@@ -6,16 +6,12 @@ use std::time::Instant;
 use serde::Deserialize;
 use ts_rs::TS;
 
+use crate::runtime_contract::change_builder::ChangeImpact;
+use crate::runtime_contract::state_change::Domain;
 use crate::state::AppState;
 use crate::types::*;
 
 // ─── Input structs ─────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetMediaEntityMetadataInput {
-    pub hash: String,
-}
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
@@ -84,47 +80,8 @@ pub async fn save_settings(state: &AppState, input: serde_json::Value) -> Result
     let value: crate::settings::store::AppSettings =
         serde_json::from_value(input).map_err(|e| e.to_string())?;
     state.settings.update(value);
-    crate::events::emit_state_changed(
-        "save_settings",
-        crate::runtime_contract::change_builder::ChangeImpact::new().view_prefs_changed(),
-    );
+    crate::events::emit_state_changed("save_settings", ChangeImpact::new().view_prefs_changed());
     Ok(())
-}
-
-pub async fn get_library_info(
-    state: &AppState,
-    _input: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let path_str = state.library_root.to_string_lossy().to_string();
-    let name = state
-        .library_root
-        .file_name()
-        .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| "Library".to_string());
-    let display_name = name.strip_suffix(".library").unwrap_or(&name).to_string();
-    let file_count = state.engine.count_library_files().unwrap_or(0);
-    Ok(serde_json::json!({
-        "path": path_str,
-        "name": display_name,
-        "file_count": file_count,
-    }))
-}
-
-pub async fn get_perf_snapshot(
-    _state: &AppState,
-    _input: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let perf = serde_json::to_value(crate::perf::get_snapshot())
-        .map_err(|e| format!("Failed to serialize perf snapshot: {e}"))?;
-    Ok(perf)
-}
-
-pub async fn check_perf_slo(
-    _state: &AppState,
-    _input: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let result = crate::perf::check_default_slo();
-    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
 pub async fn open_external_url(
@@ -191,16 +148,13 @@ pub async fn reorder_sidebar_nodes(
         }
     }
     state.engine.reorder_sidebar_nodes(&input.moves)?;
-    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
-        .add_domain(crate::runtime_contract::state_change::Domain::Sidebar);
+    let mut impact = ChangeImpact::new().add_domain(Domain::Sidebar);
     if !folder_ids.is_empty() {
-        impact = impact
-            .add_domain(crate::runtime_contract::state_change::Domain::Folders)
-            .folder_ids(folder_ids);
+        impact = impact.add_domain(Domain::Folders).folder_ids(folder_ids);
     }
     if !smart_folder_ids.is_empty() {
         impact = impact
-            .add_domain(crate::runtime_contract::state_change::Domain::SmartFolders)
+            .add_domain(Domain::SmartFolders)
             .smart_folder_ids(smart_folder_ids);
     }
     crate::events::emit_state_changed("reorder_sidebar_nodes", impact);
@@ -222,10 +176,7 @@ pub async fn set_view_prefs(
 ) -> Result<serde_json::Value, String> {
     let scope_key = input.scope_key.unwrap_or_default();
     let result = state.engine.set_view_prefs(&scope_key, input.patch)?;
-    crate::events::emit_state_changed(
-        "set_view_prefs",
-        crate::runtime_contract::change_builder::ChangeImpact::view_prefs_change(),
-    );
+    crate::events::emit_state_changed("set_view_prefs", ChangeImpact::view_prefs_change());
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -242,66 +193,13 @@ pub async fn set_zoom_factor(state: &AppState, input: SetZoomFactorInput) -> Res
     Ok(())
 }
 
-pub async fn get_zoom_factor(
-    state: &AppState,
-    _input: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let factor = state.settings.get().zoom_factor.unwrap_or(1.0);
-    Ok(serde_json::to_value(&factor).map_err(|e| e.to_string())?)
-}
-
-// ── Media Metadata ──────────────────────────────────────────────────────
-
-pub async fn get_media_entity_metadata(
-    state: &AppState,
-    input: GetMediaEntityMetadataInput,
-) -> Result<serde_json::Value, String> {
-    let result = state
-        .engine
-        .get_entity_all_metadata(&input.hash)?
-        .ok_or_else(|| format!("Entity not found: {}", input.hash))?;
-    serde_json::to_value(&result).map_err(|e| e.to_string())
-}
-
-pub async fn get_storage_stats(
-    state: &AppState,
-    _input: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let (stats, breakdown) = state.engine.get_storage_stats()?;
-    let blob_store = state.blob_store.clone();
-    let (originals_disk, thumbnails_disk) =
-        tokio::task::spawn_blocking(move || blob_store.disk_usage())
-            .await
-            .map_err(|e| e.to_string())?;
-
-    let mut result = serde_json::to_value(&stats).map_err(|e| e.to_string())?;
-    let obj = result.as_object_mut().ok_or("expected object")?;
-    obj.insert(
-        "breakdown".to_string(),
-        serde_json::to_value(&breakdown).map_err(|e| e.to_string())?,
-    );
-    obj.insert(
-        "originals_disk".to_string(),
-        serde_json::Value::Number(originals_disk.into()),
-    );
-    obj.insert(
-        "thumbnails_disk".to_string(),
-        serde_json::Value::Number(thumbnails_disk.into()),
-    );
-    Ok(result)
-}
-
 // ── Sidebar Pinning ──────────────────────────────────────────────────
 
-pub async fn pin_sidebar_item(
-    state: &AppState,
-    input: PinSidebarItemInput,
-) -> Result<(), String> {
+pub async fn pin_sidebar_item(state: &AppState, input: PinSidebarItemInput) -> Result<(), String> {
     state.engine.pin_sidebar_item(&input.node_id)?;
     crate::events::emit_state_changed(
         "pin_sidebar_item",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domain(crate::runtime_contract::state_change::Domain::Sidebar),
+        ChangeImpact::new().add_domain(Domain::Sidebar),
     );
     Ok(())
 }
@@ -313,8 +211,7 @@ pub async fn unpin_sidebar_item(
     state.engine.unpin_sidebar_item(&input.node_id)?;
     crate::events::emit_state_changed(
         "unpin_sidebar_item",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domain(crate::runtime_contract::state_change::Domain::Sidebar),
+        ChangeImpact::new().add_domain(Domain::Sidebar),
     );
     Ok(())
 }
@@ -326,8 +223,7 @@ pub async fn reorder_pinned_items(
     state.engine.reorder_pinned_items(&input.moves)?;
     crate::events::emit_state_changed(
         "reorder_pinned_items",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domain(crate::runtime_contract::state_change::Domain::Sidebar),
+        ChangeImpact::new().add_domain(Domain::Sidebar),
     );
     Ok(())
 }

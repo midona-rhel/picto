@@ -8,11 +8,13 @@
  */
 
 import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { IconSettings2, IconCommand, IconPalette, IconX, IconSearch, IconBorderAll, IconLayoutBoard, IconSortAscending, IconSortDescending } from '@tabler/icons-react';
+import { IconSettings2, IconCommand, IconPalette, IconX, IconSearch, IconBorderAll, IconLayoutBoard, IconSortAscending, IconSortDescending, IconCloud, IconSparkles } from '@tabler/icons-react';
 import { getKeyboardPreset, setKeyboardPreset, type KeyboardPreset } from '../../shared/lib/shortcuts';
 import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { ShortcutsPanel } from './ShortcutsPanel';
+import { CloudSyncPanel } from './CloudSyncPanel';
+import { AiTaggingPanel } from './AiTaggingPanel';
 import { appController } from '../../controllers/appController';
 import { settingsController, type AppSettings, type ViewPrefsDto, type ViewPrefsPatch } from '../../controllers/settingsController';
 import styles from './Settings.module.css';
@@ -41,6 +43,8 @@ const PANELS: PanelDef[] = [
   { id: 'general', label: 'General', icon: IconSettings2 },
   { id: 'appearance', label: 'Appearance', icon: IconPalette },
   { id: 'shortcuts', label: 'Shortcuts', icon: IconCommand, custom: () => <ShortcutsPanel /> },
+  { id: 'aitagging', label: 'AI Tagging', icon: IconSparkles, custom: () => <AiTaggingPanel /> },
+  { id: 'cloudsync', label: 'Cloud Sync', icon: IconCloud, custom: () => <CloudSyncPanel /> },
 ];
 
 // ── Individual setting rows (for General + future panels) ──

@@ -162,3 +162,22 @@
   background: var(--color-surface-1);
 }
 
+
+.scopeCrumbLink {
+  border: none;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  /* Re-enable clicks — .scopeTitle is pointer-events:none so the titlebar
+     drag region works around the text; the crumbs themselves must opt back in. */
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+.scopeCrumbLink:hover {
+  opacity: 1;
+  text-decoration: underline;
+}

@@ -124,15 +124,12 @@ async fn analyze_batch(
         return Ok((DerivativeBatchOutcome::default(), Vec::new()));
     };
 
-    let want_thumbnail =
-        work_types.contains(&DeferredWorkType::Thumbnail)
-            && context.prepared_source.caps.can_thumbnail();
-    let want_colors =
-        work_types.contains(&DeferredWorkType::DominantColors)
-            && context.prepared_source.caps.can_dominant_colors;
-    let want_phash =
-        work_types.contains(&DeferredWorkType::PerceptualHash)
-            && context.prepared_source.caps.can_perceptual_hash;
+    let want_thumbnail = work_types.contains(&DeferredWorkType::Thumbnail)
+        && context.prepared_source.caps.can_thumbnail();
+    let want_colors = work_types.contains(&DeferredWorkType::DominantColors)
+        && context.prepared_source.caps.can_dominant_colors;
+    let want_phash = work_types.contains(&DeferredWorkType::PerceptualHash)
+        && context.prepared_source.caps.can_perceptual_hash;
 
     let mut outcome = DerivativeBatchOutcome {
         has_thumbnail: context.thumbnail_exists,
@@ -240,9 +237,7 @@ fn unique_entity_hashes(entity_hashes: &[String]) -> Vec<String> {
     unique
 }
 
-fn missing_nonstorage_work_types_for_target(
-    target: &DerivativeTarget,
-) -> Vec<DeferredWorkType> {
+fn missing_nonstorage_work_types_for_target(target: &DerivativeTarget) -> Vec<DeferredWorkType> {
     let caps = capabilities_for_stored_media(&target.mime_type, target.frame_count);
     let mut work_types = Vec::new();
     if caps.can_dominant_colors

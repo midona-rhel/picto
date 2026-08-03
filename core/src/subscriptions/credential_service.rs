@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use serde_json::Value;
 use tracing::warn;
 
-use crate::db::LibraryDatabase;
 use crate::credential_store::{CredentialType, SiteCredential};
+use crate::db::LibraryDatabase;
 use crate::subscriptions::gallery_dl_runner;
 use crate::subscriptions::types::{CredentialDomain, CredentialHealth};
 
@@ -79,6 +79,8 @@ pub struct SetManualCredentialRequest {
     pub cookies: Option<HashMap<String, String>>,
     pub oauth_token: Option<String>,
     pub display_name: Option<String>,
+    /// RFC3339 timestamp when the captured session/cookies expire, if known.
+    pub expires_at: Option<String>,
 }
 
 pub trait CredentialStoreBackend: Clone + Send + Sync + 'static {
@@ -131,7 +133,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
     pub async fn list_credentials(&self) -> Result<Vec<CredentialDomain>, String> {
         self.db.with_read(|conn| {
             let mut stmt = conn.prepare_cached(
-                "SELECT site_category, credential_type, display_name, date_added
+                "SELECT site_category, credential_type, display_name, date_added, expires_at
                  FROM credential_domain ORDER BY site_category",
             )?;
             let rows = stmt.query_map([], |row| {
@@ -140,13 +142,17 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
                     credential_type: row.get(1)?,
                     display_name: row.get(2)?,
                     created_at: row.get(3)?,
+                    expires_at: row.get(4)?,
                 })
             })?;
             rows.collect()
         })
     }
 
-    pub async fn list_credential_health(&self) -> Result<Vec<CredentialHealth>, String> {
+    /// Recorded health exactly as written by run observations. Run gating
+    /// (preflight) must use THIS view — a timestamp-based cookie expiry is a
+    /// warning, not a reason to refuse runs.
+    pub async fn list_credential_health_raw(&self) -> Result<Vec<CredentialHealth>, String> {
         self.db.with_read(|conn| {
             let mut stmt = conn.prepare_cached(
                 "SELECT site_category, health_status, last_checked_at, last_error
@@ -158,6 +164,48 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
                     health_status: row.get(1)?,
                     last_checked_at: row.get(2)?,
                     last_error: row.get(3)?,
+                })
+            })?;
+            rows.collect()
+        })
+    }
+
+    /// Display view: a stored cookie expiry in the past overrides recorded
+    /// health so the UI can warn "log in again" before any run fails. Runs
+    /// still proceed — only run-observed auth failures block (see
+    /// `preflight_for_run`, which reads the raw view).
+    pub async fn list_credential_health(&self) -> Result<Vec<CredentialHealth>, String> {
+        self.db.with_read(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT h.site_category, h.health_status, h.last_checked_at, h.last_error,
+                        d.expires_at
+                 FROM credential_health h
+                 LEFT JOIN credential_domain d ON d.site_category = h.site_category
+                 ORDER BY h.site_category",
+            )?;
+            let now = chrono::Utc::now();
+            let rows = stmt.query_map([], move |row| {
+                let status: String = row.get(1)?;
+                let last_error: Option<String> = row.get(3)?;
+                let expires_at: Option<String> = row.get(4)?;
+                let cookie_expired = expires_at
+                    .as_deref()
+                    .and_then(|exp| chrono::DateTime::parse_from_rfc3339(exp).ok())
+                    .is_some_and(|exp| exp.with_timezone(&chrono::Utc) < now)
+                    && status != "missing";
+                Ok(CredentialHealth {
+                    site_category: row.get(0)?,
+                    health_status: if cookie_expired {
+                        "expired".to_string()
+                    } else {
+                        status
+                    },
+                    last_checked_at: row.get(2)?,
+                    last_error: if cookie_expired {
+                        Some("Saved session cookies may have expired — log in again.".to_string())
+                    } else {
+                        last_error
+                    },
                 })
             })?;
             rows.collect()
@@ -190,6 +238,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             &canonical_site_category,
             &request.credential_type,
             request.display_name.as_deref(),
+            request.expires_at.as_deref(),
         )
         .await?;
         self.set_health(
@@ -223,6 +272,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             cookies,
             oauth_token: Some(refresh_token),
             display_name: Some("Pixiv".to_string()),
+            expires_at: None,
         })
         .await
     }
@@ -242,13 +292,16 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
     /// already known to be expired/unauthorized. Read-only.
     pub async fn preflight_for_run(&self, site_id: &str, url: &str) -> CredentialPreflight {
         let resolved = self.resolve_credential(site_id, url);
-        let strictly_required = gallery_dl_runner::site_by_id(site_id)
-            .is_some_and(|site| site.auth_strictly_required);
+        let strictly_required =
+            gallery_dl_runner::site_by_id(site_id).is_some_and(|site| site.auth_strictly_required);
 
         if resolved.gallery_dl_auth.is_some() {
-            // Credential present — but block when its health is known-bad.
+            // Credential present — block only on run-observed auth failures.
+            // The raw view deliberately ignores timestamp-based cookie expiry:
+            // that is a display warning, and a wrongly-computed expiry must
+            // never silently kill all runs for a site.
             let category = resolved.canonical_site_category.clone();
-            if let Ok(rows) = self.list_credential_health().await {
+            if let Ok(rows) = self.list_credential_health_raw().await {
                 if let Some(row) = rows.iter().find(|h| h.site_category == category) {
                     if row.health_status == "expired" || row.health_status == "unauthorized" {
                         return CredentialPreflight::Blocked {
@@ -390,16 +443,36 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             }
         };
 
-        self.set_health(&canonical_site_category, status, detail)
+        // An auth-shaped failure can only indict a credential that exists —
+        // otherwise (e.g. a 403 from a CDN on an anonymous site) it is a run
+        // problem, and marking health would block every future run.
+        let has_credential = self
+            .store
+            .get_credential(&canonical_site_category)
+            .ok()
+            .flatten()
+            .is_some();
+        if has_credential {
+            self.set_health(&canonical_site_category, status, detail)
+                .await;
+            self.upsert_issue(
+                subscription_id,
+                query_id,
+                "credential_blocked",
+                message,
+                detail,
+            )
             .await;
-        self.upsert_issue(
-            subscription_id,
-            query_id,
-            "credential_blocked",
-            message,
-            detail,
-        )
-        .await;
+        } else {
+            self.upsert_issue(
+                subscription_id,
+                query_id,
+                "credential_blocked",
+                "The site rejected the request as unauthorized, but no account is stored — add one in Accounts",
+                detail,
+            )
+            .await;
+        }
     }
 
     pub async fn note_run_success(
@@ -423,24 +496,6 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             .await;
         self.resolve_issue(subscription_id, query_id, "credential_blocked")
             .await;
-    }
-
-    pub async fn note_runtime_error(
-        &self,
-        site_id: &str,
-        used_credential: bool,
-        detail: Option<&str>,
-    ) {
-        if !used_credential {
-            return;
-        }
-        let canonical_site_category = canonical_credential_site_category(site_id);
-        self.set_health(
-            &canonical_site_category,
-            CredentialHealthStatus::Error,
-            detail,
-        )
-        .await;
     }
 
     async fn set_health(
@@ -476,7 +531,9 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
     }
 
     async fn resolve_issue(&self, subscription_id: i64, query_id: Option<i64>, issue_kind: &str) {
-        let _ = self.resolve_issue_db(subscription_id, query_id, issue_kind).await;
+        let _ = self
+            .resolve_issue_db(subscription_id, query_id, issue_kind)
+            .await;
     }
 
     async fn upsert_credential_domain(
@@ -484,19 +541,22 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         site_category: &str,
         credential_type: &str,
         display_name: Option<&str>,
+        expires_at: Option<&str>,
     ) -> Result<(), String> {
         self.db.with_write(|conn| {
             conn.execute(
-                "INSERT INTO credential_domain (site_category, credential_type, display_name, date_added)
-                 VALUES (?1, ?2, ?3, ?4)
+                "INSERT INTO credential_domain (site_category, credential_type, display_name, date_added, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
                  ON CONFLICT(site_category) DO UPDATE
                  SET credential_type = excluded.credential_type,
-                     display_name = excluded.display_name",
+                     display_name = excluded.display_name,
+                     expires_at = excluded.expires_at",
                 rusqlite::params![
                     site_category,
                     credential_type,
                     display_name,
-                    chrono::Utc::now().to_rfc3339()
+                    chrono::Utc::now().to_rfc3339(),
+                    expires_at
                 ],
             )?;
             Ok(())
@@ -787,10 +847,7 @@ mod tests {
             )
             .await
             .unwrap();
-        (
-            subscription.id.parse().unwrap(),
-            query.id.parse().unwrap(),
-        )
+        (subscription.id.parse().unwrap(), query.id.parse().unwrap())
     }
 
     #[tokio::test]
@@ -808,6 +865,7 @@ mod tests {
                 cookies: None,
                 oauth_token: Some("refresh".to_string()),
                 display_name: Some("Pixiv".to_string()),
+                expires_at: None,
             })
             .await
             .unwrap();
@@ -818,6 +876,44 @@ mod tests {
         let credentials = service.list_credentials().await.unwrap();
         assert_eq!(credentials.len(), 1);
         assert_eq!(credentials[0].site_category, "pixiv");
+    }
+
+    #[tokio::test]
+    async fn past_cookie_expiry_overrides_health_to_expired() {
+        let db = test_db().await;
+        let store = InMemoryCredentialStore::default();
+        let service = SubscriptionCredentialService::with_store(db.as_ref(), store);
+
+        let mut cookies = HashMap::new();
+        cookies.insert("auth_token".to_string(), "x".to_string());
+        cookies.insert("ct0".to_string(), "y".to_string());
+        service
+            .set_manual_credential(SetManualCredentialRequest {
+                site_category: "twitter".to_string(),
+                credential_type: "cookies".to_string(),
+                username: None,
+                password: None,
+                cookies: Some(cookies),
+                oauth_token: None,
+                display_name: None,
+                expires_at: Some("2000-01-01T00:00:00+00:00".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let health = service.list_credential_health().await.unwrap();
+        let row = health
+            .iter()
+            .find(|h| h.site_category == "twitter")
+            .expect("twitter health row");
+        assert_eq!(row.health_status, "expired");
+        assert!(row.last_error.as_deref().unwrap_or("").contains("expired"));
+
+        let credentials = service.list_credentials().await.unwrap();
+        assert_eq!(
+            credentials[0].expires_at.as_deref(),
+            Some("2000-01-01T00:00:00+00:00")
+        );
     }
 
     #[tokio::test]
@@ -907,8 +1003,10 @@ mod tests {
     #[tokio::test]
     async fn missing_credential_marks_health_and_creates_issue() {
         let db = test_db().await;
-        let service =
-            SubscriptionCredentialService::with_store(db.as_ref(), InMemoryCredentialStore::default());
+        let service = SubscriptionCredentialService::with_store(
+            db.as_ref(),
+            InMemoryCredentialStore::default(),
+        );
         let (subscription_id, query_id) = create_subscription_query(&db, "gelbooru").await;
 
         let resolved = service
@@ -938,11 +1036,62 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn auth_failure_without_credential_never_touches_health() {
+        let db = test_db().await;
+        let service = SubscriptionCredentialService::with_store(
+            db.as_ref(),
+            InMemoryCredentialStore::default(),
+        );
+        let (subscription_id, query_id) = create_subscription_query(&db, "gelbooru").await;
+
+        // No stored credential: an auth-shaped failure (e.g. a CDN 403) must
+        // not indict a credential that does not exist.
+        service
+            .note_run_auth_failure(
+                subscription_id,
+                Some(query_id),
+                "gelbooru",
+                AuthFailureKind::Unauthorized,
+                Some("401 Unauthorized"),
+            )
+            .await;
+
+        let health = service.list_credential_health().await.unwrap();
+        assert!(health.is_empty());
+        let issues = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            db.as_ref(),
+            std::path::Path::new("/tmp"),
+        )
+        .list_subscription_issues(subscription_id, Some(query_id), 10)
+        .await
+        .unwrap();
+        assert!(issues
+            .iter()
+            .any(|issue| issue.issue_kind == "credential_blocked"));
+    }
+
+    #[tokio::test]
     async fn auth_failure_marks_blocked_and_success_clears_matching_issues() {
         let db = test_db().await;
-        let service =
-            SubscriptionCredentialService::with_store(db.as_ref(), InMemoryCredentialStore::default());
+        let service = SubscriptionCredentialService::with_store(
+            db.as_ref(),
+            InMemoryCredentialStore::default(),
+        );
         let (subscription_id, query_id) = create_subscription_query(&db, "gelbooru").await;
+
+        service
+            .set_manual_credential(SetManualCredentialRequest {
+                site_category: "gelbooru".to_string(),
+                credential_type: "api_key".to_string(),
+                username: Some("123".to_string()),
+                password: Some("key".to_string()),
+                cookies: None,
+                oauth_token: None,
+                display_name: None,
+                expires_at: None,
+            })
+            .await
+            .unwrap();
 
         service
             .note_run_auth_failure(

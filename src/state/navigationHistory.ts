@@ -8,11 +8,20 @@
 import { atom, getDefaultStore } from 'jotai';
 import { collectionsController } from '../controllers/collectionsController';
 import { activeNodeIdAtom, parentNodeIdAtom, collectionNameAtom } from './navigation';
+import { subscriptionsSelectionAtom, type SubscriptionsSelection } from './subscriptionsWorkspace';
+
+const SUBSCRIPTIONS_NODE_ID = 'system:subscriptions';
 
 interface HistoryEntry {
   nodeId: string;
   parentNodeId: string | null;
   collectionName: string | null;
+  /** Subject selection inside the subscriptions workspace (null = Following home). */
+  subsSelection?: SubscriptionsSelection;
+}
+
+function selectionKey(selection: SubscriptionsSelection | undefined): string {
+  return selection ? `${selection.kind}:${selection.id}` : 'home';
 }
 
 interface HistoryState {
@@ -57,8 +66,15 @@ export function pushHistory(nodeId: string) {
   const h = store.get(historyAtom);
   // If we're not at the end, truncate forward history
   const stack = h.stack.slice(0, h.cursor + 1);
-  // Don't push duplicate
-  if (stack[stack.length - 1]?.nodeId === nodeId) return;
+  // Direct navigation to the subscriptions node lands on the Following home.
+  if (nodeId === SUBSCRIPTIONS_NODE_ID) {
+    store.set(subscriptionsSelectionAtom, null);
+  }
+  // Don't push duplicate (for subscriptions, "same" also means same subject)
+  const last = stack[stack.length - 1];
+  if (last?.nodeId === nodeId && (nodeId !== SUBSCRIPTIONS_NODE_ID || last.subsSelection == null)) {
+    return;
+  }
   // Capture current collection context
   const entry: HistoryEntry = {
     nodeId,
@@ -74,10 +90,34 @@ export function pushHistory(nodeId: string) {
   scrollPositions.delete(nodeId);
 }
 
+/**
+ * Record navigation inside the subscriptions workspace (Following home and
+ * subject pages) so the universal back/forward traverses them too.
+ */
+export function pushSubscriptionsHistory(selection: SubscriptionsSelection) {
+  const h = store.get(historyAtom);
+  const stack = h.stack.slice(0, h.cursor + 1);
+  const last = stack[stack.length - 1];
+  if (last?.nodeId === SUBSCRIPTIONS_NODE_ID && selectionKey(last.subsSelection) === selectionKey(selection ?? undefined)) {
+    return;
+  }
+  stack.push({
+    nodeId: SUBSCRIPTIONS_NODE_ID,
+    parentNodeId: store.get(parentNodeIdAtom),
+    collectionName: store.get(collectionNameAtom),
+    subsSelection: selection ?? undefined,
+  });
+  if (stack.length > 100) stack.shift();
+  store.set(historyAtom, { stack, cursor: stack.length - 1 });
+}
+
 function applyHistoryEntry(entry: HistoryEntry) {
   store.set(parentNodeIdAtom, entry.parentNodeId);
   store.set(collectionNameAtom, entry.collectionName);
   store.set(activeNodeIdAtom, entry.nodeId);
+  if (entry.nodeId === SUBSCRIPTIONS_NODE_ID) {
+    store.set(subscriptionsSelectionAtom, entry.subsSelection ?? null);
+  }
 }
 
 /** Go back in history, skipping invalid entries (e.g. deleted collections). */

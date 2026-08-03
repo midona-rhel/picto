@@ -3,6 +3,19 @@
 ## Priority
 P1
 
+## Current audit status (2026-08-03)
+
+Partially implemented and release-blocking. Durable runs, query jobs, download attempts,
+ingest handoff, and a rebuilt frontend exist. The remaining work is concrete:
+
+- retry lookup incorrectly searches only the newest 500 attempts
+- issue identity includes mutable message text and permits duplicates for null query ids
+- persisted issues do not yet carry the full severity/recoverability/log contract below
+- transport still constructs `SubscriptionRuntimeService` directly instead of calling one
+  bounded subscription service through the engine
+- the site-specific PBIs were archived; supported sites are now one verification matrix owned
+  by this PBI
+
 ## AI-generated caveat
 This document is based on an in-repo audit of the current subscriptions CRUD, run orchestration, gallery-dl runner, and runtime progress/state handling. It is intentionally decisive. The main goal is to stop treating too many failures as opaque and terminal.
 
@@ -12,10 +25,8 @@ This document is based on an in-repo audit of the current subscriptions CRUD, ru
 - `Activated` when the live subscription flow uses the new subscription service by default.
 - `Legacy removed` when replaced subscription transport/runtime paths for that activated slice are deleted.
 
-Activation depends on:
-- [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
-- [PBI-573-greenfield-import-and-ingest-reset.md](./docs/pbis/active-alpha/PBI-573-greenfield-import-and-ingest-reset.md)
-- [PBI-576-greenfield-deferred-work-and-background-processing-reset.md](./docs/pbis/active-alpha/PBI-576-greenfield-deferred-work-and-background-processing-reset.md)
+The engine, ingest, and background-work foundations are live. Their historical plans are in
+`docs/pbis/archive/`; they are no longer scheduling dependencies.
 
 ## Problem
 The current subscription system works, but too much of its runtime behavior is still modeled as “run something, maybe fail, maybe stop.”
@@ -137,15 +148,11 @@ Exact table names can be improved, but the separation is not optional.
 
 The engine should talk to this subsystem through a typed service boundary. It should not know or care whether the subscription service stores its state in the library database, a separate SQLite database, or another local store.
 
-## Relationship to other reset PBIs
-- PBI-573 defines ingest, which subscriptions must feed into
-- PBI-576 defines deferred/background task ownership
-- PBI-568 defines the engine boundary this subsystem must sit behind
-- PBI-569 defines media delivery, which subscriptions do not own
-
-This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
-This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).
-This PBI must follow the cross-layer comment rules in [PBI-580-cross-layer-comment-rules.md](./docs/pbis/active-alpha/PBI-580-cross-layer-comment-rules.md).
+## Boundaries
+- Subscription downloads use the live ingest queue.
+- Scheduling and retries use the live background-work layer.
+- Dispatch should call one bounded subscription service through the engine.
+- Media delivery remains outside this subsystem.
 
 ## Acceptance criteria
 This PBI is complete only when:

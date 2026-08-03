@@ -4,8 +4,6 @@
 //! folders, smart folders) into a `RoaringBitmap` of matching file IDs.
 //! Both grid and selection code paths consume this module.
 
-pub mod resolver;
-
 /// Match mode for include/exclude set operations on tags or folders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IncludeMatchMode {

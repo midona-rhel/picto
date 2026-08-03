@@ -1,24 +1,11 @@
 import { invoke } from './ipc';
 
-export interface EntityAssetResult {
-  role: string;
-  available: boolean;
-  url?: string | null;
-  mime_type?: string | null;
-  path?: string | null;
-  source_entity_hash?: string | null;
-}
-
 export function openExternalUrl(url: string): Promise<void> {
   return invoke<void>('open_external_url', { url });
 }
 
 export function openSettingsWindow(): Promise<void> {
   return invoke<void>('open_settings_window');
-}
-
-export function resolveEntityAsset(hash: string, role: string): Promise<EntityAssetResult> {
-  return invoke<EntityAssetResult>('resolve_entity_asset', { entity_hash: hash, role });
 }
 
 export function resolveFilePath(hash: string): Promise<string | null> {

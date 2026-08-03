@@ -159,7 +159,9 @@ fn build_request_url(style: AutocompleteStyle, base: &str, prefix: &str, limit: 
             "{base}/autocomplete.json?search[query]={encoded}&search[type]=tag_query&limit={limit}"
         ),
         AutocompleteStyle::Gelbooru => {
-            format!("{base}/index.php?page=autocomplete2&term={encoded}&type=tag_query&limit={limit}")
+            format!(
+                "{base}/index.php?page=autocomplete2&term={encoded}&type=tag_query&limit={limit}"
+            )
         }
         AutocompleteStyle::GelbooruV02 => format!("{base}/autocomplete.php?q={encoded}"),
         AutocompleteStyle::Moebooru => {

@@ -38,7 +38,7 @@ function statusDotClass(state: 'running' | 'paused' | 'attention' | 'idle'): str
 /**
  * Left rail — the app's canonical sidebar tree (SidebarRow) with groups as
  * expandable folders and subscriptions as children. Hover reveals group
- * run/stop; footer hosts the Follow wizard and Accounts.
+ * run/stop; footer hosts the New subscription dialog and Accounts.
  */
 export function SidebarRail({
   groups,
@@ -136,9 +136,8 @@ export function SidebarRail({
                     expanded={expanded}
                     onToggleExpand={() => toggleGroup(group.id)}
                     onClick={() => {
-                      // Row click both navigates and toggles the children.
+                      // Row click navigates only — the chevron owns expansion.
                       onSelect({ kind: 'group', id: group.id });
-                      toggleGroup(group.id);
                     }}
                   >
                     <span className={styles.railRowName}>{group.name}</span>
@@ -179,7 +178,7 @@ export function SidebarRail({
       </div>
       <div className={styles.railFooter}>
         <ActionButton variant="primary" onClick={onOpenWizard}>
-          <IconPlus size={14} /> Follow…
+          <IconPlus size={14} /> New subscription…
         </ActionButton>
         <ActionButton variant="ghost" onClick={onOpenAccounts}>
           <IconShieldLock size={14} /> Accounts

@@ -14,6 +14,17 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
         ),
     );
 
+    // Delay between FILE downloads (sleep-request only paces page/API requests).
+    // Without this, bulk runs fire hundreds of media downloads back-to-back and
+    // CDNs (gelbooru especially) start refusing until retries are exhausted —
+    // observed as mass "gallery-dl exhausted item retries" failures.
+    extractor.insert(
+        "sleep".into(),
+        serde_json::Value::Number(
+            serde_json::Number::from_f64(1.0).unwrap_or(serde_json::Number::from(1)),
+        ),
+    );
+
     extractor.insert("metadata".into(), serde_json::Value::Bool(true));
 
     // Fetch categorized tags (tags_artist, tags_character, etc.) from post HTML.

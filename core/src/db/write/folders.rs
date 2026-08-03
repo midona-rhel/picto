@@ -1,5 +1,5 @@
 //! Folder write operations — CRUD, membership, reorder.
-//! Folder membership (folder_member) stores single entity IDs only.
+//! Folder membership stores the entity IDs selected by the caller's expansion mode.
 
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -91,7 +91,7 @@ pub fn delete_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<()> 
     Ok(())
 }
 
-/// Add entities to a folder. Expands collections to member singles.
+/// Add entities to a folder using the caller's explicit expansion mode.
 pub fn add_members(
     conn: &Connection,
     folder_id: i64,
@@ -100,19 +100,11 @@ pub fn add_members(
 ) -> rusqlite::Result<FolderMembershipChange> {
     let expanded = expand_ids(conn, entity_ids, expansion)?;
 
-    // Only insert singles (entity_kind = 'single')
     for eid in &expanded {
-        let kind: String = conn.query_row(
-            "SELECT entity_kind FROM media_entity WHERE entity_id = ?1",
-            [eid],
-            |row| row.get(0),
+        conn.execute(
+            "INSERT OR IGNORE INTO folder_member (folder_id, entity_id) VALUES (?1, ?2)",
+            params![folder_id, eid],
         )?;
-        if kind == "single" {
-            conn.execute(
-                "INSERT OR IGNORE INTO folder_member (folder_id, entity_id) VALUES (?1, ?2)",
-                params![folder_id, eid],
-            )?;
-        }
     }
 
     Ok(FolderMembershipChange {
@@ -173,7 +165,11 @@ pub fn move_folder(
 }
 
 /// Walk up the parent chain from `start_id`. Returns true if `ancestor_id` is found.
-pub fn is_ancestor_of(conn: &Connection, start_id: i64, ancestor_id: i64) -> rusqlite::Result<bool> {
+pub fn is_ancestor_of(
+    conn: &Connection,
+    start_id: i64,
+    ancestor_id: i64,
+) -> rusqlite::Result<bool> {
     let mut current = start_id;
     for _ in 0..200 {
         let parent: Option<Option<i64>> = conn
@@ -185,7 +181,9 @@ pub fn is_ancestor_of(conn: &Connection, start_id: i64, ancestor_id: i64) -> rus
             .optional()?;
         match parent {
             Some(Some(pid)) => {
-                if pid == ancestor_id { return Ok(true); }
+                if pid == ancestor_id {
+                    return Ok(true);
+                }
                 current = pid;
             }
             _ => return Ok(false),

@@ -34,6 +34,9 @@ pub struct AppState {
     pub worker_handles: tokio::sync::Mutex<Vec<(&'static str, tokio::task::JoinHandle<()>)>>,
     /// AI tagger sessions — one per enabled model, lazily initialised.
     pub ai_taggers: crate::ai_tagger::inference::SharedTaggerSessions,
+    /// Cancellation token for the currently running auto-tag prediction,
+    /// if any. One run at a time.
+    pub ai_tag_run: tokio::sync::Mutex<Option<CancellationToken>>,
 }
 
 static STATE: OnceLock<RwLock<Option<Arc<AppState>>>> = OnceLock::new();
@@ -110,7 +113,28 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         &cancel,
     )
     .await;
-    let engine = Arc::new(crate::engine::ApplicationEngine::new(new_db));
+    let engine = Arc::new(crate::engine::ApplicationEngine::new(new_db.clone()));
+
+    // Reclaim orphaned blobs in the background — off the open critical path.
+    // The 10-minute age guard keeps in-flight ingest staging safe.
+    {
+        let sweep_db = new_db.clone();
+        let sweep_blobs = blob_store.clone();
+        tokio::task::spawn_blocking(move || {
+            let referenced = sweep_db.with_read(|conn| {
+                let mut stmt = conn.prepare("SELECT file_hash FROM media_file")?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()
+            });
+            if let Ok(referenced) = referenced {
+                let (deleted, freed) =
+                    sweep_blobs.sweep_orphans(&referenced, std::time::Duration::from_secs(600));
+                if deleted > 0 {
+                    tracing::info!(deleted, freed, "startup orphaned blob sweep complete");
+                }
+            }
+        });
+    }
 
     let state = Arc::new(AppState {
         blob_store,
@@ -124,6 +148,7 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         folder_watch_commands,
         worker_handles: tokio::sync::Mutex::new(worker_handles),
         ai_taggers: crate::ai_tagger::inference::new_shared_sessions(),
+        ai_tag_run: tokio::sync::Mutex::new(None),
     });
 
     {

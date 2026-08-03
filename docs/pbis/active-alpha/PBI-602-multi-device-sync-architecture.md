@@ -13,7 +13,7 @@ This document locks the architecture contract for syncing one library across mul
 - `Legacy removed` — n/a (additive system).
 
 Activation depends on:
-- [PBI-601-local-persistence-crash-safety-hardening.md](./docs/pbis/active-alpha/PBI-601-local-persistence-crash-safety-hardening.md)
+- [PBI-601-local-persistence-crash-safety-hardening.md](./docs/pbis/archive/PBI-601-local-persistence-crash-safety-hardening.md)
 
 ## Problem
 A live SQLite database cannot be placed in a file-sync folder: WAL's three-file consistency, mid-transaction snapshots, and whole-file conflict resolution make corruption or silent whole-session loss inevitable. Yet users want one library on multiple devices, synced through storage they already own (Google Drive), with no possibility of one device destructively interfering with another, and graceful behavior when metadata arrives before media.

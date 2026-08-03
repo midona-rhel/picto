@@ -47,16 +47,6 @@ pub fn compile_all_smart_folders(conn: &Connection, bitmaps: &BitmapStore) {
     }
 }
 
-pub(crate) fn evaluate_predicate(
-    conn: &Connection,
-    bitmaps: &BitmapStore,
-    json: &str,
-) -> rusqlite::Result<RoaringBitmap> {
-    let pred: SmartFolderPredicate = serde_json::from_str(json)
-        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-    compile_predicate(conn, &pred, bitmaps)
-}
-
 pub(crate) fn compile_predicate(
     conn: &Connection,
     pred: &SmartFolderPredicate,
@@ -302,9 +292,10 @@ fn compile_numeric_rule(
         "lte" => Some("<="),
         _ => None,
     };
-    if let (Some(comparator), Some(value)) =
-        (comparator, rule.value.as_ref().and_then(|value| value.as_f64()))
-    {
+    if let (Some(comparator), Some(value)) = (
+        comparator,
+        rule.value.as_ref().and_then(|value| value.as_f64()),
+    ) {
         include_bitmaps.push(entity_sql_to_bitmap(
             conn,
             &format!("{ENTITY_BASE_SQL} AND {expr} {comparator} ?1"),
@@ -436,12 +427,28 @@ fn compile_file_type_rule(
     };
 
     let (clause, arg) = match value {
-        "image" => ("COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?1", "image/%".to_string()),
-        "video" => ("COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?1", "video/%".to_string()),
-        "audio" => ("COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?1", "audio/%".to_string()),
-        other => ("COALESCE(mf.mime_type, pmf.mime_type, '') = ?1", other.to_string()),
+        "image" => (
+            "COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?1",
+            "image/%".to_string(),
+        ),
+        "video" => (
+            "COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?1",
+            "video/%".to_string(),
+        ),
+        "audio" => (
+            "COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?1",
+            "audio/%".to_string(),
+        ),
+        other => (
+            "COALESCE(mf.mime_type, pmf.mime_type, '') = ?1",
+            other.to_string(),
+        ),
     };
-    let bitmap = entity_sql_to_bitmap(conn, &format!("{ENTITY_BASE_SQL} AND {clause}"), params![arg])?;
+    let bitmap = entity_sql_to_bitmap(
+        conn,
+        &format!("{ENTITY_BASE_SQL} AND {clause}"),
+        params![arg],
+    )?;
 
     match rule.op.as_str() {
         "is" => include_bitmaps.push(bitmap),
@@ -531,7 +538,11 @@ fn compile_shape_rule(
             return Ok(());
         }
     };
-    include_bitmaps.push(entity_sql_to_bitmap(conn, &format!("{ENTITY_BASE_SQL} AND {clause}"), [])?);
+    include_bitmaps.push(entity_sql_to_bitmap(
+        conn,
+        &format!("{ENTITY_BASE_SQL} AND {clause}"),
+        [],
+    )?);
     Ok(())
 }
 
@@ -589,10 +600,12 @@ fn entity_sql_to_bitmap(
 
 #[cfg(test)]
 mod tests {
-    use super::{compile_predicate, evaluate_predicate};
+    use super::compile_predicate;
     use crate::db::core::schema::LIBRARY_DDL;
     use crate::db::projection::bitmaps::{BitmapKey, BitmapStore};
-    use crate::smart_folders::types::{MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup};
+    use crate::smart_folders::types::{
+        MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup,
+    };
     use roaring::RoaringBitmap;
     use rusqlite::params;
 
@@ -623,8 +636,11 @@ mod tests {
             [],
         )
         .expect("insert files");
-        conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2), (3, 3)", [])
-            .expect("link files");
+        conn.execute(
+            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2), (3, 3)",
+            [],
+        )
+        .expect("link files");
         conn.execute("INSERT INTO tag (tag_id, namespace, subtag) VALUES (1, 'general', 'landscape'), (2, 'general', 'portrait')", [])
             .expect("insert tags");
         conn.execute(
@@ -654,30 +670,41 @@ mod tests {
                         "negate": false,
                         "rules": [{ "field": "rating", "op": "gte", "value": 4 }]
                     }]
-                }).to_string(),
+                })
+                .to_string(),
                 serde_json::json!({
                     "groups": [{
                         "match_mode": "all",
                         "negate": false,
                         "rules": [{ "field": "color", "op": "contains", "values": ["#ff0000"] }]
                     }]
-                }).to_string(),
+                })
+                .to_string(),
             ],
         )
         .expect("insert smart folders");
 
-        bitmaps.set(BitmapKey::Status(1), RoaringBitmap::from_iter([1_u32, 2_u32]));
+        bitmaps.set(
+            BitmapKey::Status(1),
+            RoaringBitmap::from_iter([1_u32, 2_u32]),
+        );
         bitmaps.set(BitmapKey::Status(2), RoaringBitmap::from_iter([3_u32]));
-        bitmaps.set(BitmapKey::EffectiveTag(1), RoaringBitmap::from_iter([1_u32]));
-        bitmaps.set(BitmapKey::EffectiveTag(2), RoaringBitmap::from_iter([2_u32]));
+        bitmaps.set(
+            BitmapKey::EffectiveTag(1),
+            RoaringBitmap::from_iter([1_u32]),
+        );
+        bitmaps.set(
+            BitmapKey::EffectiveTag(2),
+            RoaringBitmap::from_iter([2_u32]),
+        );
 
         (conn, bitmaps)
     }
 
     #[test]
-    fn evaluate_predicate_uses_canonical_rule_model() {
+    fn compile_predicate_uses_canonical_rule_model() {
         let (conn, bitmaps) = seeded_conn();
-        let json = serde_json::json!({
+        let pred: SmartFolderPredicate = serde_json::from_value(serde_json::json!({
             "groups": [{
                 "match_mode": "all",
                 "negate": false,
@@ -686,10 +713,10 @@ mod tests {
                     { "field": "tags", "op": "include_all", "values": ["landscape"] }
                 ]
             }]
-        })
-        .to_string();
+        }))
+        .expect("parse predicate");
 
-        let bitmap = evaluate_predicate(&conn, &bitmaps, &json).expect("evaluate predicate");
+        let bitmap = compile_predicate(&conn, &pred, &bitmaps).expect("compile predicate");
         assert_eq!(bitmap, RoaringBitmap::from_iter([1_u32]));
     }
 

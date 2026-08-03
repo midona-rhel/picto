@@ -81,10 +81,7 @@ pub(super) fn detect_gallery_dl_root(path: &Path) -> Option<PathBuf> {
     })
 }
 
-pub(super) async fn maybe_cleanup_subscription_temp_root(
-    db: &LibraryDatabase,
-    temp_root: &Path,
-) {
+pub(super) async fn maybe_cleanup_subscription_temp_root(db: &LibraryDatabase, temp_root: &Path) {
     match db.has_retained_ingest_sources_for_root(temp_root).await {
         Ok(true) => {}
         Ok(false) => crate::subscriptions::gallery_dl_runner::cleanup_temp_dir(temp_root).await,

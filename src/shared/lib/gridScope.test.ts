@@ -11,8 +11,10 @@ describe('gridScope helpers', () => {
 
   it('keeps non-grid manager nodes out of grid scope mapping', () => {
     expect(isNonGridNodeId('system:subscriptions')).toBe(true);
+    expect(isNonGridNodeId('system:tag_manager')).toBe(true);
     expect(nodeIdToGridScope('system:subscriptions')).toBeNull();
     expect(nodeIdToGridScope('system:duplicates')).toBeNull();
+    expect(nodeIdToGridScope('system:tag_manager')).toBeNull();
   });
 
   it('maps canonical scopes back to active node ids', () => {

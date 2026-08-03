@@ -55,12 +55,24 @@ export function parseBooruApiCredential(raw: string): { userId: string; apiKey: 
   return userId && apiKey ? { userId, apiKey } : null;
 }
 
+const INLINE_AUTH_SITES = new Set([
+  'pixiv',
+  'gelbooru',
+  'rule34',
+  'twitter',
+  'furaffinity',
+  // Cookie-capture login windows (mirror COOKIE_LOGIN_SITES in
+  // electron/windows/windowManager.mjs):
+  'patreon',
+  'fanbox',
+  'fantia',
+  'instagram',
+  'deviantart',
+  'nijie',
+]);
+
 export function supportsInlineAuth(siteId: string): boolean {
-  return siteId === 'pixiv'
-    || siteId === 'gelbooru'
-    || siteId === 'rule34'
-    || siteId === 'twitter'
-    || siteId === 'furaffinity';
+  return INLINE_AUTH_SITES.has(siteId);
 }
 
 export function requiresCookiePair(siteId: string): boolean {

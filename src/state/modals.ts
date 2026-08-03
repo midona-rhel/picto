@@ -72,12 +72,11 @@ export const createGroupModalAtom = atom({ open: false });
 export interface FolderImportModalState {
   open: boolean;
   path: string;
-  preserveStructure: boolean;
   targetFolderId: number | null;
 }
 
 export const folderImportModalAtom = atom<FolderImportModalState>({
-  open: false, path: '', preserveStructure: true, targetFolderId: null,
+  open: false, path: '', targetFolderId: null,
 });
 
 // ── Tag select modal (wider modal version, opened from context menu / keyboard) ──

@@ -30,14 +30,12 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::subscriptions::credential_service::GalleryDlAuthConfig;
-use crate::subscriptions::source_adapter::{
-    DownloadedItem, FailedDownloadedItem, ParsedMetadata,
-};
+use crate::subscriptions::source_adapter::{DownloadedItem, FailedDownloadedItem, ParsedMetadata};
 use crate::tags::logging::summarize_tag_pairs;
 
 use self::config::build_config;
 
-pub use failure::{classify_failure, FailureKind};
+pub use failure::{classify_failure, error_tail, final_error_line, FailureKind};
 pub use filesystem::cleanup_temp_dir;
 pub use metadata::{extract_creator_identifier, parse_metadata, parse_tags};
 pub use metadata_validation::{

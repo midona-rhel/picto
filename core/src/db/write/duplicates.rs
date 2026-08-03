@@ -1,7 +1,9 @@
 use rusqlite::{params, Connection};
 
 use crate::db::query::duplicates::DuplicateSingleRef;
-use crate::db::types::{DuplicateCollectionConflict, DuplicateResolutionResult, DuplicateResolveStatus};
+use crate::db::types::{
+    DuplicateCollectionConflict, DuplicateResolutionResult, DuplicateResolveStatus,
+};
 
 pub fn upsert_duplicate_pair_for_review(
     conn: &Connection,
@@ -145,7 +147,6 @@ pub fn resolve_duplicate_pair(
     right: DuplicateSingleRef,
     preferred_collection_id: Option<i64>,
 ) -> rusqlite::Result<DuplicateResolutionResult> {
-
     if action == "not_duplicate" {
         conn.execute(
             "UPDATE duplicate
@@ -215,10 +216,13 @@ pub fn resolve_duplicate_pair(
     }
 
     if let Some(chosen_collection_id) = preferred_collection_id {
-        let valid = [winner.parent_collection_entity_id, loser.parent_collection_entity_id]
-            .into_iter()
-            .flatten()
-            .any(|value| value == chosen_collection_id);
+        let valid = [
+            winner.parent_collection_entity_id,
+            loser.parent_collection_entity_id,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|value| value == chosen_collection_id);
         if !valid {
             return Err(rusqlite::Error::InvalidParameterName(
                 "preferred_collection_id must match one of the duplicate owners".into(),
@@ -300,7 +304,10 @@ pub fn resolve_duplicate_pair(
              WHERE entity_id = ?2",
             params![winner.entity_id, loser.entity_id],
         )?;
-        conn.execute("DELETE FROM folder_member WHERE entity_id = ?1", [loser.entity_id])?;
+        conn.execute(
+            "DELETE FROM folder_member WHERE entity_id = ?1",
+            [loser.entity_id],
+        )?;
         ids
     };
 
@@ -389,8 +396,14 @@ pub fn resolve_duplicate_pair(
         "DELETE FROM single_media_entity WHERE entity_id = ?1",
         [loser.entity_id],
     )?;
-    conn.execute("DELETE FROM entity_tag WHERE entity_id = ?1", [loser.entity_id])?;
-    conn.execute("DELETE FROM media_entity WHERE entity_id = ?1", [loser.entity_id])?;
+    conn.execute(
+        "DELETE FROM entity_tag WHERE entity_id = ?1",
+        [loser.entity_id],
+    )?;
+    conn.execute(
+        "DELETE FROM media_entity WHERE entity_id = ?1",
+        [loser.entity_id],
+    )?;
     conn.execute("DELETE FROM media_file WHERE file_id = ?1", [loser.file_id])?;
 
     for collection_id in &affected_collection_ids {

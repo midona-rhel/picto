@@ -14,11 +14,66 @@ use super::drain::{drain_outbox, DEFAULT_OPS_PER_SEGMENT};
 use super::segment::decode_segment;
 use super::{OpRecord, OP_VERSION};
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq, serde::Serialize)]
 pub struct SyncReport {
     pub segments_uploaded: usize,
     pub segments_consumed: usize,
     pub ops_applied: usize,
+    pub blobs_uploaded: usize,
+    pub blobs_downloaded: usize,
+}
+
+/// Mirror originals between the local blob store and `blobs/f/...` on the
+/// remote. Content-addressed and write-once on both sides, so both
+/// directions are pure fill-in-the-gaps; nothing is ever replaced.
+pub fn sync_blobs(
+    blob_store: &crate::blob_store::BlobStore,
+    backend: &dyn SyncBackend,
+) -> Result<(usize, usize), String> {
+    let remote: std::collections::HashSet<String> = backend
+        .list("blobs/f/")
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .collect();
+    let mut uploaded = 0usize;
+    let mut local_keys = std::collections::HashSet::new();
+    for (hash, ext) in blob_store.list_originals() {
+        let key = format!("blobs/f/{}/{}/{}.{}", &hash[0..2], &hash[2..4], hash, ext);
+        local_keys.insert(key.clone());
+        if remote.contains(&key) {
+            continue;
+        }
+        let bytes = blob_store
+            .read_original(&hash, Some(&ext))
+            .map_err(|e| e.to_string())?;
+        match backend.put(&key, &bytes) {
+            Ok(()) => uploaded += 1,
+            Err(super::backend::BackendError::AlreadyExists(_)) => {}
+            Err(e) => return Err(format!("blob upload {key}: {e}")),
+        }
+    }
+    let mut downloaded = 0usize;
+    for key in &remote {
+        if local_keys.contains(key) {
+            continue;
+        }
+        let Some(name) = key.rsplit('/').next() else {
+            continue;
+        };
+        let Some((hash, ext)) = name.split_once('.') else {
+            continue;
+        };
+        if hash.len() != 64 {
+            continue;
+        }
+        if let Some(bytes) = backend.get(key).map_err(|e| e.to_string())? {
+            blob_store
+                .write_original(hash, &bytes, Some(ext))
+                .map_err(|e| e.to_string())?;
+            downloaded += 1;
+        }
+    }
+    Ok((uploaded, downloaded))
 }
 
 /// Parse `oplog/<device>/<seq>.seg` → `(device, seq)`.
@@ -57,8 +112,8 @@ pub fn sync_once(db: &LibraryDatabase, backend: &dyn SyncBackend) -> Result<Sync
             let Some(bytes) = backend.get(key).map_err(|e| e.to_string())? else {
                 break;
             };
-            let ops = decode_segment(&bytes)
-                .map_err(|e| format!("quarantined segment {key}: {e}"))?;
+            let ops =
+                decode_segment(&bytes).map_err(|e| format!("quarantined segment {key}: {e}"))?;
             new_ops.extend(ops);
             cursor += 1;
             report.segments_consumed += 1;
@@ -90,8 +145,7 @@ mod tests {
 
     fn open_device(device_id: &str) -> LibraryDatabase {
         let tmp = TempDir::new().unwrap();
-        let db =
-            LibraryDatabase::open_with_device_id(tmp.path(), device_id.to_string()).unwrap();
+        let db = LibraryDatabase::open_with_device_id(tmp.path(), device_id.to_string()).unwrap();
         std::mem::forget(tmp);
         db
     }
@@ -116,10 +170,27 @@ mod tests {
         // Device A: an entity with tags, in a folder.
         let folder_a = dev_a.create_folder("Art", None, None, None).unwrap();
         let file_id = dev_a
-            .insert_file("hash_s", "image/png", 9, Some(64), Some(64), None, None, false, "2026-01-01")
+            .insert_file(
+                "hash_s",
+                "image/png",
+                9,
+                Some(64),
+                Some(64),
+                None,
+                None,
+                false,
+                "2026-01-01",
+            )
             .unwrap();
         let entity_a = dev_a
-            .insert_single("hash_s", file_id, Some("pic"), 1, "2026-01-01", "2026-01-02")
+            .insert_single(
+                "hash_s",
+                file_id,
+                Some("pic"),
+                1,
+                "2026-01-01",
+                "2026-01-02",
+            )
             .unwrap();
         // insert_single is a non-emitting low-level path, so device B never
         // materializes hash_s: the tag/membership ops referencing it are

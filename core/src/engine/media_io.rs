@@ -35,8 +35,6 @@ pub struct ExportMediaRequest {
 }
 
 type EnsureThumbnailResult = crate::background_work::EnsureThumbnailResult;
-type ReanalyzeFileColorsResult = crate::background_work::ReanalyzeFileColorsResult;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportFormat {
     Original,
@@ -87,56 +85,6 @@ impl ApplicationEngine {
             }
         }
         Ok(paths)
-    }
-
-    pub async fn open_file_default(
-        &self,
-        blob_store: &Arc<BlobStore>,
-        entity_hash: &str,
-    ) -> Result<(), String> {
-        let path = self.resolve_file_path(blob_store, entity_hash).await?;
-        open::that(&path).map_err(|e| format!("Failed to open file: {e}"))?;
-        Ok(())
-    }
-
-    pub async fn reveal_in_folder(
-        &self,
-        blob_store: &Arc<BlobStore>,
-        entity_hash: &str,
-    ) -> Result<(), String> {
-        let path = self.resolve_file_path(blob_store, entity_hash).await?;
-        reveal_in_folder_os(&path)?;
-        Ok(())
-    }
-
-    pub async fn export_file(
-        &self,
-        blob_store: &Arc<BlobStore>,
-        library_root: &Path,
-        entity_hash: &str,
-        dest: &Path,
-    ) -> Result<(), String> {
-        reject_library_export_path(library_root, dest)?;
-        let target = self
-            .db
-            .get_derivative_target_by_entity_hash(entity_hash)?
-            .ok_or_else(|| format!("Entity not found: {entity_hash}"))?;
-        let ext = mime_to_extension(&target.mime_type).to_string();
-        let blob_store = blob_store.clone();
-        let file_hash = target.file_hash;
-        let data = tokio::task::spawn_blocking(move || blob_store.read_original(&file_hash, Some(&ext)))
-            .await
-            .map_err(|e| format!("Export read task failed: {e}"))?
-            .map_err(|e| format!("Export read failed: {e}"))?;
-        if let Some(parent) = dest.parent() {
-            tokio::fs::create_dir_all(parent)
-                .await
-                .map_err(|e| format!("Failed to create export directory: {e}"))?;
-        }
-        tokio::fs::write(dest, data)
-            .await
-            .map_err(|e| format!("Failed to write export: {e}"))?;
-        Ok(())
     }
 
     pub async fn export_media(
@@ -196,7 +144,11 @@ impl ApplicationEngine {
                 if !record.mime_type.starts_with("image/") {
                     return Err(format!(
                         "Format conversion is only supported for image files: {}",
-                        if display_name.is_empty() { hash } else { &display_name }
+                        if display_name.is_empty() {
+                            hash
+                        } else {
+                            &display_name
+                        }
                     ));
                 }
 
@@ -260,28 +212,6 @@ impl ApplicationEngine {
         })
     }
 
-    pub async fn resolve_thumbnail_path(
-        &self,
-        blob_store: &Arc<BlobStore>,
-        entity_hash: &str,
-    ) -> Result<String, String> {
-        let thumbnail_hash = self
-            .db
-            .get_entity_details(entity_hash)?
-            .map(|details| details.thumbnail_hash)
-            .ok_or_else(|| format!("Entity not found: {entity_hash}"))?;
-        let blob_store = blob_store.clone();
-        tokio::task::spawn_blocking(move || {
-            blob_store
-                .find_thumbnail_path(&thumbnail_hash)
-                .map_err(|e| format!("Blob error: {e}"))?
-                .map(|path| path.to_string_lossy().into_owned())
-                .ok_or_else(|| format!("Thumbnail not found: {thumbnail_hash}"))
-        })
-        .await
-        .map_err(|e| format!("Task error: {e}"))?
-    }
-
     pub async fn ensure_thumbnail(
         &self,
         blob_store: &Arc<BlobStore>,
@@ -293,25 +223,6 @@ impl ApplicationEngine {
         if result.regenerated_thumbnail {
             crate::events::emit_state_changed(
                 "ensure_thumbnail",
-                ChangeImpact::new()
-                    .entity_hashes(vec![entity_hash.to_string()])
-                    .derivative_fields_changed(&[MediaDerivativeField::Thumbnail]),
-            );
-        }
-        Ok(result)
-    }
-
-    pub async fn regenerate_thumbnail(
-        &self,
-        blob_store: &Arc<BlobStore>,
-        entity_hash: &str,
-    ) -> Result<EnsureThumbnailResult, String> {
-        let result =
-            crate::background_work::ensure_thumbnail_now(&self.db, blob_store, entity_hash, true)
-                .await?;
-        if result.regenerated_thumbnail {
-            crate::events::emit_state_changed(
-                "regenerate_thumbnail",
                 ChangeImpact::new()
                     .entity_hashes(vec![entity_hash.to_string()])
                     .derivative_fields_changed(&[MediaDerivativeField::Thumbnail]),
@@ -359,26 +270,6 @@ impl ApplicationEngine {
         })
     }
 
-    pub async fn reanalyze_file_colors(
-        &self,
-        blob_store: &Arc<BlobStore>,
-        entity_hash: &str,
-    ) -> Result<ReanalyzeFileColorsResult, String> {
-        let result =
-            crate::background_work::reanalyze_file_colors_now(&self.db, blob_store, entity_hash)
-                .await?;
-        crate::events::emit_state_changed(
-            "reanalyze_file_colors",
-            ChangeImpact::new()
-                .entity_hashes(vec![entity_hash.to_string()])
-                .derivative_fields_changed(&[MediaDerivativeField::DominantColorHex])
-                .smart_folder_scopes_changed_for_derivative_fields(&[
-                    MediaDerivativeField::DominantColorHex,
-                ]),
-        );
-        Ok(result)
-    }
-
     fn resolve_target_hashes(&self, target: EntityTarget) -> Result<Vec<String>, String> {
         let resolved = target::resolve(&self.db, &target)?;
         match resolved {
@@ -405,40 +296,13 @@ impl ApplicationEngine {
     }
 }
 
-fn reveal_in_folder_os(path: &str) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    {
-        std::process::Command::new("open")
-            .arg("-R")
-            .arg(path)
-            .spawn()
-            .map_err(|e| format!("Failed to reveal in Finder: {e}"))?;
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        std::process::Command::new("explorer")
-            .arg(format!("/select,{}", path))
-            .spawn()
-            .map_err(|e| format!("Failed to reveal in Explorer: {e}"))?;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        if let Some(parent) = std::path::Path::new(path).parent() {
-            std::process::Command::new("xdg-open")
-                .arg(parent)
-                .spawn()
-                .map_err(|e| format!("Failed to open folder: {e}"))?;
-        }
-    }
-
-    Ok(())
-}
-
 fn sanitize_file_stem(name: &str, fallback: &str) -> String {
     let trimmed = name.trim();
-    let raw = if trimmed.is_empty() { fallback } else { trimmed };
+    let raw = if trimmed.is_empty() {
+        fallback
+    } else {
+        trimmed
+    };
     let cleaned_raw = raw
         .chars()
         .map(|ch| match ch {

@@ -8,6 +8,9 @@ import { StatusBadge } from './StatusBadge';
 import { formatRelativeTime } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
 
+/** Rows rendered when a failure group is first expanded (rest behind "show all"). */
+const EXPANDED_POST_CAP = 50;
+
 function groupByReason(posts: FailedPostGroup[]): Map<string, FailedPostGroup[]> {
   const groups = new Map<string, FailedPostGroup[]>();
   for (const post of posts) {
@@ -36,6 +39,7 @@ export function HealthTab({
 }) {
   const groups = useMemo(() => groupByReason(failedPosts), [failedPosts]);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [showAllExpanded, setShowAllExpanded] = useState(false);
   const openIssues = issues.filter((issue) => issue.status !== 'resolved');
   const retryable = failedPosts.filter((post) => post.canRetry);
 
@@ -44,11 +48,11 @@ export function HealthTab({
   }
 
   return (
-    <div className={styles.tabPanel}>
+    <div className={styles.healthStack}>
       {failedPosts.length > 0 && (
         <div className={styles.section}>
           <div className={styles.sectionHeader}>
-            <span className={styles.sectionTitle}>
+            <span className={styles.subsectionTitle}>
               Failed posts ({failedPosts.length})
             </span>
             <ActionButton
@@ -83,7 +87,7 @@ export function HealthTab({
                     Retry
                   </ActionButton>
                 </div>
-                {isOpen && posts.map((post) => (
+                {isOpen && (showAllExpanded ? posts : posts.slice(0, EXPANDED_POST_CAP)).map((post) => (
                   <div key={post.key} className={styles.healthRow}>
                     <span>{post.queryLabel}</span>
                     <span className={styles.muted}>post {post.postId}</span>
@@ -105,6 +109,15 @@ export function HealthTab({
                     )}
                   </div>
                 ))}
+                {isOpen && !showAllExpanded && posts.length > EXPANDED_POST_CAP && (
+                  <button
+                    type="button"
+                    className={styles.historyMore}
+                    onClick={() => setShowAllExpanded(true)}
+                  >
+                    Show all {posts.length} posts
+                  </button>
+                )}
               </div>
             );
           })}
@@ -114,7 +127,7 @@ export function HealthTab({
       {openIssues.length > 0 && (
         <div className={styles.section}>
           <div className={styles.sectionHeader}>
-            <span className={styles.sectionTitle}>Open issues ({openIssues.length})</span>
+            <span className={styles.subsectionTitle}>Open issues ({openIssues.length})</span>
           </div>
           {openIssues.map((issue) => (
             <div key={issue.issue_id} className={styles.issueCard}>

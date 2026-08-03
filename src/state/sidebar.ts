@@ -57,21 +57,6 @@ function withSubscriptionsNode(nodes: SidebarNodeDto[]): SidebarNodeDto[] {
   return next;
 }
 
-// ── Derived: scope counts ────────────────────────────────────────
-
-export const scopeCountsAtom = atom((get) => {
-  const nodes = get(sidebarNodesAtom);
-  const find = (id: string) => nodes.find((n) => n.id === id)?.count ?? 0;
-  return {
-    active: find('system:active'),
-    inbox: find('system:inbox'),
-    trash: find('system:trash'),
-    uncategorized: find('system:uncategorized'),
-    untagged: find('system:untagged'),
-    duplicates: find('system:duplicates'),
-  };
-});
-
 // ── Write atoms (used by controllers) ────────────────────────────
 
 export const setSidebarTreeAtom = atom(
@@ -110,26 +95,6 @@ export const applySidebarCountsAtom = atom(
   },
 );
 
-export const adjustFolderCountAtom = atom(
-  null,
-  (get, set, { folderId, delta }: { folderId: number; delta: number }) => {
-    const fid = `folder:${folderId}`;
-    set(
-      sidebarNodesAtom,
-      get(sidebarNodesAtom).map((n) =>
-        n.id === fid ? { ...n, count: (n.count ?? 0) + delta } : n,
-      ),
-    );
-  },
-);
-
-export const insertFolderNodeAtom = atom(
-  null,
-  (get, set, node: SidebarNodeDto) => {
-    set(sidebarNodesAtom, [...get(sidebarNodesAtom), node]);
-  },
-);
-
 export const removeFolderNodeAtom = atom(
   null,
   (get, set, folderId: number) => {
@@ -156,17 +121,6 @@ export const removeSmartFolderNodeAtom = atom(
   (get, set, sfId: number) => {
     const sid = `smart:${sfId}`;
     set(sidebarNodesAtom, get(sidebarNodesAtom).filter((n) => n.id !== sid));
-  },
-);
-
-export const patchSmartFolderNodeAtom = atom(
-  null,
-  (get, set, { sfId, patch }: { sfId: number; patch: Partial<SidebarNodeDto> }) => {
-    const sid = `smart:${sfId}`;
-    set(
-      sidebarNodesAtom,
-      get(sidebarNodesAtom).map((n) => (n.id === sid ? { ...n, ...patch } : n)),
-    );
   },
 );
 

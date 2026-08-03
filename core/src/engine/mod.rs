@@ -9,9 +9,7 @@
 //! Transport adapters call engine methods. They do not own behavior.
 //! The engine calls LibraryDatabase. It does not access storage directly.
 
-pub mod assets;
 pub mod collections;
-pub mod deferred;
 pub mod duplicates;
 pub mod folders;
 pub mod ingest;

@@ -48,17 +48,18 @@ jobs:
             liblcms2-dev \
             libssl-dev \
             libclang-dev \
-            libfuse2
+            libfuse2 \
+            xvfb
 
       - name: Download FFmpeg binaries
         run: bash scripts/download-ffmpeg.sh
 
       - name: Install root dependencies
-        run: npm install
+        run: npm ci
 
       - name: Install NAPI CLI deps
         working-directory: native/picto-node
-        run: npm install
+        run: npm ci
 
       - name: Run alpha verify gate
         run: npm run gate:alpha
@@ -112,7 +113,8 @@ jobs:
             liblcms2-dev \
             libssl-dev \
             libclang-dev \
-            libfuse2
+            libfuse2 \
+            xvfb
 
       - name: Install LLVM (Windows)
         if: runner.os == 'Windows'
@@ -128,26 +130,24 @@ jobs:
         run: bash scripts/download-gallery-dl.sh
 
       - name: Install root dependencies
-        run: npm install
+        run: npm ci
 
       - name: Install NAPI CLI deps
         working-directory: native/picto-node
-        run: npm install
-
-      - name: Build native module
-        working-directory: native/picto-node
-        run: npx napi build --release
-
-      - name: Build frontend
-        run: npm run build:electron
+        run: npm ci
 
       - name: Package alpha artifacts
         run: npm run alpha:package
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Run alpha smoke (Linux)
+        if: runner.os == 'Linux'
+        run: xvfb-run --auto-servernum npm run alpha:smoke -- --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
+
       - name: Run alpha smoke
-        run: npm run alpha:smoke -- --scope package --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
+        if: runner.os != 'Linux'
+        run: npm run alpha:smoke -- --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4

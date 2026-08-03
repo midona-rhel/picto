@@ -26,12 +26,12 @@ export function AddQueryBar({
   };
 
   return (
-    <div className={styles.queryCardAdd}>
+    <div className={styles.addQueryRow}>
       <CmSelect
         value={siteId}
         options={sites.map((entry) => ({ value: entry.id, label: entry.name }))}
         onChange={setSiteId}
-        width={160}
+        width={140}
       />
       <TagAutocompleteInput
         siteId={siteId}
@@ -40,8 +40,8 @@ export function AddQueryBar({
         onSubmit={submit}
         placeholder={site ? `e.g. ${site.example_query}` : 'query'}
       />
-      <ActionButton variant="secondary" disabled={busy || !queryText.trim()} onClick={submit}>
-        Add query
+      <ActionButton variant="secondary" compact disabled={busy || !queryText.trim()} onClick={submit}>
+        Add
       </ActionButton>
     </div>
   );

@@ -33,12 +33,21 @@ pub struct ModelInfo {
     pub input_size: u32,
     /// Channel order expected by the model.
     pub channel_order: ChannelOrder,
+    /// Approximate download size of the ONNX file in bytes.
+    #[ts(type = "number")]
+    pub size_bytes: u64,
+    /// Which tag vocabulary the model produces (shown in the settings panel).
+    pub dataset: String,
+    /// Heavy models trade speed for accuracy and are only recommended on
+    /// machines with plenty of memory.
+    pub heavy: bool,
 }
 
 /// Static registry of known models.
 ///
-/// WD14: SmilingWolf's ViT-Large v3 — highest F1 score (0.4674) among all v3 variants.
-/// E621: Z3D-E621-ConvNext — community-trained E621 tagger in ONNX format.
+/// WD14 SwinV2 v3 + Z3D E621 ConvNext are the recommended default pair;
+/// EVA02-Large v3 is the highest-accuracy WD variant but several times
+/// slower and ~1.3 GB on disk, so it is marked heavy.
 pub fn known_models() -> Vec<ModelInfo> {
     vec![
         ModelInfo {
@@ -48,6 +57,9 @@ pub fn known_models() -> Vec<ModelInfo> {
             labels_url: "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv".into(),
             input_size: 448,
             channel_order: ChannelOrder::Bgr,
+            size_bytes: 467_000_000,
+            dataset: "Danbooru tags".into(),
+            heavy: false,
         },
         ModelInfo {
             slug: "z3d-e621-convnext".into(),
@@ -56,6 +68,20 @@ pub fn known_models() -> Vec<ModelInfo> {
             labels_url: "https://huggingface.co/toynya/Z3D-E621-Convnext/resolve/main/tags-selected.csv".into(),
             input_size: 448,
             channel_order: ChannelOrder::Rgb,
+            size_bytes: 390_000_000,
+            dataset: "e621 tags".into(),
+            heavy: false,
+        },
+        ModelInfo {
+            slug: "wd14-eva02-large-v3".into(),
+            label: "WD14 EVA02-Large v3".into(),
+            onnx_url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/model.onnx".into(),
+            labels_url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/selected_tags.csv".into(),
+            input_size: 448,
+            channel_order: ChannelOrder::Bgr,
+            size_bytes: 1_260_000_000,
+            dataset: "Danbooru tags, highest accuracy".into(),
+            heavy: true,
         },
     ]
 }

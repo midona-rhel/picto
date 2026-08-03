@@ -6,8 +6,8 @@
  *   - grid: uniform square tiles
  *   - justified: row-filling with aspect-ratio-aware sizing
  *
- * Ported from legacy/frontend/features/grid/layoutMath.ts with justified
- * last-row fix: incomplete last rows use target height instead of stretching.
+ * Based on the prior grid layout algorithm, with a justified last-row fix:
+ * incomplete last rows use target height instead of stretching.
  */
 
 import type { LayoutItem, LayoutResult, GridViewMode } from './types';

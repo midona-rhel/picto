@@ -76,7 +76,12 @@ pub struct AppSettings {
     #[serde(default)]
     pub ai_tagger_e621_enabled: bool,
     #[serde(default)]
+    pub ai_tagger_eva02_enabled: bool,
+    #[serde(default)]
     pub ai_tagger_auto_on_import: bool,
+    /// Whether AI runs may write `rating:` tags (auto-import path).
+    #[serde(default = "default_true")]
+    pub ai_tagger_write_rating: bool,
     #[serde(default = "default_ai_threshold_general")]
     pub ai_threshold_general: f32,
     #[serde(default = "default_ai_threshold_character")]
@@ -196,7 +201,9 @@ impl Default for AppSettings {
             watch_folder_default_status: default_watch_folder_default_status(),
             ai_tagger_wd14_enabled: false,
             ai_tagger_e621_enabled: false,
+            ai_tagger_eva02_enabled: false,
             ai_tagger_auto_on_import: false,
+            ai_tagger_write_rating: true,
             ai_threshold_general: default_ai_threshold_general(),
             ai_threshold_character: default_ai_threshold_character(),
             ai_threshold_copyright: default_ai_threshold_copyright(),

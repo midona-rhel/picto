@@ -78,11 +78,26 @@ pub async fn start_workers(
         handles.push(("group_scheduler", handle));
     }
 
+    // ── Subscription runtime reconcile (must precede the site runner) ──
+    {
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            canonical_db.as_ref(),
+            library_root,
+        );
+        match runtime.reconcile_subscription_runtime_state().await {
+            Ok(report) => {
+                tracing::info!(?report, "Subscription runtime reconciled at startup")
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Subscription runtime reconcile failed")
+            }
+        }
+    }
+
     // ── Subscription site runner ──────────────────────
     {
         let sub_db = canonical_db.clone();
         let sub_root = library_root.to_path_buf();
-        let sub_blob = blob_store.clone();
         let sub_rl = rate_limiter.clone();
         let sub_running = running_subscriptions.clone();
         let sub_terminal = sub_terminal_statuses.clone();
@@ -90,7 +105,6 @@ pub async fn start_workers(
         let handle = tokio::spawn(crate::subscriptions::site_runner::start_worker_loop(
             sub_db,
             sub_root,
-            sub_blob,
             sub_rl,
             sub_running,
             sub_terminal,

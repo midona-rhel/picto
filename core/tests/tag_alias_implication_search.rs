@@ -1,77 +1,63 @@
-//! Workflow test: add tag → alias → implication → search agrees.
+//! Tag aliases and implications must affect the canonical grid query.
 
 mod common_canonical;
 
-use picto_core::scope::resolver::{resolve_scope, ScopeFilter};
-use picto_core::types::*;
+use std::collections::BTreeSet;
+
+use picto_core::db::types::{
+    BaseScope, EntityViewQuery, QueryFilters, QueryPage, QuerySort, ScopeKind, TagFilter,
+    TagMatchMode,
+};
+use picto_core::engine::ApplicationEngine;
+
+fn query_tag(harness: &common_canonical::TestHarness, tag: &str) -> BTreeSet<i64> {
+    harness
+        .db
+        .query_entity_view(&EntityViewQuery {
+            base_scope: BaseScope {
+                kind: ScopeKind::System,
+                key: Some("all".into()),
+                id: None,
+            },
+            filters: QueryFilters {
+                tags: Some(vec![TagFilter {
+                    tag: tag.to_string(),
+                    match_mode: TagMatchMode::Include,
+                }]),
+                ..Default::default()
+            },
+            sort: QuerySort::default(),
+            page: QueryPage {
+                cursor: None,
+                limit: 100,
+            },
+        })
+        .expect("query tag")
+        .items
+        .into_iter()
+        .map(|item| item.entity_id)
+        .collect()
+}
 
 #[tokio::test]
-async fn tag_search_direct_then_alias_then_implication() {
+async fn aliases_and_implications_are_visible_to_grid_search() {
     let harness = common_canonical::TestHarness::new().await;
-
-    // Insert 3 active files
-    let f1 = harness.insert_test_file("ta_1", "f1.png", 1).await;
-    let f2 = harness.insert_test_file("ta_2", "f2.png", 1).await;
-    let f3 = harness.insert_test_file("ta_3", "f3.png", 1).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_active(f3);
-
-    // Create tags: "red", "crimson", "color"
+    let red_entity = harness.insert_test_file("tag_red", "red.png", 1).await;
+    let crimson_entity = harness
+        .insert_test_file("tag_crimson", "crimson.png", 1)
+        .await;
     let red = harness.insert_test_tag("", "red").await;
     let crimson = harness.insert_test_tag("", "crimson").await;
     let color = harness.insert_test_tag("", "color").await;
+    harness.tag_entity(red_entity, red).await;
+    harness.tag_entity(crimson_entity, crimson).await;
 
-    // Tag f1 with "red", f2 with "crimson", f3 untagged
-    harness.tag_entity(f1, red).await;
-    harness.tag_entity(f2, crimson).await;
-    harness.bitmaps_insert_effective_tag(red, f1);
-    harness.bitmaps_insert_effective_tag(crimson, f2);
+    let engine = ApplicationEngine::new(harness.db.clone());
+    engine.manage_tag_alias(crimson, Some(red)).unwrap();
+    engine.manage_tag_implication(red, color, true).unwrap();
 
-    // 1. Direct search: "red" returns only f1
-    let filter_red = ScopeFilter {
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            search_tags: Some(vec!["red".to_string()]),
-            ..Default::default()
-        },
-    };
-    let bm = resolve_scope(&harness.db, &filter_red).await.unwrap();
-    assert_eq!(bm.len(), 1, "only f1 has tag red");
-    assert!(bm.contains(f1 as u32));
-
-    // 2. Simulate alias: "crimson" resolves to "red"
-    // In the real system, the alias compiler would update effective tag bitmaps.
-    // For deterministic testing, seed effective tags manually:
-    // f2 (tagged "crimson") now also appears under "red" effective tag
-    harness.bitmaps_insert_effective_tag(red, f2);
-
-    let bm = resolve_scope(&harness.db, &filter_red).await.unwrap();
-    assert_eq!(bm.len(), 2, "after alias, both f1 and f2 match red");
-    assert!(bm.contains(f1 as u32));
-    assert!(bm.contains(f2 as u32));
-
-    // 3. Simulate implication: "red" implies "color"
-    // f1 and f2 (which have effective tag "red") should also have effective tag "color"
-    harness.bitmaps_insert_effective_tag(color, f1);
-    harness.bitmaps_insert_effective_tag(color, f2);
-
-    let filter_color = ScopeFilter {
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            search_tags: Some(vec!["color".to_string()]),
-            ..Default::default()
-        },
-    };
-    let bm = resolve_scope(&harness.db, &filter_color).await.unwrap();
-    assert_eq!(
-        bm.len(),
-        2,
-        "implication: red implies color, so f1+f2 match color"
-    );
-    assert!(bm.contains(f1 as u32));
-    assert!(bm.contains(f2 as u32));
-
-    // f3 should never appear in any tag search
-    assert!(!bm.contains(f3 as u32), "f3 has no tags, must not match");
+    let expected = BTreeSet::from([red_entity, crimson_entity]);
+    assert_eq!(query_tag(&harness, "red"), expected);
+    assert_eq!(query_tag(&harness, "crimson"), expected);
+    assert_eq!(query_tag(&harness, "color"), expected);
 }

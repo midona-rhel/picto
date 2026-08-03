@@ -63,7 +63,6 @@ interface GridMenuContext {
   onEditCollection?: () => void;
   onOpenTagSelect?: () => void;
   onOpenAiTagger?: () => void;
-  onOpenBatchRename?: () => void;
   onAccept?: () => void;
   onReject?: () => void;
   onRename?: () => void;
@@ -221,10 +220,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   if (singleSelected) {
     entries.push(item('Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.rename'), action: ctx.onRename }));
   }
-  if (hasSelection && selectionCount > 1) {
-    entries.push(item('Batch Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.batchRename'), action: ctx.onOpenBatchRename }));
-  }
-  if (singleSelected || (hasSelection && selectionCount > 1)) {
+  if (singleSelected) {
     entries.push(sep());
   }
 
@@ -258,7 +254,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   // ── Tags ──
   if (hasSelection) {
     entries.push(item('Add Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('organize.addTag'), action: ctx.onOpenTagSelect }));
-    entries.push(item('AI Tagger', { icon: <IconBookmarks size={15} />, shortcut: kbd('organize.autoTag'), action: ctx.onOpenAiTagger }));
+    entries.push(item(selectionCount > 1 ? `Auto Tag ${selectionCount} Images` : 'Auto Tag', { icon: <IconBookmarks size={15} />, shortcut: kbd('organize.autoTag'), action: ctx.onOpenAiTagger }));
     entries.push(item('Copy Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags }));
     entries.push(item('Paste Tags', { icon: <IconBookmarks size={15} style={{ transform: 'scaleX(-1)' }} />, shortcut: kbd('edit.pasteTags'), action: ctx.onPasteTags, disabled: !ctx.hasClipboardTags }));
     entries.push(sep());

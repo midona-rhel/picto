@@ -4,13 +4,10 @@ use std::pin::Pin;
 
 use tokio::sync::mpsc::Sender;
 
-use crate::subscriptions::gallery_dl_runner::{
-    self, GalleryDlRunner, RunOptions, RunSummary,
-};
+use crate::subscriptions::gallery_dl_runner::{self, GalleryDlRunner, RunOptions, RunSummary};
 
 use super::{
-    describe_site, runner_key_for_site, validate_query_kind, DownloadedItem,
-    SiteAdapterDescriptor,
+    describe_site, runner_key_for_site, validate_query_kind, DownloadedItem, SiteAdapterDescriptor,
 };
 
 pub trait SubscriptionSourceAdapter: Send + Sync {

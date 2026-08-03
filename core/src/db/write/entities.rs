@@ -175,6 +175,7 @@ pub fn set_entity_date_created(
 /// Returns the deleted entity IDs and hashes.
 pub fn delete_entities(conn: &Connection, entity_ids: &[i64]) -> rusqlite::Result<EntityChange> {
     let mut change = EntityChange::default();
+    let mut candidate_file_hashes: Vec<String> = Vec::new();
 
     for eid in entity_ids {
         // Collect hash before deletion
@@ -218,6 +219,15 @@ pub fn delete_entities(conn: &Connection, entity_ids: &[i64]) -> rusqlite::Resul
                         |row| row.get(0),
                     )
                     .ok();
+                if let Some(fid) = member_file_id {
+                    if let Ok(h) = conn.query_row(
+                        "SELECT file_hash FROM media_file WHERE file_id = ?1",
+                        [fid],
+                        |row| row.get::<_, String>(0),
+                    ) {
+                        candidate_file_hashes.push(h);
+                    }
+                }
                 conn.execute(
                     "DELETE FROM single_media_entity WHERE entity_id = ?1",
                     [mid],
@@ -245,6 +255,15 @@ pub fn delete_entities(conn: &Connection, entity_ids: &[i64]) -> rusqlite::Resul
                 |row| row.get(0),
             )
             .ok();
+        if let Some(fid) = file_id {
+            if let Ok(h) = conn.query_row(
+                "SELECT file_hash FROM media_file WHERE file_id = ?1",
+                [fid],
+                |row| row.get::<_, String>(0),
+            ) {
+                candidate_file_hashes.push(h);
+            }
+        }
         conn.execute(
             "DELETE FROM single_media_entity WHERE entity_id = ?1",
             [eid],
@@ -263,6 +282,21 @@ pub fn delete_entities(conn: &Connection, entity_ids: &[i64]) -> rusqlite::Resul
         if let Some(h) = hash {
             change.entity_ids.push(*eid);
             change.entity_hashes.push(h);
+        }
+    }
+
+    // Content-addressed blobs may back several media_file rows — only report
+    // hashes with zero remaining references as reclaimable.
+    candidate_file_hashes.sort();
+    candidate_file_hashes.dedup();
+    for hash in candidate_file_hashes {
+        let refs: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM media_file WHERE file_hash = ?1",
+            [&hash],
+            |row| row.get(0),
+        )?;
+        if refs == 0 {
+            change.freed_file_hashes.push(hash);
         }
     }
 

@@ -13,52 +13,35 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::duplicates::ScanDuplicatesInput::export().unwrap();
     picto_core::dispatch::typed::duplicates::GetDuplicatePairsInput::export().unwrap();
     picto_core::dispatch::typed::duplicates::ResolveDuplicatePairInput::export().unwrap();
-    picto_core::dispatch::typed::duplicates::UpdateDuplicateSettingsInput::export().unwrap();
-
-    picto_core::dispatch::typed::folders::GetFolderFilesInput::export().unwrap();
     picto_core::dispatch::typed::folders::GetFolderCoverHashInput::export().unwrap();
-    picto_core::dispatch::typed::folders::GetFileFoldersInput::export().unwrap();
-    picto_core::dispatch::typed::folders::GetEntityFoldersInput::export().unwrap();
     picto_core::dispatch::typed::folders::MoveFolderInput::export().unwrap();
     picto_core::dispatch::typed::folders::CreateFolderInput::export().unwrap();
     picto_core::dispatch::typed::folders::UpdateFolderInput::export().unwrap();
     picto_core::dispatch::typed::folders::DeleteFolderInput::export().unwrap();
-    picto_core::dispatch::typed::folders::UpdateFolderParentInput::export().unwrap();
-    picto_core::dispatch::typed::folders::AddFilesToFolderInput::export().unwrap();
     picto_core::dispatch::typed::folders::RemoveFilesFromFolderInput::export().unwrap();
-    picto_core::dispatch::typed::folders::ReorderFoldersInput::export().unwrap();
     picto_core::dispatch::typed::folders::ReorderFolderItemsInput::export().unwrap();
     picto_core::dispatch::typed::collections::GetCollectionSummaryInput::export().unwrap();
     picto_core::dispatch::typed::collections::CreateCollectionInput::export().unwrap();
-    picto_core::dispatch::typed::collections::UpdateCollectionInput::export().unwrap();
     picto_core::dispatch::typed::collections::ReorderCollectionMembersInput::export().unwrap();
     picto_core::dispatch::typed::collections::AddCollectionMembersInput::export().unwrap();
     picto_core::dispatch::typed::collections::RemoveCollectionMembersInput::export().unwrap();
     picto_core::dispatch::typed::collections::DeleteCollectionInput::export().unwrap();
 
     picto_core::dispatch::typed::media_io::ResolveFilePathInput::export().unwrap();
-    picto_core::dispatch::typed::media_io::OpenFileDefaultInput::export().unwrap();
-    picto_core::dispatch::typed::media_io::RevealInFolderInput::export().unwrap();
     picto_core::dispatch::typed::media_io::OpenInNewWindowInput::export().unwrap();
-    picto_core::dispatch::typed::media_io::ResolveThumbnailPathInput::export().unwrap();
     picto_core::dispatch::typed::media_io::EnsureThumbnailInput::export().unwrap();
-    picto_core::dispatch::typed::media_io::RegenerateThumbnailInput::export().unwrap();
     picto_core::dispatch::typed::media_io::RegenerateThumbnailsBatchInput::export().unwrap();
-    picto_core::dispatch::typed::media_io::ReanalyzeFileColorsInput::export().unwrap();
 
-    picto_core::dispatch::typed::media_lifecycle::ImportFilesInput::export().unwrap();
-    picto_core::dispatch::typed::system::GetMediaEntityMetadataInput::export().unwrap();
-
-    picto_core::dispatch::typed::smart_folders::ReorderSmartFoldersInput::export().unwrap();
+    picto_core::dispatch::typed::media_lifecycle::AddMediaInput::export().unwrap();
     picto_core::dispatch::typed::smart_folders::CreateSmartFolderInput::export().unwrap();
     picto_core::dispatch::typed::smart_folders::UpdateSmartFolderInput::export().unwrap();
     picto_core::dispatch::typed::smart_folders::DeleteSmartFolderInput::export().unwrap();
-    picto_core::dispatch::typed::smart_folders::CountSmartFolderInput::export().unwrap();
 
     picto_core::dispatch::typed::subscriptions::CreateGroupInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::DeleteGroupInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::RenameGroupInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::SetGroupScheduleInput::export().unwrap();
+    picto_core::dispatch::typed::subscriptions::PauseGroupInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::RunGroupInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::StopGroupInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::GetSiteMetadataSchemaInput::export().unwrap();
@@ -84,10 +67,6 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::system::SetZoomFactorInput::export().unwrap();
 
     picto_core::dispatch::typed::tags::SearchTagsInput::export().unwrap();
-    picto_core::dispatch::typed::tags::GetFileTagsInput::export().unwrap();
-    picto_core::dispatch::typed::tags::AddTagsInput::export().unwrap();
-    picto_core::dispatch::typed::tags::RemoveTagsInput::export().unwrap();
-    picto_core::dispatch::typed::tags::FindFilesByTagsInput::export().unwrap();
     picto_core::dispatch::typed::tags::ManageTagAliasInput::export().unwrap();
     picto_core::dispatch::typed::tags::ManageTagImplicationInput::export().unwrap();
     picto_core::dispatch::typed::tags::GetTagRelationsInput::export().unwrap();
@@ -95,10 +74,23 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::tags::GetTagsPaginatedInput::export().unwrap();
     picto_core::dispatch::typed::tags::RenameTagInput::export().unwrap();
     picto_core::dispatch::typed::tags::DeleteTagInput::export().unwrap();
-    picto_core::dispatch::typed::tags::CompanionGetNamespaceValuesInput::export().unwrap();
-    picto_core::dispatch::typed::tags::CompanionGetFilesByTagInput::export().unwrap();
 
     // events
+    // ai_tagger
+    picto_core::dispatch::typed::ai_tagger::AiTaggerStatusInput::export().unwrap();
+    picto_core::dispatch::typed::ai_tagger::AiTaggerModelStatus::export().unwrap();
+    picto_core::dispatch::typed::ai_tagger::AiTaggerHardware::export().unwrap();
+    picto_core::dispatch::typed::ai_tagger::AiTaggerStatusOutput::export().unwrap();
+    picto_core::dispatch::typed::ai_tagger::AiTaggerDownloadModelInput::export().unwrap();
+    picto_core::dispatch::typed::ai_tagger::AiTagPredictInput::export().unwrap();
+    picto_core::dispatch::typed::ai_tagger::AiTagCancelInput::export().unwrap();
+    picto_core::dispatch::typed::ai_tagger::FilePrediction::export().unwrap();
+    picto_core::dispatch::typed::ai_tagger::AiTagPredictOutput::export().unwrap();
+    picto_core::dispatch::typed::ai_tagger::AiTagApplyInput::export().unwrap();
+    picto_core::ai_tagger::inference::TagPrediction::export().unwrap();
+    picto_core::ai_tagger::models::ModelInfo::export().unwrap();
+    picto_core::ai_tagger::models::ChannelOrder::export().unwrap();
+
     // runtime_contract
     picto_core::runtime_contract::state_change::Domain::export().unwrap();
     picto_core::runtime_contract::state_change::TagChangeDetails::export().unwrap();
@@ -122,8 +114,6 @@ fn export_all_bindings() {
     picto_core::smart_folders::types::PredicateRule::export().unwrap();
 
     // types
-    picto_core::types::ImportResult::export().unwrap();
-    picto_core::types::ImportBatchResult::export().unwrap();
     picto_core::types::GridScopeKind::export().unwrap();
     picto_core::types::GridSystemScopeKey::export().unwrap();
     picto_core::types::GridScopeSpec::export().unwrap();

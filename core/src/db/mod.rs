@@ -4,10 +4,15 @@
 //! Code outside `db/` consumes typed methods and typed results only.
 //! No SQL, no table names, no bitmap storage details leak out.
 
+mod collection_ops;
 pub mod core;
-pub mod migration_legacy;
+mod deferred_ops;
+mod folder_ops;
 pub mod projection;
 pub mod query;
+mod remote_ops;
+mod smart_folder_ops;
+mod tag_ops;
 pub mod types;
 pub mod write;
 
@@ -18,337 +23,6 @@ use rusqlite::{Connection, OptionalExtension};
 
 use self::projection::bitmaps::BitmapStore;
 use self::types::*;
-
-fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
-    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
-    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
-    for row in rows {
-        if row? == column {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn table_exists(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
-        [table],
-        |row| row.get::<_, i64>(0),
-    )
-    .map(|exists| exists != 0)
-}
-
-fn reconcile_ingest_queue_schema(conn: &Connection) -> Result<(), String> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS ingest_queue (
-            queue_id        INTEGER PRIMARY KEY,
-            queue_kind      TEXT    NOT NULL,
-            source_kind     TEXT    NOT NULL,
-            subscription_id INTEGER REFERENCES subscription(subscription_id) ON DELETE CASCADE,
-            query_id        INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
-            query_run_id    INTEGER,
-            cleanup_root    TEXT,
-            post_id         TEXT,
-            category        TEXT,
-            preferred_name  TEXT,
-            expected_count  INTEGER,
-            status          TEXT    NOT NULL DEFAULT 'pending',
-            last_error      TEXT,
-            created_at      TEXT    NOT NULL,
-            updated_at      TEXT    NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS ingest_queue_item (
-            item_id              INTEGER PRIMARY KEY,
-            queue_id             INTEGER NOT NULL REFERENCES ingest_queue(queue_id) ON DELETE CASCADE,
-            source_path          TEXT    NOT NULL,
-            page_num             INTEGER NOT NULL DEFAULT 0,
-            payload_json         TEXT    NOT NULL,
-            delete_after_ingest  INTEGER NOT NULL DEFAULT 0,
-            status               TEXT    NOT NULL DEFAULT 'pending',
-            result_kind          TEXT,
-            resolved_entity_hash TEXT,
-            resolved_file_hash   TEXT,
-            last_error           TEXT,
-            created_at           TEXT    NOT NULL,
-            updated_at           TEXT    NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_ingest_queue_ready
-            ON ingest_queue(status, created_at, queue_id);
-        CREATE INDEX IF NOT EXISTS idx_ingest_queue_subscription
-            ON ingest_queue(subscription_id, status, queue_id);
-        CREATE INDEX IF NOT EXISTS idx_ingest_queue_item_queue
-            ON ingest_queue_item(queue_id, status, page_num, item_id);",
-    )
-    .map_err(|e| format!("Failed to reconcile ingest queue tables: {e}"))?;
-
-    if table_exists(conn, "ingest_queue").map_err(|e| e.to_string())? {
-        if !has_column(conn, "ingest_queue", "created_at").map_err(|e| e.to_string())? {
-            conn.execute_batch(
-                "ALTER TABLE ingest_queue ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
-                 ALTER TABLE ingest_queue ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';",
-            )
-            .map_err(|e| format!("Failed to add ingest_queue created/updated columns: {e}"))?;
-            conn.execute(
-                "UPDATE ingest_queue
-                 SET created_at = COALESCE(NULLIF(date_added, ''), datetime('now')),
-                     updated_at = COALESCE(NULLIF(date_modified, ''), COALESCE(NULLIF(date_added, ''), datetime('now')))
-                 WHERE created_at = '' OR updated_at = ''",
-                [],
-            )
-            .map_err(|e| format!("Failed to backfill ingest_queue timestamps: {e}"))?;
-        }
-    }
-
-    if table_exists(conn, "ingest_queue_item").map_err(|e| e.to_string())? {
-        if !has_column(conn, "ingest_queue_item", "created_at").map_err(|e| e.to_string())? {
-            conn.execute_batch(
-                "ALTER TABLE ingest_queue_item ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
-                 ALTER TABLE ingest_queue_item ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';",
-            )
-            .map_err(|e| {
-                format!("Failed to add ingest_queue_item created/updated columns: {e}")
-            })?;
-            conn.execute(
-                "UPDATE ingest_queue_item
-                 SET created_at = COALESCE(NULLIF(date_added, ''), datetime('now')),
-                     updated_at = COALESCE(NULLIF(date_modified, ''), COALESCE(NULLIF(date_added, ''), datetime('now')))
-                 WHERE created_at = '' OR updated_at = ''",
-                [],
-            )
-            .map_err(|e| format!("Failed to backfill ingest_queue_item timestamps: {e}"))?;
-        }
-    }
-
-    Ok(())
-}
-
-fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
-    if has_column(conn, "folder", "notes").map_err(|e| e.to_string())? == false {
-        conn.execute_batch("ALTER TABLE folder ADD COLUMN notes TEXT")
-            .map_err(|e| format!("Failed to add folder.notes to canonical db: {e}"))?;
-    }
-    if has_column(conn, "smart_folder", "notes").map_err(|e| e.to_string())? == false {
-        conn.execute_batch("ALTER TABLE smart_folder ADD COLUMN notes TEXT")
-            .map_err(|e| format!("Failed to add smart_folder.notes to canonical db: {e}"))?;
-    }
-    if has_column(conn, "tag", "site_mask").map_err(|e| e.to_string())? == false {
-        conn.execute_batch("ALTER TABLE tag ADD COLUMN site_mask INTEGER NOT NULL DEFAULT 0")
-            .map_err(|e| format!("Failed to add tag.site_mask to canonical db: {e}"))?;
-    }
-    if has_column(conn, "entity_tag", "provenance_mask").map_err(|e| e.to_string())? == false {
-        conn.execute_batch(
-            "ALTER TABLE entity_tag ADD COLUMN provenance_mask INTEGER NOT NULL DEFAULT 0",
-        )
-        .map_err(|e| format!("Failed to add entity_tag.provenance_mask to canonical db: {e}"))?;
-        conn.execute(
-            "UPDATE entity_tag SET provenance_mask = ?1 WHERE source = 'local' AND provenance_mask = 0",
-            [types::mask_to_db_bits(types::TAG_PROVENANCE_MANUAL)],
-        )
-        .map_err(|e| format!("Failed to backfill entity_tag.provenance_mask: {e}"))?;
-    }
-    if has_column(conn, "media_file", "color_analysis_version").map_err(|e| e.to_string())? == false
-    {
-        conn.execute_batch(
-            "ALTER TABLE media_file
-             ADD COLUMN color_analysis_version INTEGER NOT NULL DEFAULT 0",
-        )
-        .map_err(|e| {
-            format!("Failed to add media_file.color_analysis_version to canonical db: {e}")
-        })?;
-    }
-    if has_column(conn, "subscription_query", "notes").map_err(|e| e.to_string())? == false {
-        conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN notes TEXT")
-            .map_err(|e| format!("Failed to add subscription_query.notes: {e}"))?;
-    }
-    if has_column(conn, "subscription_group", "paused").map_err(|e| e.to_string())? == false {
-        conn.execute_batch(
-            "ALTER TABLE subscription_group ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
-        )
-        .map_err(|e| format!("Failed to add subscription_group.paused: {e}"))?;
-    }
-    if has_column(conn, "credential_domain", "expires_at").map_err(|e| e.to_string())? == false {
-        conn.execute_batch("ALTER TABLE credential_domain ADD COLUMN expires_at TEXT")
-            .map_err(|e| format!("Failed to add credential_domain.expires_at: {e}"))?;
-    }
-    if has_column(conn, "subscription_query", "site_id").map_err(|e| e.to_string())? == false {
-        conn.execute_batch(
-            "ALTER TABLE subscription_query ADD COLUMN site_id TEXT NOT NULL DEFAULT ''",
-        )
-        .map_err(|e| format!("Failed to add subscription_query.site_id: {e}"))?;
-        conn.execute(
-            "UPDATE subscription_query
-             SET site_id = COALESCE((
-                 SELECT NULLIF(subscription.site_id, '')
-                 FROM subscription
-                 WHERE subscription.subscription_id = subscription_query.subscription_id
-             ), site_id)
-             WHERE site_id = ''",
-            [],
-        )
-        .map_err(|e| format!("Failed to backfill subscription_query.site_id: {e}"))?;
-    }
-    if has_column(conn, "subscription_query", "query_kind").map_err(|e| e.to_string())? == false {
-        conn.execute_batch(
-            "ALTER TABLE subscription_query ADD COLUMN query_kind TEXT NOT NULL DEFAULT ''",
-        )
-        .map_err(|e| format!("Failed to add subscription_query.query_kind: {e}"))?;
-        conn.execute(
-            "UPDATE subscription_query SET query_kind = CASE
-                 WHEN site_id = 'pixivuser' THEN 'user'
-                 WHEN site_id = 'furaffinity' THEN 'user'
-                 WHEN site_id = 'patreon' THEN 'creator'
-                 WHEN site_id = 'fanbox' THEN 'creator'
-                 WHEN site_id = 'fantia' THEN 'fanclub'
-                 WHEN site_id = 'instagram' THEN 'user'
-                 WHEN site_id = 'twitter' THEN 'user'
-                 WHEN site_id = 'deviantart' THEN 'user'
-                 WHEN site_id = 'artstation' THEN 'user'
-                 WHEN site_id = 'tumblr' THEN 'blog'
-                 ELSE 'search'
-             END
-             WHERE query_kind = ''",
-            [],
-        )
-        .map_err(|e| format!("Failed to backfill subscription_query.query_kind: {e}"))?;
-    }
-    for column in [
-        "last_success_at",
-        "last_failure_at",
-        "last_failure_kind",
-        "last_failure_message",
-    ] {
-        if has_column(conn, "subscription_query", column).map_err(|e| e.to_string())? == false {
-            conn.execute_batch(&format!(
-                "ALTER TABLE subscription_query ADD COLUMN {column} TEXT"
-            ))
-            .map_err(|e| format!("Failed to add subscription_query.{column}: {e}"))?;
-        }
-    }
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS subscription_run (
-            run_id INTEGER PRIMARY KEY,
-            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
-            started_at TEXT NOT NULL,
-            finished_at TEXT,
-            status TEXT NOT NULL DEFAULT 'running',
-            failure_kind TEXT,
-            error_message TEXT,
-            files_downloaded INTEGER NOT NULL DEFAULT 0,
-            files_skipped INTEGER NOT NULL DEFAULT 0,
-            metadata_validated INTEGER NOT NULL DEFAULT 0,
-            metadata_invalid INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS subscription_query_run (
-            query_run_id INTEGER PRIMARY KEY,
-            run_id INTEGER REFERENCES subscription_run(run_id) ON DELETE SET NULL,
-            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
-            query_id INTEGER NOT NULL REFERENCES subscription_query(query_id) ON DELETE CASCADE,
-            started_at TEXT NOT NULL,
-            finished_at TEXT,
-            status TEXT NOT NULL DEFAULT 'running',
-            failure_kind TEXT,
-            error_message TEXT,
-            posts_processed INTEGER NOT NULL DEFAULT 0,
-            files_downloaded INTEGER NOT NULL DEFAULT 0,
-            files_skipped INTEGER NOT NULL DEFAULT 0
-        );
-        CREATE TABLE IF NOT EXISTS subscription_query_job (
-            job_id INTEGER PRIMARY KEY,
-            run_id INTEGER REFERENCES subscription_run(run_id) ON DELETE SET NULL,
-            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
-            query_id INTEGER NOT NULL REFERENCES subscription_query(query_id) ON DELETE CASCADE,
-            site_id TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'queued',
-            job_kind TEXT NOT NULL DEFAULT 'query_sync',
-            requested_by TEXT NOT NULL DEFAULT 'subscription',
-            post_id TEXT,
-            queued_at TEXT NOT NULL,
-            started_at TEXT,
-            finished_at TEXT,
-            failure_kind TEXT,
-            error_message TEXT
-        );
-        CREATE INDEX IF NOT EXISTS idx_subscription_query_job_ready
-            ON subscription_query_job(status, queued_at, job_id);
-        CREATE INDEX IF NOT EXISTS idx_subscription_query_job_subscription
-            ON subscription_query_job(subscription_id, status, queued_at, job_id);
-        CREATE TABLE IF NOT EXISTS subscription_issue (
-            issue_id INTEGER PRIMARY KEY,
-            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
-            query_id INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
-            issue_kind TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'open',
-            message TEXT NOT NULL,
-            detail TEXT,
-            first_seen_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL,
-            resolved_at TEXT,
-            UNIQUE (subscription_id, query_id, issue_kind, message)
-        );
-        CREATE TABLE IF NOT EXISTS subscription_download_attempt (
-            attempt_id INTEGER PRIMARY KEY,
-            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
-            query_id INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
-            query_run_id INTEGER REFERENCES subscription_query_run(query_run_id) ON DELETE SET NULL,
-            item_key TEXT NOT NULL,
-            site_category TEXT,
-            post_id TEXT,
-            page_num INTEGER,
-            canonical_post_url TEXT,
-            media_url TEXT,
-            retry_url TEXT,
-            retry_count INTEGER NOT NULL DEFAULT 0,
-            status TEXT NOT NULL DEFAULT 'pending',
-            failure_kind TEXT,
-            last_error TEXT,
-            next_retry_at TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            resolved_at TEXT,
-            UNIQUE (subscription_id, query_id, item_key)
-        );
-        CREATE TABLE IF NOT EXISTS subscription_post_member (
-            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
-            site_id TEXT NOT NULL,
-            post_id TEXT NOT NULL,
-            item_key TEXT NOT NULL,
-            page_num INTEGER,
-            canonical_post_url TEXT,
-            media_url TEXT,
-            entity_hash TEXT,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (subscription_id, site_id, post_id, item_key)
-        );",
-    )
-    .map_err(|e| format!("Failed to create canonical subscription runtime tables: {e}"))?;
-    conn.execute_batch(
-        "DROP TABLE IF EXISTS rejected_fingerprint;
-         DROP TABLE IF EXISTS rejected_media;",
-    )
-    .map_err(|e| format!("Failed to remove rejected-media schema: {e}"))?;
-    reconcile_ingest_queue_schema(conn)?;
-    if has_column(conn, "folder", "total_size_bytes").map_err(|e| e.to_string())? == false {
-        conn.execute_batch("ALTER TABLE folder ADD COLUMN total_size_bytes INTEGER NOT NULL DEFAULT 0")
-            .map_err(|e| format!("Failed to add folder.total_size_bytes: {e}"))?;
-    }
-    if has_column(conn, "smart_folder", "total_size_bytes").map_err(|e| e.to_string())? == false {
-        conn.execute_batch("ALTER TABLE smart_folder ADD COLUMN total_size_bytes INTEGER NOT NULL DEFAULT 0")
-            .map_err(|e| format!("Failed to add smart_folder.total_size_bytes: {e}"))?;
-    }
-    if has_column(conn, "folder", "pinned").map_err(|e| e.to_string())? == false {
-        conn.execute_batch("ALTER TABLE folder ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0; ALTER TABLE folder ADD COLUMN pin_order INTEGER NOT NULL DEFAULT 0")
-            .map_err(|e| format!("Failed to add folder pinning columns: {e}"))?;
-    }
-    if has_column(conn, "smart_folder", "pinned").map_err(|e| e.to_string())? == false {
-        conn.execute_batch("ALTER TABLE smart_folder ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0; ALTER TABLE smart_folder ADD COLUMN pin_order INTEGER NOT NULL DEFAULT 0")
-            .map_err(|e| format!("Failed to add smart_folder pinning columns: {e}"))?;
-    }
-    reconcile_sync_identity_schema(conn)?;
-    Ok(())
-}
 
 fn folder_uuid(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<String>> {
     conn.query_row(
@@ -396,470 +70,6 @@ fn entity_hashes_for_ids(conn: &Connection, ids: &[i64]) -> rusqlite::Result<Vec
     Ok(out)
 }
 
-// ── Remote op application ────────────────────────────────────────
-// Materializes ops from peer devices into local truth tables. Unknown
-// entities/tags/folders are skipped (their creating op arrives via the same
-// ordered stream); every arm is idempotent so a crashed batch can re-apply.
-
-fn entity_id_by_hash(conn: &Connection, hash: &str) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",
-        [hash],
-        |row| row.get(0),
-    )
-    .optional()
-}
-
-fn folder_id_by_uuid(conn: &Connection, uuid: &str) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT folder_id FROM folder WHERE uuid = ?1",
-        [uuid],
-        |row| row.get(0),
-    )
-    .optional()
-}
-
-fn smart_folder_id_by_uuid(conn: &Connection, uuid: &str) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT smart_folder_id FROM smart_folder WHERE uuid = ?1",
-        [uuid],
-        |row| row.get(0),
-    )
-    .optional()
-}
-
-fn split_tag_key(key: &str) -> (&str, &str) {
-    match key.find(':') {
-        Some(idx) => (&key[..idx], &key[idx + 1..]),
-        None => ("", key),
-    }
-}
-
-fn tag_id_by_key(conn: &Connection, key: &str) -> rusqlite::Result<Option<i64>> {
-    let (ns, st) = split_tag_key(key);
-    conn.query_row(
-        "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
-        rusqlite::params![ns, st],
-        |row| row.get(0),
-    )
-    .optional()
-}
-
-fn get_or_create_tag_by_key(conn: &Connection, key: &str) -> rusqlite::Result<i64> {
-    if let Some(id) = tag_id_by_key(conn, key)? {
-        return Ok(id);
-    }
-    let (ns, st) = split_tag_key(key);
-    conn.execute(
-        "INSERT OR IGNORE INTO tag (namespace, subtag) VALUES (?1, ?2)",
-        rusqlite::params![ns, st],
-    )?;
-    tag_id_by_key(conn, key)?.ok_or(rusqlite::Error::QueryReturnedNoRows)
-}
-
-fn payload_str<'a>(p: &'a serde_json::Value, field: &str) -> Option<&'a str> {
-    p.get(field).and_then(|v| v.as_str())
-}
-
-fn payload_strings(p: &serde_json::Value, field: &str) -> Vec<String> {
-    p.get(field)
-        .and_then(|v| v.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn payload_mask(p: &serde_json::Value, field: &str, default: u64) -> u64 {
-    payload_str(p, field)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(default)
-}
-
-fn entity_ids_for_hashes(conn: &Connection, hashes: &[String]) -> rusqlite::Result<Vec<i64>> {
-    let mut ids = Vec::with_capacity(hashes.len());
-    for hash in hashes {
-        if let Some(id) = entity_id_by_hash(conn, hash)? {
-            ids.push(id);
-        }
-    }
-    Ok(ids)
-}
-
-fn apply_remote_op(conn: &Connection, op: &crate::oplog::OpRecord) -> rusqlite::Result<()> {
-    let key = op.entity_key.as_str();
-    let p = &op.payload;
-    let now = chrono::Utc::now().to_rfc3339();
-    match op.op_type.as_str() {
-        "entity_created" => {
-            if entity_id_by_hash(conn, key)?.is_some() {
-                return Ok(()); // content-addressed: already materialized
-            }
-            conn.execute(
-                "DELETE FROM media_file WHERE file_hash = ?1
-                 AND file_id NOT IN (SELECT file_id FROM single_media_entity)",
-                [key],
-            )?;
-            let file_id = write::files::insert_file(
-                conn,
-                key,
-                payload_str(p, "mime").unwrap_or("application/octet-stream"),
-                p.get("size").and_then(|v| v.as_i64()).unwrap_or(0),
-                p.get("width").and_then(|v| v.as_i64()),
-                p.get("height").and_then(|v| v.as_i64()),
-                p.get("duration_ms").and_then(|v| v.as_i64()),
-                p.get("frame_count").and_then(|v| v.as_i64()),
-                p.get("has_audio").and_then(|v| v.as_bool()).unwrap_or(false),
-                &now,
-            )?;
-            let entity_id = write::entities::insert_single(
-                conn,
-                key,
-                file_id,
-                payload_str(p, "name"),
-                p.get("status").and_then(|v| v.as_i64()).unwrap_or(0),
-                payload_str(p, "date_created").unwrap_or(&now),
-                &now,
-            )?;
-            let source_urls = payload_strings(p, "source_urls");
-            let source_urls_json = if source_urls.is_empty() {
-                None
-            } else {
-                serde_json::to_string(&source_urls).ok()
-            };
-            if payload_str(p, "notes").is_some() || source_urls_json.is_some() {
-                write::entities::patch_entity_metadata(
-                    conn,
-                    &[entity_id],
-                    None,
-                    None,
-                    payload_str(p, "notes").map(Some),
-                    source_urls_json.as_deref(),
-                    &now,
-                    types::ExpansionMode::EntityOnly,
-                )?;
-            }
-            let tags = payload_strings(p, "tags");
-            if !tags.is_empty() {
-                write::tags::add_tags(
-                    conn,
-                    &[entity_id],
-                    &tags,
-                    payload_mask(p, "tag_provenance", types::TAG_PROVENANCE_MANUAL),
-                    types::ExpansionMode::EntityOnly,
-                )?;
-            }
-            // Derivatives (thumbnail, phash, colors) queue when the blob
-            // lands; the blob itself arrives via blob sync or source refetch.
-        }
-        "entity_status_changed" => {
-            if let Some(id) = entity_id_by_hash(conn, key)? {
-                if let Some(status) = p.get("status").and_then(|v| v.as_i64()) {
-                    write::entities::set_entity_status(
-                        conn,
-                        &[id],
-                        status,
-                        types::ExpansionMode::EntityOnly,
-                        &now,
-                    )?;
-                }
-            }
-        }
-        "entity_updated" => {
-            if let Some(id) = entity_id_by_hash(conn, key)? {
-                write::entities::patch_entity_metadata(
-                    conn,
-                    &[id],
-                    payload_str(p, "name"),
-                    p.get("rating").map(|v| v.as_i64()),
-                    p.get("notes").map(|v| v.as_str()),
-                    p.get("source_urls")
-                        .and_then(|v| serde_json::to_string(v).ok())
-                        .as_deref(),
-                    &now,
-                    types::ExpansionMode::EntityOnly,
-                )?;
-                if let Some(created) = payload_str(p, "date_created") {
-                    write::entities::set_entity_date_created(conn, id, created, &now)?;
-                }
-            }
-        }
-        "entity_deleted" | "collection_deleted" => {
-            if op.op_type == "collection_deleted"
-                && p.get("split").and_then(|v| v.as_bool()).unwrap_or(false)
-            {
-                if let Some(id) = entity_id_by_hash(conn, key)? {
-                    write::collections::split_collection(conn, id)?;
-                }
-            } else if let Some(id) = entity_id_by_hash(conn, key)? {
-                if op.op_type == "collection_deleted" {
-                    write::collections::delete_collection(conn, id)?;
-                } else {
-                    write::entities::delete_entities(conn, &[id])?;
-                }
-            }
-        }
-        "entity_tags_added" | "entity_tags_removed" => {
-            if let Some(id) = entity_id_by_hash(conn, key)? {
-                let tags = payload_strings(p, "tags");
-                if tags.is_empty() {
-                    return Ok(());
-                }
-                if op.op_type == "entity_tags_added" {
-                    write::tags::add_tags(
-                        conn,
-                        &[id],
-                        &tags,
-                        payload_mask(p, "provenance", types::TAG_PROVENANCE_MANUAL),
-                        types::ExpansionMode::EntityOnly,
-                    )?;
-                } else {
-                    write::tags::remove_tags(conn, &[id], &tags, types::ExpansionMode::EntityOnly)?;
-                }
-            }
-        }
-        "tag_renamed" => {
-            if let (Some(id), Some(to)) = (tag_id_by_key(conn, key)?, payload_str(p, "to")) {
-                write::tags::rename_tag(conn, id, to)?;
-            }
-        }
-        "tag_merged" => {
-            if let (Some(from), Some(into_key)) = (tag_id_by_key(conn, key)?, payload_str(p, "into"))
-            {
-                let into = get_or_create_tag_by_key(conn, into_key)?;
-                if from != into {
-                    write::tags::merge_tags(conn, from, into)?;
-                }
-            }
-        }
-        "tag_deleted" => {
-            if let Some(id) = tag_id_by_key(conn, key)? {
-                write::tags::delete_tag(conn, id)?;
-            }
-        }
-        "tag_alias_set" => {
-            let from = get_or_create_tag_by_key(conn, key)?;
-            let to = match payload_str(p, "to") {
-                Some(to_key) => Some(get_or_create_tag_by_key(conn, to_key)?),
-                None => None,
-            };
-            write::tags::manage_alias(conn, from, to)?;
-        }
-        "tag_implication_set" => {
-            if let (Some(parent_key), Some(add)) = (
-                payload_str(p, "parent"),
-                p.get("add").and_then(|v| v.as_bool()),
-            ) {
-                let child = get_or_create_tag_by_key(conn, key)?;
-                let parent = get_or_create_tag_by_key(conn, parent_key)?;
-                write::tags::manage_implication(conn, child, parent, add)?;
-            }
-        }
-        "tag_site_mask_set" => {
-            let id = get_or_create_tag_by_key(conn, key)?;
-            write::tags::set_tag_site_mask(conn, id, payload_mask(p, "site_mask", 0))?;
-        }
-        "folder_created" => {
-            if folder_id_by_uuid(conn, key)?.is_none() {
-                let parent_id = match payload_str(p, "parent") {
-                    Some(parent_uuid) => folder_id_by_uuid(conn, parent_uuid)?,
-                    None => None,
-                };
-                conn.execute(
-                    "INSERT INTO folder (name, parent_id, icon, color, uuid, date_added, date_modified)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-                    rusqlite::params![
-                        payload_str(p, "name").unwrap_or("Folder"),
-                        parent_id,
-                        payload_str(p, "icon"),
-                        payload_str(p, "color"),
-                        key,
-                        now,
-                    ],
-                )?;
-            }
-        }
-        "folder_updated" => {
-            if let Some(id) = folder_id_by_uuid(conn, key)? {
-                let patch = types::FolderPatch {
-                    name: payload_str(p, "name").map(|s| s.to_string()),
-                    icon: payload_str(p, "icon").map(|s| s.to_string()),
-                    color: payload_str(p, "color").map(|s| s.to_string()),
-                    notes: payload_str(p, "notes").map(|s| s.to_string()),
-                    ..Default::default()
-                };
-                write::folders::update_folder(conn, id, &patch, &now)?;
-            }
-        }
-        "folder_moved" => {
-            if let Some(id) = folder_id_by_uuid(conn, key)? {
-                let parent_id = match payload_str(p, "parent") {
-                    Some(parent_uuid) => folder_id_by_uuid(conn, parent_uuid)?,
-                    None => None,
-                };
-                write::folders::move_folder(conn, id, parent_id, &now)?;
-            }
-        }
-        "folder_deleted" => {
-            if let Some(id) = folder_id_by_uuid(conn, key)? {
-                write::folders::delete_folder(conn, id)?;
-            }
-        }
-        "folder_members_added" | "folder_members_removed" => {
-            if let Some(id) = folder_id_by_uuid(conn, key)? {
-                let ids = entity_ids_for_hashes(conn, &payload_strings(p, "entities"))?;
-                if ids.is_empty() {
-                    return Ok(());
-                }
-                if op.op_type == "folder_members_added" {
-                    write::folders::add_members(conn, id, &ids, types::ExpansionMode::EntityOnly)?;
-                } else {
-                    write::folders::remove_members(
-                        conn,
-                        id,
-                        &ids,
-                        types::ExpansionMode::EntityOnly,
-                    )?;
-                }
-            }
-        }
-        "smart_folder_created" => {
-            if smart_folder_id_by_uuid(conn, key)?.is_none() {
-                let parent_id = match payload_str(p, "parent") {
-                    Some(parent_uuid) => smart_folder_id_by_uuid(conn, parent_uuid)?,
-                    None => None,
-                };
-                conn.execute(
-                    "INSERT INTO smart_folder (name, parent_id, predicate_json, icon, color, notes, uuid, date_added, date_modified)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-                    rusqlite::params![
-                        payload_str(p, "name").unwrap_or("Smart folder"),
-                        parent_id,
-                        payload_str(p, "predicate").unwrap_or("{}"),
-                        payload_str(p, "icon"),
-                        payload_str(p, "color"),
-                        payload_str(p, "notes"),
-                        key,
-                        now,
-                    ],
-                )?;
-            }
-        }
-        "smart_folder_updated" => {
-            if let Some(id) = smart_folder_id_by_uuid(conn, key)? {
-                write::smart_folders::update_smart_folder(
-                    conn,
-                    id,
-                    payload_str(p, "name"),
-                    payload_str(p, "predicate"),
-                    payload_str(p, "icon"),
-                    payload_str(p, "color"),
-                    payload_str(p, "notes"),
-                    payload_str(p, "sort_field"),
-                    payload_str(p, "sort_order"),
-                    &now,
-                )?;
-            }
-        }
-        "smart_folder_moved" => {
-            if let Some(id) = smart_folder_id_by_uuid(conn, key)? {
-                let parent_id = match payload_str(p, "parent") {
-                    Some(parent_uuid) => smart_folder_id_by_uuid(conn, parent_uuid)?,
-                    None => None,
-                };
-                write::smart_folders::move_smart_folder(conn, id, parent_id, &now)?;
-            }
-        }
-        "smart_folder_deleted" => {
-            if let Some(id) = smart_folder_id_by_uuid(conn, key)? {
-                write::smart_folders::delete_smart_folder(conn, id)?;
-            }
-        }
-        "collection_created" => {
-            if entity_id_by_hash(conn, key)?.is_none() {
-                write::entities::insert_collection(
-                    conn,
-                    key,
-                    payload_str(p, "name").unwrap_or("Collection"),
-                    payload_str(p, "date_created").unwrap_or(&now),
-                    &now,
-                )?;
-            }
-        }
-        "collection_renamed" => {
-            if let (Some(id), Some(name)) = (entity_id_by_hash(conn, key)?, payload_str(p, "name"))
-            {
-                write::collections::update_collection_name(conn, id, name, &now)?;
-            }
-        }
-        "collection_members_added" | "collection_members_removed" => {
-            if let Some(id) = entity_id_by_hash(conn, key)? {
-                let ids = entity_ids_for_hashes(conn, &payload_strings(p, "members"))?;
-                if ids.is_empty() {
-                    return Ok(());
-                }
-                if op.op_type == "collection_members_added" {
-                    write::collections::add_members(conn, id, &ids)?;
-                } else {
-                    write::collections::remove_members(conn, id, &ids)?;
-                }
-            }
-        }
-        "collection_members_reordered" => {
-            if let Some(id) = entity_id_by_hash(conn, key)? {
-                let ids = entity_ids_for_hashes(conn, &payload_strings(p, "order"))?;
-                if !ids.is_empty() {
-                    write::collections::reorder_members(conn, id, &ids)?;
-                }
-            }
-        }
-        "duplicate_decided" => {
-            if let Some((hash_a, hash_b)) = key.split_once('|') {
-                let file_of = |hash: &str| -> rusqlite::Result<Option<i64>> {
-                    conn.query_row(
-                        "SELECT sme.file_id FROM media_entity me
-                         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                         WHERE me.entity_hash = ?1",
-                        [hash],
-                        |row| row.get(0),
-                    )
-                    .optional()
-                };
-                if let (Some(fa), Some(fb)) = (file_of(hash_a)?, file_of(hash_b)?) {
-                    let status = match payload_str(p, "action") {
-                        Some("not_duplicate") => "ignored_false_positive",
-                        Some("keep_both") => "dismissed_keep_both",
-                        _ => "resolved",
-                    };
-                    let winner_file = match payload_str(p, "winner") {
-                        Some(w) => file_of(w)?,
-                        None => None,
-                    };
-                    let loser_file = match payload_str(p, "loser") {
-                        Some(l) => file_of(l)?,
-                        None => None,
-                    };
-                    conn.execute(
-                        "UPDATE duplicate SET status = ?1, decision_at = datetime('now'),
-                             decision_source = 'sync', decision_reason = 'Decision synced from another device',
-                             winner_file_id = ?2, loser_file_id = ?3
-                         WHERE (file_id_a = ?4 AND file_id_b = ?5) OR (file_id_a = ?5 AND file_id_b = ?4)",
-                        rusqlite::params![status, winner_file, loser_file, fa, fb],
-                    )?;
-                }
-            }
-        }
-        other => {
-            // Same op_version but a type this build doesn't know: log and
-            // skip — version gating happens before application.
-            tracing::warn!(op_type = other, "skipping unknown remote op type");
-        }
-    }
-    Ok(())
-}
-
 /// Everything replay needs to materialize an ingested single (the blob itself
 /// is fetched by hash). Derived fields (phash, colors) are excluded.
 fn ingest_entity_created_payload(prepared: &types::IngestPreparedSingle) -> serde_json::Value {
@@ -880,6 +90,102 @@ fn ingest_entity_created_payload(prepared: &types::IngestPreparedSingle) -> serd
         "tags": prepared.tag_strings,
         "tag_provenance": prepared.tag_provenance_mask.to_string(),
     })
+}
+
+/// Insert one prepared media entity inside the caller's write transaction.
+///
+/// Collection materialization deliberately passes no deferred work because its
+/// caller batches those rows after the collection transaction commits.
+fn insert_prepared_single(
+    conn: &Connection,
+    device_id: &str,
+    prepared: &types::IngestPreparedSingle,
+    deferred_work_types: &[crate::background_work::DeferredWorkType],
+) -> rusqlite::Result<i64> {
+    let source_urls_json = if prepared.source_urls.is_empty() {
+        None
+    } else {
+        Some(serde_json::to_string(&prepared.source_urls).unwrap_or_default())
+    };
+
+    // Clean up any orphan media_file left by a deleted entity before inserting,
+    // so we don't hit a UNIQUE constraint on file_hash.
+    conn.execute(
+        "DELETE FROM media_file WHERE file_hash = ?1
+         AND file_id NOT IN (SELECT file_id FROM single_media_entity)",
+        rusqlite::params![prepared.entity_hash],
+    )?;
+    let file_id = write::files::insert_file(
+        conn,
+        &prepared.entity_hash,
+        &prepared.mime_type,
+        prepared.size_bytes,
+        prepared.pixel_width,
+        prepared.pixel_height,
+        prepared.duration_ms,
+        prepared.frame_count,
+        prepared.has_audio,
+        &prepared.date_added,
+    )?;
+    if let Some(phash) = prepared.perceptual_hash.as_deref() {
+        write::files::replace_file_phash(conn, file_id, Some(phash))?;
+    }
+    let entity_id = write::entities::insert_single(
+        conn,
+        &prepared.entity_hash,
+        file_id,
+        prepared.name.as_deref(),
+        prepared.status,
+        &prepared.date_created,
+        &prepared.date_added,
+    )?;
+    if prepared.notes.is_some() || !prepared.source_urls.is_empty() {
+        write::entities::patch_entity_metadata(
+            conn,
+            &[entity_id],
+            None,
+            None,
+            prepared.notes.as_deref().map(Some),
+            source_urls_json.as_deref(),
+            &prepared.date_added,
+            types::ExpansionMode::EntityOnly,
+        )?;
+    }
+    if !prepared.tag_strings.is_empty() {
+        write::tags::add_tags(
+            conn,
+            &[entity_id],
+            &prepared.tag_strings,
+            prepared.tag_provenance_mask,
+            types::ExpansionMode::EntityOnly,
+        )?;
+    }
+    if !deferred_work_types.is_empty() {
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut stmt = conn.prepare(
+            "INSERT INTO deferred_work_item
+                 (entity_hash, work_type, status, attempt_count, available_at, queued_at)
+             VALUES
+                 (?1, ?2, 'pending', 0, ?3, ?3)
+             ON CONFLICT(entity_hash, work_type) DO NOTHING",
+        )?;
+        for work_type in deferred_work_types {
+            stmt.execute(rusqlite::params![
+                prepared.entity_hash,
+                work_type.as_db_str(),
+                now
+            ])?;
+        }
+    }
+    crate::oplog::record_op(
+        conn,
+        device_id,
+        "entity_created",
+        &prepared.entity_hash,
+        &ingest_entity_created_payload(prepared),
+    )?;
+
+    Ok(entity_id)
 }
 
 /// Sync-relevant fields of an entity metadata patch (absent = unchanged,
@@ -971,97 +277,6 @@ fn emit_per_entity(
     Ok(())
 }
 
-/// Stable sync identity (uuid columns) and the durable op outbox.
-/// Entities that only had local autoincrement ids get a uuid; existing rows
-/// are backfilled so every row has one before any op can reference it.
-fn reconcile_sync_identity_schema(conn: &Connection) -> Result<(), String> {
-    for (table, pk) in [
-        ("folder", "folder_id"),
-        ("smart_folder", "smart_folder_id"),
-        ("subscription_group", "group_id"),
-        ("subscription", "subscription_id"),
-    ] {
-        if has_column(conn, table, "uuid").map_err(|e| e.to_string())? == false {
-            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN uuid TEXT"))
-                .map_err(|e| format!("Failed to add {table}.uuid: {e}"))?;
-        }
-        let missing: Vec<i64> = {
-            let mut stmt = conn
-                .prepare(&format!("SELECT {pk} FROM {table} WHERE uuid IS NULL"))
-                .map_err(|e| e.to_string())?;
-            let rows = stmt
-                .query_map([], |row| row.get(0))
-                .map_err(|e| e.to_string())?
-                .collect::<rusqlite::Result<Vec<i64>>>()
-                .map_err(|e| e.to_string())?;
-            rows
-        };
-        for id in missing {
-            conn.execute(
-                &format!("UPDATE {table} SET uuid = ?1 WHERE {pk} = ?2"),
-                rusqlite::params![crate::oplog::new_uuid(), id],
-            )
-            .map_err(|e| format!("Failed to backfill {table}.uuid: {e}"))?;
-        }
-        conn.execute_batch(&format!(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_uuid ON {table}(uuid) WHERE uuid IS NOT NULL"
-        ))
-        .map_err(|e| format!("Failed to index {table}.uuid: {e}"))?;
-    }
-
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS op_outbox (
-            op_id        INTEGER PRIMARY KEY,
-            op_version   INTEGER NOT NULL,
-            op_type      TEXT    NOT NULL,
-            entity_key   TEXT    NOT NULL,
-            payload_json TEXT    NOT NULL,
-            hlc          TEXT    NOT NULL,
-            device_id    TEXT    NOT NULL,
-            created_at   TEXT    NOT NULL,
-            uploaded_seq INTEGER
-        );
-        CREATE INDEX IF NOT EXISTS idx_op_outbox_pending ON op_outbox(op_id) WHERE uploaded_seq IS NULL;
-        CREATE TABLE IF NOT EXISTS sync_ingest_cursor (
-            device_id    TEXT PRIMARY KEY,
-            consumed_seq INTEGER NOT NULL DEFAULT 0
-        );",
-    )
-    .map_err(|e| format!("Failed to create op_outbox: {e}"))?;
-    Ok(())
-}
-
-/// Import legacy data from an old SqliteDatabase file via ATTACH.
-/// Fatal — returns Err if the import fails.
-fn import_from_legacy_db(conn: &Connection, old_db_path: &Path) -> Result<(), String> {
-    tracing::info!(
-        "Importing from legacy database at {}",
-        old_db_path.display()
-    );
-    let old_db_str = old_db_path.to_string_lossy().to_string();
-
-    conn.execute(
-        "ATTACH DATABASE ?1 AS old_db",
-        rusqlite::params![old_db_str],
-    )
-    .map_err(|e| format!("Failed to attach legacy database: {e}"))?;
-
-    let result = migration_legacy::migrate_from_attached(conn);
-    let _ = conn.execute("DETACH DATABASE old_db", []);
-
-    match result {
-        Ok(r) => {
-            tracing::info!("Legacy import complete: {r}");
-            Ok(())
-        }
-        Err(e) => Err(format!(
-            "Failed to import legacy data from {}: {e}. \
-             The library cannot open with an empty canonical database while legacy data exists.",
-            old_db_path.display()
-        )),
-    }
-}
-
 /// The single typed database boundary. All storage access goes through here.
 /// Code outside `core/src/db/` must not issue SQL or know table names.
 pub struct LibraryDatabase {
@@ -1120,65 +335,13 @@ impl LibraryDatabase {
             device_id,
         };
 
-        // Bootstrap: migrate, import, or load existing schema
+        // Pre-1.0 libraries must match this build's schema exactly. We create
+        // empty libraries, but never mutate or delete an incompatible database.
         {
             let conn = db.write_conn.lock().unwrap();
-            let old_db_path = library_root.join("db").join("library.sqlite");
-            let legacy_exists = old_db_path.exists();
-            // user_version marks a completed bootstrap (migration or import).
-            // Without it, an intentionally emptied library is indistinguishable
-            // from a failed import and would be silently re-imported on open.
-            let bootstrapped: i64 = conn
-                .query_row("PRAGMA user_version", [], |r| r.get(0))
-                .unwrap_or(0);
-
-            if migration_legacy::needs_migration(&conn) {
-                // In-place migration (old tables exist in library.db itself)
-                tracing::info!(
-                    "Legacy schema detected in library.db, running in-place migration..."
-                );
-                let result = migration_legacy::migrate(&conn)?;
-                tracing::info!("{result}");
-                projection::compiler::full_rebuild(&conn, &db.bitmaps);
-                tracing::info!("Post-migration projection rebuild complete");
-            } else if !migration_legacy::is_new_schema(&conn) {
-                // Fresh library.db — create schema and import from legacy if it exists
-                conn.execute_batch(core::schema::LIBRARY_DDL)
-                    .map_err(|e| format!("Failed to create schema: {e}"))?;
-
-                if legacy_exists {
-                    import_from_legacy_db(&conn, &old_db_path)?;
-                }
-
-                projection::compiler::full_rebuild(&conn, &db.bitmaps);
-            } else {
-                // Existing new-schema library.db — check for empty-with-legacy-data
-                let canonical_count: i64 = conn
-                    .query_row("SELECT COUNT(*) FROM media_entity", [], |r| r.get(0))
-                    .unwrap_or(0);
-
-                if canonical_count == 0 && legacy_exists && bootstrapped == 0 {
-                    // New schema exists but is empty, legacy data exists, and no
-                    // bootstrap ever completed: a previous import failed. Repair.
-                    tracing::warn!(
-                        "Canonical DB has new schema but 0 entities while legacy DB exists. Repairing..."
-                    );
-                    import_from_legacy_db(&conn, &old_db_path)?;
-                    projection::compiler::full_rebuild(&conn, &db.bitmaps);
-                } else {
-                    // Normal startup — bitmaps are derived, rebuild from authoritative tables.
-                    let conn_r = db.read_conn.lock().unwrap();
-                    projection::compiler::full_rebuild(&conn_r, &db.bitmaps);
-                    // Remove the delta log left behind by older versions.
-                    let _ = std::fs::remove_file(library_root.join("bitmaps.delta"));
-                }
-            }
-
-            // Every path above leaves a valid, bootstrapped library behind.
-            let _ = conn.execute_batch("PRAGMA user_version = 1;");
-
-            // Reconcile schema: add columns that may be missing from older schema versions
-            reconcile_open_schema(&conn)?;
+            core::schema::initialize_schema(&conn)?;
+            projection::compiler::full_rebuild(&conn, &db.bitmaps);
+            let _ = std::fs::remove_file(library_root.join("bitmaps.delta"));
         }
 
         Ok(db)
@@ -1214,6 +377,83 @@ impl LibraryDatabase {
     /// This installation's device identity (stamped on outbox ops).
     pub fn device_id(&self) -> &str {
         &self.device_id
+    }
+
+    pub fn kv_get(&self, key: &str) -> Result<Option<String>, String> {
+        let key = key.to_string();
+        self.with_read(move |conn| write::settings::get_kv(conn, &key))
+    }
+
+    pub fn kv_set(&self, key: &str, value: &str) -> Result<(), String> {
+        let key = key.to_string();
+        let value = value.to_string();
+        self.with_write(move |conn| write::settings::set_kv(conn, &key, &value))
+    }
+
+    pub fn kv_delete(&self, key: &str) -> Result<(), String> {
+        let key = key.to_string();
+        self.with_write(move |conn| {
+            conn.execute("DELETE FROM kv_settings WHERE key = ?1", [&key])
+                .map(|_| ())
+        })
+    }
+
+    /// Stable identity of this library's truth lineage. Minted on first use;
+    /// shared across all devices syncing the same library.
+    pub fn library_uuid(&self) -> Result<String, String> {
+        if let Some(existing) = self.kv_get("library_uuid")? {
+            if !existing.is_empty() {
+                return Ok(existing);
+            }
+        }
+        let minted = crate::oplog::new_uuid();
+        self.kv_set("library_uuid", &minted)?;
+        Ok(minted)
+    }
+
+    /// Adopt a remote library's lineage. Only legal when this library has no
+    /// identity yet, already matches, or holds no truth (fresh install).
+    pub fn adopt_library_uuid(&self, uuid: &str) -> Result<(), String> {
+        match self.kv_get("library_uuid")? {
+            Some(existing) if !existing.is_empty() => {
+                if existing == uuid {
+                    return Ok(());
+                }
+                if !self.truth_is_empty()? {
+                    return Err(
+                        "This local library already belongs to a different sync lineage. \
+                         Connecting it here would merge two unrelated libraries. Use an \
+                         empty library to connect, or connect to this library's own remote."
+                            .to_string(),
+                    );
+                }
+                self.kv_set("library_uuid", uuid)
+            }
+            _ => self.kv_set("library_uuid", uuid),
+        }
+    }
+
+    /// True when the library holds no truth rows (safe to adopt any lineage).
+    pub fn truth_is_empty(&self) -> Result<bool, String> {
+        self.with_read(|conn| {
+            let entities: i64 =
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |r| r.get(0))?;
+            let folders: i64 = conn.query_row("SELECT COUNT(*) FROM folder", [], |r| r.get(0))?;
+            let smart: i64 =
+                conn.query_row("SELECT COUNT(*) FROM smart_folder", [], |r| r.get(0))?;
+            Ok(entities == 0 && folders == 0 && smart == 0)
+        })
+    }
+
+    /// Outbox ops not yet shipped to the remote.
+    pub fn pending_op_count(&self) -> Result<i64, String> {
+        self.with_read(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM op_outbox WHERE uploaded_seq IS NULL",
+                [],
+                |r| r.get(0),
+            )
+        })
     }
 
     /// Oldest not-yet-uploaded outbox ops, as `(op_id, record)`.
@@ -1283,7 +523,7 @@ impl LibraryDatabase {
         let applied = self.with_write(move |conn| {
             let mut applied = 0usize;
             for op in &ops {
-                apply_remote_op(conn, op)?;
+                remote_ops::apply_remote_op(conn, op)?;
                 applied += 1;
             }
             for (device, seq) in &cursors {
@@ -1370,8 +610,13 @@ impl LibraryDatabase {
         date_added: &str,
     ) -> Result<i64, String> {
         self.with_write(|conn| {
-            let id =
-                write::entities::insert_collection(conn, entity_hash, name, date_created, date_added)?;
+            let id = write::entities::insert_collection(
+                conn,
+                entity_hash,
+                name,
+                date_created,
+                date_added,
+            )?;
             crate::oplog::record_op(
                 conn,
                 &self.device_id,
@@ -1575,7 +820,9 @@ impl LibraryDatabase {
 
         if exact_matches.len() == 1 {
             let candidate = &exact_matches[0];
-            if let Some(existing) = self.get_existing_import_target_by_file_hash(&candidate.file_hash)? {
+            if let Some(existing) =
+                self.get_existing_import_target_by_file_hash(&candidate.file_hash)?
+            {
                 let quality = crate::duplicates::quality::compare_static_image_quality(
                     &crate::duplicates::quality::ComparableImageCandidate {
                         mime_type: &existing.mime_type,
@@ -1630,7 +877,9 @@ impl LibraryDatabase {
         distance: u32,
     ) -> Result<(), String> {
         self.with_write(move |conn| {
-            write::duplicates::upsert_duplicate_pair_for_review(conn, file_id_a, file_id_b, distance)
+            write::duplicates::upsert_duplicate_pair_for_review(
+                conn, file_id_a, file_id_b, distance,
+            )
         })
     }
 
@@ -1661,88 +910,7 @@ impl LibraryDatabase {
         let prepared = prepared.clone();
         let deferred_work = deferred_work_types.to_vec();
         self.with_write(move |conn| {
-            let source_urls_json = if prepared.source_urls.is_empty() {
-                None
-            } else {
-                Some(serde_json::to_string(&prepared.source_urls).unwrap_or_default())
-            };
-            // Clean up any orphan media_file left by a deleted entity before
-            // inserting, so we don't hit a UNIQUE constraint on file_hash.
-            conn.execute(
-                "DELETE FROM media_file WHERE file_hash = ?1
-                 AND file_id NOT IN (SELECT file_id FROM single_media_entity)",
-                rusqlite::params![prepared.entity_hash],
-            )?;
-            let file_id = write::files::insert_file(
-                &conn,
-                &prepared.entity_hash,
-                &prepared.mime_type,
-                prepared.size_bytes,
-                prepared.pixel_width,
-                prepared.pixel_height,
-                prepared.duration_ms,
-                prepared.frame_count,
-                prepared.has_audio,
-                &prepared.date_added,
-            )?;
-            if let Some(phash) = prepared.perceptual_hash.as_deref() {
-                write::files::replace_file_phash(&conn, file_id, Some(phash))?;
-            }
-            let entity_id = write::entities::insert_single(
-                &conn,
-                &prepared.entity_hash,
-                file_id,
-                prepared.name.as_deref(),
-                prepared.status,
-                &prepared.date_created,
-                &prepared.date_added,
-            )?;
-            if prepared.notes.is_some() || !prepared.source_urls.is_empty() {
-                write::entities::patch_entity_metadata(
-                    &conn,
-                    &[entity_id],
-                    None,
-                    None,
-                    prepared.notes.as_deref().map(Some),
-                    source_urls_json.as_deref(),
-                    &prepared.date_added,
-                    types::ExpansionMode::EntityOnly,
-                )?;
-            }
-            if !prepared.tag_strings.is_empty() {
-                write::tags::add_tags(
-                    &conn,
-                    &[entity_id],
-                    &prepared.tag_strings,
-                    prepared.tag_provenance_mask,
-                    types::ExpansionMode::EntityOnly,
-                )?;
-            }
-            if !deferred_work.is_empty() {
-                let now = chrono::Utc::now().to_rfc3339();
-                let mut stmt = conn.prepare(
-                    "INSERT INTO deferred_work_item
-                         (entity_hash, work_type, status, attempt_count, available_at, queued_at)
-                     VALUES
-                         (?1, ?2, 'pending', 0, ?3, ?3)
-                     ON CONFLICT(entity_hash, work_type) DO NOTHING",
-                )?;
-                for work_type in &deferred_work {
-                    stmt.execute(rusqlite::params![
-                        prepared.entity_hash,
-                        work_type.as_db_str(),
-                        now
-                    ])?;
-                }
-            }
-            crate::oplog::record_op(
-                conn,
-                &self.device_id,
-                "entity_created",
-                &prepared.entity_hash,
-                &ingest_entity_created_payload(&prepared),
-            )?;
-            Ok(entity_id)
+            insert_prepared_single(conn, &self.device_id, &prepared, &deferred_work)
         })
     }
 
@@ -1752,7 +920,6 @@ impl LibraryDatabase {
         new_members: &[types::IngestPreparedSingle],
         existing_member_ids: &[i64],
         existing_collection_id: Option<i64>,
-        force_collection: bool,
     ) -> Result<(i64, String, Vec<String>), String> {
         let collection_name = name.to_string();
         let prepared = new_members.to_vec();
@@ -1762,87 +929,23 @@ impl LibraryDatabase {
             let mut new_hashes = Vec::with_capacity(prepared.len());
 
             for member in &prepared {
-                let source_urls_json = if member.source_urls.is_empty() {
-                    None
-                } else {
-                    Some(serde_json::to_string(&member.source_urls).unwrap_or_default())
-                };
-                // Clean up any orphan media_file left by a deleted entity before
-                // inserting, so we don't hit a UNIQUE constraint on file_hash.
-                conn.execute(
-                    "DELETE FROM media_file WHERE file_hash = ?1
-                     AND file_id NOT IN (SELECT file_id FROM single_media_entity)",
-                    rusqlite::params![member.entity_hash],
-                )?;
-                let file_id = write::files::insert_file(
-                    &conn,
-                    &member.entity_hash,
-                    &member.mime_type,
-                    member.size_bytes,
-                    member.pixel_width,
-                    member.pixel_height,
-                    member.duration_ms,
-                    member.frame_count,
-                    member.has_audio,
-                    &member.date_added,
-                )?;
-                let entity_id = write::entities::insert_single(
-                    &conn,
-                    &member.entity_hash,
-                    file_id,
-                    member.name.as_deref(),
-                    member.status,
-                    &member.date_created,
-                    &member.date_added,
-                )?;
-                if member.notes.is_some() || !member.source_urls.is_empty() {
-                    write::entities::patch_entity_metadata(
-                        &conn,
-                        &[entity_id],
-                        None,
-                        None,
-                        member.notes.as_deref().map(Some),
-                        source_urls_json.as_deref(),
-                        &member.date_added,
-                        types::ExpansionMode::EntityOnly,
-                    )?;
-                }
-                if !member.tag_strings.is_empty() {
-                    write::tags::add_tags(
-                        &conn,
-                        &[entity_id],
-                        &member.tag_strings,
-                        member.tag_provenance_mask,
-                        types::ExpansionMode::EntityOnly,
-                    )?;
-                }
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "entity_created",
-                    &member.entity_hash,
-                    &ingest_entity_created_payload(member),
-                )?;
+                let entity_id = insert_prepared_single(conn, &self.device_id, member, &[])?;
                 member_ids.push(entity_id);
                 new_hashes.push(member.entity_hash.clone());
             }
 
-            if existing_collection_id.is_none() && member_ids.len() < 2 && !force_collection {
+            if member_ids.is_empty() {
                 return Err(rusqlite::Error::InvalidQuery);
             }
 
             let collection_id = if let Some(collection_id) = existing_collection_id {
-                if !member_ids.is_empty() {
-                    write::collections::add_members(&conn, collection_id, &member_ids)?;
-                }
+                write::collections::add_members(&conn, collection_id, &member_ids)?;
                 collection_id
             } else {
                 let now = chrono::Utc::now().to_rfc3339();
                 let collection_id =
                     write::collections::create_collection(&conn, &collection_name, &now)?;
-                if !member_ids.is_empty() {
-                    write::collections::add_members(&conn, collection_id, &member_ids)?;
-                }
+                write::collections::add_members(&conn, collection_id, &member_ids)?;
                 collection_id
             };
 
@@ -1869,819 +972,6 @@ impl LibraryDatabase {
             }
             Ok((collection_id, collection_hash, new_hashes))
         })
-    }
-
-    // ── Collection operations ────────────────────────────────────
-
-    pub fn add_collection_members(
-        &self,
-        collection_id: i64,
-        member_entity_ids: &[i64],
-    ) -> Result<CollectionMembershipChange, String> {
-        self.with_write(|conn| {
-            let change = write::collections::add_members(conn, collection_id, member_entity_ids)?;
-            emit_collection_membership_op(conn, &self.device_id, collection_id, &change)?;
-            Ok(change)
-        })
-    }
-
-    pub fn create_collection(&self, name: &str) -> Result<i64, String> {
-        let n = name.to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(move |conn| {
-            let collection_id = write::collections::create_collection(conn, &n, &now)?;
-            if let Some(hash) = query::collections::get_collection_hash(conn, collection_id)? {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "collection_created",
-                    &hash,
-                    &serde_json::json!({ "name": n }),
-                )?;
-            }
-            Ok(collection_id)
-        })
-    }
-
-    pub fn update_collection_name(&self, collection_id: i64, name: &str) -> Result<(), String> {
-        let n = name.to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(move |conn| {
-            write::collections::update_collection_name(conn, collection_id, &n, &now)?;
-            if let Some(hash) = query::collections::get_collection_hash(conn, collection_id)? {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "collection_renamed",
-                    &hash,
-                    &serde_json::json!({ "name": n }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn remove_collection_members(
-        &self,
-        collection_id: i64,
-        member_entity_ids: &[i64],
-    ) -> Result<CollectionMembershipChange, String> {
-        self.with_write(|conn| {
-            let change =
-                write::collections::remove_members(conn, collection_id, member_entity_ids)?;
-            emit_collection_membership_op(conn, &self.device_id, collection_id, &change)?;
-            Ok(change)
-        })
-    }
-
-    pub fn reorder_collection_members(
-        &self,
-        collection_id: i64,
-        ordered_entity_ids: &[i64],
-    ) -> Result<(), String> {
-        let ids = ordered_entity_ids.to_vec();
-        self.with_write(move |conn| {
-            write::collections::reorder_members(conn, collection_id, &ids)?;
-            if let Some(hash) = query::collections::get_collection_hash(conn, collection_id)? {
-                let order = entity_hashes_for_ids(conn, &ids)?;
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "collection_members_reordered",
-                    &hash,
-                    &serde_json::json!({ "order": order }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn reorder_collection_members_by_hashes(
-        &self,
-        collection_id: i64,
-        ordered_hashes: &[String],
-    ) -> Result<(), String> {
-        let hashes = ordered_hashes.to_vec();
-        self.with_write(move |conn| {
-            let current_rows =
-                query::collections::list_collection_member_hash_rows(conn, collection_id)?;
-            if current_rows.is_empty() {
-                return Ok(());
-            }
-
-            let mut by_hash = std::collections::HashMap::<String, i64>::new();
-            let mut current_hash_order = Vec::with_capacity(current_rows.len());
-            for (entity_id, hash) in current_rows {
-                by_hash.insert(hash.clone(), entity_id);
-                current_hash_order.push(hash);
-            }
-
-            let mut seen = std::collections::HashSet::<String>::new();
-            let mut final_order = Vec::with_capacity(current_hash_order.len());
-            for hash in &hashes {
-                if by_hash.contains_key(hash) && seen.insert(hash.clone()) {
-                    final_order.push(*by_hash.get(hash).unwrap());
-                }
-            }
-            for hash in current_hash_order {
-                if seen.insert(hash.clone()) {
-                    final_order.push(*by_hash.get(&hash).unwrap());
-                }
-            }
-
-            write::collections::reorder_members(conn, collection_id, &final_order)?;
-            if let Some(hash) = query::collections::get_collection_hash(conn, collection_id)? {
-                let order = entity_hashes_for_ids(conn, &final_order)?;
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "collection_members_reordered",
-                    &hash,
-                    &serde_json::json!({ "order": order }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn add_collection_members_by_hashes(
-        &self,
-        collection_id: i64,
-        hashes: &[String],
-    ) -> Result<CollectionMembershipChange, String> {
-        let ids = self.resolve_entity_hashes(hashes)?;
-        self.add_collection_members(collection_id, &ids)
-    }
-
-    pub fn remove_collection_members_by_hashes(
-        &self,
-        collection_id: i64,
-        hashes: &[String],
-    ) -> Result<CollectionMembershipChange, String> {
-        let ids = self.resolve_entity_hashes(hashes)?;
-        self.remove_collection_members(collection_id, &ids)
-    }
-
-    pub fn delete_collection(&self, collection_id: i64) -> Result<Vec<i64>, String> {
-        self.with_write(|conn| {
-            let hash = query::collections::get_collection_hash(conn, collection_id)?;
-            let result = write::collections::delete_collection(conn, collection_id)?;
-            if let Some(hash) = hash {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "collection_deleted",
-                    &hash,
-                    &serde_json::json!({}),
-                )?;
-            }
-            Ok(result)
-        })
-    }
-
-    pub fn split_collection(&self, collection_id: i64) -> Result<Vec<i64>, String> {
-        self.with_write(|conn| {
-            let hash = query::collections::get_collection_hash(conn, collection_id)?;
-            let result = write::collections::split_collection(conn, collection_id)?;
-            // Splitting dissolves the container; the member singles live on.
-            if let Some(hash) = hash {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "collection_deleted",
-                    &hash,
-                    &serde_json::json!({ "split": true }),
-                )?;
-            }
-            Ok(result)
-        })
-    }
-
-    pub fn get_collections(&self) -> Result<Vec<CollectionRecord>, String> {
-        self.with_read(query::collections::list_collections)
-    }
-
-    pub fn get_collection_summary(&self, collection_id: i64) -> Result<CollectionSummary, String> {
-        self.with_read(|conn| query::collections::get_collection_summary(conn, collection_id))
-    }
-
-    pub fn list_collection_member_hashes(&self, collection_id: i64) -> Result<Vec<String>, String> {
-        self.with_read(|conn| {
-            query::collections::list_collection_member_hashes(conn, collection_id)
-        })
-    }
-
-    pub fn get_collection_hash(&self, collection_id: i64) -> Result<Option<String>, String> {
-        self.with_read(|conn| query::collections::get_collection_hash(conn, collection_id))
-    }
-
-    pub fn get_collection_folder_ids(&self, collection_id: i64) -> Result<Vec<i64>, String> {
-        self.with_read(|conn| query::collections::get_collection_folder_ids(conn, collection_id))
-    }
-
-    pub fn get_folder_ids_for_entities(&self, entity_ids: &[i64]) -> Result<Vec<i64>, String> {
-        let ids = entity_ids.to_vec();
-        self.with_read(|conn| query::collections::get_folder_ids_for_entities(conn, &ids))
-    }
-
-    pub fn get_folder_entity_count(&self, folder_id: i64) -> Result<Option<i64>, String> {
-        self.with_read(|conn| {
-            conn.query_row(
-                "SELECT COUNT(*) FROM folder_member WHERE folder_id = ?1",
-                [folder_id],
-                |row| row.get(0),
-            )
-            .optional()
-        })
-    }
-
-    // ── Tag operations ───────────────────────────────────────────
-
-    pub fn add_tags(
-        &self,
-        entity_ids: &[i64],
-        tag_strings: &[String],
-        provenance_mask: u64,
-        expansion: ExpansionMode,
-    ) -> Result<TagChange, String> {
-        self.with_write(|conn| {
-            let change =
-                write::tags::add_tags(conn, entity_ids, tag_strings, provenance_mask, expansion)?;
-            if !change.tags_added.is_empty() {
-                let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
-                emit_per_entity(
-                    conn,
-                    &self.device_id,
-                    "entity_tags_added",
-                    &hashes,
-                    &serde_json::json!({ "tags": change.tags_added, "provenance": provenance_mask.to_string() }),
-                )?;
-            }
-            Ok(change)
-        })
-    }
-
-    pub fn remove_tags(
-        &self,
-        entity_ids: &[i64],
-        tag_strings: &[String],
-        expansion: ExpansionMode,
-    ) -> Result<TagChange, String> {
-        self.with_write(|conn| {
-            let change = write::tags::remove_tags(conn, entity_ids, tag_strings, expansion)?;
-            if !change.tags_removed.is_empty() {
-                let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
-                emit_per_entity(
-                    conn,
-                    &self.device_id,
-                    "entity_tags_removed",
-                    &hashes,
-                    &serde_json::json!({ "tags": change.tags_removed }),
-                )?;
-            }
-            Ok(change)
-        })
-    }
-
-    pub fn rename_tag(&self, tag_id: i64, new_name: &str) -> Result<TagStructureChange, String> {
-        self.with_write(|conn| {
-            let old_key = tag_op_key(conn, tag_id)?;
-            let change = write::tags::rename_tag(conn, tag_id, new_name)?;
-            if let Some(old_key) = old_key {
-                match change.merged_into_tag_id {
-                    Some(target_id) => {
-                        let into = tag_op_key(conn, target_id)?;
-                        crate::oplog::record_op(
-                            conn,
-                            &self.device_id,
-                            "tag_merged",
-                            &old_key,
-                            &serde_json::json!({ "into": into }),
-                        )?;
-                    }
-                    None => {
-                        crate::oplog::record_op(
-                            conn,
-                            &self.device_id,
-                            "tag_renamed",
-                            &old_key,
-                            &serde_json::json!({ "to": new_name }),
-                        )?;
-                    }
-                }
-            }
-            Ok(change)
-        })
-    }
-
-    pub fn delete_tag(&self, tag_id: i64) -> Result<TagStructureChange, String> {
-        self.with_write(|conn| {
-            let key = tag_op_key(conn, tag_id)?;
-            let change = write::tags::delete_tag(conn, tag_id)?;
-            if let Some(key) = key {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "tag_deleted",
-                    &key,
-                    &serde_json::json!({}),
-                )?;
-            }
-            Ok(change)
-        })
-    }
-
-    pub fn merge_tags(
-        &self,
-        from_tag_id: i64,
-        to_tag_id: i64,
-    ) -> Result<TagStructureChange, String> {
-        self.with_write(|conn| {
-            let from_key = tag_op_key(conn, from_tag_id)?;
-            let into = tag_op_key(conn, to_tag_id)?;
-            let change = write::tags::merge_tags(conn, from_tag_id, to_tag_id)?;
-            if let Some(from_key) = from_key {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "tag_merged",
-                    &from_key,
-                    &serde_json::json!({ "into": into }),
-                )?;
-            }
-            Ok(change)
-        })
-    }
-
-    pub fn manage_tag_alias(&self, from_tag_id: i64, to_tag_id: Option<i64>) -> Result<(), String> {
-        self.with_write(|conn| {
-            let from_key = tag_op_key(conn, from_tag_id)?;
-            let to_key = match to_tag_id {
-                Some(id) => tag_op_key(conn, id)?,
-                None => None,
-            };
-            write::tags::manage_alias(conn, from_tag_id, to_tag_id)?;
-            if let Some(from_key) = from_key {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "tag_alias_set",
-                    &from_key,
-                    &serde_json::json!({ "to": to_key }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn manage_tag_implication(
-        &self,
-        child_tag_id: i64,
-        parent_tag_id: i64,
-        add: bool,
-    ) -> Result<(), String> {
-        self.with_write(|conn| {
-            let child_key = tag_op_key(conn, child_tag_id)?;
-            let parent_key = tag_op_key(conn, parent_tag_id)?;
-            write::tags::manage_implication(conn, child_tag_id, parent_tag_id, add)?;
-            if let Some(child_key) = child_key {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "tag_implication_set",
-                    &child_key,
-                    &serde_json::json!({ "parent": parent_key, "add": add }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn set_tag_site_mask(&self, tag_id: i64, site_mask: u64) -> Result<(), String> {
-        self.with_write(|conn| {
-            write::tags::set_tag_site_mask(conn, tag_id, site_mask)?;
-            if let Some(key) = tag_op_key(conn, tag_id)? {
-                // Masks cross boundaries as decimal strings (PBI-598 rule).
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "tag_site_mask_set",
-                    &key,
-                    &serde_json::json!({ "site_mask": site_mask.to_string() }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn ensure_tag(&self, tag_str: &str) -> Result<i64, String> {
-        self.with_write(|conn| write::tags::ensure_tag(conn, tag_str))
-    }
-
-    // ── Folder operations ────────────────────────────────────────
-
-    pub fn create_folder(
-        &self,
-        name: &str,
-        parent_id: Option<i64>,
-        icon: Option<&str>,
-        color: Option<&str>,
-    ) -> Result<i64, String> {
-        let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(|conn| {
-            let folder_id = write::folders::create_folder(conn, name, parent_id, icon, color, &now)?;
-            let uuid = folder_uuid(conn, folder_id)?.unwrap_or_default();
-            let parent_uuid = match parent_id {
-                Some(pid) => folder_uuid(conn, pid)?,
-                None => None,
-            };
-            crate::oplog::record_op(
-                conn,
-                &self.device_id,
-                "folder_created",
-                &uuid,
-                &serde_json::json!({
-                    "name": name,
-                    "parent": parent_uuid,
-                    "icon": icon,
-                    "color": color,
-                }),
-            )?;
-            Ok(folder_id)
-        })
-    }
-
-    pub fn update_folder(&self, folder_id: i64, patch: &types::FolderPatch) -> Result<(), String> {
-        let now = chrono::Utc::now().to_rfc3339();
-        let p = patch.clone();
-        self.with_write(move |conn| {
-            write::folders::update_folder(conn, folder_id, &p, &now)?;
-            // Only truth fields sync; watch config is device-local.
-            let mut fields = serde_json::Map::new();
-            if let Some(v) = &p.name {
-                fields.insert("name".into(), v.clone().into());
-            }
-            if let Some(v) = &p.icon {
-                fields.insert("icon".into(), v.clone().into());
-            }
-            if let Some(v) = &p.color {
-                fields.insert("color".into(), v.clone().into());
-            }
-            if let Some(v) = &p.notes {
-                fields.insert("notes".into(), v.clone().into());
-            }
-            if !fields.is_empty() {
-                if let Some(uuid) = folder_uuid(conn, folder_id)? {
-                    crate::oplog::record_op(
-                        conn,
-                        &self.device_id,
-                        "folder_updated",
-                        &uuid,
-                        &serde_json::Value::Object(fields),
-                    )?;
-                }
-            }
-            Ok(())
-        })
-    }
-
-    pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
-        self.with_write(|conn| {
-            let uuid = folder_uuid(conn, folder_id)?;
-            write::folders::delete_folder(conn, folder_id)?;
-            if let Some(uuid) = uuid {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "folder_deleted",
-                    &uuid,
-                    &serde_json::json!({}),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn move_folder(&self, folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
-        if new_parent_id == Some(folder_id) {
-            return Err("Cannot move a folder into itself".into());
-        }
-        let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(move |conn| {
-            // Prevent cycles: check if new_parent_id is a descendant of folder_id
-            if let Some(target) = new_parent_id {
-                if write::folders::is_ancestor_of(conn, target, folder_id)? {
-                    return Err(rusqlite::Error::InvalidParameterName(
-                        "Cannot move a folder into one of its descendants".into(),
-                    ));
-                }
-            }
-            write::folders::move_folder(conn, folder_id, new_parent_id, &now)?;
-            if let Some(uuid) = folder_uuid(conn, folder_id)? {
-                let parent_uuid = match new_parent_id {
-                    Some(pid) => folder_uuid(conn, pid)?,
-                    None => None,
-                };
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "folder_moved",
-                    &uuid,
-                    &serde_json::json!({ "parent": parent_uuid }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn reorder_folders(&self, moves: &[(i64, i64)]) -> Result<(), String> {
-        let m = moves.to_vec();
-        self.with_write(move |conn| write::folders::reorder_folders(conn, &m))
-    }
-
-    pub fn set_folder_pinned(&self, folder_id: i64, pinned: bool) -> Result<(), String> {
-        self.with_write(move |conn| {
-            conn.execute(
-                "UPDATE folder SET pinned = ?1 WHERE folder_id = ?2",
-                rusqlite::params![pinned as i64, folder_id],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn set_smart_folder_pinned(&self, smart_folder_id: i64, pinned: bool) -> Result<(), String> {
-        self.with_write(move |conn| {
-            conn.execute(
-                "UPDATE smart_folder SET pinned = ?1 WHERE smart_folder_id = ?2",
-                rusqlite::params![pinned as i64, smart_folder_id],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn reorder_pinned_items(&self, moves: &[(String, i64)]) -> Result<(), String> {
-        let moves = moves.to_vec();
-        self.with_write(move |conn| {
-            for (node_id, pin_order) in &moves {
-                if let Some(raw) = node_id.strip_prefix("folder:") {
-                    if let Ok(folder_id) = raw.parse::<i64>() {
-                        conn.execute(
-                            "UPDATE folder SET pin_order = ?1 WHERE folder_id = ?2",
-                            rusqlite::params![pin_order, folder_id],
-                        )?;
-                    }
-                } else if let Some(raw) = node_id.strip_prefix("smart:") {
-                    if let Ok(smart_folder_id) = raw.parse::<i64>() {
-                        conn.execute(
-                            "UPDATE smart_folder SET pin_order = ?1 WHERE smart_folder_id = ?2",
-                            rusqlite::params![pin_order, smart_folder_id],
-                        )?;
-                    }
-                }
-            }
-            Ok(())
-        })
-    }
-
-    pub fn reorder_folder_items(&self, folder_id: i64, moves: &[(i64, i64)]) -> Result<(), String> {
-        let m = moves.to_vec();
-        self.with_write(move |conn| write::folders::reorder_members(conn, folder_id, &m))
-    }
-
-    pub fn get_folder(&self, folder_id: i64) -> Result<Option<query::folders::FolderRow>, String> {
-        self.with_read(|conn| query::folders::get_folder(conn, folder_id))
-    }
-
-    pub fn collect_descendant_smart_folder_ids(&self, root_id: i64) -> Result<Vec<i64>, String> {
-        self.with_read(|conn| query::folders::collect_descendant_smart_folder_ids(conn, root_id))
-    }
-
-    pub fn get_smart_folder(
-        &self,
-        smart_folder_id: i64,
-    ) -> Result<Option<query::folders::SmartFolderRow>, String> {
-        self.with_read(|conn| query::folders::get_smart_folder(conn, smart_folder_id))
-    }
-
-    pub fn find_child_folder_id(&self, parent_id: i64, name: &str) -> Result<Option<i64>, String> {
-        let child_name = name.to_string();
-        self.with_read(move |conn| {
-            query::ingest::find_child_folder_id(conn, parent_id, &child_name)
-        })
-    }
-
-    pub fn list_folders_canonical(&self) -> Result<Vec<query::folders::FolderRow>, String> {
-        self.with_read(|conn| query::folders::list_folders(conn))
-    }
-
-    pub fn list_smart_folders_canonical(
-        &self,
-    ) -> Result<Vec<query::folders::SmartFolderRow>, String> {
-        self.with_read(|conn| query::folders::list_smart_folders(conn))
-    }
-
-    pub fn add_folder_members(
-        &self,
-        folder_id: i64,
-        entity_ids: &[i64],
-        expansion: ExpansionMode,
-    ) -> Result<FolderMembershipChange, String> {
-        self.with_write(|conn| {
-            let change = write::folders::add_members(conn, folder_id, entity_ids, expansion)?;
-            emit_folder_membership_op(
-                conn,
-                &self.device_id,
-                "folder_members_added",
-                folder_id,
-                &change.entity_ids,
-            )?;
-            Ok(change)
-        })
-    }
-
-    pub fn remove_folder_members(
-        &self,
-        folder_id: i64,
-        entity_ids: &[i64],
-        expansion: ExpansionMode,
-    ) -> Result<FolderMembershipChange, String> {
-        self.with_write(|conn| {
-            let change = write::folders::remove_members(conn, folder_id, entity_ids, expansion)?;
-            emit_folder_membership_op(
-                conn,
-                &self.device_id,
-                "folder_members_removed",
-                folder_id,
-                &change.entity_ids,
-            )?;
-            Ok(change)
-        })
-    }
-
-    // ── Smart folder operations ──────────────────────────────────
-
-    pub fn create_smart_folder(
-        &self,
-        name: &str,
-        parent_id: Option<i64>,
-        predicate_json: &str,
-        icon: Option<&str>,
-        color: Option<&str>,
-        notes: Option<&str>,
-    ) -> Result<i64, String> {
-        let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(|conn| {
-            let smart_folder_id = write::smart_folders::create_smart_folder(
-                conn,
-                name,
-                parent_id,
-                predicate_json,
-                icon,
-                color,
-                notes,
-                &now,
-            )?;
-            if let Some(uuid) = smart_folder_uuid(conn, smart_folder_id)? {
-                let parent_uuid = match parent_id {
-                    Some(pid) => smart_folder_uuid(conn, pid)?,
-                    None => None,
-                };
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "smart_folder_created",
-                    &uuid,
-                    &serde_json::json!({
-                        "name": name,
-                        "parent": parent_uuid,
-                        "predicate": predicate_json,
-                        "icon": icon,
-                        "color": color,
-                        "notes": notes,
-                    }),
-                )?;
-            }
-            Ok(smart_folder_id)
-        })
-    }
-
-    pub fn update_smart_folder(
-        &self,
-        smart_folder_id: i64,
-        name: Option<&str>,
-        predicate_json: Option<&str>,
-        icon: Option<&str>,
-        color: Option<&str>,
-        notes: Option<&str>,
-        sort_field: Option<&str>,
-        sort_order: Option<&str>,
-    ) -> Result<(), String> {
-        let now = chrono::Utc::now().to_rfc3339();
-        let n = name.map(str::to_string);
-        let p = predicate_json.map(str::to_string);
-        let i = icon.map(str::to_string);
-        let c = color.map(str::to_string);
-        let notes = notes.map(str::to_string);
-        let sf = sort_field.map(str::to_string);
-        let so = sort_order.map(str::to_string);
-        self.with_write(move |conn| {
-            write::smart_folders::update_smart_folder(
-                conn,
-                smart_folder_id,
-                n.as_deref(),
-                p.as_deref(),
-                i.as_deref(),
-                c.as_deref(),
-                notes.as_deref(),
-                sf.as_deref(),
-                so.as_deref(),
-                &now,
-            )?;
-            let mut fields = serde_json::Map::new();
-            if let Some(v) = &n {
-                fields.insert("name".into(), v.clone().into());
-            }
-            if let Some(v) = &p {
-                fields.insert("predicate".into(), v.clone().into());
-            }
-            if let Some(v) = &i {
-                fields.insert("icon".into(), v.clone().into());
-            }
-            if let Some(v) = &c {
-                fields.insert("color".into(), v.clone().into());
-            }
-            if let Some(v) = &notes {
-                fields.insert("notes".into(), v.clone().into());
-            }
-            if let Some(v) = &sf {
-                fields.insert("sort_field".into(), v.clone().into());
-            }
-            if let Some(v) = &so {
-                fields.insert("sort_order".into(), v.clone().into());
-            }
-            if !fields.is_empty() {
-                if let Some(uuid) = smart_folder_uuid(conn, smart_folder_id)? {
-                    crate::oplog::record_op(
-                        conn,
-                        &self.device_id,
-                        "smart_folder_updated",
-                        &uuid,
-                        &serde_json::Value::Object(fields),
-                    )?;
-                }
-            }
-            Ok(())
-        })
-    }
-
-    pub fn delete_smart_folder(
-        &self,
-        smart_folder_id: i64,
-    ) -> Result<(Vec<i64>, Option<i64>), String> {
-        self.with_write(|conn| {
-            let uuid = smart_folder_uuid(conn, smart_folder_id)?;
-            let result = write::smart_folders::delete_smart_folder(conn, smart_folder_id)?;
-            if let Some(uuid) = uuid {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "smart_folder_deleted",
-                    &uuid,
-                    &serde_json::json!({}),
-                )?;
-            }
-            Ok(result)
-        })
-    }
-
-    pub fn move_smart_folder(
-        &self,
-        smart_folder_id: i64,
-        new_parent_id: Option<i64>,
-    ) -> Result<(), String> {
-        let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(move |conn| {
-            write::smart_folders::move_smart_folder(conn, smart_folder_id, new_parent_id, &now)?;
-            if let Some(uuid) = smart_folder_uuid(conn, smart_folder_id)? {
-                let parent_uuid = match new_parent_id {
-                    Some(pid) => smart_folder_uuid(conn, pid)?,
-                    None => None,
-                };
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "smart_folder_moved",
-                    &uuid,
-                    &serde_json::json!({ "parent": parent_uuid }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn reorder_smart_folders(&self, moves: &[(i64, i64)]) -> Result<(), String> {
-        let m = moves.to_vec();
-        self.with_write(move |conn| write::smart_folders::reorder_smart_folders(conn, &m))
     }
 
     // ── Bulk target operations (for engine query_results targets) ──
@@ -2938,7 +1228,8 @@ impl LibraryDatabase {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::tags::remove_tags(conn, &ids, &t, types::ExpansionMode::EntityOnly)?;
+            let change =
+                write::tags::remove_tags(conn, &ids, &t, types::ExpansionMode::EntityOnly)?;
             if !change.tags_removed.is_empty() {
                 let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
                 emit_per_entity(
@@ -2967,8 +1258,12 @@ impl LibraryDatabase {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change =
-                write::folders::add_members(conn, folder_id, &ids, types::ExpansionMode::EntityOnly)?;
+            let change = write::folders::add_members(
+                conn,
+                folder_id,
+                &ids,
+                types::ExpansionMode::EntityOnly,
+            )?;
             emit_folder_membership_op(
                 conn,
                 &self.device_id,
@@ -3008,527 +1303,6 @@ impl LibraryDatabase {
                 &change.entity_ids,
             )?;
             Ok(change)
-        })
-    }
-
-    // ── Deferred work ────────────────────────────────────────────
-
-    pub fn get_deferred_work_summary(
-        &self,
-    ) -> Result<crate::engine::deferred::DeferredWorkSummary, String> {
-        self.with_read(|conn| {
-            let pending: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM deferred_work_item WHERE status = 'pending'",
-                [],
-                |r| r.get(0),
-            )?;
-            let running: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM deferred_work_item WHERE status = 'running'",
-                [],
-                |r| r.get(0),
-            )?;
-            let failed: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM deferred_work_item WHERE status = 'pending' AND attempt_count > 0",
-                [],
-                |r| r.get(0),
-            )?;
-            let dominant_pending: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM deferred_work_item
-                 WHERE work_type = 'dominant_colors' AND status = 'pending' AND attempt_count = 0",
-                [],
-                |r| r.get(0),
-            )?;
-            let dominant_running: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM deferred_work_item
-                 WHERE work_type = 'dominant_colors' AND status = 'running'",
-                [],
-                |r| r.get(0),
-            )?;
-            let dominant_failed: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM deferred_work_item
-                 WHERE work_type = 'dominant_colors' AND status = 'pending' AND attempt_count > 0",
-                [],
-                |r| r.get(0),
-            )?;
-            Ok(crate::engine::deferred::DeferredWorkSummary {
-                pending_count: pending,
-                running_count: running,
-                failed_count: failed,
-                dominant_colors_pending_count: dominant_pending,
-                dominant_colors_running_count: dominant_running,
-                dominant_colors_failed_count: dominant_failed,
-            })
-        })
-    }
-
-    pub fn retry_deferred_work(&self, entity_hash: &str) -> Result<(), String> {
-        let h = entity_hash.to_string();
-        let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(|conn| {
-            conn.execute(
-                "UPDATE deferred_work_item
-                 SET status = 'pending', attempt_count = 0, available_at = ?1, last_error = NULL
-                 WHERE entity_hash = ?2",
-                rusqlite::params![now, h],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn enqueue_deferred_jobs(
-        &self,
-        entity_hash: &str,
-        work_types: &[crate::background_work::DeferredWorkType],
-    ) -> Result<(), String> {
-        let hash = entity_hash.to_string();
-        let work_types: Vec<String> = work_types
-            .iter()
-            .map(|work_type| work_type.as_db_str().to_string())
-            .collect();
-        self.with_write(move |conn| {
-            let now = chrono::Utc::now().to_rfc3339();
-            let mut stmt = conn.prepare(
-                "INSERT INTO deferred_work_item
-                     (entity_hash, work_type, status, attempt_count, available_at, queued_at)
-                 VALUES
-                     (?1, ?2, 'pending', 0, ?3, ?3)
-                 ON CONFLICT(entity_hash, work_type) DO UPDATE SET
-                     status = 'pending',
-                     attempt_count = 0,
-                     available_at = excluded.available_at,
-                     last_error = NULL,
-                     queued_at = excluded.queued_at,
-                     started_at = NULL,
-                     finished_at = NULL,
-                     last_error_at = NULL",
-            )?;
-            for work_type in &work_types {
-                stmt.execute(rusqlite::params![hash, work_type, now])?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn ensure_deferred_jobs_present(
-        &self,
-        entity_hash: &str,
-        work_types: &[crate::background_work::DeferredWorkType],
-    ) -> Result<(), String> {
-        self.ensure_deferred_jobs_present_batch(vec![(
-            entity_hash.to_string(),
-            work_types.to_vec(),
-        )])
-    }
-
-    pub fn ensure_deferred_jobs_present_batch(
-        &self,
-        items: Vec<(String, Vec<crate::background_work::DeferredWorkType>)>,
-    ) -> Result<(), String> {
-        self.with_write(move |conn| {
-            let now = chrono::Utc::now().to_rfc3339();
-            let mut stmt = conn.prepare(
-                "INSERT INTO deferred_work_item
-                     (entity_hash, work_type, status, attempt_count, available_at, queued_at)
-                 VALUES
-                     (?1, ?2, 'pending', 0, ?3, ?3)
-                 ON CONFLICT(entity_hash, work_type) DO NOTHING",
-            )?;
-            for (entity_hash, work_types) in &items {
-                for work_type in work_types {
-                    stmt.execute(rusqlite::params![entity_hash, work_type.as_db_str(), now])?;
-                }
-            }
-            Ok(())
-        })
-    }
-
-    pub fn enqueue_deferred_jobs_batch(
-        &self,
-        items: Vec<(String, Vec<crate::background_work::DeferredWorkType>)>,
-    ) -> Result<(), String> {
-        self.with_write(move |conn| {
-            let now = chrono::Utc::now().to_rfc3339();
-            let mut stmt = conn.prepare(
-                "INSERT INTO deferred_work_item
-                     (entity_hash, work_type, status, attempt_count, available_at, queued_at)
-                 VALUES
-                     (?1, ?2, 'pending', 0, ?3, ?3)
-                 ON CONFLICT(entity_hash, work_type) DO UPDATE SET
-                     status = 'pending',
-                     attempt_count = 0,
-                     available_at = excluded.available_at,
-                     last_error = NULL,
-                     queued_at = excluded.queued_at,
-                     started_at = NULL,
-                     finished_at = NULL,
-                     last_error_at = NULL",
-            )?;
-            for (entity_hash, work_types) in &items {
-                for work_type in work_types {
-                    stmt.execute(rusqlite::params![entity_hash, work_type.as_db_str(), now])?;
-                }
-            }
-            Ok(())
-        })
-    }
-
-    pub fn list_deferred_work_items(
-        &self,
-        filter: crate::background_work::DeferredWorkFilter,
-    ) -> Result<Vec<crate::background_work::DeferredWorkItemInfo>, String> {
-        self.with_read(move |conn| {
-            let mut sql = String::from(
-                "SELECT entity_hash, work_type, status, attempt_count, available_at, queued_at, started_at, finished_at, last_error, last_error_at
-                 FROM deferred_work_item",
-            );
-            let mut conditions = Vec::<String>::new();
-            let mut params: Vec<String> = Vec::new();
-
-            if let Some(entity_hash) = &filter.entity_hash {
-                conditions.push("entity_hash = ?".to_string());
-                params.push(entity_hash.clone());
-            }
-            if let Some(work_type) = filter.work_type {
-                conditions.push("work_type = ?".to_string());
-                params.push(work_type.as_db_str().to_string());
-            }
-            if let Some(status) = filter.status {
-                conditions.push("status = ?".to_string());
-                params.push(status.as_db_str().to_string());
-            }
-            if !conditions.is_empty() {
-                sql.push_str(" WHERE ");
-                sql.push_str(&conditions.join(" AND "));
-            }
-            sql.push_str(" ORDER BY available_at ASC, work_id ASC");
-            let limit = filter.limit.unwrap_or(200).clamp(1, 1000);
-            sql.push_str(&format!(" LIMIT {limit}"));
-
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt
-                .query_map(rusqlite::params_from_iter(params.iter()), |row| {
-                    let work_type_raw: String = row.get(1)?;
-                    let status_raw: String = row.get(2)?;
-                    Ok(crate::background_work::DeferredWorkItemInfo {
-                        entity_hash: row.get(0)?,
-                        work_type: crate::background_work::DeferredWorkType::from_db_str(&work_type_raw)
-                            .ok_or(rusqlite::Error::InvalidQuery)?,
-                        status: crate::background_work::DeferredWorkStatus::from_db_str(&status_raw)
-                            .ok_or(rusqlite::Error::InvalidQuery)?,
-                        attempt_count: row.get(3)?,
-                        available_at: row.get(4)?,
-                        queued_at: row.get(5)?,
-                        started_at: row.get(6)?,
-                        finished_at: row.get(7)?,
-                        last_error: row.get(8)?,
-                        last_error_at: row.get(9)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })
-    }
-
-    pub fn reset_running_deferred_work_items(&self) -> Result<usize, String> {
-        let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(move |conn| {
-            conn.execute(
-                "UPDATE deferred_work_item
-                 SET status = 'pending',
-                     started_at = NULL,
-                     finished_at = NULL,
-                     queued_at = ?1
-                 WHERE status = 'running'",
-                [&now],
-            )
-        })
-    }
-
-    pub fn claim_next_deferred_work_items(
-        &self,
-    ) -> Result<Vec<types::ClaimedDeferredWorkItem>, String> {
-        self.with_write(|conn| {
-            let now = chrono::Utc::now().to_rfc3339();
-            let next_hash: Option<String> = conn
-                .query_row(
-                    "SELECT entity_hash
-                     FROM deferred_work_item
-                     WHERE status = 'pending' AND available_at <= ?1
-                     ORDER BY work_id ASC
-                     LIMIT 1",
-                    [&now],
-                    |row| row.get(0),
-                )
-                .optional()?;
-
-            let Some(next_hash) = next_hash else {
-                return Ok(Vec::new());
-            };
-
-            let mut stmt = conn.prepare(
-                "SELECT work_id, entity_hash, work_type, attempt_count
-                 FROM deferred_work_item
-                 WHERE entity_hash = ?1 AND status = 'pending' AND available_at <= ?2
-                 ORDER BY work_id ASC",
-            )?;
-            let rows = stmt
-                .query_map(rusqlite::params![next_hash, now], |row| {
-                    Ok(types::ClaimedDeferredWorkItem {
-                        work_id: row.get(0)?,
-                        entity_hash: row.get(1)?,
-                        work_type: row.get(2)?,
-                        attempt_count: row.get(3)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            drop(stmt);
-
-            for row in &rows {
-                conn.execute(
-                    "UPDATE deferred_work_item
-                     SET status = 'running',
-                         started_at = ?2
-                     WHERE work_id = ?1",
-                    rusqlite::params![row.work_id, now],
-                )?;
-            }
-            Ok(rows)
-        })
-    }
-
-    pub fn complete_deferred_work_item(&self, work_id: i64) -> Result<(), String> {
-        self.with_write(move |conn| {
-            conn.execute(
-                "DELETE FROM deferred_work_item WHERE work_id = ?1",
-                [work_id],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn retry_deferred_work_item(
-        &self,
-        work_id: i64,
-        next_attempt: i64,
-        error: &str,
-    ) -> Result<(), String> {
-        let error = error.to_string();
-        let available_at = {
-            let exp = (next_attempt.saturating_sub(1)).clamp(0, 10) as u32;
-            let delay_secs = (30_i64.saturating_mul(1_i64 << exp)).min(60 * 60);
-            (chrono::Utc::now() + chrono::Duration::seconds(delay_secs)).to_rfc3339()
-        };
-        let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(move |conn| {
-            conn.execute(
-                "UPDATE deferred_work_item
-                 SET status = 'pending',
-                     attempt_count = ?2,
-                     available_at = ?3,
-                     last_error = ?4,
-                     queued_at = ?5,
-                     started_at = NULL,
-                     last_error_at = ?5
-                 WHERE work_id = ?1",
-                rusqlite::params![work_id, next_attempt, available_at, error, now],
-            )?;
-            Ok(())
-        })
-    }
-
-    pub fn set_phash_for_entity_hash(&self, entity_hash: &str, phash: &str) -> Result<(), String> {
-        let hash = entity_hash.to_string();
-        let value = phash.to_string();
-        self.with_write(move |conn| {
-            let file_id: i64 = conn.query_row(
-                "SELECT mf.file_id
-                 FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
-                 WHERE me.entity_hash = ?1",
-                [&hash],
-                |row| row.get(0),
-            )?;
-            write::files::update_file_analysis(conn, file_id, Some(&value), None, None)
-        })
-    }
-
-    pub fn replace_file_phash(&self, file_id: i64, phash: Option<&str>) -> Result<(), String> {
-        let value = phash.map(str::to_string);
-        self.with_write(move |conn| {
-            write::files::replace_file_phash(conn, file_id, value.as_deref())
-        })
-    }
-
-    pub fn set_file_colors_for_entity_hash(
-        &self,
-        entity_hash: &str,
-        colors: &[(String, f32, f32, f32)],
-        dominant_color_hex: Option<&str>,
-        dominant_palette_blob: Option<&[u8]>,
-        color_analysis_version: i64,
-    ) -> Result<(), String> {
-        let hash = entity_hash.to_string();
-        let colors = colors.to_vec();
-        let dominant = dominant_color_hex.map(str::to_string);
-        let palette_blob = dominant_palette_blob.map(|blob| blob.to_vec());
-        self.with_write(move |conn| {
-            let file_id: i64 = conn.query_row(
-                "SELECT mf.file_id
-                 FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
-                 WHERE me.entity_hash = ?1",
-                [&hash],
-                |row| row.get(0),
-            )?;
-            write::files::replace_file_color_analysis(
-                conn,
-                file_id,
-                &colors,
-                dominant.as_deref(),
-                palette_blob.as_deref(),
-                color_analysis_version,
-            )
-        })
-    }
-
-    pub fn replace_file_colors(
-        &self,
-        file_id: i64,
-        colors: &[(String, f32, f32, f32)],
-        dominant_color_hex: Option<&str>,
-        dominant_palette_blob: Option<&[u8]>,
-        color_analysis_version: i64,
-    ) -> Result<(), String> {
-        let colors = colors.to_vec();
-        let dominant = dominant_color_hex.map(str::to_string);
-        let palette_blob = dominant_palette_blob.map(|blob| blob.to_vec());
-        self.with_write(move |conn| {
-            write::files::replace_file_color_analysis(
-                conn,
-                file_id,
-                &colors,
-                dominant.as_deref(),
-                palette_blob.as_deref(),
-                color_analysis_version,
-            )
-        })
-    }
-
-    pub fn get_file_colors_for_entity_hash(
-        &self,
-        entity_hash: &str,
-    ) -> Result<Vec<(String, f64, f64, f64)>, String> {
-        let hash = entity_hash.to_string();
-        self.with_read(|conn| {
-            let row = conn
-                .query_row(
-                    "SELECT mf.file_id, mf.dominant_palette_blob
-                     FROM media_entity me
-                     JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                     JOIN media_file mf ON mf.file_id = sme.file_id
-                     WHERE me.entity_hash = ?1",
-                    [&hash],
-                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<Vec<u8>>>(1)?)),
-                )
-                .optional()?;
-            let Some((file_id, dominant_palette_blob)) = row else {
-                return Ok(Vec::new());
-            };
-
-            if let Some(blob) = dominant_palette_blob.as_deref() {
-                match crate::media_processing::colors::deserialize_dominant_palette_blob(blob) {
-                    Ok(colors) => {
-                        return Ok(colors
-                            .into_iter()
-                            .map(|color| (color.hex, color.l, color.a, color.b))
-                            .collect());
-                    }
-                    Err(error) => {
-                        tracing::warn!(
-                            entity_hash = %hash,
-                            file_id,
-                            error = %error,
-                            "Failed to decode dominant_palette_blob, falling back to file_color"
-                        );
-                    }
-                }
-            }
-
-            let mut stmt = conn.prepare_cached(
-                "SELECT hex, l, a, b FROM file_color WHERE file_id = ?1 ORDER BY rowid",
-            )?;
-            let colors = stmt
-                .query_map([file_id], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, f64>(1)?,
-                        row.get::<_, f64>(2)?,
-                        row.get::<_, f64>(3)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(colors)
-        })
-    }
-
-    pub fn enqueue_stale_color_analysis_jobs(&self, target_version: i64) -> Result<usize, String> {
-        let candidates = self.with_read(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT me.entity_hash, mf.mime_type, mf.frame_count
-                 FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
-                 WHERE mf.color_analysis_version < ?1
-                    OR (mf.color_analysis_version >= ?1 AND mf.dominant_palette_blob IS NULL)",
-            )?;
-            let rows = stmt
-                .query_map([target_version], |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<i64>>(2)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })?;
-
-        let items = candidates
-            .into_iter()
-            .filter_map(|(entity_hash, mime_type, frame_count)| {
-                let caps = crate::media_capabilities::capabilities_for_stored_media(
-                    &mime_type,
-                    frame_count,
-                );
-                caps.can_dominant_colors.then_some((
-                    entity_hash,
-                    vec![crate::background_work::DeferredWorkType::DominantColors],
-                ))
-            })
-            .collect::<Vec<_>>();
-
-        let count = items.len();
-        if count > 0 {
-            self.ensure_deferred_jobs_present_batch(items)?;
-        }
-        Ok(count)
-    }
-
-    /// Get the entity_hash of a collection's primary member (first by ordinal).
-    pub fn get_primary_member_hash(&self, collection_hash: &str) -> Result<Option<String>, String> {
-        let h = collection_hash.to_string();
-        self.with_read(|conn| {
-            use rusqlite::OptionalExtension;
-            conn.query_row(
-                "SELECT pm.entity_hash FROM media_entity me
-                 JOIN media_entity pm ON pm.entity_id = me.primary_member_entity_id
-                 WHERE me.entity_hash = ?1 AND me.entity_kind = 'collection'",
-                [&h],
-                |row| row.get(0),
-            )
-            .optional()
         })
     }
 
@@ -3636,7 +1410,8 @@ impl LibraryDatabase {
         })?;
 
         let colors = self.get_file_colors_for_entity_hash(entity_hash)?;
-        let parent_tags = self.with_read(|conn| query::metadata::get_implied_tags(conn, entity_hash))?;
+        let parent_tags =
+            self.with_read(|conn| query::metadata::get_implied_tags(conn, entity_hash))?;
 
         let tags = entity
             .tags
@@ -3781,9 +1556,8 @@ impl LibraryDatabase {
         source_hash: &str,
     ) -> Result<crate::types::FindSimilarResponse, String> {
         let source_hash = source_hash.to_string();
-        let source = self.with_read(|conn| {
-            query::duplicates::get_duplicate_find_source(conn, &source_hash)
-        })?;
+        let source = self
+            .with_read(|conn| query::duplicates::get_duplicate_find_source(conn, &source_hash))?;
 
         let Some(source) = source else {
             return Ok(crate::types::FindSimilarResponse {
@@ -4035,619 +1809,4 @@ impl LibraryDatabase {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::LibraryDatabase;
-    use crate::background_work::{DeferredWorkFilter, DeferredWorkType};
-    use crate::db::core::schema::LIBRARY_DDL;
-    use crate::db::types::{BaseScope, DuplicateResolveStatus, EntityViewQuery, QueryFilters, QueryPage, QuerySort, ScopeKind};
-    use crate::media_analysis::ensure_missing_color_analysis_jobs;
-    use crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION;
-    use crate::media_processing::colors::{serialize_dominant_palette_blob, DominantColor};
-    use rusqlite::params;
-    use tempfile::TempDir;
-
-    fn open_test_db() -> LibraryDatabase {
-        let tmp = TempDir::new().expect("tempdir");
-        let db = LibraryDatabase::open(tmp.path()).expect("open library db");
-        std::mem::forget(tmp);
-        db
-    }
-
-    #[test]
-    fn folder_mutations_emit_outbox_ops_with_stable_uuid() {
-        let db = open_test_db();
-
-        let folder_id = db.create_folder("Art", None, None, None).unwrap();
-        db.update_folder(
-            folder_id,
-            &crate::db::types::FolderPatch {
-                name: Some("Artwork".to_string()),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        db.delete_folder(folder_id).unwrap();
-
-        let ops: Vec<(String, String, String, String)> = db
-            .with_read(|conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT op_type, entity_key, hlc, device_id FROM op_outbox ORDER BY op_id",
-                )?;
-                let rows = stmt
-                    .query_map([], |row| {
-                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
-            })
-            .unwrap();
-
-        assert_eq!(
-            ops.iter().map(|o| o.0.as_str()).collect::<Vec<_>>(),
-            vec!["folder_created", "folder_updated", "folder_deleted"]
-        );
-        let uuid = &ops[0].1;
-        assert_eq!(uuid.len(), 32, "entity key must be the folder uuid");
-        assert!(ops.iter().all(|o| &o.1 == uuid));
-        assert!(ops[0].2 < ops[1].2 && ops[1].2 < ops[2].2, "hlc must increase");
-        assert!(ops.iter().all(|o| !o.3.is_empty()));
-    }
-
-    #[test]
-    fn entity_tag_and_collection_mutations_emit_ops() {
-        let db = open_test_db();
-        let file_id = db
-            .insert_file("hash_x", "image/png", 10, None, None, None, None, false, "2026-01-01")
-            .unwrap();
-        let entity_id = db
-            .insert_single("hash_x", file_id, Some("img"), 1, "2026-01-01", "2026-01-01")
-            .unwrap();
-
-        db.add_tags(
-            &[entity_id],
-            &["general:cat".to_string()],
-            1,
-            crate::db::types::ExpansionMode::EntityOnly,
-        )
-        .unwrap();
-        db.set_entity_status(&[entity_id], 2, crate::db::types::ExpansionMode::EntityOnly)
-            .unwrap();
-        let collection_id = db.create_collection("My set").unwrap();
-        db.update_collection_name(collection_id, "Renamed set").unwrap();
-        db.delete_collection(collection_id).unwrap();
-        db.delete_entities(&[entity_id]).unwrap();
-
-        let ops: Vec<(String, String)> = db
-            .with_read(|conn| {
-                let mut stmt =
-                    conn.prepare("SELECT op_type, entity_key FROM op_outbox ORDER BY op_id")?;
-                let rows = stmt
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok(rows)
-            })
-            .unwrap();
-
-        let types: Vec<&str> = ops.iter().map(|o| o.0.as_str()).collect();
-        assert_eq!(
-            types,
-            vec![
-                "entity_tags_added",
-                "entity_status_changed",
-                "collection_created",
-                "collection_renamed",
-                "collection_deleted",
-                "entity_deleted",
-            ]
-        );
-        assert!(ops
-            .iter()
-            .filter(|o| o.0.starts_with("entity_"))
-            .all(|o| o.1 == "hash_x"));
-        // Collection ops key on the collection's entity_hash, not the member's.
-        assert!(ops
-            .iter()
-            .filter(|o| o.0.starts_with("collection_"))
-            .all(|o| o.1 != "hash_x" && !o.1.is_empty()));
-    }
-
-    #[test]
-    fn reopen_backfills_missing_uuids() {
-        let tmp = TempDir::new().expect("tempdir");
-        {
-            let db = LibraryDatabase::open(tmp.path()).expect("open");
-            db.with_write(|conn| {
-                conn.execute(
-                    "INSERT INTO folder (name, uuid, date_added, date_modified)
-                     VALUES ('legacy', NULL, 'now', 'now')",
-                    [],
-                )
-                .map(|_| ())
-            })
-            .unwrap();
-        }
-        let db = LibraryDatabase::open(tmp.path()).expect("reopen");
-        let uuid: Option<String> = db
-            .with_read(|conn| {
-                conn.query_row(
-                    "SELECT uuid FROM folder WHERE name = 'legacy'",
-                    [],
-                    |row| row.get(0),
-                )
-            })
-            .unwrap();
-        let uuid = uuid.expect("uuid must be backfilled on reopen");
-        assert_eq!(uuid.len(), 32);
-    }
-
-    #[test]
-    fn with_write_rolls_back_every_statement_on_error() {
-        let db = open_test_db();
-
-        let result: Result<(), String> = db.with_write(|conn| {
-            conn.execute(
-                "INSERT INTO tag (namespace, subtag) VALUES ('test', 'rollback_a')",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO tag (namespace, subtag) VALUES ('test', 'rollback_b')",
-                [],
-            )?;
-            Err(rusqlite::Error::InvalidQuery)
-        });
-        assert!(result.is_err());
-
-        let count: i64 = db
-            .with_read(|conn| {
-                conn.query_row(
-                    "SELECT COUNT(*) FROM tag WHERE namespace = 'test'",
-                    [],
-                    |row| row.get(0),
-                )
-            })
-            .unwrap();
-        assert_eq!(count, 0, "failed write action must leave no partial rows");
-
-        db.with_write(|conn| {
-            conn.execute(
-                "INSERT INTO tag (namespace, subtag) VALUES ('test', 'commit_a')",
-                [],
-            )
-            .map(|_| ())
-        })
-        .unwrap();
-        let count: i64 = db
-            .with_read(|conn| {
-                conn.query_row(
-                    "SELECT COUNT(*) FROM tag WHERE namespace = 'test'",
-                    [],
-                    |row| row.get(0),
-                )
-            })
-            .unwrap();
-        assert_eq!(count, 1, "successful write action must commit");
-    }
-
-    #[test]
-    fn get_file_colors_for_entity_hash_prefers_blob_and_falls_back_to_index() {
-        let db = open_test_db();
-        db.with_write(|conn| {
-            conn.execute_batch(LIBRARY_DDL)?;
-            conn.execute(
-                "INSERT INTO media_entity (
-                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
-                 ) VALUES (1, 'with_blob', 'single', 1, 'Blob', '2026-04-01', '2026-04-01', '2026-04-01')",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO media_entity (
-                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
-                 ) VALUES (2, 'fallback', 'single', 1, 'Fallback', '2026-04-01', '2026-04-01', '2026-04-01')",
-                [],
-            )?;
-
-            let blob = serialize_dominant_palette_blob(&[DominantColor {
-                hex: "#abcdef".into(),
-                l: 10.0,
-                a: 1.0,
-                b: 2.0,
-            }])
-            .expect("serialize");
-
-            conn.execute(
-                "INSERT INTO media_file (
-                    file_id, file_hash, mime_type, size_bytes, has_audio, dominant_color_hex,
-                    dominant_palette_blob, color_analysis_version, date_added
-                 ) VALUES (1, 'file_blob', 'image/png', 1, 0, '#abcdef', ?1, ?2, '2026-04-01')",
-                rusqlite::params![blob, TARGET_COLOR_ANALYSIS_VERSION],
-            )?;
-            conn.execute(
-                "INSERT INTO media_file (
-                    file_id, file_hash, mime_type, size_bytes, has_audio, dominant_color_hex,
-                    color_analysis_version, date_added
-                 ) VALUES (2, 'file_fallback', 'image/png', 1, 0, '#123456', 0, '2026-04-01')",
-                [],
-            )?;
-            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1)", [])?;
-            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (2, 2)", [])?;
-            conn.execute(
-                "INSERT INTO file_color (file_id, hex, l, a, b) VALUES (2, '#fedcba', 20.0, 3.0, 4.0)",
-                [],
-            )?;
-            Ok(())
-        })
-        .expect("seed db");
-
-        let blob_colors = db
-            .get_file_colors_for_entity_hash("with_blob")
-            .expect("get blob colors");
-        let fallback_colors = db
-            .get_file_colors_for_entity_hash("fallback")
-            .expect("get fallback colors");
-
-        assert_eq!(blob_colors[0].0, "#abcdef");
-        assert_eq!(fallback_colors[0].0, "#fedcba");
-    }
-
-    #[test]
-    fn open_repairs_missing_ingest_queue_tables_for_existing_canonical_db() {
-        let tmp = TempDir::new().expect("tempdir");
-        let db_path = tmp.path().join("library.db");
-        let conn = rusqlite::Connection::open(&db_path).expect("open raw db");
-        conn.execute_batch(LIBRARY_DDL).expect("create schema");
-        conn.execute_batch(
-            "DROP INDEX IF EXISTS idx_ingest_queue_ready;
-             DROP INDEX IF EXISTS idx_ingest_queue_subscription;
-             DROP INDEX IF EXISTS idx_ingest_queue_item_queue;
-             DROP TABLE IF EXISTS ingest_queue_item;
-             DROP TABLE IF EXISTS ingest_queue;",
-        )
-        .expect("drop queue tables");
-        drop(conn);
-
-        let db = LibraryDatabase::open(tmp.path()).expect("repair schema");
-        db.with_read(|conn| {
-            let queue_exists: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ingest_queue'",
-                [],
-                |row| row.get(0),
-            )?;
-            let item_exists: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ingest_queue_item'",
-                [],
-                |row| row.get(0),
-            )?;
-            let ready_index_exists: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_ingest_queue_ready'",
-                [],
-                |row| row.get(0),
-            )?;
-            assert_eq!(queue_exists, 1);
-            assert_eq!(item_exists, 1);
-            assert_eq!(ready_index_exists, 1);
-            Ok(())
-        })
-        .expect("inspect repaired schema");
-    }
-
-    #[test]
-    fn smart_folder_scope_query_matches_runtime_compiled_bitmap_and_sidebar_count() {
-        let db = open_test_db();
-        db.with_write(|conn| {
-            conn.execute(
-                "INSERT INTO media_entity (
-                    entity_id, entity_hash, entity_kind, status, name, rating, date_created, date_added, date_modified
-                 ) VALUES
-                    (1, 'entity_1', 'single', 1, 'Landscape', 5, '2026-04-01', '2026-04-01', '2026-04-01'),
-                    (2, 'entity_2', 'single', 1, 'Portrait', 2, '2026-04-02', '2026-04-02', '2026-04-02')",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO media_file (
-                    file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, has_audio, date_added
-                 ) VALUES
-                    (1, 'file_1', 'image/png', 100, 1000, 500, 0, '2026-04-01'),
-                    (2, 'file_2', 'image/jpeg', 100, 500, 1000, 0, '2026-04-02')",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO tag (tag_id, namespace, subtag, file_count) VALUES (1, 'general', 'landscape', 1)",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO entity_tag (entity_id, tag_id, provenance_mask, source) VALUES (1, 1, 1, 'local')",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO file_color (file_id, hex, l, a, b) VALUES (1, '#ff0000', 50.0, 60.0, 70.0)",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO smart_folder (
-                    smart_folder_id, name, predicate_json, date_added, date_modified
-                 ) VALUES (?1, ?2, ?3, ?4, ?4)",
-                params![
-                    7_i64,
-                    "Smart Landscape",
-                    serde_json::json!({
-                        "groups": [{
-                            "match_mode": "all",
-                            "negate": false,
-                            "rules": [
-                                { "field": "tags", "op": "include_all", "values": ["landscape"] },
-                                { "field": "color", "op": "contains", "values": ["#ff0000"] },
-                                { "field": "rating", "op": "gte", "value": 4 }
-                            ]
-                        }]
-                    }).to_string(),
-                    "2026-04-01T00:00:00Z",
-                ],
-            )?;
-            Ok(())
-        })
-        .expect("seed smart folder data");
-
-        db.full_rebuild();
-
-        let page = db
-            .query_entity_view(&EntityViewQuery {
-                base_scope: BaseScope {
-                    kind: ScopeKind::SmartFolder,
-                    key: None,
-                    id: Some(7),
-                },
-                filters: QueryFilters::default(),
-                sort: QuerySort::default(),
-                page: QueryPage::default(),
-            })
-            .expect("query smart folder scope");
-
-        assert_eq!(page.items.len(), 1);
-        assert_eq!(page.items[0].entity_hash, "entity_1");
-        assert_eq!(
-            db.bitmap_len(&crate::db::projection::bitmaps::BitmapKey::SmartFolder(7)),
-            1
-        );
-        db.with_read(|conn| {
-            let count: i64 = conn.query_row(
-                "SELECT count FROM sidebar_node WHERE node_id = 'smart:7'",
-                [],
-                |row| row.get(0),
-            )?;
-            assert_eq!(count, 1);
-            Ok(())
-        })
-        .expect("read sidebar count");
-    }
-
-    #[test]
-    fn resolve_duplicate_pair_requires_explicit_collection_choice_for_cross_collection_members() {
-        let db = open_test_db();
-        db.with_write(|conn| {
-            conn.execute_batch(LIBRARY_DDL)?;
-            conn.execute(
-                "INSERT INTO media_entity (
-                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
-                 ) VALUES
-                    (1, 'collection_left', 'collection', 1, 'Left Collection', '2026-04-01', '2026-04-01', '2026-04-01'),
-                    (2, 'collection_right', 'collection', 1, 'Right Collection', '2026-04-01', '2026-04-01', '2026-04-01'),
-                    (3, 'left_single', 'single', 1, 'Left Single', '2026-04-01', '2026-04-01', '2026-04-01'),
-                    (4, 'right_single', 'single', 1, 'Right Single', '2026-04-01', '2026-04-01', '2026-04-01')",
-                [],
-            )?;
-            conn.execute(
-                "UPDATE media_entity
-                 SET parent_collection_entity_id = 1, collection_ordinal = 1
-                 WHERE entity_id = 3",
-                [],
-            )?;
-            conn.execute(
-                "UPDATE media_entity
-                 SET parent_collection_entity_id = 2, collection_ordinal = 1
-                 WHERE entity_id = 4",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO media_file (
-                    file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, has_audio,
-                    perceptual_hash, date_added
-                 ) VALUES
-                    (1, 'file_left', 'image/png', 1, 100, 100, 0, 'hash_left', '2026-04-01'),
-                    (2, 'file_right', 'image/png', 1, 100, 100, 0, 'hash_right', '2026-04-01')",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (3, 1), (4, 2)",
-                [],
-            )?;
-            Ok(())
-        })
-        .expect("seed duplicate conflict data");
-
-        let result = db
-            .resolve_duplicate_pair("keep_left", "left_single", "right_single", None)
-            .expect("resolve duplicate conflict");
-
-        assert!(matches!(result.status, DuplicateResolveStatus::Conflict));
-        let conflict = result.conflict.expect("conflict payload");
-        assert_eq!(conflict.winner_collection_id, Some(1));
-        assert_eq!(conflict.loser_collection_id, Some(2));
-    }
-
-    #[test]
-    fn enqueue_stale_color_analysis_jobs_only_queues_stale_color_capable_rows() {
-        let db = open_test_db();
-        db.with_write(|conn| {
-            conn.execute_batch(LIBRARY_DDL)?;
-            conn.execute(
-                "INSERT INTO media_entity (
-                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
-                 ) VALUES
-                    (1, 'stale_image', 'single', 1, 'Stale', '2026-04-01', '2026-04-01', '2026-04-01'),
-                    (2, 'fresh_image', 'single', 1, 'Fresh', '2026-04-01', '2026-04-01', '2026-04-01'),
-                    (3, 'audio_only', 'single', 1, 'Audio', '2026-04-01', '2026-04-01', '2026-04-01')",
-                [],
-            )?;
-
-            let blob = serialize_dominant_palette_blob(&[DominantColor {
-                hex: "#010203".into(),
-                l: 1.0,
-                a: 2.0,
-                b: 3.0,
-            }])
-            .expect("serialize");
-
-            conn.execute(
-                "INSERT INTO media_file (
-                    file_id, file_hash, mime_type, size_bytes, has_audio, color_analysis_version, date_added
-                 ) VALUES
-                    (1, 'stale_file', 'image/png', 1, 0, 0, '2026-04-01'),
-                    (3, 'audio_file', 'audio/mpeg', 1, 1, 0, '2026-04-01')",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO media_file (
-                    file_id, file_hash, mime_type, size_bytes, has_audio, dominant_palette_blob,
-                    color_analysis_version, date_added
-                 ) VALUES (2, 'fresh_file', 'image/png', 1, 0, ?1, ?2, '2026-04-01')",
-                rusqlite::params![blob, TARGET_COLOR_ANALYSIS_VERSION],
-            )?;
-            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1)", [])?;
-            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (2, 2)", [])?;
-            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (3, 3)", [])?;
-            Ok(())
-        })
-        .expect("seed db");
-
-        let queued = db
-            .enqueue_stale_color_analysis_jobs(TARGET_COLOR_ANALYSIS_VERSION)
-            .expect("enqueue stale colors");
-        let jobs = db
-            .list_deferred_work_items(DeferredWorkFilter::default())
-            .expect("list jobs");
-
-        assert_eq!(queued, 1);
-        assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].entity_hash, "stale_image");
-        assert_eq!(jobs[0].work_type, DeferredWorkType::DominantColors);
-    }
-
-    #[test]
-    fn ensure_deferred_jobs_present_does_not_reset_existing_running_job() {
-        let db = open_test_db();
-        db.with_write(|conn| {
-            conn.execute_batch(LIBRARY_DDL)?;
-            conn.execute(
-                "INSERT INTO deferred_work_item (
-                    entity_hash, work_type, status, attempt_count, available_at, queued_at, started_at
-                 ) VALUES (?1, 'dominant_colors', 'running', 3, '2026-04-01', '2026-04-01', '2026-04-01T00:00:01Z')",
-                ["hash_a"],
-            )?;
-            Ok(())
-        })
-        .expect("seed deferred work");
-
-        db.ensure_deferred_jobs_present("hash_a", &[DeferredWorkType::DominantColors])
-            .expect("ensure deferred work");
-
-        let jobs = db
-            .list_deferred_work_items(DeferredWorkFilter::default())
-            .expect("list jobs");
-        assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].entity_hash, "hash_a");
-        assert_eq!(jobs[0].work_type, DeferredWorkType::DominantColors);
-        assert_eq!(jobs[0].status, crate::background_work::DeferredWorkStatus::Running);
-        assert_eq!(jobs[0].attempt_count, 3);
-        assert_eq!(jobs[0].started_at.as_deref(), Some("2026-04-01T00:00:01Z"));
-    }
-
-    #[test]
-    fn ensure_missing_color_analysis_jobs_only_queues_missing_colors_once() {
-        let db = open_test_db();
-        db.with_write(|conn| {
-            conn.execute_batch(LIBRARY_DDL)?;
-            conn.execute(
-                "INSERT INTO media_entity (
-                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
-                 ) VALUES
-                    (1, 'stale_image', 'single', 1, 'Stale', '2026-04-01', '2026-04-01', '2026-04-01'),
-                    (2, 'fresh_image', 'single', 1, 'Fresh', '2026-04-01', '2026-04-01', '2026-04-01')",
-                [],
-            )?;
-            let blob = serialize_dominant_palette_blob(&[DominantColor {
-                hex: "#010203".into(),
-                l: 1.0,
-                a: 2.0,
-                b: 3.0,
-            }])
-            .expect("serialize");
-            conn.execute(
-                "INSERT INTO media_file (
-                    file_id, file_hash, mime_type, size_bytes, has_audio, color_analysis_version, date_added
-                 ) VALUES (1, 'stale_file', 'image/png', 1, 0, 0, '2026-04-01')",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO media_file (
-                    file_id, file_hash, mime_type, size_bytes, has_audio, dominant_palette_blob,
-                    color_analysis_version, date_added
-                 ) VALUES (2, 'fresh_file', 'image/png', 1, 0, ?1, ?2, '2026-04-01')",
-                rusqlite::params![blob, TARGET_COLOR_ANALYSIS_VERSION],
-            )?;
-            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1)", [])?;
-            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (2, 2)", [])?;
-            Ok(())
-        })
-        .expect("seed db");
-
-        let hashes = vec![
-            "stale_image".to_string(),
-            "fresh_image".to_string(),
-            "stale_image".to_string(),
-        ];
-        ensure_missing_color_analysis_jobs(&db, &hashes).expect("first ensure");
-        ensure_missing_color_analysis_jobs(&db, &hashes).expect("second ensure");
-
-        let jobs = db
-            .list_deferred_work_items(DeferredWorkFilter::default())
-            .expect("list jobs");
-        assert_eq!(jobs.len(), 1);
-        assert_eq!(jobs[0].entity_hash, "stale_image");
-        assert_eq!(jobs[0].work_type, DeferredWorkType::DominantColors);
-    }
-
-    #[test]
-    fn deferred_work_summary_reports_dominant_color_backlog_counts() {
-        let db = open_test_db();
-        db.with_write(|conn| {
-            conn.execute_batch(LIBRARY_DDL)?;
-            conn.execute(
-                "INSERT INTO deferred_work_item (
-                    entity_hash, work_type, status, attempt_count, available_at, queued_at
-                 ) VALUES
-                    ('pending_color', 'dominant_colors', 'pending', 0, '2026-04-01', '2026-04-01'),
-                    ('failed_color', 'dominant_colors', 'pending', 2, '2026-04-01', '2026-04-01'),
-                    ('running_color', 'dominant_colors', 'running', 0, '2026-04-01', '2026-04-01'),
-                    ('thumb_job', 'thumbnail', 'pending', 0, '2026-04-01', '2026-04-01')",
-                [],
-            )?;
-            Ok(())
-        })
-        .expect("seed deferred summary");
-
-        let summary = db
-            .get_deferred_work_summary()
-            .expect("get deferred summary");
-
-        assert_eq!(summary.pending_count, 3);
-        assert_eq!(summary.running_count, 1);
-        assert_eq!(summary.failed_count, 1);
-        assert_eq!(summary.dominant_colors_pending_count, 1);
-        assert_eq!(summary.dominant_colors_running_count, 1);
-        assert_eq!(summary.dominant_colors_failed_count, 1);
-    }
-}
+mod tests;

@@ -18,9 +18,6 @@ pub mod ingest;
 pub mod ingest_queue;
 pub mod media_analysis;
 pub mod media_capabilities;
-pub mod media_delivery;
-#[doc(hidden)]
-pub mod media_derivatives;
 pub mod scope;
 pub mod selection;
 pub mod settings;

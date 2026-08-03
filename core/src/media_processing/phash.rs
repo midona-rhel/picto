@@ -10,9 +10,7 @@ pub fn compute_phash(image_data: &[u8]) -> Result<ImageHash, image::ImageError> 
 }
 
 /// Generate a perceptual hash from a pre-decoded image (avoids redundant decode).
-pub fn compute_phash_from_image(
-    img: &image::DynamicImage,
-) -> Result<ImageHash, image::ImageError> {
+pub fn compute_phash_from_image(img: &image::DynamicImage) -> Result<ImageHash, image::ImageError> {
     let rgba = img.to_rgba8();
     let (w, h) = (rgba.width(), rgba.height());
 

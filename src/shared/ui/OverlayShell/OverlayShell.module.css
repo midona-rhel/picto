@@ -1,5 +1,5 @@
 /* OverlayShell — reusable glass floating panel container.
- * Used by tag picker, folder picker, AI tagger, batch rename. */
+ * Used by tag picker, folder picker, and AI tagger. */
 
 .backdrop {
   position: fixed;

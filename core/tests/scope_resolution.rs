@@ -1,511 +1,225 @@
-//! Scope contract conformance tests.
-//!
-//! Each test targets `resolve_scope` / `scope_count` directly,
-//! asserting intended business rules for system scopes, tag search,
-//! folder search, and select-all parity.
+//! Canonical grid scope and count conformance tests.
 
 mod common_canonical;
 
-use picto_core::db::types::ExpansionMode;
-use picto_core::scope::resolver::{resolve_scope, scope_count, ScopeFilter};
-use picto_core::types::*;
+use std::collections::BTreeSet;
 
-/// Business rule: `system:active` = active only (status=1).
-/// Inbox and trash are excluded.
-#[tokio::test]
-async fn scope_contract_system_all_excludes_inbox_and_trash() {
-    let harness = common_canonical::TestHarness::new().await;
-    let f_active = harness.insert_test_file("sc_a", "a.png", 1).await;
-    let f_inbox = harness.insert_test_file("sc_b", "b.png", 0).await;
-    let f_trash = harness.insert_test_file("sc_c", "c.png", 2).await;
-    harness.bitmaps_mark_active(f_active);
-    harness.bitmaps_mark_inbox(f_inbox);
-    harness.bitmaps_mark_trash(f_trash);
+use picto_core::db::types::{
+    BaseScope, EntityViewQuery, ExpansionMode, QueryFilters, QueryPage, QuerySort, ScopeKind,
+    TagFilter, TagMatchMode,
+};
 
-    let filter = ScopeFilter::default();
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-
-    assert!(
-        bm.contains(f_active as u32),
-        "active file must be in system:active"
-    );
-    assert!(
-        !bm.contains(f_inbox as u32),
-        "inbox file must NOT be in system:active"
-    );
-    assert!(
-        !bm.contains(f_trash as u32),
-        "trash file must NOT be in system:active"
-    );
-    assert_eq!(bm.len(), 1);
+fn query_ids(
+    harness: &common_canonical::TestHarness,
+    kind: ScopeKind,
+    key: Option<&str>,
+    id: Option<i64>,
+    filters: QueryFilters,
+) -> BTreeSet<i64> {
+    harness
+        .db
+        .query_entity_view(&EntityViewQuery {
+            base_scope: BaseScope {
+                kind,
+                key: key.map(str::to_owned),
+                id,
+            },
+            filters,
+            sort: QuerySort::default(),
+            page: QueryPage {
+                cursor: None,
+                limit: 1_000,
+            },
+        })
+        .expect("query entity view")
+        .items
+        .into_iter()
+        .map(|item| item.entity_id)
+        .collect()
 }
 
-/// Business rule: `system:inbox` = inbox only (status=0).
-#[tokio::test]
-async fn scope_contract_inbox_only_inbox() {
-    let harness = common_canonical::TestHarness::new().await;
-    let f_active = harness.insert_test_file("si_a", "a.png", 1).await;
-    let f_inbox = harness.insert_test_file("si_b", "b.png", 0).await;
-    let f_trash = harness.insert_test_file("si_c", "c.png", 2).await;
-    harness.bitmaps_mark_active(f_active);
-    harness.bitmaps_mark_inbox(f_inbox);
-    harness.bitmaps_mark_trash(f_trash);
-
-    let filter = ScopeFilter {
-        scope: GridScopeSpec {
-            kind: GridScopeKind::System,
-            system_key: Some(GridSystemScopeKey::Inbox),
-            ..Default::default()
-        },
-        filters: GridFilterSpec::default(),
-    };
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-
-    assert_eq!(bm.len(), 1);
-    assert!(bm.contains(f_inbox as u32));
+fn system_ids(harness: &common_canonical::TestHarness, key: &str) -> BTreeSet<i64> {
+    query_ids(
+        harness,
+        ScopeKind::System,
+        Some(key),
+        None,
+        QueryFilters::default(),
+    )
 }
 
-/// Business rule: `system:trash` = trash only (status=2).
 #[tokio::test]
-async fn scope_contract_trash_only_trash() {
+async fn system_scopes_partition_lifecycle_states() {
     let harness = common_canonical::TestHarness::new().await;
-    let f_active = harness.insert_test_file("st_a", "a.png", 1).await;
-    let f_inbox = harness.insert_test_file("st_b", "b.png", 0).await;
-    let f_trash = harness.insert_test_file("st_c", "c.png", 2).await;
-    harness.bitmaps_mark_active(f_active);
-    harness.bitmaps_mark_inbox(f_inbox);
-    harness.bitmaps_mark_trash(f_trash);
+    let active = harness
+        .insert_test_file("scope_active", "active.png", 1)
+        .await;
+    let inbox = harness
+        .insert_test_file("scope_inbox", "inbox.png", 0)
+        .await;
+    let trash = harness
+        .insert_test_file("scope_trash", "trash.png", 2)
+        .await;
 
-    let filter = ScopeFilter {
-        scope: GridScopeSpec {
-            kind: GridScopeKind::System,
-            system_key: Some(GridSystemScopeKey::Trash),
-            ..Default::default()
-        },
-        filters: GridFilterSpec::default(),
-    };
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-
-    assert_eq!(bm.len(), 1);
-    assert!(bm.contains(f_trash as u32));
+    assert_eq!(system_ids(&harness, "all"), BTreeSet::from([active]));
+    assert_eq!(system_ids(&harness, "inbox"), BTreeSet::from([inbox]));
+    assert_eq!(system_ids(&harness, "trash"), BTreeSet::from([trash]));
 }
 
-/// Business rule: `untagged` = active (status=1) items with no effective tags.
-/// Inbox items without tags are NOT included (untagged is active-scoped).
 #[tokio::test]
-async fn scope_contract_untagged_means_active_without_tags() {
+async fn untagged_and_uncategorized_are_active_only() {
     let harness = common_canonical::TestHarness::new().await;
-    let f1 = harness.insert_test_file("ut_1", "1.png", 1).await;
-    let f2 = harness.insert_test_file("ut_2", "2.png", 1).await;
-    let f3 = harness.insert_test_file("ut_3", "3.png", 1).await;
-    let f4 = harness.insert_test_file("ut_4", "4.png", 0).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_active(f3);
-    harness.bitmaps_mark_inbox(f4);
+    let tagged = harness
+        .insert_test_file("scope_tagged", "tagged.png", 1)
+        .await;
+    let categorized = harness
+        .insert_test_file("scope_categorized", "categorized.png", 1)
+        .await;
+    let plain = harness
+        .insert_test_file("scope_plain", "plain.png", 1)
+        .await;
+    let inbox = harness
+        .insert_test_file("scope_plain_inbox", "inbox.png", 0)
+        .await;
+
     let red = harness.insert_test_tag("", "red").await;
-    harness.tag_entity(f1, red).await;
-    harness.bitmaps_mark_tagged(f1);
-
-    let filter = ScopeFilter {
-        scope: GridScopeSpec {
-            kind: GridScopeKind::System,
-            system_key: Some(GridSystemScopeKey::Untagged),
-            ..Default::default()
-        },
-        filters: GridFilterSpec::default(),
-    };
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-
-    assert!(
-        bm.contains(f2 as u32),
-        "untagged active f2 should be included"
-    );
-    assert!(
-        bm.contains(f3 as u32),
-        "untagged active f3 should be included"
-    );
-    assert!(!bm.contains(f1 as u32), "tagged f1 must NOT be in untagged");
-    assert!(!bm.contains(f4 as u32), "inbox f4 must NOT be in untagged");
-    assert_eq!(bm.len(), 2);
-}
-
-/// Business rule: `uncategorized` = active singles not in any folder.
-/// Inbox items without folders are NOT included.
-#[tokio::test]
-async fn scope_contract_uncategorized_means_active_without_folder() {
-    let harness = common_canonical::TestHarness::new().await;
-    let f1 = harness.insert_test_file("uc_1", "1.png", 1).await;
-    let f2 = harness.insert_test_file("uc_2", "2.png", 1).await;
-    let f3 = harness.insert_test_file("uc_3", "3.png", 1).await;
-    let f4 = harness.insert_test_file("uc_4", "4.png", 0).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_active(f3);
-    harness.bitmaps_mark_inbox(f4);
-
+    harness.tag_entity(tagged, red).await;
     let folder = harness
         .db
-        .create_folder("Bucket", None, None, None)
-        .expect("create folder");
+        .create_folder("Folder", None, None, None)
+        .unwrap();
     harness
         .db
-        .add_folder_members(folder, &[f1], ExpansionMode::EntityOnly)
-        .expect("add to folder");
+        .add_folder_members(folder, &[categorized], ExpansionMode::EntityOnly)
+        .unwrap();
 
-    let filter = ScopeFilter {
-        scope: GridScopeSpec {
-            kind: GridScopeKind::System,
-            system_key: Some(GridSystemScopeKey::Uncategorized),
-            ..Default::default()
-        },
-        filters: GridFilterSpec::default(),
-    };
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
+    let untagged = system_ids(&harness, "untagged");
+    assert_eq!(untagged, BTreeSet::from([categorized, plain]));
+    assert!(!untagged.contains(&inbox));
 
-    assert!(
-        !bm.contains(f1 as u32),
-        "f1 is in a folder — not uncategorized"
+    let uncategorized = system_ids(&harness, "uncategorized");
+    assert_eq!(uncategorized, BTreeSet::from([tagged, plain]));
+    assert!(!uncategorized.contains(&inbox));
+}
+
+#[tokio::test]
+async fn folder_scope_returns_active_members() {
+    let harness = common_canonical::TestHarness::new().await;
+    let member = harness
+        .insert_test_file("scope_member", "member.png", 1)
+        .await;
+    let other = harness
+        .insert_test_file("scope_other", "other.png", 1)
+        .await;
+    let folder = harness
+        .db
+        .create_folder("Folder", None, None, None)
+        .unwrap();
+    harness
+        .db
+        .add_folder_members(folder, &[member], ExpansionMode::EntityOnly)
+        .unwrap();
+
+    let ids = query_ids(
+        &harness,
+        ScopeKind::Folder,
+        None,
+        Some(folder),
+        QueryFilters::default(),
     );
-    assert!(bm.contains(f2 as u32), "f2 is active and uncategorized");
-    assert!(bm.contains(f3 as u32), "f3 is active and uncategorized");
-    assert!(!bm.contains(f4 as u32), "f4 is inbox — not uncategorized");
-    assert_eq!(bm.len(), 2);
+    assert_eq!(ids, BTreeSet::from([member]));
+    assert!(!ids.contains(&other));
 }
 
-/// Business rule: tag search default match mode = intersection ("all").
 #[tokio::test]
-async fn scope_contract_tag_search_default_intersection() {
+async fn tag_filters_intersect_and_exclude() {
     let harness = common_canonical::TestHarness::new().await;
-    let f1 = harness.insert_test_file("ti_1", "1.png", 1).await;
-    let f2 = harness.insert_test_file("ti_2", "2.png", 1).await;
-    let f3 = harness.insert_test_file("ti_3", "3.png", 1).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_active(f3);
+    let red_only = harness.insert_test_file("scope_red", "red.png", 1).await;
+    let blue_only = harness.insert_test_file("scope_blue", "blue.png", 1).await;
+    let both = harness.insert_test_file("scope_both", "both.png", 1).await;
     let red = harness.insert_test_tag("", "red").await;
     let blue = harness.insert_test_tag("", "blue").await;
-    harness.tag_entity(f1, red).await;
-    harness.tag_entity(f3, red).await;
-    harness.tag_entity(f2, blue).await;
-    harness.tag_entity(f3, blue).await;
-    harness.bitmaps_insert_effective_tag(red, f1);
-    harness.bitmaps_insert_effective_tag(red, f3);
-    harness.bitmaps_insert_effective_tag(blue, f2);
-    harness.bitmaps_insert_effective_tag(blue, f3);
+    harness.tag_entity(red_only, red).await;
+    harness.tag_entity(blue_only, blue).await;
+    harness.tag_entity(both, red).await;
+    harness.tag_entity(both, blue).await;
 
-    let filter = ScopeFilter {
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            search_tags: Some(vec!["red".to_string(), "blue".to_string()]),
-            tag_match_mode: None,
+    let both_tags = query_ids(
+        &harness,
+        ScopeKind::System,
+        Some("all"),
+        None,
+        QueryFilters {
+            tags: Some(vec![
+                TagFilter {
+                    tag: "red".into(),
+                    match_mode: TagMatchMode::Include,
+                },
+                TagFilter {
+                    tag: "blue".into(),
+                    match_mode: TagMatchMode::Include,
+                },
+            ]),
             ..Default::default()
         },
-    };
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
+    );
+    assert_eq!(both_tags, BTreeSet::from([both]));
 
-    assert_eq!(bm.len(), 1, "default tag match = intersection");
-    assert!(bm.contains(f3 as u32), "only f3 has both red and blue");
-}
-
-/// Business rule: tag search "any" = union.
-#[tokio::test]
-async fn scope_contract_tag_search_union() {
-    let harness = common_canonical::TestHarness::new().await;
-    let f1 = harness.insert_test_file("tu_1", "1.png", 1).await;
-    let f2 = harness.insert_test_file("tu_2", "2.png", 1).await;
-    let f3 = harness.insert_test_file("tu_3", "3.png", 1).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_active(f3);
-    let red = harness.insert_test_tag("", "red").await;
-    let blue = harness.insert_test_tag("", "blue").await;
-    harness.tag_entity(f1, red).await;
-    harness.tag_entity(f3, red).await;
-    harness.tag_entity(f2, blue).await;
-    harness.tag_entity(f3, blue).await;
-    harness.bitmaps_insert_effective_tag(red, f1);
-    harness.bitmaps_insert_effective_tag(red, f3);
-    harness.bitmaps_insert_effective_tag(blue, f2);
-    harness.bitmaps_insert_effective_tag(blue, f3);
-
-    let filter = ScopeFilter {
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            search_tags: Some(vec!["red".to_string(), "blue".to_string()]),
-            tag_match_mode: Some("any".to_string()),
+    let red_without_blue = query_ids(
+        &harness,
+        ScopeKind::System,
+        Some("all"),
+        None,
+        QueryFilters {
+            tags: Some(vec![
+                TagFilter {
+                    tag: "red".into(),
+                    match_mode: TagMatchMode::Include,
+                },
+                TagFilter {
+                    tag: "blue".into(),
+                    match_mode: TagMatchMode::Exclude,
+                },
+            ]),
             ..Default::default()
         },
-    };
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-
-    assert_eq!(bm.len(), 3, "any = union: all three files match");
-    assert!(bm.contains(f1 as u32));
-    assert!(bm.contains(f2 as u32));
-    assert!(bm.contains(f3 as u32));
+    );
+    assert_eq!(red_without_blue, BTreeSet::from([red_only]));
 }
 
-/// Business rule: excluded tags are subtracted from results.
 #[tokio::test]
-async fn scope_contract_tag_search_exclusion() {
+async fn system_counts_match_canonical_queries_after_mutations() {
     let harness = common_canonical::TestHarness::new().await;
-    let f1 = harness.insert_test_file("te_1", "1.png", 1).await;
-    let f2 = harness.insert_test_file("te_2", "2.png", 1).await;
-    let f3 = harness.insert_test_file("te_3", "3.png", 1).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_active(f3);
-    let red = harness.insert_test_tag("", "red").await;
-    let blue = harness.insert_test_tag("", "blue").await;
-    harness.tag_entity(f1, red).await;
-    harness.tag_entity(f3, red).await;
-    harness.tag_entity(f2, blue).await;
-    harness.tag_entity(f3, blue).await;
-    harness.bitmaps_insert_effective_tag(red, f1);
-    harness.bitmaps_insert_effective_tag(red, f3);
-    harness.bitmaps_insert_effective_tag(blue, f2);
-    harness.bitmaps_insert_effective_tag(blue, f3);
+    let active = harness
+        .insert_test_file("count_active", "active.png", 1)
+        .await;
+    let inbox = harness
+        .insert_test_file("count_inbox", "inbox.png", 0)
+        .await;
+    let trash = harness
+        .insert_test_file("count_trash", "trash.png", 2)
+        .await;
 
-    let filter = ScopeFilter {
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            search_tags: Some(vec!["red".to_string()]),
-            search_excluded_tags: Some(vec!["blue".to_string()]),
-            ..Default::default()
-        },
-    };
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-
-    assert_eq!(bm.len(), 1, "f3 has blue so excluded, only f1 remains");
-    assert!(bm.contains(f1 as u32));
-}
-
-/// Business rule: folder default match mode = union ("any").
-#[tokio::test]
-async fn scope_contract_folder_default_union() {
-    let harness = common_canonical::TestHarness::new().await;
-    let f1 = harness.insert_test_file("fu_1", "1.png", 1).await;
-    let f2 = harness.insert_test_file("fu_2", "2.png", 1).await;
-    let f3 = harness.insert_test_file("fu_3", "3.png", 1).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_active(f3);
-    let fa = harness.db.create_folder("A", None, None, None).unwrap();
-    let fb = harness.db.create_folder("B", None, None, None).unwrap();
     harness
         .db
-        .add_folder_members(fa, &[f1, f3], ExpansionMode::EntityOnly)
+        .set_entity_status(&[inbox], 1, ExpansionMode::EntityOnly)
         .unwrap();
     harness
         .db
-        .add_folder_members(fb, &[f2, f3], ExpansionMode::EntityOnly)
+        .set_entity_status(&[active], 2, ExpansionMode::EntityOnly)
         .unwrap();
 
-    let filter = ScopeFilter {
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            folder_ids: Some(vec![fa, fb]),
-            folder_match_mode: None,
-            ..Default::default()
-        },
-    };
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-
-    assert_eq!(bm.len(), 3, "default folder = union: all three");
-    assert!(bm.contains(f1 as u32));
-    assert!(bm.contains(f2 as u32));
-    assert!(bm.contains(f3 as u32));
-}
-
-/// Business rule: folder match mode "all" = intersection.
-#[tokio::test]
-async fn scope_contract_folder_intersection() {
-    let harness = common_canonical::TestHarness::new().await;
-    let f1 = harness.insert_test_file("fint_1", "1.png", 1).await;
-    let f2 = harness.insert_test_file("fint_2", "2.png", 1).await;
-    let f3 = harness.insert_test_file("fint_3", "3.png", 1).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_active(f3);
-    let fa = harness.db.create_folder("A", None, None, None).unwrap();
-    let fb = harness.db.create_folder("B", None, None, None).unwrap();
-    harness
-        .db
-        .add_folder_members(fa, &[f1, f3], ExpansionMode::EntityOnly)
-        .unwrap();
-    harness
-        .db
-        .add_folder_members(fb, &[f2, f3], ExpansionMode::EntityOnly)
-        .unwrap();
-
-    let filter = ScopeFilter {
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            folder_ids: Some(vec![fa, fb]),
-            folder_match_mode: Some("all".to_string()),
-            ..Default::default()
-        },
-    };
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-
-    assert_eq!(bm.len(), 1, "folder all = intersection: only f3");
-    assert!(bm.contains(f3 as u32));
-}
-
-/// Business rule: excluded folders are subtracted from results.
-#[tokio::test]
-async fn scope_contract_folder_exclusion() {
-    let harness = common_canonical::TestHarness::new().await;
-    let f1 = harness.insert_test_file("fex_1", "1.png", 1).await;
-    let f2 = harness.insert_test_file("fex_2", "2.png", 1).await;
-    let f3 = harness.insert_test_file("fex_3", "3.png", 1).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_active(f3);
-    let fa = harness.db.create_folder("A", None, None, None).unwrap();
-    let fb = harness.db.create_folder("B", None, None, None).unwrap();
-    harness
-        .db
-        .add_folder_members(fa, &[f1, f3], ExpansionMode::EntityOnly)
-        .unwrap();
-    harness
-        .db
-        .add_folder_members(fb, &[f2, f3], ExpansionMode::EntityOnly)
-        .unwrap();
-
-    let filter = ScopeFilter {
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            folder_ids: Some(vec![fa]),
-            excluded_folder_ids: Some(vec![fb]),
-            ..Default::default()
-        },
-    };
-    let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-
-    assert_eq!(bm.len(), 1, "f3 is in B (excluded), only f1 remains");
-    assert!(bm.contains(f1 as u32));
-}
-
-/// Business rule: query-results selection uses the same scope/filter contract as the grid.
-#[tokio::test]
-async fn scope_contract_grid_and_selection_same_scope() {
-    let harness = common_canonical::TestHarness::new().await;
-    let f1 = harness.insert_test_file("gs_1", "1.png", 1).await;
-    let f2 = harness.insert_test_file("gs_2", "2.png", 1).await;
-    let f3 = harness.insert_test_file("gs_3", "3.png", 1).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_active(f3);
-    let red = harness.insert_test_tag("", "red").await;
-    harness.tag_entity(f1, red).await;
-    harness.tag_entity(f3, red).await;
-    harness.bitmaps_insert_effective_tag(red, f1);
-    harness.bitmaps_insert_effective_tag(red, f3);
-
-    let grid_filter = ScopeFilter {
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            search_tags: Some(vec!["red".to_string()]),
-            ..Default::default()
-        },
-    };
-    let selection_filter = ScopeFilter {
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            search_tags: Some(vec!["red".to_string()]),
-            ..Default::default()
-        },
-    };
-    let grid_bm = resolve_scope(&harness.db, &grid_filter).await.unwrap();
-    let selection_bm = resolve_scope(&harness.db, &selection_filter).await.unwrap();
-
+    let counts = harness.db.get_scope_counts().unwrap();
+    assert_eq!(counts.active, system_ids(&harness, "all").len() as i64);
+    assert_eq!(counts.inbox, system_ids(&harness, "inbox").len() as i64);
+    assert_eq!(counts.trash, system_ids(&harness, "trash").len() as i64);
     assert_eq!(
-        grid_bm, selection_bm,
-        "grid and selection must resolve identical bitmaps"
+        counts.untagged,
+        system_ids(&harness, "untagged").len() as i64
     );
-    assert_eq!(grid_bm.len(), 2);
-    assert!(grid_bm.contains(f1 as u32));
-    assert!(grid_bm.contains(f3 as u32));
-}
-
-/// Business rule: scope_count agrees with resolve_scope.len() for all system scopes.
-#[tokio::test]
-async fn scope_contract_scope_count_agrees_with_resolve_scope() {
-    let harness = common_canonical::TestHarness::new().await;
-    let f1 = harness.insert_test_file("cnt_1", "1.png", 1).await;
-    let f2 = harness.insert_test_file("cnt_2", "2.png", 1).await;
-    let f3 = harness.insert_test_file("cnt_3", "3.png", 0).await;
-    let f4 = harness.insert_test_file("cnt_4", "4.png", 2).await;
-    harness.bitmaps_mark_active(f1);
-    harness.bitmaps_mark_active(f2);
-    harness.bitmaps_mark_inbox(f3);
-    harness.bitmaps_mark_trash(f4);
-    harness.bitmaps_mark_tagged(f2);
-
-    let folder = harness.db.create_folder("F", None, None, None).unwrap();
-    harness
-        .db
-        .add_folder_members(folder, &[f2], ExpansionMode::EntityOnly)
-        .unwrap();
-
-    let cases: Vec<(&str, ScopeFilter)> = vec![
-        ("system:active", ScopeFilter::default()),
-        ("system:active_files", ScopeFilter::default()),
-        (
-            "system:inbox",
-            ScopeFilter {
-                scope: GridScopeSpec {
-                    kind: GridScopeKind::System,
-                    system_key: Some(GridSystemScopeKey::Inbox),
-                    ..Default::default()
-                },
-                filters: GridFilterSpec::default(),
-            },
-        ),
-        (
-            "system:trash",
-            ScopeFilter {
-                scope: GridScopeSpec {
-                    kind: GridScopeKind::System,
-                    system_key: Some(GridSystemScopeKey::Trash),
-                    ..Default::default()
-                },
-                filters: GridFilterSpec::default(),
-            },
-        ),
-        (
-            "system:untagged",
-            ScopeFilter {
-                scope: GridScopeSpec {
-                    kind: GridScopeKind::System,
-                    system_key: Some(GridSystemScopeKey::Untagged),
-                    ..Default::default()
-                },
-                filters: GridFilterSpec::default(),
-            },
-        ),
-        (
-            "system:uncategorized",
-            ScopeFilter {
-                scope: GridScopeSpec {
-                    kind: GridScopeKind::System,
-                    system_key: Some(GridSystemScopeKey::Uncategorized),
-                    ..Default::default()
-                },
-                filters: GridFilterSpec::default(),
-            },
-        ),
-    ];
-
-    for (scope_key, filter) in cases {
-        let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-        let bitmap_count = bm.len() as i64;
-        let sidebar_count = scope_count(&harness.db, scope_key).unwrap();
-        assert_eq!(
-            sidebar_count, bitmap_count,
-            "scope_count({}) = {} but resolve_scope.len() = {}",
-            scope_key, sidebar_count, bitmap_count
-        );
-    }
+    assert_eq!(
+        counts.uncategorized,
+        system_ids(&harness, "uncategorized").len() as i64
+    );
+    assert!(system_ids(&harness, "trash").contains(&trash));
 }

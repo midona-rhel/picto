@@ -3,7 +3,9 @@ use std::path::{Path, PathBuf};
 use image::DynamicImage;
 
 use crate::constants::MimeType;
-use crate::media_capabilities::{capabilities_for_detected_mime, capabilities_for_stored_media, MediaCapabilities};
+use crate::media_capabilities::{
+    capabilities_for_detected_mime, capabilities_for_stored_media, MediaCapabilities,
+};
 
 use super::analysis::get_file_info;
 use super::detection::get_mime;

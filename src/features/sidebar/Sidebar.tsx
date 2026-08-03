@@ -9,7 +9,7 @@ import { useEffect, useMemo, useCallback, useRef, useState } from 'react';
 import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { folderWatchModalAtom, confirmModalAtom, exportModalAtom, smartFolderModalAtom } from '../../state/modals';
 import {
-  IconFolder, IconFolderOpen, IconFolderPlus, IconFolderSymlink,
+  IconFolder, IconFolderOpen, IconFolderPlus,
   IconCopy, IconUpload, IconDownload,
   IconPhoto, IconInbox, IconTrash,
   IconClock, IconBookmark, IconPin, IconPinnedOff,
@@ -17,7 +17,7 @@ import {
 import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
   IconNewSubfolder, IconRename, IconSort, IconExpand, IconCollapse,
-  IconExpandAll, IconChangeIcon, IconAutoTags, IconWatchFolder,
+  IconExpandAll, IconChangeIcon, IconWatchFolder,
   IconFolderQuestionCustom, IconBookmarkQuestionCustom,
 } from '../../shared/ui/icons/sidebar-menu-icons';
 import {
@@ -31,6 +31,7 @@ import { foldersController } from '../../controllers/foldersController';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { pinSidebarItem, unpinSidebarItem, reorderPinnedItems } from '../../platform/sidebarApi';
 import { SidebarRow } from '../../shared/ui/SidebarRow';
+import { LibrarySwitcherButton } from '../library/LibrarySwitcherButton';
 import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
 import { IconPicker } from '../../shared/ui/IconPicker';
@@ -480,7 +481,6 @@ export function Sidebar() {
       { label: 'New Subfolder', icon: <IconNewSubfolder size={14} />, action: () => { void createFolderAndRename(folderId); } },
       { separator: true },
       { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
-      { label: 'Set Auto-Tags...', icon: <IconAutoTags size={14} />, action: () => { /* TODO: needs auto-tags editor panel */ } },
       { separator: true },
       { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => {
         void (async () => {
@@ -490,7 +490,7 @@ export function Sidebar() {
             });
             if (result) {
               const folderPath = typeof result === 'string' ? result : result[0];
-              await foldersController.importFolder(folderPath, folderId);
+              await foldersController.addMedia(folderPath, folderId);
             }
           } catch (err) {
             console.error('[sidebar] import folder failed:', err);
@@ -533,7 +533,6 @@ export function Sidebar() {
           target: { kind: 'query_results', query: { base_scope: { kind: 'folder', id: folderId } } },
         });
       } },
-      { label: 'Move', icon: <IconFolderSymlink size={14} />, action: () => { /* TODO: needs folder destination picker */ } },
       { separator: true },
       (node.meta as Record<string, unknown> | null)?.pinned
         ? { label: 'Unpin', icon: <IconPinnedOff size={14} />, action: () => { void unpinSidebarItem(node.id); } }
@@ -745,6 +744,7 @@ export function Sidebar() {
 
   return (
     <div className={styles.root}>
+      <LibrarySwitcherButton />
       <div className={styles.scroll}>
         {loading && nodes.length === 0 && (
           <div className={styles.loadingMessage}>Loading…</div>

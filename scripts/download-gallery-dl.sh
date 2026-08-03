@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-VERSION="1.32.2"
+VERSION="1.32.6"
 REPO="mikf/gallery-dl"
 # Release assets moved to Codeberg from v1.32.0 (GitHub is a source mirror only).
 BASE_URL="https://codeberg.org/mikf/gallery-dl/releases/download/v${VERSION}"

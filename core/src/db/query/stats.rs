@@ -76,9 +76,7 @@ pub fn count_media_files(conn: &Connection) -> rusqlite::Result<i64> {
     conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| row.get(0))
 }
 
-pub fn aggregate_file_stats(
-    conn: &Connection,
-) -> rusqlite::Result<crate::db::types::FileStats> {
+pub fn aggregate_file_stats(conn: &Connection) -> rusqlite::Result<crate::db::types::FileStats> {
     let mut inbox: i64 = 0;
     let mut active: i64 = 0;
     let mut trash: i64 = 0;

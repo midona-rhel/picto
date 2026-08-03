@@ -1,8 +1,7 @@
 import {
   exportMedia,
   getFolderCoverHash,
-  importFiles,
-  importFolder,
+  addMedia,
 } from '../platform/folderApi';
 import {
   clipboardCopyFile,
@@ -19,27 +18,18 @@ export const filesController = {
     return getFolderCoverHash(folderId);
   },
 
-  importFiles(
+  addMedia(
     paths: string[],
     params?: {
       tag_strings?: string[];
       source_urls?: string[];
       initial_status?: number;
       parent_folder_id?: number | null;
-    },
-  ): Promise<unknown> {
-    return importFiles(paths, params);
-  },
-
-  importFolder(
-    path: string,
-    params?: {
       preserve_structure?: boolean;
-      parent_folder_id?: number | null;
-      initial_status?: number;
+      collection_name?: string | null;
     },
-  ): Promise<unknown> {
-    return importFolder(path, params);
+  ): Promise<void> {
+    return addMedia(paths, params);
   },
 
   exportMedia(

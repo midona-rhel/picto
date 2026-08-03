@@ -6,9 +6,7 @@ use picto_core::db::LibraryDatabase;
 use picto_core::ingest_queue::IngestQueueItemPayload;
 use picto_core::subscriptions::credential_service::SubscriptionCredentialService;
 use picto_core::subscriptions::gallery_dl_runner;
-use picto_core::subscriptions::policy::{
-    apply_resume_to_query, default_resume_strategy_for_site,
-};
+use picto_core::subscriptions::policy::{apply_resume_to_query, default_resume_strategy_for_site};
 use picto_core::subscriptions::runtime_service::SubscriptionRuntimeService;
 use picto_core::subscriptions::source_adapter::{
     describe_site, validate_query_kind, ParsedMetadata,
@@ -131,8 +129,8 @@ fn readiness_fixtures_have_valid_descriptors_and_urls() {
             .any(|kind| kind.id == fixture.query_kind));
         validate_query_kind(fixture.site_id, fixture.query_kind).unwrap();
 
-        let url = gallery_dl_runner::build_url(fixture.site_id, fixture.query_text)
-            .expect("fixture URL");
+        let url =
+            gallery_dl_runner::build_url(fixture.site_id, fixture.query_text).expect("fixture URL");
         for expected in fixture.expected_url_contains {
             assert!(
                 url.contains(expected),
@@ -151,7 +149,10 @@ fn readiness_resume_url_uses_same_query_shaping_as_sync_engine() {
     let resumed = apply_resume_to_query(query, "123456", "tag_id_lt");
     let url = gallery_dl_runner::build_url("gelbooru", &resumed).expect("resumed URL");
 
-    assert_eq!(default_resume_strategy_for_site("gelbooru"), Some("tag_id_lt"));
+    assert_eq!(
+        default_resume_strategy_for_site("gelbooru"),
+        Some("tag_id_lt")
+    );
     assert!(resumed.contains("id:<123456"));
     assert!(url.contains("id:%3C123456") || url.contains("id:<123456"));
 }
@@ -184,14 +185,21 @@ fn readiness_metadata_contract_separates_post_and_asset_fields() {
 
     assert_eq!(post.post_id.as_deref(), Some("42"));
     assert_eq!(post.tags.len(), 2);
-    assert_eq!(asset.media_url.as_deref(), Some("https://cdn.example.test/file.jpg"));
+    assert_eq!(
+        asset.media_url.as_deref(),
+        Some("https://cdn.example.test/file.jpg")
+    );
     assert_eq!(asset.item_key.as_deref(), Some("example:42:0"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires network and may require real service credentials"]
 async fn live_subscription_source_readiness_matrix() {
-    if std::env::var("PICTO_LIVE_SUBSCRIPTION_TESTS").ok().as_deref() != Some("1") {
+    if std::env::var("PICTO_LIVE_SUBSCRIPTION_TESTS")
+        .ok()
+        .as_deref()
+        != Some("1")
+    {
         println!("subscription_readiness: skipped_live_disabled");
         return;
     }
@@ -221,7 +229,10 @@ async fn live_subscription_source_readiness_matrix() {
     let runtime = SubscriptionRuntimeService::new(&db, tmp.path());
 
     let mut reports = Vec::new();
-    for fixture in FIXTURES.iter().filter(|fixture| selected.contains(fixture.site_id)) {
+    for fixture in FIXTURES
+        .iter()
+        .filter(|fixture| selected.contains(fixture.site_id))
+    {
         reports.push(run_live_fixture(&db, &runtime, tmp.path(), fixture).await);
     }
 
@@ -273,14 +284,21 @@ async fn run_live_fixture_inner(
     library_root: &Path,
     fixture: &SourceReadinessFixture,
 ) -> Result<ReadinessReport, (&'static str, String)> {
-    let descriptor = describe_site(fixture.site_id)
-        .ok_or_else(|| ("failed_descriptor", format!("unknown site {}", fixture.site_id)))?;
+    let descriptor = describe_site(fixture.site_id).ok_or_else(|| {
+        (
+            "failed_descriptor",
+            format!("unknown site {}", fixture.site_id),
+        )
+    })?;
     validate_query_kind(fixture.site_id, fixture.query_kind)
         .map_err(|error| ("failed_descriptor", error))?;
     if fixture.requires_credentials && !descriptor.auth_supported {
         return Err((
             "failed_descriptor",
-            format!("{} requires credentials but descriptor says auth is unsupported", fixture.site_id),
+            format!(
+                "{} requires credentials but descriptor says auth is unsupported",
+                fixture.site_id
+            ),
         ));
     }
 
@@ -297,7 +315,10 @@ async fn run_live_fixture_inner(
     }
 
     let group = runtime
-        .create_group(format!("readiness-{}", fixture.site_id), Some("manual".to_string()))
+        .create_group(
+            format!("readiness-{}", fixture.site_id),
+            Some("manual".to_string()),
+        )
         .await
         .map_err(|error| ("failed_descriptor", error))?;
     let group_id: i64 = group.id.parse().map_err(|error| {
@@ -318,7 +339,10 @@ async fn run_live_fixture_inner(
     let subscription_id: i64 = subscription.id.parse().map_err(|error| {
         (
             "failed_descriptor",
-            format!("invalid created subscription id {}: {error}", subscription.id),
+            format!(
+                "invalid created subscription id {}: {error}",
+                subscription.id
+            ),
         )
     })?;
     let query = runtime
@@ -346,7 +370,10 @@ async fn run_live_fixture_inner(
             return Ok(ReadinessReport {
                 site_id: fixture.site_id,
                 status: "skipped_missing_credential",
-                detail: format!("no credential available for {}", credential.canonical_site_category),
+                detail: format!(
+                    "no credential available for {}",
+                    credential.canonical_site_category
+                ),
             });
         }
     }
@@ -377,7 +404,10 @@ async fn run_live_fixture_inner(
     if first_run.files_downloaded != 1 {
         return Err((
             "failed_download",
-            format!("first run downloaded {} assets, expected exactly 1", first_run.files_downloaded),
+            format!(
+                "first run downloaded {} assets, expected exactly 1",
+                first_run.files_downloaded
+            ),
         ));
     }
 
@@ -386,16 +416,24 @@ async fn run_live_fixture_inner(
     if payloads.len() != 1 {
         return Err((
             "failed_ingest",
-            format!("first run persisted {} ingest payloads, expected exactly 1", payloads.len()),
+            format!(
+                "first run persisted {} ingest payloads, expected exactly 1",
+                payloads.len()
+            ),
         ));
     }
-    let payload = payloads
-        .first()
-        .ok_or_else(|| ("failed_ingest", "no ingest queue payload was persisted".to_string()))?;
-    let metadata = payload
-        .subscription_metadata
-        .as_ref()
-        .ok_or_else(|| ("failed_metadata", "payload missing subscription metadata".to_string()))?;
+    let payload = payloads.first().ok_or_else(|| {
+        (
+            "failed_ingest",
+            "no ingest queue payload was persisted".to_string(),
+        )
+    })?;
+    let metadata = payload.subscription_metadata.as_ref().ok_or_else(|| {
+        (
+            "failed_metadata",
+            "payload missing subscription metadata".to_string(),
+        )
+    })?;
     verify_metadata(fixture, metadata)?;
 
     let refreshed = runtime
@@ -418,8 +456,16 @@ async fn run_live_fixture_inner(
         }
         let resumed_query = apply_resume_to_query(&query_text, "123456", strategy);
         let resumed_url = gallery_dl_runner::build_url(fixture.site_id, &resumed_query)
-            .ok_or_else(|| ("failed_resume", "resumed URL could not be built".to_string()))?;
-        if strategy == "tag_id_lt" && !resumed_url.contains("id:%3C123456") && !resumed_url.contains("id:<123456") {
+            .ok_or_else(|| {
+                (
+                    "failed_resume",
+                    "resumed URL could not be built".to_string(),
+                )
+            })?;
+        if strategy == "tag_id_lt"
+            && !resumed_url.contains("id:%3C123456")
+            && !resumed_url.contains("id:<123456")
+        {
             return Err((
                 "failed_resume",
                 format!("resumed URL did not include cursor: {resumed_url}"),
@@ -429,7 +475,12 @@ async fn run_live_fixture_inner(
         let resume_cursor = metadata
             .post_id
             .as_deref()
-            .ok_or_else(|| ("failed_resume", "metadata did not provide a post id cursor".to_string()))?
+            .ok_or_else(|| {
+                (
+                    "failed_resume",
+                    "metadata did not provide a post id cursor".to_string(),
+                )
+            })?
             .to_string();
         runtime
             .set_query_completed_initial_run(query_id, false)
@@ -566,10 +617,22 @@ fn verify_metadata(
     fixture: &SourceReadinessFixture,
     metadata: &ParsedMetadata,
 ) -> Result<(), (&'static str, String)> {
-    if metadata.post_id.as_deref().unwrap_or_default().trim().is_empty() {
+    if metadata
+        .post_id
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
         return Err(("failed_metadata", "missing post_id".to_string()));
     }
-    if metadata.item_key.as_deref().unwrap_or_default().trim().is_empty() {
+    if metadata
+        .item_key
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
         return Err(("failed_metadata", "missing item_key".to_string()));
     }
     if metadata.raw_metadata.is_none() {
@@ -581,7 +644,13 @@ fn verify_metadata(
     {
         return Err(("failed_metadata", "missing source/post URL".to_string()));
     }
-    if metadata.media_url.as_deref().unwrap_or_default().trim().is_empty() {
+    if metadata
+        .media_url
+        .as_deref()
+        .unwrap_or_default()
+        .trim()
+        .is_empty()
+    {
         return Err(("failed_metadata", "missing media_url".to_string()));
     }
     if fixture.expected_metadata.tags && metadata.tags.is_empty() {

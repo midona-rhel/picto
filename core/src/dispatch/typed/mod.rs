@@ -11,5 +11,6 @@ pub mod media_io;
 pub mod media_lifecycle;
 pub mod smart_folders;
 pub mod subscriptions;
+pub mod sync;
 pub mod system;
 pub mod tags;

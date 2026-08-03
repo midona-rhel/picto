@@ -150,6 +150,7 @@ export function AuthWorkspace({
         credential_type: 'cookies',
         display_name: selectedEntry?.site.name ?? credential.site_category,
         cookies: credential.cookies,
+        expires_at: credential.expires_at ?? null,
       }).then(async () => {
         await refresh();
         setMessage('Credential saved from the login window.');

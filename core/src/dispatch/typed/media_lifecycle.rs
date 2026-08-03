@@ -1,7 +1,7 @@
 //! Handler functions for media lifecycle operations:
 //! import, status changes, deletion, and FTS rebuild.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::state::AppState;
@@ -10,26 +10,22 @@ use crate::state::AppState;
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ImportFilesInput {
+pub struct AddMediaInput {
     pub paths: Vec<String>,
+    #[serde(default)]
     pub tag_strings: Option<Vec<String>>,
+    #[serde(default)]
     pub source_urls: Option<Vec<String>>,
     #[serde(default = "default_initial_status")]
     #[ts(type = "number")]
     pub initial_status: i64,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ImportFolderInput {
-    pub path: String,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub parent_folder_id: Option<i64>,
     #[serde(default)]
     pub preserve_structure: bool,
     #[serde(default)]
-    pub parent_folder_id: Option<i64>,
-    #[serde(default = "default_initial_status")]
-    #[ts(type = "number")]
-    pub initial_status: i64,
+    pub collection_name: Option<String>,
 }
 
 fn default_initial_status() -> i64 {
@@ -38,10 +34,17 @@ fn default_initial_status() -> i64 {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn import_files(
-    state: &AppState,
-    input: ImportFilesInput,
-) -> Result<crate::types::ImportBatchResult, String> {
+pub async fn add_media(state: &AppState, input: AddMediaInput) -> Result<(), String> {
+    if input.paths.is_empty() {
+        return Err("At least one media path is required".to_string());
+    }
+    if input.collection_name.is_some() && input.preserve_structure {
+        return Err("Collection imports cannot preserve folder structure".to_string());
+    }
+    if input.preserve_structure && input.paths.len() != 1 {
+        return Err("Preserving folder structure requires exactly one folder path".to_string());
+    }
+
     // Reject paths inside the library directory to prevent circular imports
     let library_root = &state.library_root;
     for p in &input.paths {
@@ -55,78 +58,45 @@ pub async fn import_files(
         }
     }
 
-    let result = state
+    state
         .engine
-        .import_files(
-            &state.blob_store,
+        .add_media(
             input.paths,
             input.tag_strings,
             input.source_urls,
             input.initial_status,
+            input.parent_folder_id,
+            input.preserve_structure,
+            input.collection_name,
             Some(&state.library_root),
         )
-        .await?;
-
-    // Auto-tag imported files if enabled
-    let imported_hashes: Vec<String> = result.imported.iter().map(|r| r.hash.clone()).collect();
-    crate::dispatch::typed::ai_tagger::auto_tag_imported(state, &imported_hashes).await;
-
-    Ok(result)
+        .await
 }
 
-pub async fn import_folder(
+#[derive(Debug, Serialize)]
+pub struct SweepOrphanedBlobsResult {
+    pub deleted_count: u64,
+    pub freed_bytes: u64,
+}
+
+/// Remove blob files no media_file row references anymore. Blobs younger
+/// than ten minutes are left alone so in-flight ingest is never raced.
+pub async fn sweep_orphaned_blobs(
     state: &AppState,
-    input: ImportFolderInput,
-) -> Result<crate::types::ImportBatchResult, String> {
-    // Reject paths inside the library directory to prevent circular imports
-    if let Ok(canonical) = std::fs::canonicalize(&input.path) {
-        if canonical.starts_with(&state.library_root) {
-            return Err(format!(
-                "Cannot import a folder inside the library directory: {}",
-                canonical.display()
-            ));
-        }
-    }
-
-    let result = state
-        .engine
-        .import_folder(
-            &state.blob_store,
-            input.path,
-            input.preserve_structure,
-            input.parent_folder_id,
-            input.initial_status,
-        )
-        .await?;
-
-    // Auto-tag imported files if enabled
-    let imported_hashes: Vec<String> = result.imported.iter().map(|r| r.hash.clone()).collect();
-    crate::dispatch::typed::ai_tagger::auto_tag_imported(state, &imported_hashes).await;
-
-    Ok(result)
-}
-
-/// Wipe all image data — catastrophic full reset.
-/// Uses file_lifecycle without specific hashes because ALL files are removed.
-pub async fn wipe_image_data(state: &AppState, _input: serde_json::Value) -> Result<(), String> {
-    let root_hashes = state.engine.db().with_read(|conn| {
-        let mut stmt = conn.prepare(
-            "SELECT entity_hash
-             FROM media_entity
-             WHERE parent_collection_entity_id IS NULL
-             ORDER BY entity_id",
-        )?;
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let referenced: std::collections::HashSet<String> = state.engine.db().with_read(|conn| {
+        let mut stmt = conn.prepare("SELECT file_hash FROM media_file")?;
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect::<rusqlite::Result<Vec<_>>>()
+        rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()
     })?;
-    if !root_hashes.is_empty() {
-        state.engine.delete_entities(crate::db::types::EntityTarget {
-            kind: crate::db::types::EntityTargetKind::EntityHashes,
-            entity_hashes: Some(root_hashes),
-            query: None,
-            excluded_entity_hashes: None,
-        })?;
-    }
-    state.blob_store.wipe().map_err(|e| e.to_string())?;
-    Ok(())
+    let (deleted_count, freed_bytes) = state
+        .blob_store
+        .sweep_orphans(&referenced, std::time::Duration::from_secs(600));
+    tracing::info!(deleted_count, freed_bytes, "orphaned blob sweep complete");
+    Ok(serde_json::to_value(SweepOrphanedBlobsResult {
+        deleted_count,
+        freed_bytes,
+    })
+    .map_err(|e| e.to_string())?)
 }

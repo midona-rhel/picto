@@ -40,25 +40,6 @@ pub fn tag_display_key(namespace: &str, subtag: &str) -> String {
     }
 }
 
-#[derive(Debug, Serialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ImportResult {
-    pub hash: String,
-    pub mime: String,
-    #[ts(type = "number")]
-    pub size: u64,
-    pub has_thumbnail: bool,
-    pub tags_applied: Vec<String>,
-}
-
-#[derive(Debug, Serialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ImportBatchResult {
-    pub imported: Vec<ImportResult>,
-    pub skipped: Vec<String>,
-    pub errors: Vec<String>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct DominantColorDto {
     pub hex: String,
@@ -428,6 +409,7 @@ pub struct SubscriptionGroupInfo {
     pub id: String,
     pub name: String,
     pub schedule: String,
+    pub paused: bool,
     pub created_at: String,
     pub total_files: u64,
     pub subscriptions: Vec<SubscriptionInfo>,

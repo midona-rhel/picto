@@ -8,7 +8,12 @@ const GRID_SYSTEM_SCOPES: Record<string, string> = {
   'system:untagged': 'untagged',
 };
 
-const NON_GRID_NODES = new Set(['system:duplicates', 'system:recent_viewed', 'system:subscriptions']);
+const NON_GRID_NODES = new Set([
+  'system:duplicates',
+  'system:recent_viewed',
+  'system:subscriptions',
+  'system:tag_manager',
+]);
 
 export function isNonGridNodeId(nodeId: string): boolean {
   return NON_GRID_NODES.has(nodeId);

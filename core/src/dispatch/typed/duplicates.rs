@@ -44,26 +44,6 @@ pub struct ResolveDuplicatePairInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct UpdateDuplicateSettingsInput {
-    #[serde(default, rename = "duplicateDetectSimilarityPct")]
-    #[ts(type = "number | null")]
-    pub duplicate_detect_similarity_pct: Option<u32>,
-    #[serde(default, rename = "duplicateReviewSimilarityPct")]
-    #[ts(type = "number | null")]
-    pub duplicate_review_similarity_pct: Option<u32>,
-    #[serde(default, rename = "duplicateAutoMergeSimilarityPct")]
-    #[ts(type = "number | null")]
-    pub duplicate_auto_merge_similarity_pct: Option<u32>,
-    #[serde(default, rename = "duplicateAutoMergeRequireMatchingDimensions")]
-    pub duplicate_auto_merge_require_matching_dimensions: Option<bool>,
-    #[serde(default, rename = "duplicateAutoMergeSubscriptionsOnly")]
-    pub duplicate_auto_merge_subscriptions_only: Option<bool>,
-    #[serde(default, rename = "duplicateAutoMergeEnabled")]
-    pub duplicate_auto_merge_enabled: Option<bool>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct FindSimilarInput {
     pub hash: String,
 }
@@ -139,54 +119,4 @@ pub async fn resolve_duplicate_pair(
         }
     }
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
-}
-
-pub async fn get_duplicate_count(
-    state: &AppState,
-    _input: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let count = state.engine.get_duplicate_count()?;
-    Ok(serde_json::json!({ "count": count }))
-}
-
-pub async fn get_duplicate_settings(
-    state: &AppState,
-    _input: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let s = state.settings.get();
-    Ok(serde_json::json!({
-        "duplicateDetectSimilarityPct": s.duplicate_detect_similarity_pct,
-        "duplicateReviewSimilarityPct": s.duplicate_review_similarity_pct,
-        "duplicateAutoMergeSimilarityPct": s.duplicate_auto_merge_similarity_pct,
-        "duplicateAutoMergeRequireMatchingDimensions": s.duplicate_auto_merge_require_matching_dimensions,
-        "duplicateAutoMergeSubscriptionsOnly": s.duplicate_auto_merge_subscriptions_only,
-        "duplicateAutoMergeEnabled": s.duplicate_auto_merge_enabled,
-    }))
-}
-
-pub async fn update_duplicate_settings(
-    state: &AppState,
-    input: UpdateDuplicateSettingsInput,
-) -> Result<serde_json::Value, String> {
-    let mut s = state.settings.get();
-    if let Some(v) = input.duplicate_detect_similarity_pct {
-        s.duplicate_detect_similarity_pct = v.clamp(95, 100);
-    }
-    if let Some(v) = input.duplicate_review_similarity_pct {
-        s.duplicate_review_similarity_pct = v.clamp(95, 100);
-    }
-    if let Some(v) = input.duplicate_auto_merge_similarity_pct {
-        s.duplicate_auto_merge_similarity_pct = v.clamp(95, 100);
-    }
-    if let Some(v) = input.duplicate_auto_merge_require_matching_dimensions {
-        s.duplicate_auto_merge_require_matching_dimensions = v;
-    }
-    if let Some(v) = input.duplicate_auto_merge_subscriptions_only {
-        s.duplicate_auto_merge_subscriptions_only = v;
-    }
-    if let Some(v) = input.duplicate_auto_merge_enabled {
-        s.duplicate_auto_merge_enabled = v;
-    }
-    state.settings.update(s);
-    Ok(serde_json::json!({ "ok": true }))
 }

@@ -1,5 +1,17 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
+if (process.env.PICTO_PACKAGED_SMOKE === '1') {
+  const reportRendererFailure = (event, message) => {
+    ipcRenderer.send('picto:smoke:renderer-failure', { event, message });
+  };
+  window.addEventListener('error', (event) => {
+    reportRendererFailure('window-error', event.error?.message ?? event.message ?? 'renderer error');
+  });
+  window.addEventListener('unhandledrejection', (event) => {
+    reportRendererFailure('unhandled-rejection', event.reason?.message ?? String(event.reason));
+  });
+}
+
 function on(channel, handler) {
   const listener = (_event, payload) => handler(payload);
   ipcRenderer.on(channel, listener);

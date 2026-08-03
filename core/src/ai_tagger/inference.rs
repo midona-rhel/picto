@@ -22,6 +22,8 @@ pub struct TagPrediction {
     pub namespace: String,
     /// Confidence score (0.0–1.0).
     pub confidence: f32,
+    /// Slug of the model that produced this prediction.
+    pub model: String,
 }
 
 /// Per-category confidence thresholds.
@@ -177,6 +179,7 @@ impl TaggerSession {
                     tag: label.name.clone(),
                     namespace: label.namespace.clone(),
                     confidence,
+                    model: self.slug.clone(),
                 });
             }
         }

@@ -13,10 +13,6 @@ import { nodeIdToGridScope } from '../shared/lib/gridScope';
 
 export const gridScopeAtom = atom<BaseScope>({ kind: 'system', key: 'all' });
 export const activeGridScopeAtom = atom((get) => nodeIdToGridScope(get(activeNodeIdAtom)));
-export const activeGridNodeIdAtom = atom((get) => {
-  const nodeId = get(activeNodeIdAtom);
-  return nodeIdToGridScope(nodeId) ? nodeId : null;
-});
 
 export type SortField = 'date_added' | 'date_created' | 'date_modified' | 'rating' | 'name' | 'size_bytes' | 'duration';
 export type SortDirection = 'asc' | 'desc';
@@ -73,12 +69,6 @@ export const gridTransitionPhaseAtom = atom<GridTransitionPhase>('idle');
 
 /** Pending action to execute at the midpoint of a soft fade transition. */
 export const gridSoftTransitionActionAtom = atom<(() => void) | null>(null);
-
-// ── Derived ──────────────────────────────────────────────────────
-
-export const gridEmptyAtom = atom((get) =>
-  get(gridItemsAtom).length === 0 && !get(gridLoadingAtom),
-);
 
 /** Human-readable label for the current scope. Derived from sidebar nodes. */
 export const gridScopeLabelAtom = atom((get) => {

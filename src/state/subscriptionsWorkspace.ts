@@ -15,6 +15,33 @@ export type SubscriptionsSelection =
 
 export type SubscriptionDetailTab = 'queries' | 'health' | 'history';
 
+/** Overview = plain-language summary; technical = dense queries/health/history tables. */
+export type SubscriptionDetailMode = 'overview' | 'technical';
+
+const DETAIL_MODE_STORAGE_KEY = 'picto.subscriptions.detailMode';
+
+function readStoredDetailMode(): SubscriptionDetailMode {
+  try {
+    return window.localStorage.getItem(DETAIL_MODE_STORAGE_KEY) === 'technical' ? 'technical' : 'overview';
+  } catch {
+    return 'overview';
+  }
+}
+
+const detailModeBaseAtom = atom<SubscriptionDetailMode>(readStoredDetailMode());
+
+export const subscriptionsDetailModeAtom = atom(
+  (get) => get(detailModeBaseAtom),
+  (_get, set, next: SubscriptionDetailMode) => {
+    set(detailModeBaseAtom, next);
+    try {
+      window.localStorage.setItem(DETAIL_MODE_STORAGE_KEY, next);
+    } catch {
+      // non-fatal — mode just won't persist
+    }
+  },
+);
+
 export type SubscriptionDetailState = {
   loading: boolean;
   error: string | null;
@@ -42,6 +69,7 @@ export const EMPTY_SUBSCRIPTION_DETAIL_STATE: SubscriptionDetailState = {
 export const subscriptionsWorkspaceSnapshotAtom = atom<SubscriptionWorkspaceSnapshot | null>(null);
 export const subscriptionsWorkspaceLoadingAtom = atom(true);
 export const subscriptionsWorkspaceErrorAtom = atom<string | null>(null);
+export const subscriptionsCoversAtom = atom<Map<string, string>>(new Map());
 export const subscriptionsSelectionAtom = atom<SubscriptionsSelection>(null);
 export const subscriptionsDetailTabAtom = atom<SubscriptionDetailTab>('queries');
 export const subscriptionsDetailAtom = atom<SubscriptionDetailState>(EMPTY_SUBSCRIPTION_DETAIL_STATE);

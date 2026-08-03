@@ -1,12 +1,8 @@
-//! System surface — sidebar, settings, library info.
+//! System surface — sidebar and view settings.
 
 use super::ApplicationEngine;
 
 impl ApplicationEngine {
-    pub fn count_library_files(&self) -> Result<i64, String> {
-        self.db.count_media_files()
-    }
-
     pub fn get_sidebar_tree(&self) -> Result<Vec<crate::db::query::sidebar::SidebarNode>, String> {
         self.db.get_sidebar_tree()
     }
@@ -41,11 +37,7 @@ impl ApplicationEngine {
         if !smart_folder_moves.is_empty() {
             self.db.reorder_smart_folders(&smart_folder_moves)?;
         }
-        self.db
-            .run_compiler(crate::db::projection::compiler::CompilerPlan {
-                rebuild_sidebar: true,
-                ..Default::default()
-            });
+        self.rebuild_sidebar();
         Ok(())
     }
 
@@ -54,16 +46,14 @@ impl ApplicationEngine {
             let id: i64 = raw.parse().map_err(|_| "Invalid folder id".to_string())?;
             self.db.set_folder_pinned(id, true)?;
         } else if let Some(raw) = node_id.strip_prefix("smart:") {
-            let id: i64 = raw.parse().map_err(|_| "Invalid smart folder id".to_string())?;
+            let id: i64 = raw
+                .parse()
+                .map_err(|_| "Invalid smart folder id".to_string())?;
             self.db.set_smart_folder_pinned(id, true)?;
         } else {
             return Err(format!("Unsupported node_id prefix: {node_id}"));
         }
-        self.db
-            .run_compiler(crate::db::projection::compiler::CompilerPlan {
-                rebuild_sidebar: true,
-                ..Default::default()
-            });
+        self.rebuild_sidebar();
         Ok(())
     }
 
@@ -72,26 +62,20 @@ impl ApplicationEngine {
             let id: i64 = raw.parse().map_err(|_| "Invalid folder id".to_string())?;
             self.db.set_folder_pinned(id, false)?;
         } else if let Some(raw) = node_id.strip_prefix("smart:") {
-            let id: i64 = raw.parse().map_err(|_| "Invalid smart folder id".to_string())?;
+            let id: i64 = raw
+                .parse()
+                .map_err(|_| "Invalid smart folder id".to_string())?;
             self.db.set_smart_folder_pinned(id, false)?;
         } else {
             return Err(format!("Unsupported node_id prefix: {node_id}"));
         }
-        self.db
-            .run_compiler(crate::db::projection::compiler::CompilerPlan {
-                rebuild_sidebar: true,
-                ..Default::default()
-            });
+        self.rebuild_sidebar();
         Ok(())
     }
 
     pub fn reorder_pinned_items(&self, moves: &[(String, i64)]) -> Result<(), String> {
         self.db.reorder_pinned_items(moves)?;
-        self.db
-            .run_compiler(crate::db::projection::compiler::CompilerPlan {
-                rebuild_sidebar: true,
-                ..Default::default()
-            });
+        self.rebuild_sidebar();
         Ok(())
     }
 
@@ -99,18 +83,21 @@ impl ApplicationEngine {
         &self,
         scope_key: &str,
     ) -> Result<Option<crate::types::ViewPrefsDto>, String> {
-        Ok(self.db.get_view_pref(scope_key)?.map(|pref| crate::types::ViewPrefsDto {
-            scope_key: pref.scope,
-            sort_field: pref.sort_field,
-            sort_order: pref.sort_dir,
-            view_mode: pref.layout,
-            target_size: pref.tile_size,
-            show_name: pref.show_name,
-            show_resolution: pref.show_resolution,
-            show_extension: pref.show_extension,
-            show_label: pref.show_label,
-            thumbnail_fit: pref.thumbnail_fit,
-        }))
+        Ok(self
+            .db
+            .get_view_pref(scope_key)?
+            .map(|pref| crate::types::ViewPrefsDto {
+                scope_key: pref.scope,
+                sort_field: pref.sort_field,
+                sort_order: pref.sort_dir,
+                view_mode: pref.layout,
+                target_size: pref.tile_size,
+                show_name: pref.show_name,
+                show_resolution: pref.show_resolution,
+                show_extension: pref.show_extension,
+                show_label: pref.show_label,
+                thumbnail_fit: pref.thumbnail_fit,
+            }))
     }
 
     pub fn set_view_prefs(
@@ -162,14 +149,5 @@ impl ApplicationEngine {
             show_label: merged.show_label,
             thumbnail_fit: merged.thumbnail_fit,
         })
-    }
-
-    pub fn get_storage_stats(
-        &self,
-    ) -> Result<(crate::db::types::FileStats, crate::db::types::MediaTypeBreakdown), String> {
-        Ok((
-            self.db.aggregate_file_stats()?,
-            self.db.aggregate_media_type_breakdown()?,
-        ))
     }
 }

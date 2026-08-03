@@ -69,6 +69,16 @@ export function listSubscriptionCollections(subscriptionId: string): Promise<Sub
   });
 }
 
+export interface SubscriptionCoverRecord {
+  subscription_id: string;
+  entity_hash: string;
+}
+
+/** Newest downloaded file per subscription — cover images for the Following grid. */
+export function getSubscriptionCovers(): Promise<SubscriptionCoverRecord[]> {
+  return invoke<SubscriptionCoverRecord[]>('get_subscription_covers', {});
+}
+
 export interface TagSuggestion {
   name: string;
   post_count: number | null;
@@ -126,6 +136,10 @@ export function deleteGroup(id: string): Promise<void> {
 
 export function setGroupSchedule(id: string, schedule: string): Promise<void> {
   return invoke<void>('set_group_schedule', { id, schedule });
+}
+
+export function pauseGroup(id: string, paused: boolean): Promise<void> {
+  return invoke<void>('pause_group', { id, paused });
 }
 
 export function runGroup(id: string): Promise<void> {
@@ -296,6 +310,7 @@ export function setCredential(input: {
   password?: string | null;
   cookies?: Record<string, string> | null;
   oauth_token?: string | null;
+  expires_at?: string | null;
 }): Promise<void> {
   return invoke<void>('set_credential', input as unknown as Record<string, unknown>);
 }

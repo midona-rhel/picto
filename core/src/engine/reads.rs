@@ -16,7 +16,8 @@ impl ApplicationEngine {
             .iter()
             .map(|item| item.entity_hash.clone())
             .collect::<Vec<_>>();
-        let _ = crate::background_work::ensure_missing_color_analysis_jobs(&self.db, &entity_hashes);
+        let _ =
+            crate::background_work::ensure_missing_color_analysis_jobs(&self.db, &entity_hashes);
         Ok(page)
     }
 

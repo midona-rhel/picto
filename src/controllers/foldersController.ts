@@ -9,7 +9,7 @@ import {
   createFolder,
   deleteFolder,
   getFolderCoverHash,
-  importFolder,
+  addMedia,
   moveFolder,
   renameFolder,
   reorderFolderItems,
@@ -62,8 +62,8 @@ export const foldersController = {
     await reorderFolderItems(folderId, { sort_by: 'name', direction: 'asc' });
   },
 
-  async importFolder(folderPath: string, parentFolderId: number | null) {
-    await importFolder(folderPath, {
+  async addMedia(folderPath: string, parentFolderId: number | null) {
+    await addMedia([folderPath], {
       parent_folder_id: parentFolderId,
       preserve_structure: true,
     });

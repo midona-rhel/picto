@@ -4,7 +4,6 @@
 
 import { useAtomValue, useSetAtom } from 'jotai';
 import { modalStyles } from '../../shared/ui/GlassModal';
-import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import {
   confirmModalAtom,
   smartFolderModalAtom,
@@ -124,8 +123,8 @@ export function ModalLayer() {
         open={folderImport.open}
         onClose={() => setFolderImport({ ...folderImport, open: false })}
         onConfirm={() => {
-          void filesController.importFolder(folderImport.path, {
-            preserve_structure: folderImport.preserveStructure,
+          void filesController.addMedia([folderImport.path], {
+            preserve_structure: true,
             parent_folder_id: folderImport.targetFolderId,
           });
           setFolderImport({ ...folderImport, open: false });
@@ -138,13 +137,6 @@ export function ModalLayer() {
           <p className={modalStyles.helpText} style={{ fontSize: 13 }}>
             Import <strong>{folderImport.path.split(/[\\/]/).filter(Boolean).pop() ?? 'folder'}</strong>
           </p>
-          <div className={modalStyles.rowSpread}>
-            <span className={modalStyles.fieldLabel}>Keep folder structure</span>
-            <ToggleSwitch
-              on={folderImport.preserveStructure}
-              onChange={() => setFolderImport({ ...folderImport, preserveStructure: !folderImport.preserveStructure })}
-            />
-          </div>
         </div>
       </ConfirmModal>
 

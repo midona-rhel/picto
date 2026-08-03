@@ -1,12 +1,13 @@
 //! Library database schema — authoritative table definitions.
 //! No other module may define or assume table structure.
 
+use rusqlite::Connection;
+
+/// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
+pub const CURRENT_SCHEMA_VERSION: i64 = 101;
+
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
-PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
-PRAGMA busy_timeout = 5000;
-
 CREATE TABLE IF NOT EXISTS media_entity (
     entity_id                    INTEGER PRIMARY KEY,
     entity_hash                  TEXT    NOT NULL UNIQUE,
@@ -382,7 +383,8 @@ CREATE TABLE IF NOT EXISTS credential_domain (
     site_category   TEXT PRIMARY KEY,
     credential_type TEXT NOT NULL,
     display_name    TEXT,
-    date_added      TEXT NOT NULL
+    date_added      TEXT NOT NULL,
+    expires_at      TEXT
 );
 
 CREATE TABLE IF NOT EXISTS credential_health (
@@ -486,5 +488,236 @@ CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
 
-INSERT OR IGNORE INTO schema_version (version) VALUES (100);
+INSERT INTO schema_version (version)
+SELECT 101
+WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
+
+/// Create a fresh pre-1.0 schema or validate an exact current-schema match.
+/// Schema conversion starts only after the 1.0 format is locked.
+pub fn initialize_schema(conn: &Connection) -> Result<(), String> {
+    let user_table_count = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )
+        .map_err(|error| format!("Failed to inspect library schema: {error}"))?;
+
+    if user_table_count == 0 {
+        conn.execute_batch(LIBRARY_DDL)
+            .map_err(|error| format!("Failed to create library schema: {error}"))?;
+    } else if !has_schema_version_table(conn)? {
+        return Err(
+            "Unsupported pre-1.0 library schema: schema_version is missing. Create a new library."
+                .to_owned(),
+        );
+    }
+
+    let version = read_schema_version(conn)?;
+    if version != CURRENT_SCHEMA_VERSION {
+        return Err(format!(
+            "Unsupported pre-1.0 library schema version {version}; this build requires exactly {CURRENT_SCHEMA_VERSION}. Create a new library."
+        ));
+    }
+    validate_current_schema(conn)
+}
+
+pub(crate) fn has_schema_version_table(conn: &Connection) -> Result<bool, String> {
+    table_exists(conn, "schema_version")
+}
+
+pub(crate) fn read_schema_version(conn: &Connection) -> Result<i64, String> {
+    let mut statement = conn
+        .prepare("SELECT version FROM schema_version")
+        .map_err(|error| format!("Failed to read canonical schema version: {error}"))?;
+    let versions = statement
+        .query_map([], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("Failed to read canonical schema version: {error}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Failed to read canonical schema version: {error}"))?;
+    match versions.as_slice() {
+        [version] => Ok(*version),
+        _ => Err(format!(
+            "Canonical schema_version must contain exactly one row; found {}",
+            versions.len()
+        )),
+    }
+}
+
+fn validate_current_schema(conn: &Connection) -> Result<(), String> {
+    const TABLE_PROBES: &[(&str, &str)] = &[
+        ("media_entity", "SELECT entity_id FROM media_entity WHERE 0"),
+        (
+            "media_file",
+            "SELECT file_id, color_analysis_version FROM media_file WHERE 0",
+        ),
+        (
+            "single_media_entity",
+            "SELECT entity_id FROM single_media_entity WHERE 0",
+        ),
+        ("tag", "SELECT tag_id, site_mask FROM tag WHERE 0"),
+        (
+            "entity_tag",
+            "SELECT entity_id, provenance_mask FROM entity_tag WHERE 0",
+        ),
+        ("tag_alias", "SELECT from_tag_id FROM tag_alias WHERE 0"),
+        (
+            "tag_implication",
+            "SELECT child_tag_id FROM tag_implication WHERE 0",
+        ),
+        ("tag_ancestor", "SELECT tag_id FROM tag_ancestor WHERE 0"),
+        (
+            "entity_tag_implied",
+            "SELECT entity_id FROM entity_tag_implied WHERE 0",
+        ),
+        ("tag_display", "SELECT tag_id FROM tag_display WHERE 0"),
+        ("tag_fts", "SELECT rowid FROM tag_fts WHERE 0"),
+        (
+            "folder",
+            "SELECT folder_id, notes, total_size_bytes, pinned, pin_order, uuid FROM folder WHERE 0",
+        ),
+        (
+            "folder_member",
+            "SELECT folder_id FROM folder_member WHERE 0",
+        ),
+        (
+            "smart_folder",
+            "SELECT smart_folder_id, notes, total_size_bytes, pinned, pin_order, uuid FROM smart_folder WHERE 0",
+        ),
+        (
+            "subscription_group",
+            "SELECT group_id, paused, uuid FROM subscription_group WHERE 0",
+        ),
+        (
+            "subscription",
+            "SELECT subscription_id, uuid FROM subscription WHERE 0",
+        ),
+        (
+            "subscription_query",
+            "SELECT query_id, site_id, query_kind, notes, last_success_at, last_failure_at, last_failure_kind, last_failure_message FROM subscription_query WHERE 0",
+        ),
+        (
+            "subscription_entity",
+            "SELECT subscription_id FROM subscription_entity WHERE 0",
+        ),
+        (
+            "subscription_post_collection",
+            "SELECT subscription_id FROM subscription_post_collection WHERE 0",
+        ),
+        (
+            "ingest_queue",
+            "SELECT queue_id, queue_kind, source_kind, subscription_id, query_id, query_run_id, cleanup_root, post_id, category, preferred_name, expected_count, status, last_error, created_at, updated_at FROM ingest_queue WHERE 0",
+        ),
+        (
+            "ingest_queue_item",
+            "SELECT item_id, queue_id, source_path, page_num, payload_json, delete_after_ingest, status, result_kind, resolved_entity_hash, resolved_file_hash, last_error, created_at, updated_at FROM ingest_queue_item WHERE 0",
+        ),
+        (
+            "subscription_run",
+            "SELECT run_id, subscription_id, started_at, finished_at, status, failure_kind, error_message, files_downloaded, files_skipped, metadata_validated, metadata_invalid FROM subscription_run WHERE 0",
+        ),
+        (
+            "subscription_query_run",
+            "SELECT query_run_id, run_id, subscription_id, query_id, started_at, finished_at, status, failure_kind, error_message, posts_processed, files_downloaded, files_skipped FROM subscription_query_run WHERE 0",
+        ),
+        (
+            "subscription_query_job",
+            "SELECT job_id, run_id, subscription_id, query_id, site_id, status, job_kind, requested_by, post_id, queued_at, started_at, finished_at, failure_kind, error_message FROM subscription_query_job WHERE 0",
+        ),
+        (
+            "subscription_issue",
+            "SELECT issue_id, subscription_id, query_id, issue_kind, status, message, detail, first_seen_at, last_seen_at, resolved_at FROM subscription_issue WHERE 0",
+        ),
+        (
+            "subscription_download_attempt",
+            "SELECT attempt_id, subscription_id, query_id, query_run_id, item_key, site_category, post_id, page_num, canonical_post_url, media_url, retry_url, retry_count, status, failure_kind, last_error, next_retry_at, created_at, updated_at, resolved_at FROM subscription_download_attempt WHERE 0",
+        ),
+        (
+            "subscription_post_member",
+            "SELECT subscription_id, site_id, post_id, item_key, page_num, canonical_post_url, media_url, entity_hash, status, created_at, updated_at FROM subscription_post_member WHERE 0",
+        ),
+        (
+            "deferred_work_item",
+            "SELECT work_id FROM deferred_work_item WHERE 0",
+        ),
+        (
+            "credential_domain",
+            "SELECT site_category, expires_at FROM credential_domain WHERE 0",
+        ),
+        (
+            "credential_health",
+            "SELECT site_category FROM credential_health WHERE 0",
+        ),
+        ("duplicate", "SELECT file_id_a FROM duplicate WHERE 0"),
+        ("file_color", "SELECT file_id FROM file_color WHERE 0"),
+        (
+            "file_color_rtree",
+            "SELECT id, min_l, max_l, min_a, max_a, min_b, max_b FROM file_color_rtree WHERE 0",
+        ),
+        ("entity_fts", "SELECT rowid FROM entity_fts WHERE 0"),
+        ("sidebar_node", "SELECT node_id FROM sidebar_node WHERE 0"),
+        ("view_pref", "SELECT scope FROM view_pref WHERE 0"),
+        ("kv_settings", "SELECT key FROM kv_settings WHERE 0"),
+        ("manifest", "SELECT key FROM manifest WHERE 0"),
+        (
+            "op_outbox",
+            "SELECT op_id, op_version, op_type, entity_key, payload_json, hlc, device_id, created_at, uploaded_seq FROM op_outbox WHERE 0",
+        ),
+        (
+            "sync_ingest_cursor",
+            "SELECT device_id, consumed_seq FROM sync_ingest_cursor WHERE 0",
+        ),
+    ];
+    const REQUIRED_INDEXES: &[&str] = &[
+        "idx_me_status",
+        "idx_me_kind",
+        "idx_me_parent",
+        "idx_me_date_added",
+        "idx_me_rating",
+        "idx_folder_uuid",
+        "idx_smart_folder_uuid",
+        "idx_subscription_group_uuid",
+        "idx_subscription_uuid",
+        "idx_ingest_queue_ready",
+        "idx_ingest_queue_subscription",
+        "idx_ingest_queue_item_queue",
+        "idx_subscription_query_job_ready",
+        "idx_subscription_query_job_subscription",
+        "idx_op_outbox_pending",
+    ];
+
+    for (table, probe) in TABLE_PROBES {
+        conn.prepare(probe).map_err(|error| {
+            format!(
+                "Canonical schema version {CURRENT_SCHEMA_VERSION} is missing or incompatible at {table}: {error}"
+            )
+        })?;
+    }
+    for index in REQUIRED_INDEXES {
+        let exists: i64 = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1)",
+                [index],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("Failed to validate canonical index {index}: {error}"))?;
+        if exists == 0 {
+            return Err(format!(
+                "Canonical schema version {CURRENT_SCHEMA_VERSION} is missing required index {index}"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn table_exists(conn: &Connection, table: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+    .map_err(|error| error.to_string())
+}

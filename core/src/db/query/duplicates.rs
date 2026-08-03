@@ -135,7 +135,9 @@ fn map_perceptual_hash_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<Perce
     })
 }
 
-pub fn list_duplicate_scan_sources(conn: &Connection) -> rusqlite::Result<Vec<DuplicateScanSource>> {
+pub fn list_duplicate_scan_sources(
+    conn: &Connection,
+) -> rusqlite::Result<Vec<DuplicateScanSource>> {
     let mut stmt = conn.prepare(
         "SELECT mf.file_id, me.entity_hash, mf.perceptual_hash, mf.mime_type, mf.frame_count
          FROM media_entity me
@@ -255,8 +257,9 @@ pub fn get_duplicate_pairs_paginated(
     })?;
     let rows: Vec<_> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     let next_cursor = if rows.len() == limit {
-        rows.last()
-            .map(|(_, file_id_a, file_id_b, distance)| format!("{distance},{file_id_a},{file_id_b}"))
+        rows.last().map(|(_, file_id_a, file_id_b, distance)| {
+            format!("{distance},{file_id_a},{file_id_b}")
+        })
     } else {
         None
     };

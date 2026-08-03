@@ -105,39 +105,19 @@ impl ApplicationEngine {
         self.db.get_smart_folder(smart_folder_id)
     }
 
-    pub fn list_folders(&self) -> Result<Vec<crate::db::query::folders::FolderRow>, String> {
-        self.db.list_folders_canonical()
-    }
-
-    pub fn list_smart_folders(
-        &self,
-    ) -> Result<Vec<crate::db::query::folders::SmartFolderRow>, String> {
-        self.db.list_smart_folders_canonical()
-    }
-
-    pub fn get_folder_entity_hashes(&self, folder_id: i64) -> Result<Vec<String>, String> {
-        self.db.get_folder_entity_hashes(folder_id)
-    }
-
     pub fn get_folder_cover_hash(&self, folder_id: i64) -> Result<Option<String>, String> {
         self.db.get_folder_cover_hash(folder_id)
     }
 
-    pub fn get_entity_folder_memberships(
-        &self,
-        entity_hash: &str,
-    ) -> Result<Vec<crate::db::types::FolderMembership>, String> {
-        self.db.get_entity_folder_memberships(entity_hash)
-    }
-
-    pub fn get_entity_folder_memberships_by_entity_id(
-        &self,
-        entity_id: i64,
-    ) -> Result<Vec<crate::db::types::FolderMembership>, String> {
-        self.db.get_entity_folder_memberships_by_entity_id(entity_id)
-    }
-
     pub fn run_compiler(&self, plan: crate::db::projection::compiler::CompilerPlan) {
         self.db.run_compiler(plan);
+    }
+
+    /// Recompile just the sidebar projection — the most common compiler plan.
+    pub fn rebuild_sidebar(&self) {
+        self.run_compiler(crate::db::projection::compiler::CompilerPlan {
+            rebuild_sidebar: true,
+            ..Default::default()
+        });
     }
 }

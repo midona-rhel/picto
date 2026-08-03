@@ -32,7 +32,13 @@ impl SiteAdapter for FallbackAdapter {
         // fanbox shapes (user: {username}, author: {username}, creator: {...})
         // and nijie's flat user_name.
         for key in [
-            "artist", "username", "user", "uploader", "blog_name", "user_name", "author",
+            "artist",
+            "username",
+            "user",
+            "uploader",
+            "blog_name",
+            "user_name",
+            "author",
             "creator",
         ] {
             if let Some(name) = json.get(key).and_then(creator_name) {

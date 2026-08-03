@@ -205,27 +205,18 @@ Zlib OR Apache-2.0 OR MIT
 NPM DEPENDENCIES
 ================================================================================
 
-All NPM runtime dependencies are MIT-licensed unless noted otherwise.
+All direct NPM application dependencies are MIT-licensed unless noted otherwise.
 
-Runtime
--------
-  @dagrejs/dagre        — MIT
-  @dnd-kit/core         — MIT
-  @dnd-kit/sortable     — MIT
-  @dnd-kit/utilities    — MIT
-  @egjs/react-infinitegrid — MIT
-  @mantine/core         — MIT
-  @mantine/dates        — MIT
-  @mantine/hooks        — MIT
-  @mantine/notifications — MIT
-  @tabler/icons-react   — MIT
+Application
+-----------
+  electron-updater        — MIT
+  jotai                   — MIT
+  @mantine/core           — MIT
+  @mantine/hooks          — MIT
+  @tabler/icons-react     — MIT
   @tanstack/react-virtual — MIT
-  blurhash              — MIT
-  dayjs                 — MIT
-  masonic               — MIT
-  react                 — MIT
-  react-dom             — MIT
-  zustand               — MIT
+  react                   — MIT
+  react-dom               — MIT
 
 Dev
 ---

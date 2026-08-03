@@ -91,10 +91,6 @@ export async function setEntityNotes(entityHash: string, notes: string): Promise
   await setTargetNotes(singleTarget(entityHash), notes);
 }
 
-export async function addEntityTags(entityHash: string, tags: string[]): Promise<void> {
-  await addTargetTags(singleTarget(entityHash), tags);
-}
-
 export async function removeEntityTags(entityHash: string, tags: string[]): Promise<void> {
   await removeTargetTags(singleTarget(entityHash), tags);
 }

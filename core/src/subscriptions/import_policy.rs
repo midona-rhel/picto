@@ -39,8 +39,12 @@ pub fn collection_group_parts(
     site_id: &str,
     metadata: &ParsedMetadata,
 ) -> Option<(String, String, String)> {
+    // gallery-dl's `num` is 1-based: a single-image post has num=1, count=1.
+    // Only a second file (num > 1) or an advertised multi-file count marks a
+    // real multi-image post — `page_num > 0` would route every single-image
+    // tweet down the collection path.
     let is_multi_post = metadata.page_count.is_some_and(|count| count > 1)
-        || metadata.page_num.is_some_and(|page_num| page_num > 0);
+        || metadata.page_num.is_some_and(|page_num| page_num > 1);
     if !is_multi_post {
         return None;
     }
@@ -124,6 +128,26 @@ mod tests {
             ..Default::default()
         };
         assert!(collection_group_parts("gelbooru", &metadata).is_none());
+
+        // Single-image tweet: gallery-dl numbers files 1-based (num=1, count=1).
+        let single_tweet = ParsedMetadata {
+            post_id: Some("2078142284424782203".to_string()),
+            category: Some("twitter".to_string()),
+            page_count: Some(1),
+            page_num: Some(1),
+            ..Default::default()
+        };
+        assert!(collection_group_parts("twitter", &single_tweet).is_none());
+
+        // Second file of a post IS a collection candidate.
+        let second_file = ParsedMetadata {
+            post_id: Some("2078142284424782203".to_string()),
+            category: Some("twitter".to_string()),
+            page_count: Some(1),
+            page_num: Some(2),
+            ..Default::default()
+        };
+        assert!(collection_group_parts("twitter", &second_file).is_some());
     }
 
     #[test]

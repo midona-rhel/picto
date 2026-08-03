@@ -94,7 +94,7 @@ pub async fn check_scheduled_groups(
     };
 
     for group in groups {
-        if group.schedule == "manual" {
+        if group.paused || group.schedule == "manual" {
             continue;
         }
 

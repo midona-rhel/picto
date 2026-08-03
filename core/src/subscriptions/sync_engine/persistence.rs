@@ -49,37 +49,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .await;
     }
 
-    pub(super) async fn reconcile_post_collection_order(
-        &self,
-        subscription_id: i64,
-        site_id: &str,
-        post_id: &str,
-        collection_id: i64,
-    ) {
-        let members = match self
-            .runtime_service()
-            .list_subscription_post_members(subscription_id, site_id, post_id)
-            .await
-        {
-            Ok(members) => members,
-            Err(_) => return,
-        };
-        let ordered_hashes: Vec<String> = members
-            .into_iter()
-            .filter(|member| member.status == "imported")
-            .filter_map(|member| member.entity_hash)
-            .collect();
-        if ordered_hashes.is_empty() {
-            return;
-        }
-        if let Ok(state) = crate::state::get_state() {
-            let _ = state
-                .engine
-                .db()
-                .reorder_collection_members_by_hashes(collection_id, &ordered_hashes);
-        }
-    }
-
     pub(super) async fn persist_failed_download_attempt(
         &self,
         subscription_id: i64,

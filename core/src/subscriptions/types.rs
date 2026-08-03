@@ -1,5 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// Newest downloaded file per subscription — cover image for the Following grid.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscriptionCoverRecord {
+    pub subscription_id: String,
+    pub entity_hash: String,
+}
+
 /// A collection entity created by a subscription from a multi-image post.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriptionCollectionRecord {
@@ -220,6 +227,8 @@ pub struct CredentialDomain {
     pub credential_type: String,
     pub display_name: Option<String>,
     pub created_at: String,
+    /// RFC3339 timestamp when the stored session/cookies expire, if known.
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

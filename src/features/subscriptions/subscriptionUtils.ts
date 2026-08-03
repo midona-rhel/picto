@@ -184,3 +184,18 @@ export function getQueryAuthState(input: {
   }
   return { tone: 'idle', label: 'Optional auth', blocking: false };
 }
+
+/** Human-readable, actionable text for a query's recorded failure kind. */
+export function describeFailure(kind: string | null, message: string | null): string | null {
+  switch (kind) {
+    case 'not_found': return 'User/query not found — check the handle';
+    case 'unauthorized': return 'Login rejected — check the account in Accounts';
+    case 'expired': return 'Session expired — log in again in Accounts';
+    case 'rate_limited': return 'Rate limited by the site — try again later';
+    case 'network': return 'Network error — check your connection';
+    case 'environment': return 'Local setup problem — check the logs';
+    case 'stale': return 'Interrupted by app shutdown';
+    case 'inbox_full': return 'Paused — inbox is full';
+    default: return message;
+  }
+}

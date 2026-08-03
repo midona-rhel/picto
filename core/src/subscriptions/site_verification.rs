@@ -97,8 +97,8 @@ pub async fn verify_site(
     query: Option<&str>,
     post_limit: Option<u32>,
 ) -> Result<SiteVerificationReport, String> {
-    let site = gallery_dl_runner::site_by_id(site_id)
-        .ok_or_else(|| format!("Unknown site: {site_id}"))?;
+    let site =
+        gallery_dl_runner::site_by_id(site_id).ok_or_else(|| format!("Unknown site: {site_id}"))?;
     // Account-style example queries are placeholders ("12345", "username") —
     // a probe against them can prove the extractor runs but not that content
     // flows. Callers should pass a real account query for a conclusive probe.
@@ -141,7 +141,9 @@ pub async fn verify_site(
     let settings = state.settings.get();
     let binary_path = crate::media_processing::gallery_dl_path::gallery_dl_path()?.clone();
     let runner = GalleryDlRunner::new(binary_path);
-    let post_limit = post_limit.unwrap_or(MAX_VERIFY_POSTS).clamp(1, MAX_VERIFY_POSTS);
+    let post_limit = post_limit
+        .unwrap_or(MAX_VERIFY_POSTS)
+        .clamp(1, MAX_VERIFY_POSTS);
 
     let opts = RunOptions {
         subscription_id: None,
@@ -214,7 +216,10 @@ pub async fn verify_site(
     if placeholder_miss {
         // The extractor ran and the site answered — the fake example account
         // just has nothing. Inconclusive, not broken.
-        failure_reasons.push("inconclusive: placeholder account query — pass --query with a real account".to_string());
+        failure_reasons.push(
+            "inconclusive: placeholder account query — pass --query with a real account"
+                .to_string(),
+        );
     }
     if summary.exit_code != 0 && !placeholder_miss {
         failure_reasons.push(format!(
@@ -227,7 +232,9 @@ pub async fn verify_site(
     }
     let items_missing_post_id = items.iter().filter(|i| i.post_id.is_none()).count();
     if downloaded > 0 && items_missing_post_id > 0 {
-        failure_reasons.push(format!("{items_missing_post_id}/{downloaded} items missing post_id"));
+        failure_reasons.push(format!(
+            "{items_missing_post_id}/{downloaded} items missing post_id"
+        ));
     }
     // Query-style booru sites must produce tags; account-style sites may be
     // tagless by design (kemono, coomer, webtoons, instagram...).
@@ -249,8 +256,11 @@ pub async fn verify_site(
         }
     }
 
-    let failure_kind = (summary.exit_code != 0)
-        .then(|| classify_failure(&summary.stderr_output).as_str().to_string());
+    let failure_kind = (summary.exit_code != 0).then(|| {
+        classify_failure(&summary.stderr_output)
+            .as_str()
+            .to_string()
+    });
 
     Ok(SiteVerificationReport {
         site_id: site_id.to_string(),

@@ -1,10 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import '../app/globals.css';
+import { LibraryManager } from '../features/library/LibraryManager';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <div style={{ padding: 32, fontFamily: 'system-ui', color: '#ccc', background: '#1a1a1e' }}>
-      <p>Library manager — rebuild pending</p>
-    </div>
+    <LibraryManager />
   </React.StrictMode>,
 );

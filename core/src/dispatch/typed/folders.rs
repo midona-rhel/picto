@@ -4,6 +4,8 @@ use rusqlite::{params, OptionalExtension};
 use serde::Deserialize;
 use ts_rs::TS;
 
+use crate::runtime_contract::change_builder::ChangeImpact;
+use crate::runtime_contract::state_change::{Domain, SidebarNodePatch};
 use crate::state::AppState;
 
 fn folder_meta_json_canonical(folder: &crate::db::query::folders::FolderRow) -> String {
@@ -21,7 +23,10 @@ fn folder_meta_json_canonical(folder: &crate::db::query::folders::FolderRow) -> 
 
 const FOLDER_RANK_GAP: i64 = 1 << 20;
 
-fn get_folder_member_ids(conn: &rusqlite::Connection, folder_id: i64) -> rusqlite::Result<Vec<i64>> {
+fn get_folder_member_ids(
+    conn: &rusqlite::Connection,
+    folder_id: i64,
+) -> rusqlite::Result<Vec<i64>> {
     let mut stmt = conn.prepare_cached(
         "SELECT entity_id
          FROM folder_member
@@ -102,7 +107,11 @@ fn redistribute_folder_member_ranks(
          WHERE folder_id = ?2 AND entity_id = ?3",
     )?;
     for (index, entity_id) in entity_ids.iter().enumerate() {
-        stmt.execute(params![(index as i64 + 1) * FOLDER_RANK_GAP, folder_id, entity_id])?;
+        stmt.execute(params![
+            (index as i64 + 1) * FOLDER_RANK_GAP,
+            folder_id,
+            entity_id
+        ])?;
     }
     Ok(())
 }
@@ -123,7 +132,10 @@ fn reorder_folder_member(
                 .and_then(|id| get_folder_member_rank(conn, folder_id, id).ok().flatten());
             let refreshed_next = before_entity_id
                 .and_then(|id| get_folder_member_rank(conn, folder_id, id).ok().flatten());
-            (refreshed_previous.or(Some(previous)), refreshed_next.or(Some(next)))
+            (
+                refreshed_previous.or(Some(previous)),
+                refreshed_next.or(Some(next)),
+            )
         }
         other => other,
     };
@@ -345,7 +357,11 @@ fn sort_folder_items_canonical(
              WHERE folder_id = ?2 AND entity_id = ?3",
         )?;
         for (index, entity_id) in sorted_ids.iter().enumerate() {
-            update_stmt.execute(params![(index as i64 + 1) * FOLDER_RANK_GAP, folder_id, entity_id])?;
+            update_stmt.execute(params![
+                (index as i64 + 1) * FOLDER_RANK_GAP,
+                folder_id,
+                entity_id
+            ])?;
         }
         Ok(())
     })
@@ -391,7 +407,11 @@ fn reverse_folder_items_canonical(
             )?;
             let len = ordered_entity_ids.len();
             for index in 0..len {
-                update_stmt.execute(params![ranks[len - 1 - index], folder_id, ordered_entity_ids[index]])?;
+                update_stmt.execute(params![
+                    ranks[len - 1 - index],
+                    folder_id,
+                    ordered_entity_ids[index]
+                ])?;
             }
             return Ok(());
         }
@@ -404,7 +424,11 @@ fn reverse_folder_items_canonical(
              WHERE folder_id = ?2 AND entity_id = ?3",
         )?;
         for (index, entity_id) in ordered_entity_ids.iter().rev().enumerate() {
-            update_stmt.execute(params![(index as i64 + 1) * FOLDER_RANK_GAP, folder_id, entity_id])?;
+            update_stmt.execute(params![
+                (index as i64 + 1) * FOLDER_RANK_GAP,
+                folder_id,
+                entity_id
+            ])?;
         }
         let _ = len;
         Ok(())
@@ -415,29 +439,9 @@ fn reverse_folder_items_canonical(
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFolderFilesInput {
-    #[ts(type = "number")]
-    pub folder_id: i64,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFolderCoverHashInput {
     #[ts(type = "number")]
     pub folder_id: i64,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFileFoldersInput {
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetEntityFoldersInput {
-    #[ts(type = "number")]
-    pub entity_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -508,36 +512,11 @@ fn default_true() -> bool {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct UpdateFolderParentInput {
-    #[ts(type = "number")]
-    pub folder_id: i64,
-    #[ts(type = "number | null")]
-    pub new_parent_id: Option<i64>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct AddFilesToFolderInput {
-    #[ts(type = "number")]
-    pub folder_id: i64,
-    #[ts(type = "import('../../src/shared/types/canonical').EntityTarget")]
-    pub target: crate::db::types::EntityTarget,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveFilesFromFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
     #[ts(type = "import('../../src/shared/types/canonical').EntityTarget")]
     pub target: crate::db::types::EntityTarget,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ReorderFoldersInput {
-    #[ts(type = "[number, number][]")]
-    pub moves: Vec<(i64, i64)>,
 }
 
 /// Unified folder item reorder. Exactly one mode: `moves` (drag-drop),
@@ -561,44 +540,11 @@ pub struct ReorderFolderItemsInput {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn list_folders(
-    state: &AppState,
-    _input: serde_json::Value,
-) -> Result<Vec<crate::db::query::folders::FolderRow>, String> {
-    state.engine.list_folders()
-}
-
-// ── Legacy-only read handlers ────────────────────────────────────────────
-// The following handlers are NOT called by the rebuilt frontend (src/).
-// They exist only for the legacy frontend (legacy/frontend/) and will be
-// removed when the legacy frontend is deleted.
-
-pub async fn get_folder_files(
-    state: &AppState,
-    input: GetFolderFilesInput,
-) -> Result<Vec<String>, String> {
-    state.engine.get_folder_entity_hashes(input.folder_id)
-}
-
 pub async fn get_folder_cover_hash(
     state: &AppState,
     input: GetFolderCoverHashInput,
 ) -> Result<Option<String>, String> {
     state.engine.get_folder_cover_hash(input.folder_id)
-}
-
-pub async fn get_file_folders(
-    state: &AppState,
-    input: GetFileFoldersInput,
-) -> Result<Vec<crate::db::types::FolderMembership>, String> {
-    state.engine.get_entity_folder_memberships(&input.hash)
-}
-
-pub async fn get_entity_folders(
-    state: &AppState,
-    input: GetEntityFoldersInput,
-) -> Result<Vec<crate::db::types::FolderMembership>, String> {
-    state.engine.get_entity_folder_memberships_by_entity_id(input.entity_id)
 }
 
 pub async fn move_folder(state: &AppState, input: MoveFolderInput) -> Result<(), String> {
@@ -609,19 +555,11 @@ pub async fn move_folder(state: &AppState, input: MoveFolderInput) -> Result<(),
     if !sibling_order.is_empty() {
         state.engine.reorder_folders(&sibling_order)?;
     }
-    state
-        .engine
-        .run_compiler(crate::db::projection::compiler::CompilerPlan {
-            rebuild_sidebar: true,
-            ..Default::default()
-        });
+    state.engine.rebuild_sidebar();
     crate::events::emit_state_changed(
         "move_folder",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[
-                crate::runtime_contract::state_change::Domain::Folders,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-            ])
+        ChangeImpact::new()
+            .add_domains(&[Domain::Folders, Domain::Sidebar])
             .folder_ids(vec![input.folder_id])
             .folder_parent_changes(vec![(input.folder_id, input.new_parent_id)])
             .folder_order_changes(sibling_order),
@@ -644,9 +582,8 @@ pub async fn create_folder(
         .get_folder(folder_id)?
         .ok_or_else(|| format!("Folder {folder_id} not found after create"))?;
     let meta = folder_meta_json_canonical(&folder);
-    let upsert = crate::runtime_contract::state_change::SidebarNodePatch {
+    let upsert = SidebarNodePatch {
         node_id: format!("folder:{folder_id}"),
-        removed: None,
         upsert: Some(true),
         kind: Some("folder".into()),
         parent_id: Some(
@@ -663,20 +600,13 @@ pub async fn create_folder(
         selectable: Some(true),
         freshness: Some("exact".into()),
         meta_json: Some(Some(meta)),
+        ..Default::default()
     };
-    state
-        .engine
-        .run_compiler(crate::db::projection::compiler::CompilerPlan {
-            rebuild_sidebar: true,
-            ..Default::default()
-        });
+    state.engine.rebuild_sidebar();
     crate::events::emit_state_changed(
         "create_folder",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[
-                crate::runtime_contract::state_change::Domain::Folders,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-            ])
+        ChangeImpact::new()
+            .add_domains(&[Domain::Folders, Domain::Sidebar])
             .folder_ids(vec![folder_id])
             .sidebar_node_patch(upsert),
     );
@@ -699,34 +629,19 @@ pub async fn update_folder(state: &AppState, input: UpdateFolderInput) -> Result
         .engine
         .get_folder(input.folder_id)?
         .ok_or_else(|| format!("Folder {} not found after update", input.folder_id))?;
-    let sidebar_patch = crate::runtime_contract::state_change::SidebarNodePatch {
+    let sidebar_patch = SidebarNodePatch {
         node_id: format!("folder:{}", input.folder_id),
-        removed: None,
-        upsert: None,
-        kind: None,
-        parent_id: None,
         name: input.name,
         icon: input.icon.map(Some),
         color: input.color.map(Some),
-        sort_order: None,
-        count: None,
-        selectable: None,
-        freshness: None,
         meta_json: Some(Some(folder_meta_json_canonical(&folder))),
+        ..Default::default()
     };
-    state
-        .engine
-        .run_compiler(crate::db::projection::compiler::CompilerPlan {
-            rebuild_sidebar: true,
-            ..Default::default()
-        });
+    state.engine.rebuild_sidebar();
     crate::events::emit_state_changed(
         "update_folder",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[
-                crate::runtime_contract::state_change::Domain::Folders,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-            ])
+        ChangeImpact::new()
+            .add_domains(&[Domain::Folders, Domain::Sidebar])
             .folder_ids(vec![input.folder_id])
             .sidebar_node_patch(sidebar_patch),
     );
@@ -780,19 +695,8 @@ pub async fn set_folder_watch_config(
         )
         .await?;
     } else {
-        let patch = crate::runtime_contract::state_change::SidebarNodePatch {
+        let patch = SidebarNodePatch {
             node_id: format!("folder:{}", input.folder_id),
-            removed: None,
-            upsert: None,
-            kind: None,
-            parent_id: None,
-            name: None,
-            icon: None,
-            color: None,
-            sort_order: None,
-            count: None,
-            selectable: None,
-            freshness: None,
             meta_json: Some(
                 state
                     .engine
@@ -801,14 +705,12 @@ pub async fn set_folder_watch_config(
                     .flatten()
                     .map(|f| folder_meta_json_canonical(&f)),
             ),
+            ..Default::default()
         };
         crate::events::emit_state_changed(
             "set_folder_watch_config",
-            crate::runtime_contract::change_builder::ChangeImpact::new()
-                .add_domains(&[
-                    crate::runtime_contract::state_change::Domain::Folders,
-                    crate::runtime_contract::state_change::Domain::Sidebar,
-                ])
+            ChangeImpact::new()
+                .add_domains(&[Domain::Folders, Domain::Sidebar])
                 .folder_ids(vec![input.folder_id])
                 .sidebar_node_patch(patch),
         );
@@ -840,28 +742,15 @@ pub async fn clear_folder_watch_config(
         .engine
         .get_folder(input.folder_id)?
         .ok_or_else(|| format!("Folder {} not found", input.folder_id))?;
-    let patch = crate::runtime_contract::state_change::SidebarNodePatch {
+    let patch = SidebarNodePatch {
         node_id: format!("folder:{}", input.folder_id),
-        removed: None,
-        upsert: None,
-        kind: None,
-        parent_id: None,
-        name: None,
-        icon: None,
-        color: None,
-        sort_order: None,
-        count: None,
-        selectable: None,
-        freshness: None,
         meta_json: Some(Some(folder_meta_json_canonical(&folder))),
+        ..Default::default()
     };
     crate::events::emit_state_changed(
         "clear_folder_watch_config",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[
-                crate::runtime_contract::state_change::Domain::Folders,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-            ])
+        ChangeImpact::new()
+            .add_domains(&[Domain::Folders, Domain::Sidebar])
             .folder_ids(vec![input.folder_id])
             .sidebar_node_patch(patch),
     );
@@ -870,125 +759,31 @@ pub async fn clear_folder_watch_config(
 
 pub async fn delete_folder(state: &AppState, input: DeleteFolderInput) -> Result<(), String> {
     state.engine.delete_folder(input.folder_id)?;
-    let patch = crate::runtime_contract::state_change::SidebarNodePatch {
+    let patch = SidebarNodePatch {
         node_id: format!("folder:{}", input.folder_id),
         removed: Some(true),
-        upsert: None,
-        kind: None,
-        parent_id: None,
-        name: None,
-        icon: None,
-        color: None,
-        sort_order: None,
-        count: None,
-        selectable: None,
-        freshness: None,
-        meta_json: None,
+        ..Default::default()
     };
     crate::events::emit_state_changed(
         "delete_folder",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .domains(&[
-                crate::runtime_contract::state_change::Domain::Folders,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-                crate::runtime_contract::state_change::Domain::Selection,
-            ])
+        ChangeImpact::new()
+            .domains(&[Domain::Folders, Domain::Sidebar, Domain::Selection])
             .folder_ids(vec![input.folder_id])
             .sidebar_node_patch(patch),
     );
     Ok(())
-}
-
-pub async fn update_folder_parent(
-    state: &AppState,
-    input: UpdateFolderParentInput,
-) -> Result<(), String> {
-    state
-        .engine
-        .move_folder(input.folder_id, input.new_parent_id)?;
-    let patch = crate::runtime_contract::state_change::SidebarNodePatch {
-        node_id: format!("folder:{}", input.folder_id),
-        removed: None,
-        upsert: None,
-        kind: None,
-        parent_id: Some(
-            input
-                .new_parent_id
-                .map(|pid| format!("folder:{pid}"))
-                .or(Some("section:folders".into())),
-        ),
-        name: None,
-        icon: None,
-        color: None,
-        sort_order: None,
-        count: None,
-        selectable: None,
-        freshness: None,
-        meta_json: None,
-    };
-    crate::events::emit_state_changed(
-        "update_folder_parent",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[
-                crate::runtime_contract::state_change::Domain::Folders,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-            ])
-            .folder_ids(vec![input.folder_id])
-            .folder_parent_changes(vec![(input.folder_id, input.new_parent_id)])
-            .sidebar_node_patch(patch),
-    );
-    Ok(())
-}
-
-pub async fn add_files_to_folder(
-    state: &AppState,
-    input: AddFilesToFolderInput,
-) -> Result<usize, String> {
-    let count = state
-        .engine
-        .update_folder_membership(
-            input.target,
-            input.folder_id,
-            crate::engine::folders::MembershipOperation::Add,
-        )?;
-    Ok(count.entity_ids.len())
 }
 
 pub async fn remove_files_from_folder(
     state: &AppState,
     input: RemoveFilesFromFolderInput,
 ) -> Result<usize, String> {
-    let count = state
-        .engine
-        .update_folder_membership(
-            input.target,
-            input.folder_id,
-            crate::engine::folders::MembershipOperation::Remove,
-        )?;
+    let count = state.engine.update_folder_membership(
+        input.target,
+        input.folder_id,
+        crate::engine::folders::MembershipOperation::Remove,
+    )?;
     Ok(count.entity_ids.len())
-}
-
-pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Result<(), String> {
-    let fids: Vec<i64> = input.moves.iter().map(|(id, _)| *id).collect();
-    let order_changes = input.moves.clone();
-    state.engine.reorder_folders(&input.moves)?;
-    state
-        .engine
-        .run_compiler(crate::db::projection::compiler::CompilerPlan {
-            rebuild_sidebar: true,
-            ..Default::default()
-        });
-    crate::events::emit_state_changed(
-        "reorder_folders",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[
-                crate::runtime_contract::state_change::Domain::Folders,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-            ])
-            .folder_ids(fids)
-            .folder_order_changes(order_changes),
-    );
-    Ok(())
 }
 
 pub async fn reorder_folder_items(
@@ -999,7 +794,13 @@ pub async fn reorder_folder_items(
         reorder_folder_items_canonical(state.engine.db(), input.folder_id, moves)?;
     } else if let Some(sort_by) = input.sort_by {
         let direction = input.direction.unwrap_or_else(|| "asc".to_string());
-        sort_folder_items_canonical(state.engine.db(), input.folder_id, &sort_by, &direction, input.hashes)?;
+        sort_folder_items_canonical(
+            state.engine.db(),
+            input.folder_id,
+            &sort_by,
+            &direction,
+            input.hashes,
+        )?;
     } else if input.reverse == Some(true) {
         reverse_folder_items_canonical(state.engine.db(), input.folder_id, input.hashes)?;
     } else {
@@ -1007,7 +808,7 @@ pub async fn reorder_folder_items(
     }
     crate::events::emit_state_changed(
         "reorder_folder_items",
-        crate::runtime_contract::change_builder::ChangeImpact::folder_item_reorder(input.folder_id),
+        ChangeImpact::folder_item_reorder(input.folder_id),
     );
     Ok(())
 }
@@ -1023,10 +824,12 @@ pub async fn reorder_folder_members(
     state: &AppState,
     input: ReorderFolderMembersInput,
 ) -> Result<(), String> {
-    state.engine.reorder_folder_items(input.folder_id, &input.moves)?;
+    state
+        .engine
+        .reorder_folder_items(input.folder_id, &input.moves)?;
     crate::events::emit_state_changed(
         "reorder_folder_members",
-        crate::runtime_contract::change_builder::ChangeImpact::folder_item_reorder(input.folder_id),
+        ChangeImpact::folder_item_reorder(input.folder_id),
     );
     Ok(())
 }

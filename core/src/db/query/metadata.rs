@@ -4,10 +4,7 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::types::{tag_display_key, TagInfo};
 
-pub fn get_implied_tags(
-    conn: &Connection,
-    entity_hash: &str,
-) -> rusqlite::Result<Vec<TagInfo>> {
+pub fn get_implied_tags(conn: &Connection, entity_hash: &str) -> rusqlite::Result<Vec<TagInfo>> {
     let entity_id: Option<i64> = conn
         .query_row(
             "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",

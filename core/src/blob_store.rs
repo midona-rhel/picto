@@ -182,6 +182,31 @@ impl BlobStore {
         Ok(())
     }
 
+    /// Enumerate stored originals as `(hash, extension)` pairs.
+    pub fn list_originals(&self) -> Vec<(String, String)> {
+        let mut out = Vec::new();
+        let f_root = self.root.join("f");
+        let mut stack = vec![f_root];
+        while let Some(dir) = stack.pop() {
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if let Some((hash, ext)) = name.split_once('.') {
+                        if hash.len() == 64 {
+                            out.push((hash.to_string(), ext.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
     /// Read an original file's bytes.
     pub fn read_original(&self, hex_hash: &str, ext: Option<&str>) -> BlobResult<Vec<u8>> {
         let path = self.original_path_with_ext(hex_hash, ext)?;
@@ -246,6 +271,65 @@ impl BlobStore {
         fs::create_dir_all(&f_dir)?;
         fs::create_dir_all(&t_dir)?;
         Ok(())
+    }
+
+    /// Delete every blob (originals and thumbnails) whose hash is not in
+    /// `referenced`, skipping files newer than `min_age` so in-flight ingest
+    /// staging is never raced. Returns (files_deleted, bytes_freed).
+    pub fn sweep_orphans(
+        &self,
+        referenced: &std::collections::HashSet<String>,
+        min_age: std::time::Duration,
+    ) -> (u64, u64) {
+        let mut deleted: u64 = 0;
+        let mut freed: u64 = 0;
+        let now = std::time::SystemTime::now();
+        for top in ["f", "t"] {
+            let top_dir = self.root.join(top);
+            let shard_a = match fs::read_dir(&top_dir) {
+                Ok(entries) => entries,
+                Err(_) => continue,
+            };
+            for ab in shard_a.flatten() {
+                let shard_b = match fs::read_dir(ab.path()) {
+                    Ok(entries) => entries,
+                    Err(_) => continue,
+                };
+                for cd in shard_b.flatten() {
+                    let files = match fs::read_dir(cd.path()) {
+                        Ok(entries) => entries,
+                        Err(_) => continue,
+                    };
+                    for file in files.flatten() {
+                        let name = file.file_name();
+                        let name_str = name.to_string_lossy();
+                        let hash = name_str.split('.').next().unwrap_or("");
+                        if hash.is_empty() || referenced.contains(hash) {
+                            continue;
+                        }
+                        let meta = match file.metadata() {
+                            Ok(meta) => meta,
+                            Err(_) => continue,
+                        };
+                        let old_enough = meta
+                            .modified()
+                            .ok()
+                            .and_then(|mtime| now.duration_since(mtime).ok())
+                            .map(|age| age >= min_age)
+                            .unwrap_or(false);
+                        if !old_enough {
+                            continue;
+                        }
+                        let size = meta.len();
+                        if fs::remove_file(file.path()).is_ok() {
+                            deleted += 1;
+                            freed += size;
+                        }
+                    }
+                }
+            }
+        }
+        (deleted, freed)
     }
 
     /// Delete both original and thumbnail for a hash.

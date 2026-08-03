@@ -47,10 +47,7 @@ pub fn get_sidebar_tree(conn: &Connection) -> rusqlite::Result<Vec<SidebarNode>>
 }
 
 pub fn get_sidebar_tree_epoch(conn: &Connection) -> rusqlite::Result<u64> {
-    let epoch: Option<i64> = conn.query_row(
-        "SELECT MAX(epoch) FROM sidebar_node",
-        [],
-        |row| row.get(0),
-    )?;
+    let epoch: Option<i64> =
+        conn.query_row("SELECT MAX(epoch) FROM sidebar_node", [], |row| row.get(0))?;
     Ok(epoch.unwrap_or(0).max(0) as u64)
 }

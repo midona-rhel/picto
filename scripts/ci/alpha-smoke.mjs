@@ -1,99 +1,258 @@
 #!/usr/bin/env node
 
-import fs from 'node:fs';
+import { spawn } from 'node:child_process';
+import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 
-function parseArgs(argv) {
-  const out = {};
-  for (let i = 0; i < argv.length; i++) {
-    const token = argv[i];
-    if (token === '--platform') out.platform = argv[++i];
-    else if (token === '--report') out.report = argv[++i];
-    else if (token === '--scope') out.scope = argv[++i];
+const SMOKE_PREFIX = '[picto-packaged-smoke] ';
+const REQUIRED_EVENTS = new Set([
+  'native-library-initialized',
+  'did-finish-load',
+  'settle-complete',
+  'native-library-closed',
+]);
+const FAILURE_EVENTS = new Set([
+  'did-fail-load',
+  'preload-error',
+  'render-process-gone',
+  'window-error',
+  'uncaught-exception',
+  'unhandled-rejection',
+  'bootstrap-failed',
+  'shutdown-failed',
+]);
+const PROCESS_TIMEOUT_MS = 30_000;
+const OUTPUT_LIMIT = 64 * 1024;
+
+export function parseArgs(argv) {
+  const args = {};
+  for (let index = 0; index < argv.length; index += 1) {
+    const key = argv[index];
+    if (key === '--platform' || key === '--report' || key === '--dist') {
+      args[key.slice(2)] = argv[++index];
+    }
   }
-  return out;
+  return args;
 }
 
-const args = parseArgs(process.argv.slice(2));
-const platform = args.platform || process.platform;
-const scope = args.scope || 'full';
-const startedAt = new Date().toISOString();
-const reportPath = args.report || path.join('artifacts', 'alpha-smoke', `${platform}.json`);
+export function normalizePlatform(platform) {
+  if (platform === 'darwin' || platform === 'mac' || platform === 'macos') return 'darwin';
+  if (platform === 'win32' || platform === 'win' || platform === 'windows') return 'win32';
+  if (platform === 'linux') return 'linux';
+  throw new Error(`Unsupported platform '${platform}'. Use darwin, linux, or win32.`);
+}
 
-const baseScenarios = [
-  {
-    id: 'launch_app',
-    label: 'Launch binary sanity',
-    command: 'npx electron --version',
-    env: {
-      // Avoid GUI/process bootstrap differences on local runners while still
-      // asserting the bundled Electron runtime is callable.
-      ELECTRON_RUN_AS_NODE: '1',
-    },
-  },
-  {
-    id: 'open_library_and_import_path',
-    label: 'Core orchestration smoke',
-    command: 'cargo test --manifest-path core/Cargo.toml --quiet --test orchestration',
-  },
-  // eventBridge tests removed — runtime sync store replaces legacy event bridge
-  {
-    id: 'status_move_trash_inbox',
-    label: 'Sidebar status move smoke',
-    command: 'npm run test -- src/components/sidebar/__tests__/Sidebar.drag-drop.test.tsx --run',
-  },
-];
+async function collectFiles(root) {
+  const files = [];
+  const directories = [root];
+  while (directories.length > 0) {
+    const directory = directories.pop();
+    const entries = await fs.readdir(directory, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) directories.push(fullPath);
+      else if (entry.isFile()) files.push(fullPath);
+    }
+  }
+  return files;
+}
 
-const scenarios =
-  scope === 'package'
-    ? baseScenarios.filter((scenario) => scenario.id !== 'open_library_and_import_path')
-    : baseScenarios;
+function hasUnpackedParent(file, platform) {
+  const parts = file.split(path.sep).map((part) => part.toLowerCase());
+  if (platform === 'darwin') return parts.some((part) => part.endsWith('.app'));
+  return parts.includes(`${platform === 'win32' ? 'win' : 'linux'}-unpacked`);
+}
 
-const results = [];
-let allPassed = true;
+export async function findUnpackedExecutable({ distDir, platform, productName = 'Picto' }) {
+  const normalizedPlatform = normalizePlatform(platform);
+  const files = await collectFiles(distDir);
+  const expectedNames = normalizedPlatform === 'win32'
+    ? new Set([`${productName}.exe`.toLowerCase()])
+    : new Set([productName.toLowerCase()]);
+  const candidates = files
+    .filter((file) => expectedNames.has(path.basename(file).toLowerCase()))
+    .filter((file) => hasUnpackedParent(file, normalizedPlatform));
 
-for (const scenario of scenarios) {
-  const t0 = Date.now();
-  const env = {
-    ...process.env,
-    ...(scenario.env || {}),
+  if (candidates.length === 0) {
+    throw new Error(`Expected an unpacked ${productName} executable in ${distDir}; found none.`);
+  }
+
+  const ranked = await Promise.all(candidates.map(async (file) => ({
+    file,
+    mtimeMs: (await fs.stat(file)).mtimeMs,
+  })));
+  ranked.sort((left, right) => {
+    if (left.mtimeMs !== right.mtimeMs) return right.mtimeMs - left.mtimeMs;
+    return left.file < right.file ? -1 : left.file > right.file ? 1 : 0;
+  });
+  return ranked[0].file;
+}
+
+export function createSmokeReportParser() {
+  let pending = '';
+  const reports = [];
+  const malformed = [];
+
+  const parseLine = (line) => {
+    if (!line.startsWith(SMOKE_PREFIX)) return;
+    try {
+      const report = JSON.parse(line.slice(SMOKE_PREFIX.length));
+      if (!report || typeof report.event !== 'string') throw new Error('missing event');
+      reports.push(report);
+    } catch {
+      malformed.push(line);
+    }
   };
-  const proc = spawnSync(scenario.command, {
-    shell: true,
-    encoding: 'utf8',
-    env,
-    maxBuffer: 1024 * 1024 * 20,
-  });
-  const durationMs = Date.now() - t0;
-  const passed = proc.status === 0;
-  allPassed = allPassed && passed;
-  results.push({
-    id: scenario.id,
-    label: scenario.label,
-    command: scenario.command,
-    passed,
-    exit_code: proc.status,
-    duration_ms: durationMs,
-    stdout_tail: (proc.stdout || '').split('\n').slice(-40).join('\n'),
-    stderr_tail: (proc.stderr || '').split('\n').slice(-40).join('\n'),
-  });
-  const status = passed ? 'PASS' : 'FAIL';
-  console.log(`[alpha-smoke] ${status} ${scenario.id} (${durationMs}ms)`);
+
+  return {
+    push(chunk) {
+      pending += chunk;
+      const lines = pending.split(/\r?\n/);
+      pending = lines.pop();
+      for (const line of lines) parseLine(line);
+    },
+    finish() {
+      if (pending) parseLine(pending);
+      pending = '';
+      return { reports, malformed };
+    },
+  };
 }
 
-const report = {
-  platform,
-  started_at: startedAt,
-  finished_at: new Date().toISOString(),
-  all_passed: allPassed,
-  scenarios: results,
-};
+function appendOutput(current, chunk) {
+  const next = current + chunk;
+  return next.length > OUTPUT_LIMIT ? next.slice(-OUTPUT_LIMIT) : next;
+}
 
-fs.mkdirSync(path.dirname(reportPath), { recursive: true });
-fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
-console.log(`[alpha-smoke] wrote report to ${reportPath}`);
+function launch(executable, env) {
+  return new Promise((resolve) => {
+    const child = spawn(executable, [], { cwd: path.dirname(executable), env, windowsHide: true });
+    const parser = createSmokeReportParser();
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    let spawnError = null;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      child.kill();
+    }, PROCESS_TIMEOUT_MS);
 
-if (!allPassed) {
-  process.exit(1);
+    child.stdout.on('data', (chunk) => {
+      const text = chunk.toString();
+      stdout = appendOutput(stdout, text);
+      parser.push(text);
+    });
+    child.stderr.on('data', (chunk) => {
+      stderr = appendOutput(stderr, chunk.toString());
+    });
+    child.on('error', (error) => {
+      spawnError = error.message;
+    });
+    child.on('close', (code, signal) => {
+      clearTimeout(timeout);
+      const parsed = parser.finish();
+      resolve({ code, signal, timedOut, spawnError, stdout, stderr, ...parsed });
+    });
+  });
+}
+
+export function evaluateRun(run) {
+  const events = new Set(run.reports.map((report) => report.event));
+  const failures = run.reports.filter((report) => FAILURE_EVENTS.has(report.event));
+  const missing = [...REQUIRED_EVENTS].filter((event) => !events.has(event));
+  const reasons = [];
+  if (run.spawnError) reasons.push(`launch failed: ${run.spawnError}`);
+  if (run.timedOut) reasons.push('process timed out');
+  if (run.code !== 0) reasons.push(`expected exit code 0, received ${run.code ?? run.signal ?? 'unknown'}`);
+  if (missing.length > 0) reasons.push(`missing smoke events: ${missing.join(', ')}`);
+  if (failures.length > 0) reasons.push(`reported failures: ${failures.map((report) => report.event).join(', ')}`);
+  if (run.malformed.length > 0) reasons.push('malformed smoke report output');
+  return reasons;
+}
+
+export async function removeTemporaryRoot(temporaryRoot, remove = fs.rm) {
+  try {
+    await remove(temporaryRoot, {
+      recursive: true,
+      force: true,
+      maxRetries: 3,
+      retryDelay: 100,
+    });
+    return { succeeded: true, error: null };
+  } catch (error) {
+    return {
+      succeeded: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  const platform = normalizePlatform(args.platform || process.platform);
+  const distDir = path.resolve(args.dist || 'dist');
+  const reportPath = path.resolve(args.report || path.join('artifacts', 'alpha-smoke', `${platform}.json`));
+  const startedAt = new Date().toISOString();
+  let temporaryRoot = null;
+  let run = null;
+  let temporaryRootCreated = false;
+  let cleanupSucceeded = true;
+  let executable = null;
+  let setupError = null;
+
+  try {
+    executable = await findUnpackedExecutable({ distDir, platform });
+    temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-packaged-smoke-'));
+    temporaryRootCreated = true;
+    const appData = path.join(temporaryRoot, 'app-data');
+    const libraryRoot = path.join(temporaryRoot, 'library');
+    await Promise.all([fs.mkdir(appData), fs.mkdir(libraryRoot)]);
+    const env = {
+      ...process.env,
+      PICTO_PACKAGED_SMOKE: '1',
+      PICTO_SMOKE_APP_DATA: appData,
+      PICTO_LIBRARY_ROOT: libraryRoot,
+    };
+    delete env.ELECTRON_RUN_AS_NODE;
+    run = await launch(executable, env);
+  } catch (error) {
+    setupError = error instanceof Error ? error.message : String(error);
+  } finally {
+    if (temporaryRoot) {
+      const cleanup = await removeTemporaryRoot(temporaryRoot);
+      cleanupSucceeded = cleanup.succeeded;
+      if (!cleanupSucceeded) setupError ??= `failed to remove temporary root: ${cleanup.error}`;
+    }
+  }
+
+  const reasons = setupError ? [setupError] : evaluateRun(run);
+  if (temporaryRootCreated && !cleanupSucceeded) reasons.push('temporary root was not removed');
+  const report = {
+    platform,
+    executable,
+    started_at: startedAt,
+    finished_at: new Date().toISOString(),
+    passed: reasons.length === 0,
+    reasons,
+    temporary_root_removed: temporaryRootCreated ? cleanupSucceeded : null,
+    exit_code: run?.code ?? null,
+    signal: run?.signal ?? null,
+    timed_out: run?.timedOut ?? false,
+    events: run?.reports ?? [],
+    stdout_tail: run?.stdout ?? '',
+    stderr_tail: run?.stderr ?? '',
+  };
+  await fs.mkdir(path.dirname(reportPath), { recursive: true });
+  await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  console.log(`[alpha-smoke] ${report.passed ? 'PASS' : 'FAIL'} ${reportPath}`);
+  if (!report.passed) {
+    for (const reason of reasons) console.error(`[alpha-smoke] ${reason}`);
+    process.exitCode = 1;
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
+  void main();
 }

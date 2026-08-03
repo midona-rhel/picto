@@ -49,13 +49,6 @@ pub fn summarize_tag_strings(tags: &[String]) -> TagSummary {
     summary
 }
 
-pub fn preview_tag_pairs(tags: &[(String, String)], limit: usize) -> Vec<String> {
-    tags.iter()
-        .take(limit)
-        .map(|(namespace, subtag)| normalize::combine_tag(namespace, subtag))
-        .collect()
-}
-
 pub fn preview_tag_strings(tags: &[String], limit: usize) -> Vec<String> {
     tags.iter().take(limit).cloned().collect()
 }

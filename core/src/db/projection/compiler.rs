@@ -116,13 +116,14 @@ fn update_cached_scope_sizes(conn: &Connection, bitmaps: &BitmapStore) {
     let _ = conn.execute("DELETE FROM temp._sf_entity", []);
 
     {
-        let mut insert_stmt = match conn.prepare("INSERT INTO temp._sf_entity (sf_id, entity_id) VALUES (?1, ?2)") {
-            Ok(stmt) => stmt,
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to prepare smart folder size temp insert");
-                return;
-            }
-        };
+        let mut insert_stmt =
+            match conn.prepare("INSERT INTO temp._sf_entity (sf_id, entity_id) VALUES (?1, ?2)") {
+                Ok(stmt) => stmt,
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to prepare smart folder size temp insert");
+                    return;
+                }
+            };
 
         for sf_id in &sf_ids {
             let bitmap = bitmaps.get(&BitmapKey::SmartFolder(*sf_id));

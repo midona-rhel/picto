@@ -111,7 +111,16 @@ pub fn compile_implied_tags(conn: &Connection, bitmaps: &BitmapStore) {
          INSERT OR IGNORE INTO entity_tag_implied (entity_id, tag_id)
          SELECT et.entity_id, ta.ancestor_id
          FROM entity_tag et
-         JOIN tag_ancestor ta ON ta.tag_id = et.tag_id;",
+         JOIN tag_ancestor ta ON ta.tag_id = et.tag_id
+         UNION
+         SELECT et.entity_id, alias.to_tag_id
+         FROM entity_tag et
+         JOIN tag_alias alias ON alias.from_tag_id = et.tag_id
+         UNION
+         SELECT et.entity_id, ta.ancestor_id
+         FROM entity_tag et
+         JOIN tag_alias alias ON alias.from_tag_id = et.tag_id
+         JOIN tag_ancestor ta ON ta.tag_id = alias.to_tag_id;",
     );
 
     // Build ImpliedTag bitmaps

@@ -1,23 +1,18 @@
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
 use crate::background_work::DeferredWorkType;
 use crate::blob_store::BlobStore;
 use crate::db::projection::compiler::CompilerPlan;
-use crate::db::types::{
-    IngestPreparedSingle, MediaEntityPatch, PerceptualHashCandidate, TAG_PROVENANCE_MANUAL,
-    TAG_PROVENANCE_UNKNOWN,
-};
+use crate::db::types::{IngestPreparedSingle, MediaEntityPatch, PerceptualHashCandidate};
 use crate::db::LibraryDatabase;
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::media_analysis;
 use crate::media_capabilities::capabilities_for_stored_media;
 use crate::subscriptions::source_adapter::ParsedMetadata;
 use crate::tags::normalize;
-use crate::types::{ImportBatchResult, ImportResult};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum IngestSourceKind {
@@ -101,77 +96,27 @@ pub struct IngestBatchSummary {
 }
 
 #[derive(Debug, Clone)]
-pub struct SubscriptionCollectionMember {
-    pub path: PathBuf,
-    pub metadata: ParsedMetadata,
-    pub skip_thumbnail: bool,
+pub struct CollectionIngestMember {
+    pub request: SingleIngestRequest,
+    pub metadata: Option<ParsedMetadata>,
 }
 
 #[derive(Debug, Clone)]
-pub struct SubscriptionCollectionOutcome {
+pub struct CollectionIngestOutcome {
     pub collection_id: Option<i64>,
     pub collection_hash: Option<String>,
     pub imported_hashes: Vec<String>,
-    pub resolved_members: Vec<ResolvedSubscriptionCollectionMember>,
+    pub resolved_members: Vec<ResolvedCollectionMember>,
     pub flags: IngestFlags,
     pub scheduled_work: usize,
 }
 
 #[derive(Debug, Clone)]
-pub struct ResolvedSubscriptionCollectionMember {
-    pub item_key: Option<String>,
-    pub page_num: Option<u32>,
-    pub canonical_post_url: Option<String>,
-    pub media_url: Option<String>,
+pub struct ResolvedCollectionMember {
+    pub metadata: Option<ParsedMetadata>,
     pub entity_hash: String,
     pub file_hash: String,
     pub disposition: SingleIngestDisposition,
-}
-
-fn collect_files_recursive(dir: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                files.extend(collect_files_recursive(&path));
-            } else if path.is_file() {
-                files.push(path);
-            }
-        }
-    }
-    files
-}
-
-fn collect_import_paths(root: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
-    let mut directories = Vec::<PathBuf>::new();
-    let mut files = Vec::<PathBuf>::new();
-    let mut stack = vec![root.to_path_buf()];
-
-    while let Some(directory) = stack.pop() {
-        let entries = fs::read_dir(&directory)
-            .map_err(|err| format!("Failed to read {}: {err}", directory.display()))?;
-        let mut child_paths = Vec::<PathBuf>::new();
-        for entry in entries {
-            let entry = entry
-                .map_err(|err| format!("Failed to read entry in {}: {err}", directory.display()))?;
-            child_paths.push(entry.path());
-        }
-        child_paths.sort();
-
-        for path in child_paths {
-            if path.is_dir() {
-                directories.push(path.clone());
-                stack.push(path);
-            } else if path.is_file() && crate::media_processing::has_supported_extension(&path) {
-                files.push(path.canonicalize().unwrap_or(path));
-            }
-        }
-    }
-
-    directories.sort();
-    files.sort();
-    Ok((directories, files))
 }
 
 pub fn dedupe_urls(mut urls: Vec<String>) -> Vec<String> {
@@ -181,18 +126,6 @@ pub fn dedupe_urls(mut urls: Vec<String>) -> Vec<String> {
         !trimmed.is_empty() && seen.insert(trimmed.to_string())
     });
     urls
-}
-
-fn merge_note_text(existing: Option<&str>, incoming: Option<&str>) -> Option<String> {
-    let existing = existing.unwrap_or("").trim();
-    let incoming = incoming.unwrap_or("").trim();
-    match (existing.is_empty(), incoming.is_empty()) {
-        (true, true) => None,
-        (true, false) => Some(incoming.to_string()),
-        (false, true) => Some(existing.to_string()),
-        (false, false) if existing.contains(incoming) => Some(existing.to_string()),
-        (false, false) => Some(format!("{existing}\n\n{incoming}")),
-    }
 }
 
 pub fn metadata_notes_text(metadata: &ParsedMetadata) -> Option<String> {
@@ -218,13 +151,6 @@ pub fn metadata_notes_text(metadata: &ParsedMetadata) -> Option<String> {
     } else {
         Some(sections.join("\n\n"))
     }
-}
-
-fn normalize_manual_tags(tag_strings: &[String]) -> Vec<String> {
-    normalize::parse_tags_ingest(tag_strings)
-        .into_iter()
-        .map(|(ns, st)| normalize::combine_tag(&ns, &st))
-        .collect()
 }
 
 pub fn normalize_subscription_tags(metadata: &ParsedMetadata) -> Vec<String> {
@@ -353,6 +279,28 @@ pub fn apply_compiler_plan(db: &LibraryDatabase, flags: &IngestFlags, folder_ids
     }
 }
 
+/// Attach fresh system-scope counts so the sidebar numbers update the moment
+/// an item lands. Without this the UI's refresh races the debounced compiler
+/// (which emits no follow-up event) and the inbox count sticks until the next
+/// unrelated event.
+pub fn attach_current_sidebar_counts(
+    db: &LibraryDatabase,
+    impact: crate::runtime_contract::change_builder::ChangeImpact,
+) -> crate::runtime_contract::change_builder::ChangeImpact {
+    match db.get_scope_counts() {
+        Ok(counts) => impact.sidebar_counts(crate::runtime_contract::state_change::SidebarCounts {
+            active: counts.active,
+            inbox: counts.inbox,
+            trash: counts.trash,
+            uncategorized: counts.uncategorized,
+            untagged: counts.untagged,
+            // Not recomputed here; negative = "leave as-is" for the frontend.
+            duplicates: -1,
+        }),
+        Err(_) => impact,
+    }
+}
+
 pub fn build_ingest_change_impact(
     summary: &IngestBatchSummary,
     extra_grid_scopes: Vec<String>,
@@ -403,49 +351,12 @@ async fn add_subscription_entity_association(
         .await;
 }
 
-async fn upsert_subscription_post_collection_association(
-    canonical_db: &LibraryDatabase,
-    subscription_id: i64,
-    site_category: &str,
-    post_id: &str,
-    collection_id: i64,
-) {
-    let Ok(state) = crate::state::get_state() else {
-        return;
-    };
-    let service = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
-        canonical_db,
-        &state.library_root,
-    );
-    let _ = service
-        .upsert_subscription_post_collection(subscription_id, site_category, post_id, collection_id)
-        .await;
-}
-
 async fn merge_existing_import_target(
     canonical_db: &LibraryDatabase,
     existing: &crate::db::query::ingest::ExistingImportTarget,
     request: &SingleIngestRequest,
 ) -> Result<SingleIngestOutcome, String> {
     let mut flags = IngestFlags::default();
-
-    if existing.status != request.initial_status {
-        if existing.status == 2 && request.initial_status != 2 {
-            canonical_db.set_entity_status(
-                &[existing.entity_id],
-                request.initial_status,
-                crate::db::types::ExpansionMode::EntityOnly,
-            )?;
-            flags.status_changed = true;
-        } else if existing.status != 2 {
-            canonical_db.set_entity_status(
-                &[existing.entity_id],
-                request.initial_status,
-                crate::db::types::ExpansionMode::EntityOnly,
-            )?;
-            flags.status_changed = true;
-        }
-    }
 
     let existing_tags = canonical_db.get_entity_tags(&existing.entity_hash)?;
     let existing_tag_set: HashSet<String> = existing_tags
@@ -468,50 +379,47 @@ async fn merge_existing_import_target(
         flags.tags_changed = true;
     }
 
-    let merged_urls: Vec<String> = {
-        let current: Vec<String> = existing
-            .source_urls_json
-            .as_deref()
-            .and_then(|raw| serde_json::from_str(raw).ok())
-            .unwrap_or_default();
-        let mut merged = current.clone();
-        let mut seen: HashSet<String> = current.into_iter().collect();
-        for url in dedupe_urls(request.source_urls.clone()) {
-            if seen.insert(url.clone()) {
-                merged.push(url);
-            }
+    let current_urls: Vec<String> = existing
+        .source_urls_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str(raw).ok())
+        .unwrap_or_default();
+    let mut merged_urls = current_urls.clone();
+    let mut seen_urls: HashSet<String> = current_urls.iter().cloned().collect();
+    for url in dedupe_urls(request.source_urls.clone()) {
+        if seen_urls.insert(url.clone()) {
+            merged_urls.push(url);
         }
-        merged
-    };
+    }
+    let urls_changed = merged_urls != current_urls;
 
-    let merged_notes = merge_note_text(existing.notes.as_deref(), request.notes.as_deref());
-    let name_change = request
+    let name_change = existing
         .name
         .as_deref()
-        .filter(|name| existing.name.as_deref().unwrap_or("") != *name)
+        .is_none_or(|name| name.trim().is_empty())
+        .then(|| request.name.as_deref().map(str::trim))
+        .flatten()
+        .filter(|name| !name.is_empty())
         .map(ToOwned::to_owned);
-    if name_change.is_some()
-        || merged_notes.as_deref() != existing.notes.as_deref()
-        || serde_json::to_string(&merged_urls).ok().as_deref()
-            != existing.source_urls_json.as_deref()
-    {
+    let notes_change = existing
+        .notes
+        .as_deref()
+        .is_none_or(|notes| notes.trim().is_empty())
+        .then(|| request.notes.as_deref().map(str::trim))
+        .flatten()
+        .filter(|notes| !notes.is_empty())
+        .map(|notes| Some(notes.to_owned()));
+    if name_change.is_some() || notes_change.is_some() || urls_changed {
         canonical_db.patch_entity_metadata(
             &[existing.entity_id],
             &MediaEntityPatch {
                 name: name_change,
-                notes: Some(merged_notes.clone()),
+                notes: notes_change,
                 rating: None,
-                source_urls: Some(merged_urls.clone()),
+                source_urls: urls_changed.then_some(merged_urls),
             },
         )?;
         flags.metadata_changed = true;
-    }
-
-    if let Some(created_at) = request.created_at.as_deref() {
-        if !created_at.trim().is_empty() && existing.date_created != created_at {
-            canonical_db.set_entity_date_created(&existing.entity_hash, created_at)?;
-            flags.metadata_changed = true;
-        }
     }
 
     if let Some(subscription_id) = request.subscription_id {
@@ -565,7 +473,9 @@ pub async fn ingest_single_path(
     if let crate::db::types::IngestDuplicateAction::ReuseExisting { entity_hash } =
         &duplicate_plan.action
     {
-        if let Some(existing) = canonical_db.get_existing_import_target_by_entity_hash(entity_hash)? {
+        if let Some(existing) =
+            canonical_db.get_existing_import_target_by_entity_hash(entity_hash)?
+        {
             return merge_existing_import_target(canonical_db, &existing, request).await;
         }
     }
@@ -597,7 +507,9 @@ pub async fn ingest_single_path(
     let mut disposition = SingleIngestDisposition::Imported;
 
     match &duplicate_plan.action {
-        crate::db::types::IngestDuplicateAction::PreferNewOverExisting { existing_entity_hash } => {
+        crate::db::types::IngestDuplicateAction::PreferNewOverExisting {
+            existing_entity_hash,
+        } => {
             let resolution = canonical_db.resolve_duplicate_pair(
                 "smart_merge",
                 existing_entity_hash,
@@ -624,8 +536,10 @@ pub async fn ingest_single_path(
     }
 
     if !duplicate_plan.review_candidates.is_empty() {
-        canonical_db
-            .record_duplicate_review_candidates(imported_target.file_id, &duplicate_plan.review_candidates)?;
+        canonical_db.record_duplicate_review_candidates(
+            imported_target.file_id,
+            &duplicate_plan.review_candidates,
+        )?;
     }
 
     Ok(SingleIngestOutcome {
@@ -653,406 +567,33 @@ pub async fn ingest_single_path(
     })
 }
 
-pub async fn import_files(
+pub async fn materialize_collection(
     canonical_db: &LibraryDatabase,
     blob_store: &BlobStore,
-    paths: Vec<String>,
-    tag_strings: Option<Vec<String>>,
-    source_urls: Option<Vec<String>>,
-    initial_status: i64,
-    library_root: Option<&Path>,
-) -> Result<(ImportBatchResult, IngestBatchSummary), String> {
-    let tag_strings = normalize_manual_tags(&tag_strings.unwrap_or_default());
-    let source_urls = dedupe_urls(source_urls.unwrap_or_default());
-    let file_paths: Vec<PathBuf> = paths
-        .into_iter()
-        .flat_map(|raw| {
-            let path = PathBuf::from(&raw);
-            let path = path.canonicalize().unwrap_or(path);
-            if path.is_dir() {
-                collect_files_recursive(&path)
-            } else {
-                vec![path]
-            }
-        })
-        .filter(|path| {
-            path.is_file()
-                && crate::media_processing::has_supported_extension(path)
-                && !library_root.is_some_and(|root| path.starts_with(root))
-        })
-        .collect();
-
-    let mut batch = ImportBatchResult {
-        imported: Vec::new(),
-        skipped: Vec::new(),
-        errors: Vec::new(),
-    };
-    let mut summary = IngestBatchSummary::default();
-
-    for path in file_paths {
-        let request = SingleIngestRequest {
-            source_kind: IngestSourceKind::Manual,
-            path,
-            tag_strings: tag_strings.clone(),
-            source_urls: source_urls.clone(),
-            name: None,
-            notes: None,
-            created_at: None,
-            initial_status,
-            skip_thumbnail: false,
-            tag_provenance_mask: TAG_PROVENANCE_MANUAL,
-            subscription_id: None,
-        };
-        match ingest_single_path(canonical_db, blob_store, &request).await {
-            Ok(outcome) => {
-                let entity_hash = outcome.entity_hash.clone();
-                summary.flags.merge(&outcome.flags);
-                summary.scheduled_work += outcome.scheduled_work;
-                let mut item_summary = IngestBatchSummary::default();
-                item_summary.flags.merge(&outcome.flags);
-                if outcome.disposition.is_imported() {
-                    summary.imported_hashes.push(outcome.entity_hash.clone());
-                    item_summary
-                        .imported_hashes
-                        .push(outcome.entity_hash.clone());
-                    batch.imported.push(ImportResult {
-                        hash: outcome.entity_hash,
-                        mime: outcome.mime,
-                        size: outcome.size,
-                        has_thumbnail: outcome.has_thumbnail,
-                        tags_applied: outcome.tags_applied,
-                    });
-                } else {
-                    summary.skipped_hashes.push(outcome.entity_hash.clone());
-                    item_summary
-                        .skipped_hashes
-                        .push(outcome.entity_hash.clone());
-                    batch.skipped.push(outcome.entity_hash);
-                }
-                apply_compiler_plan(canonical_db, &item_summary.flags, &item_summary.folder_ids);
-                crate::events::emit_state_changed(
-                    "manual_import",
-                    build_ingest_change_impact(
-                        &item_summary,
-                        vec!["system:active".into(), "system:inbox".into()],
-                    ),
-                );
-                let _ = crate::background_work::ensure_missing_color_analysis_jobs(
-                    canonical_db,
-                    &[entity_hash],
-                );
-            }
-            Err(error) => batch.errors.push(error),
-        }
-    }
-
-    Ok((batch, summary))
-}
-
-pub async fn import_folder(
-    canonical_db: &LibraryDatabase,
-    blob_store: &BlobStore,
-    path: String,
-    preserve_structure: bool,
-    parent_folder_id: Option<i64>,
-    initial_status: i64,
-) -> Result<(ImportBatchResult, IngestBatchSummary), String> {
-    let root_path = {
-        let path = PathBuf::from(path);
-        path.canonicalize().unwrap_or(path)
-    };
-    if !root_path.is_dir() {
-        return Err(format!("Folder not found: {}", root_path.display()));
-    }
-
-    let (directories, file_paths) = collect_import_paths(&root_path)?;
-    let mut batch = ImportBatchResult {
-        imported: Vec::new(),
-        skipped: Vec::new(),
-        errors: Vec::new(),
-    };
-    let mut summary = IngestBatchSummary::default();
-
-    let mut folder_cache = HashMap::<PathBuf, i64>::new();
-    if preserve_structure {
-        let root_name = root_path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
-            .unwrap_or("Imported Folder")
-            .to_string();
-        let root_folder_id =
-            canonical_db.create_folder(&root_name, parent_folder_id, None, None)?;
-        folder_cache.insert(PathBuf::new(), root_folder_id);
-        summary.folder_ids.push(root_folder_id);
-
-        for directory in directories {
-            let relative = match directory.strip_prefix(&root_path) {
-                Ok(relative) if !relative.as_os_str().is_empty() => relative.to_path_buf(),
-                _ => continue,
-            };
-            let parent_relative = relative.parent().map(Path::to_path_buf).unwrap_or_default();
-            let Some(parent_id) = folder_cache.get(&parent_relative).copied() else {
-                continue;
-            };
-            let name = directory
-                .file_name()
-                .and_then(|entry| entry.to_str())
-                .filter(|entry| !entry.is_empty())
-                .unwrap_or("Imported Folder")
-                .to_string();
-            let folder_id = canonical_db.create_folder(&name, Some(parent_id), None, None)?;
-            folder_cache.insert(relative, folder_id);
-            summary.folder_ids.push(folder_id);
-        }
-    }
-
-    for file_path in file_paths {
-        let target_folder_id = if preserve_structure {
-            let relative_parent = file_path
-                .strip_prefix(&root_path)
-                .ok()
-                .and_then(|relative| relative.parent())
-                .map(Path::to_path_buf)
-                .unwrap_or_default();
-            folder_cache.get(&relative_parent).copied()
-        } else {
-            parent_folder_id
-        };
-
-        let request = SingleIngestRequest {
-            source_kind: IngestSourceKind::Manual,
-            path: file_path,
-            tag_strings: Vec::new(),
-            source_urls: Vec::new(),
-            name: None,
-            notes: None,
-            created_at: None,
-            initial_status,
-            skip_thumbnail: false,
-            tag_provenance_mask: TAG_PROVENANCE_MANUAL,
-            subscription_id: None,
-        };
-        match ingest_single_path(canonical_db, blob_store, &request).await {
-            Ok(outcome) => {
-                let entity_hash = outcome.entity_hash.clone();
-                summary.flags.merge(&outcome.flags);
-                summary.scheduled_work += outcome.scheduled_work;
-                let mut item_summary = IngestBatchSummary::default();
-                item_summary.flags.merge(&outcome.flags);
-                if let Some(folder_id) = target_folder_id {
-                    let ids = canonical_db.resolve_entity_hashes(&[outcome.entity_hash.clone()])?;
-                    if !ids.is_empty() {
-                        canonical_db.add_folder_members(
-                            folder_id,
-                            &ids,
-                            crate::db::types::ExpansionMode::EntityOnly,
-                        )?;
-                        if !summary.folder_ids.contains(&folder_id) {
-                            summary.folder_ids.push(folder_id);
-                        }
-                        item_summary.folder_ids.push(folder_id);
-                    }
-                }
-                if outcome.disposition.is_imported() {
-                    summary.imported_hashes.push(outcome.entity_hash.clone());
-                    item_summary
-                        .imported_hashes
-                        .push(outcome.entity_hash.clone());
-                    batch.imported.push(ImportResult {
-                        hash: outcome.entity_hash,
-                        mime: outcome.mime,
-                        size: outcome.size,
-                        has_thumbnail: outcome.has_thumbnail,
-                        tags_applied: outcome.tags_applied,
-                    });
-                } else {
-                    summary.skipped_hashes.push(outcome.entity_hash.clone());
-                    item_summary
-                        .skipped_hashes
-                        .push(outcome.entity_hash.clone());
-                    batch.skipped.push(outcome.entity_hash);
-                }
-                apply_compiler_plan(canonical_db, &item_summary.flags, &item_summary.folder_ids);
-                crate::events::emit_state_changed(
-                    "import_folder",
-                    build_ingest_change_impact(
-                        &item_summary,
-                        vec!["system:active".into(), "system:inbox".into()],
-                    ),
-                );
-                let _ = crate::background_work::ensure_missing_color_analysis_jobs(
-                    canonical_db,
-                    &[entity_hash],
-                );
-            }
-            Err(error) => batch.errors.push(error),
-        }
-    }
-
-    summary.folder_ids.sort_unstable();
-    summary.folder_ids.dedup();
-    Ok((batch, summary))
-}
-
-pub async fn import_watch_path(
-    canonical_db: &LibraryDatabase,
-    blob_store: &BlobStore,
-    root_folder_id: i64,
-    root_path: &Path,
-    watch_subfolders: bool,
-    watch_import_status_mode: &str,
-    path: &Path,
-) -> Result<IngestBatchSummary, String> {
-    let relative_parent = path
-        .strip_prefix(root_path)
-        .ok()
-        .and_then(|relative| relative.parent())
-        .unwrap_or_else(|| Path::new(""));
-    if !watch_subfolders && !relative_parent.as_os_str().is_empty() {
-        return Ok(IngestBatchSummary::default());
-    }
-
-    let target_folder_id = if relative_parent.as_os_str().is_empty() {
-        root_folder_id
-    } else {
-        let mut current_folder_id = root_folder_id;
-        for component in relative_parent.components() {
-            let Component::Normal(name) = component else {
-                continue;
-            };
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            let child_id = match canonical_db.find_child_folder_id(current_folder_id, name)? {
-                Some(folder_id) => folder_id,
-                None => canonical_db.create_folder(name, Some(current_folder_id), None, None)?,
-            };
-            current_folder_id = child_id;
-        }
-        current_folder_id
-    };
-
-    let initial_status = match watch_import_status_mode {
-        "inbox" => 0,
-        "active" => 1,
-        "inherit" => {
-            let default_mode = crate::state::get_state()
-                .map(|state| state.settings.get().watch_folder_default_status)
-                .unwrap_or_else(|_| "inbox".to_string());
-            if default_mode == "active" {
-                1
-            } else {
-                0
-            }
-        }
-        other => return Err(format!("Invalid watch import status mode: {other}")),
-    };
-
-    let request = SingleIngestRequest {
-        source_kind: IngestSourceKind::WatchFolder,
-        path: path.to_path_buf(),
-        tag_strings: Vec::new(),
-        source_urls: Vec::new(),
-        name: None,
-        notes: None,
-        created_at: None,
-        initial_status,
-        skip_thumbnail: false,
-        tag_provenance_mask: TAG_PROVENANCE_UNKNOWN,
-        subscription_id: None,
-    };
-    let outcome = ingest_single_path(canonical_db, blob_store, &request).await?;
-    let mut summary = IngestBatchSummary::default();
-    summary.flags.merge(&outcome.flags);
-    summary.scheduled_work += outcome.scheduled_work;
-    summary.folder_ids.push(target_folder_id);
-    let ids = canonical_db.resolve_entity_hashes(&[outcome.entity_hash.clone()])?;
-    if !ids.is_empty() {
-        canonical_db.add_folder_members(
-            target_folder_id,
-            &ids,
-            crate::db::types::ExpansionMode::EntityOnly,
-        )?;
-    }
-    if outcome.disposition.is_imported() {
-        summary.imported_hashes.push(outcome.entity_hash);
-    } else {
-        summary.skipped_hashes.push(outcome.entity_hash);
-    }
-    let _ = crate::background_work::ensure_missing_color_analysis_jobs(
-        canonical_db,
-        &summary
-            .imported_hashes
-            .iter()
-            .chain(summary.skipped_hashes.iter())
-            .cloned()
-            .collect::<Vec<_>>(),
-    );
-    Ok(summary)
-}
-
-pub async fn ingest_subscription_item(
-    canonical_db: &LibraryDatabase,
-    blob_store: &BlobStore,
-    file_path: &Path,
-    metadata: &ParsedMetadata,
-    subscription_id: i64,
-    skip_thumbnail: bool,
-    initial_status: i64,
-) -> Result<SingleIngestOutcome, String> {
-    let request = SingleIngestRequest {
-        source_kind: IngestSourceKind::Subscription,
-        path: file_path.to_path_buf(),
-        tag_strings: normalize_subscription_tags(metadata),
-        source_urls: dedupe_urls(metadata.source_urls.clone()),
-        name: crate::subscriptions::import_policy::preferred_import_name(metadata),
-        notes: metadata_notes_text(metadata),
-        created_at: metadata.created_at.clone(),
-        initial_status,
-        skip_thumbnail,
-        tag_provenance_mask: TAG_PROVENANCE_UNKNOWN,
-        subscription_id: Some(subscription_id),
-    };
-    ingest_single_path(canonical_db, blob_store, &request).await
-}
-
-pub async fn materialize_subscription_collection(
-    canonical_db: &LibraryDatabase,
-    blob_store: &BlobStore,
-    subscription_id: i64,
-    site_category: &str,
-    post_id: &str,
     preferred_name: &str,
-    members: &[SubscriptionCollectionMember],
+    members: &[CollectionIngestMember],
     existing_collection_id: Option<i64>,
-    force_collection: bool,
-) -> Result<SubscriptionCollectionOutcome, String> {
+    prior_member_hashes: &[String],
+) -> Result<CollectionIngestOutcome, String> {
     let mut existing_member_ids = Vec::new();
-    let mut new_members =
-        Vec::<(IngestPreparedSingle, ResolvedSubscriptionCollectionMember)>::new();
-    let mut resolved_members = Vec::<ResolvedSubscriptionCollectionMember>::new();
+    // Members materialized by an earlier partial queue join this collection
+    // during a later queue attempt.
+    for hash in prior_member_hashes {
+        if let Some(existing) = canonical_db.get_existing_import_target_by_entity_hash(hash)? {
+            existing_member_ids.push(existing.entity_id);
+        }
+    }
+    let mut new_members = Vec::<(IngestPreparedSingle, usize, ResolvedCollectionMember)>::new();
+    let mut resolved_members = vec![None; members.len()];
     let mut pending_review_pairs = Vec::<(String, Vec<PerceptualHashCandidate>)>::new();
     let mut pending_exact_upgrades = Vec::<(String, String)>::new();
     let mut imported_hashes = Vec::new();
     let mut flags = IngestFlags::default();
     let mut scheduled_work = 0usize;
 
-    for member in members {
-        let request = SingleIngestRequest {
-            source_kind: IngestSourceKind::Subscription,
-            path: member.path.clone(),
-            tag_strings: normalize_subscription_tags(&member.metadata),
-            source_urls: dedupe_urls(member.metadata.source_urls.clone()),
-            name: crate::subscriptions::import_policy::preferred_import_name(&member.metadata),
-            notes: metadata_notes_text(&member.metadata),
-            created_at: member.metadata.created_at.clone(),
-            initial_status: 0,
-            skip_thumbnail: member.skip_thumbnail,
-            tag_provenance_mask: TAG_PROVENANCE_UNKNOWN,
-            subscription_id: Some(subscription_id),
-        };
-        let options = build_import_options(&request);
+    for (member_index, member) in members.iter().enumerate() {
+        let request = &member.request;
+        let options = build_import_options(request);
         let prepared_blob =
             ImportPipeline::prepare_blob_import(blob_store, &request.path, &options)
                 .await
@@ -1063,11 +604,8 @@ pub async fn materialize_subscription_collection(
             let merge = merge_existing_import_target(canonical_db, &existing, &request).await?;
             flags.merge(&merge.flags);
             existing_member_ids.push(existing.entity_id);
-            resolved_members.push(ResolvedSubscriptionCollectionMember {
-                item_key: member.metadata.item_key.clone(),
-                page_num: member.metadata.page_num,
-                canonical_post_url: member.metadata.canonical_post_url.clone(),
-                media_url: member.metadata.media_url.clone(),
+            resolved_members[member_index] = Some(ResolvedCollectionMember {
+                metadata: member.metadata.clone(),
                 entity_hash: existing.entity_hash.clone(),
                 file_hash: existing.file_hash.clone(),
                 disposition: SingleIngestDisposition::Reused,
@@ -1084,7 +622,8 @@ pub async fn materialize_subscription_collection(
         prepared_single.perceptual_hash = imported_phash.clone();
 
         let threshold = duplicate_review_distance_threshold();
-        let duplicate_plan = canonical_db.plan_ingest_duplicate_review(&prepared_single, threshold)?;
+        let duplicate_plan =
+            canonical_db.plan_ingest_duplicate_review(&prepared_single, threshold)?;
 
         if let crate::db::types::IngestDuplicateAction::ReuseExisting { entity_hash } =
             &duplicate_plan.action
@@ -1095,11 +634,8 @@ pub async fn materialize_subscription_collection(
                 let merge = merge_existing_import_target(canonical_db, &existing, &request).await?;
                 flags.merge(&merge.flags);
                 existing_member_ids.push(existing.entity_id);
-                resolved_members.push(ResolvedSubscriptionCollectionMember {
-                    item_key: member.metadata.item_key.clone(),
-                    page_num: member.metadata.page_num,
-                    canonical_post_url: member.metadata.canonical_post_url.clone(),
-                    media_url: member.metadata.media_url.clone(),
+                resolved_members[member_index] = Some(ResolvedCollectionMember {
+                    metadata: member.metadata.clone(),
                     entity_hash: existing.entity_hash.clone(),
                     file_hash: existing.file_hash.clone(),
                     disposition: SingleIngestDisposition::Reused,
@@ -1125,7 +661,6 @@ pub async fn materialize_subscription_collection(
             ));
         }
 
-        imported_hashes.push(prepared_single.entity_hash.clone());
         scheduled_work += work_types_for_new_ingest(
             &prepared_single.mime_type,
             prepared_single.frame_count,
@@ -1135,11 +670,9 @@ pub async fn materialize_subscription_collection(
         .len();
         new_members.push((
             prepared_single.clone(),
-            ResolvedSubscriptionCollectionMember {
-                item_key: member.metadata.item_key.clone(),
-                page_num: member.metadata.page_num,
-                canonical_post_url: member.metadata.canonical_post_url.clone(),
-                media_url: member.metadata.media_url.clone(),
+            member_index,
+            ResolvedCollectionMember {
+                metadata: member.metadata.clone(),
                 entity_hash: prepared_single.entity_hash.clone(),
                 file_hash: prepared_single.entity_hash.clone(),
                 disposition: SingleIngestDisposition::Imported,
@@ -1149,64 +682,23 @@ pub async fn materialize_subscription_collection(
 
     let total_member_count = new_members.len() + existing_member_ids.len();
     if total_member_count == 0 {
-        return Ok(SubscriptionCollectionOutcome {
+        return Ok(CollectionIngestOutcome {
             collection_id: None,
             collection_hash: None,
             imported_hashes,
-            resolved_members,
+            resolved_members: resolved_members.into_iter().flatten().collect(),
             flags,
-            scheduled_work,
-        });
-    }
-
-    if existing_collection_id.is_none() && total_member_count < 2 && !force_collection {
-        if let Some((member, mut identity)) = new_members.into_iter().next() {
-            let work_types = work_types_for_new_ingest(
-                &member.mime_type,
-                member.frame_count,
-                !member.has_thumbnail && !member.skip_thumbnail,
-                member.perceptual_hash.is_some(),
-            );
-            if let Err(error) = canonical_db.insert_ingested_single(&member, &work_types) {
-                if let Some(existing) = canonical_db
-                    .get_existing_import_target_by_file_hash_write(&member.entity_hash)?
-                {
-                    identity.entity_hash = existing.entity_hash.clone();
-                    identity.file_hash = existing.file_hash.clone();
-                    identity.disposition = SingleIngestDisposition::Reused;
-                } else {
-                    return Err(error);
-                }
-            }
-            resolved_members.push(identity);
-        }
-        let _ = crate::background_work::ensure_missing_color_analysis_jobs(
-            canonical_db,
-            &resolved_members
-                .iter()
-                .map(|member| member.entity_hash.clone())
-                .collect::<Vec<_>>(),
-        );
-        return Ok(SubscriptionCollectionOutcome {
-            collection_id: None,
-            collection_hash: None,
-            imported_hashes,
-            resolved_members,
-            flags: IngestFlags {
-                status_changed: true,
-                ..flags
-            },
             scheduled_work,
         });
     }
 
     let prepared_members: Vec<IngestPreparedSingle> = new_members
         .iter()
-        .map(|(member, _)| member.clone())
+        .map(|(member, _, _)| member.clone())
         .collect();
-    let mut new_member_results: Vec<ResolvedSubscriptionCollectionMember> = new_members
+    let mut new_member_results: Vec<(usize, ResolvedCollectionMember)> = new_members
         .into_iter()
-        .map(|(_, identity)| identity)
+        .map(|(_, member_index, identity)| (member_index, identity))
         .collect();
     let (collection_id, collection_hash, new_hashes) = canonical_db
         .materialize_ingested_collection(
@@ -1214,7 +706,6 @@ pub async fn materialize_subscription_collection(
             &prepared_members,
             &existing_member_ids,
             existing_collection_id,
-            force_collection,
         )?;
 
     let batch: Vec<(String, Vec<DeferredWorkType>)> = prepared_members
@@ -1234,15 +725,6 @@ pub async fn materialize_subscription_collection(
         canonical_db.ensure_deferred_jobs_present_batch(batch)?;
     }
 
-    upsert_subscription_post_collection_association(
-        canonical_db,
-        subscription_id,
-        site_category,
-        post_id,
-        collection_id,
-    )
-    .await;
-
     for (new_hash, candidates) in &pending_review_pairs {
         let Some(new_target) = canonical_db.get_existing_import_target_by_entity_hash(new_hash)?
         else {
@@ -1259,7 +741,7 @@ pub async fn materialize_subscription_collection(
             Some(collection_id),
         )?;
         if let Some(winner_hash) = resolution.winner_hash.clone() {
-            for member in &mut new_member_results {
+            for (_, member) in &mut new_member_results {
                 if member.entity_hash == *new_hash {
                     member.entity_hash = winner_hash.clone();
                     if let Some(winner) =
@@ -1276,7 +758,13 @@ pub async fn materialize_subscription_collection(
     }
 
     imported_hashes.extend(new_hashes);
-    resolved_members.extend(new_member_results);
+    for (member_index, member) in new_member_results {
+        resolved_members[member_index] = Some(member);
+    }
+    let resolved_members: Vec<ResolvedCollectionMember> = resolved_members
+        .into_iter()
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| "collection materialization lost a member result".to_string())?;
     flags.status_changed = true;
     let _ = crate::background_work::ensure_missing_color_analysis_jobs(
         canonical_db,
@@ -1285,7 +773,7 @@ pub async fn materialize_subscription_collection(
             .map(|member| member.entity_hash.clone())
             .collect::<Vec<_>>(),
     );
-    Ok(SubscriptionCollectionOutcome {
+    Ok(CollectionIngestOutcome {
         collection_id: Some(collection_id),
         collection_hash: Some(collection_hash),
         imported_hashes,
@@ -1298,17 +786,17 @@ pub async fn materialize_subscription_collection(
 #[cfg(test)]
 mod tests {
     use super::{
-        ingest_single_path, materialize_subscription_collection, normalize_subscription_tags,
-        IngestSourceKind, SingleIngestDisposition, SingleIngestRequest,
-        SubscriptionCollectionMember,
+        ingest_single_path, materialize_collection, normalize_subscription_tags,
+        CollectionIngestMember, IngestSourceKind, SingleIngestDisposition, SingleIngestRequest,
     };
     use crate::blob_store::BlobStore;
+    use crate::db::types::{ExpansionMode, MediaEntityPatch};
     use crate::db::LibraryDatabase;
     use crate::duplicates::phash::DEFAULT_DISTANCE_THRESHOLD;
     use crate::media_processing::compute_phash_base64;
     use crate::subscriptions::source_adapter::ParsedMetadata;
-    use img_hash::ImageHash;
     use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
+    use img_hash::ImageHash;
     use std::fs;
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
@@ -1326,7 +814,9 @@ mod tests {
         };
 
         let normalized = normalize_subscription_tags(&metadata);
-        assert!(normalized.iter().any(|tag| tag == "general:http://example.com"));
+        assert!(normalized
+            .iter()
+            .any(|tag| tag == "general:http://example.com"));
         assert!(normalized.iter().any(|tag| tag == "general:dragon:quest"));
         assert!(normalized.iter().any(|tag| tag == "creator:foo_artist"));
     }
@@ -1360,7 +850,9 @@ mod tests {
 
     fn encode_image(image: &DynamicImage, format: ImageFormat) -> Vec<u8> {
         let mut bytes = Vec::new();
-        image.write_to(&mut Cursor::new(&mut bytes), format).expect("encode image");
+        image
+            .write_to(&mut Cursor::new(&mut bytes), format)
+            .expect("encode image");
         bytes
     }
 
@@ -1382,7 +874,12 @@ mod tests {
             let checker = ((x / 8) + (y / 8)) % 2 == 0;
             let base: u8 = if checker { 220 } else { 40 };
             let tint = ((x + y) % 17) as u8;
-            *pixel = Rgba([base, base.saturating_sub(tint / 2), base.saturating_add(tint / 3), 255]);
+            *pixel = Rgba([
+                base,
+                base.saturating_sub(tint / 2),
+                base.saturating_add(tint / 3),
+                255,
+            ]);
         }
         DynamicImage::ImageRgba8(buffer)
     }
@@ -1494,8 +991,14 @@ mod tests {
             .expect("second ingest");
 
         assert!(first.disposition.is_imported());
-        assert!(matches!(second.disposition, SingleIngestDisposition::Reused));
+        assert!(matches!(
+            second.disposition,
+            SingleIngestDisposition::Reused
+        ));
         assert_eq!(first.entity_hash, second.entity_hash);
+        assert!(!second.flags.tags_changed);
+        assert!(!second.flags.metadata_changed);
+        assert!(!second.flags.status_changed);
         db.with_read(|conn| {
             let entity_count: i64 =
                 conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?;
@@ -1503,9 +1006,110 @@ mod tests {
                 conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| row.get(0))?;
             assert_eq!(entity_count, 1);
             assert_eq!(file_count, 1);
+            let source_urls_json: Option<String> = conn.query_row(
+                "SELECT source_urls_json FROM media_entity WHERE entity_id = ?1",
+                [first.entity_id.expect("inserted entity id")],
+                |row| row.get(0),
+            )?;
+            assert!(source_urls_json.is_none());
             Ok(())
         })
         .expect("inspect exact hash reuse");
+    }
+
+    #[tokio::test]
+    async fn reimport_only_enriches_reused_entity_metadata() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+        let source_path = source_root.join("reimport.png");
+        write_image(&source_path, &patterned_image(96, 96), ImageFormat::Png);
+
+        let first = ingest_single_path(&db, &blob_store, &request_for_path(&source_path))
+            .await
+            .expect("initial ingest");
+        let entity_id = first.entity_id.expect("inserted entity id");
+        db.patch_entity_metadata(
+            &[entity_id],
+            &MediaEntityPatch {
+                name: Some("existing name".to_string()),
+                notes: Some(Some("existing notes".to_string())),
+                rating: Some(4),
+                source_urls: Some(vec!["https://existing.example/post".to_string()]),
+            },
+        )
+        .expect("seed existing metadata");
+        db.set_entity_status(&[entity_id], 2, ExpansionMode::EntityOnly)
+            .expect("seed existing status");
+        db.set_entity_date_created(&first.entity_hash, "2001-02-03T04:05:06Z")
+            .expect("seed existing creation date");
+
+        let mut reimport = request_for_path(&source_path);
+        reimport.initial_status = 1;
+        reimport.tag_strings = vec!["general:incoming".to_string()];
+        reimport.source_urls = vec![
+            "https://existing.example/post".to_string(),
+            "https://incoming.example/post".to_string(),
+            "https://incoming.example/post".to_string(),
+        ];
+        reimport.name = Some("incoming name".to_string());
+        reimport.notes = Some("incoming notes".to_string());
+        reimport.created_at = Some("2024-05-06T07:08:09Z".to_string());
+
+        let reused = ingest_single_path(&db, &blob_store, &reimport)
+            .await
+            .expect("reimport");
+        assert!(matches!(
+            reused.disposition,
+            SingleIngestDisposition::Reused
+        ));
+        assert_eq!(reused.entity_hash, first.entity_hash);
+        assert!(reused.flags.tags_changed);
+        assert!(reused.flags.metadata_changed);
+        assert!(!reused.flags.status_changed);
+
+        let tags = db.get_entity_tags(&first.entity_hash).expect("read tags");
+        assert!(tags
+            .iter()
+            .any(|tag| tag.namespace == "general" && tag.subtag == "incoming"));
+        db.with_read(|conn| {
+            let (status, name, notes, rating, urls_json, date_created): (
+                i64,
+                Option<String>,
+                Option<String>,
+                Option<i64>,
+                Option<String>,
+                String,
+            ) = conn.query_row(
+                "SELECT status, name, notes, rating, source_urls_json, date_created
+                 FROM media_entity WHERE entity_id = ?1",
+                [entity_id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                        row.get(5)?,
+                    ))
+                },
+            )?;
+            assert_eq!(status, 2);
+            assert_eq!(name.as_deref(), Some("existing name"));
+            assert_eq!(notes.as_deref(), Some("existing notes"));
+            assert_eq!(rating, Some(4));
+            assert_eq!(date_created, "2001-02-03T04:05:06Z");
+            let urls: Vec<String> =
+                serde_json::from_str(&urls_json.expect("source URLs")).expect("valid source URLs");
+            assert_eq!(
+                urls,
+                vec![
+                    "https://existing.example/post".to_string(),
+                    "https://incoming.example/post".to_string(),
+                ]
+            );
+            Ok(())
+        })
+        .expect("verify reimport contract");
     }
 
     #[tokio::test]
@@ -1533,16 +1137,14 @@ mod tests {
         assert!(first.disposition.is_imported());
         assert!(second.disposition.is_imported());
         assert_eq!(db.get_duplicate_count().expect("duplicate count"), 0);
-        assert!(
-            db.get_existing_import_target_by_file_hash(&first.file_hash)
-                .expect("old target")
-                .is_none()
-        );
-        assert!(
-            db.get_existing_import_target_by_file_hash(&second.file_hash)
-                .expect("new target")
-                .is_some()
-        );
+        assert!(db
+            .get_existing_import_target_by_file_hash(&first.file_hash)
+            .expect("old target")
+            .is_none());
+        assert!(db
+            .get_existing_import_target_by_file_hash(&second.file_hash)
+            .expect("new target")
+            .is_some());
         db.with_read(|conn| {
             let entity_count: i64 =
                 conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?;
@@ -1567,8 +1169,8 @@ mod tests {
 
         let first_phash =
             compute_phash_base64(&fs::read(&first_path).expect("read first")).expect("first phash");
-        let second_phash =
-            compute_phash_base64(&fs::read(&second_path).expect("read second")).expect("second phash");
+        let second_phash = compute_phash_base64(&fs::read(&second_path).expect("read second"))
+            .expect("second phash");
         assert_eq!(first_phash, second_phash);
 
         let first = ingest_single_path(&db, &blob_store, &request_for_path(&first_path))
@@ -1581,10 +1183,11 @@ mod tests {
         assert!(first.disposition.is_imported());
         assert!(second.disposition.is_imported());
         db.with_read(|conn| {
-            let count: i64 =
-                conn.query_row("SELECT COUNT(*) FROM duplicate WHERE status = 'detected'", [], |row| {
-                    row.get(0)
-                })?;
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM duplicate WHERE status = 'detected'",
+                [],
+                |row| row.get(0),
+            )?;
             let entity_count: i64 =
                 conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?;
             assert_eq!(count, 1);
@@ -1605,11 +1208,13 @@ mod tests {
         write_image(&second_path, &near, ImageFormat::Png);
 
         let first_hash = ImageHash::<Vec<u8>>::from_base64(
-            &compute_phash_base64(&fs::read(&first_path).expect("read first")).expect("first phash"),
+            &compute_phash_base64(&fs::read(&first_path).expect("read first"))
+                .expect("first phash"),
         )
         .expect("parse first phash");
         let second_hash = ImageHash::<Vec<u8>>::from_base64(
-            &compute_phash_base64(&fs::read(&second_path).expect("read second")).expect("second phash"),
+            &compute_phash_base64(&fs::read(&second_path).expect("read second"))
+                .expect("second phash"),
         )
         .expect("parse second phash");
         let distance = first_hash.dist(&second_hash);
@@ -1626,27 +1231,39 @@ mod tests {
         assert!(first.disposition.is_imported());
         assert!(second.disposition.is_imported());
         db.with_read(|conn| {
-            let count: i64 =
-                conn.query_row("SELECT COUNT(*) FROM duplicate WHERE status = 'detected'", [], |row| {
-                    row.get(0)
-                })?;
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM duplicate WHERE status = 'detected'",
+                [],
+                |row| row.get(0),
+            )?;
             assert_eq!(count, 1);
             Ok(())
         })
         .expect("inspect near phash review");
     }
 
-    fn collection_member(path: &Path, page_num: u32) -> SubscriptionCollectionMember {
-        SubscriptionCollectionMember {
-            path: path.to_path_buf(),
-            metadata: ParsedMetadata {
+    fn collection_member(path: &Path, page_num: u32) -> CollectionIngestMember {
+        CollectionIngestMember {
+            request: SingleIngestRequest {
+                source_kind: IngestSourceKind::Subscription,
+                path: path.to_path_buf(),
+                tag_strings: Vec::new(),
+                source_urls: Vec::new(),
+                name: None,
+                notes: None,
+                created_at: None,
+                initial_status: 0,
+                skip_thumbnail: true,
+                tag_provenance_mask: 0,
+                subscription_id: Some(1),
+            },
+            metadata: Some(ParsedMetadata {
                 post_id: Some("777".to_string()),
                 category: Some("danbooru".to_string()),
                 page_num: Some(page_num),
                 page_count: Some(3),
                 ..Default::default()
-            },
-            skip_thumbnail: true,
+            }),
         }
     }
 
@@ -1662,7 +1279,49 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subscription_collection_member_count_tracks_incremental_appends() {
+    async fn collection_materialization_preserves_input_order_for_mixed_results() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+        let existing_path = source_root.join("existing.png");
+        let new_path = source_root.join("new.png");
+        write_image(&existing_path, &solid_image(96, 96, 40), ImageFormat::Png);
+        write_image(&new_path, &solid_image(96, 96, 220), ImageFormat::Png);
+
+        let existing = ingest_single_path(&db, &blob_store, &request_for_path(&existing_path))
+            .await
+            .expect("seed existing media");
+        let outcome = materialize_collection(
+            &db,
+            &blob_store,
+            "mixed collection",
+            &[
+                collection_member(&new_path, 0),
+                collection_member(&existing_path, 1),
+            ],
+            None,
+            &[],
+        )
+        .await
+        .expect("materialize mixed collection");
+
+        assert_eq!(outcome.resolved_members.len(), 2);
+        assert!(outcome.resolved_members[0].disposition.is_imported());
+        assert_eq!(
+            outcome.resolved_members[1].entity_hash,
+            existing.entity_hash
+        );
+        assert!(matches!(
+            outcome.resolved_members[1].disposition,
+            SingleIngestDisposition::Reused
+        ));
+        assert_eq!(outcome.imported_hashes.len(), 1);
+        assert_eq!(
+            outcome.imported_hashes[0],
+            outcome.resolved_members[0].entity_hash
+        );
+    }
+
+    #[tokio::test]
+    async fn collection_materialization_creates_one_member_and_appends_incrementally() {
         let (_tmp, db, blob_store, source_root) = open_test_library();
 
         let first_path = source_root.join("p0.png");
@@ -1672,35 +1331,32 @@ mod tests {
         write_image(&second_path, &solid_image(96, 96, 30), ImageFormat::Png);
         write_image(&third_path, &solid_image(96, 96, 200), ImageFormat::Png);
 
-        let outcome = materialize_subscription_collection(
+        let outcome = materialize_collection(
             &db,
             &blob_store,
-            1,
-            "danbooru",
-            "777",
             "post 777",
-            &[collection_member(&first_path, 0), collection_member(&second_path, 1)],
+            &[collection_member(&first_path, 0)],
             None,
-            true,
+            &[],
         )
         .await
         .expect("materialize initial collection");
 
         let collection_id = outcome.collection_id.expect("collection created");
-        assert_eq!(read_member_count(&db, collection_id), 2);
+        assert_eq!(read_member_count(&db, collection_id), 1);
 
         // A later run discovers one more page of the same post — the member
         // appends to the existing collection and the count follows.
-        let outcome2 = materialize_subscription_collection(
+        let outcome2 = materialize_collection(
             &db,
             &blob_store,
-            1,
-            "danbooru",
-            "777",
             "post 777",
-            &[collection_member(&third_path, 2)],
+            &[
+                collection_member(&second_path, 1),
+                collection_member(&third_path, 2),
+            ],
             Some(collection_id),
-            true,
+            &[],
         )
         .await
         .expect("append to existing collection");

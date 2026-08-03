@@ -63,10 +63,27 @@ mod tests {
         let db = open_db();
         let folder_id = db.create_folder("Art", None, None, None).unwrap();
         let file_id = db
-            .insert_file("hash_r", "image/png", 5, None, None, None, None, false, "2026-01-01")
+            .insert_file(
+                "hash_r",
+                "image/png",
+                5,
+                None,
+                None,
+                None,
+                None,
+                false,
+                "2026-01-01",
+            )
             .unwrap();
         let entity_id = db
-            .insert_single("hash_r", file_id, Some("img"), 1, "2026-01-01", "2026-01-01")
+            .insert_single(
+                "hash_r",
+                file_id,
+                Some("img"),
+                1,
+                "2026-01-01",
+                "2026-01-01",
+            )
             .unwrap();
         db.add_folder_members(
             folder_id,

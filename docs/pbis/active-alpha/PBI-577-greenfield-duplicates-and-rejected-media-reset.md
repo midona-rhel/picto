@@ -3,6 +3,20 @@
 ## Priority
 P1
 
+## Current audit status (2026-08-03)
+
+Backend and rebuilt manager implemented; app smoke remains. Canonical ingest computes pHash,
+exact hash reuse exists, exact/near pHash behavior has tests, duplicate decisions are persisted,
+and cross-collection resolution requires an explicit owner. The rebuilt frontend now has a typed
+duplicate API, paginated comparison screen, scan/loading/error/empty states, all five decisions,
+keyboard navigation, and explicit collection-owner conflict handling. `system:duplicates` routes
+through the manager surface instead of the unavailable placeholder.
+
+Do not add another duplicate controller or global workspace store unless a second consumer needs
+one. The screen owns transient review state and calls the typed API directly. Close and archive
+this PBI after an Electron smoke pass proves scanning, media loading, each decision, sidebar count
+refresh, and the collection-conflict dialog against a real library.
+
 ## AI-generated caveat
 This document is based on an in-repo audit of the current duplicate scanner, perceptual-hash code, duplicate-pair storage, and manual review flow. It intentionally excludes a rejected-media database because the product model does not want one.
 
@@ -12,11 +26,8 @@ This document is based on an in-repo audit of the current duplicate scanner, per
 - `Activated` when the live duplicate path uses the new subsystem by default.
 - `Legacy removed` when replaced duplicate/review paths for that activated slice are deleted.
 
-Activation depends on:
-- [PBI-567-greenfield-library-database-reset.md](./docs/pbis/active-alpha/PBI-567-greenfield-library-database-reset.md)
-- [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
-- [PBI-576-greenfield-deferred-work-and-background-processing-reset.md](./docs/pbis/active-alpha/PBI-576-greenfield-deferred-work-and-background-processing-reset.md)
-- [PBI-573-greenfield-import-and-ingest-reset.md](./docs/pbis/active-alpha/PBI-573-greenfield-import-and-ingest-reset.md) where exact hash and pHash ingest decisions are part of the activated flow
+The database, engine, ingest, and background-work foundations are live. Their historical plans
+are archived and are no longer scheduling dependencies.
 
 ## Problem
 The current duplicates system is still too close to the old file-table implementation and not yet aligned tightly enough with the canonical entity/file model.
@@ -101,15 +112,11 @@ The new model should include explicit records such as:
 
 Exact names can improve, but the domain split is required.
 
-## Relationship to other reset PBIs
-- PBI-567 defines one file to one single entity
-- PBI-573 ingest must consult exact file hash and exact/near pHash rules during import
-- PBI-568 must expose duplicates through the engine boundary, not legacy orchestrators
-- PBI-576 may schedule perceptual-hash computation and related work for this subsystem
-
-This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
-This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).
-This PBI must follow the cross-layer comment rules in [PBI-580-cross-layer-comment-rules.md](./docs/pbis/active-alpha/PBI-580-cross-layer-comment-rules.md).
+## Boundaries
+- Similarity and exact-match work remain file-based.
+- Review decisions operate on the owning media entities.
+- Ingest owns exact-hash reuse and duplicate-candidate creation.
+- Background work may compute pHash; duplicate review owns the resulting decision.
 
 ## Acceptance criteria
 This PBI is complete only when:

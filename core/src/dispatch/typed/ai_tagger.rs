@@ -7,12 +7,39 @@ use crate::ai_tagger::inference::{TagPrediction, Thresholds};
 use crate::ai_tagger::models::ModelInfo;
 use crate::db::types::{EntityTarget, EntityTargetKind, TAG_PROVENANCE_AI};
 use crate::engine::tags::TagOperation;
+use crate::runtime_contract::task::{RuntimeTask, TaskKind, TaskProgress, TaskStatus};
+use crate::settings::store::AppSettings;
 use crate::state::AppState;
+use tokio_util::sync::CancellationToken;
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
-const WD14_SLUG: &str = "wd14-swinv2-v3";
-const E621_SLUG: &str = "z3d-e621-convnext";
+/// Task id of the singleton auto-tag progress task.
+const AUTO_TAG_TASK_ID: &str = "auto_tag";
+
+/// Predictions below this confidence are dropped outright; the panel applies
+/// the user's cutoff client-side anywhere above this floor without
+/// re-running inference.
+const PREDICT_FLOOR: f32 = 0.10;
+
+/// Whether a model slug is enabled in settings.
+fn model_enabled(settings: &AppSettings, slug: &str) -> bool {
+    match slug {
+        "wd14-swinv2-v3" => settings.ai_tagger_wd14_enabled,
+        "z3d-e621-convnext" => settings.ai_tagger_e621_enabled,
+        "wd14-eva02-large-v3" => settings.ai_tagger_eva02_enabled,
+        _ => false,
+    }
+}
+
+/// Registry slugs enabled in settings, in registry order.
+fn enabled_slugs(settings: &AppSettings) -> Vec<String> {
+    crate::ai_tagger::models::known_models()
+        .into_iter()
+        .filter(|m| model_enabled(settings, &m.slug))
+        .map(|m| m.slug)
+        .collect()
+}
 
 // ─── Input / Output structs ─────────────────────────────────────────────────
 
@@ -28,6 +55,26 @@ pub struct AiTaggerModelStatus {
     pub label: String,
     pub enabled: bool,
     pub downloaded: bool,
+    /// Recommended default for the current machine.
+    pub recommended: bool,
+    /// Accuracy-over-speed model; flagged in the UI on modest hardware.
+    pub heavy: bool,
+    #[ts(type = "number")]
+    pub size_bytes: u64,
+    pub dataset: String,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+#[serde(rename_all = "camelCase")]
+pub struct AiTaggerHardware {
+    pub cpu_model: Option<String>,
+    #[ts(type = "number")]
+    pub logical_cores: u32,
+    #[ts(type = "number | null")]
+    pub memory_bytes: Option<u64>,
+    /// Execution provider ONNX Runtime is using (e.g. "CPU").
+    pub execution_provider: String,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -37,6 +84,7 @@ pub struct AiTaggerStatusOutput {
     pub models: Vec<AiTaggerModelStatus>,
     pub gpu_backend: Option<String>,
     pub available_models: Vec<ModelInfo>,
+    pub hardware: AiTaggerHardware,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -89,38 +137,41 @@ pub async fn ai_tagger_status(
     let models_root = models_root_for(state);
     let all_models = crate::ai_tagger::models::known_models();
 
-    let models = vec![
-        AiTaggerModelStatus {
-            slug: WD14_SLUG.into(),
-            label: all_models
-                .iter()
-                .find(|m| m.slug == WD14_SLUG)
-                .map(|m| m.label.clone())
-                .unwrap_or_else(|| WD14_SLUG.into()),
-            enabled: settings.ai_tagger_wd14_enabled,
-            downloaded: crate::ai_tagger::models::is_model_downloaded(&models_root, WD14_SLUG),
-        },
-        AiTaggerModelStatus {
-            slug: E621_SLUG.into(),
-            label: all_models
-                .iter()
-                .find(|m| m.slug == E621_SLUG)
-                .map(|m| m.label.clone())
-                .unwrap_or_else(|| E621_SLUG.into()),
-            enabled: settings.ai_tagger_e621_enabled,
-            downloaded: crate::ai_tagger::models::is_model_downloaded(&models_root, E621_SLUG),
-        },
-    ];
+    let models = all_models
+        .iter()
+        .map(|m| AiTaggerModelStatus {
+            slug: m.slug.clone(),
+            label: m.label.clone(),
+            enabled: model_enabled(&settings, &m.slug),
+            downloaded: crate::ai_tagger::models::is_model_downloaded(&models_root, &m.slug),
+            // Light models are the recommended pair everywhere; heavy models
+            // are an explicit opt-in regardless of hardware.
+            recommended: !m.heavy,
+            heavy: m.heavy,
+            size_bytes: m.size_bytes,
+            dataset: m.dataset.clone(),
+        })
+        .collect();
 
     let gpu_backend = {
         let guard = state.ai_taggers.lock().await;
         guard.values().next().map(|s| s.gpu_backend())
     };
 
+    let hardware = AiTaggerHardware {
+        cpu_model: detect_cpu_model(),
+        logical_cores: std::thread::available_parallelism()
+            .map(|n| n.get() as u32)
+            .unwrap_or(1),
+        memory_bytes: detect_memory_bytes(),
+        execution_provider: gpu_backend.clone().unwrap_or_else(|| "CPU".into()),
+    };
+
     Ok(AiTaggerStatusOutput {
         models,
         gpu_backend,
         available_models: all_models,
+        hardware,
     })
 }
 
@@ -168,48 +219,75 @@ pub async fn ai_tag_predict(
     input: AiTagPredictInput,
 ) -> Result<AiTagPredictOutput, String> {
     let settings = state.settings.get();
-    let thresholds = thresholds_from_settings(&settings);
 
     // Collect which models to run — explicit list overrides settings
-    let slugs: Vec<&str> = if let Some(ref models) = input.models {
-        if !models.is_empty() {
-            models.iter().map(|s| s.as_str()).collect()
-        } else {
-            let mut s = Vec::new();
-            if settings.ai_tagger_wd14_enabled {
-                s.push(WD14_SLUG);
-            }
-            if settings.ai_tagger_e621_enabled {
-                s.push(E621_SLUG);
-            }
-            s
-        }
-    } else {
-        let mut s = Vec::new();
-        if settings.ai_tagger_wd14_enabled {
-            s.push(WD14_SLUG);
-        }
-        if settings.ai_tagger_e621_enabled {
-            s.push(E621_SLUG);
-        }
-        s
+    let slugs: Vec<String> = match &input.models {
+        Some(models) if !models.is_empty() => models.clone(),
+        _ => enabled_slugs(&settings),
     };
-
     if slugs.is_empty() {
         return Err("No AI tagger models specified or enabled.".into());
     }
 
-    tracing::info!(models = ?slugs, hashes = input.hashes.len(), "ai_tag_predict: starting");
+    // One run at a time — the panel drives a single prediction pass.
+    let token = {
+        let mut guard = state.ai_tag_run.lock().await;
+        if guard.is_some() {
+            return Err("An auto-tag run is already in progress.".into());
+        }
+        let token = CancellationToken::new();
+        *guard = Some(token.clone());
+        token
+    };
 
-    // Ensure all enabled sessions are loaded
-    for slug in &slugs {
-        tracing::info!(slug, "ai_tag_predict: ensuring session loaded");
-        ensure_session(state, slug).await?;
+    let result = run_predict(state, &input.hashes, &slugs, &token).await;
+
+    state.ai_tag_run.lock().await.take();
+    result
+}
+
+async fn run_predict(
+    state: &AppState,
+    hashes: &[String],
+    slugs: &[String],
+    token: &CancellationToken,
+) -> Result<AiTagPredictOutput, String> {
+    let total = hashes.len() as u64;
+    tracing::info!(models = ?slugs, hashes = total, "ai_tag_predict: starting");
+    emit_autotag_task(
+        TaskStatus::Running,
+        0,
+        total,
+        Some("Loading models…".into()),
+    );
+
+    // Ensure all requested sessions are loaded
+    for slug in slugs {
+        if let Err(e) = ensure_session(state, slug).await {
+            emit_autotag_task(TaskStatus::Failed, 0, total, Some(e.clone()));
+            schedule_autotag_task_removal();
+            return Err(e);
+        }
     }
+
+    // Everything above the floor comes back; the panel applies the user's
+    // cutoff client-side.
+    let floor = Thresholds {
+        general: PREDICT_FLOOR,
+        character: PREDICT_FLOOR,
+        copyright: PREDICT_FLOOR,
+        artist: PREDICT_FLOOR,
+        species: PREDICT_FLOOR,
+        rating: PREDICT_FLOOR,
+    };
 
     let mut predictions = Vec::new();
 
-    for hash in &input.hashes {
+    for (idx, hash) in hashes.iter().enumerate() {
+        if token.is_cancelled() {
+            break;
+        }
+
         // Read the original file (not thumbnail) for best inference quality
         let image_bytes = match read_original_image(state, hash).await {
             Ok(bytes) => bytes,
@@ -219,33 +297,27 @@ pub async fn ai_tag_predict(
                     tags: vec![],
                     error: Some(e),
                 });
+                emit_autotag_task(TaskStatus::Running, (idx + 1) as u64, total, None);
                 continue;
             }
         };
 
-        // Run each enabled model and merge results
+        // Run each model; per-model attribution is kept (TagPrediction.model)
+        // and merging happens in the panel.
         let mut all_tags: Vec<TagPrediction> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
 
-        tracing::info!(
-            hash,
-            bytes = image_bytes.len(),
-            "ai_tag_predict: read original image"
-        );
-
         {
             let mut guard = state.ai_taggers.lock().await;
-            for slug in &slugs {
-                if let Some(session) = guard.get_mut(*slug) {
-                    match session.predict(&image_bytes, &thresholds) {
-                        Ok(tags) => {
-                            tracing::info!(
-                                slug,
-                                tags = tags.len(),
-                                "ai_tag_predict: model produced tags"
-                            );
-                            all_tags.extend(tags);
-                        }
+            for slug in slugs {
+                if token.is_cancelled() {
+                    break;
+                }
+                if let Some(session) = guard.get_mut(slug.as_str()) {
+                    let result =
+                        tokio::task::block_in_place(|| session.predict(&image_bytes, &floor));
+                    match result {
+                        Ok(tags) => all_tags.extend(tags),
                         Err(e) => {
                             tracing::error!(slug, error = %e, "ai_tag_predict: inference failed");
                             errors.push(format!("{slug}: {e}"));
@@ -257,17 +329,6 @@ pub async fn ai_tag_predict(
             }
         }
 
-        // Deduplicate: if both models predict the same tag, keep highest confidence
-        all_tags.sort_by(|a, b| {
-            a.namespace.cmp(&b.namespace).then(a.tag.cmp(&b.tag)).then(
-                b.confidence
-                    .partial_cmp(&a.confidence)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
-        });
-        all_tags.dedup_by(|a, b| a.namespace == b.namespace && a.tag == b.tag);
-
-        // Re-sort by confidence descending
         all_tags.sort_by(|a, b| {
             b.confidence
                 .partial_cmp(&a.confidence)
@@ -283,9 +344,35 @@ pub async fn ai_tag_predict(
                 Some(errors.join("; "))
             },
         });
+
+        emit_autotag_task(TaskStatus::Running, (idx + 1) as u64, total, None);
     }
 
+    let status_text = token.is_cancelled().then(|| "Cancelled".to_string());
+    emit_autotag_task(
+        TaskStatus::Finished,
+        predictions.len() as u64,
+        total,
+        status_text,
+    );
+    schedule_autotag_task_removal();
+
     Ok(AiTagPredictOutput { predictions })
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct AiTagCancelInput {}
+
+/// Cancel the in-flight auto-tag prediction, if any. The running predict
+/// call returns its partial results.
+pub async fn ai_tag_cancel(state: &AppState, _input: AiTagCancelInput) -> Result<(), String> {
+    let guard = state.ai_tag_run.lock().await;
+    if let Some(token) = guard.as_ref() {
+        token.cancel();
+        emit_autotag_task(TaskStatus::Cancelling, 0, 0, None);
+    }
+    Ok(())
 }
 
 pub async fn ai_tag_apply(state: &AppState, input: AiTagApplyInput) -> Result<usize, String> {
@@ -321,6 +408,88 @@ pub async fn ai_tag_apply(state: &AppState, input: AiTagApplyInput) -> Result<us
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
+
+fn emit_autotag_task(status: TaskStatus, done: u64, total: u64, status_text: Option<String>) {
+    let now = chrono::Utc::now().to_rfc3339();
+    crate::runtime_state::upsert_task(RuntimeTask {
+        task_id: AUTO_TAG_TASK_ID.into(),
+        kind: TaskKind::AutoTag,
+        status,
+        label: "Auto tagging".into(),
+        parent_task_id: None,
+        progress: Some(TaskProgress {
+            done,
+            total,
+            status_text,
+        }),
+        detail: None,
+        started_at: now.clone(),
+        updated_at: now,
+    });
+}
+
+fn schedule_autotag_task_removal() {
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        crate::runtime_state::remove_task(AUTO_TAG_TASK_ID);
+    });
+}
+
+fn detect_cpu_model() -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("sysctl")
+            .args(["-n", "machdep.cpu.brand_string"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::fs::read_to_string("/proc/cpuinfo")
+            .ok()?
+            .lines()
+            .find(|l| l.starts_with("model name"))
+            .and_then(|l| l.split(':').nth(1))
+            .map(|s| s.trim().to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
+}
+
+fn detect_memory_bytes() -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("sysctl")
+            .args(["-n", "hw.memsize"])
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .and_then(|s| s.trim().parse().ok())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let meminfo = std::fs::read_to_string("/proc/meminfo").ok()?;
+        let kb: u64 = meminfo
+            .lines()
+            .find(|l| l.starts_with("MemTotal"))?
+            .split_whitespace()
+            .nth(1)?
+            .parse()
+            .ok()?;
+        Some(kb * 1024)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux")))]
+    {
+        None
+    }
+}
 
 /// Read the original image bytes for a hash from the blob store.
 async fn read_original_image(state: &AppState, hash: &str) -> Result<Vec<u8>, String> {
@@ -395,13 +564,7 @@ pub async fn auto_tag_imported(state: &AppState, hashes: &[String]) {
         return;
     }
 
-    let mut slugs = Vec::new();
-    if settings.ai_tagger_wd14_enabled {
-        slugs.push(WD14_SLUG);
-    }
-    if settings.ai_tagger_e621_enabled {
-        slugs.push(E621_SLUG);
-    }
+    let slugs = enabled_slugs(&settings);
     if slugs.is_empty() {
         return;
     }
@@ -429,7 +592,7 @@ pub async fn auto_tag_imported(state: &AppState, hashes: &[String]) {
         {
             let mut guard = state.ai_taggers.lock().await;
             for slug in &slugs {
-                if let Some(session) = guard.get_mut(*slug) {
+                if let Some(session) = guard.get_mut(slug.as_str()) {
                     match session.predict(&image_bytes, &thresholds) {
                         Ok(tags) => all_tags.extend(tags),
                         Err(e) => {
@@ -449,6 +612,10 @@ pub async fn auto_tag_imported(state: &AppState, hashes: &[String]) {
             )
         });
         all_tags.dedup_by(|a, b| a.namespace == b.namespace && a.tag == b.tag);
+
+        if !settings.ai_tagger_write_rating {
+            all_tags.retain(|t| t.namespace != "rating");
+        }
 
         // Apply tags
         let tag_strings: Vec<String> = all_tags

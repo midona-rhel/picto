@@ -14,7 +14,6 @@ const closed: PortalState = { open: false, anchor: null };
 export const tagSelectPortalAtom = atom<PortalState>(closed);
 export const folderPickerPortalAtom = atom<PortalState>(closed);
 export const aiTaggerPortalAtom = atom<PortalState>(closed);
-export const batchRenamePortalAtom = atom<PortalState>(closed);
 
 // Convenience: simple boolean atoms for backward compat
 export const tagSelectOpenAtom = atom(
@@ -29,10 +28,19 @@ export const aiTaggerOpenAtom = atom(
   (get) => get(aiTaggerPortalAtom).open,
   (_get, set, open: boolean) => set(aiTaggerPortalAtom, open ? { open: true } : closed),
 );
-export const batchRenameOpenAtom = atom(
-  (get) => get(batchRenamePortalAtom).open,
-  (_get, set, open: boolean) => set(batchRenamePortalAtom, open ? { open: true } : closed),
-);
+
+/**
+ * Anchor for panels that dock to the inspector's left edge, used when the
+ * opener isn't an inspector button (context menu, keyboard shortcut).
+ * Returns null when the inspector isn't in the DOM — OverlayShell then
+ * falls back to centered placement.
+ */
+export function inspectorAnchor(): { x: number; y: number } | null {
+  const panel = document.querySelector('[data-inspector-panel]') as HTMLElement | null;
+  if (!panel) return null;
+  const rect = panel.getBoundingClientRect();
+  return { x: rect.left, y: rect.top + 80 };
+}
 
 /** Open a portal with an anchor position (e.g., from the inspector + button). */
 export function openPortalAnchored(

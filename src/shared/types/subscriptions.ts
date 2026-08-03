@@ -53,6 +53,7 @@ export interface SubscriptionGroupInfo {
   id: string;
   name: string;
   schedule: GroupSchedule | string;
+  paused: boolean;
   created_at: string;
   total_files: number;
   subscriptions: SubscriptionInfo[];
@@ -158,6 +159,7 @@ export interface CredentialDomain {
   credential_type: CredentialType | string;
   display_name: string | null;
   created_at: string;
+  expires_at: string | null;
 }
 
 export interface CredentialHealth {
@@ -196,6 +198,7 @@ export interface AuthSessionCredentialPayload {
   cookies?: Record<string, string> | null;
   oauth_code?: string | null;
   phpsessid?: string | null;
+  expires_at?: string | null;
 }
 
 export interface AuthSessionState {

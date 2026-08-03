@@ -80,8 +80,15 @@ export function AuthSiteDetail({
 
         <div className={styles.detailMeta}>
           <span className={styles.smallBadge}>{entry.credential?.credential_type ?? 'not configured'}</span>
-          {entry.queryCount > 0 && <span className={styles.smallBadge}>{entry.queryCount} queries use this site</span>}
+          {entry.queryCount > 0 && <span className={styles.smallBadge}>{entry.queryCount} {entry.queryCount === 1 ? 'query uses' : 'queries use'} this site</span>}
           {entry.health?.last_checked_at && <span className={styles.smallBadge}>checked {formatRelativeTime(entry.health.last_checked_at)}</span>}
+          {entry.credential?.expires_at && (
+            <span className={styles.smallBadge}>
+              {Date.parse(entry.credential.expires_at) < Date.now()
+                ? 'session expired'
+                : `session expires ${formatRelativeTime(entry.credential.expires_at)}`}
+            </span>
+          )}
         </div>
 
         <div className={styles.muted}>
@@ -121,11 +128,7 @@ export function AuthSiteDetail({
               ? 'Sign in in the login window and Picto will capture the Pixiv OAuth code automatically.'
               : entry.site.id === 'gelbooru' || entry.site.id === 'rule34'
                 ? 'Sign in in the login window and Picto will save the site user_id and api_key from account settings.'
-                : entry.site.id === 'twitter'
-                  ? 'Sign in in the login window and Picto will capture the authenticated cookies gallery-dl needs.'
-                  : entry.site.id === 'furaffinity'
-                    ? 'Sign in in the login window and Picto will capture the session cookies gallery-dl needs.'
-                    : 'Sign in in the login window to continue.'}
+                : 'Sign in in the login window and Picto will capture the session cookies gallery-dl needs.'}
           </div>
           <div className={styles.emptyState}>
             <div className={styles.sectionTitle}>{hasEmbeddedSession ? 'Login in progress' : 'No active login'}</div>

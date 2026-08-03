@@ -49,10 +49,10 @@ export function AuthSitesSidebar({
                 <div className={styles.rowMeta}>
                   <span className={styles.muted}>{entry.site.domain}</span>
                   {entry.queryCount > 0 && (
-                    <span className={styles.smallBadge}>{entry.queryCount} queries</span>
+                    <span className={styles.smallBadge}>{entry.queryCount} {entry.queryCount === 1 ? 'query' : 'queries'}</span>
                   )}
                   {entry.issues.length > 0 && (
-                    <span className={styles.smallBadge}>{entry.issues.length} issues</span>
+                    <span className={styles.smallBadge}>{entry.issues.length} {entry.issues.length === 1 ? 'issue' : 'issues'}</span>
                   )}
                 </div>
                 <div className={styles.muted}>

@@ -125,6 +125,13 @@ pub struct SetGroupScheduleInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct PauseGroupInput {
+    pub id: String,
+    pub paused: bool,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RunGroupInput {
     pub id: String,
 }
@@ -293,6 +300,7 @@ pub struct SetCredentialInput {
     pub password: Option<String>,
     pub cookies: Option<std::collections::HashMap<String, String>>,
     pub oauth_token: Option<String>,
+    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -380,6 +388,20 @@ pub async fn set_group_schedule(
     Ok(())
 }
 
+pub async fn pause_group(state: &AppState, input: PauseGroupInput) -> Result<(), String> {
+    let gid: i64 = input.id.parse().unwrap_or(0);
+    runtime_service(state)
+        .set_group_paused(input.id, input.paused)
+        .await?;
+    crate::events::emit_state_changed(
+        "pause_group",
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
+            .group_ids(vec![gid]),
+    );
+    Ok(())
+}
+
 /// Task-only: spawns async group run (all child subscriptions).
 /// State changes emitted per-subscription by the sync engine.
 pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), String> {
@@ -445,6 +467,14 @@ pub async fn set_subscription_group(
 }
 
 /// Read-only: collections this subscription created from multi-image posts.
+pub async fn get_subscription_covers(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let result = runtime_service(state).get_subscription_covers().await?;
+    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
+}
+
 pub async fn list_subscription_collections(
     state: &AppState,
     input: ListSubscriptionCollectionsInput,
@@ -453,7 +483,9 @@ pub async fn list_subscription_collections(
         .subscription_id
         .parse()
         .map_err(|_| format!("Invalid subscription id: {}", input.subscription_id))?;
-    let result = runtime_service(state).list_subscription_collections(sid).await?;
+    let result = runtime_service(state)
+        .list_subscription_collections(sid)
+        .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -944,12 +976,11 @@ pub async fn list_credentials(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let result =
-        crate::subscriptions::credential_service::SubscriptionCredentialService::new(
-            state.engine.db(),
-        )
-            .list_credentials()
-            .await?;
+    let result = crate::subscriptions::credential_service::SubscriptionCredentialService::new(
+        state.engine.db(),
+    )
+    .list_credentials()
+    .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -957,12 +988,11 @@ pub async fn list_credential_health(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let result =
-        crate::subscriptions::credential_service::SubscriptionCredentialService::new(
-            state.engine.db(),
-        )
-            .list_credential_health()
-            .await?;
+    let result = crate::subscriptions::credential_service::SubscriptionCredentialService::new(
+        state.engine.db(),
+    )
+    .list_credential_health()
+    .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -971,18 +1001,19 @@ pub async fn set_credential(state: &AppState, input: SetCredentialInput) -> Resu
         crate::subscriptions::credential_service::SubscriptionCredentialService::new(
             state.engine.db(),
         )
-            .set_manual_credential(
-                crate::subscriptions::credential_service::SetManualCredentialRequest {
-                    site_category: input.site_category,
-                    credential_type: input.credential_type,
-                    username: input.username,
-                    password: input.password,
-                    cookies: input.cookies,
-                    oauth_token: input.oauth_token,
-                    display_name: input.display_name,
-                },
-            )
-            .await?;
+        .set_manual_credential(
+            crate::subscriptions::credential_service::SetManualCredentialRequest {
+                site_category: input.site_category,
+                credential_type: input.credential_type,
+                username: input.username,
+                password: input.password,
+                cookies: input.cookies,
+                oauth_token: input.oauth_token,
+                display_name: input.display_name,
+                expires_at: input.expires_at,
+            },
+        )
+        .await?;
 
     crate::events::emit_state_changed(
         "set_credential",
@@ -998,12 +1029,11 @@ pub async fn delete_credential(
     state: &AppState,
     input: DeleteCredentialInput,
 ) -> Result<(), String> {
-    let canonical =
-        crate::subscriptions::credential_service::SubscriptionCredentialService::new(
-            state.engine.db(),
-        )
-            .delete_credential(&input.site_category)
-            .await?;
+    let canonical = crate::subscriptions::credential_service::SubscriptionCredentialService::new(
+        state.engine.db(),
+    )
+    .delete_credential(&input.site_category)
+    .await?;
     crate::events::emit_state_changed(
         "delete_credential",
         crate::runtime_contract::change_builder::ChangeImpact::new()

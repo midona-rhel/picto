@@ -23,9 +23,10 @@ impl FsBackend {
 
     fn path_for(&self, key: &str) -> Result<PathBuf, BackendError> {
         // Keys are forward-slash object names; reject traversal.
-        if key.split('/').any(|part| {
-            part.is_empty() || part == "." || part == ".." || part.contains('\\')
-        }) {
+        if key
+            .split('/')
+            .any(|part| part.is_empty() || part == "." || part == ".." || part.contains('\\'))
+        {
             return Err(BackendError::Io(format!("invalid object key: {key}")));
         }
         Ok(self.root.join(key))
@@ -44,10 +45,8 @@ impl SyncBackend for FsBackend {
         // Stage-and-rename so a sync client never observes (or uploads) a
         // half-written object; create_new on rename target is approximated by
         // the exists() check above plus per-device key namespacing.
-        let mut tmp = tempfile::NamedTempFile::new_in(
-            path.parent().unwrap_or(&self.root),
-        )
-        .map_err(|e| BackendError::Io(e.to_string()))?;
+        let mut tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(&self.root))
+            .map_err(|e| BackendError::Io(e.to_string()))?;
         tmp.write_all(bytes)
             .and_then(|_| tmp.as_file().sync_all())
             .map_err(|e| BackendError::Io(e.to_string()))?;

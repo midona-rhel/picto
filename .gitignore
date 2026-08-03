@@ -158,14 +158,15 @@ src-tauri/gen/
 # Tauri plugin build artifacts
 /plugins/gelbooru-plugin/target
 
-# Package lock files (project uses yarn)
-package-lock.json
-
 # Git worktrees
 /worktrees/
 /worktree-*/
 /hydrus-reference
 /hydrus-fixtures
+/XIVWindowResizer/
+
+# Generated local verification output
+/artifacts/
 
 # Loose test/script files in root
 test_gelbooru_simple.rs

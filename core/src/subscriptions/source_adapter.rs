@@ -35,8 +35,64 @@ pub fn infer_query_kind(site_id: &str) -> &'static str {
         "patreon" | "fanbox" => "creator",
         "fantia" => "fanclub",
         "tumblr" => "blog",
-        _ => "search",
+        other => match site_by_id(other) {
+            // Account-only sites (kemono, coomer, pawchive, webtoons, ...)
+            // only validate as "user" — "search" would fail validate_query_kind.
+            Some(site) if site.supports_account && !site.supports_query => "user",
+            _ => "search",
+        },
     }
+}
+
+/// Normalize user input into the bare token a site's url_template expects:
+/// strips a leading '@' for account-style query kinds and extracts the handle
+/// from a pasted profile URL for sites where that is unambiguous (twitter/x).
+/// Everything else passes through unchanged — booru tag queries legitimately
+/// contain ':' and '/' and must never be rewritten.
+pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> String {
+    let trimmed = raw.trim();
+    let account_kind = matches!(query_kind, "user" | "creator" | "blog" | "fanclub");
+
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        if canonical_site_id(site_id) == "twitter" {
+            if let Ok(parsed) = url::Url::parse(trimmed) {
+                let host = parsed
+                    .host_str()
+                    .unwrap_or_default()
+                    .trim_start_matches("www.")
+                    .to_ascii_lowercase();
+                if host == "twitter.com" || host == "x.com" {
+                    // The handle is the first path segment; trailing segments
+                    // like /media or /with_replies fall away with it.
+                    let first = parsed
+                        .path_segments()
+                        .into_iter()
+                        .flatten()
+                        .find(|segment| !segment.is_empty());
+                    if let Some(segment) = first {
+                        let handle = segment.trim_start_matches('@');
+                        let reserved = [
+                            "i",
+                            "home",
+                            "search",
+                            "explore",
+                            "notifications",
+                            "settings",
+                        ];
+                        if !handle.is_empty() && !reserved.contains(&handle) {
+                            return handle.to_string();
+                        }
+                    }
+                }
+            }
+        }
+        return trimmed.to_string();
+    }
+
+    if account_kind {
+        return trimmed.strip_prefix('@').unwrap_or(trimmed).to_string();
+    }
+    trimmed.to_string()
 }
 
 pub fn resolve_query_kind(site_id: &str, query_kind: Option<&str>) -> String {
@@ -56,7 +112,11 @@ pub fn runner_key_for_site(site_id: &str) -> String {
 pub fn validate_query_kind(site_id: &str, query_kind: &str) -> Result<(), String> {
     let descriptor = describe_site(site_id)
         .ok_or_else(|| format!("Unknown site: {}", canonical_site_id(site_id)))?;
-    if descriptor.query_kinds.iter().any(|kind| kind.id == query_kind) {
+    if descriptor
+        .query_kinds
+        .iter()
+        .any(|kind| kind.id == query_kind)
+    {
         return Ok(());
     }
     Err(format!(
@@ -122,6 +182,58 @@ mod tests {
         assert_eq!(resolve_query_kind("pixivuser", None), "user");
         assert_eq!(resolve_query_kind("patreon", Some("   ")), "creator");
         assert_eq!(resolve_query_kind("gelbooru", None), "search");
+    }
+
+    #[test]
+    fn normalize_query_text_handles_twitter_inputs() {
+        use super::normalize_query_text;
+        assert_eq!(normalize_query_text("twitter", "user", "@name"), "name");
+        assert_eq!(normalize_query_text("twitter", "user", "  name  "), "name");
+        assert_eq!(
+            normalize_query_text("twitter", "user", "https://x.com/name?s=21"),
+            "name"
+        );
+        assert_eq!(
+            normalize_query_text("twitter", "user", "https://twitter.com/name/media"),
+            "name"
+        );
+        assert_eq!(
+            normalize_query_text("twitter", "user", "https://www.x.com/@name"),
+            "name"
+        );
+        // Reserved paths are not handles — conservative pass-through.
+        assert_eq!(
+            normalize_query_text("twitter", "user", "https://x.com/i/flow/login"),
+            "https://x.com/i/flow/login"
+        );
+        // Booru tag queries are never rewritten.
+        assert_eq!(
+            normalize_query_text("gelbooru", "search", "1girl rating:safe"),
+            "1girl rating:safe"
+        );
+        // Account-only sites keep path-style queries intact.
+        assert_eq!(
+            normalize_query_text("pawchive", "user", "fanbox/user/123"),
+            "fanbox/user/123"
+        );
+        // Creator kinds strip a single leading @.
+        assert_eq!(
+            normalize_query_text("fanbox", "creator", "@creator"),
+            "creator"
+        );
+    }
+
+    #[test]
+    fn inferred_kind_is_valid_for_every_site() {
+        for site in crate::subscriptions::gallery_dl_runner::SITES {
+            let kind = infer_query_kind(site.id);
+            assert!(
+                validate_query_kind(site.id, kind).is_ok(),
+                "site '{}' infers kind '{}' which its descriptor rejects",
+                site.id,
+                kind
+            );
+        }
     }
 
     #[test]

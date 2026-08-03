@@ -34,6 +34,9 @@ impl SubscriptionGroupOrchestrator {
             db.as_ref(),
             library_root,
         );
+        if runtime.is_group_paused(group_id).await? {
+            return Err(format!("Group {group_id} is paused"));
+        }
         let subs = runtime.list_subscriptions_for_group(group_id).await?;
         if subs.is_empty() {
             return Err("Group has no subscriptions".to_string());
@@ -149,15 +152,20 @@ impl SubscriptionGroupOrchestrator {
             .parse()
             .map_err(|_| format!("Invalid group id: {}", id))?;
 
-        let runtime =
-            crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(db, library_root);
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            db,
+            library_root,
+        );
         let subscriptions = runtime.list_subscriptions_for_group(group_id).await?;
         let mut names_by_id = std::collections::HashMap::new();
         for sub in &subscriptions {
             names_by_id.insert(sub.subscription_id.to_string(), sub.name.clone());
         }
 
-        let sub_ids: Vec<i64> = subscriptions.iter().map(|sub| sub.subscription_id).collect();
+        let sub_ids: Vec<i64> = subscriptions
+            .iter()
+            .map(|sub| sub.subscription_id)
+            .collect();
         let mut cancelled_ids = Vec::new();
         for sub_id in sub_ids {
             let sub_id_str = sub_id.to_string();

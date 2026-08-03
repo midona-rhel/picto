@@ -1,19 +1,4 @@
 import { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen } from 'electron';
-
-app.commandLine.appendSwitch('disable-features', 'AutofillServerCommunication');
-app.commandLine.appendSwitch('force_high_performance_gpu');
-if (process.env.PICTO_EXPERIMENTAL_GPU_FLAGS === '1') {
-  app.commandLine.appendSwitch('enable-gpu-rasterization');
-  app.commandLine.appendSwitch('enable-zero-copy');
-  app.commandLine.appendSwitch('num-raster-threads', '4');
-}
-
-// Single instance guard — prevent multiple Picto processes from running.
-// If another instance is already running, focus its window and quit this one.
-const gotLock = app.requestSingleInstanceLock();
-if (!gotLock) {
-  app.quit();
-}
 import fs from 'node:fs/promises';
 import fsModule from 'node:fs';
 import path from 'node:path';
@@ -36,10 +21,102 @@ import { createLibraryHostService } from './services/libraryHostService.mjs';
 import { registerIpcHandlers } from './ipc/registerHandlers.mjs';
 import { createAutoUpdaterService } from './services/autoUpdater.mjs';
 
+const isPackagedSmoke = process.env.PICTO_PACKAGED_SMOKE === '1';
+if (isPackagedSmoke && process.env.PICTO_SMOKE_APP_DATA) {
+  app.setPath('appData', process.env.PICTO_SMOKE_APP_DATA);
+  app.setPath('userData', path.join(process.env.PICTO_SMOKE_APP_DATA, 'user-data'));
+}
+
+app.commandLine.appendSwitch('disable-features', 'AutofillServerCommunication');
+app.commandLine.appendSwitch('force_high_performance_gpu');
+if (process.env.PICTO_EXPERIMENTAL_GPU_FLAGS === '1') {
+  app.commandLine.appendSwitch('enable-gpu-rasterization');
+  app.commandLine.appendSwitch('enable-zero-copy');
+  app.commandLine.appendSwitch('num-raster-threads', '4');
+}
+
+// Single instance guard — prevent multiple Picto processes from running.
+// If another instance is already running, focus its window and quit this one.
+const gotLock = isPackagedSmoke || app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+}
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:8080';
+const SMOKE_SETTLE_MS = 1500;
+let nativeClosePromise = null;
+let nativeShutdownSettled = false;
+let nativeQuitPromise = null;
+let smokeFailureReported = false;
+let smokeExitRequested = false;
+
+function reportPackagedSmoke(event, details = {}) {
+  if (!isPackagedSmoke) return;
+  process.stdout.write(`[picto-packaged-smoke] ${JSON.stringify({ event, ...details })}\n`);
+}
+
+function closeNativeLibraryOnce() {
+  nativeClosePromise ??= closeLibrary();
+  return nativeClosePromise;
+}
+
+function failPackagedSmoke(event, details = {}, closeNative = true) {
+  reportPackagedSmoke(event, details);
+  if (!isPackagedSmoke || smokeFailureReported) return;
+
+  smokeFailureReported = true;
+  if (!closeNative) {
+    app.exit(1);
+    return;
+  }
+  void closeNativeLibraryOnce()
+    .catch((error) => {
+      reportPackagedSmoke('shutdown-failed', { message: error?.message ?? String(error) });
+    })
+    .finally(() => {
+      nativeShutdownSettled = true;
+      app.exit(1);
+    });
+}
+
+async function completePackagedSmoke() {
+  if (!isPackagedSmoke || smokeExitRequested) return;
+  smokeExitRequested = true;
+  try {
+    await closeNativeLibraryOnce();
+    nativeShutdownSettled = true;
+    if (smokeFailureReported) return;
+    reportPackagedSmoke('native-library-closed');
+    app.exit(0);
+  } catch (error) {
+    nativeShutdownSettled = true;
+    failPackagedSmoke('shutdown-failed', { message: error?.message ?? String(error) }, false);
+  }
+}
+
+function awaitNativeShutdownBeforeQuit(event) {
+  if (nativeShutdownSettled) return;
+  event.preventDefault();
+  nativeQuitPromise ??= closeNativeLibraryOnce()
+    .then(() => {
+      nativeShutdownSettled = true;
+      app.quit();
+    })
+    .catch((error) => {
+      nativeShutdownSettled = true;
+      console.error('[main] native library shutdown failed:', error);
+      if (isPackagedSmoke) {
+        reportPackagedSmoke('shutdown-failed', { message: error?.message ?? String(error) });
+      }
+      app.exit(1);
+    });
+}
+
+app.on('before-quit', awaitNativeShutdownBeforeQuit);
+app.on('will-quit', awaitNativeShutdownBeforeQuit);
 
 if (isDev) {
   // CDP endpoint for dev tooling (electron-mcp-server, screenshots, eval).
@@ -89,11 +166,23 @@ const windowManager = createWindowManager({
   isDev,
   getCachedConfig,
   saveGlobalConfig,
+  onWindowEvent: (event, details) => {
+    if (event === 'did-finish-load' && details.label === 'main') {
+      reportPackagedSmoke(event, details);
+      setTimeout(() => {
+        reportPackagedSmoke('settle-complete');
+        void completePackagedSmoke();
+      }, SMOKE_SETTLE_MS);
+      return;
+    }
+    if (event !== 'did-finish-load') failPackagedSmoke(event, details);
+  },
 });
 
 const updaterService = createAutoUpdaterService({
   app,
   isDev,
+  isSmoke: isPackagedSmoke,
   sendToAllWindows: (...args) => windowManager.sendToAllWindows(...args),
 });
 
@@ -143,6 +232,13 @@ const menuManager = createMenuManager({
   sendToMainWindow: windowManager.sendToMainWindow,
 });
 buildAppMenu = menuManager.buildAppMenu;
+
+if (isPackagedSmoke) {
+  ipcMain.on('picto:smoke:renderer-failure', (_event, failure) => {
+    const event = failure?.event === 'window-error' ? 'window-error' : 'unhandled-rejection';
+    failPackagedSmoke(event, { message: failure?.message ?? 'renderer failure' });
+  });
+}
 
 registerIpcHandlers({
   app,
@@ -228,6 +324,7 @@ async function bootstrapApplication() {
   if (libraryToOpen) {
     console.info('[main] initializing library', { libraryToOpen });
     await libraryHost.initializeInitialLibrary(libraryToOpen);
+    reportPackagedSmoke('native-library-initialized');
     console.info('[main] library initialized in native core');
     console.info('[main] library history updated');
   } else {
@@ -250,9 +347,11 @@ async function bootstrapApplication() {
 }
 
 process.on('uncaughtException', (err) => {
+  failPackagedSmoke('uncaught-exception', { message: err?.message ?? String(err) });
   console.error('[main] Uncaught exception:', err);
 });
 process.on('unhandledRejection', (reason) => {
+  failPackagedSmoke('unhandled-rejection', { message: reason?.message ?? String(reason) });
   console.error('[main] Unhandled promise rejection:', reason);
 });
 
@@ -310,6 +409,7 @@ app.whenReady().then(async () => {
     }
   });
 }).catch((err) => {
+  failPackagedSmoke('bootstrap-failed', { message: err?.message ?? String(err) });
   console.error('[main] app.whenReady failed:', err);
 });
 

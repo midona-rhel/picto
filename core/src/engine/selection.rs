@@ -100,7 +100,8 @@ impl ApplicationEngine {
 
         tracing::debug!(
             "[selection_summary] selected_count={}, total_tags_to_check={}",
-            selected_count, all_counts.len()
+            selected_count,
+            all_counts.len()
         );
 
         for tag in all_counts {
@@ -136,7 +137,8 @@ impl ApplicationEngine {
 
         tracing::debug!(
             "[selection_summary] result: shared_tags={}, top_tags={}",
-            shared.len(), top.len()
+            shared.len(),
+            top.len()
         );
 
         // No truncation on shared — the intersection naturally shrinks as more items are selected

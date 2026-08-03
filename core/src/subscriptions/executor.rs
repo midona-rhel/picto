@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::AppSettings;
@@ -19,67 +18,62 @@ use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 pub async fn execute_query_job(
     db: Arc<LibraryDatabase>,
     library_root: std::path::PathBuf,
-    blob_store: Arc<BlobStore>,
     rate_limiter: RateLimiter,
     running_subs: RunningSubscriptions,
     sub_terminal_statuses: SubTerminalStatuses,
     app_settings: AppSettings,
     job: SubscriptionQueryJob,
 ) {
-    let runtime =
-        crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(db.as_ref(), &library_root);
+    let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+        db.as_ref(),
+        &library_root,
+    );
     let sub_id_str = job.subscription_id.to_string();
+
+    // Early failures must still run finalize_if_idle — if this was the run's
+    // only job, nothing else clears the guard, run row, and runtime task.
+    macro_rules! fail_job_and_finalize {
+        ($kind:expr, $message:expr) => {{
+            let _ = runtime
+                .finish_subscription_query_job(
+                    job.job_id,
+                    "failed",
+                    Some($kind.to_string()),
+                    Some($message),
+                )
+                .await;
+            let _ = finalize_if_idle(
+                &runtime,
+                &running_subs,
+                &sub_terminal_statuses,
+                &format!("Subscription {}", job.subscription_id),
+                &sub_id_str,
+                job.run_id,
+                "subscription",
+                Some(job.query_id.to_string()),
+                None,
+            )
+            .await;
+            return;
+        }};
+    }
 
     let sub = match runtime.get_subscription(job.subscription_id).await {
         Ok(Some(sub)) => sub,
-        Ok(None) => {
-            let _ = runtime
-                .finish_subscription_query_job(
-                    job.job_id,
-                    "failed",
-                    Some("missing_subscription".to_string()),
-                    Some(format!("Subscription {} no longer exists", job.subscription_id)),
-                )
-                .await;
-            return;
-        }
-        Err(error) => {
-            let _ = runtime
-                .finish_subscription_query_job(
-                    job.job_id,
-                    "failed",
-                    Some("runtime".to_string()),
-                    Some(error),
-                )
-                .await;
-            return;
-        }
+        Ok(None) => fail_job_and_finalize!(
+            "missing_subscription",
+            format!("Subscription {} no longer exists", job.subscription_id)
+        ),
+        Err(error) => fail_job_and_finalize!("runtime", error),
     };
 
     let query = match runtime.get_subscription_query(job.query_id).await {
         Ok(Some(query)) => query,
-        Ok(None) => {
-            let _ = runtime
-                .finish_subscription_query_job(
-                    job.job_id,
-                    "failed",
-                    Some("missing_query".to_string()),
-                    Some(format!("Query {} no longer exists", job.query_id)),
-                )
-                .await;
-            return;
-        }
-        Err(error) => {
-            let _ = runtime
-                .finish_subscription_query_job(
-                    job.job_id,
-                    "failed",
-                    Some("runtime".to_string()),
-                    Some(error),
-                )
-                .await;
-            return;
-        }
+        Ok(None) => fail_job_and_finalize!(
+            "missing_query",
+            format!("Query {} no longer exists", job.query_id)
+        ),
+        Err(error) => fail_job_and_finalize!("runtime", error),
     };
 
     let runner_key = runner_key_for_site(&query.site_id);
@@ -87,17 +81,20 @@ pub async fn execute_query_job(
 
     let cancel = {
         let map = running_subs.lock().await;
-        map.get(&sub_id_str)
-            .cloned()
-            .unwrap_or_else(|| {
-                let token = tokio_util::sync::CancellationToken::new();
-                token.cancel();
-                token
-            })
+        map.get(&sub_id_str).cloned().unwrap_or_else(|| {
+            let token = tokio_util::sync::CancellationToken::new();
+            token.cancel();
+            token
+        })
     };
 
     let group_name = match sub.group_id {
-        Some(gid) => runtime.get_group(gid).await.ok().flatten().map(|group| group.name),
+        Some(gid) => runtime
+            .get_group(gid)
+            .await
+            .ok()
+            .flatten()
+            .map(|group| group.name),
         None => None,
     };
     let mode = if job.requested_by == "query" || job.requested_by == "retry" {
@@ -111,13 +108,16 @@ pub async fn execute_query_job(
             .map(|post_id| format!("Retry post {post_id}"))
             .unwrap_or_else(|| format!("Retry query {}", job.query_id))
     } else {
-        resolve_query_name(query.query_id, &query.query_text, query.display_name.as_deref())
+        resolve_query_name(
+            query.query_id,
+            &query.query_text,
+            query.display_name.as_deref(),
+        )
     };
 
     let result = tokio::spawn(run_job_inner(
         db.clone(),
         library_root.clone(),
-        blob_store.clone(),
         rate_limiter.clone(),
         app_settings.clone(),
         sub.clone(),
@@ -236,7 +236,12 @@ async fn finalize_if_idle(
         let failure_kind = failure.and_then(|job| job.failure_kind.clone());
         let error_message = failure.and_then(|job| job.error_message.clone());
         runtime
-            .finalize_subscription_run_status(run_id, status, failure_kind.clone(), error_message.clone())
+            .finalize_subscription_run_status(
+                run_id,
+                status,
+                failure_kind.clone(),
+                error_message.clone(),
+            )
             .await?;
         (status.to_string(), failure_kind, error_message)
     } else {
@@ -300,7 +305,6 @@ struct JobOutcome {
 async fn run_job_inner(
     db: Arc<LibraryDatabase>,
     library_root: std::path::PathBuf,
-    blob_store: Arc<BlobStore>,
     rate_limiter: RateLimiter,
     app_settings: AppSettings,
     sub: crate::subscriptions::types::Subscription,
@@ -310,7 +314,7 @@ async fn run_job_inner(
     _query_name: String,
     cancel: tokio_util::sync::CancellationToken,
 ) -> JobOutcome {
-    let engine_result = SubscriptionSyncEngine::new(&db, &blob_store, &app_settings, &library_root);
+    let engine_result = SubscriptionSyncEngine::new(&db, &app_settings, &library_root);
     let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled;
     let auto_merge_distance = if auto_merge_enabled {
         crate::settings::store::similarity_pct_to_distance(
@@ -325,11 +329,13 @@ async fn run_job_inner(
     let mut engine = match engine_result {
         Ok(engine) => engine
             .with_name(sub.name.clone())
-            .with_progress_mode(if job.requested_by == "query" || job.requested_by == "retry" {
-                "query"
-            } else {
-                "subscription"
-            })
+            .with_progress_mode(
+                if job.requested_by == "query" || job.requested_by == "retry" {
+                    "query"
+                } else {
+                    "subscription"
+                },
+            )
             .with_group_name(group_name.clone())
             .with_rate_limiter(rate_limiter.clone())
             .with_auto_merge(
@@ -352,8 +358,10 @@ async fn run_job_inner(
     };
 
     if job.job_kind == "retry_post" {
-        let runtime =
-            crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(db.as_ref(), &library_root);
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            db.as_ref(),
+            &library_root,
+        );
         let canonical_site_id =
             crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id).to_string();
         let attempts = match runtime
@@ -441,8 +449,10 @@ async fn run_job_inner(
         };
     }
 
-    let runtime =
-        crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(db.as_ref(), &library_root);
+    let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+        db.as_ref(),
+        &library_root,
+    );
     let mut total_downloaded_delta = 0usize;
     let mut total_skipped = 0usize;
     let mut total_metadata_validated = 0usize;
@@ -488,8 +498,7 @@ async fn run_job_inner(
             }
             remaining
         };
-        let post_limit =
-            effective_query_post_limit(app_settings.sub_batch_size, effective_limit);
+        let post_limit = effective_query_post_limit(app_settings.sub_batch_size, effective_limit);
         let progress: SyncProgress = engine
             .sync_query(
                 job.run_id,
@@ -520,7 +529,11 @@ async fn run_job_inner(
             break;
         }
 
-        let refreshed = runtime.get_subscription_query(query.query_id).await.ok().flatten();
+        let refreshed = runtime
+            .get_subscription_query(query.query_id)
+            .await
+            .ok()
+            .flatten();
         let needs_continuation = refreshed.as_ref().is_some_and(|query| {
             !query.completed_initial_run
                 && query

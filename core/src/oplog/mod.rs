@@ -15,6 +15,7 @@ use rusqlite::Connection;
 pub mod backend;
 pub mod backend_fs;
 pub mod drain;
+pub mod remote_library;
 pub mod replay;
 pub mod segment;
 pub mod sync;

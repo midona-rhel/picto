@@ -1,0 +1,278 @@
+/* AI Tagging settings panel — hardware card, model table, cutoffs, behavior. */
+
+.panel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 4px 2px;
+}
+
+.block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.blockTitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.hint {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  line-height: 1.5;
+}
+
+.error {
+  font-size: 12px;
+  color: var(--color-danger, #e5484d); /* guard:allow — danger fallback matches existing usage */
+  white-space: pre-wrap;
+}
+
+/* ── Hardware card ── */
+
+.hwCard {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-black-10);
+  padding: 12px 14px;
+}
+
+.hwName {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.hwDetail {
+  font-size: 11.5px;
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+}
+
+.hwReco {
+  margin-left: auto;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.hwRecoLabel {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+}
+
+.hwRecoValue {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+/* ── Model table ── */
+
+.modelTable {
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.modelRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.modelRow:first-child {
+  border-top: none;
+}
+
+.modelMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.modelName {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+
+.badge {
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  border-radius: 4px;
+  padding: 1.5px 6px;
+  flex-shrink: 0;
+}
+
+.badgeReco {
+  composes: badge;
+  color: var(--color-primary);
+  background: var(--color-primary-10);
+  border: 1px solid var(--color-primary-20);
+}
+
+.badgeHeavy {
+  composes: badge;
+  color: var(--color-text-secondary);
+  background: var(--color-subtle-overlay);
+  border: 1px solid var(--color-border-primary);
+}
+
+.modelMeta {
+  font-size: 11.5px;
+  color: var(--color-text-tertiary);
+  margin-top: 2px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.modelState {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.stateDownloaded {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.stateDownloaded svg {
+  color: var(--color-primary);
+}
+
+.btn {
+  font-size: 12px;
+  color: var(--color-text-primary);
+  background: var(--color-surface-1);
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.btn:hover {
+  background: var(--color-surface-hover);
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.btnGhost {
+  composes: btn;
+  background: transparent;
+  border-color: transparent;
+  color: var(--color-text-tertiary);
+}
+
+.btnGhost:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+
+.downloadWrap {
+  width: 200px;
+}
+
+.downloadMeta {
+  display: flex;
+  justify-content: space-between;
+  font-size: 10.5px;
+  color: var(--color-text-tertiary);
+  margin-bottom: 4px;
+  font-family: var(--font-family-mono);
+}
+
+/* ── Confidence cutoffs ── */
+
+.threshGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 28px;
+  max-width: 640px;
+}
+
+.threshRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 12.5px;
+}
+
+.threshLabel {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 92px;
+  flex-shrink: 0;
+  color: var(--color-text-secondary);
+}
+
+.threshDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: 0.75;
+}
+
+.threshSlider {
+  flex: 1;
+  height: 3px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+.threshValue {
+  font-size: 11px;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+  width: 34px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ── Behavior toggles ── */
+
+.optRow {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 3px 0;
+}
+
+.optText {
+  flex: 1;
+  min-width: 0;
+}
+
+.optLabel {
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.optHint {
+  font-size: 11.5px;
+  color: var(--color-text-tertiary);
+  margin-top: 1px;
+}

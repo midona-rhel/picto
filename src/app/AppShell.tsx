@@ -7,7 +7,7 @@
 
 import { useCallback, useEffect, useRef } from 'react';
 import { isNativeDragPending as isNativeDragPendingFn, isDragActive as isDragActiveFn, getDragState, startNativeDrag as startNativeDragFn } from '../features/grid/dragState';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { IconLayoutSidebar, IconSettings, IconChevronLeft, IconChevronRight, IconPin, IconPinFilled } from '@tabler/icons-react';
 import { Sidebar } from '../features/sidebar/Sidebar';
 import { GridScreen } from '../features/grid/GridScreen';
@@ -29,12 +29,14 @@ import { viewerSessionAtom } from '../state/viewer';
 import { startAppRuntime } from '../runtime/appRuntime';
 import { registerAppSettingsReload } from '../runtime/appSettingsSettle';
 import { zoomController } from '../controllers/zoomController';
-import { canGoBackAtom, canGoForwardAtom, goBack, goForward, pushHistory } from '../state/navigationHistory';
+import { canGoBackAtom, canGoForwardAtom, goBack, goForward, pushHistory, pushSubscriptionsHistory } from '../state/navigationHistory';
+import { subscriptionsSelectionAtom, subscriptionsWorkspaceSnapshotAtom } from '../state/subscriptionsWorkspace';
 import { getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
 import { KbdTooltip } from '../shared/ui/KbdTooltip';
 import { WindowControls } from '../shared/ui/WindowControls';
 import { appController } from '../controllers/appController';
 import { settingsController } from '../controllers/settingsController';
+import { isEditableTarget } from './editableTarget';
 import styles from './AppShell.module.css';
 
 function InspectorTitlebarActions() {
@@ -58,14 +60,17 @@ function openSettings() {
 }
 
 /** Build the full ancestor path for a sidebar node (folder or smart folder). */
-function buildBreadcrumbPath(nodeId: string, nodes: { id: string; name: string; parent_id: string | null }[]): string[] {
-  const path: string[] = [];
+function buildBreadcrumbPath(
+  nodeId: string,
+  nodes: { id: string; name: string; parent_id: string | null }[],
+): { id: string; name: string }[] {
+  const path: { id: string; name: string }[] = [];
   let currentId: string | null = nodeId;
   const sectionRoots = new Set(['section:folders', 'section:smart_folders']);
   while (currentId) {
     const node = nodes.find((n) => n.id === currentId);
     if (!node || sectionRoots.has(node.id)) break;
-    path.unshift(node.name);
+    path.unshift({ id: node.id, name: node.name });
     currentId = node.parent_id ?? null;
   }
   return path;
@@ -80,6 +85,67 @@ function ScopeTitle() {
   const snapshot = useAtomValue(displayedGridSnapshotAtom);
   const parentNodeId = useAtomValue(parentNodeIdAtom);
   const nodes = useAtomValue(sidebarNodesAtom);
+  const activeNodeId = useAtomValue(activeNodeIdAtom);
+  const setActiveNodeId = useSetAtom(activeNodeIdAtom);
+  const [subsSelection, setSubsSelection] = useAtom(subscriptionsSelectionAtom);
+  const subsSnapshot = useAtomValue(subscriptionsWorkspaceSnapshotAtom);
+
+  const navigateToNode = (nodeId: string) => {
+    setActiveNodeId(nodeId);
+    pushHistory(nodeId);
+  };
+
+  // Following breadcrumb: Following [/ Group] [/ Subscription], ancestors clickable.
+  if (activeNodeId === 'system:subscriptions') {
+    const selectedSub =
+      subsSelection?.kind === 'subscription'
+        ? subsSnapshot?.subscriptions.find((sub) => sub.id === subsSelection.id) ?? null
+        : null;
+    const groupId =
+      subsSelection?.kind === 'group'
+        ? subsSelection.id
+        : selectedSub?.group_id != null
+          ? String(selectedSub.group_id)
+          : null;
+    const groupName = groupId != null
+      ? subsSnapshot?.groups.find((group) => group.id === groupId)?.name ?? null
+      : null;
+    const leafName = selectedSub?.name ?? (subsSelection?.kind === 'group' ? groupName : null);
+    if (!leafName) return <span className={styles.scopeTitle}>Following</span>;
+
+    const crumbSeparator = <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>;
+    return (
+      <span className={styles.scopeTitle}>
+        <button
+          type="button"
+          className={styles.scopeCrumbLink}
+          onClick={() => {
+            setSubsSelection(null);
+            pushSubscriptionsHistory(null);
+          }}
+        >
+          Following
+        </button>
+        {selectedSub && groupName && groupId != null && (
+          <>
+            {crumbSeparator}
+            <button
+              type="button"
+              className={styles.scopeCrumbLink}
+              onClick={() => {
+                setSubsSelection({ kind: 'group', id: groupId });
+                pushSubscriptionsHistory({ kind: 'group', id: groupId });
+              }}
+            >
+              {groupName}
+            </button>
+          </>
+        )}
+        {crumbSeparator}
+        {leafName}
+      </span>
+    );
+  }
 
   if (!label) return null;
 
@@ -89,14 +155,19 @@ function ScopeTitle() {
   if (displayedNodeId.startsWith('collection:') && parentNodeId) {
     const parentPath = displayedNodeId.startsWith('collection:') && (parentNodeId.startsWith('folder:') || parentNodeId.startsWith('smart:'))
       ? buildBreadcrumbPath(parentNodeId, nodes)
-      : [parentNodeId === 'system:active' ? 'All' : parentNodeId === 'system:inbox' ? 'Inbox' : parentNodeId === 'system:trash' ? 'Trash' : parentNodeId];
+      : [{
+          id: parentNodeId,
+          name: parentNodeId === 'system:active' ? 'All' : parentNodeId === 'system:inbox' ? 'Inbox' : parentNodeId === 'system:trash' ? 'Trash' : parentNodeId,
+        }];
 
     return (
       <span className={styles.scopeTitle}>
         {parentPath.map((seg, i) => (
-          <span key={i}>
+          <span key={seg.id}>
             {i > 0 && <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>}
-            <span style={{ opacity: 0.6 }}>{seg}</span>
+            <button type="button" className={styles.scopeCrumbLink} onClick={() => navigateToNode(seg.id)}>
+              {seg.name}
+            </button>
           </span>
         ))}
         <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>
@@ -112,9 +183,15 @@ function ScopeTitle() {
       return (
         <span className={styles.scopeTitle}>
           {path.map((seg, i) => (
-            <span key={i}>
+            <span key={seg.id}>
               {i > 0 && <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>}
-              <span style={i < path.length - 1 ? { opacity: 0.6 } : undefined}>{seg}</span>
+              {i < path.length - 1 ? (
+                <button type="button" className={styles.scopeCrumbLink} onClick={() => navigateToNode(seg.id)}>
+                  {seg.name}
+                </button>
+              ) : (
+                <span>{seg.name}</span>
+              )}
             </span>
           ))}
         </span>
@@ -154,16 +231,27 @@ export function AppShell() {
     d.startWidth = el?.offsetWidth ?? inspectorWidth;
     el?.classList.add(styles.inspectorDragging);
 
+    // Coalesce mousemove bursts to one layout write per frame.
+    let pendingWidth = -1;
+    let rafId = 0;
+    const flush = () => {
+      rafId = 0;
+      if (pendingWidth < 0) return;
+      if (el) el.style.width = `${pendingWidth}px`;
+      document.documentElement.style.setProperty('--inspector-width', `${pendingWidth}px`);
+      pendingWidth = -1;
+    };
     const onMove = (ev: MouseEvent) => {
       if (!d.dragging) return;
       const delta = d.startX - ev.clientX;
-      const next = Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, Math.round(d.startWidth + delta)));
-      if (el) el.style.width = `${next}px`;
-      document.documentElement.style.setProperty('--inspector-width', `${next}px`);
+      pendingWidth = Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, Math.round(d.startWidth + delta)));
+      if (!rafId) rafId = requestAnimationFrame(flush);
     };
     const onUp = () => {
       if (!d.dragging) return;
       d.dragging = false;
+      if (rafId) cancelAnimationFrame(rafId);
+      flush();
       el?.classList.remove(styles.inspectorDragging);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
@@ -296,9 +384,10 @@ export function AppShell() {
     };
 
     function handleKeyDown(e: KeyboardEvent) {
+      if (isEditableTarget(e.target)) return;
+
       // Suppress browser Tab focus navigation (but let it fall through to shortcut matching)
       if (e.key === 'Tab') e.preventDefault();
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       if (matchesShortcutDef(e, defs.sidebar))   { e.preventDefault(); toggleSidebar(); return; }
       if (matchesShortcutDef(e, defs.settings))   { e.preventDefault(); openSettings(); return; }

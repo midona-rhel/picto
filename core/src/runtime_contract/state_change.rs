@@ -161,7 +161,7 @@ pub struct StateChanges {
 /// They carry enough data to render the node and its current context inspector
 /// summary (kind, parent, name, icon, color, sort_order, count, selectable,
 /// freshness, meta_json) but omit `expanded_by_default`.
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, Default, Serialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct SidebarNodePatch {
     pub node_id: String,

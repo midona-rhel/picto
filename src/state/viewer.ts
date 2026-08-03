@@ -46,11 +46,29 @@ export const viewerDisplayStateAtom = atom<ViewerDisplayState | null>(null);
 /** Written by MediaView, read by GridToolbar. */
 export const viewerDisplayControlsAtom = atom<ViewerDisplayControls | null>(null);
 
+/**
+ * The session is anchored by entity hash — the stored index is only a hint.
+ * Items can be inserted ahead of the current position while a run ingests;
+ * resolving by index alone would silently shift which image is shown.
+ */
+export function resolveViewerIndex(
+  session: ViewerSession,
+  items: CanonicalEntityGridItem[],
+): number {
+  if (items[session.currentIndex]?.entity_hash === session.currentHash) {
+    return session.currentIndex;
+  }
+  const byHash = items.findIndex((item) => item.entity_hash === session.currentHash);
+  if (byHash >= 0) return byHash;
+  // Current entity vanished (deleted/moved out of scope): stay near position.
+  return Math.min(session.currentIndex, Math.max(items.length - 1, 0));
+}
+
 export const viewerCurrentItemAtom = atom<CanonicalEntityGridItem | null>((get) => {
   const session = get(viewerSessionAtom);
   if (!session) return null;
   const items = get(gridItemsAtom);
-  return items[session.currentIndex] ?? null;
+  return items[resolveViewerIndex(session, items)] ?? null;
 });
 
 /** Create a session from items + target hash. */
@@ -63,13 +81,13 @@ export function createViewerSession(
   return { currentIndex: index, currentHash: hash };
 }
 
-/** Navigate by delta, clamped to bounds. Returns null if out of range. */
+/** Navigate by delta from the hash-anchored position, clamped to bounds. */
 export function navigateViewerSession(
   session: ViewerSession,
   items: CanonicalEntityGridItem[],
   delta: number,
 ): ViewerSession | null {
-  const nextIndex = session.currentIndex + delta;
+  const nextIndex = resolveViewerIndex(session, items) + delta;
   if (nextIndex < 0 || nextIndex >= items.length) return null;
   return { currentIndex: nextIndex, currentHash: items[nextIndex].entity_hash };
 }

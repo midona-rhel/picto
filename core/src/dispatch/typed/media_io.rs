@@ -1,7 +1,4 @@
-//! Handler functions for media I/O operations: path resolution,
-//! OS integration (open, reveal, export), thumbnails, and color search.
-
-use std::path::Path;
+//! Handler functions for media path resolution, export, and thumbnails.
 
 use serde::Deserialize;
 use ts_rs::TS;
@@ -13,7 +10,6 @@ use crate::state::AppState;
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ResolveFilePathInput {
-    #[serde(alias = "entity_hash")]
     pub hash: String,
 }
 
@@ -26,28 +22,6 @@ pub struct ResolveFilePathsBatchInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct OpenFileDefaultInput {
-    #[serde(alias = "entity_hash")]
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct RevealInFolderInput {
-    #[serde(alias = "entity_hash")]
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ExportFileInput {
-    #[serde(alias = "entity_hash")]
-    pub hash: String,
-    pub dest_path: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct OpenInNewWindowInput {
     pub hash: String,
     pub width: Option<u32>,
@@ -56,22 +30,7 @@ pub struct OpenInNewWindowInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ResolveThumbnailPathInput {
-    #[serde(alias = "entity_hash")]
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct EnsureThumbnailInput {
-    #[serde(alias = "entity_hash")]
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct RegenerateThumbnailInput {
-    #[serde(alias = "entity_hash")]
     pub hash: String,
 }
 
@@ -79,13 +38,6 @@ pub struct RegenerateThumbnailInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RegenerateThumbnailsBatchInput {
     pub hashes: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ReanalyzeFileColorsInput {
-    #[serde(alias = "entity_hash")]
-    pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -141,35 +93,6 @@ pub async fn resolve_file_paths_batch(
     serde_json::to_value(&paths).map_err(|e| e.to_string())
 }
 
-pub async fn open_file_default(
-    state: &AppState,
-    input: OpenFileDefaultInput,
-) -> Result<(), String> {
-    state
-        .engine
-        .open_file_default(&state.blob_store, &input.hash)
-        .await
-}
-
-pub async fn reveal_in_folder(state: &AppState, input: RevealInFolderInput) -> Result<(), String> {
-    state
-        .engine
-        .reveal_in_folder(&state.blob_store, &input.hash)
-        .await
-}
-
-pub async fn export_file(state: &AppState, input: ExportFileInput) -> Result<(), String> {
-    state
-        .engine
-        .export_file(
-            &state.blob_store,
-            &state.library_root,
-            &input.hash,
-            Path::new(&input.dest_path),
-        )
-        .await
-}
-
 pub async fn export_media(
     state: &AppState,
     input: ExportMediaInput,
@@ -208,16 +131,6 @@ pub async fn open_in_new_window(
     Ok(())
 }
 
-pub async fn resolve_thumbnail_path(
-    state: &AppState,
-    input: ResolveThumbnailPathInput,
-) -> Result<String, String> {
-    state
-        .engine
-        .resolve_thumbnail_path(&state.blob_store, &input.hash)
-        .await
-}
-
 pub async fn ensure_thumbnail(
     state: &AppState,
     input: EnsureThumbnailInput,
@@ -225,17 +138,6 @@ pub async fn ensure_thumbnail(
     let result = state
         .engine
         .ensure_thumbnail(&state.blob_store, &input.hash)
-        .await?;
-    serde_json::to_value(&result).map_err(|e| e.to_string())
-}
-
-pub async fn regenerate_thumbnail(
-    state: &AppState,
-    input: RegenerateThumbnailInput,
-) -> Result<serde_json::Value, String> {
-    let result = state
-        .engine
-        .regenerate_thumbnail(&state.blob_store, &input.hash)
         .await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
@@ -253,15 +155,4 @@ pub async fn regenerate_thumbnails_batch(
         "regenerated": result.exported,
         "errors": result.errors,
     }))
-}
-
-pub async fn reanalyze_file_colors(
-    state: &AppState,
-    input: ReanalyzeFileColorsInput,
-) -> Result<serde_json::Value, String> {
-    let result = state
-        .engine
-        .reanalyze_file_colors(&state.blob_store, &input.hash)
-        .await?;
-    serde_json::to_value(&result).map_err(|e| e.to_string())
 }

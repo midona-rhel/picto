@@ -1,9 +1,0 @@
-.scrollY {
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.scrollYStable {
-  composes: scrollY;
-  scrollbar-gutter: stable;
-}

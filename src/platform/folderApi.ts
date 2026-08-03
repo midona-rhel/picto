@@ -72,25 +72,20 @@ export function getFolderCoverHash(folderId: number): Promise<string | null> {
   return invoke<string | null>('get_folder_cover_hash', { folder_id: folderId });
 }
 
-export function importFiles(paths: string[], params?: {
+export function addMedia(paths: string[], params?: {
   tag_strings?: string[];
   source_urls?: string[];
   initial_status?: number;
   parent_folder_id?: number | null;
-}): Promise<unknown> {
-  return invoke('import_files', { paths, ...params } as unknown as Record<string, unknown>);
-}
-
-export function importFolder(path: string, params?: {
   preserve_structure?: boolean;
-  parent_folder_id?: number | null;
-  initial_status?: number;
-}): Promise<unknown> {
-  return invoke('import_folder', {
-    path,
-    preserve_structure: params?.preserve_structure ?? true,
+  collection_name?: string | null;
+}): Promise<void> {
+  return invoke<void>('add_media', {
+    paths,
+    ...params,
+    preserve_structure: params?.preserve_structure ?? false,
     parent_folder_id: params?.parent_folder_id ?? null,
-    initial_status: params?.initial_status ?? 1,
+    collection_name: params?.collection_name ?? null,
   } as unknown as Record<string, unknown>);
 }
 

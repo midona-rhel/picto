@@ -13,13 +13,12 @@ use tracing::{info, warn};
 use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
 use crate::ingest::{
-    apply_compiler_plan, build_ingest_change_impact, ingest_single_path,
-    materialize_subscription_collection, IngestBatchSummary, IngestSourceKind,
-    SingleIngestDisposition, SingleIngestOutcome, SingleIngestRequest,
-    SubscriptionCollectionMember,
+    apply_compiler_plan, build_ingest_change_impact, ingest_single_path, materialize_collection,
+    CollectionIngestMember, IngestBatchSummary, IngestSourceKind, SingleIngestDisposition,
+    SingleIngestOutcome, SingleIngestRequest,
 };
-use crate::subscriptions::source_adapter::ParsedMetadata;
 use crate::subscriptions::runtime_service::SubscriptionRuntimeService;
+use crate::subscriptions::source_adapter::ParsedMetadata;
 use crate::tags::logging::{preview_tag_strings, summarize_tag_strings};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -262,7 +261,9 @@ fn add_ingest_queue_item(
         params![
             queue_id,
             source_path,
-            page_num,
+            // Column is NOT NULL DEFAULT 0 (cursor ordering); an explicit NULL
+            // bind bypasses the DEFAULT, so pageless items must bind 0.
+            page_num.unwrap_or(0),
             payload_json,
             if delete_after_ingest { 1 } else { 0 },
             now,
@@ -749,9 +750,10 @@ pub async fn enqueue_manual_files(
     tag_strings: Option<Vec<String>>,
     source_urls: Option<Vec<String>>,
     initial_status: i64,
+    target_folder_id: Option<i64>,
     library_root: Option<&Path>,
-) -> Result<crate::types::ImportBatchResult, String> {
-    let file_paths: Vec<PathBuf> = paths
+) -> Result<(), String> {
+    let mut file_paths: Vec<PathBuf> = paths
         .into_iter()
         .flat_map(|p| {
             let path = PathBuf::from(&p);
@@ -768,6 +770,11 @@ pub async fn enqueue_manual_files(
                 && !library_root.is_some_and(|root| p.starts_with(root))
         })
         .collect();
+    file_paths.sort();
+    file_paths.dedup();
+    if file_paths.is_empty() {
+        return Err("No supported media files to add".to_string());
+    }
 
     for path in &file_paths {
         let request = SingleIngestRequest {
@@ -792,26 +799,109 @@ pub async fn enqueue_manual_files(
             path,
             request,
             None,
-            None,
+            target_folder_id,
             false,
         )
         .await?;
     }
 
-    Ok(crate::types::ImportBatchResult {
-        imported: Vec::new(),
-        skipped: Vec::new(),
-        errors: Vec::new(),
-    })
+    Ok(())
+}
+
+pub async fn enqueue_manual_collection(
+    db: &LibraryDatabase,
+    paths: Vec<String>,
+    name: String,
+    tag_strings: Option<Vec<String>>,
+    source_urls: Option<Vec<String>>,
+    initial_status: i64,
+    target_folder_id: Option<i64>,
+    library_root: Option<&Path>,
+) -> Result<i64, String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Collection name cannot be blank".to_string());
+    }
+
+    let mut file_paths: Vec<PathBuf> = paths
+        .into_iter()
+        .flat_map(|raw_path| {
+            let path = PathBuf::from(raw_path);
+            let path = path.canonicalize().unwrap_or(path);
+            if path.is_dir() {
+                collect_files_recursive(&path)
+            } else {
+                vec![path]
+            }
+        })
+        .filter(|path| {
+            path.is_file()
+                && crate::media_processing::has_supported_extension(path)
+                && !library_root.is_some_and(|root| path.starts_with(root))
+        })
+        .collect();
+    file_paths.sort();
+    file_paths.dedup();
+    if file_paths.is_empty() {
+        return Err("No supported media files to add to collection".to_string());
+    }
+
+    let tag_strings = tag_strings.unwrap_or_default();
+    let source_urls = source_urls.unwrap_or_default();
+    let items = file_paths
+        .into_iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let request = SingleIngestRequest {
+                source_kind: IngestSourceKind::Manual,
+                path: path.clone(),
+                tag_strings: tag_strings.clone(),
+                source_urls: source_urls.clone(),
+                name: None,
+                notes: None,
+                created_at: None,
+                initial_status,
+                skip_thumbnail: false,
+                tag_provenance_mask: crate::db::types::TAG_PROVENANCE_MANUAL,
+                subscription_id: None,
+            };
+            (
+                path,
+                Some(index as i64),
+                IngestQueueItemPayload {
+                    request,
+                    subscription_metadata: None,
+                    target_folder_id,
+                },
+                false,
+            )
+        })
+        .collect();
+
+    db.enqueue_ingest_queue(
+        IngestQueueKind::Collection,
+        "manual",
+        None,
+        None,
+        None,
+        None,
+        None,
+        None,
+        Some(&name),
+        None,
+        items,
+    )
+    .await
 }
 
 pub async fn enqueue_folder_import(
     db: &LibraryDatabase,
     path: String,
-    preserve_structure: bool,
     parent_folder_id: Option<i64>,
+    tag_strings: Option<Vec<String>>,
+    source_urls: Option<Vec<String>>,
     initial_status: i64,
-) -> Result<crate::types::ImportBatchResult, String> {
+) -> Result<(), String> {
     let root_path = {
         let path = PathBuf::from(path);
         path.canonicalize().unwrap_or(path)
@@ -820,56 +910,55 @@ pub async fn enqueue_folder_import(
         return Err(format!("Folder not found: {}", root_path.display()));
     }
 
-    let (directories, file_paths) = collect_import_paths(&root_path)?;
+    let (directories, mut file_paths) = collect_import_paths(&root_path)?;
+    file_paths.retain(|path| crate::media_processing::has_supported_extension(path));
+    file_paths.sort();
+    file_paths.dedup();
+    if file_paths.is_empty() {
+        return Err("No supported media files to add".to_string());
+    }
     let mut folder_cache = std::collections::HashMap::<PathBuf, i64>::new();
-    if preserve_structure {
-        let root_name = root_path
+    let root_name = root_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .unwrap_or("Imported Folder")
+        .to_string();
+    let root_folder_id = db.create_folder(&root_name, parent_folder_id, None, None)?;
+    folder_cache.insert(PathBuf::new(), root_folder_id);
+
+    for directory in directories {
+        let relative = match directory.strip_prefix(&root_path) {
+            Ok(relative) if !relative.as_os_str().is_empty() => relative.to_path_buf(),
+            _ => continue,
+        };
+        let parent_relative = relative.parent().map(Path::to_path_buf).unwrap_or_default();
+        let Some(parent_id) = folder_cache.get(&parent_relative).copied() else {
+            continue;
+        };
+        let name = directory
             .file_name()
-            .and_then(|name| name.to_str())
-            .filter(|name| !name.is_empty())
+            .and_then(|entry| entry.to_str())
+            .filter(|entry| !entry.is_empty())
             .unwrap_or("Imported Folder")
             .to_string();
-        let root_folder_id =
-            db.create_folder(&root_name, parent_folder_id, None, None)?;
-        folder_cache.insert(PathBuf::new(), root_folder_id);
-
-        for directory in directories {
-            let relative = match directory.strip_prefix(&root_path) {
-                Ok(relative) if !relative.as_os_str().is_empty() => relative.to_path_buf(),
-                _ => continue,
-            };
-            let parent_relative = relative.parent().map(Path::to_path_buf).unwrap_or_default();
-            let Some(parent_id) = folder_cache.get(&parent_relative).copied() else {
-                continue;
-            };
-            let name = directory
-                .file_name()
-                .and_then(|entry| entry.to_str())
-                .filter(|entry| !entry.is_empty())
-                .unwrap_or("Imported Folder")
-                .to_string();
-            let folder_id = db.create_folder(&name, Some(parent_id), None, None)?;
-            folder_cache.insert(relative, folder_id);
-        }
+        let folder_id = db.create_folder(&name, Some(parent_id), None, None)?;
+        folder_cache.insert(relative, folder_id);
     }
 
     for file_path in &file_paths {
-        let target_folder_id = if preserve_structure {
-            let relative_parent = file_path
-                .strip_prefix(&root_path)
-                .ok()
-                .and_then(|relative| relative.parent())
-                .map(Path::to_path_buf)
-                .unwrap_or_default();
-            folder_cache.get(&relative_parent).copied()
-        } else {
-            parent_folder_id
-        };
+        let relative_parent = file_path
+            .strip_prefix(&root_path)
+            .ok()
+            .and_then(|relative| relative.parent())
+            .map(Path::to_path_buf)
+            .unwrap_or_default();
+        let target_folder_id = folder_cache.get(&relative_parent).copied();
         let request = SingleIngestRequest {
             source_kind: IngestSourceKind::Manual,
             path: file_path.clone(),
-            tag_strings: Vec::new(),
-            source_urls: Vec::new(),
+            tag_strings: tag_strings.clone().unwrap_or_default(),
+            source_urls: source_urls.clone().unwrap_or_default(),
             name: None,
             notes: None,
             created_at: None,
@@ -893,11 +982,7 @@ pub async fn enqueue_folder_import(
         .await?;
     }
 
-    Ok(crate::types::ImportBatchResult {
-        imported: Vec::new(),
-        skipped: Vec::new(),
-        errors: Vec::new(),
-    })
+    Ok(())
 }
 
 pub async fn enqueue_watch_path(
@@ -1128,19 +1213,14 @@ async fn process_single_queue(
         return Ok(());
     }
 
-    let outcome: SingleIngestOutcome =
-        ingest_single_path(db, blob_store, &payload.request).await?;
+    let outcome: SingleIngestOutcome = ingest_single_path(db, blob_store, &payload.request).await?;
 
     let mut summary = IngestBatchSummary::default();
     summary.flags.merge(&outcome.flags);
     if let Some(folder_id) = payload.target_folder_id {
         let ids = db.resolve_entity_hashes(&[outcome.entity_hash.clone()])?;
         if !ids.is_empty() {
-            db.add_folder_members(
-                folder_id,
-                &ids,
-                crate::db::types::ExpansionMode::EntityOnly,
-            )?;
+            db.add_folder_members(folder_id, &ids, crate::db::types::ExpansionMode::EntityOnly)?;
             summary.folder_ids.push(folder_id);
         }
     }
@@ -1160,7 +1240,11 @@ async fn process_single_queue(
                 .map(|state| SubscriptionRuntimeService::new(db, &state.library_root));
             if let Some(runtime) = runtime {
                 let _ = runtime
-                    .resolve_subscription_download_attempt(subscription_id, queue.query_id, &item_key)
+                    .resolve_subscription_download_attempt(
+                        subscription_id,
+                        queue.query_id,
+                        &item_key,
+                    )
                     .await;
             }
         }
@@ -1188,7 +1272,10 @@ async fn process_single_queue(
         };
         crate::events::emit_state_changed(
             "ingest_queue_single_commit",
-            build_ingest_change_impact(&summary, extra_grid_scopes),
+            crate::ingest::attach_current_sidebar_counts(
+                db,
+                build_ingest_change_impact(&summary, extra_grid_scopes),
+            ),
         );
     }
 
@@ -1209,10 +1296,77 @@ async fn process_single_queue(
         std::slice::from_ref(&outcome.entity_hash),
     )
     .await;
+    if outcome.disposition.is_imported() {
+        if let Ok(state) = crate::state::get_state() {
+            crate::dispatch::typed::ai_tagger::auto_tag_imported(
+                state.as_ref(),
+                std::slice::from_ref(&outcome.entity_hash),
+            )
+            .await;
+        }
+    }
     if item.delete_after_ingest {
         delete_source_file_if_owned(&item.source_path).await;
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct SubscriptionCollectionContext<'a> {
+    subscription_id: i64,
+    category: &'a str,
+    post_id: &'a str,
+}
+
+fn subscription_collection_context(
+    queue: &IngestQueueEntry,
+) -> Result<Option<SubscriptionCollectionContext<'_>>, String> {
+    match (
+        queue.subscription_id,
+        queue.category.as_deref(),
+        queue.post_id.as_deref(),
+    ) {
+        (Some(subscription_id), Some(category), Some(post_id))
+            if !category.trim().is_empty() && !post_id.trim().is_empty() =>
+        {
+            Ok(Some(SubscriptionCollectionContext {
+                subscription_id,
+                category,
+                post_id,
+            }))
+        }
+        (None, None, None) => Ok(None),
+        _ => Err("collection queue has partial subscription context".to_string()),
+    }
+}
+
+async fn persist_subscription_collection_association(
+    db: &LibraryDatabase,
+    context: &SubscriptionCollectionContext<'_>,
+    collection_id: i64,
+) {
+    let Ok(state) = crate::state::get_state() else {
+        return;
+    };
+    let runtime = SubscriptionRuntimeService::new(db, &state.library_root);
+    if let Err(error) = runtime
+        .upsert_subscription_post_collection(
+            context.subscription_id,
+            context.category,
+            context.post_id,
+            collection_id,
+        )
+        .await
+    {
+        warn!(
+            subscription_id = context.subscription_id,
+            category = context.category,
+            post_id = context.post_id,
+            collection_id,
+            %error,
+            "Failed to persist subscription collection association"
+        );
+    }
 }
 
 async fn process_collection_queue(
@@ -1221,26 +1375,28 @@ async fn process_collection_queue(
     queue: &IngestQueueEntry,
     items: &[IngestQueueItem],
 ) -> Result<(), String> {
-    let subscription_id = queue
-        .subscription_id
-        .ok_or_else(|| "subscription collection queue missing subscription_id".to_string())?;
-    let category = queue
-        .category
-        .as_deref()
-        .ok_or_else(|| "subscription collection queue missing category".to_string())?;
-    let post_id = queue
-        .post_id
-        .as_deref()
-        .ok_or_else(|| "subscription collection queue missing post_id".to_string())?;
+    let subscription = subscription_collection_context(queue)?;
     let preferred_name = queue
         .preferred_name
         .as_deref()
-        .ok_or_else(|| "subscription collection queue missing preferred_name".to_string())?;
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| "collection queue missing preferred_name".to_string())?;
 
-    let mut members = Vec::new();
-    let mut processable_items = Vec::new();
+    let mut target_folder_id = None;
+    let mut processable = Vec::new();
     let mut missing_count = 0usize;
     for item in items {
+        let mut payload: IngestQueueItemPayload =
+            serde_json::from_str(&item.payload_json).map_err(|err| err.to_string())?;
+        if let Some(previous_target) = target_folder_id {
+            if previous_target != payload.target_folder_id {
+                return Err("collection queue has conflicting target folders".to_string());
+            }
+        } else {
+            target_folder_id = Some(payload.target_folder_id);
+        }
+        log_ingest_queue_payload("execute_collection", queue.queue_id, item.item_id, &payload);
         db.mark_ingest_queue_item_running(item.item_id).await?;
         let path = PathBuf::from(&item.source_path);
         if !path.exists() {
@@ -1254,131 +1410,173 @@ async fn process_collection_queue(
             .await?;
             continue;
         }
-        let payload: IngestQueueItemPayload =
-            serde_json::from_str(&item.payload_json).map_err(|err| err.to_string())?;
-        log_ingest_queue_payload("execute_collection", queue.queue_id, item.item_id, &payload);
-        let metadata = payload
-            .subscription_metadata
-            .clone()
-            .ok_or_else(|| "subscription collection item missing metadata".to_string())?;
-        members.push(SubscriptionCollectionMember {
-            path,
-            metadata,
-            skip_thumbnail: false,
-        });
-        processable_items.push(item);
+        payload.request.path = path;
+        processable.push((
+            item.clone(),
+            CollectionIngestMember {
+                request: payload.request,
+                metadata: payload.subscription_metadata,
+            },
+        ));
     }
     if missing_count > 0 {
         info!(
             queue_id = queue.queue_id,
             missing_count,
-            remaining = members.len(),
+            remaining = processable.len(),
             "Collection queue: some source files missing, skipping them"
         );
     }
-    if members.is_empty() {
-        // All source files are gone — entire queue is stale, mark items as done
+    if processable.is_empty() {
         info!(
             queue_id = queue.queue_id,
             "All collection source files missing, treating as already-processed no-op"
         );
         return Ok(());
     }
-    members.sort_by_key(|member| member.metadata.page_num.unwrap_or(u32::MAX));
-    for (index, member) in members.iter_mut().enumerate() {
-        member.skip_thumbnail = index > 0;
+
+    processable.sort_by_key(|(_, member)| {
+        member
+            .metadata
+            .as_ref()
+            .and_then(|metadata| metadata.page_num)
+            .unwrap_or(u32::MAX)
+    });
+    for (index, (_, member)) in processable.iter_mut().enumerate() {
+        member.request.skip_thumbnail = index > 0;
     }
+    let (processable_items, members): (Vec<_>, Vec<_>) = processable.into_iter().unzip();
 
-    let existing_collection_id = if let Ok(state) = crate::state::get_state() {
-        let runtime = SubscriptionRuntimeService::new(db, &state.library_root);
-        runtime
-            .get_subscription_post_collection(subscription_id, category, post_id)
-            .await
+    let (existing_collection_id, prior_member_hashes) = if let Some(context) = &subscription {
+        let runtime = crate::state::get_state()
             .ok()
-            .flatten()
+            .map(|state| SubscriptionRuntimeService::new(db, &state.library_root));
+        let existing_collection_id = match &runtime {
+            Some(runtime) => runtime
+                .get_subscription_post_collection(
+                    context.subscription_id,
+                    context.category,
+                    context.post_id,
+                )
+                .await
+                .ok()
+                .flatten(),
+            None => None,
+        };
+        let prior_member_hashes = match runtime {
+            Some(runtime) => runtime
+                .list_subscription_post_members(
+                    context.subscription_id,
+                    context.category,
+                    context.post_id,
+                )
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .filter(|member| member.status == "imported")
+                .filter_map(|member| member.entity_hash)
+                .collect(),
+            None => Vec::new(),
+        };
+        (existing_collection_id, prior_member_hashes)
     } else {
-        None
+        (None, Vec::new())
     };
-    let expected_count = queue.expected_count.unwrap_or(0);
-    let force_collection =
-        existing_collection_id.is_some() || expected_count > 1 || members.len() > 1;
 
-    let result = materialize_subscription_collection(
+    let result = materialize_collection(
         db,
         blob_store,
-        subscription_id,
-        category,
-        post_id,
         preferred_name,
         &members,
         existing_collection_id,
-        force_collection,
+        &prior_member_hashes,
     )
     .await?;
+    let collection_id = result.collection_id.or(existing_collection_id);
+    let target_folder_id = target_folder_id.flatten();
+    let mut folder_ids = Vec::new();
+    if let (Some(folder_id), Some(collection_id)) = (target_folder_id, collection_id) {
+        db.add_folder_members(
+            folder_id,
+            &[collection_id],
+            crate::db::types::ExpansionMode::EntityOnly,
+        )?;
+        folder_ids.push(folder_id);
+    }
 
-    apply_compiler_plan(db, &result.flags, &[]);
-    for member in &result.resolved_members {
-        if let Some(item_key) = member.item_key.as_deref() {
-            if let Ok(state) = crate::state::get_state() {
-                let runtime = SubscriptionRuntimeService::new(db, &state.library_root);
-                let _ = runtime
-                    .resolve_subscription_download_attempt(subscription_id, queue.query_id, item_key)
-                    .await;
+    if let Some(context) = &subscription {
+        for member in &result.resolved_members {
+            let Some(mut metadata) = member.metadata.clone() else {
+                continue;
+            };
+            metadata.post_id = Some(context.post_id.to_string());
+            metadata.category = Some(context.category.to_string());
+            if let Some(item_key) = subscription_item_key(&metadata) {
+                if let Ok(state) = crate::state::get_state() {
+                    let runtime = SubscriptionRuntimeService::new(db, &state.library_root);
+                    let _ = runtime
+                        .resolve_subscription_download_attempt(
+                            context.subscription_id,
+                            queue.query_id,
+                            &item_key,
+                        )
+                        .await;
+                }
             }
+            persist_subscription_post_member(
+                db,
+                context.subscription_id,
+                &metadata,
+                Some(member.entity_hash.as_str()),
+                "imported",
+            )
+            .await;
         }
-        persist_subscription_post_member(
-            db,
-            subscription_id,
-            &ParsedMetadata {
-                item_key: member.item_key.clone(),
-                page_num: member.page_num,
-                canonical_post_url: member.canonical_post_url.clone(),
-                media_url: member.media_url.clone(),
-                post_id: Some(post_id.to_string()),
-                category: Some(category.to_string()),
-                ..Default::default()
-            },
-            Some(member.entity_hash.as_str()),
-            "imported",
-        )
-        .await;
-    }
-    if let Some(collection_id) = result.collection_id.or(existing_collection_id) {
-        reconcile_subscription_collection_order(
-            db,
-            subscription_id,
-            category,
-            post_id,
-            collection_id,
-        )
-        .await;
+        if let Some(collection_id) = collection_id {
+            persist_subscription_collection_association(db, context, collection_id).await;
+            reconcile_subscription_collection_order(
+                db,
+                context.subscription_id,
+                context.category,
+                context.post_id,
+                collection_id,
+            )
+            .await;
+        }
     }
 
-    let mut impact = if let Some(collection_hash) = result.collection_hash {
-        let mut summary = IngestBatchSummary::default();
-        summary.flags.merge(&result.flags);
+    apply_compiler_plan(db, &result.flags, &folder_ids);
+    let mut summary = IngestBatchSummary::default();
+    summary.flags.merge(&result.flags);
+    summary.folder_ids = folder_ids;
+    if let Some(collection_hash) = result.collection_hash.clone() {
         summary.imported_hashes.push(collection_hash);
-        build_ingest_change_impact(&summary, vec!["system:inbox".into()])
     } else {
-        let mut summary = IngestBatchSummary::default();
-        summary.flags.merge(&result.flags);
         summary
             .imported_hashes
             .extend(result.imported_hashes.clone());
-        build_ingest_change_impact(&summary, vec!["system:inbox".into()])
+    }
+    let extra_grid_scopes = if subscription.is_some() {
+        vec!["system:inbox".into()]
+    } else {
+        vec!["system:active".into(), "system:inbox".into()]
     };
-    if let Some(collection_id) = result.collection_id.or(existing_collection_id) {
-        let folder_ids = db
+    let mut impact = build_ingest_change_impact(&summary, extra_grid_scopes);
+    if let Some(collection_id) = collection_id {
+        let collection_folder_ids = db
             .get_collection_folder_ids(collection_id)
             .unwrap_or_default();
         impact = impact.merge(
             crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
                 collection_id,
-                &folder_ids,
+                &collection_folder_ids,
             ),
         );
     }
-    crate::events::emit_state_changed("ingest_queue_collection_commit", impact);
+    crate::events::emit_state_changed(
+        "ingest_queue_collection_commit",
+        crate::ingest::attach_current_sidebar_counts(db, impact),
+    );
 
     for (item, member) in processable_items
         .into_iter()
@@ -1399,20 +1597,38 @@ async fn process_collection_queue(
             delete_source_file_if_owned(&item.source_path).await;
         }
     }
-    let derivative_entity_hashes =
-        unique_entity_hashes(result.resolved_members.iter().map(|member| member.entity_hash.as_str()));
+    let derivative_entity_hashes = unique_entity_hashes(
+        result
+            .resolved_members
+            .iter()
+            .map(|member| member.entity_hash.as_str()),
+    );
     crate::background_work::enqueue_missing_derivative_jobs(
         db,
         blob_store,
         &derivative_entity_hashes,
     )
     .await;
+    let imported_entity_hashes = unique_entity_hashes(
+        result
+            .resolved_members
+            .iter()
+            .filter(|member| member.disposition.is_imported())
+            .map(|member| member.entity_hash.as_str()),
+    );
+    if !imported_entity_hashes.is_empty() {
+        if let Ok(state) = crate::state::get_state() {
+            crate::dispatch::typed::ai_tagger::auto_tag_imported(
+                state.as_ref(),
+                &imported_entity_hashes,
+            )
+            .await;
+        }
+    }
     Ok(())
 }
 
-async fn repair_duplicate_failed_single_queues(
-    db: &Arc<LibraryDatabase>,
-) -> Result<(), String> {
+async fn repair_duplicate_failed_single_queues(db: &Arc<LibraryDatabase>) -> Result<(), String> {
     let candidates = db.list_duplicate_failed_single_queue_candidates().await?;
     for (queue_id, item_id, source_path) in candidates {
         let path = PathBuf::from(&source_path);
@@ -1455,9 +1671,7 @@ async fn process_queue_entry(
     }
 
     let result = match queue.queue_kind {
-        IngestQueueKind::Single => {
-            process_single_queue(db, blob_store, &queue, &items[0]).await
-        }
+        IngestQueueKind::Single => process_single_queue(db, blob_store, &queue, &items[0]).await,
         IngestQueueKind::Collection => {
             process_collection_queue(db, blob_store, &queue, &items).await
         }
@@ -1519,6 +1733,10 @@ pub async fn start_worker_loop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
+    use std::fs;
+    use std::io::Cursor;
+    use tempfile::TempDir;
 
     fn setup_queue_schema(conn: &Connection) {
         conn.execute_batch(
@@ -1558,6 +1776,19 @@ mod tests {
         .unwrap();
     }
 
+    fn write_image(path: &Path, color: u8) {
+        let image = DynamicImage::ImageRgba8(ImageBuffer::from_pixel(
+            8,
+            8,
+            Rgba([color, color, color, 255]),
+        ));
+        let mut bytes = Vec::new();
+        image
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .unwrap();
+        fs::write(path, bytes).unwrap();
+    }
+
     #[test]
     fn count_ingest_queue_by_subscription_reports_imported_reused_and_failed_items() {
         let conn = Connection::open_in_memory().unwrap();
@@ -1588,6 +1819,211 @@ mod tests {
         assert_eq!(counts.ingested, 1);
         assert_eq!(counts.reused, 1);
         assert_eq!(counts.failed, 1);
+    }
+
+    #[test]
+    fn collection_queue_rejects_partial_subscription_context() {
+        let queue = IngestQueueEntry {
+            queue_id: 1,
+            queue_kind: IngestQueueKind::Collection,
+            source_kind: "subscription".to_string(),
+            subscription_id: Some(7),
+            query_id: None,
+            query_run_id: None,
+            cleanup_root: None,
+            post_id: None,
+            category: Some("site".to_string()),
+            preferred_name: Some("post".to_string()),
+            expected_count: None,
+            status: "pending".to_string(),
+        };
+
+        assert_eq!(
+            subscription_collection_context(&queue).unwrap_err(),
+            "collection queue has partial subscription context"
+        );
+    }
+
+    #[tokio::test]
+    async fn manual_collection_enqueue_rejects_blank_names_and_empty_media() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        fs::create_dir_all(&library_root).unwrap();
+        let db = LibraryDatabase::open(&library_root).unwrap();
+
+        let blank_name = enqueue_manual_collection(
+            &db,
+            Vec::new(),
+            "  ".to_string(),
+            None,
+            None,
+            1,
+            None,
+            Some(&library_root),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(blank_name, "Collection name cannot be blank");
+
+        let empty_media = enqueue_manual_collection(
+            &db,
+            Vec::new(),
+            "Valid name".to_string(),
+            None,
+            None,
+            1,
+            None,
+            Some(&library_root),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(empty_media, "No supported media files to add to collection");
+    }
+
+    #[tokio::test]
+    async fn manual_collection_queue_adds_collection_to_folder_not_members() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(&library_root).unwrap();
+        fs::create_dir_all(&source_root).unwrap();
+        let first = source_root.join("first.png");
+        let second = source_root.join("second.png");
+        write_image(&first, 32);
+        write_image(&second, 224);
+
+        let db = Arc::new(LibraryDatabase::open(&library_root).unwrap());
+        let blob_store = Arc::new(BlobStore::open(&library_root).unwrap());
+        let folder_id = db.create_folder("Imported", None, None, None).unwrap();
+        enqueue_manual_collection(
+            db.as_ref(),
+            vec![first.display().to_string(), second.display().to_string()],
+            "Manual collection".to_string(),
+            Some(vec!["general:manual".to_string()]),
+            None,
+            1,
+            Some(folder_id),
+            Some(&library_root),
+        )
+        .await
+        .unwrap();
+
+        let queue = db.lease_next_ingest_queue().await.unwrap().unwrap();
+        process_queue_entry(&db, &blob_store, queue).await.unwrap();
+
+        db.with_read(|conn| {
+            let (collection_id, member_count): (i64, i64) = conn.query_row(
+                "SELECT entity_id, member_count FROM media_entity
+                 WHERE entity_kind = 'collection' AND name = 'Manual collection'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )?;
+            assert_eq!(member_count, 2);
+            let collection_folder_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM folder_member WHERE folder_id = ?1 AND entity_id = ?2",
+                params![folder_id, collection_id],
+                |row| row.get(0),
+            )?;
+            let child_folder_count: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                 FROM folder_member fm
+                 JOIN media_entity child ON child.entity_id = fm.entity_id
+                 WHERE fm.folder_id = ?1 AND child.parent_collection_entity_id = ?2",
+                params![folder_id, collection_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(collection_folder_count, 1);
+            assert_eq!(child_folder_count, 0);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_file_queue_adds_imported_entity_to_target_folder() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(&library_root).unwrap();
+        fs::create_dir_all(&source_root).unwrap();
+        let source = source_root.join("manual.png");
+        write_image(&source, 96);
+
+        let db = Arc::new(LibraryDatabase::open(&library_root).unwrap());
+        let blob_store = Arc::new(BlobStore::open(&library_root).unwrap());
+        let folder_id = db.create_folder("Imported", None, None, None).unwrap();
+        enqueue_manual_files(
+            db.as_ref(),
+            vec![source.display().to_string()],
+            None,
+            None,
+            1,
+            Some(folder_id),
+            Some(&library_root),
+        )
+        .await
+        .unwrap();
+
+        let queue = db.lease_next_ingest_queue().await.unwrap().unwrap();
+        process_queue_entry(&db, &blob_store, queue).await.unwrap();
+
+        db.with_read(|conn| {
+            let member_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM folder_member WHERE folder_id = ?1",
+                params![folder_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(member_count, 1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_file_enqueue_rejects_zero_supported_media() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        fs::create_dir_all(&library_root).unwrap();
+        let db = LibraryDatabase::open(&library_root).unwrap();
+
+        let error = enqueue_manual_files(
+            &db,
+            vec![temp.path().join("missing.png").display().to_string()],
+            None,
+            None,
+            1,
+            None,
+            Some(&library_root),
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(error, "No supported media files to add");
+    }
+
+    #[tokio::test]
+    async fn structured_folder_enqueue_rejects_zero_supported_media_before_creating_folders() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(&library_root).unwrap();
+        fs::create_dir_all(&source_root).unwrap();
+        fs::write(source_root.join("ignored.txt"), "not media").unwrap();
+        let db = LibraryDatabase::open(&library_root).unwrap();
+
+        let error =
+            enqueue_folder_import(&db, source_root.display().to_string(), None, None, None, 1)
+                .await
+                .unwrap_err();
+
+        assert_eq!(error, "No supported media files to add");
+        db.with_read(|conn| {
+            let folder_count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM folder", [], |row| row.get(0))?;
+            assert_eq!(folder_count, 0);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[test]
@@ -1675,6 +2111,9 @@ mod tests {
     #[test]
     fn unique_entity_hashes_preserves_order_while_deduping() {
         let unique = unique_entity_hashes(["a", "b", "a", "c", "b"]);
-        assert_eq!(unique, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
+        assert_eq!(
+            unique,
+            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+        );
     }
 }

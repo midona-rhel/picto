@@ -20,10 +20,7 @@ pub enum ReplayError {
     #[error("backend: {0}")]
     Backend(#[from] super::backend::BackendError),
     #[error("segment {key}: {source}")]
-    Segment {
-        key: String,
-        source: SegmentError,
-    },
+    Segment { key: String, source: SegmentError },
     #[error("op with unknown version {0} — update required, nothing applied past it")]
     UnknownOpVersion(i64),
 }
@@ -150,7 +147,9 @@ impl TruthState {
                 let new_key = if op.op_type == "tag_renamed" {
                     p.get("to").and_then(|v| v.as_str()).map(Self::tag_key)
                 } else {
-                    p.get("into").and_then(|v| v.as_str()).map(|s| s.to_string())
+                    p.get("into")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
                 };
                 if let Some(new_key) = new_key {
                     if let Some(state) = self.tags.remove(key) {
@@ -194,11 +193,17 @@ impl TruthState {
                         .insert("site_mask".into(), mask.clone());
                 }
             }
-            "folder_created" | "folder_updated" | "folder_moved" | "folder_deleted"
-            | "folder_members_added" | "folder_members_removed" => {
+            "folder_created"
+            | "folder_updated"
+            | "folder_moved"
+            | "folder_deleted"
+            | "folder_members_added"
+            | "folder_members_removed" => {
                 apply_container_op(&mut self.folders, "folder", op);
             }
-            "smart_folder_created" | "smart_folder_updated" | "smart_folder_moved"
+            "smart_folder_created"
+            | "smart_folder_updated"
+            | "smart_folder_moved"
             | "smart_folder_deleted" => {
                 apply_container_op(&mut self.smart_folders, "smart_folder", op);
             }
@@ -248,8 +253,7 @@ impl TruthState {
                 }
             }
             "duplicate_decided" => {
-                self.duplicate_decisions
-                    .insert(key.to_string(), p.clone());
+                self.duplicate_decisions.insert(key.to_string(), p.clone());
             }
             // Forward compatibility: unknown op types within a known
             // op_version are ignored here; version gating happens in replay().
@@ -281,7 +285,10 @@ fn apply_container_op(
         }
         "moved" => {
             container.deleted = false;
-            container.parent = p.get("parent").and_then(|v| v.as_str()).map(|s| s.to_string());
+            container.parent = p
+                .get("parent")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string());
         }
         "deleted" => container.deleted = true,
         "members_added" | "members_removed" => {
@@ -333,7 +340,13 @@ pub fn replay_backend(backend: &dyn SyncBackend) -> Result<TruthState, ReplayErr
 mod tests {
     use super::*;
 
-    fn op(hlc: &str, device: &str, op_type: &str, key: &str, payload: serde_json::Value) -> OpRecord {
+    fn op(
+        hlc: &str,
+        device: &str,
+        op_type: &str,
+        key: &str,
+        payload: serde_json::Value,
+    ) -> OpRecord {
         OpRecord {
             op_version: 1,
             op_type: op_type.into(),
@@ -346,14 +359,62 @@ mod tests {
 
     fn two_device_history() -> Vec<OpRecord> {
         vec![
-            op("001-0000", "dev_a", "entity_created", "h1", serde_json::json!({"kind":"single","name":"one","status":1,"tags":["general:cat"]})),
-            op("002-0000", "dev_b", "entity_created", "h2", serde_json::json!({"kind":"single","name":"two","status":1})),
-            op("003-0000", "dev_a", "folder_created", "f-uuid", serde_json::json!({"name":"Art","parent":null})),
-            op("004-0000", "dev_b", "entity_tags_added", "h2", serde_json::json!({"tags":["artist:foo"]})),
-            op("005-0000", "dev_a", "folder_members_added", "f-uuid", serde_json::json!({"entities":["h1"]})),
-            op("006-0000", "dev_b", "entity_status_changed", "h1", serde_json::json!({"status":2})),
-            op("007-0000", "dev_a", "entity_updated", "h1", serde_json::json!({"rating":5})),
-            op("008-0000", "dev_b", "tag_renamed", "artist:foo", serde_json::json!({"to":"artist:bar"})),
+            op(
+                "001-0000",
+                "dev_a",
+                "entity_created",
+                "h1",
+                serde_json::json!({"kind":"single","name":"one","status":1,"tags":["general:cat"]}),
+            ),
+            op(
+                "002-0000",
+                "dev_b",
+                "entity_created",
+                "h2",
+                serde_json::json!({"kind":"single","name":"two","status":1}),
+            ),
+            op(
+                "003-0000",
+                "dev_a",
+                "folder_created",
+                "f-uuid",
+                serde_json::json!({"name":"Art","parent":null}),
+            ),
+            op(
+                "004-0000",
+                "dev_b",
+                "entity_tags_added",
+                "h2",
+                serde_json::json!({"tags":["artist:foo"]}),
+            ),
+            op(
+                "005-0000",
+                "dev_a",
+                "folder_members_added",
+                "f-uuid",
+                serde_json::json!({"entities":["h1"]}),
+            ),
+            op(
+                "006-0000",
+                "dev_b",
+                "entity_status_changed",
+                "h1",
+                serde_json::json!({"status":2}),
+            ),
+            op(
+                "007-0000",
+                "dev_a",
+                "entity_updated",
+                "h1",
+                serde_json::json!({"rating":5}),
+            ),
+            op(
+                "008-0000",
+                "dev_b",
+                "tag_renamed",
+                "artist:foo",
+                serde_json::json!({"to":"artist:bar"}),
+            ),
         ]
     }
 
@@ -389,9 +450,27 @@ mod tests {
         // Device A deletes the folder; device B, concurrently but later in
         // the total order, adds a member. Add-wins: the folder lives.
         let ops = vec![
-            op("001-0000", "dev_a", "folder_created", "f1", serde_json::json!({"name":"Art"})),
-            op("002-0000", "dev_a", "folder_deleted", "f1", serde_json::json!({})),
-            op("002-0001", "dev_b", "folder_members_added", "f1", serde_json::json!({"entities":["h9"]})),
+            op(
+                "001-0000",
+                "dev_a",
+                "folder_created",
+                "f1",
+                serde_json::json!({"name":"Art"}),
+            ),
+            op(
+                "002-0000",
+                "dev_a",
+                "folder_deleted",
+                "f1",
+                serde_json::json!({}),
+            ),
+            op(
+                "002-0001",
+                "dev_b",
+                "folder_members_added",
+                "f1",
+                serde_json::json!({"entities":["h9"]}),
+            ),
         ];
         let state = replay_ops(ops).unwrap();
         let folder = &state.folders["f1"];
@@ -400,9 +479,27 @@ mod tests {
 
         // And the reverse order: delete last in the total order → stays dead.
         let ops = vec![
-            op("001-0000", "dev_a", "folder_created", "f1", serde_json::json!({"name":"Art"})),
-            op("002-0000", "dev_b", "folder_members_added", "f1", serde_json::json!({"entities":["h9"]})),
-            op("003-0000", "dev_a", "folder_deleted", "f1", serde_json::json!({})),
+            op(
+                "001-0000",
+                "dev_a",
+                "folder_created",
+                "f1",
+                serde_json::json!({"name":"Art"}),
+            ),
+            op(
+                "002-0000",
+                "dev_b",
+                "folder_members_added",
+                "f1",
+                serde_json::json!({"entities":["h9"]}),
+            ),
+            op(
+                "003-0000",
+                "dev_a",
+                "folder_deleted",
+                "f1",
+                serde_json::json!({}),
+            ),
         ];
         assert!(replay_ops(ops).unwrap().folders["f1"].deleted);
     }

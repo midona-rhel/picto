@@ -160,14 +160,6 @@ impl ApplicationEngine {
         self.db.search_tags(query, limit, offset)
     }
 
-    pub fn get_all_tags_with_counts(&self) -> Result<Vec<TagRecord>, String> {
-        self.db.get_all_tags_with_counts()
-    }
-
-    pub fn get_entity_tags(&self, entity_hash: &str) -> Result<Vec<TagInfo>, String> {
-        self.db.get_entity_tags(entity_hash)
-    }
-
     pub fn get_tag_relations(
         &self,
         tag_id: i64,

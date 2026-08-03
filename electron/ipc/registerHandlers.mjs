@@ -257,10 +257,6 @@ export function registerIpcHandlers({
         }
         return null;
       }
-      case 'startDragging':
-        // Electron window dragging is driven by CSS app regions. This call is
-        // retained only for frontend compatibility with older host abstractions.
-        return null;
       case 'minimize': win.minimize(); return null;
       case 'toggleMaximize': win.isMaximized() ? win.unmaximize() : win.maximize(); return null;
       case 'setSize': {

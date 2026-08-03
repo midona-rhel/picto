@@ -92,55 +92,13 @@ pub struct DeferredWorkSummary {
     pub dominant_colors_failed_count: i64,
 }
 
-pub use crate::media_analysis::{EnsureThumbnailResult, ReanalyzeFileColorsResult};
-
-pub fn enqueue_derivative_jobs(
-    db: &LibraryDatabase,
-    entity_hash: &str,
-    mime: &str,
-    frame_count: Option<i64>,
-    needs_thumbnail: bool,
-) -> Result<(), String> {
-    crate::media_analysis::enqueue_derivative_jobs(
-        db,
-        entity_hash,
-        mime,
-        frame_count,
-        needs_thumbnail,
-    )
-}
-
-pub async fn enqueue_missing_derivative_jobs(
-    db: &LibraryDatabase,
-    blob_store: &Arc<BlobStore>,
-    entity_hashes: &[String],
-) {
-    crate::media_analysis::enqueue_missing_derivative_jobs(db, blob_store, entity_hashes).await;
-}
-
-pub fn ensure_missing_color_analysis_jobs(
-    db: &LibraryDatabase,
-    entity_hashes: &[String],
-) -> Result<(), String> {
-    crate::media_analysis::ensure_missing_color_analysis_jobs(db, entity_hashes)
-}
-
-pub async fn ensure_thumbnail_now(
-    db: &LibraryDatabase,
-    blob_store: &Arc<BlobStore>,
-    entity_hash: &str,
-    force: bool,
-) -> Result<EnsureThumbnailResult, String> {
-    crate::media_analysis::ensure_thumbnail_now(db, blob_store, entity_hash, force).await
-}
-
-pub async fn reanalyze_file_colors_now(
-    db: &LibraryDatabase,
-    blob_store: &Arc<BlobStore>,
-    entity_hash: &str,
-) -> Result<ReanalyzeFileColorsResult, String> {
-    crate::media_analysis::reanalyze_file_colors_now(db, blob_store, entity_hash).await
-}
+// Facade re-exports: callers use `background_work::` as the single entry
+// point for derivative work; the implementations live in media_analysis.
+pub use crate::media_analysis::{
+    enqueue_derivative_jobs, enqueue_missing_derivative_jobs, ensure_missing_color_analysis_jobs,
+    ensure_thumbnail_now, reanalyze_file_colors_now, EnsureThumbnailResult,
+    ReanalyzeFileColorsResult,
+};
 
 async fn drain_next_entity(
     db: &LibraryDatabase,

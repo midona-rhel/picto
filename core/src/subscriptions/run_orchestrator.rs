@@ -5,8 +5,8 @@
 
 use std::sync::Arc;
 
-use crate::db::LibraryDatabase;
 use crate::blob_store::BlobStore;
+use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
 use crate::subscriptions::job_queue::{
@@ -20,6 +20,50 @@ use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
 pub struct SubscriptionRunOrchestrator;
 
+/// Undo `activate_subscription_guard` + `publish_start` after a failed
+/// enqueue — otherwise the token and the Running task leak and the
+/// subscription reads as permanently running.
+async fn release_guard_and_task(running_subs: &RunningSubscriptions, id: &str) {
+    let mut map = running_subs.lock().await;
+    map.remove(id);
+    drop(map);
+    crate::runtime_state::remove_task(&format!("sub:{id}"));
+}
+
+/// When no executor is alive for this subscription (nothing was leased, or the
+/// process that leased it is gone), stop must do the executor's cleanup itself.
+async fn finalize_stopped_subscription(
+    runtime: &crate::subscriptions::runtime_service::SubscriptionRuntimeService<'_>,
+    running_subs: &RunningSubscriptions,
+    id: &str,
+    name: &str,
+) {
+    let sub_id = id.parse::<i64>().unwrap_or_default();
+    let _ = runtime
+        .finalize_open_runs_for_subscription(sub_id, "cancelled", Some("cancelled"), None)
+        .await;
+    crate::subscriptions::runtime_tasks::publish_finished(
+        id,
+        name,
+        "subscription",
+        None,
+        None,
+        0,
+        0,
+        0,
+        0,
+        None,
+        "cancelled",
+        "Cancelled",
+        None,
+        None,
+    );
+    crate::subscriptions::runtime_tasks::schedule_progress_snapshot_clear(
+        running_subs.clone(),
+        id.to_string(),
+    );
+}
+
 impl SubscriptionRunOrchestrator {
     pub async fn stop_subscription(
         db: &LibraryDatabase,
@@ -27,8 +71,11 @@ impl SubscriptionRunOrchestrator {
         running_subs: &RunningSubscriptions,
         id: String,
     ) -> Result<(), String> {
-        let runtime =
-            crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(db, library_root);
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            db,
+            library_root,
+        );
+        let sub_id = id.parse::<i64>().unwrap_or_default();
         let resolved_name = if let Ok(sub_id) = id.parse::<i64>() {
             runtime
                 .get_subscription(sub_id)
@@ -46,14 +93,48 @@ impl SubscriptionRunOrchestrator {
                 drop(map);
                 token.cancel();
                 let _ = runtime
-                    .cancel_pending_subscription_jobs_for_subscription(
-                        id.parse::<i64>().unwrap_or_default(),
-                    )
+                    .cancel_pending_subscription_jobs_for_subscription(sub_id)
                     .await;
                 publish_cancelling(&id, &resolved_name);
+                // If nothing is actually executing (jobs were still queued, or
+                // the run row was an orphan), no executor will ever finalize —
+                // do it here so the UI clears without a restart.
+                let active = runtime
+                    .count_active_subscription_query_jobs(sub_id)
+                    .await
+                    .unwrap_or(1);
+                if active == 0 {
+                    finalize_stopped_subscription(&runtime, running_subs, &id, &resolved_name)
+                        .await;
+                }
                 Ok(())
             }
-            None => Err(format!("Subscription {} is not running", id)),
+            None => {
+                drop(map);
+                // Not running in-memory, but the DB or task registry may hold
+                // stuck state (orphaned rows, leaked Cancelling task). Make
+                // Stop an idempotent reconciler instead of an error so a stuck
+                // card can be cleared in-app.
+                let _ = runtime
+                    .cancel_pending_subscription_jobs_for_subscription(sub_id)
+                    .await;
+                let active = runtime
+                    .count_active_subscription_query_jobs(sub_id)
+                    .await
+                    .unwrap_or(1);
+                if active == 0 {
+                    let _ = runtime
+                        .finalize_open_runs_for_subscription(
+                            sub_id,
+                            "cancelled",
+                            Some("cancelled"),
+                            None,
+                        )
+                        .await;
+                    crate::runtime_state::remove_task(&format!("sub:{id}"));
+                }
+                Ok(())
+            }
         }
     }
 
@@ -134,8 +215,10 @@ impl SubscriptionRunOrchestrator {
         let _cancel = activate_subscription_guard(running_subs, &id).await?;
 
         publish_start(&id, &sub.name, "subscription", None, None);
-        let _run_id =
-            enqueue_subscription_bundle(&runtime, &bundle, "subscription").await?;
+        if let Err(error) = enqueue_subscription_bundle(&runtime, &bundle, "subscription").await {
+            release_guard_and_task(running_subs, &id).await;
+            return Err(error);
+        }
         let _ = sub_terminal_statuses;
         let _ = blob_store;
         let _ = rate_limiter;
@@ -199,7 +282,10 @@ impl SubscriptionRunOrchestrator {
             Some(query_name.clone()),
         );
 
-        let _run_id = enqueue_single_query(&runtime, &bundle, "query").await?;
+        if let Err(error) = enqueue_single_query(&runtime, &bundle, "query").await {
+            release_guard_and_task(running_subs, &subscription_id).await;
+            return Err(error);
+        }
         let _ = blob_store;
         let _ = rate_limiter;
         let _ = settings;
@@ -283,7 +369,12 @@ impl SubscriptionRunOrchestrator {
             Some(query_name.clone()),
         );
 
-        let _run_id = enqueue_retry_job(&runtime, sub_id, qid, &canonical_site_id, &post_id).await?;
+        if let Err(error) =
+            enqueue_retry_job(&runtime, sub_id, qid, &canonical_site_id, &post_id).await
+        {
+            release_guard_and_task(running_subs, &subscription_id).await;
+            return Err(error);
+        }
         let _ = retry_url;
         let _ = blob_store;
         let _ = rate_limiter;
@@ -309,8 +400,9 @@ async fn check_credential_preflight(
         let Some(site) = crate::subscriptions::gallery_dl_runner::site_by_id(&query.site_id) else {
             continue;
         };
-        let url = crate::subscriptions::gallery_dl_runner::build_url(&query.site_id, &query.query_text)
-            .unwrap_or_default();
+        let url =
+            crate::subscriptions::gallery_dl_runner::build_url(&query.site_id, &query.query_text)
+                .unwrap_or_default();
         match service.preflight_for_run(&query.site_id, &url).await {
             CredentialPreflight::Ready => {}
             CredentialPreflight::MissingOptional => {
@@ -319,21 +411,36 @@ async fn check_credential_preflight(
             }
             CredentialPreflight::MissingRequired => {
                 let message = format!(
-                    "{} requires a login before it can be used — add an account for {} and run again",
+                    "{} requires a login — open Accounts, add one for {}, then run again",
                     site.name, site.domain
                 );
                 service
-                    .note_preflight_block(subscription_id, Some(query.query_id), &query.site_id, &message)
+                    .note_preflight_block(
+                        subscription_id,
+                        Some(query.query_id),
+                        &query.site_id,
+                        &message,
+                    )
                     .await;
                 return Err(message);
             }
             CredentialPreflight::Blocked { status } => {
+                let reason = match status.as_str() {
+                    "expired" => "session has expired".to_string(),
+                    "unauthorized" => "login was rejected by the site".to_string(),
+                    other => format!("credential is {other}"),
+                };
                 let message = format!(
-                    "The stored credential for {} is {status} — re-authenticate and run again",
+                    "Your {} {reason} — open Accounts and log in again, then run this subscription",
                     site.name
                 );
                 service
-                    .note_preflight_block(subscription_id, Some(query.query_id), &query.site_id, &message)
+                    .note_preflight_block(
+                        subscription_id,
+                        Some(query.query_id),
+                        &query.site_id,
+                        &message,
+                    )
                     .await;
                 return Err(message);
             }

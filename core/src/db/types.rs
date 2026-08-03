@@ -38,6 +38,10 @@ pub enum ExpansionMode {
 pub struct EntityChange {
     pub entity_ids: Vec<i64>,
     pub entity_hashes: Vec<String>,
+    /// Content hashes whose last media_file reference was deleted — their
+    /// blobs are safe to reclaim once the transaction commits.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub freed_file_hashes: Vec<String>,
 }
 
 #[derive(Debug, Default, Serialize)]

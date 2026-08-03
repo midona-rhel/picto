@@ -90,10 +90,20 @@ pub enum SourceRunEvent {
     RunStarted,
     PostDiscovered(PostMetadata),
     AssetDiscovered(DownloadedItem),
-    AssetSkipped { metadata: ParsedMetadata, reason: String },
+    AssetSkipped {
+        metadata: ParsedMetadata,
+        reason: String,
+    },
     AssetDownloadFailed(FailedDownloadedItem),
-    Progress { discovered_items: usize, skipped_archive_items: usize },
-    RunWarning { message: String },
+    Progress {
+        discovered_items: usize,
+        skipped_archive_items: usize,
+    },
+    RunWarning {
+        message: String,
+    },
     RunCompleted,
-    RunFailed { message: String },
+    RunFailed {
+        message: String,
+    },
 }

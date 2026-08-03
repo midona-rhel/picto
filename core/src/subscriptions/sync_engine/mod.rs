@@ -10,7 +10,6 @@
 
 mod credentials;
 mod helpers;
-mod importing;
 mod persistence;
 mod progress;
 mod query;
@@ -21,7 +20,6 @@ use std::path::{Path, PathBuf};
 
 use chrono::Utc;
 
-use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::AppSettings;
@@ -49,7 +47,6 @@ pub struct SyncProgress {
 
 pub struct SubscriptionSyncEngine<'a> {
     db: &'a LibraryDatabase,
-    blob_store: &'a BlobStore,
     library_root: PathBuf,
     rate_limiter: Option<RateLimiter>,
     runner: GalleryDlRunner,
@@ -84,7 +81,6 @@ pub(super) struct PendingCollection {
 impl<'a> SubscriptionSyncEngine<'a> {
     pub fn new(
         db: &'a LibraryDatabase,
-        blob_store: &'a BlobStore,
         settings: &AppSettings,
         library_root: &Path,
     ) -> Result<Self, String> {
@@ -93,7 +89,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         Ok(Self {
             db,
-            blob_store,
             library_root: library_root.to_path_buf(),
             rate_limiter: None,
             runner,
@@ -211,15 +206,16 @@ impl<'a> SubscriptionSyncEngine<'a> {
         query_run_id: Option<i64>,
         sub_id_str: &str,
         progress: &mut SyncProgress,
-    ) {
+    ) -> Result<(), String> {
         let Some(pc) = pending_collections.remove(pending_key) else {
-            return;
+            return Ok(());
         };
         self.enqueue_pending_collection(pc, subscription_id, query_id, query_run_id)
-            .await;
+            .await?;
         progress.queued_for_ingest += 1;
         self.set_phase("queueing");
         self.emit_progress_force(sub_id_str, progress, "Queued post for ingest");
+        Ok(())
     }
 
     async fn enqueue_pending_collection(
@@ -228,7 +224,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         subscription_id: i64,
         query_id: i64,
         query_run_id: Option<i64>,
-    ) {
+    ) -> Result<i64, String> {
         let cleanup_root = pc
             .members
             .first()
@@ -267,8 +263,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 )
             })
             .collect();
-        let _ = self
-            .db
+        self.db
             .enqueue_ingest_queue(
                 crate::ingest_queue::IngestQueueKind::Collection,
                 "subscription",
@@ -282,7 +277,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 pc.expected_count.map(i64::from),
                 items,
             )
-            .await;
+            .await
     }
 
     async fn enqueue_single_subscription_item(
@@ -292,18 +287,22 @@ impl<'a> SubscriptionSyncEngine<'a> {
         query_run_id: Option<i64>,
         file_path: &std::path::Path,
         metadata: &ParsedMetadata,
-    ) {
+    ) -> Result<i64, String> {
         let cleanup_root = helpers::detect_gallery_dl_root(file_path);
-        let request =
-            helpers::build_subscription_ingest_request(subscription_id, file_path, metadata, false, 0);
+        let request = helpers::build_subscription_ingest_request(
+            subscription_id,
+            file_path,
+            metadata,
+            false,
+            0,
+        );
         helpers::log_subscription_ingest_request_shape(
             query_id,
             subscription_id,
             metadata,
             &request.tag_strings,
         );
-        let _ = self
-            .db
+        self.db
             .enqueue_ingest_queue(
                 crate::ingest_queue::IngestQueueKind::Single,
                 "subscription",
@@ -326,7 +325,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     true,
                 )],
             )
-            .await;
+            .await
     }
 
     async fn record_issue(

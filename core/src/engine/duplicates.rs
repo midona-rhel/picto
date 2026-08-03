@@ -41,10 +41,6 @@ impl ApplicationEngine {
             .get_duplicate_pairs(cursor, limit, status, max_distance)
     }
 
-    pub fn get_duplicate_count(&self) -> Result<i64, String> {
-        self.db.get_duplicate_count()
-    }
-
     pub fn resolve_duplicate_pair(
         &self,
         action: &str,

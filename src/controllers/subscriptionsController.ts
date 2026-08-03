@@ -11,6 +11,7 @@ import {
   getGroups,
   getRunningSubscriptionProgress,
   getRunningSubscriptions,
+  getSubscriptionCovers,
   getSubscriptionSites,
   getSubscriptions,
   listCredentialHealth,
@@ -33,6 +34,7 @@ import {
   runSubscriptionQuery,
   setCredential,
   setGroupSchedule,
+  pauseGroup,
   setSubscriptionAutoCollections,
   setSubscriptionGroup,
   stopGroup,
@@ -176,6 +178,10 @@ export const subscriptionsController = {
     return setGroupSchedule(id, schedule);
   },
 
+  pauseGroup(id: string, paused: boolean): Promise<void> {
+    return pauseGroup(id, paused);
+  },
+
   runGroup(id: string): Promise<void> {
     return runGroup(id);
   },
@@ -198,6 +204,12 @@ export const subscriptionsController = {
 
   listCollections(subscriptionId: string): Promise<SubscriptionCollectionRecord[]> {
     return listSubscriptionCollections(subscriptionId);
+  },
+
+  /** Newest downloaded file hash per subscription id, for grid covers. */
+  async getCovers(): Promise<Map<string, string>> {
+    const records = await getSubscriptionCovers();
+    return new Map(records.map((record) => [record.subscription_id, record.entity_hash]));
   },
 
   /** Retry failed posts one at a time — the backend serializes per-site anyway. */

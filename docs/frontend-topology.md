@@ -123,21 +123,7 @@ src/
 | `src/hooks/useInlineRename.ts` | shared | `src/shared/hooks/` |
 | `src/domain/actions/` | feature-owned | `src/features/grid/actions/` |
 
-## CI Enforcement (PBI-403)
-
-The topology is enforced by `scripts/guard-topology.mjs` (run via `npm run guard:topology`).
-
-### What it blocks
-
-1. **Root drift** — new files or directories in `src/` root outside the approved set.
-2. **Deprecated imports** — imports from paths that have been fully migrated (`stores/`, `desktop/`, `app-shell/`).
-
-### What it allows
-
-- Internal imports within canonical directory trees.
-- Transitional compatibility only where it still resolves to canonical shared paths.
-
-### Contributor rules
+## Contributor Rules
 
 1. New domain code goes in `src/features/<feature>/`.
 2. New cross-domain primitives go in `src/shared/`.

@@ -26,13 +26,6 @@ export function getZoomFactor(): number {
   return zoom || 1;
 }
 
-/** Convert visual (zoomed) coordinates to CSS pixels for position:fixed.
- *  Use for clientX/clientY → fixed left/top. */
-export function visualToCSS(visualX: number, visualY: number, zoom?: number): { x: number; y: number } {
-  const z = zoom ?? getZoomFactor();
-  return { x: visualX / z, y: visualY / z };
-}
-
 /** Convert a DOMRect (from getBoundingClientRect) to CSS pixel values.
  *  Use when you need rect positions for fixed positioning or clamping. */
 export function rectToCSS(rect: DOMRect, zoom?: number): { left: number; top: number; right: number; bottom: number; width: number; height: number } {

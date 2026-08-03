@@ -459,28 +459,30 @@ class PictoDownloadJob:
     def __init__(self, url: str):
         from gallery_dl import job
 
+        bridge = self
+
+        # Hooks must be registered at CLASS level: dispatching extractors
+        # (twitter user → timeline, furaffinity gallery/scraps, ...) spawn
+        # CHILD jobs via `self.__class__(extr, self)`. Instance-level hook
+        # registration on the parent leaves children silent — their downloads
+        # succeed on disk but no item events reach Picto, so nothing ingests.
         class _BridgeJob(job.DownloadJob):
-            pass
+            def initialize(self, *args, **kwargs):
+                super().initialize(*args, **kwargs)
+                self.out = _NullOutput()
+                if not isinstance(self.hooks, collections.defaultdict):
+                    self.hooks = collections.defaultdict(list)
+                self.register_hooks(
+                    {
+                        "prepare": bridge._safe_hook(bridge._on_prepare),
+                        "after": bridge._safe_hook(bridge._on_after),
+                        "skip": bridge._safe_hook(bridge._on_skip),
+                        "error": bridge._safe_hook(bridge._on_error),
+                    }
+                )
 
         self._job = _BridgeJob(url)
         self._job.out = _NullOutput()
-        self._job.initialize = self._wrap_initialize(self._job.initialize)
-
-    def _wrap_initialize(self, original):
-        def wrapped(*args, **kwargs):
-            original(*args, **kwargs)
-            if not isinstance(self._job.hooks, collections.defaultdict):
-                self._job.hooks = collections.defaultdict(list)
-            self._job.register_hooks(
-                {
-                    "prepare": self._safe_hook(self._on_prepare),
-                    "after": self._safe_hook(self._on_after),
-                    "skip": self._safe_hook(self._on_skip),
-                    "error": self._safe_hook(self._on_error),
-                }
-            )
-
-        return wrapped
 
     def _safe_hook(self, fn):
         def wrapped(pathfmt):

@@ -58,16 +58,15 @@ import { SubfolderGrid } from './SubfolderGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import { saveScrollPosition, getScrollPosition, pushHistory } from '../../state/navigationHistory';
-import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession } from '../../state/viewer';
-import { tagSelectOpenAtom, folderPickerOpenAtom, aiTaggerOpenAtom, batchRenameOpenAtom } from '../../state/portals';
+import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
+import { tagSelectOpenAtom, folderPickerOpenAtom, aiTaggerPortalAtom, inspectorAnchor } from '../../state/portals';
 import { confirmModalAtom, folderImportModalAtom, exportModalAtom, tagSelectModalAtom, folderPickerModalAtom } from '../../state/modals';
 import { MediaView } from '../viewer/MediaView';
-import { SubscriptionsScreen } from '../subscriptions/SubscriptionsScreen';
+import { ManagerSurface } from '../managers/ManagerSurface';
 import { QuickLook } from '../viewer/QuickLook';
 import { TagSelectPanel } from '../tags/TagSelectPanel';
 import { FolderPickerPanel } from '../folders/FolderPickerPanel';
 import { AiTaggerPanel } from '../ai-tagger/AiTaggerPanel';
-import { BatchRenamePanel } from '../batch-rename/BatchRenamePanel';
 import { useGridArrowNav } from './hooks/useGridArrowNav';
 import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
@@ -151,8 +150,7 @@ export function GridScreen() {
   const setQuickLookSession = useSetAtom(quickLookSessionAtom);
   const setTagSelectOpen = useSetAtom(tagSelectOpenAtom);
   const setFolderPickerOpen = useSetAtom(folderPickerOpenAtom);
-  const setAiTaggerOpen = useSetAtom(aiTaggerOpenAtom);
-  const setBatchRenameOpen = useSetAtom(batchRenameOpenAtom);
+  const setAiTaggerPortal = useSetAtom(aiTaggerPortalAtom);
   const setTagSelectModal = useSetAtom(tagSelectModalAtom);
   const setFolderPickerModal = useSetAtom(folderPickerModalAtom);
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
@@ -214,12 +212,11 @@ export function GridScreen() {
         store.set(folderImportModalAtom, {
           open: true,
           path: paths[0],
-          preserveStructure: true,
           targetFolderId: folderId ?? null,
         });
       } else {
         // File import — direct
-        void filesController.importFiles(paths, folderId != null ? { parent_folder_id: folderId } : {});
+        void filesController.addMedia(paths, folderId != null ? { parent_folder_id: folderId } : {});
       }
     });
 
@@ -575,6 +572,8 @@ export function GridScreen() {
   setTagSelectModalRef.current = setTagSelectModal;
   const setFolderPickerModalRef = useRef(setFolderPickerModal);
   setFolderPickerModalRef.current = setFolderPickerModal;
+  const setAiTaggerPortalRef = useRef(setAiTaggerPortal);
+  setAiTaggerPortalRef.current = setAiTaggerPortal;
 
   useEffect(() => {
     const defs = {
@@ -591,6 +590,7 @@ export function GridScreen() {
       openNewWindow:   getShortcut('file.openNewWindow')!,
       addTag:          getShortcut('organize.addTag')!,
       addToFolders:    getShortcut('organize.addFolder')!,
+      autoTag:         getShortcut('organize.autoTag')!,
     };
 
     function handleKeyDown(e: KeyboardEvent) {
@@ -669,6 +669,9 @@ export function GridScreen() {
       if (matchesShortcutDef(e, defs.addToFolders) && count > 0) {
         e.preventDefault(); setFolderPickerModalRef.current({ open: true }); return;
       }
+      if (matchesShortcutDef(e, defs.autoTag) && count > 0) {
+        e.preventDefault(); setAiTaggerPortalRef.current({ open: true, anchor: inspectorAnchor() }); return;
+      }
 
       // Rating keys 0-5 (plain digits, no modifiers)
       if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && count > 0) {
@@ -694,10 +697,7 @@ export function GridScreen() {
 
   const renderIncomingSurface = () => {
     if (!isGridScope) {
-      if (activeNodeId === 'system:subscriptions') {
-        return <SubscriptionsScreen />;
-      }
-      return <div className={styles.nonGridPlaceholder}>This view is not available yet</div>;
+      return <ManagerSurface nodeId={activeNodeId} />;
     }
 
     if (error) {
@@ -753,7 +753,7 @@ export function GridScreen() {
                     });
                     if (result) {
                       const paths = Array.isArray(result) ? result : [result];
-                      await filesController.importFiles(paths);
+                      await filesController.addMedia(paths);
                     }
                   } catch (err) {
                     console.error('[grid] import files failed:', err);
@@ -771,7 +771,7 @@ export function GridScreen() {
                     });
                     if (result) {
                       const folderPath = typeof result === 'string' ? result : result[0];
-                      await filesController.importFolder(folderPath);
+                      await filesController.addMedia([folderPath], { preserve_structure: true });
                     }
                   } catch (err) {
                     console.error('[grid] import folder failed:', err);
@@ -1052,8 +1052,7 @@ export function GridScreen() {
             },
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
             onOpenTagSelect: () => { setTagSelectModal({ open: true }); },
-            onOpenAiTagger: () => { setAiTaggerOpen(true); },
-            onOpenBatchRename: () => { setBatchRenameOpen(true); },
+            onOpenAiTagger: () => { setAiTaggerPortal({ open: true, anchor: inspectorAnchor() }); },
             onCreateCollection: () => {
               const hashes = [...effectiveHashes];
               const selectedItems = items.filter((i) => effectiveHashes.has(i.entity_hash));
@@ -1171,7 +1170,7 @@ export function GridScreen() {
       {viewerSession && (
         <MediaView
           items={items}
-          currentIndex={viewerSession.currentIndex}
+          currentIndex={resolveViewerIndex(viewerSession, items)}
           totalCount={totalCount}
           onNavigate={(delta) => {
             const next = navigateViewerSession(viewerSession, items, delta);
@@ -1196,7 +1195,7 @@ export function GridScreen() {
       {quickLookSession && (
         <QuickLook
           items={items}
-          currentIndex={quickLookSession.currentIndex}
+          currentIndex={resolveViewerIndex(quickLookSession, items)}
           totalCount={totalCount}
           onNavigate={(delta) => {
             const next = navigateViewerSession(quickLookSession, items, delta);
@@ -1229,7 +1228,6 @@ export function GridScreen() {
       <TagSelectPanel />
       <FolderPickerPanel />
       <AiTaggerPanel />
-      <BatchRenamePanel />
     </div>
   );
 }

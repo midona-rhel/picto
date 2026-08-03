@@ -299,15 +299,11 @@ fn apply_scope(
             let idx = bound.len() + 1;
             parts.push("me.status = 1".into());
             parts.push(format!(
-                "(EXISTS (SELECT 1 FROM entity_tag et JOIN tag t ON t.tag_id = et.tag_id \
-                  WHERE et.entity_id = me.entity_id \
-                  AND (t.namespace || ':' || t.subtag = ?{idx} OR t.subtag = ?{idx})) \
-                 OR (me.entity_kind = 'collection' AND EXISTS (\
+                "({} OR (me.entity_kind = 'collection' AND EXISTS (\
                      SELECT 1 FROM media_entity child \
-                     JOIN entity_tag et ON et.entity_id = child.entity_id \
-                     JOIN tag t ON t.tag_id = et.tag_id \
-                     WHERE child.parent_collection_entity_id = me.entity_id \
-                     AND (t.namespace || ':' || t.subtag = ?{idx} OR t.subtag = ?{idx}))))"
+                     WHERE child.parent_collection_entity_id = me.entity_id AND {})))",
+                effective_tag_exists("me.entity_id", idx),
+                effective_tag_exists("child.entity_id", idx),
             ));
             bound.push(Box::new(scope.key.clone().unwrap_or_default()));
         }
@@ -420,9 +416,11 @@ fn apply_filters(filters: &QueryFilters, parts: &mut Vec<String>, bound: &mut Ve
         for tf in tag_filters {
             let idx = bound.len() + 1;
             let tag_exists = format!(
-                "EXISTS (SELECT 1 FROM entity_tag et JOIN tag t ON t.tag_id = et.tag_id \
-                 WHERE et.entity_id = me.entity_id \
-                 AND (t.namespace || ':' || t.subtag = ?{idx} OR t.subtag = ?{idx}))"
+                "({} OR (me.entity_kind = 'collection' AND EXISTS (\
+                    SELECT 1 FROM media_entity child \
+                    WHERE child.parent_collection_entity_id = me.entity_id AND {})))",
+                effective_tag_exists("me.entity_id", idx),
+                effective_tag_exists("child.entity_id", idx),
             );
             match tf.match_mode {
                 TagMatchMode::Include => parts.push(tag_exists),
@@ -468,6 +466,55 @@ fn apply_filters(filters: &QueryFilters, parts: &mut Vec<String>, bound: &mut Ve
             }
         }
     }
+}
+
+fn effective_tag_exists(entity_id: &str, parameter_index: usize) -> String {
+    let matches_requested_tag = |membership_alias: &str| {
+        format!(
+            "({membership_alias}.tag_id = requested.tag_id
+              OR EXISTS (
+                  SELECT 1 FROM tag_alias ta
+                  WHERE ta.from_tag_id = requested.tag_id
+                    AND ta.to_tag_id = {membership_alias}.tag_id
+              )
+              OR EXISTS (
+                  SELECT 1 FROM tag_alias ta
+                  WHERE ta.from_tag_id = {membership_alias}.tag_id
+                    AND ta.to_tag_id = requested.tag_id
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM tag_alias requested_alias
+                  JOIN tag_alias member_alias
+                    ON member_alias.to_tag_id = requested_alias.to_tag_id
+                  WHERE requested_alias.from_tag_id = requested.tag_id
+                    AND member_alias.from_tag_id = {membership_alias}.tag_id
+              ))"
+        )
+    };
+
+    format!(
+        "EXISTS (
+            SELECT 1
+            FROM tag requested
+            WHERE (requested.namespace || ':' || requested.subtag = ?{parameter_index}
+                   OR requested.subtag = ?{parameter_index})
+              AND (
+                  EXISTS (
+                      SELECT 1 FROM entity_tag direct
+                      WHERE direct.entity_id = {entity_id}
+                        AND {direct_match}
+                  )
+                  OR EXISTS (
+                      SELECT 1 FROM entity_tag_implied implied
+                      WHERE implied.entity_id = {entity_id}
+                        AND {implied_match}
+                  )
+              )
+        )",
+        direct_match = matches_requested_tag("direct"),
+        implied_match = matches_requested_tag("implied"),
+    )
 }
 
 fn apply_date_filter(
@@ -531,7 +578,7 @@ const SIMILAR_HAMMING_THRESHOLD: u32 = 10;
 
 /// Resolve entity_ids of entities with perceptual hashes similar to the
 /// source entity identified by `source_entity_hash`.
-/// TODO: This is a brute-force linear scan. Replace with BK-tree lookup for large libraries.
+/// The simple linear scan is intentional until representative-library profiling proves it slow.
 fn resolve_similar_ids(conn: &Connection, source_entity_hash: &str) -> Vec<i64> {
     let engine = base64::engine::general_purpose::STANDARD;
 

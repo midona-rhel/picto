@@ -36,7 +36,8 @@ import {
   selectedEntityHashesAtom,
 } from '../../state/selection';
 import { sidebarNodesAtom } from '../../state/sidebar';
-import { tagSelectPortalAtom, folderPickerPortalAtom } from '../../state/portals';
+import { tagSelectPortalAtom, folderPickerPortalAtom, aiTaggerPortalAtom } from '../../state/portals';
+import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
 import { activeNodeIdAtom } from '../../state/navigation';
 import { pushHistory } from '../../state/navigationHistory';
 import styles from './Inspector.module.css';
@@ -218,7 +219,7 @@ export function Inspector() {
     const palette = (d.dominant_colors ?? []).map((c) => c.hex).filter((h): h is string => !!h && h.length > 0);
 
     return (
-      <Shell>
+      <Shell footer={<InspectorActionBar count={1} />}>
         <Preview hashes={[d.thumbnail_hash]} type="single" />
         <ColorPalette colors={palette.length > 0 ? palette : d.dominant_color_hex ? [d.dominant_color_hex] : []} />
 
@@ -269,7 +270,7 @@ export function Inspector() {
     const previewHashes = summary?.sample_hashes ?? [...selectedHashes].slice(0, 3);
 
     return (
-      <Shell>
+      <Shell footer={<InspectorActionBar count={count} />}>
         <Preview hashes={previewHashes} type="stacked" />
         <ColorPalette colors={[]} />
 
@@ -355,12 +356,38 @@ export function Inspector() {
 
 // ── Shared sub-components ───────────────────────────────────────
 
-function Shell({ children }: { children: React.ReactNode }) {
+function Shell({ children, footer }: { children: React.ReactNode; footer?: React.ReactNode }) {
   return (
-    <div className={styles.panel}>
+    <div className={styles.panel} data-inspector-panel="">
       <div className={styles.scrollContent}>
         <div className={styles.contentStack}>{children}</div>
       </div>
+      {footer}
+    </div>
+  );
+}
+
+/** Pinned action bar at the bottom of the inspector: Auto Tag + Export
+ * (export is a reserved slot, not available yet). */
+function InspectorActionBar({ count }: { count: number }) {
+  const autoTagDef = getShortcut('organize.autoTag');
+  return (
+    <div className={styles.actionBar}>
+      <KbdTooltip
+        label="Suggest tags with AI"
+        shortcut={autoTagDef ? formatKeysDisplay(autoTagDef.keys) : undefined}
+      >
+        <button
+          className={styles.actionBtnPrimary}
+          onClick={(e) => openPortal(e, aiTaggerPortalAtom)}
+          type="button"
+        >
+          {count > 1 ? `Auto Tag ${count.toLocaleString()} Images` : 'Auto Tag'}
+        </button>
+      </KbdTooltip>
+      <button className={styles.actionBtn} type="button" disabled>
+        Export
+      </button>
     </div>
   );
 }

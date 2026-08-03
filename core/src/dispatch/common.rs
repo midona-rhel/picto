@@ -8,6 +8,11 @@ pub fn ok_null() -> Result<String, String> {
     Ok("null".to_string())
 }
 
+/// Deserialize dispatch args into a typed input struct.
+pub fn from_args<T: serde::de::DeserializeOwned>(args: serde_json::Value) -> Result<T, String> {
+    serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))
+}
+
 /// Deserializes `T` wrapped in `Some`. With `#[serde(default)]` on an `Option<Option<T>>`,
 /// absent keys → `None`, JSON `null` → `Some(None)`, JSON value → `Some(Some(value))`.
 pub fn deserialize_some<'de, T, D>(deserializer: D) -> Result<Option<T>, D::Error>

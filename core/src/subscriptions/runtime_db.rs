@@ -119,6 +119,75 @@ fn map_subscription_post_member_row(
     })
 }
 
+#[derive(Debug, Default)]
+pub struct SubscriptionReconcileReport {
+    pub jobs_cancelled: usize,
+    pub runs_finalized: usize,
+    pub query_runs_finalized: usize,
+    pub health_rows_repaired: usize,
+    pub query_kinds_repaired: usize,
+}
+
+/// Reset subscription runtime rows orphaned by an app quit/crash mid-run.
+///
+/// Safe only at library open, before the site-runner worker starts: any
+/// 'queued'/'running' job at that point belonged to a previous process whose
+/// in-memory cancel tokens and guards are gone, so it can never complete.
+/// Cancelling 'queued' jobs forfeits resume-across-restart by design — a
+/// scheduled or manual re-run re-enqueues fresh work.
+pub fn reconcile_stale_subscription_runtime(
+    conn: &Connection,
+) -> rusqlite::Result<SubscriptionReconcileReport> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let interrupted = "Interrupted — the app was closed while this run was active";
+    let mut report = SubscriptionReconcileReport::default();
+
+    report.jobs_cancelled = conn.execute(
+        "UPDATE subscription_query_job
+         SET status = 'cancelled', finished_at = ?1,
+             failure_kind = COALESCE(failure_kind, 'stale'),
+             error_message = COALESCE(error_message, ?2)
+         WHERE status IN ('queued', 'running')",
+        params![now, interrupted],
+    )?;
+    report.runs_finalized = conn.execute(
+        "UPDATE subscription_run
+         SET status = 'cancelled', finished_at = ?1,
+             failure_kind = COALESCE(failure_kind, 'stale'),
+             error_message = COALESCE(error_message, ?2)
+         WHERE status = 'running'",
+        params![now, interrupted],
+    )?;
+    report.query_runs_finalized = conn.execute(
+        "UPDATE subscription_query_run
+         SET status = 'cancelled', finished_at = ?1,
+             failure_kind = COALESCE(failure_kind, 'stale'),
+             error_message = COALESCE(error_message, ?2)
+         WHERE status = 'running'",
+        params![now, interrupted],
+    )?;
+
+    // Auth-bad health for a site with no stored credential is impossible by
+    // definition — earlier builds wrote these from misclassified download
+    // failures.
+    report.health_rows_repaired = conn.execute(
+        "DELETE FROM credential_health
+         WHERE health_status IN ('unauthorized', 'expired', 'error')
+           AND site_category NOT IN (SELECT site_category FROM credential_domain)",
+        [],
+    )?;
+    // 'error' rows were written for content failures (e.g. user-not-found);
+    // reset so the next successful run can mark them valid again.
+    report.health_rows_repaired += conn.execute(
+        "UPDATE credential_health
+         SET health_status = 'unknown', last_error = NULL
+         WHERE health_status = 'error'",
+        [],
+    )?;
+
+    Ok(report)
+}
+
 pub fn create_subscription_run(conn: &Connection, subscription_id: i64) -> rusqlite::Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
@@ -308,7 +377,7 @@ pub fn enqueue_subscription_query_job(
     job_kind: &str,
     requested_by: &str,
     post_id: Option<&str>,
-) -> rusqlite::Result<i64> {
+) -> rusqlite::Result<(i64, bool)> {
     let existing: Option<i64> = conn
         .query_row(
             "SELECT job_id
@@ -325,7 +394,9 @@ pub fn enqueue_subscription_query_job(
         )
         .optional()?;
     if let Some(job_id) = existing {
-        return Ok(job_id);
+        // Deduplicated against an in-flight job — the caller must know no new
+        // work was queued, or it will create run rows nothing ever finalizes.
+        return Ok((job_id, false));
     }
 
     let now = chrono::Utc::now().to_rfc3339();
@@ -344,7 +415,27 @@ pub fn enqueue_subscription_query_job(
             now
         ],
     )?;
-    Ok(conn.last_insert_rowid())
+    Ok((conn.last_insert_rowid(), true))
+}
+
+/// Finalize every still-'running' run row for a subscription. Used by stop and
+/// cleanup paths where no executor is alive to do it.
+pub fn finalize_open_runs_for_subscription(
+    conn: &Connection,
+    subscription_id: i64,
+    status: &str,
+    failure_kind: Option<&str>,
+    error_message: Option<&str>,
+) -> rusqlite::Result<usize> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE subscription_run
+         SET status = ?1, finished_at = ?2,
+             failure_kind = COALESCE(failure_kind, ?3),
+             error_message = COALESCE(error_message, ?4)
+         WHERE subscription_id = ?5 AND status = 'running'",
+        params![status, now, failure_kind, error_message, subscription_id],
+    )
 }
 
 pub fn list_queued_subscription_query_jobs(
@@ -472,7 +563,6 @@ pub fn reset_subscription_query_state(
     conn: &Connection,
     query_id: i64,
 ) -> rusqlite::Result<(usize, usize, usize, usize, usize)> {
-
     let query_reset = conn.execute(
         "UPDATE subscription_query
          SET files_found = 0,
@@ -504,7 +594,8 @@ pub fn reset_subscription_query_state(
         [query_id],
     )?;
 
-    let queues_deleted = conn.execute("DELETE FROM ingest_queue WHERE query_id = ?1", [query_id])?;
+    let queues_deleted =
+        conn.execute("DELETE FROM ingest_queue WHERE query_id = ?1", [query_id])?;
 
     Ok((
         query_reset,
@@ -519,7 +610,6 @@ pub fn reset_subscription_state(
     conn: &Connection,
     subscription_id: i64,
 ) -> rusqlite::Result<(usize, usize, usize)> {
-
     let queries_reset = conn.execute(
         "UPDATE subscription_query
          SET files_found = 0,
@@ -866,11 +956,11 @@ pub fn upsert_subscription_post_collection(
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO subscription_post_collection (
-             subscription_id, site_id, post_id, collection_entity_id, created_at, updated_at
+             subscription_id, site_id, post_id, collection_entity_id, date_added, date_modified
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
          ON CONFLICT(subscription_id, site_id, post_id)
          DO UPDATE SET collection_entity_id = excluded.collection_entity_id,
-                       updated_at = excluded.updated_at",
+                       date_modified = excluded.date_modified",
         params![subscription_id, site_id, post_id, collection_entity_id, now],
     )?;
     Ok(())

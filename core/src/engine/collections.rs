@@ -1,6 +1,6 @@
 //! Collection CRUD + membership behavior.
 
-use crate::db::types::{CollectionMembershipChange, CollectionRecord, CollectionSummary};
+use crate::db::types::{CollectionMembershipChange, CollectionSummary};
 
 use super::{ApplicationEngine, WriteChange};
 
@@ -16,10 +16,6 @@ fn collection_grid_scopes(collection_id: i64, folder_ids: &[i64]) -> Vec<String>
 }
 
 impl ApplicationEngine {
-    pub fn get_collections(&self) -> Result<Vec<CollectionRecord>, String> {
-        self.db.get_collections()
-    }
-
     pub fn get_collection_summary(&self, collection_id: i64) -> Result<CollectionSummary, String> {
         self.db.get_collection_summary(collection_id)
     }

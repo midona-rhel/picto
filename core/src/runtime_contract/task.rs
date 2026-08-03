@@ -36,6 +36,7 @@ pub enum TaskKind {
     SubscriptionGroup,
     Import,
     ModelDownload,
+    AutoTag,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

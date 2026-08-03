@@ -47,6 +47,17 @@ export interface AppSettings {
   gridSortOrder: string;
   zoomFactor: number | null;
   showTreeGuides: boolean;
+  aiTaggerWd14Enabled: boolean;
+  aiTaggerE621Enabled: boolean;
+  aiTaggerEva02Enabled: boolean;
+  aiTaggerAutoOnImport: boolean;
+  aiTaggerWriteRating: boolean;
+  aiThresholdGeneral: number;
+  aiThresholdCharacter: number;
+  aiThresholdCopyright: number;
+  aiThresholdArtist: number;
+  aiThresholdSpecies: number;
+  aiThresholdRating: number;
   [key: string]: unknown;
 }
 

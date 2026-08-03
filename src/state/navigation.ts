@@ -46,10 +46,6 @@ export const toggleInspectorAtom = atom(null, (get, set) => {
 });
 
 export const showTreeGuidesAtom = atom(true);
-export const toggleTreeGuidesAtom = atom(null, (get, set) => {
-  const next = !get(showTreeGuidesAtom);
-  set(showTreeGuidesAtom, next);
-});
 
 const INSPECTOR_WIDTH_STORAGE_KEY = 'picto-inspector-width';
 export const INSPECTOR_MIN_WIDTH = 260;
@@ -66,4 +62,3 @@ export const setInspectorWidthAtom = atom(null, (_get, set, width: number) => {
   set(inspectorWidthAtom, clamped);
   localStorage.setItem(INSPECTOR_WIDTH_STORAGE_KEY, String(clamped));
 });
-

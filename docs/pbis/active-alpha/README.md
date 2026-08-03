@@ -1,19 +1,35 @@
 # Active PBIs
 
-This directory still contains both active work and historical greenfield-reset notes.
+This directory contains executable work only. Historical reset plans, completed work,
+superseded audits, and site-by-site subscription notes live in `docs/pbis/archive/`.
 
-Frontend status:
-- the frontend was rebuilt and cleaned up in place
-- the API/controller/state/runtime cleanup slices are largely implemented
-- shell, grid, and inspector are the live path
+## Release blockers
 
-Frontend follow-ups still worth treating as genuinely open:
-- [PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md](./docs/pbis/active-alpha/PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md)
-- [PBI-596-greenfield-random-active-image-view-contract.md](./docs/pbis/active-alpha/PBI-596-greenfield-random-active-image-view-contract.md)
-- [PBI-599-context-menu-action-parity.md](./docs/pbis/active-alpha/PBI-599-context-menu-action-parity.md)
+1. [PBI-603-release-finalization-and-integration-gate.md](PBI-603-release-finalization-and-integration-gate.md)
+   - resolve the current merge state
+   - make the complete verification lane green
+   - remove remaining schema/runtime compatibility drift
+2. [PBI-575-greenfield-subscriptions-engine-and-recovery-reset.md](PBI-575-greenfield-subscriptions-engine-and-recovery-reset.md)
+   - make subscription runs reliable and recoverable
+   - consolidate site verification into one maintained matrix
+3. [PBI-577-greenfield-duplicates-and-rejected-media-reset.md](PBI-577-greenfield-duplicates-and-rejected-media-reset.md)
+   - activate the already-present canonical duplicate backend through a usable review surface
+4. [PBI-604-tag-manager-activation.md](PBI-604-tag-manager-activation.md)
+   - implement the rebuilt tag manager against the canonical tag API
+5. [PBI-605-ai-tagging-activation.md](PBI-605-ai-tagging-activation.md)
+   - prove model download, inference, review, apply, and import automation end to end
+6. [PBI-602-multi-device-sync-architecture.md](PBI-602-multi-device-sync-architecture.md)
+   - finish safe two-device folder sync and restart recovery
+7. [PBI-227-first-run-onboarding-and-library-creation-guidance.md](PBI-227-first-run-onboarding-and-library-creation-guidance.md)
+   - make first launch lead directly to creating a library
 
-Backend/runtime and metadata PBIs in this folder remain active when they still describe current repo work. The old reset-program sequencing documents should be read as historical notes unless they have been explicitly refreshed.
+## Backlog policy
 
-Persistence and sync track (2026-07-17 audit):
-- [PBI-601-local-persistence-crash-safety-hardening.md](./docs/pbis/active-alpha/PBI-601-local-persistence-crash-safety-hardening.md) — P1 prerequisite: atomic blob writes, transaction wraps, durability pragmas
-- [PBI-602-multi-device-sync-architecture.md](./docs/pbis/active-alpha/PBI-602-multi-device-sync-architecture.md) — append-only oplog over dumb object storage (Google Drive first)
+- A PBI must describe an observed product gap and a finite acceptance test.
+- Generic audits and architecture manifestos are not active PBIs.
+- Unreproduced bug buckets and legacy-parity programs are deleted, not carried as release work.
+- Do not create one ticket per subscription site. Site support is one tested matrix owned
+  by PBI-575.
+- When implementation lands, archive the PBI in the same commit.
+- If a bug recurs after archival, create a new ticket containing current evidence rather
+  than restoring an old plan written against deleted code.

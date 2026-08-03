@@ -60,7 +60,11 @@ Local package:
 yarn alpha:package
 ```
 
-Local smoke test:
+Packaged smoke (requires the unpacked product created by the package command):
 ```bash
-yarn alpha:smoke -- --platform local --report artifacts/alpha-smoke/local.json
+yarn alpha:smoke -- --report artifacts/alpha-smoke/local.json
 ```
+
+The smoke launches the unpacked product with isolated app data and library storage. It passes only
+when native library initialization succeeds, the main window loads without process/load/preload
+failures during a short settle period, native shutdown succeeds, and the app exits with code `0`.

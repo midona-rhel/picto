@@ -30,7 +30,12 @@ async function extractRustCommands() {
         await scanDir(fullPath);
       } else if (entry.name.endsWith('.rs') && entry.name !== 'common.rs') {
         const content = await fs.readFile(fullPath, 'utf8');
-        for (const cmd of extractRustCommandsFromText(content)) commands.add(cmd);
+        // Match-arm command names only exist in mod.rs's dispatch match; typed
+        // handler files contain unrelated string matches (sort keys, statuses)
+        // that would pollute the command set.
+        if (entry.name === 'mod.rs') {
+          for (const cmd of extractRustCommandsFromText(content)) commands.add(cmd);
+        }
         // Also match TypedCommand const NAME patterns: const NAME: &'static str = "cmd";
         const TYPED_CMD_RE = /const\s+NAME:\s*&'static\s+str\s*=\s*"([a-z_]+)"/g;
         let m;

@@ -92,9 +92,13 @@ pub fn get_collection_folder_ids(
 ) -> rusqlite::Result<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT fm.folder_id
-         FROM media_entity me
-         JOIN folder_member fm ON fm.entity_id = me.entity_id
-         WHERE me.parent_collection_entity_id = ?1
+         FROM folder_member fm
+         WHERE fm.entity_id = ?1
+            OR fm.entity_id IN (
+                SELECT entity_id
+                FROM media_entity
+                WHERE parent_collection_entity_id = ?1
+            )
          ORDER BY fm.folder_id ASC",
     )?;
     let rows = stmt.query_map([collection_id], |row| row.get::<_, i64>(0))?;

@@ -19,7 +19,6 @@ const subfolderSelectionNodeIdsStateAtom = atom<Set<string>>(new Set<string>());
 
 export const selectionModeAtom = atom((get) => get(selectionModeStateAtom));
 export const querySelectionActiveAtom = atom((get) => get(selectionModeStateAtom) === 'query_results');
-export const querySelectionExcludedEntityHashesAtom = atom((get) => get(querySelectionExcludedHashesAtom));
 
 export const selectedSubfolderNodeIdsAtom = atom<
   Set<string>,
@@ -119,8 +118,6 @@ export const selectionCountAtom = atom((get) => {
   }
   return get(explicitSelectionHashesAtom).size;
 });
-
-export const hasSelectionAtom = atom((get) => get(selectionCountAtom) > 0);
 
 /** Single selected hash only exists for explicit single selection. */
 export const selectedEntityHashAtom = atom((get) => {

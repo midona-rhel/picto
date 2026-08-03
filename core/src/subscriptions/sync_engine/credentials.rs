@@ -62,15 +62,4 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .note_run_success(subscription_id, Some(query_id), site_id, used_credential)
             .await;
     }
-
-    pub(super) async fn note_runtime_error(
-        &self,
-        site_id: &str,
-        used_credential: bool,
-        detail: Option<&str>,
-    ) {
-        SubscriptionCredentialService::new(self.db)
-            .note_runtime_error(site_id, used_credential, detail)
-            .await;
-    }
 }

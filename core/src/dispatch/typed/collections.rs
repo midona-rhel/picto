@@ -22,16 +22,6 @@ pub struct CreateCollectionInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct UpdateCollectionInput {
-    #[ts(type = "number")]
-    pub id: i64,
-    pub name: Option<String>,
-    #[serde(default)]
-    pub tags: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddCollectionTagsInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -79,13 +69,6 @@ pub struct DeleteCollectionInput {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn get_collections(
-    state: &AppState,
-    _input: serde_json::Value,
-) -> Result<Vec<crate::db::types::CollectionRecord>, String> {
-    state.engine.get_collections()
-}
-
 pub async fn get_collection_summary(
     state: &AppState,
     input: GetCollectionSummaryInput,
@@ -99,25 +82,6 @@ pub async fn create_collection(
 ) -> Result<i64, String> {
     state.engine.create_collection(&input.name)
 }
-
-pub async fn update_collection(
-    state: &AppState,
-    input: UpdateCollectionInput,
-) -> Result<(), String> {
-    if input.tags.is_some() {
-        return Err(
-            "Collection tag editing no longer lives in update_collection; use the canonical tag commands instead"
-                .to_string(),
-        );
-    }
-    let Some(name) = input.name.as_deref() else {
-        return Ok(());
-    };
-    state.engine.update_collection(input.id, name)
-}
-
-// add_collection_tags / remove_collection_tags removed —
-// collection tags use the generic add_tags/remove_tags path via entity_tag_raw.
 
 pub async fn reorder_collection_members(
     state: &AppState,

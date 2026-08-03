@@ -12,9 +12,9 @@ const { autoUpdater } = pkg;
  * The updater checks GitHub releases for a `latest-{platform}.yml` file
  * that electron-builder generates automatically during `--publish`.
  */
-export function createAutoUpdaterService({ app, isDev, sendToAllWindows }) {
-  // Don't run in dev — no packaged app to update
-  if (isDev) {
+export function createAutoUpdaterService({ app, isDev, isSmoke = false, sendToAllWindows }) {
+  // Smoke launches are intentionally offline and must exercise app startup, not update delivery.
+  if (isDev || isSmoke) {
     return {
       checkForUpdates: () => Promise.resolve(null),
       downloadUpdate: () => Promise.resolve(),
