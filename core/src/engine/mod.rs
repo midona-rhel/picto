@@ -80,7 +80,7 @@ impl ApplicationEngine {
             // updates immediately without waiting for a full compiler rebuild.
             let mut patches = impact.sidebar_node_patches.take().unwrap_or_default();
             for &fid in &change.dirty_folder_ids {
-                if let Ok(Some(count)) = self.db.get_folder_entity_count(fid) {
+                if let Ok(count) = self.db.get_folder_visible_count(fid) {
                     patches.push(crate::runtime_contract::state_change::SidebarNodePatch {
                         node_id: format!("folder:{fid}"),
                         count: Some(Some(count)),

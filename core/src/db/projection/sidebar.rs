@@ -201,16 +201,7 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
         let parent = parent_id
             .map(|pid| format!("folder:{pid}"))
             .unwrap_or_else(|| "section:folders".into());
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(DISTINCT COALESCE(me.parent_collection_entity_id, me.entity_id))
-                 FROM folder_member fm
-                 JOIN media_entity me ON me.entity_id = fm.entity_id
-                 WHERE fm.folder_id = ?1 AND me.status = 1",
-                [fid],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
+        let count = crate::db::query::grid::folder_visible_count(conn, *fid).unwrap_or(0);
         let meta = serde_json::json!({
             "folder_id": fid,
             "notes": notes,

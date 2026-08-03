@@ -803,6 +803,93 @@ fn deleting_folder_tree_removes_memberships_not_media_and_refreshes_sidebar() {
 }
 
 #[test]
+fn folder_count_matches_grid_collection_collapse_and_active_visibility() {
+    let db = open_test_db();
+    let folder_id = db.create_folder("Visible", None, None, None).unwrap();
+
+    let insert = |hash: &str, status: i64| {
+        let file_id = db
+            .insert_file(
+                &format!("{hash}-file"),
+                "image/png",
+                10,
+                None,
+                None,
+                None,
+                None,
+                false,
+                "2026-08-04",
+            )
+            .unwrap();
+        db.insert_single(
+            hash,
+            file_id,
+            Some(hash),
+            status,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap()
+    };
+
+    let first = insert("folder-count-first", 1);
+    let second = insert("folder-count-second", 1);
+    let standalone = insert("folder-count-standalone", 1);
+    let inbox = insert("folder-count-inbox", 0);
+    let trash = insert("folder-count-trash", 2);
+    db.add_folder_members(
+        folder_id,
+        &[first, second, standalone, inbox, trash],
+        crate::db::types::ExpansionMode::EntityOnly,
+    )
+    .unwrap();
+    let collection_id = db
+        .create_collection_with_members_by_hashes(
+            "Collapsed",
+            &[
+                "folder-count-first".to_string(),
+                "folder-count-second".to_string(),
+            ],
+        )
+        .unwrap();
+    // Direct and child membership still represent one visible collection tile.
+    db.add_folder_members(
+        folder_id,
+        &[collection_id],
+        crate::db::types::ExpansionMode::EntityOnly,
+    )
+    .unwrap();
+
+    let page = db
+        .query_entity_view(&EntityViewQuery {
+            base_scope: BaseScope {
+                kind: ScopeKind::Folder,
+                key: None,
+                id: Some(folder_id),
+            },
+            filters: QueryFilters::default(),
+            sort: QuerySort::default(),
+            page: QueryPage::default(),
+        })
+        .unwrap();
+    assert_eq!(page.total_count, Some(2));
+    assert_eq!(page.items.len(), 2);
+    assert_eq!(db.get_folder_visible_count(folder_id).unwrap(), 2);
+
+    db.full_rebuild();
+    db.with_read(|conn| {
+        let sidebar_count: i64 = conn.query_row(
+            "SELECT count FROM sidebar_node WHERE node_id = ?1",
+            [format!("folder:{folder_id}")],
+            |row| row.get(0),
+        )?;
+        assert_eq!(sidebar_count, 2);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn entity_tag_and_collection_mutations_emit_ops() {
     let db = open_test_db();
     let file_id = db

@@ -10,6 +10,29 @@ use crate::db::types::{
     TagMatchMode,
 };
 
+fn folder_scope_membership(parameter_index: usize) -> String {
+    format!(
+        "(EXISTS (SELECT 1 FROM folder_member fm WHERE fm.folder_id = ?{parameter_index} AND fm.entity_id = me.entity_id) \
+         OR (me.entity_kind = 'collection' AND EXISTS (\
+             SELECT 1 FROM media_entity child \
+             JOIN folder_member fm ON fm.entity_id = child.entity_id \
+             WHERE child.parent_collection_entity_id = me.entity_id AND fm.folder_id = ?{parameter_index})))"
+    )
+}
+
+/// Count the same active top-level entities rendered by an unfiltered folder grid.
+pub fn folder_visible_count(conn: &Connection, folder_id: i64) -> rusqlite::Result<i64> {
+    let sql = format!(
+        "SELECT COUNT(*)
+         FROM media_entity me
+         WHERE me.parent_collection_entity_id IS NULL
+           AND me.status = 1
+           AND {}",
+        folder_scope_membership(1)
+    );
+    conn.query_row(&sql, [folder_id], |row| row.get(0))
+}
+
 /// Base SELECT for grid items. Also selects me.entity_id at position 18
 /// (not exposed in EntityGridItem but used for cursor construction).
 const GRID_SELECT: &str = "SELECT
@@ -266,13 +289,7 @@ fn apply_scope(
         ScopeKind::Folder => {
             let idx = bound.len() + 1;
             parts.push("me.status = 1".into());
-            parts.push(format!(
-                "(EXISTS (SELECT 1 FROM folder_member fm WHERE fm.folder_id = ?{idx} AND fm.entity_id = me.entity_id) \
-                 OR (me.entity_kind = 'collection' AND EXISTS (\
-                     SELECT 1 FROM media_entity child \
-                     JOIN folder_member fm ON fm.entity_id = child.entity_id \
-                     WHERE child.parent_collection_entity_id = me.entity_id AND fm.folder_id = ?{idx})))"
-            ));
+            parts.push(folder_scope_membership(idx));
             bound.push(Box::new(scope.id.unwrap_or(0)));
         }
         ScopeKind::SmartFolder => {

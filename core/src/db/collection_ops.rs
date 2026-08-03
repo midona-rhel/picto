@@ -262,15 +262,4 @@ impl LibraryDatabase {
             query::collections::get_parent_collection_ids_for_entities(conn, &ids)
         })
     }
-
-    pub fn get_folder_entity_count(&self, folder_id: i64) -> Result<Option<i64>, String> {
-        self.with_read(|conn| {
-            conn.query_row(
-                "SELECT COUNT(*) FROM folder_member WHERE folder_id = ?1",
-                [folder_id],
-                |row| row.get(0),
-            )
-            .optional()
-        })
-    }
 }

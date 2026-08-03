@@ -137,6 +137,10 @@ impl LibraryDatabase {
         })
     }
 
+    pub fn get_folder_visible_count(&self, folder_id: i64) -> Result<i64, String> {
+        self.with_read(|conn| query::grid::folder_visible_count(conn, folder_id))
+    }
+
     pub fn set_smart_folder_pinned(
         &self,
         smart_folder_id: i64,
