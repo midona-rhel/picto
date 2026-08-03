@@ -2,6 +2,24 @@
 
 use super::*;
 
+fn resolve_entity_hashes_exact(conn: &Connection, hashes: &[String]) -> rusqlite::Result<Vec<i64>> {
+    let mut ids = Vec::with_capacity(hashes.len());
+    let mut resolve =
+        conn.prepare_cached("SELECT entity_id FROM media_entity WHERE entity_hash = ?1")?;
+    for hash in hashes {
+        let id = resolve
+            .query_row([hash], |row| row.get::<_, i64>(0))
+            .map_err(|error| match error {
+                rusqlite::Error::QueryReturnedNoRows => rusqlite::Error::InvalidParameterName(
+                    format!("Unknown media entity hash: {hash}"),
+                ),
+                other => other,
+            })?;
+        ids.push(id);
+    }
+    Ok(ids)
+}
+
 impl LibraryDatabase {
     // ── Collection operations ────────────────────────────────────
 
@@ -31,6 +49,44 @@ impl LibraryDatabase {
                     &serde_json::json!({ "name": n }),
                 )?;
             }
+            Ok(collection_id)
+        })
+    }
+
+    pub fn create_collection_with_members_by_hashes(
+        &self,
+        name: &str,
+        hashes: &[String],
+    ) -> Result<i64, String> {
+        if hashes.is_empty() {
+            return Err("a collection requires at least one member".to_string());
+        }
+
+        let name = name.to_string();
+        let hashes = hashes.to_vec();
+        let now = chrono::Utc::now().to_rfc3339();
+        self.with_write(move |conn| {
+            let ids = resolve_entity_hashes_exact(conn, &hashes)?;
+            let collection_id = write::collections::create_collection(conn, &name, &now)?;
+            let change = write::collections::add_members(conn, collection_id, &ids)?;
+            let collection_hash = query::collections::get_collection_hash(conn, collection_id)?
+                .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+            crate::oplog::record_op(
+                conn,
+                &self.device_id,
+                "collection_created",
+                &collection_hash,
+                &serde_json::json!({ "name": name }),
+            )?;
+            let members = entity_hashes_for_ids(conn, &ids)?;
+            crate::oplog::record_op(
+                conn,
+                &self.device_id,
+                "collection_members_added",
+                &collection_hash,
+                &serde_json::json!({ "members": members }),
+            )?;
+            debug_assert_eq!(change.collection_id, collection_id);
             Ok(collection_id)
         })
     }
@@ -141,8 +197,12 @@ impl LibraryDatabase {
         collection_id: i64,
         hashes: &[String],
     ) -> Result<CollectionMembershipChange, String> {
-        let ids = self.resolve_entity_hashes(hashes)?;
-        self.add_collection_members(collection_id, &ids)
+        self.with_write(|conn| {
+            let ids = resolve_entity_hashes_exact(conn, hashes)?;
+            let change = write::collections::add_members(conn, collection_id, &ids)?;
+            emit_collection_membership_op(conn, &self.device_id, collection_id, &change)?;
+            Ok(change)
+        })
     }
 
     pub fn remove_collection_members_by_hashes(
@@ -154,23 +214,6 @@ impl LibraryDatabase {
         self.remove_collection_members(collection_id, &ids)
     }
 
-    pub fn delete_collection(&self, collection_id: i64) -> Result<Vec<i64>, String> {
-        self.with_write(|conn| {
-            let hash = query::collections::get_collection_hash(conn, collection_id)?;
-            let result = write::collections::delete_collection(conn, collection_id)?;
-            if let Some(hash) = hash {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "collection_deleted",
-                    &hash,
-                    &serde_json::json!({}),
-                )?;
-            }
-            Ok(result)
-        })
-    }
-
     pub fn split_collection(&self, collection_id: i64) -> Result<Vec<i64>, String> {
         self.with_write(|conn| {
             let hash = query::collections::get_collection_hash(conn, collection_id)?;
@@ -180,9 +223,9 @@ impl LibraryDatabase {
                 crate::oplog::record_op(
                     conn,
                     &self.device_id,
-                    "collection_deleted",
+                    "collection_split",
                     &hash,
-                    &serde_json::json!({ "split": true }),
+                    &serde_json::json!({}),
                 )?;
             }
             Ok(result)
@@ -195,12 +238,6 @@ impl LibraryDatabase {
 
     pub fn get_collection_summary(&self, collection_id: i64) -> Result<CollectionSummary, String> {
         self.with_read(|conn| query::collections::get_collection_summary(conn, collection_id))
-    }
-
-    pub fn list_collection_member_hashes(&self, collection_id: i64) -> Result<Vec<String>, String> {
-        self.with_read(|conn| {
-            query::collections::list_collection_member_hashes(conn, collection_id)
-        })
     }
 
     pub fn get_collection_hash(&self, collection_id: i64) -> Result<Option<String>, String> {

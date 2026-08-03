@@ -18,6 +18,7 @@ pub struct GetCollectionSummaryInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateCollectionInput {
     pub name: String,
+    pub hashes: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -80,7 +81,7 @@ pub async fn create_collection(
     state: &AppState,
     input: CreateCollectionInput,
 ) -> Result<i64, String> {
-    state.engine.create_collection(&input.name)
+    state.engine.create_collection(&input.name, &input.hashes)
 }
 
 pub async fn reorder_collection_members(
@@ -119,16 +120,9 @@ pub async fn remove_collection_members(
         .len())
 }
 
-pub async fn delete_collection(
-    state: &AppState,
-    input: DeleteCollectionInput,
-) -> Result<(), String> {
-    state.engine.delete_collection(input.id)
-}
-
-pub async fn list_collection_member_hashes(
+pub async fn split_collection(
     state: &AppState,
     input: DeleteCollectionInput,
 ) -> Result<Vec<String>, String> {
-    state.engine.list_collection_member_hashes(input.id)
+    state.engine.split_collection(input.id)
 }

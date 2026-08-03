@@ -222,7 +222,7 @@ impl TruthState {
                     entity.fields.insert("name".into(), name.clone());
                 }
             }
-            "collection_deleted" => {
+            "collection_split" => {
                 self.entity(key).deleted = true;
             }
             "collection_members_added" | "collection_members_removed" => {

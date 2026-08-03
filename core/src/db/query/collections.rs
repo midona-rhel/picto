@@ -62,16 +62,6 @@ pub fn list_collection_member_hash_rows(
     rows.collect()
 }
 
-pub fn list_collection_member_hashes(
-    conn: &Connection,
-    collection_id: i64,
-) -> rusqlite::Result<Vec<String>> {
-    Ok(list_collection_member_hash_rows(conn, collection_id)?
-        .into_iter()
-        .map(|(_, hash)| hash)
-        .collect())
-}
-
 pub fn get_collection_hash(
     conn: &Connection,
     collection_id: i64,

@@ -501,7 +501,7 @@ export function GridScreen() {
     store.set(confirmModalAtom, {
       open: true,
       title: 'Delete Permanently',
-      message: `This will permanently delete ${selectionCount} item${selectionCount !== 1 ? 's' : ''}. This cannot be undone.`,
+      message: `This will permanently delete ${selectionCount} item${selectionCount !== 1 ? 's' : ''}. If this includes a collection, every child image and underlying file will also be deleted. This cannot be undone.`,
       confirmLabel: 'Delete',
       danger: true,
       onConfirm: () => {
@@ -1014,7 +1014,11 @@ export function GridScreen() {
               if (selCount < 2) return undefined;
               const collections = selectedItems.filter((i) => i.entity_kind === 'collection');
               const nonCollections = selectedItems.filter((i) => i.entity_kind !== 'collection');
-              if (collections.length !== 1 || nonCollections.length === 0) return undefined;
+              if (
+                collections.length !== 1
+                || nonCollections.length === 0
+                || nonCollections.some((item) => !item.mime_type.startsWith('image/'))
+              ) return undefined;
               const collId = collections[0].entity_id;
               return () => {
                 void (async () => {
@@ -1053,19 +1057,23 @@ export function GridScreen() {
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
             onOpenTagSelect: () => { setTagSelectModal({ open: true }); },
             onOpenAiTagger: () => { setAiTaggerPortal({ open: true, anchor: inspectorAnchor() }); },
-            onCreateCollection: () => {
+            onCreateCollection: selectedItems.every((item) => item.mime_type.startsWith('image/')) ? () => {
               const hashes = [...effectiveHashes];
               const selectedItems = items.filter((i) => effectiveHashes.has(i.entity_hash));
               const name = inferCollectionName(selectedItems.map((i) => i.name ?? ''));
               setTransitionPhase('fading_out');
               // Do backend work + navigate after fade-out completes
-              const backendWork = (async () => {
-                const id = await collectionsController.create(name);
-                await collectionsController.addMembers(id, hashes);
-                return id;
-              })();
+              const backendWork = collectionsController.create(name, hashes).then(
+                (id) => ({ id, error: null }),
+                (error) => ({ id: null, error }),
+              );
               setTimeout(async () => {
-                const id = await backendWork;
+                const { id, error } = await backendWork;
+                if (id == null) {
+                  console.error('Failed to create collection', error);
+                  setTransitionPhase('fading_in');
+                  return;
+                }
                 const collNodeId = `collection:${id}`;
                 setParentNodeId(activeNodeId);
                 setCollectionName(name);
@@ -1073,7 +1081,7 @@ export function GridScreen() {
                 store.set(skipFadeOutAtom, true);
                 setActiveNodeId(collNodeId);
               }, SCOPE_TRANSITION_MS);
-            },
+            } : undefined,
             onRemoveFromCollection: gridScope.kind === 'collection' && gridScope.id != null
               ? () => { void collectionsController.removeMembers(gridScope.id!, [...effectiveHashes]); }
               : undefined,
@@ -1089,8 +1097,7 @@ export function GridScreen() {
               if (gridScope.kind === 'collection' && gridScope.id != null) {
                 return () => {
                   void (async () => {
-                    const memberHashes = await collectionsController.listMemberHashes(gridScope.id!);
-                    await collectionsController.delete(gridScope.id!);
+                    const memberHashes = await collectionsController.split(gridScope.id!);
                     const target = parentNodeId ?? 'system:active';
                     setParentNodeId(null);
                     setCollectionName(null);
@@ -1104,8 +1111,7 @@ export function GridScreen() {
               if (singleItem?.entity_kind === 'collection') {
                 return () => {
                   void (async () => {
-                    const memberHashes = await collectionsController.listMemberHashes(singleItem.entity_id);
-                    await collectionsController.delete(singleItem.entity_id);
+                    const memberHashes = await collectionsController.split(singleItem.entity_id);
                     setTimeout(() => setSelectedHashes(new Set(memberHashes)), 100);
                   })();
                 };

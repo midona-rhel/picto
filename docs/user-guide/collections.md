@@ -2,20 +2,18 @@
 
 [← User Guide](README.md)
 
-Collections are curated albums with a specific ordering — like a playlist for images. Unlike [folders](folders.md) (which are organizational containers) or [smart folders](smart-folders.md) (which are automatic), collections give you full manual control over which files appear and in what order.
+Collections are ordered groups of images. Videos cannot be collection members. Unlike [folders](folders.md) and [smart folders](smart-folders.md), a collection appears as one media entity whose content metadata is derived from its child images.
 
 ## Creating a Collection
 
-1. Right-click selected files → **Create Collection**, or use the collections view
-2. Enter a name for the collection
-3. Optionally assign tags to the collection itself
+Select two or more images, right-click, and choose **Create Collection**. Picto creates the collection and attaches every selected image in one operation.
 
 ## Adding and Removing Members
 
 - **Add** — Select files in the grid, right-click → Add to Collection, or drag onto the collection
 - **Remove** — In collection view, right-click a file → Remove from Collection
 
-A file can belong to multiple collections.
+An image belongs to at most one collection. Adding it to another collection moves it there.
 
 ## Reordering Members
 
@@ -27,10 +25,10 @@ Click a collection in the sidebar or collections view to drill down into its mem
 
 In the [detail view](viewing-images-and-video.md), a strip view appears at the bottom showing all collection members as a horizontal carousel for quick navigation.
 
-## Collection Tags
+## Collection Metadata
 
-Collections can have their own tags, separate from the tags on individual files. This is useful for categorizing collections themselves (e.g., tagging a collection as `type:tutorial` or `project:2024`).
+The collection aggregates metadata from its children; it does not own a separate copy. Adding or removing a tag on a collection applies that exact tag change to every child while leaving unrelated child tags untouched.
 
 ## Deleting a Collection
 
-Delete a collection to remove the grouping. The files themselves are not affected — they remain in your library.
+Permanently deleting a collection also deletes every child media entity and its underlying file. Use **Split Collection** when you only want to remove the grouping and keep the child images.

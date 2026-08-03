@@ -198,19 +198,14 @@ pub(super) fn apply_remote_op(
                 }
             }
         }
-        "entity_deleted" | "collection_deleted" => {
-            if op.op_type == "collection_deleted"
-                && p.get("split").and_then(|v| v.as_bool()).unwrap_or(false)
-            {
-                if let Some(id) = entity_id_by_hash(conn, key)? {
-                    write::collections::split_collection(conn, id)?;
-                }
-            } else if let Some(id) = entity_id_by_hash(conn, key)? {
-                if op.op_type == "collection_deleted" {
-                    write::collections::delete_collection(conn, id)?;
-                } else {
-                    write::entities::delete_entities(conn, &[id])?;
-                }
+        "entity_deleted" => {
+            if let Some(id) = entity_id_by_hash(conn, key)? {
+                write::entities::delete_entities(conn, &[id])?;
+            }
+        }
+        "collection_split" => {
+            if let Some(id) = entity_id_by_hash(conn, key)? {
+                write::collections::split_collection(conn, id)?;
             }
         }
         "entity_tags_added" | "entity_tags_removed" => {

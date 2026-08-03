@@ -47,33 +47,6 @@ pub fn update_collection_name(
     Ok(())
 }
 
-pub fn delete_collection(conn: &Connection, collection_id: i64) -> rusqlite::Result<Vec<i64>> {
-    let mut stmt = conn.prepare(
-        "SELECT entity_id
-         FROM media_entity
-         WHERE parent_collection_entity_id = ?1
-         ORDER BY COALESCE(collection_ordinal, 9223372036854775807) ASC, entity_id ASC",
-    )?;
-    let member_ids = stmt
-        .query_map([collection_id], |row| row.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-
-    conn.execute(
-        "UPDATE media_entity
-         SET parent_collection_entity_id = NULL,
-             collection_ordinal = NULL
-         WHERE parent_collection_entity_id = ?1",
-        [collection_id],
-    )?;
-    conn.execute(
-        "DELETE FROM media_entity
-         WHERE entity_id = ?1 AND entity_kind = 'collection'",
-        [collection_id],
-    )?;
-
-    Ok(member_ids)
-}
-
 /// Add single entities as members of a collection.
 /// Sets parent_collection_entity_id and collection_ordinal on each member.
 /// Updates collection aggregates transactionally.
@@ -82,6 +55,8 @@ pub fn add_members(
     collection_id: i64,
     member_entity_ids: &[i64],
 ) -> rusqlite::Result<CollectionMembershipChange> {
+    validate_add_members(conn, collection_id, member_entity_ids)?;
+
     let mut previous_collections = Vec::new();
     let mut previous_stmt = conn.prepare(
         "SELECT parent_collection_entity_id
@@ -125,6 +100,49 @@ pub fn add_members(
         added: member_entity_ids.to_vec(),
         removed: Vec::new(),
     })
+}
+
+/// Reject the whole request before changing membership. Collections aggregate image singles only.
+fn validate_add_members(
+    conn: &Connection,
+    collection_id: i64,
+    member_entity_ids: &[i64],
+) -> rusqlite::Result<()> {
+    let is_collection: bool = conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM media_entity
+             WHERE entity_id = ?1 AND entity_kind = 'collection'
+         )",
+        [collection_id],
+        |row| row.get(0),
+    )?;
+    if !is_collection {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "Collection does not exist".to_string(),
+        ));
+    }
+
+    let mut valid_member = conn.prepare_cached(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM media_entity me
+             JOIN single_media_entity sme ON sme.entity_id = me.entity_id
+             JOIN media_file mf ON mf.file_id = sme.file_id
+             WHERE me.entity_id = ?1
+               AND me.entity_kind = 'single'
+               AND mf.mime_type LIKE 'image/%'
+         )",
+    )?;
+    for entity_id in member_entity_ids {
+        let valid: bool = valid_member.query_row([entity_id], |row| row.get(0))?;
+        if !valid {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "Collections can contain images only; invalid member entity {entity_id}"
+            )));
+        }
+    }
+
+    Ok(())
 }
 
 /// Remove single entities from a collection.

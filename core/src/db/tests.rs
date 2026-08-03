@@ -75,6 +75,364 @@ fn collection_materialization_persists_prepared_perceptual_hashes() {
 }
 
 #[test]
+fn collection_membership_rejects_mixed_image_and_video_without_writes() {
+    let db = open_test_db();
+    let image_file = db
+        .insert_file(
+            "collection-image-file",
+            "image/png",
+            10,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "2026-08-04",
+        )
+        .unwrap();
+    let image_id = db
+        .insert_single(
+            "collection-image-entity",
+            image_file,
+            None,
+            1,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap();
+    let video_file = db
+        .insert_file(
+            "collection-video-file",
+            "video/mp4",
+            20,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "2026-08-04",
+        )
+        .unwrap();
+    let video_id = db
+        .insert_single(
+            "collection-video-entity",
+            video_file,
+            None,
+            1,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap();
+
+    let source_collection = db.create_collection("Source").unwrap();
+    let target_collection = db.create_collection("Target").unwrap();
+    db.add_collection_members(source_collection, &[image_id])
+        .unwrap();
+    let before = db
+        .with_read(|conn| {
+            Ok((
+                conn.query_row(
+                    "SELECT parent_collection_entity_id FROM media_entity WHERE entity_id = ?1",
+                    [image_id],
+                    |row| row.get::<_, Option<i64>>(0),
+                )?,
+                conn.query_row(
+                    "SELECT member_count FROM media_entity WHERE entity_id = ?1",
+                    [target_collection],
+                    |row| row.get::<_, Option<i64>>(0),
+                )?,
+                conn.query_row("SELECT COUNT(*) FROM op_outbox", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+            ))
+        })
+        .unwrap();
+
+    assert!(db
+        .add_collection_members(target_collection, &[image_id, video_id])
+        .is_err());
+
+    let after = db
+        .with_read(|conn| {
+            Ok((
+                conn.query_row(
+                    "SELECT parent_collection_entity_id FROM media_entity WHERE entity_id = ?1",
+                    [image_id],
+                    |row| row.get::<_, Option<i64>>(0),
+                )?,
+                conn.query_row(
+                    "SELECT member_count FROM media_entity WHERE entity_id = ?1",
+                    [target_collection],
+                    |row| row.get::<_, Option<i64>>(0),
+                )?,
+                conn.query_row("SELECT COUNT(*) FROM op_outbox", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(before, after);
+    assert_eq!(after.0, Some(source_collection));
+}
+
+#[test]
+fn collection_membership_by_hashes_rejects_unknown_hash_without_writes() {
+    let db = open_test_db();
+    let file_id = db
+        .insert_file(
+            "known-collection-file",
+            "image/jpeg",
+            10,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "2026-08-04",
+        )
+        .unwrap();
+    let entity_id = db
+        .insert_single(
+            "known-collection-entity",
+            file_id,
+            None,
+            1,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap();
+    let collection_id = db.create_collection("Target").unwrap();
+    let before_ops: i64 = db
+        .with_read(|conn| conn.query_row("SELECT COUNT(*) FROM op_outbox", [], |row| row.get(0)))
+        .unwrap();
+
+    assert!(db
+        .add_collection_members_by_hashes(
+            collection_id,
+            &[
+                "known-collection-entity".to_string(),
+                "missing-collection-entity".to_string(),
+            ],
+        )
+        .is_err());
+
+    let (parent, ordinal, member_count, after_ops): (Option<i64>, Option<i64>, Option<i64>, i64) =
+        db.with_read(|conn| {
+            Ok((
+                conn.query_row(
+                    "SELECT parent_collection_entity_id FROM media_entity WHERE entity_id = ?1",
+                    [entity_id],
+                    |row| row.get(0),
+                )?,
+                conn.query_row(
+                    "SELECT collection_ordinal FROM media_entity WHERE entity_id = ?1",
+                    [entity_id],
+                    |row| row.get(0),
+                )?,
+                conn.query_row(
+                    "SELECT member_count FROM media_entity WHERE entity_id = ?1",
+                    [collection_id],
+                    |row| row.get(0),
+                )?,
+                conn.query_row("SELECT COUNT(*) FROM op_outbox", [], |row| row.get(0))?,
+            ))
+        })
+        .unwrap();
+    assert_eq!((parent, ordinal, member_count), (None, None, Some(0)));
+    assert_eq!(after_ops, before_ops);
+}
+
+#[test]
+fn create_collection_with_members_rolls_back_invalid_members() {
+    let db = open_test_db();
+    let image_file = db
+        .insert_file(
+            "create-collection-image-file",
+            "image/png",
+            10,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "2026-08-04",
+        )
+        .unwrap();
+    db.insert_single(
+        "create-collection-image",
+        image_file,
+        None,
+        1,
+        "2026-08-04",
+        "2026-08-04",
+    )
+    .unwrap();
+    let video_file = db
+        .insert_file(
+            "create-collection-video-file",
+            "video/mp4",
+            10,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "2026-08-04",
+        )
+        .unwrap();
+    db.insert_single(
+        "create-collection-video",
+        video_file,
+        None,
+        1,
+        "2026-08-04",
+        "2026-08-04",
+    )
+    .unwrap();
+
+    let before: (i64, i64) = db
+        .with_read(|conn| {
+            Ok((
+                conn.query_row(
+                    "SELECT COUNT(*) FROM media_entity WHERE entity_kind = 'collection'",
+                    [],
+                    |row| row.get(0),
+                )?,
+                conn.query_row("SELECT COUNT(*) FROM op_outbox", [], |row| row.get(0))?,
+            ))
+        })
+        .unwrap();
+
+    assert!(db
+        .create_collection_with_members_by_hashes(
+            "Invalid collection",
+            &[
+                "create-collection-image".to_string(),
+                "create-collection-video".to_string(),
+            ],
+        )
+        .is_err());
+    assert!(db
+        .create_collection_with_members_by_hashes(
+            "Unknown collection",
+            &["missing-collection-member".to_string()],
+        )
+        .is_err());
+
+    let after: (i64, i64) = db
+        .with_read(|conn| {
+            Ok((
+                conn.query_row(
+                    "SELECT COUNT(*) FROM media_entity WHERE entity_kind = 'collection'",
+                    [],
+                    |row| row.get(0),
+                )?,
+                conn.query_row("SELECT COUNT(*) FROM op_outbox", [], |row| row.get(0))?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(after, before);
+}
+
+#[test]
+fn collection_split_preserves_media_while_entity_delete_removes_it() {
+    let split_db = open_test_db();
+    let split_file = split_db
+        .insert_file(
+            "split-file",
+            "image/png",
+            10,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "2026-08-04",
+        )
+        .unwrap();
+    let split_member = split_db
+        .insert_single(
+            "split-member",
+            split_file,
+            None,
+            1,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap();
+    let split_collection = split_db.create_collection("Split").unwrap();
+    split_db
+        .add_collection_members(split_collection, &[split_member])
+        .unwrap();
+
+    assert_eq!(
+        split_db.split_collection(split_collection).unwrap(),
+        vec![split_member]
+    );
+    let split_counts: (i64, i64, i64, Option<i64>) = split_db
+        .with_read(|conn| {
+            Ok((
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?,
+                conn.query_row("SELECT COUNT(*) FROM single_media_entity", [], |row| {
+                    row.get(0)
+                })?,
+                conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| row.get(0))?,
+                conn.query_row(
+                    "SELECT parent_collection_entity_id FROM media_entity WHERE entity_id = ?1",
+                    [split_member],
+                    |row| row.get(0),
+                )?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(split_counts, (1, 1, 1, None));
+
+    let delete_db = open_test_db();
+    let delete_file = delete_db
+        .insert_file(
+            "delete-file",
+            "image/png",
+            10,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "2026-08-04",
+        )
+        .unwrap();
+    let delete_member = delete_db
+        .insert_single(
+            "delete-member",
+            delete_file,
+            None,
+            1,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap();
+    let delete_collection = delete_db.create_collection("Delete").unwrap();
+    delete_db
+        .add_collection_members(delete_collection, &[delete_member])
+        .unwrap();
+
+    let deleted = delete_db.delete_entities(&[delete_collection]).unwrap();
+    assert_eq!(deleted.freed_file_hashes, vec!["delete-file"]);
+    let delete_counts: (i64, i64, i64) = delete_db
+        .with_read(|conn| {
+            Ok((
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?,
+                conn.query_row("SELECT COUNT(*) FROM single_media_entity", [], |row| {
+                    row.get(0)
+                })?,
+                conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| row.get(0))?,
+            ))
+        })
+        .unwrap();
+    assert_eq!(delete_counts, (0, 0, 0));
+}
+
+#[test]
 fn folder_mutations_emit_outbox_ops_with_stable_uuid() {
     let db = open_test_db();
 
@@ -269,7 +627,7 @@ fn entity_tag_and_collection_mutations_emit_ops() {
     let collection_id = db.create_collection("My set").unwrap();
     db.update_collection_name(collection_id, "Renamed set")
         .unwrap();
-    db.delete_collection(collection_id).unwrap();
+    db.split_collection(collection_id).unwrap();
     db.delete_entities(&[entity_id]).unwrap();
 
     let ops: Vec<(String, String)> = db
@@ -291,7 +649,7 @@ fn entity_tag_and_collection_mutations_emit_ops() {
             "entity_status_changed",
             "collection_created",
             "collection_renamed",
-            "collection_deleted",
+            "collection_split",
             "entity_deleted",
         ]
     );

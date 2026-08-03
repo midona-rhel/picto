@@ -161,6 +161,29 @@ fn collect_import_paths(root: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Str
     Ok((directories, files))
 }
 
+/// Collections are image aggregates. Extensions only narrow the manual picker
+/// candidates; the bytes decide whether a collection import is valid.
+async fn preflight_collection_sources(paths: &[PathBuf]) -> Result<(), String> {
+    for path in paths {
+        let mime = crate::media_processing::get_mime(path)
+            .await
+            .map_err(|error| {
+                format!(
+                    "Failed to inspect collection source {}: {error}",
+                    path.display()
+                )
+            })?;
+        if !crate::media_processing::is_image(mime) {
+            return Err(format!(
+                "Collections can contain images only: {} is {}",
+                path.display(),
+                mime.mime_string()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
@@ -845,6 +868,7 @@ pub async fn enqueue_manual_collection(
     if file_paths.is_empty() {
         return Err("No supported media files to add to collection".to_string());
     }
+    preflight_collection_sources(&file_paths).await?;
 
     let tag_strings = tag_strings.unwrap_or_default();
     let source_urls = source_urls.unwrap_or_default();
@@ -1384,10 +1408,10 @@ async fn process_collection_queue(
         .ok_or_else(|| "collection queue missing preferred_name".to_string())?;
 
     let mut target_folder_id = None;
-    let mut processable = Vec::new();
+    let mut prepared = Vec::new();
     let mut missing_count = 0usize;
     for item in items {
-        let mut payload: IngestQueueItemPayload =
+        let payload: IngestQueueItemPayload =
             serde_json::from_str(&item.payload_json).map_err(|err| err.to_string())?;
         if let Some(previous_target) = target_folder_id {
             if previous_target != payload.target_folder_id {
@@ -1397,10 +1421,24 @@ async fn process_collection_queue(
             target_folder_id = Some(payload.target_folder_id);
         }
         log_ingest_queue_payload("execute_collection", queue.queue_id, item.item_id, &payload);
-        db.mark_ingest_queue_item_running(item.item_id).await?;
         let path = PathBuf::from(&item.source_path);
         if !path.exists() {
             missing_count += 1;
+            prepared.push((item.clone(), payload, None));
+            continue;
+        }
+        prepared.push((item.clone(), payload, Some(path)));
+    }
+
+    let present_paths: Vec<_> = prepared
+        .iter()
+        .filter_map(|(_, _, path)| path.clone())
+        .collect();
+    preflight_collection_sources(&present_paths).await?;
+
+    let mut processable = Vec::new();
+    for (item, payload, path) in prepared {
+        let Some(path) = path else {
             db.mark_ingest_queue_item_complete(
                 item.item_id,
                 IngestQueueItemResultKind::Reused,
@@ -1409,12 +1447,14 @@ async fn process_collection_queue(
             )
             .await?;
             continue;
-        }
-        payload.request.path = path;
+        };
+        db.mark_ingest_queue_item_running(item.item_id).await?;
+        let mut request = payload.request;
+        request.path = path;
         processable.push((
-            item.clone(),
+            item,
             CollectionIngestMember {
-                request: payload.request,
+                request,
                 metadata: payload.subscription_metadata,
             },
         ));
@@ -1789,6 +1829,11 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
+    fn write_video_fixture(path: &Path) {
+        // Enough of an ISO base media header for the MIME detector to identify MP4.
+        fs::write(path, b"\0\0\0\x18ftypmp42\0\0\0\0mp42isom\0\0\0\0").unwrap();
+    }
+
     #[test]
     fn count_ingest_queue_by_subscription_reports_imported_reused_and_failed_items() {
         let conn = Connection::open_in_memory().unwrap();
@@ -1878,6 +1923,115 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(empty_media, "No supported media files to add to collection");
+    }
+
+    #[tokio::test]
+    async fn manual_collection_enqueue_rejects_non_image_without_creating_queue_rows() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(&library_root).unwrap();
+        fs::create_dir_all(&source_root).unwrap();
+        let image = source_root.join("image.png");
+        let video = source_root.join("video.mp4");
+        write_image(&image, 96);
+        write_video_fixture(&video);
+        let db = LibraryDatabase::open(&library_root).unwrap();
+
+        let error = enqueue_manual_collection(
+            &db,
+            vec![image.display().to_string(), video.display().to_string()],
+            "Mixed collection".to_string(),
+            None,
+            None,
+            1,
+            None,
+            Some(&library_root),
+        )
+        .await
+        .unwrap_err();
+
+        assert!(error.contains("Collections can contain images only"));
+        db.with_read(|conn| {
+            let queue_count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM ingest_queue", [], |row| row.get(0))?;
+            assert_eq!(queue_count, 0);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn collection_execution_preflight_keeps_items_pending_for_non_image_sources() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(&library_root).unwrap();
+        fs::create_dir_all(&source_root).unwrap();
+        let image = source_root.join("image.png");
+        let video = source_root.join("video.mp4");
+        write_image(&image, 96);
+        write_video_fixture(&video);
+
+        let db = Arc::new(LibraryDatabase::open(&library_root).unwrap());
+        let blob_store = Arc::new(BlobStore::open(&library_root).unwrap());
+        let payload = |path: &Path| IngestQueueItemPayload {
+            request: SingleIngestRequest {
+                source_kind: IngestSourceKind::Manual,
+                path: path.to_path_buf(),
+                tag_strings: Vec::new(),
+                source_urls: Vec::new(),
+                name: None,
+                notes: None,
+                created_at: None,
+                initial_status: 1,
+                skip_thumbnail: false,
+                tag_provenance_mask: crate::db::types::TAG_PROVENANCE_MANUAL,
+                subscription_id: None,
+            },
+            subscription_metadata: None,
+            target_folder_id: None,
+        };
+        db.enqueue_ingest_queue(
+            IngestQueueKind::Collection,
+            "manual",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some("Mixed collection"),
+            None,
+            vec![
+                (image.clone(), Some(0), payload(&image), false),
+                (video.clone(), Some(1), payload(&video), false),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let queue = db.lease_next_ingest_queue().await.unwrap().unwrap();
+        let items = db.list_ingest_queue_items(queue.queue_id).await.unwrap();
+        let error = process_collection_queue(&db, &blob_store, &queue, &items)
+            .await
+            .unwrap_err();
+        assert!(error.contains("Collections can contain images only"));
+        assert!(blob_store.list_originals().is_empty());
+
+        db.with_read(|conn| {
+            let pending_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM ingest_queue_item WHERE queue_id = ?1 AND status = 'pending'",
+                params![queue.queue_id],
+                |row| row.get(0),
+            )?;
+            let entity_count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?;
+            assert_eq!(pending_count, 2);
+            assert_eq!(entity_count, 0);
+            Ok(())
+        })
+        .unwrap();
     }
 
     #[tokio::test]

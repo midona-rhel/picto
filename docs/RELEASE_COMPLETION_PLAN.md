@@ -38,8 +38,9 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 
 - [x] Prove manual, collection, folder, watch, subscription, and retry imports use the durable queue.
 - [x] Delete competing import/retry paths; keep explicit user-requested derivative repair actions.
-- [ ] Reject videos from collection creation and collection membership atomically.
-- [ ] Verify collection metadata aggregation, tag fan-out, and destructive collection deletion.
+- [x] Reject videos from collection creation, queued imports, and membership before writes.
+- [x] Create collections with members atomically; keep split non-destructive and deletion destructive.
+- [ ] Verify collection metadata aggregation and tag fan-out.
 - [x] Delete folders atomically with all descendants while leaving media untouched.
 - [x] Fall back to the nearest surviving parent or All when deleting the active folder hierarchy.
 - [x] Emit every deleted folder in runtime facts.

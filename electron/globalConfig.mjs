@@ -17,41 +17,8 @@ export function getConfigPath() {
   return path.join(app.getPath('appData'), 'picto', 'config.json');
 }
 
-function getLegacyConfigPaths() {
-  const appData = app.getPath('appData');
-  return [
-    path.join(appData, 'imaginator', 'config.json'),
-  ];
-}
-
-async function migrateLegacyConfigIfNeeded(configPath) {
-  try {
-    await fs.access(configPath);
-    return false;
-  } catch {
-    // No picto config yet: try legacy migration.
-  }
-
-  for (const legacyPath of getLegacyConfigPaths()) {
-    try {
-      const raw = await fs.readFile(legacyPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) continue;
-      const migrated = { ...DEFAULT_CONFIG, ...parsed };
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(migrated, null, 2), 'utf-8');
-      return true;
-    } catch {
-      // Try next legacy path.
-    }
-  }
-
-  return false;
-}
-
 export async function loadGlobalConfig() {
   const configPath = getConfigPath();
-  await migrateLegacyConfigIfNeeded(configPath);
   try {
     const raw = await fs.readFile(configPath, 'utf-8');
     cachedConfig = { ...DEFAULT_CONFIG, ...JSON.parse(raw) };

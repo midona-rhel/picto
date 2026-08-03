@@ -11,8 +11,8 @@ export function getCollectionSummary(collectionId: number): Promise<CollectionSu
   return invoke<CollectionSummary>('get_collection_summary', { id: collectionId });
 }
 
-export function createCollection(name: string): Promise<number> {
-  return invoke<number>('create_collection', { name });
+export function createCollection(name: string, hashes: string[]): Promise<number> {
+  return invoke<number>('create_collection', { name, hashes });
 }
 
 export function addCollectionMembers(collectionId: number, hashes: string[]): Promise<number> {
@@ -27,10 +27,6 @@ export function reorderCollectionMembers(collectionId: number, orderedHashes: st
   return invoke<void>('reorder_collection_members', { id: collectionId, hashes: orderedHashes });
 }
 
-export function deleteCollection(collectionId: number): Promise<void> {
-  return invoke<void>('delete_collection', { id: collectionId });
-}
-
-export function listCollectionMemberHashes(collectionId: number): Promise<string[]> {
-  return invoke<string[]>('list_collection_member_hashes', { id: collectionId });
+export function splitCollection(collectionId: number): Promise<string[]> {
+  return invoke<string[]>('split_collection', { id: collectionId });
 }

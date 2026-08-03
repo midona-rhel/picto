@@ -99,11 +99,10 @@ const WRITE_COMMANDS: &[&str] = &[
     "set_folder_watch_config",
     "clear_folder_watch_config",
     "create_collection",
-    "delete_collection",
+    "split_collection",
     "add_collection_members",
     "remove_collection_members",
     "reorder_collection_members",
-    "list_collection_member_hashes",
     "save_settings",
     "sync_create_remote_library",
     "sync_connect_remote_library",
@@ -331,14 +330,7 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "remove_collection_members" => {
             call!(typed::collections::remove_collection_members, &state, args)
         }
-        "delete_collection" => call!(typed::collections::delete_collection, &state, args),
-        "list_collection_member_hashes" => {
-            call!(
-                typed::collections::list_collection_member_hashes,
-                &state,
-                args
-            )
-        }
+        "split_collection" => call!(typed::collections::split_collection, &state, args),
 
         // ── Media I/O ─────────────────────────────────────────
         "resolve_file_path" => call!(typed::media_io::resolve_file_path, &state, args),

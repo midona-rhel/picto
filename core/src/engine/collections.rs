@@ -20,22 +20,22 @@ impl ApplicationEngine {
         self.db.get_collection_summary(collection_id)
     }
 
-    pub fn list_collection_member_hashes(&self, collection_id: i64) -> Result<Vec<String>, String> {
-        self.db.list_collection_member_hashes(collection_id)
-    }
-
-    pub fn create_collection(&self, name: &str) -> Result<i64, String> {
-        let collection_id = self.db.create_collection(name)?;
-        let collection_hash = self
+    pub fn create_collection(&self, name: &str, member_hashes: &[String]) -> Result<i64, String> {
+        let collection_id = self
             .db
-            .get_collection_hash(collection_id)?
-            .into_iter()
-            .collect();
+            .create_collection_with_members_by_hashes(name, member_hashes)?;
+        let member_ids = self.db.resolve_entity_hashes(member_hashes)?;
+        let folder_ids = self.db.get_folder_ids_for_entities(&member_ids)?;
+        let mut entity_hashes = member_hashes.to_vec();
+        entity_hashes.extend(self.db.get_collection_hash(collection_id)?.into_iter());
+        let mut entity_ids = member_ids;
+        entity_ids.push(collection_id);
         self.commit_write(&WriteChange {
             origin: "create_collection".to_string(),
-            entity_hashes: collection_hash,
+            entity_hashes,
+            entity_ids,
             status_changed: true,
-            extra_grid_scopes: vec!["system:active".to_string()],
+            extra_grid_scopes: collection_grid_scopes(collection_id, &folder_ids),
             ..Default::default()
         });
         Ok(collection_id)
@@ -53,26 +53,6 @@ impl ApplicationEngine {
             origin: "update_collection".to_string(),
             entity_hashes: collection_hash,
             metadata_changed: true,
-            extra_grid_scopes: collection_grid_scopes(collection_id, &folder_ids),
-            ..Default::default()
-        });
-        Ok(())
-    }
-
-    pub fn delete_collection(&self, collection_id: i64) -> Result<(), String> {
-        let folder_ids = self.db.get_collection_folder_ids(collection_id)?;
-        // Get collection's own hash before deletion so the grid can remove the tile
-        let collection_hash = self.db.get_collection_hash(collection_id)?;
-        let freed_member_ids = self.db.delete_collection(collection_id)?;
-        let mut entity_hashes = self.db.get_entity_hashes_by_ids(&freed_member_ids)?;
-        if let Some(ch) = collection_hash {
-            entity_hashes.push(ch);
-        }
-        self.commit_write(&WriteChange {
-            origin: "delete_collection".to_string(),
-            entity_hashes,
-            entity_ids: freed_member_ids,
-            status_changed: true,
             extra_grid_scopes: collection_grid_scopes(collection_id, &folder_ids),
             ..Default::default()
         });
@@ -142,17 +122,21 @@ impl ApplicationEngine {
         Ok(())
     }
 
-    pub fn split_collection(&self, collection_id: i64) -> Result<Vec<i64>, String> {
+    pub fn split_collection(&self, collection_id: i64) -> Result<Vec<String>, String> {
         let folder_ids = self.db.get_collection_folder_ids(collection_id)?;
+        let collection_hash = self.db.get_collection_hash(collection_id)?;
         let freed_ids = self.db.split_collection(collection_id)?;
+        let freed_hashes = self.db.get_entity_hashes_by_ids(&freed_ids)?;
+        let mut changed_hashes = freed_hashes.clone();
+        changed_hashes.extend(collection_hash);
         self.commit_write(&WriteChange {
             origin: "split_collection".to_string(),
             entity_ids: freed_ids.clone(),
-            entity_hashes: self.db.get_entity_hashes_by_ids(&freed_ids)?,
+            entity_hashes: changed_hashes,
             status_changed: true,
             extra_grid_scopes: collection_grid_scopes(collection_id, &folder_ids),
             ..Default::default()
         });
-        Ok(freed_ids)
+        Ok(freed_hashes)
     }
 }

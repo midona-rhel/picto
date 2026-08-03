@@ -1,15 +1,14 @@
 import {
   addCollectionMembers,
   createCollection,
-  deleteCollection,
   getCollectionSummary,
-  listCollectionMemberHashes,
   removeCollectionMembers,
+  splitCollection,
 } from '../platform/collectionApi';
 
 export const collectionsController = {
-  create(name: string): Promise<number> {
-    return createCollection(name);
+  create(name: string, hashes: string[]): Promise<number> {
+    return createCollection(name, hashes);
   },
 
   addMembers(collectionId: number, hashes: string[]): Promise<number> {
@@ -20,12 +19,8 @@ export const collectionsController = {
     return removeCollectionMembers(collectionId, hashes);
   },
 
-  delete(collectionId: number): Promise<void> {
-    return deleteCollection(collectionId);
-  },
-
-  listMemberHashes(collectionId: number): Promise<string[]> {
-    return listCollectionMemberHashes(collectionId);
+  split(collectionId: number): Promise<string[]> {
+    return splitCollection(collectionId);
   },
 
   async exists(collectionId: number): Promise<boolean> {
