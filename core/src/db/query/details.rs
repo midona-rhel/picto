@@ -5,6 +5,8 @@ use rusqlite::{Connection, OptionalExtension};
 
 use crate::db::types::{mask_from_db_bits, EntityDetails, EntityKind, FolderInfo, TagInfo};
 
+use super::collections;
+
 /// Get full details for an entity by hash.
 pub fn get_entity_details(
     conn: &Connection,
@@ -103,29 +105,39 @@ pub fn get_entity_details(
         return Ok(None);
     };
 
-    let source_urls =
-        source_urls_json.and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok());
-
-    // Fetch tags
-    let mut tag_stmt = conn.prepare(
-        "SELECT t.tag_id, t.namespace, t.subtag, t.site_mask, et.provenance_mask, et.source
-         FROM entity_tag et
-         JOIN tag t ON t.tag_id = et.tag_id
-         WHERE et.entity_id = ?1
-         ORDER BY t.namespace, t.subtag",
-    )?;
-    let tags: Vec<TagInfo> = tag_stmt
-        .query_map([entity_id], |row| {
-            Ok(TagInfo {
-                tag_id: row.get(0)?,
-                namespace: row.get(1)?,
-                subtag: row.get(2)?,
-                site_mask: mask_from_db_bits(row.get::<_, Option<i64>>(3)?.unwrap_or(0)),
-                provenance_mask: mask_from_db_bits(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
-                source: row.get(5)?,
-            })
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let entity_kind = EntityKind::from_str(&entity_kind_str).unwrap_or(EntityKind::Single);
+    let (rating, notes, source_urls, tags) = if entity_kind == EntityKind::Collection {
+        let content = collections::get_collection_content_metadata(conn, entity_id)?;
+        (
+            content.rating,
+            content.notes,
+            (!content.source_urls.is_empty()).then_some(content.source_urls),
+            content.tags,
+        )
+    } else {
+        let source_urls =
+            source_urls_json.and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok());
+        let mut tag_stmt = conn.prepare(
+            "SELECT t.tag_id, t.namespace, t.subtag, t.site_mask, et.provenance_mask, et.source
+             FROM entity_tag et
+             JOIN tag t ON t.tag_id = et.tag_id
+             WHERE et.entity_id = ?1
+             ORDER BY t.namespace, t.subtag",
+        )?;
+        let tags: Vec<TagInfo> = tag_stmt
+            .query_map([entity_id], |row| {
+                Ok(TagInfo {
+                    tag_id: row.get(0)?,
+                    namespace: row.get(1)?,
+                    subtag: row.get(2)?,
+                    site_mask: mask_from_db_bits(row.get::<_, Option<i64>>(3)?.unwrap_or(0)),
+                    provenance_mask: mask_from_db_bits(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
+                    source: row.get(5)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        (rating, notes, source_urls, tags)
+    };
 
     // Fetch folders
     let mut folder_stmt = conn.prepare(
@@ -147,7 +159,7 @@ pub fn get_entity_details(
     Ok(Some(EntityDetails {
         entity_hash,
         thumbnail_hash,
-        entity_kind: EntityKind::from_str(&entity_kind_str).unwrap_or(EntityKind::Single),
+        entity_kind,
         name,
         mime_type,
         size_bytes,

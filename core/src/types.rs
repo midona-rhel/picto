@@ -90,7 +90,8 @@ pub struct EntityGridItem {
     pub entity_id: i64,
     pub kind: String,
     pub hash: String,
-    /// Hash for thumbnail/media asset URLs. For collections, this is the cover file's hash.
+    /// Hash for thumbnail/media asset URLs. Collection identity remains its own hash;
+    /// its thumbnail may be provided by the selected member image.
     pub thumbnail_hash: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub member_count: Option<i64>,

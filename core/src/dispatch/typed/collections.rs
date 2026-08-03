@@ -23,22 +23,6 @@ pub struct CreateCollectionInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct AddCollectionTagsInput {
-    #[ts(type = "number")]
-    pub id: i64,
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct RemoveCollectionTagsInput {
-    #[ts(type = "number")]
-    pub id: i64,
-    pub tags: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderCollectionMembersInput {
     #[ts(type = "number")]
     pub id: i64,

@@ -2,7 +2,7 @@
 //!
 //! `ApplicationEngine` sits above `LibraryDatabase` and owns:
 //! - target resolution (EntityTarget → concrete ids or DB-backed bulk target)
-//! - expansion rules (EntityAndDescendants for tags/status/folders)
+//! - expansion rules (collection tags apply to member singles; status/folders include collections)
 //! - state-change emission after writes
 //! - projection scheduling after writes
 //!

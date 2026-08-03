@@ -5,7 +5,9 @@ use std::collections::{BTreeSet, HashSet};
 use rusqlite::{Connection, OptionalExtension};
 use serde_json::Value as JsonValue;
 
-use crate::db::types::{CollectionMimeCount, CollectionRecord, CollectionSummary};
+use crate::db::types::{
+    mask_from_db_bits, CollectionMimeCount, CollectionRecord, CollectionSummary, TagInfo,
+};
 
 fn parse_source_urls_json(raw: &str) -> Vec<String> {
     let parsed = serde_json::from_str::<JsonValue>(raw).ok();
@@ -30,20 +32,98 @@ fn parse_source_urls_json(raw: &str) -> Vec<String> {
     }
 }
 
-fn list_member_tag_strings(conn: &Connection, collection_id: i64) -> rusqlite::Result<Vec<String>> {
+/// Content metadata for a collection is a read-only aggregate of its children.
+/// Collection rows intentionally do not store a second editable copy.
+pub(crate) struct CollectionContentMetadata {
+    pub tags: Vec<TagInfo>,
+    pub source_urls: Vec<String>,
+    pub rating: Option<i64>,
+    pub notes: Option<String>,
+}
+
+pub(crate) fn get_collection_content_metadata(
+    conn: &Connection,
+    collection_id: i64,
+) -> rusqlite::Result<CollectionContentMetadata> {
     let mut stmt = conn.prepare(
-        "SELECT DISTINCT CASE
-             WHEN t.namespace = '' THEN t.subtag
-             ELSE t.namespace || ':' || t.subtag
-         END AS raw_tag
+        "SELECT t.tag_id, t.namespace, t.subtag, t.site_mask, et.provenance_mask
          FROM media_entity me
          JOIN entity_tag et ON et.entity_id = me.entity_id
          JOIN tag t ON t.tag_id = et.tag_id
          WHERE me.parent_collection_entity_id = ?1
-         ORDER BY raw_tag COLLATE NOCASE ASC",
+         ORDER BY t.namespace COLLATE NOCASE ASC, t.subtag COLLATE NOCASE ASC",
     )?;
-    let rows = stmt.query_map([collection_id], |row| row.get::<_, String>(0))?;
-    rows.collect()
+    let mut tags = Vec::<TagInfo>::new();
+    for row in stmt.query_map([collection_id], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            mask_from_db_bits(row.get::<_, Option<i64>>(3)?.unwrap_or(0)),
+            mask_from_db_bits(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
+        ))
+    })? {
+        let (tag_id, namespace, subtag, site_mask, provenance_mask) = row?;
+        if let Some(tag) = tags.iter_mut().find(|tag| tag.tag_id == tag_id) {
+            tag.provenance_mask |= provenance_mask;
+        } else {
+            tags.push(TagInfo {
+                tag_id,
+                namespace,
+                subtag,
+                site_mask,
+                provenance_mask,
+                source: "aggregate".to_string(),
+            });
+        }
+    }
+
+    let mut source_stmt = conn.prepare(
+        "SELECT me.source_urls_json
+         FROM media_entity me
+         WHERE me.parent_collection_entity_id = ?1
+           AND me.source_urls_json IS NOT NULL",
+    )?;
+    let source_rows = source_stmt.query_map([collection_id], |row| row.get::<_, String>(0))?;
+    let mut source_urls = BTreeSet::new();
+    for row in source_rows {
+        for url in parse_source_urls_json(&row?) {
+            source_urls.insert(url);
+        }
+    }
+
+    let rating: Option<i64> = conn.query_row(
+        "SELECT MAX(rating)
+         FROM media_entity
+         WHERE parent_collection_entity_id = ?1",
+        [collection_id],
+        |row| row.get(0),
+    )?;
+
+    let mut notes_stmt = conn.prepare(
+        "SELECT notes
+         FROM media_entity
+         WHERE parent_collection_entity_id = ?1
+           AND notes IS NOT NULL
+           AND TRIM(notes) != ''",
+    )?;
+    let note_rows = notes_stmt.query_map([collection_id], |row| row.get::<_, String>(0))?;
+    let mut seen = HashSet::new();
+    let mut notes = Vec::new();
+    for row in note_rows {
+        let note = row?;
+        let trimmed = note.trim();
+        if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
+            notes.push(trimmed.to_string());
+        }
+    }
+
+    Ok(CollectionContentMetadata {
+        tags,
+        source_urls: source_urls.into_iter().collect(),
+        rating,
+        notes: (!notes.is_empty()).then(|| notes.join("\n\n")),
+    })
 }
 
 pub fn list_collection_member_hash_rows(
@@ -121,6 +201,33 @@ pub fn get_folder_ids_for_entities(
     rows.collect()
 }
 
+pub fn get_parent_collection_ids_for_entities(
+    conn: &Connection,
+    entity_ids: &[i64],
+) -> rusqlite::Result<Vec<i64>> {
+    if entity_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = (1..=entity_ids.len())
+        .map(|idx| format!("?{idx}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT DISTINCT parent_collection_entity_id
+         FROM media_entity
+         WHERE entity_id IN ({placeholders})
+           AND parent_collection_entity_id IS NOT NULL
+         ORDER BY parent_collection_entity_id"
+    );
+    let params: Vec<&dyn rusqlite::ToSql> = entity_ids
+        .iter()
+        .map(|id| id as &dyn rusqlite::ToSql)
+        .collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params.as_slice(), |row| row.get::<_, i64>(0))?;
+    rows.collect()
+}
+
 pub fn list_collections(conn: &Connection) -> rusqlite::Result<Vec<CollectionRecord>> {
     let mut stmt = conn.prepare(
         "SELECT
@@ -152,7 +259,14 @@ pub fn list_collections(conn: &Connection) -> rusqlite::Result<Vec<CollectionRec
 
     let mut collections = rows.collect::<rusqlite::Result<Vec<_>>>()?;
     for collection in &mut collections {
-        collection.tags = list_member_tag_strings(conn, collection.id)?;
+        collection.tags = get_collection_content_metadata(conn, collection.id)?
+            .tags
+            .into_iter()
+            .map(|tag| match tag.namespace.as_str() {
+                "" => tag.subtag,
+                namespace => format!("{namespace}:{}", tag.subtag),
+            })
+            .collect();
     }
     Ok(collections)
 }
@@ -192,7 +306,15 @@ pub fn get_collection_summary(
         },
     )?;
 
-    let tags = list_member_tag_strings(conn, collection_id)?;
+    let content = get_collection_content_metadata(conn, collection_id)?;
+    let tags = content
+        .tags
+        .iter()
+        .map(|tag| match tag.namespace.as_str() {
+            "" => tag.subtag.clone(),
+            namespace => format!("{namespace}:{}", tag.subtag),
+        })
+        .collect();
 
     let mut mime_stmt = conn.prepare(
         "SELECT mf.mime_type, COUNT(*) AS cnt
@@ -212,53 +334,6 @@ pub fn get_collection_summary(
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    let mut source_stmt = conn.prepare(
-        "SELECT me.source_urls_json
-         FROM media_entity me
-         WHERE me.parent_collection_entity_id = ?1
-           AND me.source_urls_json IS NOT NULL",
-    )?;
-    let source_rows = source_stmt.query_map([collection_id], |row| row.get::<_, String>(0))?;
-    let mut source_urls = BTreeSet::new();
-    for row in source_rows {
-        for url in parse_source_urls_json(&row?) {
-            source_urls.insert(url);
-        }
-    }
-
-    let rating: Option<i64> = conn.query_row(
-        "SELECT MAX(rating)
-         FROM media_entity
-         WHERE parent_collection_entity_id = ?1",
-        [collection_id],
-        |row| row.get(0),
-    )?;
-
-    let notes = {
-        let mut stmt = conn.prepare(
-            "SELECT notes
-             FROM media_entity
-             WHERE parent_collection_entity_id = ?1
-               AND notes IS NOT NULL
-               AND TRIM(notes) != ''",
-        )?;
-        let rows = stmt.query_map([collection_id], |row| row.get::<_, String>(0))?;
-        let mut seen = HashSet::new();
-        let mut values = Vec::new();
-        for row in rows {
-            let note = row?;
-            let trimmed = note.trim();
-            if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
-                values.push(trimmed.to_string());
-            }
-        }
-        if values.is_empty() {
-            None
-        } else {
-            Some(values.join("\n\n"))
-        }
-    };
-
     let imported_at: Option<String> = conn.query_row(
         "SELECT MIN(date_added)
          FROM media_entity
@@ -274,11 +349,11 @@ pub fn get_collection_summary(
         image_count,
         total_size_bytes,
         mime_breakdown,
-        source_urls: source_urls.into_iter().collect(),
-        rating,
+        source_urls: content.source_urls,
+        rating: content.rating,
         created_at,
         updated_at,
         imported_at,
-        notes,
+        notes: content.notes,
     })
 }

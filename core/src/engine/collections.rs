@@ -87,13 +87,19 @@ impl ApplicationEngine {
         let change = self
             .db
             .remove_collection_members_by_hashes(collection_id, member_hashes)?;
-        let folder_ids = self.db.get_folder_ids_for_entities(&change.removed)?;
+        let mut entity_ids = change.removed.clone();
+        let mut entity_hashes = self.db.get_entity_hashes_by_ids(&change.removed)?;
+        if change.deleted_collection {
+            entity_ids.push(collection_id);
+            entity_hashes.extend(change.collection_hash.clone());
+        }
         self.commit_write(&WriteChange {
             origin: "remove_collection_members".to_string(),
-            entity_ids: change.removed.clone(),
-            entity_hashes: self.db.get_entity_hashes_by_ids(&change.removed)?,
+            entity_ids,
+            entity_hashes,
             status_changed: true,
-            extra_grid_scopes: collection_grid_scopes(collection_id, &folder_ids),
+            entities_deleted: change.deleted_collection,
+            extra_grid_scopes: collection_grid_scopes(collection_id, &change.folder_ids),
             ..Default::default()
         });
         Ok(change)

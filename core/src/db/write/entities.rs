@@ -91,33 +91,29 @@ pub fn patch_entity_metadata(
     now: &str,
     expansion: ExpansionMode,
 ) -> rusqlite::Result<EntityChange> {
+    let has_content_patch = rating.is_some() || notes.is_some() || source_urls_json.is_some();
+    if has_content_patch {
+        let mut collection_check = conn.prepare(
+            "SELECT EXISTS(
+                 SELECT 1 FROM media_entity
+                 WHERE entity_id = ?1 AND entity_kind = 'collection'
+             )",
+        )?;
+        for entity_id in entity_ids {
+            let is_collection: bool = collection_check.query_row([entity_id], |row| row.get(0))?;
+            if is_collection {
+                return Err(rusqlite::Error::InvalidParameterName(
+                    "collections aggregate child content metadata; patch their members instead"
+                        .to_string(),
+                ));
+            }
+        }
+    }
+
     let expanded = expand_ids(conn, entity_ids, expansion)?;
     let mut change = EntityChange::default();
 
     for eid in &expanded {
-        let mut sets = vec!["date_modified = ?1"];
-        let mut idx = 2u32;
-
-        // Build dynamic SET clause based on which fields are provided
-        if name.is_some() {
-            sets.push("name = ?2");
-            idx = 3;
-        }
-        if rating.is_some() {
-            sets.push(if idx == 2 {
-                "rating = ?2"
-            } else {
-                "rating = ?3"
-            });
-        }
-        if notes.is_some() {
-            sets.push("notes = ?4");
-        }
-        if source_urls_json.is_some() {
-            sets.push("source_urls_json = ?5");
-        }
-
-        // For simplicity, update all provided fields in one statement
         if let Some(n) = name {
             conn.execute(
                 "UPDATE media_entity SET name = ?1, date_modified = ?2 WHERE entity_id = ?3",
@@ -305,7 +301,8 @@ pub fn delete_entities(conn: &Connection, entity_ids: &[i64]) -> rusqlite::Resul
 
 /// Expand entity IDs according to the expansion mode.
 /// EntityOnly: return as-is.
-/// DescendantsOnly: return member singles of any collections in the list.
+/// SinglesAndCollectionMembers: keep single targets and replace collection
+/// targets with their member singles.
 /// EntityAndDescendants: return the original IDs plus member singles.
 pub fn expand_ids(
     conn: &Connection,
@@ -314,7 +311,7 @@ pub fn expand_ids(
 ) -> rusqlite::Result<Vec<i64>> {
     match mode {
         ExpansionMode::EntityOnly => Ok(entity_ids.to_vec()),
-        ExpansionMode::DescendantsOnly => {
+        ExpansionMode::SinglesAndCollectionMembers => {
             let mut result = Vec::new();
             for eid in entity_ids {
                 let kind: String = conn.query_row(
@@ -330,8 +327,12 @@ pub fn expand_ids(
                         .query_map([eid], |row| row.get(0))?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
                     result.extend(members);
+                } else {
+                    result.push(*eid);
                 }
             }
+            result.sort_unstable();
+            result.dedup();
             Ok(result)
         }
         ExpansionMode::EntityAndDescendants => {

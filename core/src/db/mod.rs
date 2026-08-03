@@ -236,9 +236,25 @@ fn emit_collection_membership_op(
     collection_id: i64,
     change: &types::CollectionMembershipChange,
 ) -> rusqlite::Result<()> {
-    let Some(hash) = query::collections::get_collection_hash(conn, collection_id)? else {
+    let hash = change
+        .collection_hash
+        .clone()
+        .or(query::collections::get_collection_hash(
+            conn,
+            collection_id,
+        )?);
+    let Some(hash) = hash else {
         return Ok(());
     };
+    if change.deleted_collection {
+        return crate::oplog::record_op(
+            conn,
+            device_id,
+            "collection_split",
+            &hash,
+            &serde_json::json!({}),
+        );
+    }
     if !change.added.is_empty() {
         let members = entity_hashes_for_ids(conn, &change.added)?;
         crate::oplog::record_op(
@@ -1037,7 +1053,7 @@ impl LibraryDatabase {
                     .map(|urls| serde_json::to_string(urls).unwrap_or_default())
                     .as_deref(),
                 &now,
-                types::ExpansionMode::EntityAndDescendants,
+                types::ExpansionMode::EntityOnly,
             )?;
             let payload = entity_patch_payload(patch);
             if payload.as_object().is_some_and(|o| !o.is_empty()) {
@@ -1092,7 +1108,9 @@ impl LibraryDatabase {
         let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            write::bulk::expand_bulk_target(conn, types::ExpansionMode::EntityAndDescendants)?;
+            // Metadata belongs to the selected entity only. Collections keep
+            // structural fields, while child content remains child-owned.
+            write::bulk::expand_bulk_target(conn, types::ExpansionMode::EntityOnly)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
             let change = write::entities::patch_entity_metadata(
                 conn,

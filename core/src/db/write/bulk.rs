@@ -89,11 +89,19 @@ pub fn populate_bulk_target(
 pub fn expand_bulk_target(conn: &Connection, mode: ExpansionMode) -> rusqlite::Result<()> {
     match mode {
         ExpansionMode::EntityOnly => {}
-        ExpansionMode::DescendantsOnly => {
+        ExpansionMode::SinglesAndCollectionMembers => {
             conn.execute_batch(
                 "CREATE TEMP TABLE _bulk_expanded AS
-                 SELECT me.entity_id FROM media_entity me
-                 WHERE me.parent_collection_entity_id IN (SELECT entity_id FROM _bulk_target);
+                 SELECT me.entity_id
+                 FROM media_entity me
+                 JOIN _bulk_target target ON target.entity_id = me.entity_id
+                 WHERE me.entity_kind = 'single'
+                 UNION
+                 SELECT member.entity_id
+                 FROM media_entity member
+                 JOIN media_entity collection ON collection.entity_id = member.parent_collection_entity_id
+                 JOIN _bulk_target target ON target.entity_id = collection.entity_id
+                 WHERE collection.entity_kind = 'collection';
                  DELETE FROM _bulk_target;
                  INSERT INTO _bulk_target SELECT entity_id FROM _bulk_expanded;
                  DROP TABLE _bulk_expanded;",

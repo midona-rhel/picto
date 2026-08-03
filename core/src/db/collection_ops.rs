@@ -253,6 +253,16 @@ impl LibraryDatabase {
         self.with_read(|conn| query::collections::get_folder_ids_for_entities(conn, &ids))
     }
 
+    pub fn get_parent_collection_ids_for_entities(
+        &self,
+        entity_ids: &[i64],
+    ) -> Result<Vec<i64>, String> {
+        let ids = entity_ids.to_vec();
+        self.with_read(|conn| {
+            query::collections::get_parent_collection_ids_for_entities(conn, &ids)
+        })
+    }
+
     pub fn get_folder_entity_count(&self, folder_id: i64) -> Result<Option<i64>, String> {
         self.with_read(|conn| {
             conn.query_row(

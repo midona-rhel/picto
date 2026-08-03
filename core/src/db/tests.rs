@@ -4,8 +4,8 @@ use super::LibraryDatabase;
 use crate::background_work::{DeferredWorkFilter, DeferredWorkType};
 use crate::db::core::schema::{CURRENT_SCHEMA_VERSION, LIBRARY_DDL};
 use crate::db::types::{
-    BaseScope, DuplicateResolveStatus, EntityViewQuery, IngestPreparedSingle, QueryFilters,
-    QueryPage, QuerySort, ScopeKind,
+    BaseScope, DuplicateResolveStatus, EntityViewQuery, IngestPreparedSingle, MediaEntityPatch,
+    QueryFilters, QueryPage, QuerySort, ScopeKind,
 };
 use crate::media_analysis::ensure_missing_color_analysis_jobs;
 use crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION;
@@ -72,6 +72,220 @@ fn collection_materialization_persists_prepared_perceptual_hashes() {
         .expect("read stored perceptual hash");
 
     assert_eq!(stored_phash.as_deref(), Some("phash-one"));
+}
+
+#[test]
+fn collection_content_is_child_owned_and_final_member_removal_syncs_split() {
+    let db = open_test_db();
+    let first_file = db
+        .insert_file(
+            "aggregate-first-file",
+            "image/png",
+            10,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "2026-08-04",
+        )
+        .unwrap();
+    let first = db
+        .insert_single(
+            "aggregate-first",
+            first_file,
+            Some("first"),
+            1,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap();
+    let second_file = db
+        .insert_file(
+            "aggregate-second-file",
+            "image/png",
+            20,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "2026-08-04",
+        )
+        .unwrap();
+    let second = db
+        .insert_single(
+            "aggregate-second",
+            second_file,
+            Some("second"),
+            1,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap();
+    let collection = db
+        .create_collection_with_members_by_hashes(
+            "Aggregate",
+            &[
+                "aggregate-first".to_string(),
+                "aggregate-second".to_string(),
+            ],
+        )
+        .unwrap();
+    let collection_hash = db.get_collection_hash(collection).unwrap().unwrap();
+
+    db.add_tags(
+        &[first],
+        &["existing:child".to_string()],
+        1,
+        crate::db::types::ExpansionMode::EntityOnly,
+    )
+    .unwrap();
+    db.add_tags(
+        &[collection],
+        &["bulk:collection".to_string()],
+        1,
+        crate::db::types::ExpansionMode::SinglesAndCollectionMembers,
+    )
+    .unwrap();
+    db.with_read(|conn| {
+        let tagged_children: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM entity_tag et
+             JOIN tag t ON t.tag_id = et.tag_id
+             WHERE et.entity_id IN (?1, ?2)
+               AND t.namespace = 'bulk' AND t.subtag = 'collection'",
+            params![first, second],
+            |row| row.get(0),
+        )?;
+        let collection_tags: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM entity_tag WHERE entity_id = ?1",
+            [collection],
+            |row| row.get(0),
+        )?;
+        assert_eq!(tagged_children, 2);
+        assert_eq!(collection_tags, 0);
+        Ok(())
+    })
+    .unwrap();
+    db.remove_tags(
+        &[collection],
+        &["bulk:collection".to_string()],
+        crate::db::types::ExpansionMode::SinglesAndCollectionMembers,
+    )
+    .unwrap();
+
+    db.with_read(|conn| {
+        let collection_tags: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM entity_tag WHERE entity_id = ?1",
+            [collection],
+            |row| row.get(0),
+        )?;
+        let first_tags: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM entity_tag WHERE entity_id = ?1",
+            [first],
+            |row| row.get(0),
+        )?;
+        let second_tags: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM entity_tag WHERE entity_id = ?1",
+            [second],
+            |row| row.get(0),
+        )?;
+        assert_eq!(collection_tags, 0);
+        assert_eq!(
+            first_tags, 1,
+            "unrelated child tag must survive bulk removal"
+        );
+        assert_eq!(second_tags, 0);
+        Ok(())
+    })
+    .unwrap();
+
+    db.patch_entity_metadata(
+        &[first],
+        &MediaEntityPatch {
+            rating: Some(4),
+            notes: Some(Some("child note".to_string())),
+            source_urls: Some(vec!["https://example.test/child".to_string()]),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    assert!(db
+        .patch_entity_metadata(
+            &[collection],
+            &MediaEntityPatch {
+                rating: Some(5),
+                notes: Some(Some("collection-owned note".to_string())),
+                source_urls: Some(vec!["https://invalid.test/collection".to_string()]),
+                ..Default::default()
+            },
+        )
+        .is_err());
+    db.patch_entity_metadata(
+        &[collection],
+        &MediaEntityPatch {
+            name: Some("Renamed aggregate".to_string()),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+
+    let details = db.get_entity_details(&collection_hash).unwrap().unwrap();
+    assert_eq!(details.name.as_deref(), Some("Renamed aggregate"));
+    assert_eq!(details.rating, Some(4));
+    assert_eq!(details.notes.as_deref(), Some("child note"));
+    assert_eq!(
+        details.source_urls.as_deref(),
+        Some(["https://example.test/child".to_string()].as_slice())
+    );
+    assert!(details
+        .tags
+        .iter()
+        .any(|tag| tag.namespace == "existing" && tag.subtag == "child"));
+    let child_name: Option<String> = db
+        .with_read(|conn| {
+            conn.query_row(
+                "SELECT name FROM media_entity WHERE entity_id = ?1",
+                [first],
+                |row| row.get(0),
+            )
+        })
+        .unwrap();
+    assert_eq!(child_name.as_deref(), Some("first"));
+    assert_eq!(
+        db.get_parent_collection_ids_for_entities(&[first, second])
+            .unwrap(),
+        vec![collection]
+    );
+    let grid = db
+        .get_entity_grid_items(&[collection_hash.clone()])
+        .unwrap();
+    assert_eq!(grid[0].rating, Some(4), "grid rating derives from children");
+
+    let removal = db
+        .remove_collection_members(collection, &[first, second])
+        .unwrap();
+    assert!(removal.deleted_collection);
+    assert_eq!(
+        removal.collection_hash.as_deref(),
+        Some(collection_hash.as_str())
+    );
+    let ops: Vec<String> = db
+        .with_read(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT op_type FROM op_outbox WHERE entity_key = ?1 ORDER BY op_id")?;
+            let ops = stmt
+                .query_map([&collection_hash], |row| row.get(0))?
+                .collect();
+            ops
+        })
+        .unwrap();
+    assert!(ops.iter().any(|op| op == "collection_split"));
+    assert!(
+        !ops.iter().any(|op| op == "collection_members_removed"),
+        "final-member removal must sync the collection deletion, not a stale membership update"
+    );
 }
 
 #[test]

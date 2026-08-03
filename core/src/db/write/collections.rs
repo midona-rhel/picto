@@ -1,7 +1,7 @@
 //! Collection write operations — membership, reorder, split, aggregates.
 //! Collection membership is encoded on media_entity via parent_collection_entity_id.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::types::CollectionMembershipChange;
 
@@ -99,6 +99,7 @@ pub fn add_members(
         collection_id,
         added: member_entity_ids.to_vec(),
         removed: Vec::new(),
+        ..Default::default()
     })
 }
 
@@ -153,6 +154,28 @@ pub fn remove_members(
     collection_id: i64,
     member_entity_ids: &[i64],
 ) -> rusqlite::Result<CollectionMembershipChange> {
+    let collection_hash = conn
+        .query_row(
+            "SELECT entity_hash FROM media_entity
+             WHERE entity_id = ?1 AND entity_kind = 'collection'",
+            [collection_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+    let mut folder_stmt = conn.prepare(
+        "SELECT DISTINCT folder_id
+         FROM folder_member
+         WHERE entity_id = ?1
+            OR entity_id IN (
+                SELECT entity_id FROM media_entity
+                WHERE parent_collection_entity_id = ?1
+            )
+         ORDER BY folder_id",
+    )?;
+    let folder_ids = folder_stmt
+        .query_map([collection_id], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
     for eid in member_entity_ids {
         conn.execute(
             "UPDATE media_entity SET parent_collection_entity_id = NULL, collection_ordinal = NULL WHERE entity_id = ?1 AND parent_collection_entity_id = ?2",
@@ -167,7 +190,8 @@ pub fn remove_members(
         |row| row.get(0),
     )?;
 
-    if remaining == 0 {
+    let deleted_collection = remaining == 0;
+    if deleted_collection {
         conn.execute(
             "DELETE FROM media_entity WHERE entity_id = ?1",
             [collection_id],
@@ -180,6 +204,9 @@ pub fn remove_members(
         collection_id,
         added: Vec::new(),
         removed: member_entity_ids.to_vec(),
+        collection_hash,
+        deleted_collection,
+        folder_ids,
     })
 }
 
@@ -262,16 +289,6 @@ pub fn sync_aggregates(conn: &Connection, collection_id: i64) -> rusqlite::Resul
         )
         .ok();
 
-    let rating: Option<i64> = conn
-        .query_row(
-            "SELECT MAX(rating)
-             FROM media_entity
-             WHERE parent_collection_entity_id = ?1",
-            [collection_id],
-            |row| row.get(0),
-        )
-        .unwrap_or(None);
-
     let status: i64 = conn.query_row(
         "SELECT CASE
              WHEN EXISTS(
@@ -327,17 +344,15 @@ pub fn sync_aggregates(conn: &Connection, collection_id: i64) -> rusqlite::Resul
          SET member_count = ?1,
              total_size_bytes = ?2,
              primary_member_entity_id = ?3,
-             rating = ?4,
-             status = ?5,
-             date_created = COALESCE(?6, date_created),
-             date_modified = COALESCE(?7, date_modified),
-             date_added = COALESCE(?8, date_added)
-         WHERE entity_id = ?9",
+             status = ?4,
+             date_created = COALESCE(?5, date_created),
+             date_modified = COALESCE(?6, date_modified),
+             date_added = COALESCE(?7, date_added)
+         WHERE entity_id = ?8",
         params![
             member_count,
             total_size,
             primary,
-            rating,
             status,
             date_created,
             date_modified,

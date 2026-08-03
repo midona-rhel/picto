@@ -20,7 +20,11 @@ const GRID_SELECT: &str = "SELECT
         COALESCE(mf.pixel_width, pmf.pixel_width) AS pixel_width,
         COALESCE(mf.pixel_height, pmf.pixel_height) AS pixel_height,
         me.status,
-        me.rating,
+        CASE WHEN me.entity_kind = 'collection' THEN (
+            SELECT MAX(child.rating)
+            FROM media_entity child
+            WHERE child.parent_collection_entity_id = me.entity_id
+        ) ELSE me.rating END AS rating,
         me.date_added,
         me.date_created,
         me.date_modified,
@@ -352,7 +356,12 @@ fn apply_filters(filters: &QueryFilters, parts: &mut Vec<String>, bound: &mut Ve
             FilterOp::Gt => ">",
             FilterOp::Lt => "<",
         };
-        parts.push(format!("me.rating {op} ?{idx}"));
+        parts.push(format!(
+            "(CASE WHEN me.entity_kind = 'collection' THEN (\
+                SELECT MAX(child.rating) FROM media_entity child \
+                WHERE child.parent_collection_entity_id = me.entity_id\
+             ) ELSE me.rating END) {op} ?{idx}"
+        ));
         bound.push(Box::new(rf.value));
     }
 
@@ -542,7 +551,12 @@ fn sort_column(field: &str) -> &str {
         "date_added" => "me.date_added",
         "date_created" => "me.date_created",
         "date_modified" => "me.date_modified",
-        "rating" => "me.rating",
+        "rating" => {
+            "CASE WHEN me.entity_kind = 'collection' THEN (\
+                 SELECT MAX(child.rating) FROM media_entity child \
+                 WHERE child.parent_collection_entity_id = me.entity_id\
+             ) ELSE me.rating END"
+        }
         "size_bytes" => "size_bytes",
         "name" => "me.name",
         _ => "me.date_added",

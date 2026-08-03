@@ -225,8 +225,17 @@ export function Inspector() {
 
         <div className={styles.fieldStack}>
           <InspectorField value={d.name ?? ''} placeholder="Name" onCommit={(v) => { void entityMutations.setEntityName(d.entity_hash, v); }} />
-          <InspectorField value={typeof d.notes === 'string' ? d.notes : ''} placeholder="Notes" onCommit={(v) => { void entityMutations.setEntityNotes(d.entity_hash, v); }} />
-          <InspectorSourceField urls={d.source_urls ?? []} onChange={(urls) => { void entityMutations.setEntitySourceUrls(d.entity_hash, urls); }} />
+          <InspectorField
+            value={typeof d.notes === 'string' ? d.notes : ''}
+            placeholder="Notes"
+            readOnly={isCollection}
+            onCommit={isCollection ? undefined : (v) => { void entityMutations.setEntityNotes(d.entity_hash, v); }}
+          />
+          <InspectorSourceField
+            urls={d.source_urls ?? []}
+            readOnly={isCollection}
+            onChange={isCollection ? undefined : (urls) => { void entityMutations.setEntitySourceUrls(d.entity_hash, urls); }}
+          />
         </div>
 
         <TagsSection
@@ -242,7 +251,10 @@ export function Inspector() {
 
         <InspectorSection title="Properties">
           <div className={styles.propsStack}>
-            <StarRating value={d.rating ?? 0} onChange={(r) => { void entityMutations.setEntityRating(d.entity_hash, r); }} />
+            <StarRating
+              value={d.rating ?? 0}
+              onChange={isCollection ? undefined : (r) => { void entityMutations.setEntityRating(d.entity_hash, r); }}
+            />
             {!isCollection && d.pixel_width && d.pixel_height && <PropertyRow label="Dimensions" value={`${d.pixel_width} × ${d.pixel_height}`} mono />}
             {!isCollection && <PropertyRow label="Size" value={fmtSize(d.size_bytes)} mono />}
             {!isCollection && <PropertyRow label="Type" value={fmtExt(d.mime_type)} title={d.mime_type} />}

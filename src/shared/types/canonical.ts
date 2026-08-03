@@ -12,8 +12,7 @@ export type EntityKind = 'single' | 'collection';
 export interface CanonicalEntityGridItem {
   entity_id: number;
   entity_hash: string;
-  /** Hash used to load the image. For singles this equals entity_hash.
-   *  For collections this is the primary member's hash (the one with a file in the blob store). */
+  /** Hash used to load display media. entity_hash is the logical entity identity. */
   thumbnail_hash: string;
   entity_kind: EntityKind;
   name: string | null;

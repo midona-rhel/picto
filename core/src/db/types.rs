@@ -30,7 +30,8 @@ impl EntityKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExpansionMode {
     EntityOnly,
-    DescendantsOnly,
+    /// Keep single targets, but replace collection targets with their member singles.
+    SinglesAndCollectionMembers,
     EntityAndDescendants,
 }
 
@@ -103,6 +104,12 @@ pub struct CollectionMembershipChange {
     pub collection_id: i64,
     pub added: Vec<i64>,
     pub removed: Vec<i64>,
+    /// Captured before a final-member removal deletes the collection row.
+    pub collection_hash: Option<String>,
+    pub deleted_collection: bool,
+    /// Captured before membership changes so a deleted collection still
+    /// invalidates every affected folder scope.
+    pub folder_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -309,8 +316,8 @@ pub struct FolderPatch {
 pub struct EntityGridItem {
     pub entity_id: i64,
     pub entity_hash: String,
-    /// Hash used to load the thumbnail. For singles == entity_hash.
-    /// For collections == primary member's hash.
+    /// Hash used to load the thumbnail. A collection's identity is
+    /// `entity_hash`; its thumbnail is supplied by its primary member.
     pub thumbnail_hash: String,
     pub entity_kind: EntityKind,
     pub name: Option<String>,
