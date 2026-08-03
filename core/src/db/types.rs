@@ -65,6 +65,33 @@ pub struct FolderMembershipChange {
     pub entity_ids: Vec<i64>,
 }
 
+/// The folders removed by one recursive delete, ordered from leaves to root.
+/// UUIDs are captured before the cascade so every deleted folder can receive
+/// its own sync tombstone in the same transaction.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FolderDeleteResult {
+    pub deleted_folders: Vec<DeletedFolder>,
+}
+
+impl FolderDeleteResult {
+    pub fn is_empty(&self) -> bool {
+        self.deleted_folders.is_empty()
+    }
+
+    pub fn folder_ids(&self) -> Vec<i64> {
+        self.deleted_folders
+            .iter()
+            .map(|folder| folder.folder_id)
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeletedFolder {
+    pub folder_id: i64,
+    pub uuid: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FolderMembership {
     pub folder_id: i64,

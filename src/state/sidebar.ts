@@ -95,11 +95,12 @@ export const applySidebarCountsAtom = atom(
   },
 );
 
-export const removeFolderNodeAtom = atom(
+/** Remove a confirmed folder deletion, including every descendant in the tree snapshot. */
+export const removeFolderNodesAtom = atom(
   null,
-  (get, set, folderId: number) => {
-    const fid = `folder:${folderId}`;
-    set(sidebarNodesAtom, get(sidebarNodesAtom).filter((n) => n.id !== fid));
+  (get, set, folderNodeIds: Iterable<string>) => {
+    const removed = new Set(folderNodeIds);
+    set(sidebarNodesAtom, get(sidebarNodesAtom).filter((n) => !removed.has(n.id)));
   },
 );
 

@@ -317,7 +317,7 @@ pub(super) fn apply_remote_op(
         }
         "folder_deleted" => {
             if let Some(id) = folder_id_by_uuid(conn, key)? {
-                write::folders::delete_folder(conn, id)?;
+                let _ = write::folders::delete_folder(conn, id)?;
             }
         }
         "folder_members_added" | "folder_members_removed" => {

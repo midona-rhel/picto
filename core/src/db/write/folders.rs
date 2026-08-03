@@ -3,7 +3,9 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::db::types::{ExpansionMode, FolderMembershipChange, FolderPatch};
+use crate::db::types::{
+    DeletedFolder, ExpansionMode, FolderDeleteResult, FolderMembershipChange, FolderPatch,
+};
 
 use super::entities::expand_ids;
 
@@ -82,13 +84,50 @@ pub fn update_folder(
     Ok(())
 }
 
-pub fn delete_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM folder_member WHERE folder_id = ?1",
-        [folder_id],
-    )?;
+/// Delete a folder subtree and its memberships without touching media rows.
+///
+/// The foreign-key cascade removes descendants, but the complete subtree must
+/// be read first so callers can emit a tombstone and runtime facts per folder.
+pub fn delete_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<FolderDeleteResult> {
+    let deleted_folders = collect_deleted_folders(conn, folder_id)?;
+    if deleted_folders.is_empty() {
+        return Ok(FolderDeleteResult::default());
+    }
+
+    let mut delete_members =
+        conn.prepare_cached("DELETE FROM folder_member WHERE folder_id = ?1")?;
+    for folder in &deleted_folders {
+        delete_members.execute([folder.folder_id])?;
+    }
     conn.execute("DELETE FROM folder WHERE folder_id = ?1", [folder_id])?;
-    Ok(())
+    Ok(FolderDeleteResult { deleted_folders })
+}
+
+fn collect_deleted_folders(
+    conn: &Connection,
+    folder_id: i64,
+) -> rusqlite::Result<Vec<DeletedFolder>> {
+    let mut stmt = conn.prepare_cached(
+        "WITH RECURSIVE descendants(folder_id, uuid, depth) AS (
+             SELECT folder_id, uuid, 0 FROM folder WHERE folder_id = ?1
+             UNION ALL
+             SELECT child.folder_id, child.uuid, descendants.depth + 1
+             FROM folder child
+             JOIN descendants ON child.parent_id = descendants.folder_id
+         )
+         SELECT folder_id, uuid
+         FROM descendants
+         ORDER BY depth DESC, folder_id DESC",
+    )?;
+    let folders = stmt
+        .query_map([folder_id], |row| {
+            Ok(DeletedFolder {
+                folder_id: row.get(0)?,
+                uuid: row.get(1)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(folders)
 }
 
 /// Add entities to a folder using the caller's explicit expansion mode.

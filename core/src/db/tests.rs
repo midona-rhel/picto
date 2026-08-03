@@ -11,6 +11,7 @@ use crate::media_analysis::ensure_missing_color_analysis_jobs;
 use crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION;
 use crate::media_processing::colors::{serialize_dominant_palette_blob, DominantColor};
 use rusqlite::params;
+use std::sync::Arc;
 use tempfile::TempDir;
 
 fn open_test_db() -> LibraryDatabase {
@@ -114,6 +115,119 @@ fn folder_mutations_emit_outbox_ops_with_stable_uuid() {
         "hlc must increase"
     );
     assert!(ops.iter().all(|o| !o.3.is_empty()));
+}
+
+#[test]
+fn deleting_folder_tree_removes_memberships_not_media_and_refreshes_sidebar() {
+    let db = Arc::new(open_test_db());
+    let root_id = db.create_folder("Root", None, None, None).unwrap();
+    let child_id = db
+        .create_folder("Child", Some(root_id), None, None)
+        .unwrap();
+    let grandchild_id = db
+        .create_folder("Grandchild", Some(child_id), None, None)
+        .unwrap();
+
+    let entity_ids: Vec<i64> = (0..3)
+        .map(|index| {
+            let file_id = db
+                .insert_file(
+                    &format!("folder-delete-file-{index}"),
+                    "image/png",
+                    10,
+                    None,
+                    None,
+                    None,
+                    None,
+                    false,
+                    "2026-08-04",
+                )
+                .unwrap();
+            db.insert_single(
+                &format!("folder-delete-entity-{index}"),
+                file_id,
+                None,
+                1,
+                "2026-08-04",
+                "2026-08-04",
+            )
+            .unwrap()
+        })
+        .collect();
+    for (folder_id, entity_id) in [root_id, child_id, grandchild_id]
+        .into_iter()
+        .zip(entity_ids.iter().copied())
+    {
+        db.add_folder_members(
+            folder_id,
+            &[entity_id],
+            crate::db::types::ExpansionMode::EntityOnly,
+        )
+        .unwrap();
+    }
+
+    let engine = crate::engine::ApplicationEngine::new(db.clone());
+    let deleted = engine.delete_folder(root_id).unwrap();
+    assert_eq!(deleted.folder_ids(), vec![grandchild_id, child_id, root_id]);
+    assert_eq!(deleted.deleted_folders.len(), 3);
+    engine.rebuild_sidebar();
+
+    let (folders, memberships, entities, singles, files, folder_nodes, uncategorized) = db
+        .with_read(|conn| {
+            Ok((
+                conn.query_row("SELECT COUNT(*) FROM folder", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                conn.query_row("SELECT COUNT(*) FROM folder_member", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                conn.query_row("SELECT COUNT(*) FROM single_media_entity", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                conn.query_row(
+                    "SELECT COUNT(*) FROM sidebar_node WHERE node_id LIKE 'folder:%'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+                conn.query_row(
+                    "SELECT count FROM sidebar_node WHERE node_id = 'system:uncategorized'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+            ))
+        })
+        .unwrap();
+    assert_eq!((folders, memberships), (0, 0));
+    assert_eq!((entities, singles, files), (3, 3, 3));
+    assert_eq!(folder_nodes, 0);
+    assert_eq!(uncategorized, 3);
+    assert_eq!(db.get_scope_counts().unwrap().uncategorized, 3);
+
+    let tombstone_uuids: Vec<String> = db
+        .with_read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT entity_key FROM op_outbox
+                 WHERE op_type = 'folder_deleted'
+                 ORDER BY op_id",
+            )?;
+            let uuids = stmt
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(uuids)
+        })
+        .unwrap();
+    let expected_uuids: Vec<String> = deleted
+        .deleted_folders
+        .iter()
+        .map(|folder| folder.uuid.clone().expect("folder UUID"))
+        .collect();
+    assert_eq!(tombstone_uuids, expected_uuids);
 }
 
 #[test]

@@ -53,6 +53,25 @@ export function getScrollPosition(nodeId: string): number | null {
   return scrollPositions.get(nodeId) ?? null;
 }
 
+/** Remove scopes that no longer exist from history and their saved grid positions. */
+export function removeHistoryEntries(nodeIds: Iterable<string>) {
+  const removed = new Set(nodeIds);
+  if (removed.size === 0) return;
+
+  for (const nodeId of removed) scrollPositions.delete(nodeId);
+
+  const h = store.get(historyAtom);
+  const stack = h.stack.filter((entry) => !removed.has(entry.nodeId));
+  const retainedThroughCursor = h.stack
+    .slice(0, h.cursor + 1)
+    .filter((entry) => !removed.has(entry.nodeId)).length;
+  const nextStack = stack.length > 0
+    ? stack
+    : [{ nodeId: 'system:active', parentNodeId: null, collectionName: null }];
+  const cursor = Math.min(Math.max(retainedThroughCursor - 1, 0), nextStack.length - 1);
+  store.set(historyAtom, { stack: nextStack, cursor });
+}
+
 /** Check if a nodeId points to a scope that still exists. */
 async function isValidNodeId(nodeId: string): Promise<boolean> {
   if (!nodeId.startsWith('collection:')) return true;

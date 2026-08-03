@@ -34,6 +34,7 @@ import {
   applySmartFolderOrderChangesAtom,
 } from '../state/sidebar';
 import { sidebarController } from '../controllers/sidebarController';
+import { settleFolderDeletionFromSidebar } from '../controllers/foldersController';
 
 const store = getDefaultStore();
 
@@ -72,13 +73,21 @@ interface SidebarCounts {
 export function startSidebarSettle(): () => void {
   let cancelled = false;
   const unlistenPromise = listen<{
+    origin?: string;
     changes: StateChanges;
     sidebar_counts?: SidebarCounts | null;
   }>('runtime/state_changed', (event) => {
     if (cancelled) return;
-    const { changes, sidebar_counts } = event.payload;
+    const { changes, sidebar_counts, origin } = event.payload;
     let needsTreeRefresh = false;
     let hadExactDeltas = false;
+
+    // Settle navigation/history before the removal patches erase the tree.
+    // Tree expansion also tolerates an incomplete event without preserving stale descendants.
+    if (origin === 'delete_folder' && changes.folder_ids?.length) {
+      settleFolderDeletionFromSidebar(changes.folder_ids);
+      hadExactDeltas = true;
+    }
 
     // 1. System scope counts (from engine write events)
     if (sidebar_counts) {

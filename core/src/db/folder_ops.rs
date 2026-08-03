@@ -71,20 +71,22 @@ impl LibraryDatabase {
         })
     }
 
-    pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
+    pub fn delete_folder(&self, folder_id: i64) -> Result<types::FolderDeleteResult, String> {
         self.with_write(|conn| {
-            let uuid = folder_uuid(conn, folder_id)?;
-            write::folders::delete_folder(conn, folder_id)?;
-            if let Some(uuid) = uuid {
+            let deleted = write::folders::delete_folder(conn, folder_id)?;
+            for folder in &deleted.deleted_folders {
+                let Some(uuid) = &folder.uuid else {
+                    continue;
+                };
                 crate::oplog::record_op(
                     conn,
                     &self.device_id,
                     "folder_deleted",
-                    &uuid,
+                    uuid,
                     &serde_json::json!({}),
                 )?;
             }
-            Ok(())
+            Ok(deleted)
         })
     }
 

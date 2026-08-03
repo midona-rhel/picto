@@ -757,21 +757,91 @@ pub async fn clear_folder_watch_config(
     Ok(())
 }
 
+fn folder_deletion_impact(folder_ids: &[i64]) -> ChangeImpact {
+    let patches = folder_ids
+        .iter()
+        .map(|folder_id| SidebarNodePatch {
+            node_id: format!("folder:{folder_id}"),
+            removed: Some(true),
+            ..Default::default()
+        })
+        .collect();
+    let mut scopes: Vec<String> = folder_ids
+        .iter()
+        .map(|folder_id| format!("folder:{folder_id}"))
+        .collect();
+    scopes.push("system:uncategorized".into());
+
+    ChangeImpact::new()
+        .domains(&[Domain::Folders, Domain::Sidebar, Domain::Selection])
+        .folder_ids(folder_ids.to_vec())
+        .folder_membership_changed(folder_ids.to_vec())
+        .extra_grid_scopes(scopes)
+        .sidebar_node_patches(patches)
+}
+
+fn reload_folder_watches(
+    commands: &tokio::sync::mpsc::UnboundedSender<crate::folders::watch::FolderWatchCommand>,
+) {
+    let _ = commands.send(crate::folders::watch::FolderWatchCommand::Reload);
+}
+
 pub async fn delete_folder(state: &AppState, input: DeleteFolderInput) -> Result<(), String> {
-    state.engine.delete_folder(input.folder_id)?;
-    let patch = SidebarNodePatch {
-        node_id: format!("folder:{}", input.folder_id),
-        removed: Some(true),
-        ..Default::default()
-    };
+    let deleted = state.engine.delete_folder(input.folder_id)?;
+    if deleted.is_empty() {
+        return Ok(());
+    }
+    let folder_ids = deleted.folder_ids();
+    reload_folder_watches(&state.folder_watch_commands);
+    state.engine.rebuild_sidebar();
     crate::events::emit_state_changed(
         "delete_folder",
-        ChangeImpact::new()
-            .domains(&[Domain::Folders, Domain::Sidebar, Domain::Selection])
-            .folder_ids(vec![input.folder_id])
-            .sidebar_node_patch(patch),
+        crate::ingest::attach_current_sidebar_counts(
+            state.engine.db(),
+            folder_deletion_impact(&folder_ids),
+        ),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{folder_deletion_impact, reload_folder_watches};
+
+    #[test]
+    fn folder_deletion_impact_reports_every_removed_folder() {
+        let impact = folder_deletion_impact(&[30, 20, 10]);
+
+        assert_eq!(impact.folder_ids, Some(vec![30, 20, 10]));
+        assert_eq!(impact.folder_membership_changed, Some(vec![30, 20, 10]));
+        assert_eq!(
+            impact.extra_grid_scopes,
+            Some(vec![
+                "folder:30".into(),
+                "folder:20".into(),
+                "folder:10".into(),
+                "system:uncategorized".into(),
+            ])
+        );
+        let patches = impact.sidebar_node_patches.expect("removal patches");
+        assert_eq!(patches.len(), 3);
+        assert_eq!(patches[0].node_id, "folder:30");
+        assert_eq!(patches[1].node_id, "folder:20");
+        assert_eq!(patches[2].node_id, "folder:10");
+        assert!(patches.iter().all(|patch| patch.removed == Some(true)));
+    }
+
+    #[test]
+    fn folder_deletion_requests_a_watch_reload() {
+        let (commands, mut received) = crate::folders::watch::channel();
+
+        reload_folder_watches(&commands);
+
+        assert!(matches!(
+            received.try_recv(),
+            Ok(crate::folders::watch::FolderWatchCommand::Reload)
+        ));
+    }
 }
 
 pub async fn remove_files_from_folder(

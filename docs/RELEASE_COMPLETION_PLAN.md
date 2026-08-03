@@ -1,4 +1,4 @@
-# Imaginator Release Completion Plan
+# Picto Release Completion Plan
 
 ## Goal
 
@@ -36,13 +36,13 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 
 ## Phase 2: Core Library Contracts
 
-- [ ] Prove all import sources terminate in the durable ingest queue.
-- [ ] Delete remaining alternate import, retry, and derivative paths.
+- [x] Prove manual, collection, folder, watch, subscription, and retry imports use the durable queue.
+- [x] Delete competing import/retry paths; keep explicit user-requested derivative repair actions.
 - [ ] Reject videos from collection creation and collection membership atomically.
 - [ ] Verify collection metadata aggregation, tag fan-out, and destructive collection deletion.
-- [ ] Delete folders atomically with all descendants while leaving media untouched.
-- [ ] Fall back to the nearest surviving parent or All when deleting the active folder hierarchy.
-- [ ] Emit every deleted folder in runtime facts.
+- [x] Delete folders atomically with all descendants while leaving media untouched.
+- [x] Fall back to the nearest surviving parent or All when deleting the active folder hierarchy.
+- [x] Emit every deleted folder in runtime facts.
 - [ ] Verify grid, sidebar, folder, smart-folder, tag, and special-scope counts agree.
 - [ ] Verify recently viewed is unique per entity and ordered by latest view.
 - [x] Remove incomplete batch rename and no-op folder actions; retain drag-and-drop folder Move.

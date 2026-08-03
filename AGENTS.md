@@ -1,6 +1,6 @@
 # Product Contract
 
-Imaginator is an Electron media library backed by SQLite. Roaring bitmap projections make
+Picto is an Electron media library backed by SQLite. Roaring bitmap projections make
 media-entity lookup and scope filtering fast; SQLite remains the source of truth.
 
 Media entities are images, videos, or image collections. Collections contain images only and
@@ -12,7 +12,7 @@ media, and cloud sync.
 
 Cloud sync writes library metadata changes and media blobs into a user-owned folder already
 synced by a desktop provider such as Google Drive or Dropbox. The provider transports files;
-Imaginator does not need its own cloud account system or provider-specific upload API.
+Picto does not need its own cloud account system or provider-specific upload API.
 
 # Engineering Rules
 

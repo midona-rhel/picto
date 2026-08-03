@@ -75,7 +75,10 @@ impl ApplicationEngine {
         self.db.update_folder(folder_id, patch)
     }
 
-    pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
+    pub fn delete_folder(
+        &self,
+        folder_id: i64,
+    ) -> Result<crate::db::types::FolderDeleteResult, String> {
         self.db.delete_folder(folder_id)
     }
 

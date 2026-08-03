@@ -27,7 +27,11 @@ import {
 import { activeNodeIdAtom } from '../../state/navigation';
 import { pushHistory } from '../../state/navigationHistory';
 import { sidebarController } from '../../controllers/sidebarController';
-import { foldersController } from '../../controllers/foldersController';
+import {
+  bulkFolderDeletionMessage,
+  foldersController,
+  singleFolderDeletionMessage,
+} from '../../controllers/foldersController';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { pinSidebarItem, unpinSidebarItem, reorderPinnedItems } from '../../platform/sidebarApi';
 import { SidebarRow } from '../../shared/ui/SidebarRow';
@@ -541,7 +545,7 @@ export function Sidebar() {
       { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
         store.set(confirmModalAtom, {
           open: true, title: 'Delete Folder', danger: true, confirmLabel: 'Delete',
-          message: `Delete "${node.name}"? Files inside will not be deleted.`,
+          message: singleFolderDeletionMessage(node.name),
           onConfirm: () => foldersController.delete(folderId),
         });
       } },
@@ -702,17 +706,18 @@ export function Sidebar() {
       action: () => {
         store.set(confirmModalAtom, {
           open: true, title: 'Delete Selected', danger: true, confirmLabel: 'Delete',
-          message: `Delete ${totalCount} selected item${totalCount > 1 ? 's' : ''}? Files inside folders will not be deleted.`,
+          message: bulkFolderDeletionMessage(totalCount),
           onConfirm: () => {
-            for (const id of folderIds) {
-              const fid = parseFolderId(id);
-              if (fid != null) void foldersController.delete(fid);
-            }
+            const folderDeleteIds = folderIds
+              .map(parseFolderId)
+              .filter((id): id is number => id != null);
+            const deletes: Promise<unknown>[] = [];
+            if (folderDeleteIds.length > 0) deletes.push(foldersController.deleteMany(folderDeleteIds));
             for (const id of smartIds) {
               const sfId = parseSmartFolderId(id);
-              if (sfId != null) void smartFoldersController.delete(sfId);
+              if (sfId != null) deletes.push(smartFoldersController.delete(sfId));
             }
-            setSidebarSelection(new Set());
+            void Promise.all(deletes).then(() => setSidebarSelection(new Set())).catch(() => {});
           },
         });
       },
