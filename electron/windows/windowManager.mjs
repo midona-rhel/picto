@@ -279,7 +279,8 @@ export function createWindowManager({
       if (!win.isDestroyed() && !win.isVisible()) {
         console.warn(`[main] window '${label}' forcing show fallback (ready-to-show timeout)`);
         try {
-          win.show();
+          if (isDev && isMain) win.showInactive();
+          else win.show();
         } catch (err) {
           console.error('[main] force-show failed:', err);
         }
@@ -292,8 +293,12 @@ export function createWindowManager({
         if (isMain && savedMainState?.maximized) {
           win.maximize();
         }
-        win.show();
-        if (isMain) win.focus();
+        if (isDev && isMain) {
+          win.showInactive();
+        } else {
+          win.show();
+          if (isMain) win.focus();
+        }
       } catch (err) {
         console.error('[main] failed to show window:', err);
       }
@@ -395,7 +400,7 @@ export function createWindowManager({
       void win.loadURL(url).catch((err) => {
         console.error(`[main] window '${label}' loadURL failed`, err);
       });
-      win.webContents.openDevTools({ mode: 'detach' });
+      win.webContents.openDevTools({ mode: 'detach', activate: false });
     } else {
       const htmlMap = {
         settings: 'settings.html',
