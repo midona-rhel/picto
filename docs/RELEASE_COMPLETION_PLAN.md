@@ -45,7 +45,7 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [x] Fall back to the nearest surviving parent or All when deleting the active folder hierarchy.
 - [x] Emit every deleted folder in runtime facts.
 - [ ] Verify grid, sidebar, folder, smart-folder, tag, and special-scope counts agree.
-- [ ] Verify recently viewed is unique per entity and ordered by latest view.
+- [x] Verify recently viewed is unique per entity and ordered by latest view.
 - [x] Remove incomplete batch rename and no-op folder actions; retain drag-and-drop folder Move.
 
 ## Phase 3: PBI-575 Subscriptions
