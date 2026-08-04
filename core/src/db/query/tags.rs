@@ -4,6 +4,24 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::types::{mask_from_db_bits, NamespaceSummary, TagInfo, TagRecord, TagRelation};
 
+const TAG_SEARCH_ORDER: &str = "CASE
+    WHEN LOWER(t.subtag) = LOWER(?2) THEN 0
+    WHEN LOWER(t.subtag) LIKE LOWER(?3) ESCAPE '\\' THEN 1
+    ELSE 2 END";
+
+fn subtag_search(query: &str) -> (String, String, String) {
+    let term = query
+        .split_once(':')
+        .map_or(query, |(_, subtag)| subtag)
+        .trim()
+        .to_string();
+    let escaped = term
+        .replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_");
+    (term, format!("%{escaped}%"), format!("{escaped}%"))
+}
+
 fn equivalent_tag_match(membership_alias: &str, requested_tag_id: &str) -> String {
     format!(
         "({membership_alias}.tag_id = {requested_tag_id}
@@ -132,17 +150,19 @@ pub fn search_tags(
             .collect();
     }
 
-    let fts_query = format!("{}*", query.replace('"', ""));
+    let (term, pattern, prefix) = subtag_search(query);
     let sql = format!(
         "SELECT {columns}
-         FROM tag_fts fts
-         JOIN tag t ON t.tag_id = fts.rowid
-         WHERE tag_fts MATCH ?1
-         ORDER BY rank
-         LIMIT ?2 OFFSET ?3"
+         FROM tag t
+         WHERE t.subtag LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+         ORDER BY {TAG_SEARCH_ORDER}, file_count DESC, t.subtag ASC, t.tag_id ASC
+         LIMIT ?4 OFFSET ?5"
     );
     let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params![fts_query, limit, offset], map_tag_record)?;
+    let rows = stmt.query_map(
+        params![pattern, term, prefix, limit, offset],
+        map_tag_record,
+    )?;
     rows.collect()
 }
 
@@ -244,27 +264,27 @@ pub fn get_tags_paginated(
 
     if let Some(query) = search {
         if !query.is_empty() {
-            let fts_query = format!("{}*", query.replace('"', ""));
+            let (term, pattern, prefix) = subtag_search(query);
             let (sql, use_ns) = match namespace {
                 Some(_) => (
                     format!(
                         "SELECT {columns}
-                         FROM tag_fts fts
-                         JOIN tag t ON t.tag_id = fts.rowid
-                         WHERE tag_fts MATCH ?1 AND t.namespace = ?2
-                         ORDER BY t.subtag ASC, t.tag_id ASC
-                         LIMIT ?3"
+                         FROM tag t
+                         WHERE t.subtag LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+                           AND t.namespace = ?4
+                         ORDER BY {TAG_SEARCH_ORDER}, file_count DESC, t.subtag ASC, t.tag_id ASC
+                         LIMIT ?5"
                     ),
                     true,
                 ),
                 None => (
                     format!(
                         "SELECT {columns}
-                         FROM tag_fts fts
-                         JOIN tag t ON t.tag_id = fts.rowid
-                         WHERE tag_fts MATCH ?1
-                         ORDER BY {NS_ORDER_EXPR} ASC, t.subtag ASC, t.tag_id ASC
-                         LIMIT ?2"
+                         FROM tag t
+                         WHERE t.subtag LIKE ?1 ESCAPE '\\' COLLATE NOCASE
+                         ORDER BY {TAG_SEARCH_ORDER}, file_count DESC, {NS_ORDER_EXPR} ASC,
+                                  t.subtag ASC, t.tag_id ASC
+                         LIMIT ?4"
                     ),
                     false,
                 ),
@@ -272,12 +292,12 @@ pub fn get_tags_paginated(
             let mut stmt = conn.prepare(&sql)?;
             return if use_ns {
                 stmt.query_map(
-                    params![fts_query, namespace.unwrap(), limit],
+                    params![pattern, term, prefix, namespace.unwrap(), limit],
                     map_tag_record,
                 )?
                 .collect()
             } else {
-                stmt.query_map(params![fts_query, limit], map_tag_record)?
+                stmt.query_map(params![pattern, term, prefix, limit], map_tag_record)?
                     .collect()
             };
         }

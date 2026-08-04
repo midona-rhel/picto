@@ -1019,6 +1019,8 @@ fn tag_counts_match_visible_tag_scopes() {
 
     let zero_count_entity = insert("tag-count-zero", 0);
     add_tag(zero_count_entity, "test:zero");
+    let general_one_girl = db.ensure_tag("1girl").unwrap();
+    let character_one_girl = db.ensure_tag("character:1girl").unwrap();
     db.full_rebuild();
 
     let records = db.get_tags_paginated(None, None, None, 100).unwrap();
@@ -1068,6 +1070,31 @@ fn tag_counts_match_visible_tag_scopes() {
         .unwrap()
         .iter()
         .any(|tag| tag.tag_id == zero_tag_id));
+
+    for query in ["1girl", "general:1girl"] {
+        let matches = db
+            .get_tags_paginated(None, Some(query.to_string()), None, 100)
+            .unwrap();
+        assert_eq!(matches.len(), 2, "picker search for {query}");
+        assert!(matches.iter().any(|tag| tag.tag_id == general_one_girl));
+        assert!(matches.iter().any(|tag| tag.tag_id == character_one_girl));
+    }
+    let autocomplete = db.search_tags("1girl", 100, 0).unwrap();
+    assert_eq!(autocomplete.len(), 2);
+    assert!(db
+        .get_tags_paginated(
+            Some("general".to_string()),
+            Some("1girl".to_string()),
+            None,
+            100,
+        )
+        .unwrap()
+        .iter()
+        .all(|tag| tag.namespace == "general"));
+    assert!(db
+        .get_tags_paginated(None, Some("general".to_string()), None, 100)
+        .unwrap()
+        .is_empty());
 
     db.with_read(|conn| {
         let has_file_count = conn

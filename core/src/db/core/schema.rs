@@ -4,7 +4,7 @@
 use rusqlite::Connection;
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 103;
+pub const CURRENT_SCHEMA_VERSION: i64 = 104;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -109,8 +109,6 @@ CREATE TABLE IF NOT EXISTS tag_display (
     display_ns TEXT,
     display_st TEXT
 );
-
-CREATE VIRTUAL TABLE IF NOT EXISTS tag_fts USING fts5(namespace, subtag, content=tag, content_rowid=tag_id);
 
 CREATE TABLE IF NOT EXISTS folder (
     folder_id                  INTEGER PRIMARY KEY,
@@ -494,7 +492,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 103
+SELECT 104
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -582,7 +580,6 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
             "SELECT entity_id FROM entity_tag_implied WHERE 0",
         ),
         ("tag_display", "SELECT tag_id FROM tag_display WHERE 0"),
-        ("tag_fts", "SELECT rowid FROM tag_fts WHERE 0"),
         (
             "folder",
             "SELECT folder_id, notes, total_size_bytes, pinned, pin_order, uuid FROM folder WHERE 0",
