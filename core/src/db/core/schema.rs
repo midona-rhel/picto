@@ -1,10 +1,10 @@
 //! Library database schema — authoritative table definitions.
 //! No other module may define or assume table structure.
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 105;
+pub const CURRENT_SCHEMA_VERSION: i64 = 106;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS entity_tag (
     source     TEXT    NOT NULL DEFAULT 'local',
     PRIMARY KEY (entity_id, tag_id, source)
 );
+CREATE INDEX IF NOT EXISTS idx_entity_tag_tag_id ON entity_tag(tag_id, entity_id);
 
 CREATE TABLE IF NOT EXISTS tag_alias (
     from_tag_id INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
@@ -99,10 +100,11 @@ CREATE TABLE IF NOT EXISTS tag_ancestor (
 );
 
 CREATE TABLE IF NOT EXISTS entity_tag_implied (
-    entity_id INTEGER NOT NULL,
-    tag_id    INTEGER NOT NULL,
+    entity_id INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,
+    tag_id    INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
     PRIMARY KEY (entity_id, tag_id)
 );
+CREATE INDEX IF NOT EXISTS idx_entity_tag_implied_tag_id ON entity_tag_implied(tag_id, entity_id);
 
 CREATE TABLE IF NOT EXISTS tag_display (
     tag_id     INTEGER PRIMARY KEY REFERENCES tag(tag_id) ON DELETE CASCADE,
@@ -138,6 +140,7 @@ CREATE TABLE IF NOT EXISTS folder_member (
     position_rank INTEGER,
     PRIMARY KEY (folder_id, entity_id)
 );
+CREATE INDEX IF NOT EXISTS idx_folder_member_entity_id ON folder_member(entity_id, folder_id);
 
 CREATE TABLE IF NOT EXISTS smart_folder (
     smart_folder_id  INTEGER PRIMARY KEY,
@@ -494,7 +497,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 105
+SELECT 106
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -678,24 +681,116 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
             "SELECT device_id, consumed_seq FROM sync_ingest_cursor WHERE 0",
         ),
     ];
-    const REQUIRED_INDEXES: &[&str] = &[
-        "idx_me_status",
-        "idx_me_kind",
-        "idx_me_parent",
-        "idx_me_date_added",
-        "idx_me_rating",
-        "idx_media_view_viewed_at",
+    const REQUIRED_INDEXES: &[(&str, &str, &[(&str, bool)])] = &[
+        ("idx_me_status", "media_entity", &[("status", false)]),
+        ("idx_me_kind", "media_entity", &[("entity_kind", false)]),
+        (
+            "idx_me_parent",
+            "media_entity",
+            &[("parent_collection_entity_id", false)],
+        ),
+        (
+            "idx_me_date_added",
+            "media_entity",
+            &[("date_added", false)],
+        ),
+        ("idx_me_rating", "media_entity", &[("rating", false)]),
+        (
+            "idx_media_view_viewed_at",
+            "media_view",
+            &[("viewed_at", true)],
+        ),
+        (
+            "idx_entity_tag_tag_id",
+            "entity_tag",
+            &[("tag_id", false), ("entity_id", false)],
+        ),
+        (
+            "idx_entity_tag_implied_tag_id",
+            "entity_tag_implied",
+            &[("tag_id", false), ("entity_id", false)],
+        ),
+        (
+            "idx_folder_member_entity_id",
+            "folder_member",
+            &[("entity_id", false), ("folder_id", false)],
+        ),
+        ("idx_folder_uuid", "folder", &[("uuid", false)]),
+        ("idx_smart_folder_uuid", "smart_folder", &[("uuid", false)]),
+        (
+            "idx_subscription_group_uuid",
+            "subscription_group",
+            &[("uuid", false)],
+        ),
+        ("idx_subscription_uuid", "subscription", &[("uuid", false)]),
+        (
+            "idx_ingest_queue_ready",
+            "ingest_queue",
+            &[
+                ("status", false),
+                ("created_at", false),
+                ("queue_id", false),
+            ],
+        ),
+        (
+            "idx_ingest_queue_subscription",
+            "ingest_queue",
+            &[
+                ("subscription_id", false),
+                ("status", false),
+                ("queue_id", false),
+            ],
+        ),
+        (
+            "idx_ingest_queue_item_queue",
+            "ingest_queue_item",
+            &[
+                ("queue_id", false),
+                ("status", false),
+                ("page_num", false),
+                ("item_id", false),
+            ],
+        ),
+        (
+            "idx_subscription_query_job_ready",
+            "subscription_query_job",
+            &[("status", false), ("queued_at", false), ("job_id", false)],
+        ),
+        (
+            "idx_subscription_query_job_subscription",
+            "subscription_query_job",
+            &[
+                ("subscription_id", false),
+                ("status", false),
+                ("queued_at", false),
+                ("job_id", false),
+            ],
+        ),
+        (
+            "idx_subscription_download_attempt_retry",
+            "subscription_download_attempt",
+            &[
+                ("subscription_id", false),
+                ("query_id", false),
+                ("site_category", false),
+                ("post_id", false),
+                ("status", false),
+            ],
+        ),
+        ("idx_op_outbox_pending", "op_outbox", &[("op_id", false)]),
+    ];
+    const UNIQUE_INDEXES: &[&str] = &[
         "idx_folder_uuid",
         "idx_smart_folder_uuid",
         "idx_subscription_group_uuid",
         "idx_subscription_uuid",
-        "idx_ingest_queue_ready",
-        "idx_ingest_queue_subscription",
-        "idx_ingest_queue_item_queue",
-        "idx_subscription_query_job_ready",
-        "idx_subscription_query_job_subscription",
-        "idx_subscription_download_attempt_retry",
-        "idx_op_outbox_pending",
+    ];
+    const PARTIAL_INDEXES: &[(&str, &str)] = &[
+        ("idx_folder_uuid", "uuid is not null"),
+        ("idx_smart_folder_uuid", "uuid is not null"),
+        ("idx_subscription_group_uuid", "uuid is not null"),
+        ("idx_subscription_uuid", "uuid is not null"),
+        ("idx_op_outbox_pending", "uploaded_seq is null"),
     ];
 
     for (table, probe) in TABLE_PROBES {
@@ -705,17 +800,67 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
             )
         })?;
     }
-    for index in REQUIRED_INDEXES {
-        let exists: i64 = conn
+    for (index, expected_table, expected_columns) in REQUIRED_INDEXES {
+        let actual_index: Option<(String, String)> = conn
             .query_row(
-                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?1)",
+                "SELECT tbl_name, sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
                 [index],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
+            .optional()
             .map_err(|error| format!("Failed to validate canonical index {index}: {error}"))?;
-        if exists == 0 {
+        let Some((actual_table, actual_sql)) = actual_index else {
             return Err(format!(
                 "Canonical schema version {CURRENT_SCHEMA_VERSION} is missing required index {index}"
+            ));
+        };
+        if actual_table != *expected_table {
+            return Err(format!(
+                "Canonical schema version {CURRENT_SCHEMA_VERSION} has incompatible index {index}: expected table {expected_table}, found {actual_table}"
+            ));
+        }
+
+        let (actual_unique, actual_partial): (bool, bool) = conn
+            .query_row(
+                "SELECT \"unique\", partial FROM pragma_index_list(?1) WHERE name = ?2",
+                params![expected_table, index],
+                |row| Ok((row.get::<_, i64>(0)? != 0, row.get::<_, i64>(1)? != 0)),
+            )
+            .map_err(|error| format!("Failed to inspect canonical index {index}: {error}"))?;
+        let expected_unique = UNIQUE_INDEXES.contains(index);
+        let expected_predicate = PARTIAL_INDEXES
+            .iter()
+            .find_map(|(name, predicate)| (*name == *index).then_some(*predicate));
+        let actual_predicate = actual_sql
+            .to_ascii_lowercase()
+            .split_once(" where ")
+            .map(|(_, predicate)| predicate.split_whitespace().collect::<Vec<_>>().join(" "));
+        if actual_unique != expected_unique
+            || actual_partial != expected_predicate.is_some()
+            || actual_predicate.as_deref() != expected_predicate
+        {
+            return Err(format!(
+                "Canonical schema version {CURRENT_SCHEMA_VERSION} has incompatible index {index}: expected unique={expected_unique}, predicate={expected_predicate:?}; found unique={actual_unique}, predicate={actual_predicate:?}"
+            ));
+        }
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT name, \"desc\" FROM pragma_index_xinfo(?1) WHERE key = 1 ORDER BY seqno",
+            )
+            .map_err(|error| format!("Failed to inspect canonical index {index}: {error}"))?;
+        let actual_columns: Vec<(String, bool)> = stmt
+            .query_map([index], |row| Ok((row.get(0)?, row.get::<_, i64>(1)? != 0)))
+            .map_err(|error| format!("Failed to inspect canonical index {index}: {error}"))?
+            .collect::<Result<_, _>>()
+            .map_err(|error| format!("Failed to inspect canonical index {index}: {error}"))?;
+        let expected_columns: Vec<(String, bool)> = expected_columns
+            .iter()
+            .map(|(name, descending)| ((*name).to_string(), *descending))
+            .collect();
+        if actual_columns != expected_columns {
+            return Err(format!(
+                "Canonical schema version {CURRENT_SCHEMA_VERSION} has incompatible index {index}: expected columns {expected_columns:?}, found {actual_columns:?}"
             ));
         }
     }

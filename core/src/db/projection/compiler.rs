@@ -54,12 +54,11 @@ pub fn execute_plan(conn: &Connection, bitmaps: &BitmapStore, plan: &CompilerPla
         || plan.rebuild_all_tags
         || !plan.dirty_tag_ids.is_empty()
         || plan.rebuild_tag_graph
-        || plan.rebuild_status
     {
         super::tags::compile_effective_tag_bitmaps(conn, bitmaps);
     }
 
-    if plan.rebuild_all || plan.rebuild_all_tags || plan.rebuild_tag_graph || plan.rebuild_status {
+    if plan.rebuild_all || plan.rebuild_all_tags || plan.rebuild_tag_graph {
         super::tags::compile_tagged_bitmap(conn, bitmaps);
     }
 
@@ -170,4 +169,74 @@ pub fn full_rebuild(conn: &Connection, bitmaps: &BitmapStore) {
             ..Default::default()
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{execute_plan, CompilerPlan};
+    use crate::db::core::schema::LIBRARY_DDL;
+    use crate::db::projection::bitmaps::{BitmapKey, BitmapStore};
+    use roaring::RoaringBitmap;
+
+    #[test]
+    fn status_plan_does_not_rebuild_tag_projections() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open database");
+        conn.execute_batch(LIBRARY_DDL).expect("create schema");
+        conn.execute(
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, entity_kind, status,
+                date_created, date_added, date_modified
+            ) VALUES (1, 'entity-1', 'single', 2, '2026-08-04', '2026-08-04', '2026-08-04')",
+            [],
+        )
+        .expect("insert entity");
+        conn.execute(
+            "INSERT INTO tag (tag_id, namespace, subtag) VALUES (1, 'general', 'example')",
+            [],
+        )
+        .expect("insert tag");
+        conn.execute(
+            "INSERT INTO entity_tag (entity_id, tag_id, provenance_mask, source)
+             VALUES (1, 1, 1, 'local')",
+            [],
+        )
+        .expect("insert entity tag");
+
+        let bitmaps = BitmapStore::new();
+        bitmaps.set(BitmapKey::Status(1), RoaringBitmap::from_iter([1_u32]));
+        bitmaps.set(BitmapKey::Status(2), RoaringBitmap::new());
+        let sentinel = RoaringBitmap::from_iter([99_u32]);
+        bitmaps.set(BitmapKey::Tag(1), sentinel.clone());
+        bitmaps.set(BitmapKey::ImpliedTag(1), sentinel.clone());
+        bitmaps.set(BitmapKey::EffectiveTag(1), sentinel.clone());
+        bitmaps.set(BitmapKey::Tagged, sentinel.clone());
+
+        execute_plan(
+            &conn,
+            &bitmaps,
+            &CompilerPlan {
+                rebuild_status: true,
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(bitmaps.get(&BitmapKey::Status(1)), RoaringBitmap::new());
+        assert_eq!(
+            bitmaps.get(&BitmapKey::Status(2)),
+            RoaringBitmap::from_iter([1_u32])
+        );
+        assert_eq!(bitmaps.get(&BitmapKey::Tag(1)), sentinel);
+        assert_eq!(
+            bitmaps.get(&BitmapKey::ImpliedTag(1)),
+            RoaringBitmap::from_iter([99_u32])
+        );
+        assert_eq!(
+            bitmaps.get(&BitmapKey::EffectiveTag(1)),
+            RoaringBitmap::from_iter([99_u32])
+        );
+        assert_eq!(
+            bitmaps.get(&BitmapKey::Tagged),
+            RoaringBitmap::from_iter([99_u32])
+        );
+    }
 }

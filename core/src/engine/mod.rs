@@ -54,6 +54,10 @@ impl ApplicationEngine {
     /// Commit a write result: rebuild projections, then emit their settled state.
     /// Every engine write method calls this after the db write succeeds.
     fn commit_write(&self, change: &WriteChange) {
+        if change.entities_deleted {
+            self.db.bitmaps.remove_entities(&change.entity_ids);
+        }
+
         let mut plan = crate::db::projection::compiler::CompilerPlan::default();
         if change.status_changed || change.entities_deleted {
             plan.rebuild_status = true;

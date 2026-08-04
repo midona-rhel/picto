@@ -625,6 +625,20 @@ fn collection_split_preserves_media_while_entity_delete_removes_it() {
             "2026-08-04",
         )
         .unwrap();
+    let child_tag = delete_db.ensure_tag("general:delete-child").unwrap();
+    let parent_tag = delete_db.ensure_tag("general:delete-parent").unwrap();
+    delete_db
+        .add_tags(
+            &[delete_member],
+            &["general:delete-child".to_string()],
+            1,
+            crate::db::types::ExpansionMode::EntityOnly,
+        )
+        .unwrap();
+    delete_db
+        .manage_tag_implication(child_tag, parent_tag, true)
+        .unwrap();
+    delete_db.full_rebuild();
     let delete_collection = delete_db.create_collection("Delete").unwrap();
     delete_db
         .add_collection_members(delete_collection, &[delete_member])
@@ -632,7 +646,7 @@ fn collection_split_preserves_media_while_entity_delete_removes_it() {
 
     let deleted = delete_db.delete_entities(&[delete_collection]).unwrap();
     assert_eq!(deleted.freed_file_hashes, vec!["delete-file"]);
-    let delete_counts: (i64, i64, i64) = delete_db
+    let delete_counts: (i64, i64, i64, i64) = delete_db
         .with_read(|conn| {
             Ok((
                 conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?,
@@ -640,10 +654,13 @@ fn collection_split_preserves_media_while_entity_delete_removes_it() {
                     row.get(0)
                 })?,
                 conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| row.get(0))?,
+                conn.query_row("SELECT COUNT(*) FROM entity_tag_implied", [], |row| {
+                    row.get(0)
+                })?,
             ))
         })
         .unwrap();
-    assert_eq!(delete_counts, (0, 0, 0));
+    assert_eq!(delete_counts, (0, 0, 0, 0));
 }
 
 #[test]
@@ -1515,6 +1532,15 @@ fn current_schema_validation_rejects_missing_tables_columns_and_indexes() {
             "DROP INDEX idx_ingest_queue_ready",
             "idx_ingest_queue_ready",
         ),
+        ("DROP INDEX idx_entity_tag_tag_id", "idx_entity_tag_tag_id"),
+        (
+            "DROP INDEX idx_entity_tag_implied_tag_id",
+            "idx_entity_tag_implied_tag_id",
+        ),
+        (
+            "DROP INDEX idx_folder_member_entity_id",
+            "idx_folder_member_entity_id",
+        ),
     ] {
         let tmp = TempDir::new().expect("tempdir");
         let conn =
@@ -1533,6 +1559,76 @@ fn current_schema_validation_rejects_missing_tables_columns_and_indexes() {
             "unexpected error for {malformation}: {error}"
         );
     }
+}
+
+#[test]
+fn current_schema_validation_rejects_wrong_required_index_definition() {
+    for (replacement, index_name) in [
+        (
+            "DROP INDEX idx_entity_tag_tag_id;
+             CREATE INDEX idx_entity_tag_tag_id ON entity_tag(entity_id, tag_id);",
+            "idx_entity_tag_tag_id",
+        ),
+        (
+            "DROP INDEX idx_folder_uuid;
+             CREATE INDEX idx_folder_uuid ON folder(uuid);",
+            "idx_folder_uuid",
+        ),
+        (
+            "DROP INDEX idx_folder_uuid;
+             CREATE UNIQUE INDEX idx_folder_uuid ON folder(uuid) WHERE uuid <> '';",
+            "idx_folder_uuid",
+        ),
+    ] {
+        let tmp = TempDir::new().expect("tempdir");
+        let db_path = tmp.path().join("library.db");
+        let conn = rusqlite::Connection::open(&db_path).expect("open raw database");
+        conn.execute_batch(LIBRARY_DDL).expect("create schema");
+        conn.execute_batch(replacement)
+            .expect("replace index with malformed definition");
+        drop(conn);
+
+        let error = match LibraryDatabase::open(tmp.path()) {
+            Ok(_) => panic!("malformed index must fail"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains(index_name) && error.contains("incompatible"),
+            "unexpected error: {error}"
+        );
+    }
+}
+
+#[test]
+fn fresh_schema_creates_hot_reverse_indexes() {
+    let db = open_test_db();
+    db.with_read(|conn| {
+        for (name, table, columns) in [
+            (
+                "idx_folder_member_entity_id",
+                "folder_member",
+                "entity_id, folder_id",
+            ),
+            ("idx_entity_tag_tag_id", "entity_tag", "tag_id, entity_id"),
+            (
+                "idx_entity_tag_implied_tag_id",
+                "entity_tag_implied",
+                "tag_id, entity_id",
+            ),
+        ] {
+            let sql: String = conn.query_row(
+                "SELECT sql FROM sqlite_master WHERE type = 'index' AND name = ?1",
+                [name],
+                |row| row.get(0),
+            )?;
+            assert!(
+                sql.contains(&format!("ON {table}({columns})")),
+                "unexpected SQL: {sql}"
+            );
+        }
+        Ok(())
+    })
+    .expect("read canonical reverse indexes");
 }
 
 #[test]

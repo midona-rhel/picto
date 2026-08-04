@@ -91,6 +91,23 @@ impl BitmapStore {
         }
     }
 
+    /// Remove deleted entities from every derived projection in one write lock.
+    pub fn remove_entities(&self, entity_ids: &[i64]) {
+        let removed = RoaringBitmap::from_iter(
+            entity_ids
+                .iter()
+                .filter_map(|entity_id| u32::try_from(*entity_id).ok()),
+        );
+        if removed.is_empty() {
+            return;
+        }
+
+        let mut bitmaps = self.bitmaps.write().unwrap();
+        for bitmap in bitmaps.values_mut() {
+            *bitmap -= &removed;
+        }
+    }
+
     /// Clear all bitmaps (for full rebuild).
     pub fn clear(&self) {
         let mut bitmaps = self.bitmaps.write().unwrap();
