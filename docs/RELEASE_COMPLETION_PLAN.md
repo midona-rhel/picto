@@ -45,27 +45,18 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [x] Fall back to the nearest surviving parent or All when deleting the active folder hierarchy.
 - [x] Emit every deleted folder in runtime facts.
 - [x] Verify grid, sidebar, folder, smart-folder, tag, and special-scope counts agree.
-- [ ] Benchmark single writes, bulk writes, startup rebuilds, and large smart-folder reads on
-      representative 100k-1M entity data.
-      Baseline: one status change at 100k entities took 1.7s with 10 smart folders and 20.7s with
-      100 smart folders; projection rebuilding, not the sub-millisecond SQL write, dominated.
-- [ ] Keep common status and tag writes incremental; they must not trigger full-library tag,
-      smart-folder, sidebar, or cached-size rebuilds.
-- [ ] Make query-result bulk mutations ID-only and set-based, with bounded runtime events.
-- [ ] Stop expanding large smart-folder bitmaps into SQL `IN` lists.
 - [x] Verify recently viewed is unique per entity and ordered by latest view.
 - [x] Remove incomplete batch rename and no-op folder actions; retain drag-and-drop folder Move.
 
 ## Phase 3: PBI-575 Subscriptions
 
 - [x] Replace newest-500 retry scans with one indexed attempt lookup.
-- [ ] Give issues stable identity independent of mutable message text.
-- [ ] Deduplicate subscription-wide issues with null query IDs.
-- [ ] Persist blocked, retryable, reviewable, and terminal recovery semantics.
-- [ ] Make the Health surface explain and expose the recovery action.
-- [ ] Consolidate repeated runtime-service construction only where it removes glue.
-- [ ] Test old retries, repeated issues, restart recovery, failures, and canonical ingest.
-- [ ] Run a real Electron create/run/fail/retry/import smoke and archive PBI-575.
+- [ ] S1: Give query and subscription issues stable non-null identity.
+- [ ] S2: Classify every meaningful failure through one persisted recovery disposition.
+- [ ] S3: Make retry, restart, stop, reset, delete, and multi-query finalization durable and safe.
+- [ ] S4: Keep `SubscriptionRuntimeService` as the one path and delete proven competitors.
+- [ ] S5: Make Health actions truthful, uncapped, paginated, and driven by persisted recovery.
+- [ ] S6: Test retry/restart/ingest behavior, run the real Electron recovery smoke, and archive PBI-575.
 
 ## Phase 4: PBI-577 Duplicates
 
@@ -114,9 +105,17 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [ ] Report uploads, downloads, pending work, failures, and derivative catch-up truthfully.
 - [ ] Pass two-device restore, corruption, ordering, and restart tests, then archive PBI-602.
 
-## Phase 8: Deletion and PBI Cleanup
+## Phase 8: Performance, Deletion, and PBI Cleanup
 
 - [x] Delete unused frontend dependencies and update third-party licenses.
+- [ ] Benchmark single writes, bulk writes, startup rebuilds, and large smart-folder reads on
+      representative 100k-1M entity data.
+      Baseline: one status change at 100k entities took 1.7s with 10 smart folders and 20.7s with
+      100 smart folders; projection rebuilding, not the sub-millisecond SQL write, dominated.
+- [ ] Keep common status and tag writes incremental; they must not trigger full-library tag,
+      smart-folder, sidebar, or cached-size rebuilds.
+- [ ] Make query-result bulk mutations ID-only and set-based, with bounded runtime events.
+- [ ] Stop expanding large smart-folder bitmaps into SQL `IN` lists.
 - [ ] Remove every production TODO by implementing, removing, or documenting a real limitation.
 - [ ] Remove unsupported authentication entrypoints.
 - [ ] Delete commands without active callers and minimize the parity allowlist.

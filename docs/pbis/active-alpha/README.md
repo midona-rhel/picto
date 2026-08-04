@@ -9,7 +9,7 @@ superseded audits, and site-by-site subscription notes live in `docs/pbis/archiv
    - resolve the current merge state
    - make the complete verification lane green
    - remove remaining schema/runtime compatibility drift
-2. [PBI-575-greenfield-subscriptions-engine-and-recovery-reset.md](PBI-575-greenfield-subscriptions-engine-and-recovery-reset.md)
+2. [PBI-575-finish-subscription-runs-and-recovery.md](PBI-575-finish-subscription-runs-and-recovery.md)
    - make subscription runs reliable and recoverable
    - consolidate site verification into one maintained matrix
 3. [PBI-577-greenfield-duplicates-and-rejected-media-reset.md](PBI-577-greenfield-duplicates-and-rejected-media-reset.md)
