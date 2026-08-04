@@ -22,6 +22,7 @@ import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { useImageZoom, type ImageSize, type ZoomState } from './hooks/useImageZoom';
 import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
+import { useRecordMediaView } from './hooks/useRecordMediaView';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
 import { VideoPlayer } from './video/VideoPlayer';
@@ -120,6 +121,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     if (images.length > 0 && images[currentIndex]) return images[currentIndex];
     return initialImage;
   }, [images, currentIndex, initialImage]);
+  useRecordMediaView(currentImage?.hash);
 
   const isVideo = currentImage?.mime?.startsWith('video/') ?? false;
   const thumbHash = currentImage?.hash ?? hash;

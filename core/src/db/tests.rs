@@ -890,6 +890,116 @@ fn folder_count_matches_grid_collection_collapse_and_active_visibility() {
 }
 
 #[test]
+fn recently_viewed_is_unique_top_level_active_and_latest_first() {
+    let db = open_test_db();
+    let insert = |hash: &str, status: i64| {
+        let file_id = db
+            .insert_file(
+                &format!("{hash}-file"),
+                "image/png",
+                10,
+                None,
+                None,
+                None,
+                None,
+                false,
+                "2026-08-04",
+            )
+            .unwrap();
+        db.insert_single(
+            hash,
+            file_id,
+            Some(hash),
+            status,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap()
+    };
+
+    let first = insert("recent-first", 1);
+    let child = insert("recent-child", 1);
+    insert("recent-inbox", 0);
+    insert("recent-trash", 2);
+    let collection = db
+        .create_collection_with_members_by_hashes(
+            "Recent collection",
+            &["recent-child".to_string()],
+        )
+        .unwrap();
+    let collection_hash = db.get_collection_hash(collection).unwrap().unwrap();
+
+    assert_eq!(
+        db.record_media_view("recent-first").unwrap(),
+        ("recent-first".to_string(), 1)
+    );
+    assert_eq!(
+        db.record_media_view("recent-child").unwrap(),
+        (collection_hash.clone(), 2)
+    );
+    assert_eq!(
+        db.record_media_view("recent-first").unwrap(),
+        ("recent-first".to_string(), 2)
+    );
+    db.record_media_view("recent-inbox").unwrap();
+    db.record_media_view("recent-trash").unwrap();
+    assert!(db.record_media_view("missing-recent").is_err());
+
+    db.with_write(|conn| {
+        conn.execute(
+            "UPDATE media_view SET viewed_at = '2026-08-04T10:00:00Z' WHERE entity_id = ?1",
+            [first],
+        )?;
+        conn.execute(
+            "UPDATE media_view SET viewed_at = '2026-08-04T11:00:00Z' WHERE entity_id = ?1",
+            [collection],
+        )?;
+        let child_view_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM media_view WHERE entity_id = ?1",
+            [child],
+            |row| row.get(0),
+        )?;
+        assert_eq!(child_view_count, 0);
+        Ok(())
+    })
+    .unwrap();
+
+    let query = |cursor: Option<String>| EntityViewQuery {
+        base_scope: BaseScope {
+            kind: ScopeKind::System,
+            key: Some("recent_viewed".to_string()),
+            id: None,
+        },
+        filters: QueryFilters::default(),
+        // The recent scope must override user-selected grid ordering.
+        sort: QuerySort {
+            field: "name".to_string(),
+            direction: "asc".to_string(),
+        },
+        page: QueryPage { limit: 1, cursor },
+    };
+    let first_page = db.query_entity_view(&query(None)).unwrap();
+    assert_eq!(first_page.total_count, Some(2));
+    assert_eq!(first_page.items[0].entity_hash, collection_hash);
+    let second_page = db
+        .query_entity_view(&query(first_page.next_cursor.clone()))
+        .unwrap();
+    assert_eq!(second_page.items[0].entity_hash, "recent-first");
+
+    db.full_rebuild();
+    db.with_read(|conn| {
+        let sidebar_count: i64 = conn.query_row(
+            "SELECT count FROM sidebar_node WHERE node_id = 'system:recent_viewed'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(sidebar_count, 2);
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn entity_tag_and_collection_mutations_emit_ops() {
     let db = open_test_db();
     let file_id = db
@@ -1174,8 +1284,13 @@ fn unknown_nonempty_schema_is_rejected_without_mutation() {
 #[test]
 fn current_schema_validation_rejects_missing_tables_columns_and_indexes() {
     for (malformation, expected_error) in [
+        ("DROP TABLE media_view", "media_view"),
         ("DROP TABLE sync_ingest_cursor", "sync_ingest_cursor"),
         ("ALTER TABLE folder DROP COLUMN pin_order", "folder"),
+        (
+            "DROP INDEX idx_media_view_viewed_at",
+            "idx_media_view_viewed_at",
+        ),
         (
             "DROP INDEX idx_ingest_queue_ready",
             "idx_ingest_queue_ready",

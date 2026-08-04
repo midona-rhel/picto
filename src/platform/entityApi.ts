@@ -39,6 +39,10 @@ export function getEntityDetails(entityHash: string): Promise<CanonicalEntityDet
   return invoke<CanonicalEntityDetails | null>('get_entity_details', { entity_hash: entityHash });
 }
 
+export function recordMediaView(entityHash: string): Promise<void> {
+  return invoke<void>('record_media_view', { entity_hash: entityHash });
+}
+
 export function patchMediaEntities(target: EntityTarget, patch: MediaEntityPatch): Promise<unknown> {
   return invoke('patch_media_entities', { target, patch } as unknown as Record<string, unknown>);
 }

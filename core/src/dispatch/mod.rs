@@ -75,6 +75,7 @@ macro_rules! call {
 /// Commands that mutate state. Logged at `info!` level; everything else is `debug!`.
 const WRITE_COMMANDS: &[&str] = &[
     "add_media",
+    "record_media_view",
     "set_entity_status",
     "delete_entities",
     "manage_tag_alias",
@@ -185,6 +186,11 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
             let input: GetHashInput = from_args(args)?;
             let result = state.engine.get_entity_details(&input.entity_hash)?;
             return to_json(&result);
+        }
+        "record_media_view" => {
+            let input: GetHashInput = from_args(args)?;
+            state.engine.record_media_view(&input.entity_hash)?;
+            return ok_null();
         }
         "get_entity_grid_items" => {
             let input: GetHashesInput = from_args(args)?;

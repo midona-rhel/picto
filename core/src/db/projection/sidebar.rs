@@ -119,6 +119,12 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
         [untagged],
     );
 
+    let recent = crate::db::query::grid::recently_viewed_count(conn).unwrap_or(0);
+    let _ = conn.execute(
+        "UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:recent_viewed'",
+        [recent],
+    );
+
     // Duplicates count
     let duplicates: i64 = conn
         .query_row(

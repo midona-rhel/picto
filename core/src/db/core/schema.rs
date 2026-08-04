@@ -4,7 +4,7 @@
 use rusqlite::Connection;
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 101;
+pub const CURRENT_SCHEMA_VERSION: i64 = 102;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -32,6 +32,12 @@ CREATE INDEX IF NOT EXISTS idx_me_kind ON media_entity(entity_kind);
 CREATE INDEX IF NOT EXISTS idx_me_parent ON media_entity(parent_collection_entity_id);
 CREATE INDEX IF NOT EXISTS idx_me_date_added ON media_entity(date_added);
 CREATE INDEX IF NOT EXISTS idx_me_rating ON media_entity(rating);
+
+CREATE TABLE IF NOT EXISTS media_view (
+    entity_id INTEGER PRIMARY KEY REFERENCES media_entity(entity_id) ON DELETE CASCADE,
+    viewed_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_media_view_viewed_at ON media_view(viewed_at DESC);
 
 CREATE TABLE IF NOT EXISTS media_file (
     file_id              INTEGER PRIMARY KEY,
@@ -489,7 +495,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 101
+SELECT 102
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -549,6 +555,10 @@ pub(crate) fn read_schema_version(conn: &Connection) -> Result<i64, String> {
 fn validate_current_schema(conn: &Connection) -> Result<(), String> {
     const TABLE_PROBES: &[(&str, &str)] = &[
         ("media_entity", "SELECT entity_id FROM media_entity WHERE 0"),
+        (
+            "media_view",
+            "SELECT entity_id, viewed_at FROM media_view WHERE 0",
+        ),
         (
             "media_file",
             "SELECT file_id, color_analysis_version FROM media_file WHERE 0",
@@ -676,6 +686,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         "idx_me_parent",
         "idx_me_date_added",
         "idx_me_rating",
+        "idx_media_view_viewed_at",
         "idx_folder_uuid",
         "idx_smart_folder_uuid",
         "idx_subscription_group_uuid",

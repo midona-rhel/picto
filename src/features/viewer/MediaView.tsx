@@ -19,6 +19,7 @@ import { useImageZoom, type ImageSize } from './hooks/useImageZoom';
 import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
+import { useRecordMediaView } from './hooks/useRecordMediaView';
 import { VideoPlayer } from './video/VideoPlayer';
 import { StripView } from './StripView';
 import { viewerController } from '../../controllers/viewerController';
@@ -41,6 +42,7 @@ export function MediaView({
 }: MediaViewProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentHash = currentItem?.entity_hash ?? '';
+  useRecordMediaView(currentHash);
   const currentMime = currentItem?.mime_type ?? '';
   const isVideo = currentMime.startsWith('video/');
   const isCollection = currentItem?.entity_kind === 'collection';

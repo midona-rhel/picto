@@ -59,7 +59,9 @@ function ViewPanel() {
   const sortDir = useAtomValue(gridSortDirectionAtom);
   const setSoftAction = useSetAtom(gridSoftTransitionActionAtom);
   const scope = useAtomValue(gridScopeAtom);
-  const isManualOrder = scope.kind === 'folder' || scope.kind === 'collection';
+  const hasFixedOrder = scope.kind === 'folder'
+    || scope.kind === 'collection'
+    || (scope.kind === 'system' && scope.key === 'recent_viewed');
 
   const setSort = (f: SortField, d: SortDirection) => { void gridController.setSort(f, d); };
 
@@ -78,7 +80,7 @@ function ViewPanel() {
         />
       </div>
 
-      {!isManualOrder && (
+      {!hasFixedOrder && (
         <div className={s.headerRow}>
           <span className={s.headerLabel}>Sort by</span>
           <div className={s.sortControls}>

@@ -14,6 +14,7 @@ mod remote_ops;
 mod smart_folder_ops;
 mod tag_ops;
 pub mod types;
+mod view_ops;
 pub mod write;
 
 use std::path::Path;

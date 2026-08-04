@@ -6,11 +6,11 @@ const GRID_SYSTEM_SCOPES: Record<string, string> = {
   'system:trash': 'trash',
   'system:uncategorized': 'uncategorized',
   'system:untagged': 'untagged',
+  'system:recent_viewed': 'recent_viewed',
 };
 
 const NON_GRID_NODES = new Set([
   'system:duplicates',
-  'system:recent_viewed',
   'system:subscriptions',
   'system:tag_manager',
 ]);

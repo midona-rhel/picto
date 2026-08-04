@@ -20,6 +20,7 @@ pub mod smart_folders;
 pub mod system;
 pub mod tags;
 pub mod target;
+pub mod views;
 pub mod writes;
 
 use std::sync::Arc;

@@ -159,6 +159,7 @@ pub enum GridSystemScopeKey {
     Trash,
     Untagged,
     Uncategorized,
+    RecentViewed,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]

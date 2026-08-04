@@ -59,13 +59,15 @@ const GRID_SELECT: &str = "SELECT
         COALESCE(mf.dominant_color_hex, pmf.dominant_color_hex) AS dominant_color_hex,
         COALESCE(mf.size_bytes, me.total_size_bytes, 0) AS size_bytes,
         me.entity_id,
-        COALESCE(pm.entity_hash, me.entity_hash) AS thumbnail_hash
+        COALESCE(pm.entity_hash, me.entity_hash) AS thumbnail_hash,
+        mv.viewed_at
      FROM media_entity me
      LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
      LEFT JOIN media_file mf ON mf.file_id = sme.file_id
      LEFT JOIN media_entity pm ON pm.entity_id = me.primary_member_entity_id
      LEFT JOIN single_media_entity psme ON psme.entity_id = pm.entity_id
-     LEFT JOIN media_file pmf ON pmf.file_id = psme.file_id";
+     LEFT JOIN media_file pmf ON pmf.file_id = psme.file_id
+     LEFT JOIN media_view mv ON mv.entity_id = me.entity_id";
 
 /// Reads an EntityGridItem from a row. entity_id at column 18 and
 /// thumbnail_hash at column 19 are read separately by the caller / here.
@@ -112,12 +114,24 @@ pub fn query_entity_view(
     // Folder and collection scopes use custom manual order instead of the user's sort preference
     let is_folder_scope = matches!(q.base_scope.kind, ScopeKind::Folder);
     let is_collection_scope = matches!(q.base_scope.kind, ScopeKind::Collection);
+    let is_recently_viewed_scope = matches!(q.base_scope.kind, ScopeKind::System)
+        && q.base_scope.key.as_deref() == Some("recent_viewed");
+    let effective_sort_field = if is_recently_viewed_scope {
+        "viewed_at"
+    } else {
+        &q.sort.field
+    };
+    let effective_sort_direction = if is_recently_viewed_scope {
+        "desc"
+    } else {
+        &q.sort.direction
+    };
     let order = if is_folder_scope {
         "fm_sort.position_rank ASC".to_string()
     } else if is_collection_scope {
         "COALESCE(me.collection_ordinal, 9223372036854775807) ASC, me.entity_id ASC".to_string()
     } else {
-        validated_sort(&q.sort.field, &q.sort.direction)
+        validated_sort(effective_sort_field, effective_sort_direction)
     };
 
     // Collect all WHERE fragments and their bound parameter values
@@ -147,13 +161,17 @@ pub fn query_entity_view(
     if !is_folder_scope && !is_collection_scope {
         let cursor_parsed = q.page.cursor.as_deref().and_then(|c| parse_cursor(conn, c));
         if let Some((ref cursor_val, cursor_id)) = cursor_parsed {
-            let dir_op = if q.sort.direction == "asc" { ">" } else { "<" };
+            let dir_op = if effective_sort_direction == "asc" {
+                ">"
+            } else {
+                "<"
+            };
             let p_idx = bound.len() + 1;
             let p_idx2 = p_idx + 1;
             where_parts.push(format!(
                 "({} {dir_op} ?{p_idx} OR ({} = ?{p_idx} AND me.entity_id > ?{p_idx2}))",
-                sort_column(&q.sort.field),
-                sort_column(&q.sort.field),
+                sort_column(effective_sort_field),
+                sort_column(effective_sort_field),
             ));
             bound.push(Box::new(cursor_val.clone()));
             bound.push(Box::new(cursor_id));
@@ -200,6 +218,7 @@ pub fn query_entity_view(
              LEFT JOIN media_entity pm ON pm.entity_id = me.primary_member_entity_id
              LEFT JOIN single_media_entity psme ON psme.entity_id = pm.entity_id
              LEFT JOIN media_file pmf ON pmf.file_id = psme.file_id
+             LEFT JOIN media_view mv ON mv.entity_id = me.entity_id
              WHERE {}",
             cw.join(" AND ")
         );
@@ -215,18 +234,20 @@ pub fn query_entity_view(
     );
     let refs: Vec<&dyn ToSql> = bound.iter().map(|b| b.as_ref()).collect();
     let mut stmt = conn.prepare(&data_sql)?;
-    let rows: Vec<(EntityGridItem, i64)> = stmt
+    let rows: Vec<(EntityGridItem, i64, Option<String>)> = stmt
         .query_map(refs.as_slice(), |row| {
             let item = read_grid_item(row)?;
             let entity_id: i64 = row.get(18)?;
-            Ok((item, entity_id))
+            let viewed_at = row.get(20)?;
+            Ok((item, entity_id, viewed_at))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     // Build next cursor from the last row's sort value + entity_id
     let next_cursor = if rows.len() as i64 == limit {
-        rows.last().map(|(item, _entity_id)| {
-            let sort_val = match q.sort.field.as_str() {
+        rows.last().map(|(item, _entity_id, viewed_at)| {
+            let sort_val = match effective_sort_field {
+                "viewed_at" => viewed_at.as_deref().unwrap_or(""),
                 "date_added" => &item.date_added,
                 "date_created" => &item.date_created,
                 "date_modified" => &item.date_modified,
@@ -241,7 +262,7 @@ pub fn query_entity_view(
         None
     };
 
-    let items: Vec<EntityGridItem> = rows.into_iter().map(|(item, _)| item).collect();
+    let items: Vec<EntityGridItem> = rows.into_iter().map(|(item, _, _)| item).collect();
 
     Ok(EntityViewPage {
         items,
@@ -280,6 +301,10 @@ fn apply_scope(
                     parts.push("me.status = 1".into());
                     parts.push("NOT EXISTS (SELECT 1 FROM entity_tag et WHERE et.entity_id = me.entity_id)".into());
                     parts.push("NOT EXISTS (SELECT 1 FROM media_entity child WHERE child.parent_collection_entity_id = me.entity_id AND EXISTS (SELECT 1 FROM entity_tag et2 WHERE et2.entity_id = child.entity_id))".into());
+                }
+                "recent_viewed" => {
+                    parts.push("me.status = 1".into());
+                    parts.push("mv.entity_id IS NOT NULL".into());
                 }
                 _ => {
                     parts.push("me.status = 1".into());
@@ -565,6 +590,7 @@ fn apply_date_filter(
 
 fn sort_column(field: &str) -> &str {
     match field {
+        "viewed_at" => "mv.viewed_at",
         "date_added" => "me.date_added",
         "date_created" => "me.date_created",
         "date_modified" => "me.date_modified",
@@ -578,6 +604,17 @@ fn sort_column(field: &str) -> &str {
         "name" => "me.name",
         _ => "me.date_added",
     }
+}
+
+pub fn recently_viewed_count(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*)
+         FROM media_view mv
+         JOIN media_entity me ON me.entity_id = mv.entity_id
+         WHERE me.status = 1 AND me.parent_collection_entity_id IS NULL",
+        [],
+        |row| row.get(0),
+    )
 }
 
 fn validated_sort(field: &str, dir: &str) -> String {

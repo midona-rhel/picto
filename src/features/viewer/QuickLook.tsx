@@ -15,6 +15,7 @@ import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import * as entityMutations from '../../controllers/entityMutations';
 import { useImageZoom, type ImageSize } from './hooks/useImageZoom';
 import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
+import { useRecordMediaView } from './hooks/useRecordMediaView';
 import { VideoPlayer } from './video/VideoPlayer';
 import styles from './QuickLook.module.css';
 
@@ -32,6 +33,7 @@ export function QuickLook({
 }: QuickLookProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentHash = currentItem?.entity_hash ?? '';
+  useRecordMediaView(currentHash);
   const currentMime = currentItem?.mime_type ?? '';
   const isVideo = currentMime.startsWith('video/');
   const total = totalCount ?? items.length;
