@@ -56,7 +56,8 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [ ] S3: Make retry, restart, stop, reset, delete, and multi-query finalization durable and safe.
 - [ ] S4: Keep `SubscriptionRuntimeService` as the one path and delete proven competitors.
 - [ ] S5: Make Health actions truthful, uncapped, paginated, and driven by persisted recovery.
-- [ ] S6: Test retry/restart/ingest behavior, run the real Electron recovery smoke, and archive PBI-575.
+- [ ] S6: Verify every advertised source with streamed ingest, metadata, collections, restart, and
+      a real credential-backed Electron run; then archive PBI-575.
 
 ## Phase 4: PBI-577 Duplicates
 

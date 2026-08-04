@@ -15,6 +15,26 @@ reopening Picto must not lose failures, create duplicate problems, or leave a ru
 `SubscriptionRuntimeService` is the current production boundary. Do not introduce another service
 or rename it for architecture. Finish this path and delete only code proven to compete with it.
 
+## Content and delivery contract
+
+- A subscription can run on its saved daily, weekly, or monthly schedule and can also be triggered
+  manually. Both triggers enqueue the same durable query jobs.
+- A run streams completed downloads into durable ingest while later posts are still downloading.
+  It must not download the entire result set before ingestion begins.
+- A multi-image post becomes one image collection when automatic collections are enabled. The
+  collection is committed only when that post's expected members are ready; unrelated posts continue
+  downloading and ingesting concurrently.
+- When automatic collections are disabled, each downloaded image becomes an independent media
+  entity and receives the post's source URLs, timestamps, tags, and other supported metadata.
+- Post metadata belongs to the child images. Collection metadata is the aggregate of those children.
+- Runtime progress must explain downloading, queued-for-ingest, ingesting, imported, reused, failed,
+  retrying, blocked, cancelled, and complete states without waiting for the whole run to finish.
+- Every source advertised by Picto must pass deterministic adapter/metadata tests and a real
+  credential-backed integration run before release. Credentials remain local and are never fixtures.
+
+OnlyFans is not a supported source in this phase. It may use a separately maintained downloader
+library later; do not distort the current gallery-dl boundary to anticipate it.
+
 ## Current state
 
 Already working and retained:
@@ -131,6 +151,9 @@ recovery action:
 
 The frontend does not infer recovery from message text.
 
+The existing subscription workspace remains. This ticket changes only progress truth, recovery
+actions, pagination, and error reporting; it is not a UI rewrite.
+
 "Retry all" is a backend operation over all eligible unresolved attempts, not the first 50 or 100
 rows loaded for display. It returns a truthful attempted/queued/failed result, and the UI reports a
 failure instead of silently discarding it. Health history is paginated; display limits never change
@@ -147,7 +170,21 @@ Acceptance:
 
 Keep unit tests at classification and persistence boundaries. Add end-to-end backend tests for
 queueing, restart reconciliation, issue deduplication, retry, success resolution, and canonical
-ingest. Then run one real Electron smoke:
+ingest. Maintain a source verification matrix listing every advertised source and query kind, its
+credential owner, deterministic fixture coverage, live verification date, and known limitation.
+
+For every advertised source, a credential-backed run must prove:
+
+- query construction and pagination/resume behavior
+- canonical post and media URLs
+- source timestamps and supported tags/metadata
+- single-image ingest
+- multi-image collection ingest with child metadata
+- non-collection ingest with metadata copied to every image
+- visible progress while download and ingest overlap
+- rerun deduplication and restart recovery
+
+Then run the real Electron workflow:
 
 1. create a subscription and query
 2. run it and import media
@@ -162,6 +199,7 @@ Archive this PBI only after that smoke passes.
 
 - a new subscription architecture or service rename
 - one PBI per supported site
+- OnlyFans support or its future downloader library
 - provider-specific import paths
 - cloud syncing runtime history or credentials
 - broad frontend refactoring
