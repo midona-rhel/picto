@@ -14,6 +14,10 @@ Cloud sync writes library metadata changes and media blobs into a user-owned fol
 synced by a desktop provider such as Google Drive or Dropbox. The provider transports files;
 Picto does not need its own cloud account system or provider-specific upload API.
 
+Picto targets libraries from hundreds of thousands up to roughly one million media entities.
+Common interactive writes must not rebuild or transmit the whole library. Unavoidable bulk work
+may take seconds, but must be measured on representative data and keep the UI responsive.
+
 # Engineering Rules
 
 - Describe each behavior in a few sentences before implementing it. If that is not possible,
