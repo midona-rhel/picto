@@ -105,6 +105,7 @@ export interface SubscriptionRunRecord {
 
 export interface SubscriptionIssueRecord {
   issue_id: number;
+  issue_key: string;
   subscription_id: number;
   query_id: number | null;
   issue_kind: string;
@@ -114,6 +115,8 @@ export interface SubscriptionIssueRecord {
   first_seen_at: string;
   last_seen_at: string;
   resolved_at: string | null;
+  recovery_action: string;
+  next_retry_at: string | null;
 }
 
 export interface SubscriptionDownloadAttemptRecord {

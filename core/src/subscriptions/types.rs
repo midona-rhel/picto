@@ -114,6 +114,7 @@ pub struct SubscriptionQueryJob {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriptionIssueRecord {
     pub issue_id: i64,
+    pub issue_key: String,
     pub subscription_id: i64,
     pub query_id: Option<i64>,
     pub issue_kind: String,
@@ -123,6 +124,8 @@ pub struct SubscriptionIssueRecord {
     pub first_seen_at: String,
     pub last_seen_at: String,
     pub resolved_at: Option<String>,
+    pub recovery_action: String,
+    pub next_retry_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

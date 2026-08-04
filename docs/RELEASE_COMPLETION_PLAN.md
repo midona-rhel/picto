@@ -51,7 +51,7 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 ## Phase 3: PBI-575 Subscriptions
 
 - [x] Replace newest-500 retry scans with one indexed attempt lookup.
-- [ ] S1: Give query and subscription issues stable non-null identity.
+- [x] S1: Give query and subscription issues stable non-null identity.
 - [ ] S2: Classify every meaningful failure through one persisted recovery disposition.
 - [ ] S3: Make retry, restart, stop, reset, delete, and multi-query finalization durable and safe.
 - [ ] S4: Keep `SubscriptionRuntimeService` as the one path and delete proven competitors.

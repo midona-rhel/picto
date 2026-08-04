@@ -63,15 +63,18 @@ fn map_subscription_query_job_row(row: &rusqlite::Row) -> rusqlite::Result<Subsc
 fn map_subscription_issue_row(row: &rusqlite::Row) -> rusqlite::Result<SubscriptionIssueRecord> {
     Ok(SubscriptionIssueRecord {
         issue_id: row.get(0)?,
-        subscription_id: row.get(1)?,
-        query_id: row.get(2)?,
-        issue_kind: row.get(3)?,
-        status: row.get(4)?,
-        message: row.get(5)?,
-        detail: row.get(6)?,
-        first_seen_at: row.get(7)?,
-        last_seen_at: row.get(8)?,
-        resolved_at: row.get(9)?,
+        issue_key: row.get(1)?,
+        subscription_id: row.get(2)?,
+        query_id: row.get(3)?,
+        issue_kind: row.get(4)?,
+        status: row.get(5)?,
+        message: row.get(6)?,
+        detail: row.get(7)?,
+        first_seen_at: row.get(8)?,
+        last_seen_at: row.get(9)?,
+        resolved_at: row.get(10)?,
+        recovery_action: row.get(11)?,
+        next_retry_at: row.get(12)?,
     })
 }
 
@@ -701,24 +704,25 @@ pub fn upsert_subscription_issue(
     detail: Option<&str>,
 ) -> rusqlite::Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
+    let issue_key = query_id
+        .map(|query_id| format!("query:{query_id}:{issue_kind}"))
+        .unwrap_or_else(|| format!("subscription:{subscription_id}:{issue_kind}"));
     conn.execute(
         "INSERT INTO subscription_issue (
-             subscription_id, query_id, issue_kind, status, message, detail, first_seen_at, last_seen_at
-         ) VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?6, ?6)
-         ON CONFLICT(subscription_id, query_id, issue_kind, message)
+             issue_key, subscription_id, query_id, issue_kind, status, message, detail, first_seen_at, last_seen_at
+         ) VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?7, ?7)
+         ON CONFLICT(issue_key)
          DO UPDATE SET status = 'open',
+                       message = excluded.message,
                        detail = excluded.detail,
                        last_seen_at = excluded.last_seen_at,
                        resolved_at = NULL",
-        params![subscription_id, query_id, issue_kind, message, detail, now],
+        params![issue_key, subscription_id, query_id, issue_kind, message, detail, now],
     )?;
     conn.query_row(
         "SELECT issue_id FROM subscription_issue
-         WHERE subscription_id = ?1
-           AND query_id IS ?2
-           AND issue_kind = ?3
-           AND message = ?4",
-        params![subscription_id, query_id, issue_kind, message],
+         WHERE issue_key = ?1",
+        [issue_key],
         |row| row.get(0),
     )
 }
@@ -750,8 +754,9 @@ pub fn list_subscription_issues(
     limit: i64,
 ) -> rusqlite::Result<Vec<SubscriptionIssueRecord>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT issue_id, subscription_id, query_id, issue_kind, status,
-                message, detail, first_seen_at, last_seen_at, resolved_at
+        "SELECT issue_id, issue_key, subscription_id, query_id, issue_kind, status,
+                message, detail, first_seen_at, last_seen_at, resolved_at,
+                recovery_action, next_retry_at
          FROM subscription_issue
          WHERE subscription_id = ?1
            AND (?2 IS NULL OR query_id = ?2)

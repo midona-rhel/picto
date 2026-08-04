@@ -38,7 +38,7 @@ Release gaps:
 
 ## Phase tickets
 
-### S1. Stable issue identity and schema
+### S1. Stable issue identity and schema (complete)
 
 Give each current problem one stable key independent of display text:
 

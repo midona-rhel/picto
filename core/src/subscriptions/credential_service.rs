@@ -617,17 +617,13 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         detail: Option<&str>,
     ) -> Result<(), String> {
         self.db.with_write(|conn| {
-            let now = chrono::Utc::now().to_rfc3339();
-            conn.execute(
-                "INSERT INTO subscription_issue (
-                     subscription_id, query_id, issue_kind, status, message, detail, first_seen_at, last_seen_at
-                 ) VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?6, ?6)
-                 ON CONFLICT(subscription_id, query_id, issue_kind, message)
-                 DO UPDATE SET status = 'open',
-                               detail = excluded.detail,
-                               last_seen_at = excluded.last_seen_at,
-                               resolved_at = NULL",
-                rusqlite::params![subscription_id, query_id, issue_kind, message, detail, now],
+            crate::subscriptions::runtime_db::upsert_subscription_issue(
+                conn,
+                subscription_id,
+                query_id,
+                issue_kind,
+                message,
+                detail,
             )?;
             Ok(())
         })

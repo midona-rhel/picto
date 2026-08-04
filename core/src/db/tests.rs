@@ -10,6 +10,7 @@ use crate::db::types::{
 use crate::media_analysis::ensure_missing_color_analysis_jobs;
 use crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION;
 use crate::media_processing::colors::{serialize_dominant_palette_blob, DominantColor};
+use crate::subscriptions::runtime_db::upsert_subscription_issue;
 use rusqlite::params;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -1541,6 +1542,10 @@ fn current_schema_validation_rejects_missing_tables_columns_and_indexes() {
             "DROP INDEX idx_folder_member_entity_id",
             "idx_folder_member_entity_id",
         ),
+        (
+            "DROP INDEX idx_subscription_issue_key",
+            "idx_subscription_issue_key",
+        ),
     ] {
         let tmp = TempDir::new().expect("tempdir");
         let conn =
@@ -1629,6 +1634,146 @@ fn fresh_schema_creates_hot_reverse_indexes() {
         Ok(())
     })
     .expect("read canonical reverse indexes");
+}
+
+#[test]
+fn subscription_issue_keys_deduplicate_query_and_global_recurrences() {
+    let db = open_test_db();
+    db.with_write(|conn| {
+        conn.execute(
+            "INSERT INTO subscription (subscription_id, name, site_id, date_added)
+             VALUES (1, 'Test subscription', 'test', '2026-08-05')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO subscription_query (query_id, subscription_id, site_id, query_text)
+             VALUES (10, 1, 'test', 'query')",
+            [],
+        )?;
+        Ok(())
+    })
+    .expect("seed subscription issue owners");
+
+    let query_issue_id = db
+        .with_write(|conn| {
+            upsert_subscription_issue(
+                conn,
+                1,
+                Some(10),
+                "network",
+                "first query message",
+                Some("first detail"),
+            )
+        })
+        .expect("insert query issue");
+    let global_issue_id = db
+        .with_write(|conn| {
+            upsert_subscription_issue(conn, 1, None, "network", "first global message", None)
+        })
+        .expect("insert global issue");
+
+    db.with_write(|conn| {
+        conn.execute(
+            "UPDATE subscription_issue
+             SET first_seen_at = 'first-seen', last_seen_at = 'old-seen',
+                 status = 'resolved', resolved_at = 'old-resolved'
+             WHERE issue_key IN ('query:10:network', 'subscription:1:network')",
+            [],
+        )?;
+        Ok(())
+    })
+    .expect("set recurrence sentinel values");
+
+    let repeated_query_issue_id = db
+        .with_write(|conn| {
+            upsert_subscription_issue(
+                conn,
+                1,
+                Some(10),
+                "network",
+                "changed query message",
+                Some("changed detail"),
+            )
+        })
+        .expect("recur query issue");
+    let repeated_global_issue_id = db
+        .with_write(|conn| {
+            upsert_subscription_issue(
+                conn,
+                1,
+                None,
+                "network",
+                "changed global message",
+                Some("changed detail"),
+            )
+        })
+        .expect("recur global issue");
+
+    assert_eq!(query_issue_id, repeated_query_issue_id);
+    assert_eq!(global_issue_id, repeated_global_issue_id);
+
+    db.with_read(|conn| {
+        let read_issue = |key: &str| {
+            conn.query_row(
+                "SELECT issue_id, issue_key, query_id, status, message, detail,
+                        first_seen_at, last_seen_at, resolved_at, recovery_action, next_retry_at
+                 FROM subscription_issue
+                 WHERE issue_key = ?1",
+                [key],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, Option<String>>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, String>(7)?,
+                        row.get::<_, Option<String>>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, Option<String>>(10)?,
+                    ))
+                },
+            )
+        };
+
+        let query = read_issue("query:10:network")?;
+        assert_eq!(query.0, query_issue_id);
+        assert_eq!(query.1, "query:10:network");
+        assert_eq!(query.2, Some(10));
+        assert_eq!(query.3, "open");
+        assert_eq!(query.4, "changed query message");
+        assert_eq!(query.5.as_deref(), Some("changed detail"));
+        assert_eq!(query.6, "first-seen");
+        assert_ne!(query.7, "old-seen");
+        assert_eq!(query.8, None);
+        assert_eq!(query.9, "none");
+        assert_eq!(query.10, None);
+
+        let global = read_issue("subscription:1:network")?;
+        assert_eq!(global.0, global_issue_id);
+        assert_eq!(global.1, "subscription:1:network");
+        assert_eq!(global.2, None);
+        assert_eq!(global.4, "changed global message");
+        assert_eq!(global.6, "first-seen");
+        assert_ne!(global.7, "old-seen");
+
+        let query_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM subscription_issue WHERE query_id = 10",
+            [],
+            |row| row.get(0),
+        )?;
+        let global_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM subscription_issue WHERE query_id IS NULL",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(query_count, 1);
+        assert_eq!(global_count, 1);
+        Ok(())
+    })
+    .expect("verify subscription issue recurrence");
 }
 
 #[test]

@@ -4,7 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 106;
+pub const CURRENT_SCHEMA_VERSION: i64 = 107;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -320,6 +320,7 @@ CREATE INDEX IF NOT EXISTS idx_subscription_query_job_subscription
 
 CREATE TABLE IF NOT EXISTS subscription_issue (
     issue_id             INTEGER PRIMARY KEY,
+    issue_key            TEXT    NOT NULL,
     subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
     query_id             INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
     issue_kind           TEXT    NOT NULL,
@@ -329,8 +330,11 @@ CREATE TABLE IF NOT EXISTS subscription_issue (
     first_seen_at        TEXT    NOT NULL,
     last_seen_at         TEXT    NOT NULL,
     resolved_at          TEXT,
-    UNIQUE (subscription_id, query_id, issue_kind, message)
+    recovery_action      TEXT    NOT NULL DEFAULT 'none',
+    next_retry_at        TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_issue_key
+    ON subscription_issue(issue_key);
 
 CREATE TABLE IF NOT EXISTS subscription_download_attempt (
     attempt_id           INTEGER PRIMARY KEY,
@@ -497,7 +501,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 106
+SELECT 107
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -639,7 +643,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         ),
         (
             "subscription_issue",
-            "SELECT issue_id, subscription_id, query_id, issue_kind, status, message, detail, first_seen_at, last_seen_at, resolved_at FROM subscription_issue WHERE 0",
+            "SELECT issue_id, issue_key, subscription_id, query_id, issue_kind, status, message, detail, first_seen_at, last_seen_at, resolved_at, recovery_action, next_retry_at FROM subscription_issue WHERE 0",
         ),
         (
             "subscription_download_attempt",
@@ -777,6 +781,11 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
                 ("status", false),
             ],
         ),
+        (
+            "idx_subscription_issue_key",
+            "subscription_issue",
+            &[("issue_key", false)],
+        ),
         ("idx_op_outbox_pending", "op_outbox", &[("op_id", false)]),
     ];
     const UNIQUE_INDEXES: &[&str] = &[
@@ -784,6 +793,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         "idx_smart_folder_uuid",
         "idx_subscription_group_uuid",
         "idx_subscription_uuid",
+        "idx_subscription_issue_key",
     ];
     const PARTIAL_INDEXES: &[(&str, &str)] = &[
         ("idx_folder_uuid", "uuid is not null"),
