@@ -93,7 +93,7 @@ function FollowCard({
 }
 
 /**
- * Following home — a card grid of everything the user follows (groups as
+ * Subscription home — a card grid of subscriptions and groups (groups as
  * subjects, plus ungrouped subscriptions). Covers come from the newest
  * downloaded file.
  *
@@ -101,7 +101,7 @@ function FollowCard({
  * opens, Cmd/Ctrl toggles, Shift range-selects, right-click opens the context
  * menu for the clicked card (or the whole selection when it's part of one).
  */
-export function FollowingGrid({
+export function SubscriptionsGrid({
   groups,
   subscriptions,
   listMetrics,
@@ -231,7 +231,7 @@ export function FollowingGrid({
     <div className={styles.followingRoot}>
       <div className={styles.followingHeader}>
         <div className={styles.titleWrap}>
-          <span className={styles.heroTitle}>Following</span>
+          <span className={styles.heroTitle}>Subscriptions</span>
           <span className={styles.muted}>
             {cards.length === 0
               ? 'Nothing followed yet'

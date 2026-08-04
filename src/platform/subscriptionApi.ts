@@ -74,7 +74,7 @@ export interface SubscriptionCoverRecord {
   entity_hash: string;
 }
 
-/** Newest downloaded file per subscription — cover images for the Following grid. */
+/** Newest downloaded file per subscription, used as its grid cover. */
 export function getSubscriptionCovers(): Promise<SubscriptionCoverRecord[]> {
   return invoke<SubscriptionCoverRecord[]>('get_subscription_covers', {});
 }

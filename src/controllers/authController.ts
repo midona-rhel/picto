@@ -17,6 +17,7 @@ import type {
   AuthSessionBounds,
   AuthSessionState,
   SubscriptionIssueRecord,
+  SubscriptionSiteInfo,
 } from '../shared/types/subscriptions';
 import type { AuthSiteSnapshot, AuthWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
 
@@ -27,8 +28,8 @@ const AUTH_ISSUE_KINDS = new Set([
   'credential_blocked',
 ]);
 
-function canonicalSiteCategory(siteId: string): string {
-  return siteId === 'pixivuser' ? 'pixiv' : siteId;
+function credentialOwnerForSite(siteId: string, sites: SubscriptionSiteInfo[]): string {
+  return sites.find((site) => site.id === siteId)?.credential_owner_site_id ?? siteId;
 }
 
 function isAuthIssue(issue: SubscriptionIssueRecord): boolean {
@@ -54,7 +55,9 @@ export const authController = {
       listCredentialHealth(),
     ]);
 
-    const authSites = sites.filter((site) => site.auth_supported);
+    const authSites = sites.filter(
+      (site) => site.auth_supported && site.id === site.credential_owner_site_id,
+    );
     const issuesBySite = new Map<string, SubscriptionIssueRecord[]>();
 
     await Promise.all(
@@ -63,7 +66,7 @@ export const authController = {
         const authIssues = issues.filter(isAuthIssue);
         if (!authIssues.length) return;
         const siteKeys = new Set(
-          subscription.queries.map((query) => canonicalSiteCategory(query.site_id)),
+          subscription.queries.map((query) => credentialOwnerForSite(query.site_id, sites)),
         );
         for (const siteKey of siteKeys) {
           const existing = issuesBySite.get(siteKey) ?? [];
@@ -75,14 +78,18 @@ export const authController = {
 
     const sitesWithState = authSites
       .map((site) => {
-        const siteKey = canonicalSiteCategory(site.id);
+        const siteKey = site.credential_owner_site_id;
         const matchingSubscriptions = subscriptions.filter((subscription) =>
-          subscription.queries.some((query) => canonicalSiteCategory(query.site_id) === siteKey),
+          subscription.queries.some(
+            (query) => credentialOwnerForSite(query.site_id, sites) === siteKey,
+          ),
         );
         const queryCount = matchingSubscriptions.reduce(
           (count, subscription) =>
             count
-            + subscription.queries.filter((query) => canonicalSiteCategory(query.site_id) === siteKey).length,
+            + subscription.queries.filter(
+              (query) => credentialOwnerForSite(query.site_id, sites) === siteKey,
+            ).length,
           0,
         );
         return {

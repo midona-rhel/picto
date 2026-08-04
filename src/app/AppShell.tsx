@@ -95,7 +95,7 @@ function ScopeTitle() {
     pushHistory(nodeId);
   };
 
-  // Following breadcrumb: Following [/ Group] [/ Subscription], ancestors clickable.
+  // Subscription breadcrumb: Subscriptions [/ Group] [/ Subscription].
   if (activeNodeId === 'system:subscriptions') {
     const selectedSub =
       subsSelection?.kind === 'subscription'
@@ -111,7 +111,7 @@ function ScopeTitle() {
       ? subsSnapshot?.groups.find((group) => group.id === groupId)?.name ?? null
       : null;
     const leafName = selectedSub?.name ?? (subsSelection?.kind === 'group' ? groupName : null);
-    if (!leafName) return <span className={styles.scopeTitle}>Following</span>;
+    if (!leafName) return <span className={styles.scopeTitle}>Subscriptions</span>;
 
     const crumbSeparator = <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>;
     return (
@@ -124,7 +124,7 @@ function ScopeTitle() {
             pushSubscriptionsHistory(null);
           }}
         >
-          Following
+          Subscriptions
         </button>
         {selectedSub && groupName && groupId != null && (
           <>

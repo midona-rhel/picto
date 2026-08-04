@@ -247,7 +247,7 @@ export function AuthWorkspace({
     setBusy(true);
     setMessage(null);
     try {
-      await authController.deleteCredential(selectedEntry.site.id === 'pixivuser' ? 'pixiv' : selectedEntry.site.id);
+      await authController.deleteCredential(selectedEntry.site.credential_owner_site_id);
       await refresh();
       setMessage('Credential removed.');
     } catch (err) {

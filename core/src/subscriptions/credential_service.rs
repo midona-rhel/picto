@@ -990,6 +990,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn pixivuser_requires_the_shared_pixiv_credential() {
+        let db = test_db().await;
+        let service = SubscriptionCredentialService::with_store(
+            db.as_ref(),
+            InMemoryCredentialStore::default(),
+        );
+
+        let preflight = service
+            .preflight_for_run("pixivuser", "https://www.pixiv.net/en/users/12345")
+            .await;
+
+        assert!(matches!(preflight, CredentialPreflight::MissingRequired));
+    }
+
+    #[tokio::test]
     async fn missing_credential_marks_health_and_creates_issue() {
         let db = test_db().await;
         let service = SubscriptionCredentialService::with_store(

@@ -6,7 +6,6 @@ import { ToggleSwitch } from '../../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { ActionButton } from './ActionButton';
 import { TagAutocompleteInput } from './TagAutocompleteInput';
 import type {
-  SubscriptionGroupInfo,
   SubscriptionSiteInfo,
 } from '../../../shared/types/subscriptions';
 import styles from './NewSubscriptionDialog.module.css';
@@ -15,8 +14,6 @@ export interface CreateSubscriptionInput {
   name: string;
   siteId: string;
   queryText: string;
-  groupId: number | null;
-  newGroupName: string | null;
   initialPostLimit: number;
   periodicPostLimit: number;
   autoCollections: boolean;
@@ -24,14 +21,12 @@ export interface CreateSubscriptionInput {
 }
 
 /**
- * Compact single-form dialog for creating a subscription: pick a site,
- * type the query, file it into a group. Sync limits and collection
- * behaviour live under a collapsed Advanced section.
+ * Compact single-form dialog for creating a subscription and its first query.
+ * Sync limits and collection behaviour live under Advanced.
  */
 export function NewSubscriptionDialog({
   open,
   sites,
-  groups,
   credentialSiteCategories,
   initialSiteId,
   busy,
@@ -41,7 +36,6 @@ export function NewSubscriptionDialog({
 }: {
   open: boolean;
   sites: SubscriptionSiteInfo[];
-  groups: SubscriptionGroupInfo[];
   credentialSiteCategories: Set<string>;
   initialSiteId: string | null;
   busy: boolean;
@@ -53,8 +47,6 @@ export function NewSubscriptionDialog({
   const [queryText, setQueryText] = useState('');
   const [name, setName] = useState('');
   const [nameTouched, setNameTouched] = useState(false);
-  const [groupPick, setGroupPick] = useState('');
-  const [newGroupName, setNewGroupName] = useState('');
   const [initialLimit, setInitialLimit] = useState('100');
   const [periodicLimit, setPeriodicLimit] = useState('50');
   const [autoCollections, setAutoCollections] = useState(true);
@@ -68,7 +60,8 @@ export function NewSubscriptionDialog({
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const site = sites.find((entry) => entry.id === siteId) ?? null;
-  const hasCredential = site != null && credentialSiteCategories.has(site.id);
+  const hasCredential = site != null
+    && credentialSiteCategories.has(site.credential_owner_site_id);
   const authMissing = site != null && site.auth_supported && !hasCredential;
   const authBlocking = authMissing && site.auth_strictly_required;
 
@@ -89,8 +82,6 @@ export function NewSubscriptionDialog({
     setQueryText('');
     setName('');
     setNameTouched(false);
-    setGroupPick('');
-    setNewGroupName('');
     setInitialLimit('100');
     setPeriodicLimit('50');
     setAutoCollections(true);
@@ -109,8 +100,6 @@ export function NewSubscriptionDialog({
       name: effectiveName.trim() || `${site?.name ?? 'Subscription'} — ${queryText.trim()}`,
       siteId,
       queryText: queryText.trim(),
-      groupId: groupPick && groupPick !== 'new' ? Number.parseInt(groupPick, 10) : null,
-      newGroupName: groupPick === 'new' ? newGroupName.trim() || 'New group' : null,
       initialPostLimit: Number.isFinite(parsedInitial) && parsedInitial > 0 ? parsedInitial : 100,
       periodicPostLimit: Number.isFinite(parsedPeriodic) && parsedPeriodic > 0 ? parsedPeriodic : 50,
       autoCollections,
@@ -159,7 +148,7 @@ export function NewSubscriptionDialog({
               <button
                 type="button"
                 className={styles.authLink}
-                onClick={() => onOpenAccounts(site.id)}
+                onClick={() => onOpenAccounts(site.credential_owner_site_id)}
               >
                 Connect account…
               </button>
@@ -203,31 +192,6 @@ export function NewSubscriptionDialog({
                 setName(e.target.value);
               }}
             />
-          </div>
-        </div>
-
-        <div className={styles.row}>
-          <span className={styles.rowLabel}>Group</span>
-          <div className={styles.rowControl}>
-            <CmSelect
-              value={groupPick}
-              options={[
-                { value: '', label: 'No group' },
-                ...groups.map((group) => ({ value: group.id, label: group.name })),
-                { value: 'new', label: 'New group…' },
-              ]}
-              onChange={setGroupPick}
-              width={groupPick === 'new' ? 130 : 220}
-            />
-            {groupPick === 'new' && (
-              <input
-                className={styles.textInput}
-                value={newGroupName}
-                placeholder="Group name"
-                autoFocus
-                onChange={(e) => setNewGroupName(e.target.value)}
-              />
-            )}
           </div>
         </div>
 

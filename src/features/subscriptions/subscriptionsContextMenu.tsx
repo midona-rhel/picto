@@ -1,5 +1,5 @@
 /**
- * Context-menu builders for the Following screen — cards, sidebar rows, and
+ * Context-menu builders for subscription cards, sidebar rows, and
  * detail overflow menus all build from here so actions stay consistent.
  *
  * Mirrors gridContextMenu.tsx: pure builders returning MenuEntry[] for the

@@ -4,6 +4,7 @@ export interface SubscriptionSiteInfo {
   id: string;
   name: string;
   domain: string;
+  credential_owner_site_id: string;
   url_template: string;
   example_query: string;
   supports_query: boolean;

@@ -153,6 +153,10 @@ backoff persistence, run-scoped multi-query finalization, idempotent Stop, group
 retention across reset/delete. Before marking S3 complete, verify a live Stop, quit/reopen during a
 run, and one transient automatic retry in Electron using a fresh schema-108 test library.
 
+Live progress on 2026-08-05: Gelbooru ingestion was observed in Electron, and rebuilding/reopening
+Picto re-claimed the same persisted run and query job without creating a replacement. Live Stop and
+transient-retry verification remain before S3 closes.
+
 Make the stored recovery action truthful:
 
 - automatic retries use persisted `next_retry_at` and bounded backoff

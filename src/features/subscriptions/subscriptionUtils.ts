@@ -126,11 +126,6 @@ export function isBooruApiKeyCategory(siteCategory: string): boolean {
   return isGelbooruCategory(siteCategory) || isRule34Category(siteCategory);
 }
 
-function canonicalSiteCategory(siteId: string): string {
-  const normalized = siteId.trim().toLowerCase();
-  return normalized === 'pixivuser' ? 'pixiv' : normalized;
-}
-
 export function getQueryModeLabel(query: SubscriptionQueryInfo): string {
   return query.completed_initial_run ? 'front scan' : 'catch-up';
 }
@@ -157,14 +152,17 @@ export function getQueryAuthState(input: {
   label: string;
   blocking: boolean;
 } {
-  const siteId = canonicalSiteCategory(input.query.site_id);
-  const site = input.sites.find((entry) => canonicalSiteCategory(entry.id) === siteId) ?? null;
+  const site = input.sites.find((entry) => entry.id === input.query.site_id) ?? null;
   if (!site || !site.auth_supported) {
     return { tone: 'idle', label: 'No auth', blocking: false };
   }
 
-  const credential = input.credentials.find((entry) => canonicalSiteCategory(entry.site_category) === siteId) ?? null;
-  const health = input.credentialHealth.find((entry) => canonicalSiteCategory(entry.site_category) === siteId) ?? null;
+  const credential = input.credentials.find(
+    (entry) => entry.site_category === site.credential_owner_site_id,
+  ) ?? null;
+  const health = input.credentialHealth.find(
+    (entry) => entry.site_category === site.credential_owner_site_id,
+  ) ?? null;
   const healthStatus = (health?.health_status ?? '').toLowerCase();
   const missing = !credential;
   const broken = healthStatus === 'unauthorized' || healthStatus === 'expired' || healthStatus === 'error' || healthStatus === 'missing';

@@ -16,7 +16,7 @@ import {
 } from '../../runtime/subscriptionsSettle';
 import type { SubscriptionInfo } from '../../shared/types/subscriptions';
 import { AccountsModal } from './components/AccountsModal';
-import { FollowingGrid } from './components/FollowingGrid';
+import { SubscriptionsGrid } from './components/SubscriptionsGrid';
 import { GroupDetail } from './components/GroupDetail';
 import { SubscriptionDetail } from './components/SubscriptionDetail';
 import { EmptyState } from './components/EmptyState';
@@ -123,14 +123,9 @@ export function SubscriptionsScreen() {
 
   const createFromWizard = useCallback(async (result: CreateSubscriptionInput) => {
     await act('wizard', async () => {
-      let groupId = result.groupId;
-      if (result.newGroupName) {
-        const group = await subscriptionsController.createGroup(result.newGroupName);
-        groupId = Number.parseInt(group.id, 10);
-      }
       const subscription = await subscriptionsController.create({
         name: result.name,
-        group_id: groupId,
+        group_id: null,
         initial_post_limit: result.initialPostLimit,
         periodic_post_limit: result.periodicPostLimit,
       });
@@ -265,7 +260,7 @@ export function SubscriptionsScreen() {
     [contextMenu, snapshot, progressBySubscriptionId, act, confirm, navigateTo, selection],
   );
 
-  /** Bulk menu for a multi-card selection on the Following grid. */
+  /** Bulk menu for a multi-card selection on the subscriptions grid. */
   const openMultiCardMenu = useCallback(
     (position: { x: number; y: number }, subscriptionIds: string[], groupIds: string[]) => {
       if (!snapshot) return;
@@ -343,7 +338,7 @@ export function SubscriptionsScreen() {
         {loading && !snapshot ? (
           <EmptyState title="Loading…" description="Fetching subscriptions." />
         ) : selection == null && snapshot ? (
-          <FollowingGrid
+          <SubscriptionsGrid
             groups={snapshot.groups}
             subscriptions={snapshot.subscriptions}
             listMetrics={snapshot.listMetrics}
@@ -438,7 +433,7 @@ export function SubscriptionsScreen() {
           />
         ) : (
           <EmptyState
-            title="Follow artists and tags"
+            title="Subscribe to artists and tags"
             description="Create a subscription and new posts will land in your library automatically."
           />
         )}
@@ -447,7 +442,6 @@ export function SubscriptionsScreen() {
       <NewSubscriptionDialog
         open={wizard.open}
         sites={snapshot?.sites ?? []}
-        groups={snapshot?.groups ?? []}
         credentialSiteCategories={new Set((snapshot?.credentials ?? []).map((credential) => credential.site_category))}
         initialSiteId={wizard.initialSiteId}
         busy={busy}

@@ -16,7 +16,7 @@ interface HistoryEntry {
   nodeId: string;
   parentNodeId: string | null;
   collectionName: string | null;
-  /** Subject selection inside the subscriptions workspace (null = Following home). */
+  /** Subject selection inside the subscriptions workspace (null = home). */
   subsSelection?: SubscriptionsSelection;
 }
 
@@ -85,7 +85,7 @@ export function pushHistory(nodeId: string) {
   const h = store.get(historyAtom);
   // If we're not at the end, truncate forward history
   const stack = h.stack.slice(0, h.cursor + 1);
-  // Direct navigation to the subscriptions node lands on the Following home.
+  // Direct navigation to the subscriptions node lands on its home.
   if (nodeId === SUBSCRIPTIONS_NODE_ID) {
     store.set(subscriptionsSelectionAtom, null);
   }
@@ -110,7 +110,7 @@ export function pushHistory(nodeId: string) {
 }
 
 /**
- * Record navigation inside the subscriptions workspace (Following home and
+ * Record navigation inside the subscriptions workspace (home and
  * subject pages) so the universal back/forward traverses them too.
  */
 export function pushSubscriptionsHistory(selection: SubscriptionsSelection) {

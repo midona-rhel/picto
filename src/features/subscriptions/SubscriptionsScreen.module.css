@@ -1180,7 +1180,7 @@ div:hover > .railHoverActions {
   margin-top: 8px;
 }
 
-.ovFollowing {
+.ovQueries {
   display: flex;
   flex-direction: column;
   gap: 4px;

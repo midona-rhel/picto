@@ -248,8 +248,8 @@ export function SubscriptionDetail({
         </div>
       )}
 
-      <div className={styles.ovFollowing}>
-        <span className={styles.subsectionTitle}>Following</span>
+      <div className={styles.ovQueries}>
+        <span className={styles.subsectionTitle}>Queries</span>
         {subscription.queries.length === 0 ? (
           <div className={styles.sectionEmptyLine}>
             Nothing yet — switch to Technical to add a tag search or an account.
