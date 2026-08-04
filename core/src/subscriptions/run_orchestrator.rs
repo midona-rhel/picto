@@ -332,17 +332,14 @@ impl SubscriptionRunOrchestrator {
             return Err("retry site_id does not match the query site".to_string());
         }
 
-        let attempts = runtime
-            .list_subscription_download_attempts(sub_id, Some(qid), 500)
+        let matching = runtime
+            .find_unresolved_subscription_download_attempts(
+                sub_id,
+                qid,
+                &canonical_site_id,
+                &post_id,
+            )
             .await?;
-        let matching: Vec<_> = attempts
-            .into_iter()
-            .filter(|attempt| {
-                attempt.post_id.as_deref() == Some(post_id.as_str())
-                    && attempt.site_category.as_deref() == Some(canonical_site_id.as_str())
-                    && attempt.status != "resolved"
-            })
-            .collect();
         if matching.is_empty() {
             return Err(format!(
                 "No failed download attempts found for post {} on query {}",

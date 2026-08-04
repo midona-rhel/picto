@@ -8,13 +8,16 @@ P1
 Partially implemented and release-blocking. Durable runs, query jobs, download attempts,
 ingest handoff, and a rebuilt frontend exist. The remaining work is concrete:
 
-- retry lookup incorrectly searches only the newest 500 attempts
 - issue identity includes mutable message text and permits duplicates for null query ids
 - persisted issues do not yet carry the full severity/recoverability/log contract below
 - transport still constructs `SubscriptionRuntimeService` directly instead of calling one
   bounded subscription service through the engine
 - the site-specific PBIs were archived; supported sites are now one verification matrix owned
   by this PBI
+
+Completed release slice:
+- retry validation and queued retry execution use one indexed lookup over all unresolved matching
+  attempts; no newest-500 scan remains
 
 ## AI-generated caveat
 This document is based on an in-repo audit of the current subscriptions CRUD, run orchestration, gallery-dl runner, and runtime progress/state handling. It is intentionally decisive. The main goal is to stop treating too many failures as opaque and terminal.

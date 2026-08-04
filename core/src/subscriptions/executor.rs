@@ -364,11 +364,17 @@ async fn run_job_inner(
         );
         let canonical_site_id =
             crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id).to_string();
-        let attempts = match runtime
-            .list_subscription_download_attempts(sub.subscription_id, Some(query.query_id), 500)
+        let post_id = job.post_id.as_deref().unwrap_or_default();
+        let matching = match runtime
+            .find_unresolved_subscription_download_attempts(
+                sub.subscription_id,
+                query.query_id,
+                &canonical_site_id,
+                post_id,
+            )
             .await
         {
-            Ok(attempts) => attempts,
+            Ok(matching) => matching,
             Err(error) => {
                 return JobOutcome {
                     files_downloaded_delta: 0,
@@ -381,15 +387,6 @@ async fn run_job_inner(
                 };
             }
         };
-        let post_id = job.post_id.as_deref().unwrap_or_default();
-        let matching: Vec<_> = attempts
-            .into_iter()
-            .filter(|attempt| {
-                attempt.post_id.as_deref() == Some(post_id)
-                    && attempt.site_category.as_deref() == Some(canonical_site_id.as_str())
-                    && attempt.status != "resolved"
-            })
-            .collect();
         if matching.is_empty() {
             return JobOutcome {
                 files_downloaded_delta: 0,

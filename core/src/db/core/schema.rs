@@ -4,7 +4,7 @@
 use rusqlite::Connection;
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 104;
+pub const CURRENT_SCHEMA_VERSION: i64 = 105;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -351,6 +351,8 @@ CREATE TABLE IF NOT EXISTS subscription_download_attempt (
     resolved_at          TEXT,
     UNIQUE (subscription_id, query_id, item_key)
 );
+CREATE INDEX IF NOT EXISTS idx_subscription_download_attempt_retry
+    ON subscription_download_attempt(subscription_id, query_id, site_category, post_id, status);
 
 CREATE TABLE IF NOT EXISTS subscription_post_member (
     subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
@@ -492,7 +494,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 104
+SELECT 105
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -692,6 +694,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         "idx_ingest_queue_item_queue",
         "idx_subscription_query_job_ready",
         "idx_subscription_query_job_subscription",
+        "idx_subscription_download_attempt_retry",
         "idx_op_outbox_pending",
     ];
 

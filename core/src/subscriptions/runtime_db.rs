@@ -878,6 +878,32 @@ pub fn list_retryable_subscription_download_attempts(
     rows.collect()
 }
 
+pub fn find_unresolved_subscription_download_attempts(
+    conn: &Connection,
+    subscription_id: i64,
+    query_id: i64,
+    site_category: &str,
+    post_id: &str,
+) -> rusqlite::Result<Vec<SubscriptionDownloadAttemptRecord>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT attempt_id, subscription_id, query_id, query_run_id, item_key, site_category,
+                post_id, page_num, canonical_post_url, media_url, retry_url, retry_count,
+                status, failure_kind, last_error, next_retry_at, created_at, updated_at, resolved_at
+         FROM subscription_download_attempt
+         WHERE subscription_id = ?1
+           AND query_id = ?2
+           AND site_category = ?3
+           AND post_id = ?4
+           AND status <> 'resolved'
+         ORDER BY updated_at DESC, attempt_id DESC",
+    )?;
+    let rows = stmt.query_map(
+        params![subscription_id, query_id, site_category, post_id],
+        map_subscription_download_attempt_row,
+    )?;
+    rows.collect()
+}
+
 pub fn list_subscription_download_attempts(
     conn: &Connection,
     subscription_id: i64,
@@ -899,6 +925,160 @@ pub fn list_subscription_download_attempts(
         map_subscription_download_attempt_row,
     )?;
     rows.collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::find_unresolved_subscription_download_attempts;
+    use crate::db::core::schema::LIBRARY_DDL;
+    use rusqlite::{params, Connection};
+
+    fn insert_attempt(
+        conn: &Connection,
+        attempt_id: i64,
+        item_key: &str,
+        site_category: &str,
+        post_id: &str,
+        status: &str,
+        updated_at: &str,
+        retry_url: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO subscription_download_attempt (
+                 attempt_id, subscription_id, query_id, item_key, site_category, post_id,
+                 status, retry_url, created_at, updated_at
+             ) VALUES (?1, 1, 1, ?2, ?3, ?4, ?5, ?6, '2026-01-01', ?7)",
+            params![
+                attempt_id,
+                item_key,
+                site_category,
+                post_id,
+                status,
+                retry_url,
+                updated_at
+            ],
+        )
+        .expect("insert download attempt");
+    }
+
+    #[test]
+    fn retry_lookup_returns_all_matching_attempts_newest_first() {
+        let conn = Connection::open_in_memory().expect("open database");
+        conn.execute_batch(LIBRARY_DDL).expect("create schema");
+        conn.execute(
+            "INSERT INTO subscription (subscription_id, name, site_id, date_added)
+             VALUES (1, 'Test subscription', 'danbooru', '2026-01-01')",
+            [],
+        )
+        .expect("insert subscription");
+        conn.execute(
+            "INSERT INTO subscription_query (query_id, subscription_id, site_id, query_text)
+             VALUES (1, 1, 'danbooru', 'tag:test')",
+            [],
+        )
+        .expect("insert query");
+
+        insert_attempt(
+            &conn,
+            1,
+            "old-match",
+            "danbooru",
+            "post-1",
+            "pending",
+            "2026-01-01",
+            "https://retry.example/old",
+        );
+        insert_attempt(
+            &conn,
+            2,
+            "new-match",
+            "danbooru",
+            "post-1",
+            "retrying",
+            "2026-03-01",
+            "https://retry.example/new",
+        );
+        insert_attempt(
+            &conn,
+            5,
+            "new-match-higher-id",
+            "danbooru",
+            "post-1",
+            "pending",
+            "2026-03-01",
+            "https://retry.example/new-higher-id",
+        );
+        insert_attempt(
+            &conn,
+            3,
+            "resolved",
+            "danbooru",
+            "post-1",
+            "resolved",
+            "2026-04-01",
+            "https://retry.example/resolved",
+        );
+        insert_attempt(
+            &conn,
+            4,
+            "wrong-site",
+            "gelbooru",
+            "post-1",
+            "pending",
+            "2026-04-01",
+            "https://retry.example/wrong-site",
+        );
+        for attempt_id in 10..515 {
+            insert_attempt(
+                &conn,
+                attempt_id,
+                &format!("newer-{attempt_id}"),
+                "danbooru",
+                &format!("post-{attempt_id}"),
+                "pending",
+                "2026-02-01",
+                &format!("https://retry.example/noise-{attempt_id}"),
+            );
+        }
+
+        let query_plan: String = conn
+            .query_row(
+                "EXPLAIN QUERY PLAN
+                 SELECT attempt_id
+                 FROM subscription_download_attempt
+                 WHERE subscription_id = ?1
+                   AND query_id = ?2
+                   AND site_category = ?3
+                   AND post_id = ?4
+                   AND status <> 'resolved'
+                 ORDER BY updated_at DESC, attempt_id DESC",
+                params![1, 1, "danbooru", "post-1"],
+                |row| row.get(3),
+            )
+            .expect("explain retry lookup");
+        assert!(
+            query_plan.contains("idx_subscription_download_attempt_retry"),
+            "retry lookup must use its index: {query_plan}"
+        );
+
+        let matches =
+            find_unresolved_subscription_download_attempts(&conn, 1, 1, "danbooru", "post-1")
+                .expect("find retry attempts");
+
+        assert_eq!(
+            matches
+                .iter()
+                .map(|attempt| attempt.item_key.as_str())
+                .collect::<Vec<_>>(),
+            ["new-match-higher-id", "new-match", "old-match"]
+        );
+        assert_eq!(
+            matches
+                .iter()
+                .find_map(|attempt| attempt.retry_url.as_deref()),
+            Some("https://retry.example/new-higher-id")
+        );
+    }
 }
 
 pub fn upsert_subscription_post_member(

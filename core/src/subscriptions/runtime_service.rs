@@ -16,8 +16,9 @@ use super::runtime_db::{
     accumulate_subscription_run_counters, add_subscription_entity,
     cancel_pending_subscription_jobs_for_subscription, count_active_subscription_query_jobs,
     create_subscription_query_run, create_subscription_run, enqueue_subscription_query_job,
-    finalize_subscription_run_status, finish_subscription_query_job, finish_subscription_query_run,
-    finish_subscription_run, get_subscription_post_collection, lease_subscription_query_job,
+    finalize_subscription_run_status, find_unresolved_subscription_download_attempts,
+    finish_subscription_query_job, finish_subscription_query_run, finish_subscription_run,
+    get_subscription_post_collection, lease_subscription_query_job,
     list_queued_subscription_query_jobs, list_retryable_subscription_download_attempts,
     list_subscription_download_attempts, list_subscription_issues, list_subscription_post_members,
     list_subscription_query_jobs_for_run, list_subscription_query_runs, list_subscription_runs,
@@ -1134,6 +1135,26 @@ impl<'a> SubscriptionRuntimeService<'a> {
     ) -> Result<Vec<SubscriptionDownloadAttemptRecord>, String> {
         self.db.with_read(move |conn| {
             list_retryable_subscription_download_attempts(conn, subscription_id, query_id, limit)
+        })
+    }
+
+    pub async fn find_unresolved_subscription_download_attempts(
+        &self,
+        subscription_id: i64,
+        query_id: i64,
+        site_category: &str,
+        post_id: &str,
+    ) -> Result<Vec<SubscriptionDownloadAttemptRecord>, String> {
+        let site_category = site_category.to_string();
+        let post_id = post_id.to_string();
+        self.db.with_read(move |conn| {
+            find_unresolved_subscription_download_attempts(
+                conn,
+                subscription_id,
+                query_id,
+                &site_category,
+                &post_id,
+            )
         })
     }
 
