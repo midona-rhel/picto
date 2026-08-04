@@ -40,8 +40,7 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::subscriptions::CreateGroupInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::DeleteGroupInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::RenameGroupInput::export().unwrap();
-    picto_core::dispatch::typed::subscriptions::SetGroupScheduleInput::export().unwrap();
-    picto_core::dispatch::typed::subscriptions::PauseGroupInput::export().unwrap();
+    picto_core::dispatch::typed::subscriptions::SetSubscriptionScheduleInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::RunGroupInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::StopGroupInput::export().unwrap();
     picto_core::dispatch::typed::subscriptions::GetSiteMetadataSchemaInput::export().unwrap();

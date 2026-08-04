@@ -1,4 +1,7 @@
+use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
+
+use futures_util::FutureExt;
 
 use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
@@ -14,14 +17,31 @@ use crate::subscriptions::runtime_tasks::{
 use crate::subscriptions::source_adapter::runner_key_for_site;
 use crate::subscriptions::sync_engine::{SubscriptionSyncEngine, SyncProgress};
 use crate::subscriptions::types::SubscriptionQueryJob;
-use crate::types::{RunningSubscriptions, SubTerminalStatuses};
+use crate::types::RunningSubscriptions;
+use tokio_util::sync::CancellationToken;
+
+const MAX_AUTOMATIC_RETRIES: i64 = 3;
+
+fn automatic_retry_kind(value: Option<&str>) -> Option<FailureKind> {
+    match value {
+        Some("network") => Some(FailureKind::Network),
+        Some("rate_limited") => Some(FailureKind::RateLimited),
+        _ => None,
+    }
+}
+
+fn automatic_retry_at(attempt_count: i64) -> String {
+    let exponent = attempt_count.clamp(0, 3) as u32;
+    let delay_seconds = 60_i64 * 2_i64.pow(exponent);
+    (chrono::Utc::now() + chrono::Duration::seconds(delay_seconds)).to_rfc3339()
+}
 
 pub async fn execute_query_job(
     db: Arc<LibraryDatabase>,
     library_root: std::path::PathBuf,
     rate_limiter: RateLimiter,
     running_subs: RunningSubscriptions,
-    sub_terminal_statuses: SubTerminalStatuses,
+    shutdown: CancellationToken,
     app_settings: AppSettings,
     job: SubscriptionQueryJob,
 ) {
@@ -59,7 +79,6 @@ pub async fn execute_query_job(
             let _ = finalize_if_idle(
                 &runtime,
                 &running_subs,
-                &sub_terminal_statuses,
                 &format!("Subscription {}", job.subscription_id),
                 &sub_id_str,
                 job.run_id,
@@ -129,7 +148,7 @@ pub async fn execute_query_job(
         )
     };
 
-    let result = tokio::spawn(run_job_inner(
+    let result = AssertUnwindSafe(run_job_inner(
         db.clone(),
         library_root.clone(),
         rate_limiter.clone(),
@@ -141,12 +160,13 @@ pub async fn execute_query_job(
         query_name.clone(),
         cancel.clone(),
     ))
+    .catch_unwind()
     .await;
 
     let result = match result {
         Ok(result) => result,
-        Err(error) => {
-            let message = format!("Task panicked: {error}");
+        Err(_) => {
+            let message = "Subscription executor panicked".to_string();
             let _ = runtime
                 .upsert_subscription_issue(
                     job.subscription_id,
@@ -175,7 +195,6 @@ pub async fn execute_query_job(
             let _ = finalize_if_idle(
                 &runtime,
                 &running_subs,
-                &sub_terminal_statuses,
                 &sub.name,
                 &sub_id_str,
                 job.run_id,
@@ -188,18 +207,6 @@ pub async fn execute_query_job(
         }
     };
 
-    let status = if result.cancelled {
-        "cancelled"
-    } else if result.errors.is_empty() {
-        "succeeded"
-    } else {
-        "failed"
-    };
-    let failure_kind = result.failure_kind.clone();
-    let last_error = result.errors.last().cloned();
-    let _ = runtime
-        .finish_subscription_query_job(job.job_id, status, failure_kind.clone(), last_error.clone())
-        .await;
     if let Some(run_id) = job.run_id {
         let _ = runtime
             .accumulate_subscription_run_counters(
@@ -211,10 +218,54 @@ pub async fn execute_query_job(
             )
             .await;
     }
+
+    let failure_kind = result.failure_kind.clone();
+    let last_error = result.errors.last().cloned();
+    if result.cancelled && shutdown.is_cancelled() {
+        let _ = runtime
+            .requeue_interrupted_subscription_query_job(job.job_id)
+            .await;
+        return;
+    }
+    if !result.cancelled && job.attempt_count < MAX_AUTOMATIC_RETRIES {
+        if let Some(kind) = automatic_retry_kind(failure_kind.as_deref()) {
+            let next_retry_at = automatic_retry_at(job.attempt_count);
+            if runtime
+                .reschedule_subscription_query_job(
+                    job.job_id,
+                    next_retry_at.clone(),
+                    kind.as_str().to_string(),
+                    last_error.clone(),
+                )
+                .await
+                .unwrap_or(false)
+            {
+                let _ = runtime
+                    .set_subscription_issue_next_retry(
+                        job.subscription_id,
+                        job.query_id,
+                        kind,
+                        next_retry_at,
+                    )
+                    .await;
+                return;
+            }
+        }
+    }
+
+    let status = if result.cancelled {
+        "cancelled"
+    } else if result.errors.is_empty() {
+        "succeeded"
+    } else {
+        "failed"
+    };
+    let _ = runtime
+        .finish_subscription_query_job(job.job_id, status, failure_kind.clone(), last_error.clone())
+        .await;
     let _ = finalize_if_idle(
         &runtime,
         &running_subs,
-        &sub_terminal_statuses,
         &sub.name,
         &sub_id_str,
         job.run_id,
@@ -228,7 +279,6 @@ pub async fn execute_query_job(
 async fn finalize_if_idle(
     runtime: &crate::subscriptions::runtime_service::SubscriptionRuntimeService<'_>,
     running_subs: &RunningSubscriptions,
-    sub_terminal_statuses: &SubTerminalStatuses,
     subscription_name: &str,
     subscription_id: &str,
     run_id: Option<i64>,
@@ -239,61 +289,36 @@ async fn finalize_if_idle(
     let subscription_id_num: i64 = subscription_id
         .parse()
         .map_err(|_| format!("Invalid subscription id: {subscription_id}"))?;
+    let (
+        status,
+        failure_kind,
+        error_message,
+        downloaded,
+        skipped,
+        metadata_validated,
+        metadata_invalid,
+    ) = if let Some(run_id) = run_id {
+        let Some(run) = runtime
+            .finalize_subscription_run_if_terminal(run_id)
+            .await?
+        else {
+            return Ok(());
+        };
+        (
+            run.status,
+            run.failure_kind,
+            run.error_message,
+            run.files_downloaded as usize,
+            run.files_skipped as usize,
+            run.metadata_validated as usize,
+            run.metadata_invalid as usize,
+        )
+    } else {
+        ("succeeded".to_string(), None, None, 0, 0, 0, 0)
+    };
     if !clear_subscription_guard_if_idle(runtime, running_subs, subscription_id_num).await? {
         return Ok(());
     }
-
-    let (status, failure_kind, error_message) = if let Some(run_id) = run_id {
-        let jobs = runtime.list_subscription_query_jobs_for_run(run_id).await?;
-        let failure = jobs
-            .iter()
-            .rev()
-            .find(|job| job.status == "failed")
-            .or_else(|| jobs.iter().rev().find(|job| job.status == "cancelled"));
-        let status = if jobs.iter().any(|job| job.status == "failed") {
-            "failed"
-        } else if jobs.iter().any(|job| job.status == "cancelled") {
-            "cancelled"
-        } else {
-            "succeeded"
-        };
-        let failure_kind = failure.and_then(|job| job.failure_kind.clone());
-        let error_message = failure.and_then(|job| job.error_message.clone());
-        runtime
-            .finalize_subscription_run_status(
-                run_id,
-                status,
-                failure_kind.clone(),
-                error_message.clone(),
-            )
-            .await?;
-        (status.to_string(), failure_kind, error_message)
-    } else {
-        ("succeeded".to_string(), None, None)
-    };
-
-    if mode == "subscription" {
-        sub_terminal_statuses
-            .lock()
-            .await
-            .insert(subscription_id.to_string(), status.clone());
-    }
-
-    let run_record = runtime
-        .list_subscription_runs(subscription_id_num, 20)
-        .await?
-        .into_iter()
-        .find(|run| Some(run.run_id) == run_id);
-    let (downloaded, skipped, metadata_validated, metadata_invalid) = run_record
-        .map(|run| {
-            (
-                run.files_downloaded as usize,
-                run.files_skipped as usize,
-                run.metadata_validated as usize,
-                run.metadata_invalid as usize,
-            )
-        })
-        .unwrap_or((0, 0, 0, 0));
 
     publish_finished(
         subscription_id,

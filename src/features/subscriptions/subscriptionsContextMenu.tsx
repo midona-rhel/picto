@@ -33,11 +33,19 @@ export interface SubscriptionMenuContext {
   onStop: () => void;
   onPause: (paused: boolean) => void;
   onRename: () => void;
+  onSetSchedule: (schedule: string) => void;
   onMoveToGroup: (groupId: number | null) => void;
   onToggleAutoCollections: () => void;
   onReset: () => void;
   onDelete: () => void;
 }
+
+const SCHEDULES: Array<{ value: string; label: string }> = [
+  { value: 'manual', label: 'Manual' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+];
 
 export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[] {
   const { subscription, running, groups } = ctx;
@@ -68,6 +76,17 @@ export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[]
       : { label: 'Pause', icon: <IconPlayerPause size={14} />, action: () => ctx.onPause(true) },
     sep(),
     { label: 'Rename', icon: <IconRename />, action: ctx.onRename },
+    {
+      submenu: true,
+      label: 'Schedule',
+      icon: <IconClock size={14} />,
+      children: SCHEDULES.map((entry): MenuEntry => ({
+        label: entry.label,
+        icon: subscription.schedule === entry.value ? <IconCheck size={14} /> : undefined,
+        action: () => ctx.onSetSchedule(entry.value),
+        disabled: subscription.schedule === entry.value,
+      })),
+    },
     { submenu: true, label: 'Move to Group', icon: <IconFolderSymlink size={14} />, children: groupChildren },
     {
       label: subscription.auto_collections ? 'Disable Post Collections' : 'Enable Post Collections',
@@ -86,41 +105,18 @@ export interface GroupMenuContext {
   anyRunning: boolean;
   onRunAll: () => void;
   onStopAll: () => void;
-  onPauseGroup: (paused: boolean) => void;
   onRename: () => void;
-  onSetSchedule: (schedule: string) => void;
   onDelete: () => void;
 }
 
-const SCHEDULES: Array<{ value: string; label: string }> = [
-  { value: 'manual', label: 'Manual' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
-];
-
 export function buildGroupMenu(ctx: GroupMenuContext): MenuEntry[] {
-  const { group, anyRunning } = ctx;
+  const { anyRunning } = ctx;
   return [
     anyRunning
       ? { label: 'Stop All', icon: <IconPlayerStop size={14} />, action: ctx.onStopAll }
-      : { label: 'Run All Now', icon: <IconPlayerPlay size={14} />, action: ctx.onRunAll, disabled: group.paused },
-    group.paused
-      ? { label: 'Resume Group', icon: <IconPlayerPlay size={14} />, action: () => ctx.onPauseGroup(false) }
-      : { label: 'Pause Group', icon: <IconPlayerPause size={14} />, action: () => ctx.onPauseGroup(true) },
+      : { label: 'Run All Now', icon: <IconPlayerPlay size={14} />, action: ctx.onRunAll },
     sep(),
     { label: 'Rename', icon: <IconRename />, action: ctx.onRename },
-    {
-      submenu: true,
-      label: 'Schedule',
-      icon: <IconClock size={14} />,
-      children: SCHEDULES.map((entry): MenuEntry => ({
-        label: entry.label,
-        icon: group.schedule === entry.value ? <IconCheck size={14} /> : undefined,
-        action: () => ctx.onSetSchedule(entry.value),
-        disabled: group.schedule === entry.value,
-      })),
-    },
     sep(),
     { label: 'Delete Group…', icon: <IconTrash size={14} />, action: ctx.onDelete, danger: true },
   ];

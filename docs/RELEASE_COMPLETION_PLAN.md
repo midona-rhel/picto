@@ -56,6 +56,7 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [x] S2: Classify every meaningful failure through one persisted recovery disposition.
 - [ ] S3: Move schedules from groups to subscriptions; make retry, restart, shutdown, stop, reset,
       delete, and multi-query finalization durable and safe.
+      Automated implementation and tests are complete; live Stop/restart/retry verification remains.
 - [ ] S4: Finish one streaming metadata/collection ingest path and delete proven competitors.
 - [ ] S5: Keep run-scoped progress visible and the run active through terminal ingest; make Health
       actions truthful and uncapped.

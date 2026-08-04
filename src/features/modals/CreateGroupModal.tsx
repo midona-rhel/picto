@@ -5,33 +5,24 @@
 import { useState, useEffect, useCallback } from 'react';
 import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
 import { GlassInput } from '../../shared/ui/GlassInput';
-import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
-
-const SCHEDULE_OPTIONS = [
-  { value: 'manual', label: 'Manual' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
-];
 
 export interface CreateGroupModalProps {
   open: boolean;
   onClose: () => void;
-  onCreate: (name: string, schedule: string) => void;
+  onCreate: (name: string) => void;
 }
 
 export function CreateGroupModal({ open, onClose, onCreate }: CreateGroupModalProps) {
   const [name, setName] = useState('');
-  const [schedule, setSchedule] = useState('manual');
 
   useEffect(() => {
-    if (open) { setName(''); setSchedule('manual'); }
+    if (open) setName('');
   }, [open]);
 
   const handleCreate = useCallback(() => {
     if (!name.trim()) return;
-    onCreate(name.trim(), schedule);
-  }, [name, schedule, onCreate]);
+    onCreate(name.trim());
+  }, [name, onCreate]);
 
   return (
     <GlassModal
@@ -63,14 +54,8 @@ export function CreateGroupModal({ open, onClose, onCreate }: CreateGroupModalPr
             autoFocus
           />
         </div>
-
-        <div className={modalStyles.field}>
-          <label className={modalStyles.fieldLabel}>Schedule</label>
-          <CmSelect value={schedule} options={SCHEDULE_OPTIONS} onChange={setSchedule} width={160} />
-        </div>
-
         <p className={modalStyles.helpText}>
-          Groups can contain multiple subscriptions that run on the same schedule.
+          Groups organize related subscriptions and provide a manual Run all action.
         </p>
       </div>
     </GlassModal>

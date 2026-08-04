@@ -4,7 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 107;
+pub const CURRENT_SCHEMA_VERSION: i64 = 108;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -165,8 +165,6 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_smart_folder_uuid ON smart_folder(uuid) WH
 CREATE TABLE IF NOT EXISTS subscription_group (
     group_id   INTEGER PRIMARY KEY,
     name       TEXT    NOT NULL,
-    schedule   TEXT    NOT NULL DEFAULT 'manual',
-    paused     INTEGER NOT NULL DEFAULT 0,
     uuid       TEXT,
     date_added TEXT    NOT NULL
 );
@@ -176,6 +174,7 @@ CREATE TABLE IF NOT EXISTS subscription (
     subscription_id    INTEGER PRIMARY KEY,
     name               TEXT    NOT NULL,
     site_id            TEXT    NOT NULL,
+    schedule           TEXT    NOT NULL DEFAULT 'manual',
     paused             INTEGER NOT NULL DEFAULT 0,
     group_id           INTEGER REFERENCES subscription_group(group_id) ON DELETE CASCADE,
     initial_post_limit INTEGER DEFAULT 100,
@@ -305,6 +304,8 @@ CREATE TABLE IF NOT EXISTS subscription_query_job (
     job_kind             TEXT    NOT NULL DEFAULT 'query_sync',
     requested_by         TEXT    NOT NULL DEFAULT 'subscription',
     post_id              TEXT,
+    attempt_count        INTEGER NOT NULL DEFAULT 0,
+    available_at         TEXT    NOT NULL,
     queued_at            TEXT    NOT NULL,
     started_at           TEXT,
     finished_at          TEXT,
@@ -313,7 +314,7 @@ CREATE TABLE IF NOT EXISTS subscription_query_job (
 );
 
 CREATE INDEX IF NOT EXISTS idx_subscription_query_job_ready
-    ON subscription_query_job(status, queued_at, job_id);
+    ON subscription_query_job(status, available_at, job_id);
 
 CREATE INDEX IF NOT EXISTS idx_subscription_query_job_subscription
     ON subscription_query_job(subscription_id, status, queued_at, job_id);
@@ -501,7 +502,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 107
+SELECT 108
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -603,11 +604,11 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         ),
         (
             "subscription_group",
-            "SELECT group_id, paused, uuid FROM subscription_group WHERE 0",
+            "SELECT group_id, uuid FROM subscription_group WHERE 0",
         ),
         (
             "subscription",
-            "SELECT subscription_id, uuid FROM subscription WHERE 0",
+            "SELECT subscription_id, schedule, uuid FROM subscription WHERE 0",
         ),
         (
             "subscription_query",
@@ -639,7 +640,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         ),
         (
             "subscription_query_job",
-            "SELECT job_id, run_id, subscription_id, query_id, site_id, status, job_kind, requested_by, post_id, queued_at, started_at, finished_at, failure_kind, error_message FROM subscription_query_job WHERE 0",
+            "SELECT job_id, run_id, subscription_id, query_id, site_id, status, job_kind, requested_by, post_id, attempt_count, available_at, queued_at, started_at, finished_at, failure_kind, error_message FROM subscription_query_job WHERE 0",
         ),
         (
             "subscription_issue",
@@ -758,7 +759,11 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         (
             "idx_subscription_query_job_ready",
             "subscription_query_job",
-            &[("status", false), ("queued_at", false), ("job_id", false)],
+            &[
+                ("status", false),
+                ("available_at", false),
+                ("job_id", false),
+            ],
         ),
         (
             "idx_subscription_query_job_subscription",

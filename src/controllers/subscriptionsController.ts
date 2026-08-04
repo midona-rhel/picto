@@ -33,8 +33,7 @@ import {
   runSubscription,
   runSubscriptionQuery,
   setCredential,
-  setGroupSchedule,
-  pauseGroup,
+  setSubscriptionSchedule,
   setSubscriptionAutoCollections,
   setSubscriptionGroup,
   stopGroup,
@@ -162,8 +161,8 @@ export const subscriptionsController = {
     return getGroups();
   },
 
-  createGroup(name: string, schedule?: string | null): Promise<SubscriptionGroupInfo> {
-    return createGroup(name, schedule);
+  createGroup(name: string): Promise<SubscriptionGroupInfo> {
+    return createGroup(name);
   },
 
   renameGroup(id: string, name: string): Promise<void> {
@@ -174,12 +173,8 @@ export const subscriptionsController = {
     return deleteGroup(id);
   },
 
-  setGroupSchedule(id: string, schedule: string): Promise<void> {
-    return setGroupSchedule(id, schedule);
-  },
-
-  pauseGroup(id: string, paused: boolean): Promise<void> {
-    return pauseGroup(id, paused);
+  setSchedule(id: string, schedule: string): Promise<void> {
+    return setSubscriptionSchedule(id, schedule);
   },
 
   runGroup(id: string): Promise<void> {

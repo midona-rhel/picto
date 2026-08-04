@@ -118,8 +118,7 @@ const WRITE_COMMANDS: &[&str] = &[
     "create_group",
     "delete_group",
     "rename_group",
-    "set_group_schedule",
-    "pause_group",
+    "set_subscription_schedule",
     "run_group",
     "stop_group",
     "create_subscription",
@@ -357,8 +356,13 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "create_group" => call!(typed::subscriptions::create_group, &state, args),
         "delete_group" => call!(typed::subscriptions::delete_group, &state, args),
         "rename_group" => call!(typed::subscriptions::rename_group, &state, args),
-        "set_group_schedule" => call!(typed::subscriptions::set_group_schedule, &state, args),
-        "pause_group" => call!(typed::subscriptions::pause_group, &state, args),
+        "set_subscription_schedule" => {
+            call!(
+                typed::subscriptions::set_subscription_schedule,
+                &state,
+                args
+            )
+        }
         "run_group" => call!(typed::subscriptions::run_group, &state, args),
         "stop_group" => call!(typed::subscriptions::stop_group, &state, args),
         "get_sites" => call!(typed::subscriptions::get_sites, &state, args),

@@ -37,6 +37,7 @@ export interface SubscriptionQueryInfo {
 export interface SubscriptionInfo {
   id: string;
   name: string;
+  schedule: SubscriptionSchedule | string;
   paused: boolean;
   group_id: string | null;
   initial_post_limit: number;
@@ -47,13 +48,11 @@ export interface SubscriptionInfo {
   queries: SubscriptionQueryInfo[];
 }
 
-export type GroupSchedule = 'manual' | 'daily' | 'weekly' | 'monthly';
+export type SubscriptionSchedule = 'manual' | 'daily' | 'weekly' | 'monthly';
 
 export interface SubscriptionGroupInfo {
   id: string;
   name: string;
-  schedule: GroupSchedule | string;
-  paused: boolean;
   created_at: string;
   total_files: number;
   subscriptions: SubscriptionInfo[];

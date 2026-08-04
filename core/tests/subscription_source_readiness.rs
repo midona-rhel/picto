@@ -315,10 +315,7 @@ async fn run_live_fixture_inner(
     }
 
     let group = runtime
-        .create_group(
-            format!("readiness-{}", fixture.site_id),
-            Some("manual".to_string()),
-        )
+        .create_group(format!("readiness-{}", fixture.site_id))
         .await
         .map_err(|error| ("failed_descriptor", error))?;
     let group_id: i64 = group.id.parse().map_err(|error| {

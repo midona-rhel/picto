@@ -11,7 +11,7 @@
 //! - `create_group` → group_ids
 //! - `delete_group` → group_ids
 //! - `rename_group` → group_ids
-//! - `set_group_schedule` → group_ids
+//! - `set_subscription_schedule` → subscription_ids
 //! - `create_subscription` → subscription_ids
 //! - `delete_subscription` → subscription_ids
 //! - `pause_subscription` → subscription_ids
@@ -100,7 +100,6 @@ pub struct ListSubscriptionCollectionsInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateGroupInput {
     pub name: String,
-    pub schedule: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -118,16 +117,9 @@ pub struct RenameGroupInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetGroupScheduleInput {
+pub struct SetSubscriptionScheduleInput {
     pub id: String,
     pub schedule: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct PauseGroupInput {
-    pub id: String,
-    pub paused: bool,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -323,9 +315,7 @@ pub async fn create_group(
     state: &AppState,
     input: CreateGroupInput,
 ) -> Result<serde_json::Value, String> {
-    let group = runtime_service(state)
-        .create_group(input.name, input.schedule)
-        .await?;
+    let group = runtime_service(state).create_group(input.name).await?;
     let gid: i64 = group.id.parse().unwrap_or(0);
     crate::events::emit_state_changed(
         "create_group",
@@ -371,33 +361,19 @@ pub async fn rename_group(state: &AppState, input: RenameGroupInput) -> Result<(
     Ok(())
 }
 
-pub async fn set_group_schedule(
+pub async fn set_subscription_schedule(
     state: &AppState,
-    input: SetGroupScheduleInput,
+    input: SetSubscriptionScheduleInput,
 ) -> Result<(), String> {
-    let gid: i64 = input.id.parse().unwrap_or(0);
+    let sid: i64 = input.id.parse().unwrap_or(0);
     runtime_service(state)
-        .set_group_schedule(input.id, input.schedule)
+        .set_subscription_schedule(input.id, input.schedule)
         .await?;
     crate::events::emit_state_changed(
-        "set_group_schedule",
+        "set_subscription_schedule",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
-            .group_ids(vec![gid]),
-    );
-    Ok(())
-}
-
-pub async fn pause_group(state: &AppState, input: PauseGroupInput) -> Result<(), String> {
-    let gid: i64 = input.id.parse().unwrap_or(0);
-    runtime_service(state)
-        .set_group_paused(input.id, input.paused)
-        .await?;
-    crate::events::emit_state_changed(
-        "pause_group",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
-            .group_ids(vec![gid]),
+            .subscription_ids(vec![sid]),
     );
     Ok(())
 }
@@ -411,7 +387,6 @@ pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), Str
         &state.blob_store,
         &state.rate_limiter,
         &state.running_subscriptions,
-        &state.sub_terminal_statuses,
         input.id,
         &state.settings,
     )
@@ -580,6 +555,13 @@ pub async fn delete_subscription(
     input: DeleteSubscriptionInput,
 ) -> Result<serde_json::Value, String> {
     let sid: i64 = input.id.parse().unwrap_or(0);
+    crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::stop_subscription(
+        state.engine.db(),
+        &state.library_root,
+        &state.running_subscriptions,
+        input.id.clone(),
+    )
+    .await?;
     let count = runtime_service(state).delete_subscription(input.id).await?;
     crate::events::emit_state_changed(
         "delete_subscription",
@@ -637,7 +619,21 @@ pub async fn delete_subscription_query(
     state: &AppState,
     input: DeleteSubscriptionQueryInput,
 ) -> Result<(), String> {
-    let qid: i64 = input.id.parse().unwrap_or(0);
+    let qid: i64 = input
+        .id
+        .parse()
+        .map_err(|_| format!("Invalid query id: {}", input.id))?;
+    let query = runtime_service(state)
+        .get_subscription_query(qid)
+        .await?
+        .ok_or_else(|| format!("Query {qid} not found"))?;
+    crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::stop_subscription(
+        state.engine.db(),
+        &state.library_root,
+        &state.running_subscriptions,
+        query.subscription_id.to_string(),
+    )
+    .await?;
     runtime_service(state)
         .delete_subscription_query(input.id)
         .await?;
@@ -739,7 +735,6 @@ pub async fn run_subscription(state: &AppState, input: RunSubscriptionInput) -> 
         &state.rate_limiter,
         &state.running_subscriptions,
         input.id,
-        Some(state.sub_terminal_statuses.clone()),
         &state.settings,
     )
     .await?;
@@ -767,9 +762,14 @@ pub async fn reset_subscription(
     input: ResetSubscriptionInput,
 ) -> Result<(), String> {
     let sid: i64 = input.id.parse().unwrap_or(0);
-    runtime_service(state)
-        .reset_subscription_checked(&state.running_subscriptions, input.id)
-        .await?;
+    crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::stop_subscription(
+        state.engine.db(),
+        &state.library_root,
+        &state.running_subscriptions,
+        input.id.clone(),
+    )
+    .await?;
+    runtime_service(state).reset_subscription(input.id).await?;
     crate::events::emit_state_changed(
         "reset_subscription",
         crate::runtime_contract::change_builder::ChangeImpact::new()
@@ -783,9 +783,23 @@ pub async fn reset_subscription_query(
     state: &AppState,
     input: ResetSubscriptionQueryInput,
 ) -> Result<(), String> {
-    let qid: i64 = input.id.parse().unwrap_or(0);
+    let qid: i64 = input
+        .id
+        .parse()
+        .map_err(|_| format!("Invalid query id: {}", input.id))?;
+    let query = runtime_service(state)
+        .get_subscription_query(qid)
+        .await?
+        .ok_or_else(|| format!("Query {qid} not found"))?;
+    crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::stop_subscription(
+        state.engine.db(),
+        &state.library_root,
+        &state.running_subscriptions,
+        query.subscription_id.to_string(),
+    )
+    .await?;
     runtime_service(state)
-        .reset_subscription_query_checked(&state.running_subscriptions, input.id)
+        .reset_subscription_query(input.id)
         .await?;
     crate::events::emit_state_changed(
         "reset_subscription_query",

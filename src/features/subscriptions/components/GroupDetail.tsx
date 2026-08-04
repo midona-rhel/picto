@@ -2,19 +2,10 @@ import { useEffect, useState } from 'react';
 import { IconPlayerPlay, IconPlayerStop, IconTrash, IconX } from '@tabler/icons-react';
 import type { SubscriptionGroupInfo, SubscriptionSiteInfo } from '../../../shared/types/subscriptions';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip/KbdTooltip';
-import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
 import { mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { ActionButton } from './ActionButton';
 import { AddQueryBar } from './AddQueryBar';
 import styles from '../SubscriptionsScreen.module.css';
-
-const SCHEDULE_OPTIONS = [
-  { value: 'manual', label: 'Manual' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
-];
-
 
 export function GroupDetail({
   group,
@@ -23,7 +14,6 @@ export function GroupDetail({
   coverHash = null,
   busy,
   onRename,
-  onSetSchedule,
   onRun,
   onStop,
   onDelete,
@@ -38,7 +28,6 @@ export function GroupDetail({
   coverHash?: string | null;
   busy: boolean;
   onRename: (name: string) => void;
-  onSetSchedule: (schedule: string) => void;
   onRun: () => void;
   onStop: () => void;
   onDelete: () => void;
@@ -93,15 +82,6 @@ export function GroupDetail({
           </div>
           </div>
           <div className={styles.heroActions}>
-            <span className={styles.fieldInline}>
-              Schedule
-              <CmSelect
-                value={group.schedule}
-                options={SCHEDULE_OPTIONS}
-                onChange={onSetSchedule}
-                width={100}
-              />
-            </span>
             {running ? (
               <ActionButton variant="secondary" disabled={busy} onClick={onStop}>
                 <IconPlayerStop size={14} /> Stop all
@@ -132,8 +112,7 @@ export function GroupDetail({
         </div>
         {group.subscriptions.length === 0 ? (
           <div className={styles.sectionEmptyLine}>
-            No sources yet — add a site below. When this runs (or its schedule fires), every
-            source is checked.
+            No sources yet — add a site below. Run all checks every source in this group.
           </div>
         ) : (
           <div className={styles.memberTable}>

@@ -16,7 +16,7 @@ use crate::subscriptions::job_queue::{
 use crate::subscriptions::policy::resolve_query_name;
 use crate::subscriptions::progress::{list_runtime_progress_from_tasks, SubscriptionProgressEvent};
 use crate::subscriptions::runtime_tasks::{publish_cancelling, publish_start};
-use crate::types::{RunningSubscriptions, SubTerminalStatuses};
+use crate::types::RunningSubscriptions;
 
 pub struct SubscriptionRunOrchestrator;
 
@@ -30,38 +30,15 @@ async fn release_guard_and_task(running_subs: &RunningSubscriptions, id: &str) {
     crate::runtime_state::remove_task(&format!("sub:{id}"));
 }
 
-/// When no executor is alive for this subscription (nothing was leased, or the
-/// process that leased it is gone), stop must do the executor's cleanup itself.
-async fn finalize_stopped_subscription(
+async fn settle_stopped_subscription(
     runtime: &crate::subscriptions::runtime_service::SubscriptionRuntimeService<'_>,
-    running_subs: &RunningSubscriptions,
     id: &str,
-    name: &str,
 ) {
     let sub_id = id.parse::<i64>().unwrap_or_default();
     let _ = runtime
         .finalize_open_runs_for_subscription(sub_id, "cancelled", Some("cancelled"), None)
         .await;
-    crate::subscriptions::runtime_tasks::publish_finished(
-        id,
-        name,
-        "subscription",
-        None,
-        None,
-        0,
-        0,
-        0,
-        0,
-        None,
-        "cancelled",
-        "Cancelled",
-        None,
-        None,
-    );
-    crate::subscriptions::runtime_tasks::schedule_progress_snapshot_clear(
-        running_subs.clone(),
-        id.to_string(),
-    );
+    crate::runtime_state::remove_task(&format!("sub:{id}"));
 }
 
 impl SubscriptionRunOrchestrator {
@@ -75,7 +52,9 @@ impl SubscriptionRunOrchestrator {
             db,
             library_root,
         );
-        let sub_id = id.parse::<i64>().unwrap_or_default();
+        let sub_id = id
+            .parse::<i64>()
+            .map_err(|_| format!("Invalid subscription id: {id}"))?;
         let resolved_name = if let Ok(sub_id) = id.parse::<i64>() {
             runtime
                 .get_subscription(sub_id)
@@ -87,55 +66,34 @@ impl SubscriptionRunOrchestrator {
         } else {
             format!("Subscription {id}")
         };
-        let mut map = running_subs.lock().await;
-        match map.remove(&id) {
-            Some(token) => {
-                drop(map);
-                token.cancel();
-                let _ = runtime
-                    .cancel_pending_subscription_jobs_for_subscription(sub_id)
-                    .await;
-                publish_cancelling(&id, &resolved_name);
-                // If nothing is actually executing (jobs were still queued, or
-                // the run row was an orphan), no executor will ever finalize —
-                // do it here so the UI clears without a restart.
-                let active = runtime
-                    .count_active_subscription_query_jobs(sub_id)
-                    .await
-                    .unwrap_or(1);
-                if active == 0 {
-                    finalize_stopped_subscription(&runtime, running_subs, &id, &resolved_name)
-                        .await;
-                }
-                Ok(())
-            }
-            None => {
-                drop(map);
-                // Not running in-memory, but the DB or task registry may hold
-                // stuck state (orphaned rows, leaked Cancelling task). Make
-                // Stop an idempotent reconciler instead of an error so a stuck
-                // card can be cleared in-app.
-                let _ = runtime
-                    .cancel_pending_subscription_jobs_for_subscription(sub_id)
-                    .await;
-                let active = runtime
-                    .count_active_subscription_query_jobs(sub_id)
-                    .await
-                    .unwrap_or(1);
-                if active == 0 {
-                    let _ = runtime
-                        .finalize_open_runs_for_subscription(
-                            sub_id,
-                            "cancelled",
-                            Some("cancelled"),
-                            None,
-                        )
-                        .await;
-                    crate::runtime_state::remove_task(&format!("sub:{id}"));
-                }
-                Ok(())
-            }
+        let token = running_subs.lock().await.get(&id).cloned();
+        let active_before = runtime.count_active_subscription_query_jobs(sub_id).await?;
+        if token.is_none() && active_before == 0 {
+            let _ = runtime
+                .finalize_open_runs_for_subscription(sub_id, "cancelled", Some("cancelled"), None)
+                .await;
+            crate::runtime_state::remove_task(&format!("sub:{id}"));
+            return Ok(());
         }
+        if let Some(token) = token {
+            token.cancel();
+            publish_cancelling(&id, &resolved_name);
+        }
+        runtime
+            .cancel_pending_subscription_jobs_for_subscription(sub_id)
+            .await?;
+
+        for _ in 0..200 {
+            if runtime.count_active_subscription_query_jobs(sub_id).await? == 0 {
+                running_subs.lock().await.remove(&id);
+                settle_stopped_subscription(&runtime, &id).await;
+                return Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        Err(format!(
+            "Timed out waiting for subscription {sub_id} to stop"
+        ))
     }
 
     pub async fn get_running_subscriptions(
@@ -177,9 +135,53 @@ impl SubscriptionRunOrchestrator {
         rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
         id: String,
-        sub_terminal_statuses: Option<SubTerminalStatuses>,
         settings: &SettingsStore,
-    ) -> Result<(), String> {
+    ) -> Result<i64, String> {
+        Self::run_subscription_requested_by(
+            db,
+            library_root,
+            blob_store,
+            rate_limiter,
+            running_subs,
+            id,
+            settings,
+            "manual",
+        )
+        .await
+    }
+
+    pub async fn run_scheduled_subscription(
+        db: &Arc<LibraryDatabase>,
+        library_root: &std::path::Path,
+        blob_store: &Arc<BlobStore>,
+        rate_limiter: &RateLimiter,
+        running_subs: &RunningSubscriptions,
+        id: String,
+        settings: &SettingsStore,
+    ) -> Result<i64, String> {
+        Self::run_subscription_requested_by(
+            db,
+            library_root,
+            blob_store,
+            rate_limiter,
+            running_subs,
+            id,
+            settings,
+            "scheduled",
+        )
+        .await
+    }
+
+    async fn run_subscription_requested_by(
+        db: &Arc<LibraryDatabase>,
+        library_root: &std::path::Path,
+        blob_store: &Arc<BlobStore>,
+        rate_limiter: &RateLimiter,
+        running_subs: &RunningSubscriptions,
+        id: String,
+        settings: &SettingsStore,
+        requested_by: &str,
+    ) -> Result<i64, String> {
         let sub_id: i64 = id
             .parse()
             .map_err(|_| format!("Invalid subscription id: {}", id))?;
@@ -198,10 +200,16 @@ impl SubscriptionRunOrchestrator {
             return Err(format!("Subscription {} is paused", id));
         }
 
-        if bundle.queries.is_empty() {
-            return Err("Subscription has no queries".to_string());
+        let enabled_queries = bundle
+            .queries
+            .iter()
+            .filter(|query| !query.paused)
+            .cloned()
+            .collect::<Vec<_>>();
+        if enabled_queries.is_empty() {
+            return Err("Subscription has no enabled queries".to_string());
         }
-        for query in &bundle.queries {
+        for query in &enabled_queries {
             if query.site_id.is_empty() {
                 return Err(format!("Query {} has no site configured", query.query_id));
             }
@@ -210,20 +218,22 @@ impl SubscriptionRunOrchestrator {
             }
         }
 
-        check_credential_preflight(db, sub_id, &bundle.queries).await?;
+        check_credential_preflight(db, sub_id, &enabled_queries).await?;
 
         let _cancel = activate_subscription_guard(running_subs, &id).await?;
 
         publish_start(&id, &sub.name, "subscription", None, None);
-        if let Err(error) = enqueue_subscription_bundle(&runtime, &bundle, "subscription").await {
-            release_guard_and_task(running_subs, &id).await;
-            return Err(error);
-        }
-        let _ = sub_terminal_statuses;
+        let run_id = match enqueue_subscription_bundle(&runtime, &bundle, requested_by).await {
+            Ok(run_id) => run_id,
+            Err(error) => {
+                release_guard_and_task(running_subs, &id).await;
+                return Err(error);
+            }
+        };
         let _ = blob_store;
         let _ = rate_limiter;
         let _ = settings;
-        Ok(())
+        Ok(run_id)
     }
 
     pub async fn run_subscription_query(
@@ -259,6 +269,9 @@ impl SubscriptionRunOrchestrator {
             query.display_name.as_deref(),
         );
 
+        if sub.paused {
+            return Err(format!("Subscription {} is paused", subscription_id));
+        }
         if query.paused {
             return Err(format!("Query {} is paused", query_id));
         }
@@ -319,6 +332,9 @@ impl SubscriptionRunOrchestrator {
             .get_subscription(sub_id)
             .await?
             .ok_or_else(|| format!("Subscription {} not found", subscription_id))?;
+        if sub.paused {
+            return Err(format!("Subscription {} is paused", subscription_id));
+        }
         let query = runtime
             .get_subscription_query(qid)
             .await?

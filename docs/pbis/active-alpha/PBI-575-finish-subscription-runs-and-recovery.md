@@ -45,23 +45,20 @@ library later; do not distort the current gallery-dl boundary to anticipate it.
 Already working and retained:
 
 - persistent definitions, runs, query runs, jobs, download attempts, and progress
-- durable query job leasing and startup reconciliation
+- durable query job leasing and restart continuation
 - subscription downloads through the canonical ingest queue
 - exact-hash duplicate reuse
-- stop and reset commands exist
+- atomic stop, reset, and definition-only delete behavior
 - indexed lookup of unresolved retry attempts across all history
 - rebuilt subscription workspace with Health and History views
 
 Release gaps:
 
-- Health displays issues but cannot consistently expose the correct recovery action
 - non-collection runs under-report downloaded files
 - ingest progress is subscription-wide instead of run-scoped and disappears before queued ingest settles
 - pending collection flushing assumes post assets are contiguous and can strand interleaved posts
 - parsed rating metadata is not carried through canonical ingest
 - the source picker advertises sites without source-specific metadata validation or live proof
-- application shutdown does not clearly await detached subscription executors
-- recurring schedules are currently stored and executed on groups instead of subscriptions
 - Python and Rust both participate in metadata normalization instead of having one clear owner
 - removed source ids remain in active bridge, adapter, policy, or autocomplete code
 - the real create/run/fail/retry/import flow has not been proved in Electron
@@ -145,7 +142,16 @@ Implementation checkpoint:
   through it one boundary at a time.
 - Remove old message-based classification only after all call sites use the typed path.
 
-### S3. Durable recovery semantics
+### S3. Durable recovery semantics (implemented; live gate pending)
+
+The database is the runtime authority: a full run owns enabled query jobs, the existing job queue
+owns bounded transient retry timing, and query-only work has no full-run identity. Memory owns only
+cancellation handles and live event projection. Groups own neither schedules nor pause state.
+
+Automated proof covers schedule ownership, query-only runs, same-run restart recovery, bounded
+backoff persistence, run-scoped multi-query finalization, idempotent Stop, group deletion, and media
+retention across reset/delete. Before marking S3 complete, verify a live Stop, quit/reopen during a
+run, and one transient automatic retry in Electron using a fresh schema-108 test library.
 
 Make the stored recovery action truthful:
 

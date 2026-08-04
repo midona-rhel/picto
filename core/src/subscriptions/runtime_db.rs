@@ -53,11 +53,13 @@ fn map_subscription_query_job_row(row: &rusqlite::Row) -> rusqlite::Result<Subsc
         job_kind: row.get(6)?,
         requested_by: row.get(7)?,
         post_id: row.get(8)?,
-        queued_at: row.get(9)?,
-        started_at: row.get(10)?,
-        finished_at: row.get(11)?,
-        failure_kind: row.get(12)?,
-        error_message: row.get(13)?,
+        attempt_count: row.get(9)?,
+        available_at: row.get(10)?,
+        queued_at: row.get(11)?,
+        started_at: row.get(12)?,
+        finished_at: row.get(13)?,
+        failure_kind: row.get(14)?,
+        error_message: row.get(15)?,
     })
 }
 
@@ -125,20 +127,19 @@ fn map_subscription_post_member_row(
 
 #[derive(Debug, Default)]
 pub struct SubscriptionReconcileReport {
-    pub jobs_cancelled: usize,
-    pub runs_finalized: usize,
+    pub jobs_requeued: usize,
+    pub orphan_runs_finalized: usize,
     pub query_runs_finalized: usize,
     pub health_rows_repaired: usize,
     pub query_kinds_repaired: usize,
 }
 
-/// Reset subscription runtime rows orphaned by an app quit/crash mid-run.
+/// Restore durable subscription work after an app quit/crash mid-run.
 ///
 /// Safe only at library open, before the site-runner worker starts: any
-/// 'queued'/'running' job at that point belonged to a previous process whose
-/// in-memory cancel tokens and guards are gone, so it can never complete.
-/// Cancelling 'queued' jobs forfeits resume-across-restart by design — a
-/// scheduled or manual re-run re-enqueues fresh work.
+/// A leased job returns to the queue and keeps its original full-run identity.
+/// Execution history records the interruption, but queued jobs and runs remain
+/// active so the normal worker can finish them after startup.
 pub fn reconcile_stale_subscription_runtime(
     conn: &Connection,
 ) -> rusqlite::Result<SubscriptionReconcileReport> {
@@ -147,20 +148,24 @@ pub fn reconcile_stale_subscription_runtime(
     let interrupted = "Interrupted — the app was closed while this run was active";
     let mut report = SubscriptionReconcileReport::default();
 
-    report.jobs_cancelled = conn.execute(
+    report.jobs_requeued = conn.execute(
         "UPDATE subscription_query_job
-         SET status = 'cancelled', finished_at = ?1,
-             failure_kind = COALESCE(failure_kind, ?2),
-             error_message = COALESCE(error_message, ?3)
-         WHERE status IN ('queued', 'running')",
-        params![now, stale, interrupted],
+         SET status = 'queued', started_at = NULL, finished_at = NULL,
+             failure_kind = NULL, error_message = NULL, available_at = ?1
+         WHERE status = 'running'",
+        [&now],
     )?;
-    report.runs_finalized = conn.execute(
+    report.orphan_runs_finalized = conn.execute(
         "UPDATE subscription_run
          SET status = 'cancelled', finished_at = ?1,
              failure_kind = COALESCE(failure_kind, ?2),
              error_message = COALESCE(error_message, ?3)
-         WHERE status = 'running'",
+         WHERE status = 'running'
+           AND NOT EXISTS (
+               SELECT 1 FROM subscription_query_job j
+               WHERE j.run_id = subscription_run.run_id
+                 AND j.status IN ('queued', 'running')
+           )",
         params![now, stale, interrupted],
     )?;
     report.query_runs_finalized = conn.execute(
@@ -259,6 +264,62 @@ pub fn finalize_subscription_run_status(
         params![now, status, failure_kind, error_message, run_id],
     )?;
     Ok(())
+}
+
+/// Settle one full subscription run once all jobs belonging to that run are
+/// terminal. This never inspects or mutates another run for the subscription.
+pub fn finalize_subscription_run_if_terminal(
+    conn: &Connection,
+    run_id: i64,
+) -> rusqlite::Result<Option<SubscriptionRunRecord>> {
+    let active_jobs: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM subscription_query_job
+         WHERE run_id = ?1 AND status IN ('queued', 'running')",
+        [run_id],
+        |row| row.get(0),
+    )?;
+    if active_jobs > 0 {
+        return Ok(None);
+    }
+
+    let failure: Option<(String, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT status, failure_kind, error_message
+             FROM subscription_query_job
+             WHERE run_id = ?1 AND status IN ('failed', 'cancelled')
+             ORDER BY CASE status WHEN 'failed' THEN 0 ELSE 1 END, job_id DESC
+             LIMIT 1",
+            [run_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()?;
+    let (status, failure_kind, error_message) = match failure {
+        Some((job_status, failure_kind, error_message)) => {
+            let status = if job_status == "failed" {
+                "failed"
+            } else {
+                "cancelled"
+            };
+            (status, failure_kind, error_message)
+        }
+        None => ("succeeded", None, None),
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE subscription_run
+         SET finished_at = ?1, status = ?2, failure_kind = ?3, error_message = ?4
+         WHERE run_id = ?5 AND status = 'running'",
+        params![now, status, failure_kind, error_message, run_id],
+    )?;
+    conn.query_row(
+        "SELECT run_id, subscription_id, started_at, finished_at, status,
+                failure_kind, error_message, files_downloaded, files_skipped,
+                metadata_validated, metadata_invalid
+         FROM subscription_run WHERE run_id = ?1",
+        [run_id],
+        map_subscription_run_row,
+    )
+    .optional()
 }
 
 pub fn accumulate_subscription_run_counters(
@@ -407,8 +468,9 @@ pub fn enqueue_subscription_query_job(
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO subscription_query_job (
-             run_id, subscription_id, query_id, site_id, status, job_kind, requested_by, post_id, queued_at
-         ) VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, ?7, ?8)",
+             run_id, subscription_id, query_id, site_id, status, job_kind, requested_by,
+             post_id, available_at, queued_at
+         ) VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, ?7, ?8, ?8)",
         params![
             run_id,
             subscription_id,
@@ -449,13 +511,15 @@ pub fn list_queued_subscription_query_jobs(
 ) -> rusqlite::Result<Vec<SubscriptionQueryJob>> {
     let mut stmt = conn.prepare_cached(
         "SELECT job_id, run_id, subscription_id, query_id, site_id, status, job_kind,
-                requested_by, post_id, queued_at, started_at, finished_at, failure_kind, error_message
+                requested_by, post_id, attempt_count, available_at, queued_at, started_at,
+                finished_at, failure_kind, error_message
          FROM subscription_query_job
-         WHERE status = 'queued'
-         ORDER BY queued_at ASC, job_id ASC
-         LIMIT ?1",
+         WHERE status = 'queued' AND available_at <= ?1
+         ORDER BY available_at ASC, job_id ASC
+         LIMIT ?2",
     )?;
-    let rows = stmt.query_map([limit], map_subscription_query_job_row)?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let rows = stmt.query_map(params![now, limit], map_subscription_query_job_row)?;
     rows.collect()
 }
 
@@ -465,7 +529,8 @@ pub fn list_subscription_query_jobs_for_run(
 ) -> rusqlite::Result<Vec<SubscriptionQueryJob>> {
     let mut stmt = conn.prepare_cached(
         "SELECT job_id, run_id, subscription_id, query_id, site_id, status, job_kind,
-                requested_by, post_id, queued_at, started_at, finished_at, failure_kind, error_message
+                requested_by, post_id, attempt_count, available_at, queued_at, started_at,
+                finished_at, failure_kind, error_message
          FROM subscription_query_job
          WHERE run_id = ?1
          ORDER BY job_id ASC",
@@ -490,7 +555,8 @@ pub fn lease_subscription_query_job(
     }
     conn.query_row(
         "SELECT job_id, run_id, subscription_id, query_id, site_id, status, job_kind,
-                requested_by, post_id, queued_at, started_at, finished_at, failure_kind, error_message
+                requested_by, post_id, attempt_count, available_at, queued_at, started_at,
+                finished_at, failure_kind, error_message
          FROM subscription_query_job
          WHERE job_id = ?1",
         [job_id],
@@ -515,6 +581,61 @@ pub fn finish_subscription_query_job(
              error_message = ?4
          WHERE job_id = ?5",
         params![status, now, failure_kind, error_message, job_id],
+    )?;
+    Ok(())
+}
+
+pub fn reschedule_subscription_query_job(
+    conn: &Connection,
+    job_id: i64,
+    available_at: &str,
+    failure_kind: &str,
+    error_message: Option<&str>,
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
+        "UPDATE subscription_query_job
+         SET status = 'queued', attempt_count = attempt_count + 1,
+             available_at = ?1, started_at = NULL, finished_at = NULL,
+             failure_kind = ?2, error_message = ?3
+         WHERE job_id = ?4 AND status = 'running'",
+        params![available_at, failure_kind, error_message, job_id],
+    )?;
+    Ok(changed == 1)
+}
+
+pub fn requeue_interrupted_subscription_query_job(
+    conn: &Connection,
+    job_id: i64,
+) -> rusqlite::Result<bool> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let changed = conn.execute(
+        "UPDATE subscription_query_job
+         SET status = 'queued', available_at = ?1, started_at = NULL,
+             finished_at = NULL, failure_kind = NULL, error_message = NULL
+         WHERE job_id = ?2 AND status = 'running'",
+        params![now, job_id],
+    )?;
+    Ok(changed == 1)
+}
+
+pub fn set_subscription_issue_next_retry(
+    conn: &Connection,
+    subscription_id: i64,
+    query_id: i64,
+    failure_kind: FailureKind,
+    next_retry_at: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE subscription_issue
+         SET next_retry_at = ?1
+         WHERE subscription_id = ?2 AND query_id = ?3
+           AND issue_kind = ?4 AND status = 'open'",
+        params![
+            next_retry_at,
+            subscription_id,
+            query_id,
+            failure_kind.issue_kind()
+        ],
     )?;
     Ok(())
 }
@@ -584,6 +705,10 @@ pub fn reset_subscription_query_state(
         [query_id],
     )?;
 
+    conn.execute(
+        "DELETE FROM subscription_query_job WHERE query_id = ?1",
+        [query_id],
+    )?;
     let query_runs_deleted = conn.execute(
         "DELETE FROM subscription_query_run WHERE query_id = ?1",
         [query_id],
@@ -631,6 +756,34 @@ pub fn reset_subscription_state(
         [subscription_id],
     )?;
 
+    conn.execute(
+        "DELETE FROM ingest_queue WHERE subscription_id = ?1",
+        [subscription_id],
+    )?;
+    conn.execute(
+        "DELETE FROM subscription_query_job WHERE subscription_id = ?1",
+        [subscription_id],
+    )?;
+    conn.execute(
+        "DELETE FROM subscription_query_run WHERE subscription_id = ?1",
+        [subscription_id],
+    )?;
+    conn.execute(
+        "DELETE FROM subscription_run WHERE subscription_id = ?1",
+        [subscription_id],
+    )?;
+    conn.execute(
+        "DELETE FROM subscription_issue WHERE subscription_id = ?1",
+        [subscription_id],
+    )?;
+    conn.execute(
+        "DELETE FROM subscription_download_attempt WHERE subscription_id = ?1",
+        [subscription_id],
+    )?;
+    conn.execute(
+        "DELETE FROM subscription_post_member WHERE subscription_id = ?1",
+        [subscription_id],
+    )?;
     let entities_deleted = conn.execute(
         "DELETE FROM subscription_entity WHERE subscription_id = ?1",
         [subscription_id],

@@ -113,8 +113,8 @@ export function ModalLayer() {
       <CreateGroupModal
         open={createGroup.open}
         onClose={() => setCreateGroup({ open: false })}
-        onCreate={(name, schedule) => {
-          void subscriptionsController.createGroup(name, schedule);
+        onCreate={(name) => {
+          void subscriptionsController.createGroup(name);
           setCreateGroup({ open: false });
         }}
       />

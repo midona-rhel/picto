@@ -409,8 +409,6 @@ pub struct SmartMergeResult {
 pub struct SubscriptionGroupInfo {
     pub id: String,
     pub name: String,
-    pub schedule: String,
-    pub paused: bool,
     pub created_at: String,
     pub total_files: u64,
     pub subscriptions: Vec<SubscriptionInfo>,
@@ -420,6 +418,7 @@ pub struct SubscriptionGroupInfo {
 pub struct SubscriptionInfo {
     pub id: String,
     pub name: String,
+    pub schedule: String,
     pub paused: bool,
     pub group_id: Option<String>,
     pub initial_post_limit: u32,
@@ -454,7 +453,3 @@ pub struct SubscriptionQueryInfo {
 /// Running subscriptions tracker. Key = subscription ID string.
 pub type RunningSubscriptions =
     std::sync::Arc<tokio::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>;
-
-/// Terminal status map for finished subscriptions. Key = subscription ID, Value = terminal status string.
-/// Written by subscription tasks on exit, read by group monitor to aggregate final group status.
-pub type SubTerminalStatuses = std::sync::Arc<tokio::sync::Mutex<HashMap<String, String>>>;

@@ -29,6 +29,18 @@ pub async fn current_subscription_token(
     map.get(subscription_id).cloned()
 }
 
+/// Restore the transient cancellation handle for durable work claimed after a
+/// restart. The database owns whether work exists; this map only delivers Stop.
+pub async fn ensure_subscription_guard(
+    running_subs: &RunningSubscriptions,
+    subscription_id: i64,
+) -> CancellationToken {
+    let mut map = running_subs.lock().await;
+    map.entry(subscription_id.to_string())
+        .or_insert_with(CancellationToken::new)
+        .clone()
+}
+
 pub async fn clear_subscription_guard_if_idle(
     runtime: &SubscriptionRuntimeService<'_>,
     running_subs: &RunningSubscriptions,
@@ -99,13 +111,10 @@ pub async fn enqueue_single_query(
     runtime: &SubscriptionRuntimeService<'_>,
     runnable: &RunnableQuery,
     requested_by: &str,
-) -> Result<i64, String> {
-    let run_id = runtime
-        .create_subscription_run(runnable.subscription.subscription_id)
-        .await?;
+) -> Result<(), String> {
     let (_job_id, created) = runtime
         .enqueue_subscription_query_job(
-            Some(run_id),
+            None,
             runnable.subscription.subscription_id,
             runnable.query.query_id,
             &runnable.query.site_id,
@@ -115,9 +124,9 @@ pub async fn enqueue_single_query(
         )
         .await?;
     if !created {
-        return finalize_empty_run(runtime, run_id).await;
+        return Err("This query already has an active job".to_string());
     }
-    Ok(run_id)
+    Ok(())
 }
 
 pub async fn enqueue_retry_job(
@@ -126,11 +135,10 @@ pub async fn enqueue_retry_job(
     query_id: i64,
     site_id: &str,
     post_id: &str,
-) -> Result<i64, String> {
-    let run_id = runtime.create_subscription_run(subscription_id).await?;
+) -> Result<(), String> {
     let (_job_id, created) = runtime
         .enqueue_subscription_query_job(
-            Some(run_id),
+            None,
             subscription_id,
             query_id,
             site_id,
@@ -140,7 +148,7 @@ pub async fn enqueue_retry_job(
         )
         .await?;
     if !created {
-        return finalize_empty_run(runtime, run_id).await;
+        return Err("This post already has an active retry job".to_string());
     }
-    Ok(run_id)
+    Ok(())
 }

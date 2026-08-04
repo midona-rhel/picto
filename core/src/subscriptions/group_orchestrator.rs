@@ -11,7 +11,7 @@ use crate::subscriptions::runtime_tasks::{
     publish_cancelling, publish_group_failed, publish_group_finished, publish_group_progress,
     publish_group_start,
 };
-use crate::types::{RunningSubscriptions, SubTerminalStatuses};
+use crate::types::RunningSubscriptions;
 
 pub struct SubscriptionGroupOrchestrator;
 
@@ -22,7 +22,6 @@ impl SubscriptionGroupOrchestrator {
         blob_store: &Arc<BlobStore>,
         rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
-        sub_terminal_statuses: &SubTerminalStatuses,
         id: String,
         settings: &SettingsStore,
     ) -> Result<(), String> {
@@ -34,24 +33,16 @@ impl SubscriptionGroupOrchestrator {
             db.as_ref(),
             library_root,
         );
-        if runtime.is_group_paused(group_id).await? {
-            return Err(format!("Group {group_id} is paused"));
-        }
         let subs = runtime.list_subscriptions_for_group(group_id).await?;
         if subs.is_empty() {
             return Err("Group has no subscriptions".to_string());
-        }
-
-        {
-            let mut statuses = sub_terminal_statuses.lock().await;
-            statuses.clear();
         }
 
         publish_group_start(&id);
 
         let mut started = 0u32;
         let mut last_err = String::new();
-        let mut started_sub_ids = Vec::new();
+        let mut started_runs = Vec::new();
 
         for sub in subs {
             if sub.paused {
@@ -71,14 +62,13 @@ impl SubscriptionGroupOrchestrator {
                 rate_limiter,
                 running_subs,
                 sub_id_str.clone(),
-                Some(sub_terminal_statuses.clone()),
                 settings,
             )
             .await
             {
-                Ok(()) => {
+                Ok(run_id) => {
                     started += 1;
-                    started_sub_ids.push(sub_id_str);
+                    started_runs.push((sub_id_str, run_id));
                 }
                 Err(e) => {
                     tracing::warn!(
@@ -103,16 +93,17 @@ impl SubscriptionGroupOrchestrator {
         let group_id_str = id.clone();
         let group_id_guard = id.clone();
         let running_subs_clone = running_subs.clone();
-        let terminal_statuses_clone = sub_terminal_statuses.clone();
+        let monitor_db = db.clone();
+        let monitor_root = library_root.to_path_buf();
 
         tokio::spawn(async move {
             let inner = tokio::spawn(async move {
                 loop {
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                     let map = running_subs_clone.lock().await;
-                    let still_running_count = started_sub_ids
+                    let still_running_count = started_runs
                         .iter()
-                        .filter(|sub_id| map.contains_key(*sub_id))
+                        .filter(|(sub_id, _)| map.contains_key(sub_id))
                         .count();
                     if still_running_count == 0 {
                         break;
@@ -123,13 +114,24 @@ impl SubscriptionGroupOrchestrator {
                     publish_group_progress(&group_id_str, done as u64, started as u64);
                 }
 
-                let statuses = terminal_statuses_clone.lock().await;
-                let has_failed = started_sub_ids.iter().any(|sub_id| {
-                    statuses
-                        .get(sub_id)
-                        .map(|status| status == "failed")
-                        .unwrap_or(false)
-                });
+                let runtime =
+                    crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+                        monitor_db.as_ref(),
+                        &monitor_root,
+                    );
+                let mut has_failed = false;
+                for (subscription_id, run_id) in &started_runs {
+                    let Ok(subscription_id) = subscription_id.parse::<i64>() else {
+                        continue;
+                    };
+                    let failed = runtime
+                        .list_subscription_runs(subscription_id, 20)
+                        .await
+                        .unwrap_or_default()
+                        .into_iter()
+                        .any(|run| run.run_id == *run_id && run.status == "failed");
+                    has_failed |= failed;
+                }
                 publish_group_finished(&group_id_str, has_failed, started as u64, started as u64);
             });
 

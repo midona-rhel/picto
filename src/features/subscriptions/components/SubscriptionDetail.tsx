@@ -24,6 +24,7 @@ import {
 } from '../../../state/subscriptionsWorkspace';
 import type { SubscriptionWorkspaceSnapshot } from '../../../shared/types/subscriptionsWorkspace';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
+import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
 import { ActionButton } from './ActionButton';
 import { AddQueryBar } from './AddQueryBar';
 import { HealthTab } from './HealthTab';
@@ -50,6 +51,7 @@ export interface DetailController {
   delete: (id: string) => void;
   rename: (id: string, currentName: string) => void;
   setAutoCollections: (id: string, on: boolean) => void;
+  setSchedule: (id: string, schedule: string) => void;
   setGroup: (id: string, groupId: number | null) => void;
   runQuery: (subscriptionId: string, queryId: string) => void;
   stopQuery: (subscriptionId: string, queryId: string) => void;
@@ -60,6 +62,13 @@ export interface DetailController {
   retryFailedPosts: (posts: FailedPostGroup[]) => void;
   openExternalUrl: (url: string) => void;
 }
+
+const SCHEDULE_OPTIONS = [
+  { value: 'manual', label: 'Manual' },
+  { value: 'daily', label: 'Daily' },
+  { value: 'weekly', label: 'Weekly' },
+  { value: 'monthly', label: 'Monthly' },
+];
 
 /** "⋮" trigger for the shared subscription context menu, anchored below the button. */
 function OverflowMenuButton({ onOpen }: { onOpen: (position: { x: number; y: number }) => void }) {
@@ -299,6 +308,15 @@ export function SubscriptionDetail({
           </div>
           </div>
           <div className={styles.heroActions}>
+            <span className={styles.fieldInline}>
+              Schedule
+              <CmSelect
+                value={subscription.schedule}
+                options={SCHEDULE_OPTIONS}
+                onChange={(schedule) => controller.setSchedule(subscription.id, schedule)}
+                width={100}
+              />
+            </span>
             {running ? (
               <ActionButton variant="secondary" disabled={busy} onClick={() => controller.stop(subscription.id)}>
                 <IconPlayerStop size={14} /> Stop

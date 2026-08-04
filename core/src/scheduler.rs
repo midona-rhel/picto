@@ -1,6 +1,6 @@
-//! Background scheduler — checks for overdue subscription groups.
+//! Background scheduler for subscription-owned recurring schedules.
 //!
-//! Called by the group_scheduler worker spawned in `workers.rs`.
+//! Called by the subscription scheduler worker spawned in `workers.rs`.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,7 +11,7 @@ use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
-use crate::types::{RunningSubscriptions, SubTerminalStatuses};
+use crate::types::RunningSubscriptions;
 
 const SCHEDULER_WARN_WINDOW: Duration = Duration::from_secs(300);
 
@@ -68,102 +68,115 @@ fn warn_scheduler_failure(kind: &'static str, message: String) {
     }
 }
 
-/// Check all subscription groups for overdue scheduled runs and trigger them.
-pub async fn check_scheduled_groups(
+fn schedule_interval_seconds(schedule: &str) -> Option<i64> {
+    match schedule {
+        "daily" => Some(86_400),
+        "weekly" => Some(604_800),
+        "monthly" => Some(2_592_000),
+        _ => None,
+    }
+}
+
+fn is_due(
+    schedule: &str,
+    last_full_run_at: Option<&str>,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let Some(interval_secs) = schedule_interval_seconds(schedule) else {
+        return false;
+    };
+    let Some(last_run) = last_full_run_at else {
+        return true;
+    };
+    let Ok(last_run) = chrono::DateTime::parse_from_rfc3339(last_run) else {
+        return true;
+    };
+    (now - last_run.with_timezone(&chrono::Utc)).num_seconds() >= interval_secs
+}
+
+/// Trigger each overdue subscription through the normal full-run path.
+pub async fn check_scheduled_subscriptions(
     db: &Arc<LibraryDatabase>,
     library_root: &std::path::Path,
     blob_store: &Arc<BlobStore>,
     rate_limiter: &RateLimiter,
     running_subs: &RunningSubscriptions,
-    sub_terminal_statuses: &SubTerminalStatuses,
     settings: &SettingsStore,
 ) {
     let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
         db.as_ref(),
         library_root,
     );
-    let groups = match runtime.get_groups().await {
+    let subscriptions = match runtime.list_scheduled_subscriptions().await {
         Ok(f) => f,
         Err(e) => {
             warn_scheduler_failure(
-                "list_groups",
-                format!("Scheduler: failed to list groups: {e}"),
+                "list_subscriptions",
+                format!("Scheduler: failed to list scheduled subscriptions: {e}"),
             );
             return;
         }
     };
 
-    for group in groups {
-        if group.paused || group.schedule == "manual" {
-            continue;
-        }
-
-        let interval_secs: i64 = match group.schedule.as_str() {
-            "daily" => 86_400,
-            "weekly" => 604_800,
-            "monthly" => 2_592_000, // 30 days
-            _ => continue,
-        };
-
-        let subs = group.subscriptions;
-
-        if subs.is_empty() {
-            continue;
-        }
-
-        let mut latest_check: Option<chrono::DateTime<chrono::Utc>> = None;
-        let mut has_any_queries = false;
-        for sub in &subs {
-            for q in &sub.queries {
-                has_any_queries = true;
-                if let Some(ref t) = q.last_check_time {
-                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t) {
-                        let utc = dt.with_timezone(&chrono::Utc);
-                        latest_check = Some(
-                            latest_check
-                                .map_or(utc, |prev: chrono::DateTime<chrono::Utc>| prev.max(utc)),
-                        );
-                    }
-                }
-            }
-        }
-
-        if !has_any_queries {
-            continue;
-        }
-
-        let now = chrono::Utc::now();
-        let is_overdue = match latest_check {
-            None => true, // Never ran
-            Some(last) => (now - last).num_seconds() >= interval_secs,
-        };
-
-        if is_overdue {
-            let group_id_str = group.id.clone();
+    let now = chrono::Utc::now();
+    for subscription in subscriptions {
+        if is_due(
+            &subscription.schedule,
+            subscription.last_full_run_at.as_deref(),
+            now,
+        ) {
+            let subscription_id = subscription.subscription_id.to_string();
             tracing::info!(
-                group_id = %group.id,
-                name = %group.name,
-                schedule = %group.schedule,
-                "Scheduler: running overdue group"
+                subscription_id = subscription.subscription_id,
+                name = %subscription.name,
+                schedule = %subscription.schedule,
+                "Scheduler: running overdue subscription"
             );
-            if let Err(e) =
-                crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::run_group(
+            if let Err(e) = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::run_scheduled_subscription(
                     db,
                     library_root,
                     blob_store,
                     rate_limiter,
                     running_subs,
-                    sub_terminal_statuses,
-                    group_id_str,
+                    subscription_id,
                     settings,
                 )
                 .await
             {
                 warn_scheduler_failure(
-                    "run_group",
-                    format!("Scheduler: failed to start group {}: {}", group.id, e),
+                    "run_subscription",
+                    format!(
+                        "Scheduler: failed to start subscription {}: {}",
+                        subscription.subscription_id, e
+                    ),
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_due;
+    use chrono::{TimeZone, Utc};
+
+    #[test]
+    fn only_recurring_schedules_become_due() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 5, 12, 0, 0).unwrap();
+        assert!(!is_due("manual", None, now));
+        assert!(is_due("daily", None, now));
+        assert!(is_due("weekly", None, now));
+        assert!(is_due("monthly", None, now));
+    }
+
+    #[test]
+    fn schedule_intervals_use_the_latest_full_run() {
+        let now = Utc.with_ymd_and_hms(2026, 8, 5, 12, 0, 0).unwrap();
+        assert!(!is_due("daily", Some("2026-08-05T11:59:59Z"), now));
+        assert!(is_due("daily", Some("2026-08-04T12:00:00Z"), now));
+        assert!(!is_due("weekly", Some("2026-07-30T12:00:01Z"), now));
+        assert!(is_due("weekly", Some("2026-07-29T12:00:00Z"), now));
+        assert!(!is_due("monthly", Some("2026-07-06T12:00:01Z"), now));
+        assert!(is_due("monthly", Some("2026-07-06T12:00:00Z"), now));
     }
 }

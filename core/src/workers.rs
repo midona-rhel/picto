@@ -1,7 +1,7 @@
 //! Background worker lifecycle — spawning and shutdown.
 //!
 //! `start_workers()` spawns all library-scoped background tasks
-//! (compiler loop, bitmap flush, group scheduler).
+//! (compiler loop, bitmap flush, subscription scheduler).
 //!
 //! `stop_workers()` joins all handles with a timeout for clean shutdown.
 
@@ -13,7 +13,7 @@ use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
 use crate::folders::watch::FolderWatchCommand;
 use crate::rate_limiter::RateLimiter;
-use crate::types::{RunningSubscriptions, SubTerminalStatuses};
+use crate::types::RunningSubscriptions;
 
 /// Shutdown timeout for joining background workers.
 const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
@@ -28,27 +28,25 @@ pub async fn start_workers(
     blob_store: &Arc<BlobStore>,
     rate_limiter: &RateLimiter,
     running_subscriptions: &RunningSubscriptions,
-    sub_terminal_statuses: &SubTerminalStatuses,
     folder_watch_rx: tokio::sync::mpsc::UnboundedReceiver<FolderWatchCommand>,
     cancel: &CancellationToken,
 ) -> Vec<(&'static str, tokio::task::JoinHandle<()>)> {
     let mut handles: Vec<(&'static str, tokio::task::JoinHandle<()>)> = Vec::new();
 
-    // ── Group scheduler ────────────────────────────────
+    // ── Subscription scheduler ─────────────────────────
     {
         let sched_db = canonical_db.clone();
         let sched_root = library_root.to_path_buf();
         let sched_blob = blob_store.clone();
         let sched_rl = rate_limiter.clone();
         let sched_running = running_subscriptions.clone();
-        let sched_terminal = sub_terminal_statuses.clone();
         let sched_cancel = cancel.clone();
         let handle = tokio::spawn(async move {
             // Startup delay — let the app settle before checking schedules
             tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
                 _ = sched_cancel.cancelled() => {
-                    tracing::info!("Group scheduler cancelled during startup delay");
+                    tracing::info!("Subscription scheduler cancelled during startup delay");
                     return;
                 }
             }
@@ -57,25 +55,24 @@ pub async fn start_workers(
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
                     _ = sched_cancel.cancelled() => {
-                        tracing::info!("Group scheduler cancelled");
+                        tracing::info!("Subscription scheduler cancelled");
                         return;
                     }
                 }
                 if let Ok(state) = crate::state::get_state() {
-                    crate::scheduler::check_scheduled_groups(
+                    crate::scheduler::check_scheduled_subscriptions(
                         &sched_db,
                         &sched_root,
                         &sched_blob,
                         &sched_rl,
                         &sched_running,
-                        &sched_terminal,
                         &state.settings,
                     )
                     .await;
                 }
             }
         });
-        handles.push(("group_scheduler", handle));
+        handles.push(("subscription_scheduler", handle));
     }
 
     // ── Subscription runtime reconcile (must precede the site runner) ──
@@ -100,14 +97,12 @@ pub async fn start_workers(
         let sub_root = library_root.to_path_buf();
         let sub_rl = rate_limiter.clone();
         let sub_running = running_subscriptions.clone();
-        let sub_terminal = sub_terminal_statuses.clone();
         let sub_cancel = cancel.clone();
         let handle = tokio::spawn(crate::subscriptions::site_runner::start_worker_loop(
             sub_db,
             sub_root,
             sub_rl,
             sub_running,
-            sub_terminal,
             sub_cancel,
         ));
         handles.push(("subscription_site_runner", handle));

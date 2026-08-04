@@ -119,11 +119,8 @@ export function getGroups(): Promise<SubscriptionGroupInfo[]> {
   return invoke<SubscriptionGroupInfo[]>('get_groups');
 }
 
-export function createGroup(name: string, schedule?: string | null): Promise<SubscriptionGroupInfo> {
-  return invoke<SubscriptionGroupInfo>('create_group', {
-    name,
-    schedule: schedule ?? null,
-  } as unknown as Record<string, unknown>);
+export function createGroup(name: string): Promise<SubscriptionGroupInfo> {
+  return invoke<SubscriptionGroupInfo>('create_group', { name });
 }
 
 export function renameGroup(id: string, name: string): Promise<void> {
@@ -134,12 +131,8 @@ export function deleteGroup(id: string): Promise<void> {
   return invoke<void>('delete_group', { id });
 }
 
-export function setGroupSchedule(id: string, schedule: string): Promise<void> {
-  return invoke<void>('set_group_schedule', { id, schedule });
-}
-
-export function pauseGroup(id: string, paused: boolean): Promise<void> {
-  return invoke<void>('pause_group', { id, paused });
+export function setSubscriptionSchedule(id: string, schedule: string): Promise<void> {
+  return invoke<void>('set_subscription_schedule', { id, schedule });
 }
 
 export function runGroup(id: string): Promise<void> {

@@ -19,12 +19,6 @@ import { ActionButton } from './ActionButton';
 import { describeSubscriptionState } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
 
-const SCHEDULE_LABELS: Record<string, string> = {
-  daily: 'daily',
-  weekly: 'weekly',
-  monthly: 'monthly',
-};
-
 function statusDotClass(state: 'running' | 'paused' | 'attention' | 'idle'): string {
   return state === 'running'
     ? `${styles.railDot} ${styles.railDotRunning}`
@@ -141,9 +135,6 @@ export function SidebarRail({
                     }}
                   >
                     <span className={styles.railRowName}>{group.name}</span>
-                    {SCHEDULE_LABELS[group.schedule] && (
-                      <span className={styles.railScheduleChip}>{SCHEDULE_LABELS[group.schedule]}</span>
-                    )}
                     <span className={styles.railHoverActions}>
                       <KbdTooltip label={groupRunning ? 'Stop group' : 'Run group'}>
                         <button

@@ -8,5 +8,4 @@ pub mod files;
 pub mod folders;
 pub mod settings;
 pub mod smart_folders;
-pub mod subscriptions;
 pub mod tags;

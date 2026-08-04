@@ -181,6 +181,8 @@ export function SubscriptionsScreen() {
     },
     setAutoCollections: (id: string, on: boolean) =>
       void act(`autocol:${id}`, () => subscriptionsController.setAutoCollections(id, on)),
+    setSchedule: (id: string, schedule: string) =>
+      void act(`schedule:${id}`, () => subscriptionsController.setSchedule(id, schedule)),
     setGroup: (id: string, groupId: number | null) =>
       void act(`setgroup:${id}`, () => subscriptionsController.setSubscriptionGroup(id, groupId)),
     runQuery: (subscriptionId: string, queryId: string) => {
@@ -222,6 +224,7 @@ export function SubscriptionsScreen() {
         onStop: () => detailController.stop(subscription.id),
         onPause: (paused) => detailController.pause(subscription.id, paused),
         onRename: () => setRenameTarget({ kind: 'subscription', id: subscription.id, currentName: subscription.name }),
+        onSetSchedule: (schedule) => detailController.setSchedule(subscription.id, schedule),
         onMoveToGroup: (groupId) => detailController.setGroup(subscription.id, groupId),
         onToggleAutoCollections: () =>
           detailController.setAutoCollections(subscription.id, !subscription.auto_collections),
@@ -247,11 +250,7 @@ export function SubscriptionsScreen() {
           void act(`rungroup:${group.id}`, () => subscriptionsController.runGroup(group.id));
         },
         onStopAll: () => void act(`stopgroup:${group.id}`, () => subscriptionsController.stopGroup(group.id)),
-        onPauseGroup: (paused) =>
-          void act(`pausegroup:${group.id}`, () => subscriptionsController.pauseGroup(group.id, paused)),
         onRename: () => setRenameTarget({ kind: 'group', id: group.id, currentName: group.name }),
-        onSetSchedule: (schedule) =>
-          void act(`schedule:${group.id}`, () => subscriptionsController.setGroupSchedule(group.id, schedule)),
         onDelete: () => {
           confirm(
             { title: 'Delete Group', message: 'Its subscriptions are kept and become ungrouped.', confirmLabel: 'Delete', danger: true },
@@ -288,7 +287,6 @@ export function SubscriptionsScreen() {
         },
         onPauseSelected: (paused) =>
           void act('multi:pause', async () => {
-            for (const gid of groupIds) await subscriptionsController.pauseGroup(gid, paused).catch(() => {});
             for (const sid of subscriptionIds) await subscriptionsController.pause(sid, paused).catch(() => {});
           }),
         onMoveSelectedToGroup: (groupId) =>
@@ -375,7 +373,6 @@ export function SubscriptionsScreen() {
             }
             busy={busy}
             onRename={(name) => void act(`renamegroup:${selectedGroup.id}`, () => subscriptionsController.renameGroup(selectedGroup.id, name))}
-            onSetSchedule={(schedule) => void act(`schedule:${selectedGroup.id}`, () => subscriptionsController.setGroupSchedule(selectedGroup.id, schedule))}
             onRun={() => {
               markSubscriptionRunTriggered();
               void act(`rungroup:${selectedGroup.id}`, () => subscriptionsController.runGroup(selectedGroup.id));

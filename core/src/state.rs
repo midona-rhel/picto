@@ -14,7 +14,7 @@ use crate::blob_store::BlobStore;
 use crate::folders::watch::FolderWatchCommand;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
-use crate::types::{RunningSubscriptions, SubTerminalStatuses};
+use crate::types::RunningSubscriptions;
 
 /// Shared application state, accessible to all command handlers.
 pub struct AppState {
@@ -25,7 +25,6 @@ pub struct AppState {
     pub settings: SettingsStore,
     pub rate_limiter: RateLimiter,
     pub running_subscriptions: RunningSubscriptions,
-    pub sub_terminal_statuses: SubTerminalStatuses,
     pub library_root: PathBuf,
     pub cancel: CancellationToken,
     pub folder_watch_commands: tokio::sync::mpsc::UnboundedSender<FolderWatchCommand>,
@@ -85,8 +84,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
     let rate_limiter = RateLimiter::new();
     let running_subscriptions: RunningSubscriptions =
         Arc::new(tokio::sync::Mutex::new(HashMap::new()));
-    let sub_terminal_statuses: SubTerminalStatuses =
-        Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
     let cancel = CancellationToken::new();
     let (folder_watch_commands, folder_watch_rx) = crate::folders::watch::channel();
@@ -108,7 +105,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         &blob_store,
         &rate_limiter,
         &running_subscriptions,
-        &sub_terminal_statuses,
         folder_watch_rx,
         &cancel,
     )
@@ -142,7 +138,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         settings,
         rate_limiter,
         running_subscriptions,
-        sub_terminal_statuses,
         library_root,
         cancel,
         folder_watch_commands,

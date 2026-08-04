@@ -22,6 +22,7 @@ pub struct SubscriptionCollectionRecord {
 pub struct Subscription {
     pub subscription_id: i64,
     pub name: String,
+    pub schedule: String,
     pub paused: bool,
     pub group_id: Option<i64>,
     pub initial_post_limit: i64,
@@ -57,7 +58,6 @@ pub struct SubscriptionQuery {
 pub struct SubscriptionGroup {
     pub group_id: i64,
     pub name: String,
-    pub schedule: String,
     pub created_at: String,
 }
 
@@ -104,6 +104,8 @@ pub struct SubscriptionQueryJob {
     pub job_kind: String,
     pub requested_by: String,
     pub post_id: Option<String>,
+    pub attempt_count: i64,
+    pub available_at: String,
     pub queued_at: String,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
