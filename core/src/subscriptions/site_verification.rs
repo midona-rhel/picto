@@ -194,7 +194,7 @@ pub async fn verify_site(
                 url,
                 credential_state,
                 exit_code: None,
-                failure_kind: Some("environment".to_string()),
+                failure_kind: Some(FailureKind::Environment.as_str().to_string()),
                 stderr_tail: error.clone(),
                 discovered: 0,
                 downloaded,

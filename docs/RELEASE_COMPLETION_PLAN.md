@@ -53,7 +53,7 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [x] Freeze unrelated performance and cleanup work until subscription closure.
 - [x] Replace newest-500 retry scans with one indexed attempt lookup.
 - [x] S1: Give query and subscription issues stable non-null identity.
-- [ ] S2: Classify every meaningful failure through one persisted recovery disposition.
+- [x] S2: Classify every meaningful failure through one persisted recovery disposition.
 - [ ] S3: Move schedules from groups to subscriptions; make retry, restart, shutdown, stop, reset,
       delete, and multi-query finalization durable and safe.
 - [ ] S4: Finish one streaming metadata/collection ingest path and delete proven competitors.

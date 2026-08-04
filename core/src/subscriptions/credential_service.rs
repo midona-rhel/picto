@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::credential_store::{CredentialType, SiteCredential};
 use crate::db::LibraryDatabase;
-use crate::subscriptions::gallery_dl_runner;
+use crate::subscriptions::gallery_dl_runner::{self, FailureKind};
 use crate::subscriptions::types::{CredentialDomain, CredentialHealth};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,12 +29,6 @@ impl CredentialHealthStatus {
             Self::Error => "error",
         }
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuthFailureKind {
-    Unauthorized,
-    Expired,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -331,13 +325,14 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         subscription_id: i64,
         query_id: Option<i64>,
         site_id: &str,
+        failure_kind: FailureKind,
         message: &str,
     ) {
         let _ = site_id;
         self.upsert_issue(
             subscription_id,
             query_id,
-            "credential_blocked",
+            failure_kind,
             message,
             Some("Add or refresh the credential for this site, then run again."),
         )
@@ -408,13 +403,13 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             self.upsert_issue(
                 subscription_id,
                 query_id,
-                "credential_missing",
+                FailureKind::CredentialMissing,
                 "No credential configured for a site that commonly requires auth",
                 Some("Configure a credential for this site to access the full subscription result set."),
             )
             .await;
         } else if gallery_dl_auth.is_some() {
-            self.resolve_issue(subscription_id, query_id, "credential_missing")
+            self.resolve_issue(subscription_id, query_id, FailureKind::CredentialMissing)
                 .await;
         }
 
@@ -426,21 +421,23 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         subscription_id: i64,
         query_id: Option<i64>,
         site_id: &str,
-        failure_kind: AuthFailureKind,
+        failure_kind: FailureKind,
         detail: Option<&str>,
     ) {
         let canonical_site_category = canonical_credential_site_category(site_id);
         let status = match failure_kind {
-            AuthFailureKind::Unauthorized => CredentialHealthStatus::Unauthorized,
-            AuthFailureKind::Expired => CredentialHealthStatus::Expired,
+            FailureKind::Unauthorized => CredentialHealthStatus::Unauthorized,
+            FailureKind::Expired => CredentialHealthStatus::Expired,
+            _ => return,
         };
         let message = match failure_kind {
-            AuthFailureKind::Unauthorized => {
+            FailureKind::Unauthorized => {
                 "Credential was rejected by the site during subscription sync"
             }
-            AuthFailureKind::Expired => {
+            FailureKind::Expired => {
                 "Credential expired or was rejected by the site during subscription sync"
             }
+            _ => return,
         };
 
         // An auth-shaped failure can only indict a credential that exists —
@@ -458,7 +455,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             self.upsert_issue(
                 subscription_id,
                 query_id,
-                "credential_blocked",
+                FailureKind::CredentialBlocked,
                 message,
                 detail,
             )
@@ -467,7 +464,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             self.upsert_issue(
                 subscription_id,
                 query_id,
-                "credential_blocked",
+                FailureKind::CredentialBlocked,
                 "The site rejected the request as unauthorized, but no account is stored — add one in Accounts",
                 detail,
             )
@@ -492,9 +489,9 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             None,
         )
         .await;
-        self.resolve_issue(subscription_id, query_id, "credential_missing")
+        self.resolve_issue(subscription_id, query_id, FailureKind::CredentialMissing)
             .await;
-        self.resolve_issue(subscription_id, query_id, "credential_blocked")
+        self.resolve_issue(subscription_id, query_id, FailureKind::CredentialBlocked)
             .await;
     }
 
@@ -521,18 +518,23 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         &self,
         subscription_id: i64,
         query_id: Option<i64>,
-        issue_kind: &str,
+        failure_kind: FailureKind,
         message: &str,
         detail: Option<&str>,
     ) {
         let _ = self
-            .upsert_issue_db(subscription_id, query_id, issue_kind, message, detail)
+            .upsert_issue_db(subscription_id, query_id, failure_kind, message, detail)
             .await;
     }
 
-    async fn resolve_issue(&self, subscription_id: i64, query_id: Option<i64>, issue_kind: &str) {
+    async fn resolve_issue(
+        &self,
+        subscription_id: i64,
+        query_id: Option<i64>,
+        failure_kind: FailureKind,
+    ) {
         let _ = self
-            .resolve_issue_db(subscription_id, query_id, issue_kind)
+            .resolve_issue_db(subscription_id, query_id, failure_kind)
             .await;
     }
 
@@ -612,7 +614,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         &self,
         subscription_id: i64,
         query_id: Option<i64>,
-        issue_kind: &str,
+        failure_kind: FailureKind,
         message: &str,
         detail: Option<&str>,
     ) -> Result<(), String> {
@@ -621,7 +623,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
                 conn,
                 subscription_id,
                 query_id,
-                issue_kind,
+                failure_kind,
                 message,
                 detail,
             )?;
@@ -633,24 +635,15 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         &self,
         subscription_id: i64,
         query_id: Option<i64>,
-        issue_kind: &str,
+        failure_kind: FailureKind,
     ) -> Result<(), String> {
         self.db.with_write(|conn| {
-            conn.execute(
-                "UPDATE subscription_issue
-                 SET status = 'resolved', resolved_at = COALESCE(resolved_at, ?4), last_seen_at = ?4
-                 WHERE subscription_id = ?1
-                   AND ((query_id = ?2) OR (query_id IS NULL AND ?2 IS NULL))
-                   AND issue_kind = ?3
-                   AND status != 'resolved'",
-                rusqlite::params![
-                    subscription_id,
-                    query_id,
-                    issue_kind,
-                    chrono::Utc::now().to_rfc3339()
-                ],
-            )?;
-            Ok(())
+            crate::subscriptions::runtime_db::resolve_subscription_issues(
+                conn,
+                subscription_id,
+                query_id,
+                failure_kind,
+            )
         })
     }
 }
@@ -1047,7 +1040,7 @@ mod tests {
                 subscription_id,
                 Some(query_id),
                 "gelbooru",
-                AuthFailureKind::Unauthorized,
+                FailureKind::Unauthorized,
                 Some("401 Unauthorized"),
             )
             .await;
@@ -1094,7 +1087,7 @@ mod tests {
                 subscription_id,
                 Some(query_id),
                 "gelbooru",
-                AuthFailureKind::Unauthorized,
+                FailureKind::Unauthorized,
                 Some("401 Unauthorized"),
             )
             .await;

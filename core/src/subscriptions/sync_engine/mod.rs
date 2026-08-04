@@ -23,7 +23,7 @@ use chrono::Utc;
 use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::AppSettings;
-use crate::subscriptions::gallery_dl_runner::GalleryDlRunner;
+use crate::subscriptions::gallery_dl_runner::{FailureKind, GalleryDlRunner};
 use crate::subscriptions::import_policy::preferred_import_name;
 use crate::subscriptions::source_adapter::ParsedMetadata;
 
@@ -332,13 +332,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
         &self,
         subscription_id: i64,
         query_id: Option<i64>,
-        issue_kind: &str,
+        failure_kind: FailureKind,
         message: &str,
         detail: Option<&str>,
     ) {
         let _ = self
             .runtime_service()
-            .upsert_subscription_issue(subscription_id, query_id, issue_kind, message, detail)
+            .upsert_subscription_issue(subscription_id, query_id, failure_kind, message, detail)
             .await;
     }
 }

@@ -35,7 +35,7 @@ use crate::tags::logging::summarize_tag_pairs;
 
 use self::config::build_config;
 
-pub use failure::{classify_failure, error_tail, final_error_line, FailureKind};
+pub use failure::{classify_failure, error_tail, final_error_line, FailureKind, RecoveryAction};
 pub use filesystem::cleanup_temp_dir;
 pub use metadata::{extract_creator_identifier, parse_metadata, parse_tags};
 pub use metadata_validation::{

@@ -54,7 +54,6 @@ Already working and retained:
 
 Release gaps:
 
-- not every failure path maps to one stable persisted issue
 - Health displays issues but cannot consistently expose the correct recovery action
 - non-collection runs under-report downloaded files
 - ingest progress is subscription-wide instead of run-scoped and disappears before queued ingest settles
@@ -119,7 +118,7 @@ Acceptance:
 - first-seen is stable; last-seen and evidence advance
 - current schema opens; any previous schema version is rejected without mutation
 
-### S2. One failure classification path
+### S2. One failure classification path (complete)
 
 Map gallery-dl, validation, ingest, and runtime failures through one typed disposition:
 

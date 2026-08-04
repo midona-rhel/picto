@@ -416,6 +416,7 @@ async fn check_credential_preflight(
                         subscription_id,
                         Some(query.query_id),
                         &query.site_id,
+                        crate::subscriptions::gallery_dl_runner::FailureKind::CredentialMissing,
                         &message,
                     )
                     .await;
@@ -436,6 +437,7 @@ async fn check_credential_preflight(
                         subscription_id,
                         Some(query.query_id),
                         &query.site_id,
+                        crate::subscriptions::gallery_dl_runner::FailureKind::CredentialBlocked,
                         &message,
                     )
                     .await;

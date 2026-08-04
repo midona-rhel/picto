@@ -5,6 +5,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::LibraryDatabase;
 use crate::ingest_queue::IngestQueueCounts;
+use crate::subscriptions::gallery_dl_runner::FailureKind;
 use crate::types::{
     RunningSubscriptions, SubscriptionGroupInfo, SubscriptionInfo, SubscriptionQueryInfo,
 };
@@ -1050,11 +1051,10 @@ impl<'a> SubscriptionRuntimeService<'a> {
         &self,
         subscription_id: i64,
         query_id: Option<i64>,
-        issue_kind: &str,
+        failure_kind: FailureKind,
         message: &str,
         detail: Option<&str>,
-    ) -> Result<i64, String> {
-        let issue_kind = issue_kind.to_string();
+    ) -> Result<Option<i64>, String> {
         let message = message.to_string();
         let detail = detail.map(ToOwned::to_owned);
         self.db.with_write(move |conn| {
@@ -1062,7 +1062,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
                 conn,
                 subscription_id,
                 query_id,
-                &issue_kind,
+                failure_kind,
                 &message,
                 detail.as_deref(),
             )
@@ -1073,11 +1073,10 @@ impl<'a> SubscriptionRuntimeService<'a> {
         &self,
         subscription_id: i64,
         query_id: Option<i64>,
-        issue_kind: &str,
+        failure_kind: FailureKind,
     ) -> Result<(), String> {
-        let issue_kind = issue_kind.to_string();
         self.db.with_write(move |conn| {
-            resolve_subscription_issues(conn, subscription_id, query_id, &issue_kind)
+            resolve_subscription_issues(conn, subscription_id, query_id, failure_kind)
         })
     }
 

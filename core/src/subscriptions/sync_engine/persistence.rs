@@ -1,5 +1,6 @@
 use chrono::{Duration, Utc};
 
+use crate::subscriptions::gallery_dl_runner::FailureKind;
 use crate::subscriptions::source_adapter::{FailedDownloadedItem, ParsedMetadata};
 use crate::subscriptions::types::OwnedSubscriptionDownloadAttemptUpsert;
 
@@ -76,7 +77,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .canonical_post_url
                     .clone()
                     .or_else(|| metadata.source_url.clone()),
-                failure_kind: Some("download_failure".to_string()),
+                failure_kind: Some(FailureKind::DownloadFailure.as_str().to_string()),
                 last_error: Some(failed.error_message.clone()),
                 next_retry_at: Some(next_retry_at),
             })

@@ -5,6 +5,7 @@ use super::types::{
     SubscriptionPostMemberRecord, SubscriptionPostMemberUpsert, SubscriptionQueryJob,
     SubscriptionQueryRunRecord, SubscriptionRunRecord,
 };
+use crate::subscriptions::gallery_dl_runner::FailureKind;
 
 fn map_subscription_run_row(row: &rusqlite::Row) -> rusqlite::Result<SubscriptionRunRecord> {
     Ok(SubscriptionRunRecord {
@@ -142,32 +143,33 @@ pub fn reconcile_stale_subscription_runtime(
     conn: &Connection,
 ) -> rusqlite::Result<SubscriptionReconcileReport> {
     let now = chrono::Utc::now().to_rfc3339();
+    let stale = FailureKind::Stale.as_str();
     let interrupted = "Interrupted — the app was closed while this run was active";
     let mut report = SubscriptionReconcileReport::default();
 
     report.jobs_cancelled = conn.execute(
         "UPDATE subscription_query_job
          SET status = 'cancelled', finished_at = ?1,
-             failure_kind = COALESCE(failure_kind, 'stale'),
-             error_message = COALESCE(error_message, ?2)
+             failure_kind = COALESCE(failure_kind, ?2),
+             error_message = COALESCE(error_message, ?3)
          WHERE status IN ('queued', 'running')",
-        params![now, interrupted],
+        params![now, stale, interrupted],
     )?;
     report.runs_finalized = conn.execute(
         "UPDATE subscription_run
          SET status = 'cancelled', finished_at = ?1,
-             failure_kind = COALESCE(failure_kind, 'stale'),
-             error_message = COALESCE(error_message, ?2)
+             failure_kind = COALESCE(failure_kind, ?2),
+             error_message = COALESCE(error_message, ?3)
          WHERE status = 'running'",
-        params![now, interrupted],
+        params![now, stale, interrupted],
     )?;
     report.query_runs_finalized = conn.execute(
         "UPDATE subscription_query_run
          SET status = 'cancelled', finished_at = ?1,
-             failure_kind = COALESCE(failure_kind, 'stale'),
-             error_message = COALESCE(error_message, ?2)
+             failure_kind = COALESCE(failure_kind, ?2),
+             error_message = COALESCE(error_message, ?3)
          WHERE status = 'running'",
-        params![now, interrupted],
+        params![now, stale, interrupted],
     )?;
 
     // Auth-bad health for a site with no stored credential is impossible by
@@ -699,25 +701,42 @@ pub fn upsert_subscription_issue(
     conn: &Connection,
     subscription_id: i64,
     query_id: Option<i64>,
-    issue_kind: &str,
+    failure_kind: FailureKind,
     message: &str,
     detail: Option<&str>,
-) -> rusqlite::Result<i64> {
+) -> rusqlite::Result<Option<i64>> {
+    if !failure_kind.creates_issue() {
+        return Ok(None);
+    }
     let now = chrono::Utc::now().to_rfc3339();
+    let issue_kind = failure_kind.issue_kind();
+    let recovery_action = failure_kind.recovery_action().as_str();
     let issue_key = query_id
         .map(|query_id| format!("query:{query_id}:{issue_kind}"))
         .unwrap_or_else(|| format!("subscription:{subscription_id}:{issue_kind}"));
     conn.execute(
         "INSERT INTO subscription_issue (
-             issue_key, subscription_id, query_id, issue_kind, status, message, detail, first_seen_at, last_seen_at
-         ) VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?7, ?7)
+             issue_key, subscription_id, query_id, issue_kind, status, message, detail,
+             first_seen_at, last_seen_at, recovery_action, next_retry_at
+         ) VALUES (?1, ?2, ?3, ?4, 'open', ?5, ?6, ?7, ?7, ?8, NULL)
          ON CONFLICT(issue_key)
          DO UPDATE SET status = 'open',
                        message = excluded.message,
                        detail = excluded.detail,
                        last_seen_at = excluded.last_seen_at,
+                       recovery_action = excluded.recovery_action,
+                       next_retry_at = NULL,
                        resolved_at = NULL",
-        params![issue_key, subscription_id, query_id, issue_kind, message, detail, now],
+        params![
+            issue_key,
+            subscription_id,
+            query_id,
+            issue_kind,
+            message,
+            detail,
+            now,
+            recovery_action,
+        ],
     )?;
     conn.query_row(
         "SELECT issue_id FROM subscription_issue
@@ -725,15 +744,20 @@ pub fn upsert_subscription_issue(
         [issue_key],
         |row| row.get(0),
     )
+    .map(Some)
 }
 
 pub fn resolve_subscription_issues(
     conn: &Connection,
     subscription_id: i64,
     query_id: Option<i64>,
-    issue_kind: &str,
+    failure_kind: FailureKind,
 ) -> rusqlite::Result<()> {
+    if !failure_kind.creates_issue() {
+        return Ok(());
+    }
     let now = chrono::Utc::now().to_rfc3339();
+    let issue_kind = failure_kind.issue_kind();
     conn.execute(
         "UPDATE subscription_issue
          SET status = 'resolved',

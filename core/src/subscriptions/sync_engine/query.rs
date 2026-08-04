@@ -61,8 +61,16 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
         };
         if let Err(error) = adapter.validate_query_kind(site_id, &query_kind) {
-            progress.failure_kind = Some("invalid_query_kind".to_string());
-            progress.errors.push(error);
+            progress.failure_kind = Some(FailureKind::InvalidQueryKind.as_str().to_string());
+            progress.errors.push(error.clone());
+            self.record_issue(
+                subscription_id,
+                Some(query_id),
+                FailureKind::InvalidQueryKind,
+                "Subscription query kind is invalid for this source",
+                Some(&error),
+            )
+            .await;
             return progress;
         }
         progress.files_downloaded = prior_files;
@@ -82,7 +90,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .map(|counts| counts.inbox.max(0) as u64)
             .unwrap_or(0);
         if inbox_count >= inbox_limit as u64 {
-            progress.failure_kind = Some("inbox_full".to_string());
+            progress.failure_kind = Some(FailureKind::InboxFull.as_str().to_string());
             self.emit_progress(
                 &sub_id_str,
                 &progress,
@@ -110,7 +118,17 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let url = match adapter.build_url(site_id, &query_for_run) {
             Some(u) => u,
             None => {
-                progress.errors.push(format!("Unknown site: {site_id}"));
+                let error = format!("Unknown subscription site: {site_id}");
+                progress.failure_kind = Some(FailureKind::InvalidQueryKind.as_str().to_string());
+                progress.errors.push(error.clone());
+                self.record_issue(
+                    subscription_id,
+                    Some(query_id),
+                    FailureKind::InvalidQueryKind,
+                    "Subscription source is not supported",
+                    Some(&error),
+                )
+                .await;
                 return progress;
             }
         };
@@ -244,7 +262,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     query_id,
                     inbox_count, inbox_limit, "sync_query: inbox full, stopping"
                 );
-                progress.failure_kind = Some("inbox_full".to_string());
+                progress.failure_kind = Some(FailureKind::InboxFull.as_str().to_string());
                 progress.cancelled = true;
                 break;
             }
@@ -256,7 +274,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 self.record_issue(
                     subscription_id,
                     Some(query_id),
-                    "malformed_metadata",
+                    FailureKind::MalformedMetadata,
                     "gallery-dl item metadata failed validation",
                     Some(&e),
                 )
@@ -304,13 +322,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
                             )
                             .await
                         {
+                            progress.failure_kind =
+                                Some(FailureKind::IngestQueueFailure.as_str().to_string());
                             progress
                                 .errors
                                 .push(format!("Failed to queue collection for ingest: {error}"));
                             self.record_issue(
                                 subscription_id,
                                 Some(query_id),
-                                "ingest_queue_failure",
+                                FailureKind::IngestQueueFailure,
                                 "Failed to queue subscription collection for ingest",
                                 Some(&error),
                             )
@@ -387,13 +407,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         )
                         .await
                     {
+                        progress.failure_kind =
+                            Some(FailureKind::IngestQueueFailure.as_str().to_string());
                         progress
                             .errors
                             .push(format!("Failed to queue collection for ingest: {error}"));
                         self.record_issue(
                             subscription_id,
                             Some(query_id),
-                            "ingest_queue_failure",
+                            FailureKind::IngestQueueFailure,
                             "Failed to queue subscription collection for ingest",
                             Some(&error),
                         )
@@ -466,13 +488,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         );
                     }
                     Err(error) => {
+                        progress.failure_kind =
+                            Some(FailureKind::IngestQueueFailure.as_str().to_string());
                         progress.errors.push(format!(
                             "Failed to queue subscription item for ingest: {error}"
                         ));
                         self.record_issue(
                             subscription_id,
                             Some(query_id),
-                            "ingest_queue_failure",
+                            FailureKind::IngestQueueFailure,
                             "Failed to queue subscription item for ingest",
                             Some(&error),
                         )
@@ -499,11 +523,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 progress.errors.push(format!("gallery-dl failed: {e}"));
                 // gallery-dl never ran — a local environment problem, not a
                 // credential problem. Record an issue; never touch health.
-                progress.failure_kind = Some("environment".to_string());
+                progress.failure_kind = Some(FailureKind::Environment.as_str().to_string());
                 self.record_issue(
                     subscription_id,
                     Some(query_id),
-                    "environment",
+                    FailureKind::Environment,
                     &format!("gallery-dl failed to run: {e}"),
                     None,
                 )
@@ -542,7 +566,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 progress
                     .errors
                     .push(format!("gallery-dl task panicked: {e}"));
-                progress.failure_kind = Some("unknown".to_string());
+                progress.failure_kind = Some(FailureKind::Panic.as_str().to_string());
+                self.record_issue(
+                    subscription_id,
+                    Some(query_id),
+                    FailureKind::Panic,
+                    "Subscription downloader task panicked",
+                    progress.errors.last().map(String::as_str),
+                )
+                .await;
                 let _ = self
                     .runtime_service()
                     .set_query_terminal_state(
@@ -580,7 +612,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         }
         let mut failed_post_members: HashMap<String, Vec<ParsedMetadata>> = HashMap::new();
         if run_summary.had_download_errors {
-            progress.failure_kind = Some("download_error".to_string());
+            progress.failure_kind = Some(FailureKind::DownloadFailure.as_str().to_string());
             progress
                 .errors
                 .push("One or more subscription downloads failed after retries".to_string());
@@ -605,7 +637,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             self.record_issue(
                 subscription_id,
                 Some(query_id),
-                "download_failure",
+                FailureKind::DownloadFailure,
                 "One or more subscription items failed after gallery-dl retries",
                 run_summary
                     .failed_items
@@ -633,12 +665,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             progress.errors.push(err.clone());
             warn!(site_id = %site_id, query_id, failure_kind = failure_kind_str, summary = %summary, error = %err, "gallery-dl query execution failed");
             let health_status = match failure_kind {
-                FailureKind::Unauthorized => {
-                    Some(crate::subscriptions::credential_service::AuthFailureKind::Unauthorized)
-                }
-                FailureKind::Expired => {
-                    Some(crate::subscriptions::credential_service::AuthFailureKind::Expired)
-                }
+                FailureKind::Unauthorized | FailureKind::Expired => Some(failure_kind),
                 _ => None,
             };
             // Only auth-classified failures for sites with a stored credential
@@ -659,31 +686,38 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     self.record_issue(
                         subscription_id,
                         Some(query_id),
-                        failure_kind_str,
+                        failure_kind,
                         &err,
                         Some(&summary),
                     )
                     .await;
                 }
             }
-        } else if run_summary.exit_code == 0 && has_credential {
-            self.note_run_success(subscription_id, query_id, site_id, has_credential)
+        } else if run_summary.exit_code == 0 {
+            if has_credential {
+                self.note_run_success(subscription_id, query_id, site_id, true)
+                    .await;
+            } else {
+                let _ = self
+                    .runtime_service()
+                    .resolve_subscription_issues(
+                        subscription_id,
+                        Some(query_id),
+                        FailureKind::CredentialBlocked,
+                    )
+                    .await;
+            }
+            let _ = self
+                .runtime_service()
+                .resolve_subscription_issues(
+                    subscription_id,
+                    Some(query_id),
+                    FailureKind::RateLimited,
+                )
                 .await;
             let _ = self
                 .runtime_service()
-                .resolve_subscription_issues(subscription_id, Some(query_id), "unauthorized")
-                .await;
-            let _ = self
-                .runtime_service()
-                .resolve_subscription_issues(subscription_id, Some(query_id), "expired")
-                .await;
-            let _ = self
-                .runtime_service()
-                .resolve_subscription_issues(subscription_id, Some(query_id), "rate_limited")
-                .await;
-            let _ = self
-                .runtime_service()
-                .resolve_subscription_issues(subscription_id, Some(query_id), "network")
+                .resolve_subscription_issues(subscription_id, Some(query_id), FailureKind::Network)
                 .await;
         }
 
@@ -723,13 +757,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         )
                         .await
                     {
+                        progress.failure_kind =
+                            Some(FailureKind::IngestQueueFailure.as_str().to_string());
                         progress
                             .errors
                             .push(format!("Failed to queue collection for ingest: {error}"));
                         self.record_issue(
                             subscription_id,
                             Some(query_id),
-                            "ingest_queue_failure",
+                            FailureKind::IngestQueueFailure,
                             "Failed to queue subscription collection for ingest",
                             Some(&error),
                         )
@@ -777,13 +813,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     )
                     .await
                 {
+                    progress.failure_kind =
+                        Some(FailureKind::IngestQueueFailure.as_str().to_string());
                     progress
                         .errors
                         .push(format!("Failed to queue collection for ingest: {error}"));
                     self.record_issue(
                         subscription_id,
                         Some(query_id),
-                        "ingest_queue_failure",
+                        FailureKind::IngestQueueFailure,
                         "Failed to queue subscription collection for ingest",
                         Some(&error),
                     )
@@ -819,12 +857,12 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     skipped_archive_items = run_summary.skipped_archive_items,
                     "sync_query: bridge discovered items but no downloads were emitted"
                 );
-                progress.failure_kind = Some("bridge_no_downloads".to_string());
+                progress.failure_kind = Some(FailureKind::BridgeNoDownloads.as_str().to_string());
                 progress.errors.push(detail.clone());
                 self.record_issue(
                     subscription_id,
                     Some(query_id),
-                    "bridge_no_downloads",
+                    FailureKind::BridgeNoDownloads,
                     "gallery-dl discovered items but emitted no downloads",
                     Some(&detail),
                 )

@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FailureKind {
+    CredentialMissing,
+    CredentialBlocked,
     Unauthorized,
     Expired,
     RateLimited,
@@ -11,19 +13,110 @@ pub enum FailureKind {
     NotFound,
     /// Local environment breakage — python bootstrap, missing modules, bad paths.
     Environment,
+    InvalidQueryKind,
+    InboxFull,
+    MalformedMetadata,
+    IngestQueueFailure,
+    DownloadFailure,
+    BridgeNoDownloads,
+    UnexpectedRetryItem,
+    MissingRetry,
+    MissingSubscription,
+    MissingQuery,
+    Runtime,
+    Panic,
+    Stale,
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryAction {
+    FixCredentials,
+    RetryAutomatically,
+    RetryNow,
+    ReviewQuery,
+    None,
+}
+
+impl RecoveryAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FixCredentials => "fix_credentials",
+            Self::RetryAutomatically => "retry_automatically",
+            Self::RetryNow => "retry_now",
+            Self::ReviewQuery => "review_query",
+            Self::None => "none",
+        }
+    }
 }
 
 impl FailureKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::CredentialMissing => "credential_missing",
+            Self::CredentialBlocked => "credential_blocked",
             Self::Unauthorized => "unauthorized",
             Self::Expired => "expired",
             Self::RateLimited => "rate_limited",
             Self::Network => "network",
             Self::NotFound => "not_found",
             Self::Environment => "environment",
+            Self::InvalidQueryKind => "invalid_query_kind",
+            Self::InboxFull => "inbox_full",
+            Self::MalformedMetadata => "malformed_metadata",
+            Self::IngestQueueFailure => "ingest_queue_failure",
+            Self::DownloadFailure => "download_failure",
+            Self::BridgeNoDownloads => "bridge_no_downloads",
+            Self::UnexpectedRetryItem => "unexpected_retry_item",
+            Self::MissingRetry => "missing_retry",
+            Self::MissingSubscription => "missing_subscription",
+            Self::MissingQuery => "missing_query",
+            Self::Runtime => "runtime",
+            Self::Panic => "panic",
+            Self::Stale => "stale",
             Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn recovery_action(self) -> RecoveryAction {
+        match self {
+            Self::CredentialMissing
+            | Self::CredentialBlocked
+            | Self::Unauthorized
+            | Self::Expired => RecoveryAction::FixCredentials,
+            Self::RateLimited | Self::Network => RecoveryAction::RetryAutomatically,
+            Self::DownloadFailure | Self::IngestQueueFailure => RecoveryAction::RetryNow,
+            Self::InvalidQueryKind
+            | Self::NotFound
+            | Self::MalformedMetadata
+            | Self::BridgeNoDownloads
+            | Self::UnexpectedRetryItem => RecoveryAction::ReviewQuery,
+            Self::Environment
+            | Self::Runtime
+            | Self::Panic
+            | Self::Unknown
+            | Self::MissingRetry
+            | Self::MissingSubscription
+            | Self::MissingQuery
+            | Self::InboxFull
+            | Self::Stale => RecoveryAction::None,
+        }
+    }
+
+    pub fn creates_issue(self) -> bool {
+        !matches!(
+            self,
+            Self::InboxFull | Self::Stale | Self::MissingSubscription | Self::MissingQuery
+        )
+    }
+
+    /// Auth failures share one durable issue identity regardless of whether
+    /// the runner reported an HTTP auth failure or an expired session.
+    pub fn issue_kind(self) -> &'static str {
+        match self {
+            Self::Unauthorized | Self::Expired => FailureKind::CredentialBlocked.as_str(),
+            _ => self.as_str(),
         }
     }
 }
@@ -152,6 +245,89 @@ pub fn classify_failure(stderr: &str) -> FailureKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovery_actions_and_issue_creation_are_deterministic() {
+        let cases = [
+            (
+                FailureKind::CredentialMissing,
+                RecoveryAction::FixCredentials,
+                true,
+            ),
+            (
+                FailureKind::CredentialBlocked,
+                RecoveryAction::FixCredentials,
+                true,
+            ),
+            (
+                FailureKind::Unauthorized,
+                RecoveryAction::FixCredentials,
+                true,
+            ),
+            (FailureKind::Expired, RecoveryAction::FixCredentials, true),
+            (
+                FailureKind::RateLimited,
+                RecoveryAction::RetryAutomatically,
+                true,
+            ),
+            (
+                FailureKind::Network,
+                RecoveryAction::RetryAutomatically,
+                true,
+            ),
+            (FailureKind::DownloadFailure, RecoveryAction::RetryNow, true),
+            (
+                FailureKind::IngestQueueFailure,
+                RecoveryAction::RetryNow,
+                true,
+            ),
+            (
+                FailureKind::InvalidQueryKind,
+                RecoveryAction::ReviewQuery,
+                true,
+            ),
+            (FailureKind::NotFound, RecoveryAction::ReviewQuery, true),
+            (
+                FailureKind::MalformedMetadata,
+                RecoveryAction::ReviewQuery,
+                true,
+            ),
+            (
+                FailureKind::BridgeNoDownloads,
+                RecoveryAction::ReviewQuery,
+                true,
+            ),
+            (
+                FailureKind::UnexpectedRetryItem,
+                RecoveryAction::ReviewQuery,
+                true,
+            ),
+            (FailureKind::Environment, RecoveryAction::None, true),
+            (FailureKind::Runtime, RecoveryAction::None, true),
+            (FailureKind::Panic, RecoveryAction::None, true),
+            (FailureKind::Unknown, RecoveryAction::None, true),
+            (FailureKind::MissingRetry, RecoveryAction::None, true),
+            (
+                FailureKind::MissingSubscription,
+                RecoveryAction::None,
+                false,
+            ),
+            (FailureKind::MissingQuery, RecoveryAction::None, false),
+            (FailureKind::InboxFull, RecoveryAction::None, false),
+            (FailureKind::Stale, RecoveryAction::None, false),
+        ];
+
+        for (kind, action, creates_issue) in cases {
+            assert_eq!(kind.recovery_action(), action, "{}", kind.as_str());
+            assert_eq!(kind.creates_issue(), creates_issue, "{}", kind.as_str());
+        }
+    }
+
+    #[test]
+    fn auth_failures_share_the_credential_blocked_issue_key() {
+        assert_eq!(FailureKind::Unauthorized.issue_kind(), "credential_blocked");
+        assert_eq!(FailureKind::Expired.issue_kind(), "credential_blocked");
+    }
 
     #[test]
     fn classifies_not_found() {

@@ -6,6 +6,7 @@ use tokio_util::sync::CancellationToken;
 use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::subscriptions::executor::execute_query_job;
+use crate::subscriptions::gallery_dl_runner::FailureKind;
 use crate::subscriptions::source_adapter::runner_key_for_site;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
@@ -72,11 +73,12 @@ pub async fn start_worker_loop(
             tokio::spawn(async move {
                 let job_id = leased.job_id;
                 let subscription_id = leased.subscription_id;
+                let query_id = leased.query_id;
 
                 // The job is already leased ('running') — every exit from this
                 // task must either execute it or fail it, and must release
                 // active_sites, or the domain wedges until restart.
-                let fail_leased_job = |kind: &'static str, message: String| {
+                let fail_leased_job = |failure_kind: FailureKind, message: String| {
                     let db = db.clone();
                     let library_root = library_root.clone();
                     let running_subs = running_subs.clone();
@@ -87,11 +89,20 @@ pub async fn start_worker_loop(
                                 &library_root,
                             );
                         let _ = runtime
+                            .upsert_subscription_issue(
+                                subscription_id,
+                                Some(query_id),
+                                failure_kind,
+                                &message,
+                                None,
+                            )
+                            .await;
+                        let _ = runtime
                             .finish_subscription_query_job(
                                 job_id,
                                 "failed",
-                                Some(kind.to_string()),
-                                Some(message),
+                                Some(failure_kind.as_str().to_string()),
+                                Some(message.clone()),
                             )
                             .await;
                         let _ = crate::subscriptions::job_queue::clear_subscription_guard_if_idle(
@@ -104,8 +115,8 @@ pub async fn start_worker_loop(
                             .finalize_open_runs_for_subscription(
                                 subscription_id,
                                 "failed",
-                                Some(kind),
-                                None,
+                                Some(failure_kind.as_str()),
+                                Some(&message),
                             )
                             .await;
                         crate::runtime_state::remove_task(&format!("sub:{subscription_id}"));
@@ -126,13 +137,20 @@ pub async fn start_worker_loop(
                         ));
                         if let Err(join_error) = exec.await {
                             tracing::error!(job_id, error = %join_error, "subscription executor panicked");
-                            fail_leased_job("panic", format!("Executor panicked: {join_error}"))
-                                .await;
+                            fail_leased_job(
+                                FailureKind::Panic,
+                                format!("Executor panicked: {join_error}"),
+                            )
+                            .await;
                         }
                     }
                     Err(error) => {
                         tracing::warn!(job_id, error = %error, "subscription site runner: missing state");
-                        fail_leased_job("environment", "App state unavailable".to_string()).await;
+                        fail_leased_job(
+                            FailureKind::Environment,
+                            "App state unavailable".to_string(),
+                        )
+                        .await;
                     }
                 }
                 let mut active = active_sites.lock().await;

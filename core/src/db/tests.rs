@@ -10,6 +10,7 @@ use crate::db::types::{
 use crate::media_analysis::ensure_missing_color_analysis_jobs;
 use crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION;
 use crate::media_processing::colors::{serialize_dominant_palette_blob, DominantColor};
+use crate::subscriptions::gallery_dl_runner::FailureKind;
 use crate::subscriptions::runtime_db::upsert_subscription_issue;
 use rusqlite::params;
 use std::sync::Arc;
@@ -1660,23 +1661,33 @@ fn subscription_issue_keys_deduplicate_query_and_global_recurrences() {
                 conn,
                 1,
                 Some(10),
-                "network",
+                FailureKind::Network,
                 "first query message",
                 Some("first detail"),
             )
         })
-        .expect("insert query issue");
+        .expect("insert query issue")
+        .expect("query issue id");
     let global_issue_id = db
         .with_write(|conn| {
-            upsert_subscription_issue(conn, 1, None, "network", "first global message", None)
+            upsert_subscription_issue(
+                conn,
+                1,
+                None,
+                FailureKind::Network,
+                "first global message",
+                None,
+            )
         })
-        .expect("insert global issue");
+        .expect("insert global issue")
+        .expect("global issue id");
 
     db.with_write(|conn| {
         conn.execute(
             "UPDATE subscription_issue
              SET first_seen_at = 'first-seen', last_seen_at = 'old-seen',
-                 status = 'resolved', resolved_at = 'old-resolved'
+                 status = 'resolved', resolved_at = 'old-resolved',
+                 recovery_action = 'none', next_retry_at = 'tomorrow'
              WHERE issue_key IN ('query:10:network', 'subscription:1:network')",
             [],
         )?;
@@ -1690,24 +1701,26 @@ fn subscription_issue_keys_deduplicate_query_and_global_recurrences() {
                 conn,
                 1,
                 Some(10),
-                "network",
+                FailureKind::Network,
                 "changed query message",
                 Some("changed detail"),
             )
         })
-        .expect("recur query issue");
+        .expect("recur query issue")
+        .expect("repeated query issue id");
     let repeated_global_issue_id = db
         .with_write(|conn| {
             upsert_subscription_issue(
                 conn,
                 1,
                 None,
-                "network",
+                FailureKind::Network,
                 "changed global message",
                 Some("changed detail"),
             )
         })
-        .expect("recur global issue");
+        .expect("recur global issue")
+        .expect("repeated global issue id");
 
     assert_eq!(query_issue_id, repeated_query_issue_id);
     assert_eq!(global_issue_id, repeated_global_issue_id);
@@ -1748,7 +1761,7 @@ fn subscription_issue_keys_deduplicate_query_and_global_recurrences() {
         assert_eq!(query.6, "first-seen");
         assert_ne!(query.7, "old-seen");
         assert_eq!(query.8, None);
-        assert_eq!(query.9, "none");
+        assert_eq!(query.9, "retry_automatically");
         assert_eq!(query.10, None);
 
         let global = read_issue("subscription:1:network")?;
@@ -1774,6 +1787,55 @@ fn subscription_issue_keys_deduplicate_query_and_global_recurrences() {
         Ok(())
     })
     .expect("verify subscription issue recurrence");
+}
+
+#[test]
+fn non_issue_failure_kinds_do_not_create_subscription_issues() {
+    let db = open_test_db();
+    db.with_write(|conn| {
+        conn.execute(
+            "INSERT INTO subscription (subscription_id, name, site_id, date_added)
+             VALUES (1, 'Test subscription', 'test', '2026-08-05')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO subscription_query (query_id, subscription_id, site_id, query_text)
+             VALUES (10, 1, 'test', 'query')",
+            [],
+        )?;
+
+        assert_eq!(
+            upsert_subscription_issue(
+                conn,
+                1,
+                Some(10),
+                FailureKind::InboxFull,
+                "Inbox is full",
+                None,
+            )?,
+            None
+        );
+        assert_eq!(
+            upsert_subscription_issue(
+                conn,
+                1,
+                Some(10),
+                FailureKind::Stale,
+                "Run was interrupted",
+                None,
+            )?,
+            None
+        );
+
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM subscription_issue WHERE subscription_id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 0);
+        Ok(())
+    })
+    .expect("no issue rows for non-issue failure kinds");
 }
 
 #[test]

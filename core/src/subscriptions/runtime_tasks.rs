@@ -6,6 +6,7 @@
 use tokio::time::{sleep, Duration};
 
 use crate::runtime_contract::task::{RuntimeTask, TaskProgress, TaskStatus};
+use crate::subscriptions::gallery_dl_runner::FailureKind;
 use crate::subscriptions::progress::SubscriptionProgressEvent;
 use crate::types::RunningSubscriptions;
 
@@ -320,7 +321,7 @@ pub fn publish_panic(
         resume_cursor: None,
         last_error,
         finished_status: Some("failed".to_string()),
-        failure_kind: Some("panic".to_string()),
+        failure_kind: Some(FailureKind::Panic.as_str().to_string()),
         error: Some(error),
     };
     publish_subscription_task(

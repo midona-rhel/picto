@@ -1,6 +1,7 @@
 use crate::subscriptions::credential_service::{
-    AuthFailureKind, ResolvedRunCredential, SubscriptionCredentialService,
+    ResolvedRunCredential, SubscriptionCredentialService,
 };
+use crate::subscriptions::gallery_dl_runner::FailureKind;
 
 use super::{SubscriptionSyncEngine, SyncProgress};
 
@@ -37,7 +38,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         subscription_id: i64,
         query_id: i64,
         site_id: &str,
-        failure_kind: AuthFailureKind,
+        failure_kind: FailureKind,
         detail: Option<&str>,
     ) {
         SubscriptionCredentialService::new(self.db)

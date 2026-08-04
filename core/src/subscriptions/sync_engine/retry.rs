@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use tokio_util::sync::CancellationToken;
 
-use crate::subscriptions::gallery_dl_runner::RunOptions;
+use crate::subscriptions::gallery_dl_runner::{FailureKind, RunOptions};
 use crate::subscriptions::import_policy::{collection_group_parts, validate_metadata_for_site};
 use crate::subscriptions::source_adapter::{
     DownloadedItem, GalleryDlSourceAdapter, SubscriptionSourceAdapter,
@@ -34,8 +34,16 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .await
         {
             if let Err(error) = adapter.validate_query_kind(site_id, &query.query_kind) {
-                progress.failure_kind = Some("invalid_query_kind".to_string());
-                progress.errors.push(error);
+                progress.failure_kind = Some(FailureKind::InvalidQueryKind.as_str().to_string());
+                progress.errors.push(error.clone());
+                self.record_issue(
+                    subscription_id,
+                    Some(query_id),
+                    FailureKind::InvalidQueryKind,
+                    "Subscription query kind is invalid for this source",
+                    Some(&error),
+                )
+                .await;
                 return progress;
             }
         }
@@ -93,7 +101,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     self.record_issue(
                         subscription_id,
                         Some(query_id),
-                        "unexpected_retry_item",
+                        FailureKind::UnexpectedRetryItem,
                         &format!(
                             "Retry for post {expected_post_id} yielded item from post {post_id}"
                         ),
@@ -108,7 +116,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 self.record_issue(
                     subscription_id,
                     Some(query_id),
-                    "malformed_metadata",
+                    FailureKind::MalformedMetadata,
                     "gallery-dl item metadata failed validation during retry",
                     Some(&error),
                 )
@@ -158,11 +166,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
             {
                 Ok(_) => progress.queued_for_ingest += 1,
                 Err(error) => {
+                    progress.failure_kind =
+                        Some(FailureKind::IngestQueueFailure.as_str().to_string());
                     progress.errors.push(error.clone());
                     self.record_issue(
                         subscription_id,
                         Some(query_id),
-                        "ingest_queue_failure",
+                        FailureKind::IngestQueueFailure,
                         &format!(
                             "Failed to queue retry item for ingest for post {expected_post_id}"
                         ),
@@ -179,20 +189,36 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 progress
                     .errors
                     .push(format!("gallery-dl retry failed: {error}"));
-                progress.failure_kind = Some("unknown".to_string());
+                progress.failure_kind = Some(FailureKind::Environment.as_str().to_string());
+                self.record_issue(
+                    subscription_id,
+                    Some(query_id),
+                    FailureKind::Environment,
+                    "Subscription retry could not start the downloader",
+                    progress.errors.last().map(String::as_str),
+                )
+                .await;
                 return progress;
             }
             Err(error) => {
                 progress
                     .errors
                     .push(format!("gallery-dl retry task panicked: {error}"));
-                progress.failure_kind = Some("unknown".to_string());
+                progress.failure_kind = Some(FailureKind::Panic.as_str().to_string());
+                self.record_issue(
+                    subscription_id,
+                    Some(query_id),
+                    FailureKind::Panic,
+                    "Subscription retry task panicked",
+                    progress.errors.last().map(String::as_str),
+                )
+                .await;
                 return progress;
             }
         };
 
         if run_summary.had_download_errors {
-            progress.failure_kind = Some("download_error".to_string());
+            progress.failure_kind = Some(FailureKind::DownloadFailure.as_str().to_string());
             for failed in &run_summary.failed_items {
                 self.persist_failed_download_attempt(
                     subscription_id,
@@ -212,11 +238,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 {
                     Ok(_) => progress.queued_for_ingest += 1,
                     Err(error) => {
+                        progress.failure_kind =
+                            Some(FailureKind::IngestQueueFailure.as_str().to_string());
                         progress.errors.push(error.clone());
                         self.record_issue(
                             subscription_id,
                             Some(query_id),
-                            "ingest_queue_failure",
+                            FailureKind::IngestQueueFailure,
                             &format!("Retry collection queue failed for post {expected_post_id}"),
                             Some(&error),
                         )
@@ -230,7 +258,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
         if run_summary.failed_items.is_empty() {
             let _ = self
                 .runtime_service()
-                .resolve_subscription_issues(subscription_id, Some(query_id), "download_failure")
+                .resolve_subscription_issues(
+                    subscription_id,
+                    Some(query_id),
+                    FailureKind::DownloadFailure,
+                )
                 .await;
         }
         if let Some(query_run_id) = query_run_id {

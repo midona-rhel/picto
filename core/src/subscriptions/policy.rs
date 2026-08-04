@@ -3,6 +3,8 @@
 //! Keeps naming, batch-limit, and terminal-status behavior in one place so
 //! controllers and the sync engine stop re-implementing those rules.
 
+use crate::subscriptions::gallery_dl_runner::FailureKind;
+
 pub fn effective_inbox_limit(_configured: u32) -> u32 {
     // Product decision: inbox ingest is always hard-capped to 1000 items.
     1000
@@ -32,10 +34,10 @@ pub fn effective_query_post_limit(global_batch_size: u32, subscription_limit: u3
 }
 
 pub fn resolve_finished_status_text(status: &str, failure_kind: Option<&str>) -> &'static str {
-    if status == "cancelled" && failure_kind == Some("inbox_full") {
+    if status == "cancelled" && failure_kind == Some(FailureKind::InboxFull.as_str()) {
         return "Paused (Inbox full)";
     }
-    if status == "cancelled" && failure_kind == Some("download_error") {
+    if status == "cancelled" && failure_kind == Some(FailureKind::DownloadFailure.as_str()) {
         return "Stopped (Download failed)";
     }
     match (status, failure_kind) {

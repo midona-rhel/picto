@@ -3,6 +3,7 @@ use std::sync::Arc;
 use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::AppSettings;
+use crate::subscriptions::gallery_dl_runner::FailureKind;
 use crate::subscriptions::job_queue::clear_subscription_guard_if_idle;
 use crate::subscriptions::policy::{
     effective_query_post_limit, resolve_finished_status_text, resolve_query_name,
@@ -34,12 +35,25 @@ pub async fn execute_query_job(
     // only job, nothing else clears the guard, run row, and runtime task.
     macro_rules! fail_job_and_finalize {
         ($kind:expr, $message:expr) => {{
+            let failure_kind = $kind;
+            let message = $message;
+            if failure_kind.creates_issue() {
+                let _ = runtime
+                    .upsert_subscription_issue(
+                        job.subscription_id,
+                        Some(job.query_id),
+                        failure_kind,
+                        &message,
+                        None,
+                    )
+                    .await;
+            }
             let _ = runtime
                 .finish_subscription_query_job(
                     job.job_id,
                     "failed",
-                    Some($kind.to_string()),
-                    Some($message),
+                    Some(failure_kind.as_str().to_string()),
+                    Some(message),
                 )
                 .await;
             let _ = finalize_if_idle(
@@ -61,19 +75,19 @@ pub async fn execute_query_job(
     let sub = match runtime.get_subscription(job.subscription_id).await {
         Ok(Some(sub)) => sub,
         Ok(None) => fail_job_and_finalize!(
-            "missing_subscription",
+            FailureKind::MissingSubscription,
             format!("Subscription {} no longer exists", job.subscription_id)
         ),
-        Err(error) => fail_job_and_finalize!("runtime", error),
+        Err(error) => fail_job_and_finalize!(FailureKind::Runtime, error),
     };
 
     let query = match runtime.get_subscription_query(job.query_id).await {
         Ok(Some(query)) => query,
         Ok(None) => fail_job_and_finalize!(
-            "missing_query",
+            FailureKind::MissingQuery,
             format!("Query {} no longer exists", job.query_id)
         ),
-        Err(error) => fail_job_and_finalize!("runtime", error),
+        Err(error) => fail_job_and_finalize!(FailureKind::Runtime, error),
     };
 
     let runner_key = runner_key_for_site(&query.site_id);
@@ -132,12 +146,22 @@ pub async fn execute_query_job(
     let result = match result {
         Ok(result) => result,
         Err(error) => {
+            let message = format!("Task panicked: {error}");
+            let _ = runtime
+                .upsert_subscription_issue(
+                    job.subscription_id,
+                    Some(job.query_id),
+                    FailureKind::Panic,
+                    "Subscription executor panicked",
+                    Some(&message),
+                )
+                .await;
             let _ = runtime
                 .finish_subscription_query_job(
                     job.job_id,
                     "failed",
-                    Some("panic".to_string()),
-                    Some(format!("Task panicked: {error}")),
+                    Some(FailureKind::Panic.as_str().to_string()),
+                    Some(message.clone()),
                 )
                 .await;
             publish_panic(
@@ -146,7 +170,7 @@ pub async fn execute_query_job(
                 mode,
                 Some(job.query_id.to_string()),
                 Some(query_name.clone()),
-                format!("Task panicked: {error}"),
+                message,
             );
             let _ = finalize_if_idle(
                 &runtime,
@@ -301,6 +325,33 @@ struct JobOutcome {
     errors: Vec<String>,
 }
 
+async fn failed_job_outcome(
+    runtime: &crate::subscriptions::runtime_service::SubscriptionRuntimeService<'_>,
+    subscription_id: i64,
+    query_id: i64,
+    failure_kind: FailureKind,
+    message: String,
+) -> JobOutcome {
+    let _ = runtime
+        .upsert_subscription_issue(
+            subscription_id,
+            Some(query_id),
+            failure_kind,
+            &message,
+            None,
+        )
+        .await;
+    JobOutcome {
+        files_downloaded_delta: 0,
+        files_skipped: 0,
+        metadata_validated: 0,
+        metadata_invalid: 0,
+        cancelled: false,
+        failure_kind: Some(failure_kind.as_str().to_string()),
+        errors: vec![message],
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_job_inner(
     db: Arc<LibraryDatabase>,
@@ -314,6 +365,10 @@ async fn run_job_inner(
     _query_name: String,
     cancel: tokio_util::sync::CancellationToken,
 ) -> JobOutcome {
+    let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+        db.as_ref(),
+        &library_root,
+    );
     let engine_result = SubscriptionSyncEngine::new(&db, &app_settings, &library_root);
     let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled;
     let auto_merge_distance = if auto_merge_enabled {
@@ -345,23 +400,18 @@ async fn run_job_inner(
             )
             .with_auto_collections(sub.auto_collections),
         Err(error) => {
-            return JobOutcome {
-                files_downloaded_delta: 0,
-                files_skipped: 0,
-                metadata_validated: 0,
-                metadata_invalid: 0,
-                cancelled: false,
-                failure_kind: Some("unknown".to_string()),
-                errors: vec![error],
-            };
+            return failed_job_outcome(
+                &runtime,
+                sub.subscription_id,
+                query.query_id,
+                FailureKind::Environment,
+                error,
+            )
+            .await;
         }
     };
 
     if job.job_kind == "retry_post" {
-        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
-            db.as_ref(),
-            &library_root,
-        );
         let canonical_site_id =
             crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id).to_string();
         let post_id = job.post_id.as_deref().unwrap_or_default();
@@ -376,30 +426,28 @@ async fn run_job_inner(
         {
             Ok(matching) => matching,
             Err(error) => {
-                return JobOutcome {
-                    files_downloaded_delta: 0,
-                    files_skipped: 0,
-                    metadata_validated: 0,
-                    metadata_invalid: 0,
-                    cancelled: false,
-                    failure_kind: Some("runtime".to_string()),
-                    errors: vec![error],
-                };
+                return failed_job_outcome(
+                    &runtime,
+                    sub.subscription_id,
+                    query.query_id,
+                    FailureKind::Runtime,
+                    error,
+                )
+                .await;
             }
         };
         if matching.is_empty() {
-            return JobOutcome {
-                files_downloaded_delta: 0,
-                files_skipped: 0,
-                metadata_validated: 0,
-                metadata_invalid: 0,
-                cancelled: false,
-                failure_kind: Some("missing_retry".to_string()),
-                errors: vec![format!(
+            return failed_job_outcome(
+                &runtime,
+                sub.subscription_id,
+                query.query_id,
+                FailureKind::MissingRetry,
+                format!(
                     "No failed download attempts found for post {} on query {}",
                     post_id, query.query_id
-                )],
-            };
+                ),
+            )
+            .await;
         }
         let retry_url = matching
             .iter()
@@ -410,15 +458,14 @@ async fn run_job_inner(
                     .find_map(|attempt| attempt.canonical_post_url.clone())
             });
         let Some(retry_url) = retry_url else {
-            return JobOutcome {
-                files_downloaded_delta: 0,
-                files_skipped: 0,
-                metadata_validated: 0,
-                metadata_invalid: 0,
-                cancelled: false,
-                failure_kind: Some("missing_retry".to_string()),
-                errors: vec![format!("No retry URL recorded for post {}", post_id)],
-            };
+            return failed_job_outcome(
+                &runtime,
+                sub.subscription_id,
+                query.query_id,
+                FailureKind::MissingRetry,
+                format!("No retry URL recorded for post {}", post_id),
+            )
+            .await;
         };
         for attempt in &matching {
             let _ = runtime
@@ -446,10 +493,6 @@ async fn run_job_inner(
         };
     }
 
-    let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
-        db.as_ref(),
-        &library_root,
-    );
     let mut total_downloaded_delta = 0usize;
     let mut total_skipped = 0usize;
     let mut total_metadata_validated = 0usize;
