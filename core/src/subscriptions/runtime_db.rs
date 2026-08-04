@@ -282,6 +282,18 @@ pub fn finalize_subscription_run_if_terminal(
         return Ok(None);
     }
 
+    let active_ingest: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM ingest_queue q
+         JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
+         WHERE qr.run_id = ?1 AND q.status IN ('pending', 'running')",
+        [run_id],
+        |row| row.get(0),
+    )?;
+    if active_ingest > 0 {
+        return Ok(None);
+    }
+
     let failure: Option<(String, Option<String>, Option<String>)> = conn
         .query_row(
             "SELECT status, failure_kind, error_message

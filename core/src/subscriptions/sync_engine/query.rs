@@ -283,6 +283,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
             progress.metadata_validated += 1;
             total_items += 1;
+            progress.files_downloaded += 1;
 
             if let Some(pid) = item.metadata.post_id.as_deref() {
                 all_post_ids.insert(pid.to_string());
@@ -356,8 +357,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 }
                 current_pending_collection_key = Some(key.clone());
                 progress.current_post_items += 1;
-                progress.files_downloaded += 1;
-
                 let short_id = if post_id.len() > 4 {
                     &post_id[post_id.len() - 4..]
                 } else {
@@ -542,10 +541,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         progress.errors.last().cloned(),
                     )
                     .await;
-                let _ = self
-                    .db
-                    .mark_all_pending_ingest_stale_for_subscription(subscription_id)
-                    .await;
                 if let Some(query_run_id) = query_run_id {
                     let _ = self
                         .runtime_service()
@@ -584,10 +579,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         progress.failure_kind.clone(),
                         progress.errors.last().cloned(),
                     )
-                    .await;
-                let _ = self
-                    .db
-                    .mark_all_pending_ingest_stale_for_subscription(subscription_id)
                     .await;
                 if let Some(query_run_id) = query_run_id {
                     let _ = self
@@ -880,11 +871,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .await;
                 }
             }
-        } else {
-            let _ = self
-                .db
-                .mark_all_pending_ingest_stale_for_subscription(subscription_id)
-                .await;
         }
 
         maybe_cleanup_subscription_temp_root(self.db, &run_summary.temp_dir).await;

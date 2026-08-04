@@ -163,7 +163,7 @@ pub async fn execute_query_job(
     .catch_unwind()
     .await;
 
-    let result = match result {
+    let mut result = match result {
         Ok(result) => result,
         Err(_) => {
             let message = "Subscription executor panicked".to_string();
@@ -219,14 +219,34 @@ pub async fn execute_query_job(
             .await;
     }
 
-    let failure_kind = result.failure_kind.clone();
-    let last_error = result.errors.last().cloned();
     if result.cancelled && shutdown.is_cancelled() {
         let _ = runtime
             .requeue_interrupted_subscription_query_job(job.job_id)
             .await;
         return;
     }
+
+    if let Some(run_id) = job.run_id {
+        match wait_for_run_ingest(db.as_ref(), run_id, &shutdown).await {
+            Ok(Some(counts)) if counts.failed > 0 => {
+                result.failure_kind = Some(FailureKind::IngestQueueFailure.as_str().to_string());
+                result.errors.push(format!(
+                    "{} downloaded file{} could not be added to the library",
+                    counts.failed,
+                    if counts.failed == 1 { "" } else { "s" },
+                ));
+            }
+            Ok(Some(_)) => {}
+            Ok(None) => return,
+            Err(error) => {
+                result.failure_kind = Some(FailureKind::IngestQueueFailure.as_str().to_string());
+                result.errors.push(error);
+            }
+        }
+    }
+
+    let failure_kind = result.failure_kind.clone();
+    let last_error = result.errors.last().cloned();
     if !result.cancelled && job.attempt_count < MAX_AUTOMATIC_RETRIES {
         if let Some(kind) = automatic_retry_kind(failure_kind.as_deref()) {
             let next_retry_at = automatic_retry_at(job.attempt_count);
@@ -274,6 +294,23 @@ pub async fn execute_query_job(
         Some(query_name),
     )
     .await;
+}
+
+async fn wait_for_run_ingest(
+    db: &LibraryDatabase,
+    run_id: i64,
+    shutdown: &CancellationToken,
+) -> Result<Option<crate::ingest_queue::IngestQueueCounts>, String> {
+    loop {
+        let counts = db.count_subscription_run_ingest_queue(run_id).await?;
+        if counts.queued == 0 && counts.ingesting == 0 {
+            return Ok(Some(counts));
+        }
+        tokio::select! {
+            _ = shutdown.cancelled() => return Ok(None),
+            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+        }
+    }
 }
 
 async fn finalize_if_idle(

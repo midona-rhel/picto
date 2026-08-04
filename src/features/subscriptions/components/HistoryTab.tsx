@@ -20,8 +20,8 @@ export function HistoryTab({ runs }: { runs: SubscriptionRunRecord[] }) {
       <div className={`${styles.historyRow} ${styles.historyHeader}`}>
         <span>Started</span>
         <span>Status</span>
-        <span className={styles.qCellNum}>Downloaded</span>
-        <span className={styles.qCellNum}>Skipped</span>
+        <span className={styles.qCellNum}>Fetched</span>
+        <span className={styles.qCellNum}>Already in library</span>
         <span>Notes</span>
       </div>
       {visible.map((run) => {

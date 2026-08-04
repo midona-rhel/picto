@@ -301,7 +301,7 @@ fn lease_next_ingest_queue(conn: &Connection) -> rusqlite::Result<Option<IngestQ
             "SELECT queue_id, queue_kind, source_kind, subscription_id, query_id, query_run_id,
                     cleanup_root, post_id, category, preferred_name, expected_count, status
              FROM ingest_queue
-             WHERE status IN ('pending', 'stale')
+             WHERE status = 'pending'
              ORDER BY created_at ASC, queue_id ASC
              LIMIT 1",
             [],
@@ -382,6 +382,13 @@ fn mark_ingest_queue_item_status(
     resolved_file_hash: Option<&str>,
     last_error: Option<&str>,
 ) -> rusqlite::Result<()> {
+    let previous_status: Option<String> = conn
+        .query_row(
+            "SELECT status FROM ingest_queue_item WHERE item_id = ?1",
+            [item_id],
+            |row| row.get(0),
+        )
+        .optional()?;
     conn.execute(
         "UPDATE ingest_queue_item
          SET status = ?1,
@@ -401,6 +408,22 @@ fn mark_ingest_queue_item_status(
             item_id
         ],
     )?;
+    if result_kind == Some(IngestQueueItemResultKind::Reused)
+        && previous_status.as_deref() != Some("complete")
+    {
+        conn.execute(
+            "UPDATE subscription_run
+             SET files_skipped = files_skipped + 1
+             WHERE run_id = (
+                 SELECT qr.run_id
+                 FROM ingest_queue_item i
+                 JOIN ingest_queue q ON q.queue_id = i.queue_id
+                 JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
+                 WHERE i.item_id = ?1
+             )",
+            [item_id],
+        )?;
+    }
     Ok(())
 }
 
@@ -446,26 +469,53 @@ fn count_ingest_queue_by_subscription(
     )
 }
 
-fn mark_running_ingest_stale(conn: &Connection) -> rusqlite::Result<()> {
+fn count_ingest_queue_by_run(
+    conn: &Connection,
+    run_id: i64,
+) -> rusqlite::Result<IngestQueueCounts> {
+    conn.query_row(
+        "SELECT
+             COALESCE(SUM(CASE WHEN i.status = 'pending' THEN 1 ELSE 0 END), 0),
+             COALESCE(SUM(CASE WHEN i.status = 'running' THEN 1 ELSE 0 END), 0),
+             COALESCE(SUM(CASE WHEN i.status = 'complete' AND i.result_kind = 'imported' THEN 1 ELSE 0 END), 0),
+             COALESCE(SUM(CASE WHEN i.status = 'complete' AND i.result_kind = 'reused' THEN 1 ELSE 0 END), 0),
+             COALESCE(SUM(CASE WHEN i.status = 'failed' THEN 1 ELSE 0 END), 0)
+         FROM ingest_queue_item i
+         JOIN ingest_queue q ON q.queue_id = i.queue_id
+         JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
+         WHERE qr.run_id = ?1",
+        [run_id],
+        |row| {
+            Ok(IngestQueueCounts {
+                queued: row.get::<_, i64>(0)? as usize,
+                ingesting: row.get::<_, i64>(1)? as usize,
+                ingested: row.get::<_, i64>(2)? as usize,
+                reused: row.get::<_, i64>(3)? as usize,
+                failed: row.get::<_, i64>(4)? as usize,
+            })
+        },
+    )
+}
+
+fn requeue_running_ingest(conn: &Connection) -> rusqlite::Result<()> {
+    let now = now_rfc3339();
+    conn.execute(
+        "UPDATE ingest_queue_item
+         SET status = 'pending', updated_at = ?1
+         WHERE status = 'running'",
+        [&now],
+    )?;
     conn.execute(
         "UPDATE ingest_queue
-         SET status = 'stale', updated_at = ?1
+         SET status = 'pending', updated_at = ?1
          WHERE status = 'running'",
-        params![now_rfc3339()],
+        [&now],
     )?;
     Ok(())
 }
 
 fn delete_completed_ingest_queues(conn: &Connection) -> rusqlite::Result<usize> {
     Ok(conn.execute("DELETE FROM ingest_queue WHERE status = 'complete'", [])?)
-}
-
-fn delete_stale_ingest_queues_older_than(conn: &Connection, days: i64) -> rusqlite::Result<usize> {
-    let cutoff = (chrono::Utc::now() - chrono::Duration::days(days)).to_rfc3339();
-    Ok(conn.execute(
-        "DELETE FROM ingest_queue WHERE status = 'stale' AND updated_at < ?1",
-        [cutoff],
-    )?)
 }
 
 fn count_retained_sources_under_root(
@@ -509,7 +559,7 @@ fn reset_ingest_queue_item_for_retry(
     let now = now_rfc3339();
     conn.execute(
         "UPDATE ingest_queue
-         SET status = 'stale', last_error = NULL, updated_at = ?1
+         SET status = 'pending', last_error = NULL, updated_at = ?1
          WHERE queue_id = ?2",
         params![now, queue_id],
     )?;
@@ -523,19 +573,6 @@ fn reset_ingest_queue_item_for_retry(
              updated_at = ?1
          WHERE item_id = ?2",
         params![now_rfc3339(), item_id],
-    )?;
-    Ok(())
-}
-
-fn mark_all_pending_ingest_stale_for_subscription(
-    conn: &Connection,
-    subscription_id: i64,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE ingest_queue
-         SET status = 'stale', updated_at = ?1
-         WHERE subscription_id = ?2 AND status IN ('pending', 'running')",
-        params![now_rfc3339(), subscription_id],
     )?;
     Ok(())
 }
@@ -588,15 +625,6 @@ impl LibraryDatabase {
                 log_ingest_queue_payload("enqueue", queue_id, item_id, &payload);
             }
             Ok(queue_id)
-        })
-    }
-
-    pub async fn mark_all_pending_ingest_stale_for_subscription(
-        &self,
-        subscription_id: i64,
-    ) -> Result<(), String> {
-        self.with_write(move |conn| {
-            mark_all_pending_ingest_stale_for_subscription(conn, subscription_id)
         })
     }
 
@@ -675,9 +703,8 @@ impl LibraryDatabase {
 
     pub async fn cleanup_ingest_queue(&self) -> Result<(), String> {
         self.with_write(move |conn| {
-            mark_running_ingest_stale(conn)?;
+            requeue_running_ingest(conn)?;
             delete_completed_ingest_queues(conn)?;
-            delete_stale_ingest_queues_older_than(conn, 7)?;
             Ok(())
         })
     }
@@ -687,6 +714,13 @@ impl LibraryDatabase {
         subscription_id: i64,
     ) -> Result<IngestQueueCounts, String> {
         self.with_read(move |conn| count_ingest_queue_by_subscription(conn, subscription_id))
+    }
+
+    pub async fn count_subscription_run_ingest_queue(
+        &self,
+        run_id: i64,
+    ) -> Result<IngestQueueCounts, String> {
+        self.with_read(move |conn| count_ingest_queue_by_run(conn, run_id))
     }
 
     pub async fn list_duplicate_failed_single_queue_candidates(
@@ -1158,7 +1192,7 @@ async fn reconcile_subscription_collection_order(
     };
     let ordered_hashes: Vec<String> = members
         .into_iter()
-        .filter(|member| member.status == "imported")
+        .filter(|member| matches!(member.status.as_str(), "imported" | "reused"))
         .filter_map(|member| member.entity_hash)
         .collect();
     if ordered_hashes.is_empty() {
@@ -1218,23 +1252,12 @@ async fn process_single_queue(
     payload.request.path = PathBuf::from(&item.source_path);
     db.mark_ingest_queue_item_running(item.item_id).await?;
 
-    // If the source file no longer exists, this is a stale queue entry —
-    // the file was already processed or cleaned up. Mark as complete no-op
-    // instead of failing (which would pin the temp root forever).
+    // Missing durable queue input is data loss, not a successful duplicate.
     if !payload.request.path.exists() {
-        info!(
-            queue_id = queue.queue_id,
-            source = %item.source_path,
-            "Source file missing, treating as already-processed no-op"
-        );
-        db.mark_ingest_queue_item_complete(
-            item.item_id,
-            IngestQueueItemResultKind::Reused,
-            None,
-            None,
-        )
-        .await?;
-        return Ok(());
+        return Err(format!(
+            "Queued ingest source is missing: {}",
+            item.source_path
+        ));
     }
 
     let outcome: SingleIngestOutcome = ingest_single_path(db, blob_store, &payload.request).await?;
@@ -1277,7 +1300,7 @@ async fn process_single_queue(
             subscription_id,
             metadata,
             Some(outcome.entity_hash.as_str()),
-            "imported",
+            outcome.disposition.result_kind(),
         )
         .await;
     }
@@ -1430,6 +1453,13 @@ async fn process_collection_queue(
         prepared.push((item.clone(), payload, Some(path)));
     }
 
+    if missing_count > 0 {
+        return Err(format!(
+            "Collection ingest is missing {missing_count} queued source file{}",
+            if missing_count == 1 { "" } else { "s" },
+        ));
+    }
+
     let present_paths: Vec<_> = prepared
         .iter()
         .filter_map(|(_, _, path)| path.clone())
@@ -1438,16 +1468,7 @@ async fn process_collection_queue(
 
     let mut processable = Vec::new();
     for (item, payload, path) in prepared {
-        let Some(path) = path else {
-            db.mark_ingest_queue_item_complete(
-                item.item_id,
-                IngestQueueItemResultKind::Reused,
-                None,
-                None,
-            )
-            .await?;
-            continue;
-        };
+        let path = path.expect("missing collection sources were rejected above");
         db.mark_ingest_queue_item_running(item.item_id).await?;
         let mut request = payload.request;
         request.path = path;
@@ -1459,22 +1480,6 @@ async fn process_collection_queue(
             },
         ));
     }
-    if missing_count > 0 {
-        info!(
-            queue_id = queue.queue_id,
-            missing_count,
-            remaining = processable.len(),
-            "Collection queue: some source files missing, skipping them"
-        );
-    }
-    if processable.is_empty() {
-        info!(
-            queue_id = queue.queue_id,
-            "All collection source files missing, treating as already-processed no-op"
-        );
-        return Ok(());
-    }
-
     processable.sort_by_key(|(_, member)| {
         member
             .metadata
@@ -1513,7 +1518,7 @@ async fn process_collection_queue(
                 .await
                 .unwrap_or_default()
                 .into_iter()
-                .filter(|member| member.status == "imported")
+                .filter(|member| matches!(member.status.as_str(), "imported" | "reused"))
                 .filter_map(|member| member.entity_hash)
                 .collect(),
             None => Vec::new(),
@@ -1568,7 +1573,7 @@ async fn process_collection_queue(
                 context.subscription_id,
                 &metadata,
                 Some(member.entity_hash.as_str()),
-                "imported",
+                member.disposition.result_kind(),
             )
             .await;
         }
@@ -1864,6 +1869,46 @@ mod tests {
         assert_eq!(counts.ingested, 1);
         assert_eq!(counts.reused, 1);
         assert_eq!(counts.failed, 1);
+    }
+
+    #[test]
+    fn startup_requeues_running_ingest_without_discarding_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_queue_schema(&conn);
+        conn.execute(
+            "INSERT INTO ingest_queue (
+                 queue_id, queue_kind, source_kind, subscription_id, status, created_at, updated_at
+             ) VALUES (1, 'single', 'subscription', 7, 'running', 'old', 'old')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO ingest_queue_item (
+                 item_id, queue_id, source_path, payload_json, delete_after_ingest,
+                 status, created_at, updated_at
+             ) VALUES (1, 1, '/tmp/a', '{}', 1, 'running', 'old', 'old')",
+            [],
+        )
+        .unwrap();
+
+        requeue_running_ingest(&conn).unwrap();
+
+        let queue_status: String = conn
+            .query_row(
+                "SELECT status FROM ingest_queue WHERE queue_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let item_status: String = conn
+            .query_row(
+                "SELECT status FROM ingest_queue_item WHERE item_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(queue_status, "pending");
+        assert_eq!(item_status, "pending");
     }
 
     #[test]
@@ -2212,7 +2257,7 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(queue_status, "stale");
+        assert_eq!(queue_status, "pending");
         assert_eq!(queue_error, None);
 
         let row: (

@@ -203,6 +203,13 @@ Implementation checkpoint:
 
 ### S4. Finish the one streaming ingest path and remove competitors
 
+Checkpoint completed on 2026-08-05: downloaded assets now increment the same counter for single and
+collection paths; cancellation and restart preserve pending ingest instead of marking it stale; an
+interrupted running ingest is returned to pending at startup; missing queue input is a visible
+failure rather than a fake reuse; and a full run cannot settle before its ingest queues are terminal.
+Imported and reused post members retain their truthful outcome while both remain valid collection
+members. History now labels fetched files and exact reuse explicitly. Live reset/re-run proof remains.
+
 Trace create, run, query run, retry, stop, reset, issue read, and ingest handoff from dispatch to
 `SubscriptionRuntimeService`. Consolidate construction only where it removes duplicate behavior.
 Delete `core/src/db/write/subscriptions.rs` if reachability confirms it is dead. Do not move the

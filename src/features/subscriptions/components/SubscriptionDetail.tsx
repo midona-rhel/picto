@@ -242,7 +242,9 @@ export function SubscriptionDetail({
               {' · '}
               {subscription.total_files.toLocaleString()} files collected
               {lastRun && lastRun.files_downloaded > 0 &&
-                ` · ${lastRun.files_downloaded} new in the last check`}
+                ` · last run fetched ${lastRun.files_downloaded}`}
+              {lastRun && lastRun.files_skipped > 0 &&
+                ` (${lastRun.files_skipped} already in your library)`}
             </span>
           </div>
         </div>
