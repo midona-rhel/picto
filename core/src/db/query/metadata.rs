@@ -37,7 +37,6 @@ pub fn get_implied_tags(conn: &Connection, entity_hash: &str) -> rusqlite::Resul
             namespace,
             subtag,
             display: tag_display_key(&display_ns, &display_st),
-            file_count: 0,
             read_only: true,
         })
     })?;

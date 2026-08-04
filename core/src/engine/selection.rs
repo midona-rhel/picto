@@ -94,22 +94,22 @@ impl ApplicationEngine {
             return Ok((Vec::new(), Vec::new()));
         }
 
-        let all_counts = self.db.get_all_tags_with_counts()?;
+        let all_tag_keys = self.db.get_all_tag_keys()?;
         let mut top = Vec::new();
         let mut shared = Vec::new();
 
         tracing::debug!(
             "[selection_summary] selected_count={}, total_tags_to_check={}",
             selected_count,
-            all_counts.len()
+            all_tag_keys.len()
         );
 
-        for tag in all_counts {
+        for (tag_id, namespace, subtag) in all_tag_keys {
             let mut bitmap =
                 self.db
                     .bitmaps
                     .get(&crate::db::projection::bitmaps::BitmapKey::EffectiveTag(
-                        tag.tag_id,
+                        tag_id,
                     ));
             if bitmap.is_empty() {
                 continue;
@@ -119,7 +119,7 @@ impl ApplicationEngine {
             if count <= 0 {
                 continue;
             }
-            let tag_str = crate::types::tag_display_key(&tag.namespace, &tag.subtag);
+            let tag_str = crate::types::tag_display_key(&namespace, &subtag);
             if count == selected_count {
                 shared.push(SelectionTagCount {
                     tag: tag_str.clone(),

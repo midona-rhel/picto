@@ -7,7 +7,6 @@ pub mod folders;
 pub mod grid;
 pub mod ingest;
 pub mod metadata;
-pub mod search;
 pub mod settings;
 pub mod sidebar;
 pub mod stats;

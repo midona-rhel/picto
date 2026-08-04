@@ -4,6 +4,87 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::types::{mask_from_db_bits, NamespaceSummary, TagInfo, TagRecord, TagRelation};
 
+fn equivalent_tag_match(membership_alias: &str, requested_tag_id: &str) -> String {
+    format!(
+        "({membership_alias}.tag_id = {requested_tag_id}
+          OR EXISTS (
+              SELECT 1 FROM tag_alias ta
+              WHERE ta.from_tag_id = {requested_tag_id}
+                AND ta.to_tag_id = {membership_alias}.tag_id
+          )
+          OR EXISTS (
+              SELECT 1 FROM tag_alias ta
+              WHERE ta.from_tag_id = {membership_alias}.tag_id
+                AND ta.to_tag_id = {requested_tag_id}
+          )
+          OR EXISTS (
+              SELECT 1
+              FROM tag_alias requested_alias
+              JOIN tag_alias member_alias
+                ON member_alias.to_tag_id = requested_alias.to_tag_id
+              WHERE requested_alias.from_tag_id = {requested_tag_id}
+                AND member_alias.from_tag_id = {membership_alias}.tag_id
+          ))"
+    )
+}
+
+fn effective_tag_id_exists(entity_id: &str, requested_tag_id: &str) -> String {
+    format!(
+        "(EXISTS (
+             SELECT 1 FROM entity_tag direct
+             WHERE direct.entity_id = {entity_id}
+               AND {direct_match}
+         )
+         OR EXISTS (
+             SELECT 1 FROM entity_tag_implied implied
+             WHERE implied.entity_id = {entity_id}
+               AND {implied_match}
+         ))",
+        direct_match = equivalent_tag_match("direct", requested_tag_id),
+        implied_match = equivalent_tag_match("implied", requested_tag_id),
+    )
+}
+
+pub(crate) fn effective_tag_exists(entity_id: &str, parameter_index: usize) -> String {
+    format!(
+        "EXISTS (
+             SELECT 1
+             FROM tag requested
+             WHERE (requested.namespace || ':' || requested.subtag = ?{parameter_index}
+                    OR requested.subtag = ?{parameter_index})
+               AND {membership}
+         )",
+        membership = effective_tag_id_exists(entity_id, "requested.tag_id"),
+    )
+}
+
+fn visible_tag_count_expr(requested_tag_id: &str) -> String {
+    format!(
+        "(SELECT COUNT(*)
+          FROM media_entity me
+          WHERE me.status = 1
+            AND me.parent_collection_entity_id IS NULL
+            AND (
+                {top_level}
+                OR (me.entity_kind = 'collection' AND EXISTS (
+                    SELECT 1
+                    FROM media_entity child
+                    WHERE child.parent_collection_entity_id = me.entity_id
+                      AND {child}
+                ))
+            ))",
+        top_level = effective_tag_id_exists("me.entity_id", requested_tag_id),
+        child = effective_tag_id_exists("child.entity_id", requested_tag_id),
+    )
+}
+
+fn tag_record_columns(alias: &str) -> String {
+    format!(
+        "{alias}.tag_id, {alias}.namespace, {alias}.subtag, {} AS file_count, {alias}.site_mask",
+        visible_tag_count_expr(&format!("{alias}.tag_id"))
+    )
+}
+
 pub fn find_tag_id(conn: &Connection, tag_str: &str) -> rusqlite::Result<Option<i64>> {
     let (namespace, subtag) = parse_tag(tag_str);
     conn.query_row(
@@ -33,40 +114,39 @@ pub fn search_tags(
     limit: i64,
     offset: i64,
 ) -> rusqlite::Result<Vec<TagRecord>> {
+    let columns = tag_record_columns("t");
     if query.is_empty() {
-        let mut stmt = conn.prepare(
-            "SELECT tag_id, namespace, subtag, file_count, site_mask
-             FROM tag
+        let sql = format!(
+            "WITH counted AS (SELECT {columns} FROM tag t)
+             SELECT tag_id, namespace, subtag, file_count, site_mask
+             FROM counted
              WHERE file_count > 0
              ORDER BY file_count DESC, subtag ASC, tag_id ASC
-             LIMIT ?1 OFFSET ?2",
-        )?;
+             LIMIT ?1 OFFSET ?2"
+        );
+        let mut stmt = conn.prepare(&sql)?;
         return stmt
             .query_map(params![limit, offset], map_tag_record)?
             .collect();
     }
 
     let fts_query = format!("{}*", query.replace('"', ""));
-    let mut stmt = conn.prepare(
-        "SELECT t.tag_id, t.namespace, t.subtag, t.file_count, t.site_mask
+    let sql = format!(
+        "SELECT {columns}
          FROM tag_fts fts
          JOIN tag t ON t.tag_id = fts.rowid
          WHERE tag_fts MATCH ?1
          ORDER BY rank
-         LIMIT ?2 OFFSET ?3",
-    )?;
+         LIMIT ?2 OFFSET ?3"
+    );
+    let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params![fts_query, limit, offset], map_tag_record)?;
     rows.collect()
 }
 
-pub fn get_all_tags_with_counts(conn: &Connection) -> rusqlite::Result<Vec<TagRecord>> {
-    let mut stmt = conn.prepare(
-        "SELECT tag_id, namespace, subtag, file_count, site_mask
-         FROM tag
-         WHERE file_count > 0
-         ORDER BY file_count DESC, subtag ASC, tag_id ASC",
-    )?;
-    let rows = stmt.query_map([], map_tag_record)?;
+pub fn get_all_tag_keys(conn: &Connection) -> rusqlite::Result<Vec<(i64, String, String)>> {
+    let mut stmt = conn.prepare("SELECT tag_id, namespace, subtag FROM tag ORDER BY tag_id")?;
+    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
     rows.collect()
 }
 
@@ -143,6 +223,7 @@ pub fn get_tags_paginated(
     cursor: Option<&str>,
     limit: i64,
 ) -> rusqlite::Result<Vec<TagRecord>> {
+    let columns = tag_record_columns("t");
     // Namespace sort priority — matches the Hydrus-compatible ordering used throughout the app
     const NS_ORDER_EXPR: &str = "CASE LOWER(t.namespace)
         WHEN 'creator'   THEN 0
@@ -164,18 +245,19 @@ pub fn get_tags_paginated(
             let fts_query = format!("{}*", query.replace('"', ""));
             let (sql, use_ns) = match namespace {
                 Some(_) => (
-                    "SELECT t.tag_id, t.namespace, t.subtag, t.file_count, t.site_mask
-                     FROM tag_fts fts
-                     JOIN tag t ON t.tag_id = fts.rowid
-                     WHERE tag_fts MATCH ?1 AND t.namespace = ?2
-                     ORDER BY t.subtag ASC, t.tag_id ASC
-                     LIMIT ?3"
-                        .to_string(),
+                    format!(
+                        "SELECT {columns}
+                         FROM tag_fts fts
+                         JOIN tag t ON t.tag_id = fts.rowid
+                         WHERE tag_fts MATCH ?1 AND t.namespace = ?2
+                         ORDER BY t.subtag ASC, t.tag_id ASC
+                         LIMIT ?3"
+                    ),
                     true,
                 ),
                 None => (
                     format!(
-                        "SELECT t.tag_id, t.namespace, t.subtag, t.file_count, t.site_mask
+                        "SELECT {columns}
                          FROM tag_fts fts
                          JOIN tag t ON t.tag_id = fts.rowid
                          WHERE tag_fts MATCH ?1
@@ -211,22 +293,6 @@ pub fn get_tags_paginated(
         (None, None)
     };
 
-    // Namespace sort priority for direct table queries (no alias prefix)
-    const NS_ORDER_BARE: &str = "CASE LOWER(namespace)
-        WHEN 'creator'   THEN 0
-        WHEN 'studio'    THEN 1
-        WHEN 'series'    THEN 2
-        WHEN 'character'  THEN 3
-        WHEN 'person'    THEN 4
-        WHEN 'species'   THEN 5
-        WHEN 'photoset'  THEN 6
-        WHEN 'rating'    THEN 7
-        WHEN 'meta'      THEN 8
-        WHEN 'system'    THEN 9
-        WHEN 'general'   THEN 10
-        WHEN ''          THEN 10
-        ELSE 11 END";
-
     let has_namespace = namespace.is_some();
 
     // When a specific namespace is selected, no namespace ordering needed — just subtag ASC.
@@ -237,14 +303,14 @@ pub fn get_tags_paginated(
         let has_cursor = cursor_subtag.is_some();
         let sql = match has_cursor {
             false => format!(
-                "SELECT tag_id, namespace, subtag, file_count, site_mask FROM tag
-                 WHERE namespace = ?1
-                 ORDER BY subtag ASC, tag_id ASC LIMIT ?2"
+                "SELECT {columns} FROM tag t
+                 WHERE t.namespace = ?1
+                 ORDER BY t.subtag ASC, t.tag_id ASC LIMIT ?2"
             ),
             true => format!(
-                "SELECT tag_id, namespace, subtag, file_count, site_mask FROM tag
-                 WHERE namespace = ?1 AND (subtag, tag_id) > (?2, ?3)
-                 ORDER BY subtag ASC, tag_id ASC LIMIT ?4"
+                "SELECT {columns} FROM tag t
+                 WHERE t.namespace = ?1 AND (t.subtag, t.tag_id) > (?2, ?3)
+                 ORDER BY t.subtag ASC, t.tag_id ASC LIMIT ?4"
             ),
         };
         let mut stmt = conn.prepare(&sql)?;
@@ -286,16 +352,14 @@ pub fn get_tags_paginated(
 
     let sql = if has_cursor {
         format!(
-            "SELECT tag_id, namespace, subtag, file_count, site_mask FROM tag
-             WHERE ({ns_order}, subtag, tag_id) > (?1, ?2, ?3)
-             ORDER BY {ns_order} ASC, subtag ASC, tag_id ASC LIMIT ?4",
-            ns_order = NS_ORDER_BARE
+            "SELECT {columns} FROM tag t
+             WHERE ({NS_ORDER_EXPR}, t.subtag, t.tag_id) > (?1, ?2, ?3)
+             ORDER BY {NS_ORDER_EXPR} ASC, t.subtag ASC, t.tag_id ASC LIMIT ?4"
         )
     } else {
         format!(
-            "SELECT tag_id, namespace, subtag, file_count, site_mask FROM tag
-             ORDER BY {ns_order} ASC, subtag ASC, tag_id ASC LIMIT ?1",
-            ns_order = NS_ORDER_BARE
+            "SELECT {columns} FROM tag t
+             ORDER BY {NS_ORDER_EXPR} ASC, t.subtag ASC, t.tag_id ASC LIMIT ?1"
         )
     };
 

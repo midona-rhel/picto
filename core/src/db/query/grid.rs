@@ -10,6 +10,8 @@ use crate::db::types::{
     TagMatchMode,
 };
 
+use super::tags::effective_tag_exists;
+
 fn folder_scope_membership(parameter_index: usize) -> String {
     format!(
         "(EXISTS (SELECT 1 FROM folder_member fm WHERE fm.folder_id = ?{parameter_index} AND fm.entity_id = me.entity_id) \
@@ -517,55 +519,6 @@ fn apply_filters(filters: &QueryFilters, parts: &mut Vec<String>, bound: &mut Ve
             }
         }
     }
-}
-
-fn effective_tag_exists(entity_id: &str, parameter_index: usize) -> String {
-    let matches_requested_tag = |membership_alias: &str| {
-        format!(
-            "({membership_alias}.tag_id = requested.tag_id
-              OR EXISTS (
-                  SELECT 1 FROM tag_alias ta
-                  WHERE ta.from_tag_id = requested.tag_id
-                    AND ta.to_tag_id = {membership_alias}.tag_id
-              )
-              OR EXISTS (
-                  SELECT 1 FROM tag_alias ta
-                  WHERE ta.from_tag_id = {membership_alias}.tag_id
-                    AND ta.to_tag_id = requested.tag_id
-              )
-              OR EXISTS (
-                  SELECT 1
-                  FROM tag_alias requested_alias
-                  JOIN tag_alias member_alias
-                    ON member_alias.to_tag_id = requested_alias.to_tag_id
-                  WHERE requested_alias.from_tag_id = requested.tag_id
-                    AND member_alias.from_tag_id = {membership_alias}.tag_id
-              ))"
-        )
-    };
-
-    format!(
-        "EXISTS (
-            SELECT 1
-            FROM tag requested
-            WHERE (requested.namespace || ':' || requested.subtag = ?{parameter_index}
-                   OR requested.subtag = ?{parameter_index})
-              AND (
-                  EXISTS (
-                      SELECT 1 FROM entity_tag direct
-                      WHERE direct.entity_id = {entity_id}
-                        AND {direct_match}
-                  )
-                  OR EXISTS (
-                      SELECT 1 FROM entity_tag_implied implied
-                      WHERE implied.entity_id = {entity_id}
-                        AND {implied_match}
-                  )
-              )
-        )",
-        direct_match = matches_requested_tag("direct"),
-        implied_match = matches_requested_tag("implied"),
-    )
 }
 
 fn apply_date_filter(

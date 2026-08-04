@@ -1405,8 +1405,8 @@ impl LibraryDatabase {
         self.with_read(|conn| query::tags::search_tags(conn, query_str, limit, offset))
     }
 
-    pub fn get_all_tags_with_counts(&self) -> Result<Vec<types::TagRecord>, String> {
-        self.with_read(query::tags::get_all_tags_with_counts)
+    pub fn get_all_tag_keys(&self) -> Result<Vec<(i64, String, String)>, String> {
+        self.with_read(query::tags::get_all_tag_keys)
     }
 
     pub fn get_entity_tags(&self, entity_hash: &str) -> Result<Vec<types::TagInfo>, String> {

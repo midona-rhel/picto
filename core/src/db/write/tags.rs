@@ -34,11 +34,6 @@ pub fn add_tags(
     }
     change.entity_ids = expanded;
 
-    // Update file_count on tag rows
-    for tid in &change.tag_ids {
-        update_tag_count(conn, *tid)?;
-    }
-
     Ok(change)
 }
 
@@ -62,7 +57,6 @@ pub fn remove_tags(
             }
             change.tag_ids.push(tag_id);
             change.tags_removed.push(tag_str.clone());
-            update_tag_count(conn, tag_id)?;
         }
     }
     change.entity_ids = expanded;
@@ -114,7 +108,6 @@ pub fn rename_tag(
         )?;
         conn.execute("DELETE FROM entity_tag WHERE tag_id = ?1", params![tag_id])?;
         conn.execute("DELETE FROM tag WHERE tag_id = ?1", params![tag_id])?;
-        update_tag_count(conn, target_id)?;
         Ok(TagStructureChange {
             entity_ids: affected_entity_ids,
             dirty_tag_ids: vec![tag_id, target_id],
@@ -183,8 +176,6 @@ pub fn merge_tags(
     )?;
     conn.execute("DELETE FROM entity_tag WHERE tag_id = ?1", [from_tag_id])?;
     conn.execute("DELETE FROM tag WHERE tag_id = ?1", [from_tag_id])?;
-    update_tag_count(conn, to_tag_id)?;
-
     Ok(TagStructureChange {
         entity_ids: affected,
         dirty_tag_ids: vec![from_tag_id, to_tag_id],
@@ -273,14 +264,6 @@ fn find_tag(conn: &Connection, tag_str: &str) -> rusqlite::Result<Option<i64>> {
         |row| row.get(0),
     )
     .optional()
-}
-
-fn update_tag_count(conn: &Connection, tag_id: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE tag SET file_count = (SELECT COUNT(*) FROM entity_tag WHERE tag_id = ?1) WHERE tag_id = ?1",
-        [tag_id],
-    )?;
-    Ok(())
 }
 
 fn parse_tag(s: &str) -> (String, String) {

@@ -4,7 +4,7 @@
 use rusqlite::Connection;
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 102;
+pub const CURRENT_SCHEMA_VERSION: i64 = 103;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -66,7 +66,6 @@ CREATE TABLE IF NOT EXISTS tag (
     namespace  TEXT    NOT NULL DEFAULT 'general',
     subtag     TEXT    NOT NULL,
     site_mask  INTEGER NOT NULL DEFAULT 0,
-    file_count INTEGER NOT NULL DEFAULT 0,
     UNIQUE (namespace, subtag)
 );
 
@@ -495,7 +494,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 102
+SELECT 103
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 

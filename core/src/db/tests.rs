@@ -890,6 +890,140 @@ fn folder_count_matches_grid_collection_collapse_and_active_visibility() {
 }
 
 #[test]
+fn tag_counts_match_visible_tag_scopes() {
+    let db = open_test_db();
+    let insert = |hash: &str, status: i64| {
+        let file_id = db
+            .insert_file(
+                &format!("{hash}-file"),
+                "image/png",
+                10,
+                None,
+                None,
+                None,
+                None,
+                false,
+                "2026-08-04",
+            )
+            .unwrap();
+        db.insert_single(
+            hash,
+            file_id,
+            Some(hash),
+            status,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap()
+    };
+    let add_tag = |entity_id: i64, tag: &str| {
+        db.add_tags(
+            &[entity_id],
+            &[tag.to_string()],
+            1,
+            crate::db::types::ExpansionMode::EntityOnly,
+        )
+        .unwrap();
+    };
+    let tag_scope = |tag: &str| EntityViewQuery {
+        base_scope: BaseScope {
+            kind: ScopeKind::Tag,
+            key: Some(tag.to_string()),
+            id: None,
+        },
+        filters: QueryFilters::default(),
+        sort: QuerySort::default(),
+        page: QueryPage::default(),
+    };
+
+    let standalone = insert("tag-count-standalone", 1);
+    let first_child = insert("tag-count-child-one", 1);
+    let second_child = insert("tag-count-child-two", 1);
+    let inbox = insert("tag-count-inbox", 0);
+    let trash = insert("tag-count-trash", 2);
+    add_tag(standalone, "test:visible");
+    add_tag(first_child, "test:visible");
+    add_tag(second_child, "test:visible");
+    add_tag(inbox, "test:visible");
+    add_tag(trash, "test:visible");
+    db.create_collection_with_members_by_hashes(
+        "Tagged collection",
+        &[
+            "tag-count-child-one".to_string(),
+            "tag-count-child-two".to_string(),
+        ],
+    )
+    .unwrap();
+
+    let alias_entity = insert("tag-count-alias", 1);
+    add_tag(alias_entity, "test:canonical");
+    let alias_seed = insert("tag-count-alias-seed", 0);
+    add_tag(alias_seed, "test:alias");
+    let canonical_id = db.find_tag_id("test:canonical").unwrap().unwrap();
+    let alias_id = db.find_tag_id("test:alias").unwrap().unwrap();
+    db.manage_tag_alias(alias_id, Some(canonical_id)).unwrap();
+
+    let implication_child_entity = insert("tag-count-implication-child", 1);
+    let implication_parent_entity = insert("tag-count-implication-parent", 1);
+    add_tag(implication_child_entity, "test:child");
+    add_tag(implication_parent_entity, "test:parent");
+    let child_tag_id = db.find_tag_id("test:child").unwrap().unwrap();
+    let parent_tag_id = db.find_tag_id("test:parent").unwrap().unwrap();
+    db.manage_tag_implication(child_tag_id, parent_tag_id, true)
+        .unwrap();
+
+    let zero_count_entity = insert("tag-count-zero", 0);
+    add_tag(zero_count_entity, "test:zero");
+    db.full_rebuild();
+
+    let records = db.get_tags_paginated(None, None, None, 100).unwrap();
+    let count = |tag: &str| {
+        let (namespace, subtag) = tag.split_once(':').unwrap();
+        records
+            .iter()
+            .find(|record| record.namespace == namespace && record.subtag == subtag)
+            .unwrap()
+            .file_count
+    };
+    let assert_scope_count = |tag: &str, expected: i64| {
+        let page = db.query_entity_view(&tag_scope(tag)).unwrap();
+        assert_eq!(page.total_count, Some(expected), "grid count for {tag}");
+        assert_eq!(count(tag), expected, "tag list count for {tag}");
+    };
+
+    assert_scope_count("test:visible", 2);
+    assert_scope_count("test:canonical", 1);
+    assert_scope_count("test:alias", 1);
+    assert_scope_count("test:child", 1);
+    assert_scope_count("test:parent", 2);
+    assert_scope_count("test:zero", 0);
+
+    let zero_tag_id = db.find_tag_id("test:zero").unwrap().unwrap();
+    assert!(db
+        .get_all_tag_keys()
+        .unwrap()
+        .iter()
+        .any(|tag| tag.0 == zero_tag_id));
+    assert!(!db
+        .search_tags("", 100, 0)
+        .unwrap()
+        .iter()
+        .any(|tag| tag.tag_id == zero_tag_id));
+
+    db.with_read(|conn| {
+        let has_file_count = conn
+            .prepare("PRAGMA table_info(tag)")?
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .iter()
+            .any(|column| column == "file_count");
+        assert!(!has_file_count, "tag counts must not be stored separately");
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
 fn recently_viewed_is_unique_top_level_active_and_latest_first() {
     let db = open_test_db();
     let insert = |hash: &str, status: i64| {
@@ -1340,7 +1474,7 @@ fn smart_folder_scope_query_matches_runtime_compiled_bitmap_and_sidebar_count() 
             [],
         )?;
         conn.execute(
-            "INSERT INTO tag (tag_id, namespace, subtag, file_count) VALUES (1, 'general', 'landscape', 1)",
+            "INSERT INTO tag (tag_id, namespace, subtag) VALUES (1, 'general', 'landscape')",
             [],
         )?;
         conn.execute(

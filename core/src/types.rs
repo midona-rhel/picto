@@ -237,7 +237,6 @@ pub struct TagInfo {
     pub namespace: String,
     pub subtag: String,
     pub display: String,
-    pub file_count: i64,
     pub read_only: bool,
 }
 
