@@ -144,5 +144,8 @@
     "vite": "^5.0.12",
     "vitest": "^1.2.1",
     "wait-on": "^8.0.5"
+  },
+  "allowScripts": {
+    "electron": true
   }
 }
