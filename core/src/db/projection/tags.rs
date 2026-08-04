@@ -2,6 +2,8 @@
 //! Rebuilds Status, Tag, ImpliedTag, EffectiveTag, Tagged, and
 //! CollectionMember bitmaps from authoritative tables.
 
+use std::collections::HashMap;
+
 use roaring::RoaringBitmap;
 use rusqlite::Connection;
 
@@ -145,19 +147,73 @@ pub fn compile_implied_tags(conn: &Connection, bitmaps: &BitmapStore) {
         }
         bitmaps.set(BitmapKey::ImpliedTag(*tag_id), bitmap);
     }
+}
 
-    // Build EffectiveTag = Tag | ImpliedTag for each tag
-    let all_tag_ids: Vec<i64> = conn
-        .prepare("SELECT tag_id FROM tag")
-        .and_then(|mut stmt| {
-            stmt.query_map([], |row| row.get(0))
-                .map(|rows| rows.flatten().collect())
-        })
-        .unwrap_or_default();
+/// Rebuild effective tag membership for entities and their visible collection aggregates.
+pub fn compile_effective_tag_bitmaps(conn: &Connection, bitmaps: &BitmapStore) {
+    let sql = "WITH membership(entity_id, tag_id) AS (
+                   SELECT entity_id, tag_id FROM entity_tag
+                   UNION
+                   SELECT entity_id, tag_id FROM entity_tag_implied
+               ), equivalent(requested_tag_id, entity_id) AS (
+                   SELECT tag_id, entity_id FROM membership
+                   UNION
+                   SELECT alias.from_tag_id, membership.entity_id
+                   FROM membership
+                   JOIN tag_alias alias ON alias.to_tag_id = membership.tag_id
+                   UNION
+                   SELECT alias.to_tag_id, membership.entity_id
+                   FROM membership
+                   JOIN tag_alias alias ON alias.from_tag_id = membership.tag_id
+                   UNION
+                   SELECT requested_alias.from_tag_id, membership.entity_id
+                   FROM membership
+                   JOIN tag_alias member_alias ON member_alias.from_tag_id = membership.tag_id
+                   JOIN tag_alias requested_alias
+                     ON requested_alias.to_tag_id = member_alias.to_tag_id
+               )
+               SELECT equivalent.requested_tag_id,
+                      equivalent.entity_id,
+                      me.parent_collection_entity_id
+               FROM equivalent
+               JOIN media_entity me ON me.entity_id = equivalent.entity_id";
 
-    for tag_id in all_tag_ids {
-        let direct = bitmaps.get(&BitmapKey::Tag(tag_id));
-        let implied = bitmaps.get(&BitmapKey::ImpliedTag(tag_id));
-        bitmaps.set(BitmapKey::EffectiveTag(tag_id), &direct | &implied);
+    let result = (|| -> rusqlite::Result<HashMap<i64, RoaringBitmap>> {
+        let mut effective = HashMap::new();
+        let mut tag_stmt = conn.prepare("SELECT tag_id FROM tag")?;
+        let tag_ids = tag_stmt.query_map([], |row| row.get::<_, i64>(0))?;
+        for tag_id in tag_ids {
+            effective.insert(tag_id?, RoaringBitmap::new());
+        }
+
+        let mut stmt = conn.prepare(sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (tag_id, entity_id, parent_id) = row?;
+            let bitmap = effective.entry(tag_id).or_default();
+            bitmap.insert(entity_id as u32);
+            if let Some(parent_id) = parent_id {
+                bitmap.insert(parent_id as u32);
+            }
+        }
+        Ok(effective)
+    })();
+
+    let effective = match result {
+        Ok(effective) => effective,
+        Err(error) => {
+            tracing::warn!(%error, "Failed to rebuild effective tag bitmaps");
+            return;
+        }
+    };
+
+    for (tag_id, bitmap) in effective {
+        bitmaps.set(BitmapKey::EffectiveTag(tag_id), bitmap);
     }
 }

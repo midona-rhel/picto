@@ -60,64 +60,20 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
         );
     }
 
-    // System scope counts (top-level only, excludes collection members)
-    for (node_id, status) in [
-        ("system:active", 1i64),
-        ("system:inbox", 0),
-        ("system:trash", 2),
-    ] {
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM media_entity WHERE status = ?1 AND parent_collection_entity_id IS NULL",
-                [status],
-                |row| row.get(0),
-            )
-            .unwrap_or(0);
-        let _ = conn.execute(
-            "UPDATE sidebar_node SET count = ?1 WHERE node_id = ?2",
-            params![count, node_id],
-        );
+    if let Ok(counts) = crate::db::query::stats::get_scope_counts(conn) {
+        for (node_id, count) in [
+            ("system:active", counts.active),
+            ("system:inbox", counts.inbox),
+            ("system:trash", counts.trash),
+            ("system:uncategorized", counts.uncategorized),
+            ("system:untagged", counts.untagged),
+        ] {
+            let _ = conn.execute(
+                "UPDATE sidebar_node SET count = ?1 WHERE node_id = ?2",
+                params![count, node_id],
+            );
+        }
     }
-
-    // Uncategorized count
-    let uncategorized: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM media_entity me
-             WHERE me.status = 1 AND me.parent_collection_entity_id IS NULL
-               AND NOT EXISTS (SELECT 1 FROM folder_member fm WHERE fm.entity_id = me.entity_id)
-               AND NOT EXISTS (
-                   SELECT 1 FROM media_entity child
-                   WHERE child.parent_collection_entity_id = me.entity_id
-                     AND EXISTS (SELECT 1 FROM folder_member fm WHERE fm.entity_id = child.entity_id)
-               )",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let _ = conn.execute(
-        "UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:uncategorized'",
-        [uncategorized],
-    );
-
-    // Untagged count
-    let untagged: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM media_entity me
-             WHERE me.status = 1 AND me.parent_collection_entity_id IS NULL
-               AND NOT EXISTS (SELECT 1 FROM entity_tag et WHERE et.entity_id = me.entity_id)
-               AND NOT EXISTS (
-                   SELECT 1 FROM media_entity child
-                   WHERE child.parent_collection_entity_id = me.entity_id
-                     AND EXISTS (SELECT 1 FROM entity_tag et WHERE et.entity_id = child.entity_id)
-               )",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-    let _ = conn.execute(
-        "UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:untagged'",
-        [untagged],
-    );
 
     let recent = crate::db::query::grid::recently_viewed_count(conn).unwrap_or(0);
     let _ = conn.execute(

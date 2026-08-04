@@ -265,6 +265,7 @@ pub fn apply_compiler_plan(db: &LibraryDatabase, flags: &IngestFlags, folder_ids
         plan.rebuild_sidebar = true;
     }
     if flags.tags_changed {
+        plan.rebuild_all_tags = true;
         plan.rebuild_all_smart_folders = true;
         plan.rebuild_sidebar = true;
     }

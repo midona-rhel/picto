@@ -70,7 +70,7 @@ pub fn rename_tag(
     tag_id: i64,
     new_name: &str,
 ) -> rusqlite::Result<TagStructureChange> {
-    let (ns, st) = parse_tag(new_name);
+    let (ns, st) = parse_tag(new_name)?;
     let mut affected_stmt = conn.prepare("SELECT entity_id FROM entity_tag WHERE tag_id = ?1")?;
     let affected_entity_ids: Vec<i64> = affected_stmt
         .query_map([tag_id], |row| row.get(0))?
@@ -241,7 +241,7 @@ pub fn ensure_tag(conn: &Connection, tag_str: &str) -> rusqlite::Result<i64> {
 // ── Helpers ──────────────────────────────────────────────────────
 
 fn get_or_create_tag(conn: &Connection, tag_str: &str) -> rusqlite::Result<i64> {
-    let (ns, st) = parse_tag(tag_str);
+    let (ns, st) = parse_tag(tag_str)?;
     if let Ok(id) = conn.query_row(
         "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
         params![ns, st],
@@ -257,7 +257,7 @@ fn get_or_create_tag(conn: &Connection, tag_str: &str) -> rusqlite::Result<i64> 
 }
 
 fn find_tag(conn: &Connection, tag_str: &str) -> rusqlite::Result<Option<i64>> {
-    let (ns, st) = parse_tag(tag_str);
+    let (ns, st) = parse_tag(tag_str)?;
     conn.query_row(
         "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
         params![ns, st],
@@ -266,18 +266,9 @@ fn find_tag(conn: &Connection, tag_str: &str) -> rusqlite::Result<Option<i64>> {
     .optional()
 }
 
-fn parse_tag(s: &str) -> (String, String) {
-    if let Some(idx) = s.find(':') {
-        let ns = &s[..idx];
-        let st = &s[idx + 1..];
-        if ns.is_empty() {
-            (String::new(), s.to_string())
-        } else {
-            (ns.to_string(), st.to_string())
-        }
-    } else {
-        (String::new(), s.to_string())
-    }
+fn parse_tag(s: &str) -> rusqlite::Result<(String, String)> {
+    crate::tags::normalize::parse_tag(s)
+        .ok_or_else(|| rusqlite::Error::InvalidParameterName(format!("Invalid tag: {s}")))
 }
 
 use rusqlite::OptionalExtension;

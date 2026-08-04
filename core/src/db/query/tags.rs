@@ -86,7 +86,9 @@ fn tag_record_columns(alias: &str) -> String {
 }
 
 pub fn find_tag_id(conn: &Connection, tag_str: &str) -> rusqlite::Result<Option<i64>> {
-    let (namespace, subtag) = parse_tag(tag_str);
+    let Some((namespace, subtag)) = crate::tags::normalize::parse_tag(tag_str) else {
+        return Ok(None);
+    };
     conn.query_row(
         "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
         params![namespace, subtag],
@@ -102,7 +104,7 @@ pub fn get_tag_string(conn: &Connection, tag_id: i64) -> rusqlite::Result<Option
         |row| {
             let namespace: String = row.get(0)?;
             let subtag: String = row.get(1)?;
-            Ok(combine_tag(&namespace, &subtag))
+            Ok(crate::types::tag_display_key(&namespace, &subtag))
         },
     )
     .optional()
@@ -414,26 +416,4 @@ fn map_tag_relation(row: &rusqlite::Row<'_>) -> rusqlite::Result<TagRelation> {
         relation: row.get(3)?,
         site_mask: mask_from_db_bits(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
     })
-}
-
-fn parse_tag(s: &str) -> (String, String) {
-    if let Some(idx) = s.find(':') {
-        let namespace = &s[..idx];
-        let subtag = &s[idx + 1..];
-        if namespace.is_empty() {
-            (String::new(), s.to_string())
-        } else {
-            (namespace.to_string(), subtag.to_string())
-        }
-    } else {
-        (String::new(), s.to_string())
-    }
-}
-
-fn combine_tag(namespace: &str, subtag: &str) -> String {
-    if namespace.is_empty() {
-        subtag.to_string()
-    } else {
-        format!("{namespace}:{subtag}")
-    }
 }

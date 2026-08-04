@@ -859,6 +859,13 @@ fn folder_count_matches_grid_collection_collapse_and_active_visibility() {
         crate::db::types::ExpansionMode::EntityOnly,
     )
     .unwrap();
+    db.add_tags(
+        &[first],
+        &["general:categorized".to_string()],
+        1,
+        crate::db::types::ExpansionMode::EntityOnly,
+    )
+    .unwrap();
 
     let page = db
         .query_entity_view(&EntityViewQuery {
@@ -887,6 +894,43 @@ fn folder_count_matches_grid_collection_collapse_and_active_visibility() {
         Ok(())
     })
     .unwrap();
+
+    let scope_counts = db.get_scope_counts().unwrap();
+    for (scope_key, sidebar_key, expected) in [
+        ("all", "active", scope_counts.active),
+        ("inbox", "inbox", scope_counts.inbox),
+        ("trash", "trash", scope_counts.trash),
+        ("uncategorized", "uncategorized", scope_counts.uncategorized),
+        ("untagged", "untagged", scope_counts.untagged),
+    ] {
+        let page = db
+            .query_entity_view(&EntityViewQuery {
+                base_scope: BaseScope {
+                    kind: ScopeKind::System,
+                    key: Some(scope_key.to_string()),
+                    id: None,
+                },
+                filters: QueryFilters::default(),
+                sort: QuerySort::default(),
+                page: QueryPage::default(),
+            })
+            .unwrap();
+        assert_eq!(
+            page.total_count,
+            Some(expected),
+            "grid count for {scope_key}"
+        );
+        db.with_read(|conn| {
+            let sidebar_count: i64 = conn.query_row(
+                "SELECT count FROM sidebar_node WHERE node_id = ?1",
+                [format!("system:{sidebar_key}")],
+                |row| row.get(0),
+            )?;
+            assert_eq!(sidebar_count, expected, "sidebar count for {scope_key}");
+            Ok(())
+        })
+        .unwrap();
+    }
 }
 
 #[test]
@@ -946,14 +990,15 @@ fn tag_counts_match_visible_tag_scopes() {
     add_tag(second_child, "test:visible");
     add_tag(inbox, "test:visible");
     add_tag(trash, "test:visible");
-    db.create_collection_with_members_by_hashes(
-        "Tagged collection",
-        &[
-            "tag-count-child-one".to_string(),
-            "tag-count-child-two".to_string(),
-        ],
-    )
-    .unwrap();
+    let collection_id = db
+        .create_collection_with_members_by_hashes(
+            "Tagged collection",
+            &[
+                "tag-count-child-one".to_string(),
+                "tag-count-child-two".to_string(),
+            ],
+        )
+        .unwrap();
 
     let alias_entity = insert("tag-count-alias", 1);
     add_tag(alias_entity, "test:canonical");
@@ -997,6 +1042,20 @@ fn tag_counts_match_visible_tag_scopes() {
     assert_scope_count("test:child", 1);
     assert_scope_count("test:parent", 2);
     assert_scope_count("test:zero", 0);
+
+    let visible_tag_id = db.find_tag_id("test:visible").unwrap().unwrap();
+    assert!(db
+        .bitmaps
+        .get(&crate::db::projection::bitmaps::BitmapKey::EffectiveTag(
+            visible_tag_id,
+        ))
+        .contains(collection_id as u32));
+    assert!(db
+        .bitmaps
+        .get(&crate::db::projection::bitmaps::BitmapKey::EffectiveTag(
+            alias_id,
+        ))
+        .contains(alias_entity as u32));
 
     let zero_tag_id = db.find_tag_id("test:zero").unwrap().unwrap();
     assert!(db
@@ -1510,6 +1569,60 @@ fn smart_folder_scope_query_matches_runtime_compiled_bitmap_and_sidebar_count() 
     })
     .expect("seed smart folder data");
 
+    let child_file = db
+        .insert_file(
+            "smart-collection-child-file",
+            "image/png",
+            100,
+            Some(100),
+            Some(100),
+            None,
+            Some(1),
+            false,
+            "2026-04-03",
+        )
+        .unwrap();
+    let child_id = db
+        .insert_single(
+            "smart-collection-child",
+            child_file,
+            Some("Smart child"),
+            1,
+            "2026-04-03",
+            "2026-04-03",
+        )
+        .unwrap();
+    let collection_id = db
+        .create_collection_with_members_by_hashes(
+            "Smart collection",
+            &["smart-collection-child".to_string()],
+        )
+        .unwrap();
+    db.add_tags(
+        &[child_id],
+        &["landscape".to_string()],
+        1,
+        crate::db::types::ExpansionMode::EntityOnly,
+    )
+    .unwrap();
+    db.with_write(|conn| {
+        conn.execute(
+            "INSERT INTO smart_folder (
+                smart_folder_id, name, predicate_json, date_added, date_modified
+             ) VALUES (8, 'Tagged collections', ?1, '2026-04-03', '2026-04-03')",
+            [serde_json::json!({
+                "groups": [{
+                    "match_mode": "all",
+                    "negate": false,
+                    "rules": [{ "field": "tags", "op": "include_all", "values": ["landscape"] }]
+                }]
+            })
+            .to_string()],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+
     db.full_rebuild();
 
     let page = db
@@ -1531,16 +1644,93 @@ fn smart_folder_scope_query_matches_runtime_compiled_bitmap_and_sidebar_count() 
         db.bitmap_len(&crate::db::projection::bitmaps::BitmapKey::SmartFolder(7)),
         1
     );
+    let collection_query = EntityViewQuery {
+        base_scope: BaseScope {
+            kind: ScopeKind::SmartFolder,
+            key: None,
+            id: Some(8),
+        },
+        filters: QueryFilters::default(),
+        sort: QuerySort::default(),
+        page: QueryPage::default(),
+    };
+    let collection_page = db.query_entity_view(&collection_query).unwrap();
+    assert_eq!(collection_page.total_count, Some(2));
+    assert!(collection_page
+        .items
+        .iter()
+        .any(|item| item.entity_id == collection_id));
     db.with_read(|conn| {
-        let count: i64 = conn.query_row(
+        let direct_count: i64 = conn.query_row(
             "SELECT count FROM sidebar_node WHERE node_id = 'smart:7'",
             [],
             |row| row.get(0),
         )?;
-        assert_eq!(count, 1);
+        let collection_count: i64 = conn.query_row(
+            "SELECT count FROM sidebar_node WHERE node_id = 'smart:8'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(direct_count, 1);
+        assert_eq!(collection_count, 2);
         Ok(())
     })
     .expect("read sidebar count");
+
+    db.remove_tags(
+        &[child_id],
+        &["landscape".to_string()],
+        crate::db::types::ExpansionMode::EntityOnly,
+    )
+    .unwrap();
+    db.run_compiler(crate::db::projection::compiler::CompilerPlan {
+        dirty_tag_ids: vec![1],
+        rebuild_all_smart_folders: true,
+        rebuild_sidebar: true,
+        ..Default::default()
+    });
+    assert_eq!(
+        db.query_entity_view(&collection_query).unwrap().total_count,
+        Some(1)
+    );
+
+    db.add_tags(
+        &[child_id],
+        &["landscape".to_string()],
+        1,
+        crate::db::types::ExpansionMode::EntityOnly,
+    )
+    .unwrap();
+    crate::ingest::apply_compiler_plan(
+        &db,
+        &crate::ingest::IngestFlags {
+            tags_changed: true,
+            ..Default::default()
+        },
+        &[],
+    );
+    assert_eq!(
+        db.query_entity_view(&collection_query).unwrap().total_count,
+        Some(2)
+    );
+
+    for (status, expected) in [(2, 1), (1, 2)] {
+        db.set_entity_status(
+            &[collection_id],
+            status,
+            crate::db::types::ExpansionMode::EntityOnly,
+        )
+        .unwrap();
+        db.run_compiler(crate::db::projection::compiler::CompilerPlan {
+            rebuild_status: true,
+            rebuild_sidebar: true,
+            ..Default::default()
+        });
+        assert_eq!(
+            db.query_entity_view(&collection_query).unwrap().total_count,
+            Some(expected)
+        );
+    }
 }
 
 #[test]

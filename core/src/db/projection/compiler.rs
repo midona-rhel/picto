@@ -50,11 +50,20 @@ pub fn execute_plan(conn: &Connection, bitmaps: &BitmapStore, plan: &CompilerPla
         super::tags::compile_implied_tags(conn, bitmaps);
     }
 
+    if plan.rebuild_all
+        || plan.rebuild_all_tags
+        || !plan.dirty_tag_ids.is_empty()
+        || plan.rebuild_tag_graph
+        || plan.rebuild_status
+    {
+        super::tags::compile_effective_tag_bitmaps(conn, bitmaps);
+    }
+
     if plan.rebuild_all || plan.rebuild_all_tags || plan.rebuild_tag_graph || plan.rebuild_status {
         super::tags::compile_tagged_bitmap(conn, bitmaps);
     }
 
-    if plan.rebuild_all || plan.rebuild_all_smart_folders {
+    if plan.rebuild_all || plan.rebuild_all_smart_folders || plan.rebuild_status {
         super::smart_folders::compile_all_smart_folders(conn, bitmaps);
     } else {
         for sf_id in &plan.dirty_smart_folder_ids {
