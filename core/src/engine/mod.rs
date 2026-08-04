@@ -3,8 +3,8 @@
 //! `ApplicationEngine` sits above `LibraryDatabase` and owns:
 //! - target resolution (EntityTarget → concrete ids or DB-backed bulk target)
 //! - expansion rules (collection tags apply to member singles; status/folders include collections)
-//! - state-change emission after writes
-//! - projection scheduling after writes
+//! - projection rebuilding after writes
+//! - state-change emission after projections settle
 //!
 //! Transport adapters call engine methods. They do not own behavior.
 //! The engine calls LibraryDatabase. It does not access storage directly.
@@ -51,10 +51,31 @@ impl ApplicationEngine {
         self.db.clone()
     }
 
-    /// Commit a write result: emit a state-change event and schedule projection work.
+    /// Commit a write result: rebuild projections, then emit their settled state.
     /// Every engine write method calls this after the db write succeeds.
     fn commit_write(&self, change: &WriteChange) {
-        // 1. Build and emit the state-change event to the frontend.
+        let mut plan = crate::db::projection::compiler::CompilerPlan::default();
+        if change.status_changed || change.entities_deleted {
+            plan.rebuild_status = true;
+            plan.rebuild_sidebar = true;
+        }
+        if change.tags_changed || change.tag_structure_changed {
+            plan.dirty_tag_ids = change.dirty_tag_ids.clone();
+            plan.rebuild_all_smart_folders = true;
+            plan.rebuild_sidebar = true;
+        }
+        if change.tag_structure_changed {
+            plan.rebuild_tag_graph = true;
+        }
+        if !change.dirty_folder_ids.is_empty() {
+            plan.rebuild_sidebar = true;
+        }
+
+        let smart_folders_rebuilt = plan.rebuild_status || plan.rebuild_all_smart_folders;
+        if !plan.is_empty() {
+            self.db.run_compiler(plan);
+        }
+
         let mut impact = ChangeImpact::new();
 
         if !change.entity_hashes.is_empty() {
@@ -77,31 +98,6 @@ impl ApplicationEngine {
         if !change.dirty_folder_ids.is_empty() {
             impact.folder_membership_changed = Some(change.dirty_folder_ids.clone());
             impact = impact.add_domain(Domain::Sidebar);
-            // Emit updated folder counts as sidebar node patches so the sidebar
-            // updates immediately without waiting for a full compiler rebuild.
-            let mut patches = impact.sidebar_node_patches.take().unwrap_or_default();
-            for &fid in &change.dirty_folder_ids {
-                if let Ok(count) = self.db.get_folder_visible_count(fid) {
-                    patches.push(crate::runtime_contract::state_change::SidebarNodePatch {
-                        node_id: format!("folder:{fid}"),
-                        count: Some(Some(count)),
-                        removed: None,
-                        upsert: None,
-                        kind: None,
-                        parent_id: None,
-                        name: None,
-                        icon: None,
-                        color: None,
-                        sort_order: None,
-                        selectable: None,
-                        freshness: None,
-                        meta_json: None,
-                    });
-                }
-            }
-            if !patches.is_empty() {
-                impact.sidebar_node_patches = Some(patches);
-            }
         }
         if change.entities_deleted {
             impact.status_changed = Some(true);
@@ -112,6 +108,45 @@ impl ApplicationEngine {
         }
         if !change.extra_grid_scopes.is_empty() {
             impact.extra_grid_scopes = Some(change.extra_grid_scopes.clone());
+        }
+
+        if smart_folders_rebuilt {
+            if let Ok(counts) = self.all_smart_folder_counts() {
+                if !counts.is_empty() {
+                    impact = impact
+                        .add_domain(Domain::SmartFolders)
+                        .smart_folder_ids(counts.iter().map(|(id, _)| *id).collect())
+                        .smart_folder_counts(counts);
+                }
+            }
+        }
+
+        if change.status_changed || !change.dirty_folder_ids.is_empty() {
+            if let Ok(nodes) = self.db.get_sidebar_tree() {
+                let dirty_nodes: std::collections::HashSet<String> = change
+                    .dirty_folder_ids
+                    .iter()
+                    .map(|id| format!("folder:{id}"))
+                    .collect();
+                let patches: Vec<_> = nodes
+                    .into_iter()
+                    .filter(|node| {
+                        node.kind == "folder"
+                            && (change.status_changed || dirty_nodes.contains(&node.node_id))
+                    })
+                    .map(
+                        |node| crate::runtime_contract::state_change::SidebarNodePatch {
+                            node_id: node.node_id,
+                            count: Some(node.count),
+                            freshness: Some("exact".into()),
+                            ..Default::default()
+                        },
+                    )
+                    .collect();
+                if !patches.is_empty() {
+                    impact.sidebar_node_patches = Some(patches);
+                }
+            }
         }
 
         // Sidebar counts — SQL-based via get_scope_counts (includes uncategorized/untagged).
@@ -128,32 +163,11 @@ impl ApplicationEngine {
         }
 
         crate::events::emit_state_changed(&change.origin, impact);
-
-        // 2. Schedule projection rebuild.
-        let mut plan = crate::db::projection::compiler::CompilerPlan::default();
-        if change.status_changed || change.entities_deleted {
-            plan.rebuild_status = true;
-            plan.rebuild_sidebar = true;
-        }
-        if change.tags_changed || change.tag_structure_changed {
-            plan.dirty_tag_ids = change.dirty_tag_ids.clone();
-            plan.rebuild_all_smart_folders = true;
-            plan.rebuild_sidebar = true;
-        }
-        if change.tag_structure_changed {
-            plan.rebuild_tag_graph = true;
-        }
-        if !change.dirty_folder_ids.is_empty() {
-            plan.rebuild_sidebar = true;
-        }
-        if !plan.is_empty() {
-            self.db.run_compiler(plan);
-        }
     }
 }
 
 /// What a write operation changed. Built from typed db change results,
-/// consumed by `commit_write` to emit events and schedule projections.
+/// consumed by `commit_write` to rebuild projections and emit their settled state.
 #[derive(Debug, Clone)]
 pub struct WriteChange {
     /// Origin label for the state-change event (e.g. "set_entity_status").

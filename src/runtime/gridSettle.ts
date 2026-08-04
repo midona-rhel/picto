@@ -3,9 +3,9 @@
  *
  * Decision model:
  *   1. If grid is not the active surface → ignore
- *   2. extra_grid_scopes is authoritative when present
- *   3. Metadata/derivative-only changes for known entity hashes → reconcile
- *   4. Membership changes (status, folder, tags) → reconcile (backend decides)
+ *   2. Canonical status/folder/smart-folder facts settle their matching scope
+ *   3. extra_grid_scopes settles additional explicitly affected scopes
+ *   4. Metadata/derivative-only changes for known entity hashes → reconcile
  *   5. Compiler batch → full refresh (fallback)
  *   6. Unknown → ignore
  *
@@ -54,6 +54,22 @@ export function classifyGridAction(
   scope: BaseScope,
   visibleEntityHashes: string[],
 ): GridAction {
+  if (changes.status_changed && scope.kind === 'system') {
+    return 'reconcile_membership';
+  }
+
+  if (changes.folder_membership_changed?.length && scope.kind === 'folder') {
+    if (scope.id != null && changes.folder_membership_changed.includes(scope.id)) {
+      return 'reconcile_membership';
+    }
+  }
+
+  if (changes.smart_folder_ids?.length && scope.kind === 'smart_folder') {
+    if (scope.id != null && changes.smart_folder_ids.includes(scope.id)) {
+      return 'reconcile_membership';
+    }
+  }
+
   if (changes.extra_grid_scopes?.length) {
     const currentKey = scopeToKey(scope);
     if (currentKey && changes.extra_grid_scopes.includes(currentKey)) {
@@ -76,21 +92,11 @@ export function classifyGridAction(
     return 'ignore';
   }
 
-  if (changes.status_changed && scope.kind === 'system') {
-    return 'reconcile_membership';
-  }
-
   if (changes.folder_membership_changed?.length && scope.kind === 'folder') {
-    if (scope.id != null && changes.folder_membership_changed.includes(scope.id)) {
-      return 'reconcile_membership';
-    }
     return 'ignore';
   }
 
   if (changes.smart_folder_ids?.length && scope.kind === 'smart_folder') {
-    if (scope.id != null && changes.smart_folder_ids.includes(scope.id)) {
-      return 'reconcile_membership';
-    }
     return 'ignore';
   }
 

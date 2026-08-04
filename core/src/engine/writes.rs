@@ -1,6 +1,6 @@
 //! Entity write surface — patch, status, delete.
 //!
-//! Every write: resolve target → call db → commit_write (emit + compile).
+//! Every write: resolve target → call db → commit_write (compile + emit).
 
 use crate::db::types::*;
 

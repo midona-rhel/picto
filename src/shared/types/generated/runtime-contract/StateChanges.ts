@@ -95,8 +95,7 @@ smart_folder_order_changes?: Array<[number, number]>,
  */
 sidebar_node_patches?: Array<SidebarNodePatch>, 
 /**
- * Smart folder count deltas: [[sf_id, new_count], ...]
- * Emitted from compiler publish when smart folder bitmaps are recomputed.
+ * Exact smart folder counts after their bitmaps are recomputed.
  */
 smart_folder_counts?: Array<[number, number]>, 
 /**

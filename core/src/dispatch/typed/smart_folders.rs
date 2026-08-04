@@ -103,6 +103,8 @@ pub async fn create_smart_folder(
         .engine
         .get_smart_folder(sf_id)?
         .ok_or_else(|| format!("Smart folder {sf_id} not found after create"))?;
+    let counts = state.engine.settle_smart_folders(&[sf_id]);
+    let count = counts.first().map(|(_, count)| *count).unwrap_or(0);
     let meta = smart_folder_meta_json_canonical(&row);
     let upsert = SidebarNodePatch {
         node_id: format!("smart:{sf_id}"),
@@ -117,24 +119,18 @@ pub async fn create_smart_folder(
         icon: Some(row.icon.clone()),
         color: Some(row.color.clone()),
         sort_order: Some(row.display_order),
-        count: Some(Some(0)),
+        count: Some(Some(count)),
         selectable: Some(true),
-        freshness: Some("stale".into()),
+        freshness: Some("exact".into()),
         meta_json: Some(Some(meta)),
         ..Default::default()
     };
-    state
-        .engine
-        .run_compiler(crate::db::projection::compiler::CompilerPlan {
-            rebuild_sidebar: true,
-            dirty_smart_folder_ids: vec![sf_id],
-            ..Default::default()
-        });
     crate::events::emit_state_changed(
         "create_smart_folder",
         ChangeImpact::new()
             .add_domains(&[Domain::SmartFolders, Domain::Sidebar])
             .smart_folder_ids(vec![sf_id])
+            .smart_folder_counts(counts)
             .sidebar_node_patch(upsert),
     );
     Ok(serde_json::to_value(&row).map_err(|e| e.to_string())?)
@@ -191,26 +187,24 @@ pub async fn update_smart_folder(
         meta_json: Some(Some(meta)),
         ..Default::default()
     };
-    state
-        .engine
-        .run_compiler(crate::db::projection::compiler::CompilerPlan {
-            rebuild_sidebar: true,
-            dirty_smart_folder_ids: if predicate_changed {
-                vec![sf_id]
-            } else {
-                vec![]
-            },
-            ..Default::default()
-        });
-    // Read the updated bitmap count after compiler ran
-    let sf_count = state.engine.smart_folder_bitmap_len(sf_id);
+    let affected_ids = if predicate_changed {
+        state.engine.smart_folder_subtree_ids(sf_id)?
+    } else {
+        Vec::new()
+    };
+    let counts = if predicate_changed {
+        state.engine.settle_smart_folders(&affected_ids)
+    } else {
+        state.engine.rebuild_sidebar();
+        Vec::new()
+    };
     let mut impact = ChangeImpact::new()
         .add_domains(&[Domain::SmartFolders, Domain::Sidebar])
-        .smart_folder_ids(vec![sf_id])
-        .smart_folder_counts(vec![(sf_id, sf_count)])
         .sidebar_node_patch(patch);
     if predicate_changed {
-        impact = impact.extra_grid_scopes(vec![format!("smart:{sf_id}")]);
+        impact = impact
+            .smart_folder_ids(affected_ids.clone())
+            .smart_folder_counts(counts);
     }
     crate::events::emit_state_changed("update_smart_folder", impact);
     Ok(serde_json::to_value(&row).map_err(|e| e.to_string())?)
@@ -238,12 +232,16 @@ pub async fn move_smart_folder(
     if !sibling_order.is_empty() {
         state.engine.reorder_smart_folders(&sibling_order)?;
     }
-    state.engine.rebuild_sidebar();
+    let affected_ids = state
+        .engine
+        .smart_folder_subtree_ids(input.smart_folder_id)?;
+    let counts = state.engine.settle_smart_folders(&affected_ids);
     crate::events::emit_state_changed(
         "move_smart_folder",
         ChangeImpact::new()
             .add_domains(&[Domain::SmartFolders, Domain::Sidebar])
-            .smart_folder_ids(vec![input.smart_folder_id])
+            .smart_folder_ids(affected_ids.clone())
+            .smart_folder_counts(counts)
             .smart_folder_parent_changes(vec![(input.smart_folder_id, input.new_parent_id)])
             .smart_folder_order_changes(sibling_order),
     );
@@ -276,16 +274,19 @@ pub async fn delete_smart_folder(
         });
     }
 
-    let mut all_sf_ids = vec![sf_id];
-    all_sf_ids.extend(&promoted_ids);
-
-    state.engine.rebuild_sidebar();
+    let mut surviving_ids = Vec::new();
+    for child_id in &promoted_ids {
+        surviving_ids.extend(state.engine.smart_folder_subtree_ids(*child_id)?);
+    }
+    let mut affected_ids = vec![sf_id];
+    affected_ids.extend(&surviving_ids);
+    let counts = state.engine.settle_smart_folders(&affected_ids);
     crate::events::emit_state_changed(
         "delete_smart_folder",
         ChangeImpact::new()
             .add_domains(&[Domain::SmartFolders, Domain::Sidebar])
-            .smart_folder_ids(all_sf_ids)
-            .extra_grid_scopes(vec![format!("smart:{sf_id}")])
+            .smart_folder_ids(affected_ids)
+            .smart_folder_counts(counts)
             .sidebar_node_patches(patches),
     );
     Ok(())

@@ -507,16 +507,4 @@ impl ChangeImpact {
         self.smart_folder_counts = Some(counts);
         self
     }
-
-    pub fn compiler_publish(smart_folders_rebuilt: bool, sf_counts: Vec<(i64, i64)>) -> Self {
-        let mut impact = Self::new();
-        impact.compiler_batch_done = Some(true);
-        if smart_folders_rebuilt {
-            impact = impact.extra_grid_scopes(vec!["system:active".into()]);
-        }
-        if !sf_counts.is_empty() {
-            impact = impact.smart_folder_counts(sf_counts);
-        }
-        impact
-    }
 }

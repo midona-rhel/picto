@@ -142,8 +142,7 @@ pub struct StateChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sidebar_node_patches: Option<Vec<SidebarNodePatch>>,
-    /// Smart folder count deltas: [[sf_id, new_count], ...]
-    /// Emitted from compiler publish when smart folder bitmaps are recomputed.
+    /// Exact smart folder counts after their bitmaps are recomputed.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "Array<[number, number]>")]
     pub smart_folder_counts: Option<Vec<(i64, i64)>>,

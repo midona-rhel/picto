@@ -1,6 +1,7 @@
 //! Smart folder CRUD.
 
 use super::ApplicationEngine;
+use std::collections::HashSet;
 
 impl ApplicationEngine {
     pub fn create_smart_folder(
@@ -61,6 +62,47 @@ impl ApplicationEngine {
 
     pub fn collect_descendant_smart_folder_ids(&self, root_id: i64) -> Result<Vec<i64>, String> {
         self.db.collect_descendant_smart_folder_ids(root_id)
+    }
+
+    pub fn smart_folder_subtree_ids(&self, root_id: i64) -> Result<Vec<i64>, String> {
+        let mut ids = vec![root_id];
+        ids.extend(self.collect_descendant_smart_folder_ids(root_id)?);
+        Ok(ids)
+    }
+
+    /// Rebuild the requested smart-folder memberships and return their exact counts.
+    pub fn settle_smart_folders(&self, smart_folder_ids: &[i64]) -> Vec<(i64, i64)> {
+        let mut seen = HashSet::new();
+        let ids: Vec<i64> = smart_folder_ids
+            .iter()
+            .copied()
+            .filter(|id| seen.insert(*id))
+            .collect();
+        self.run_compiler(crate::db::projection::compiler::CompilerPlan {
+            rebuild_sidebar: true,
+            dirty_smart_folder_ids: ids.clone(),
+            ..Default::default()
+        });
+        ids.into_iter()
+            .filter_map(|id| {
+                self.get_smart_folder(id)
+                    .ok()
+                    .flatten()
+                    .map(|_| (id, self.smart_folder_bitmap_len(id)))
+            })
+            .collect()
+    }
+
+    pub(crate) fn all_smart_folder_counts(&self) -> Result<Vec<(i64, i64)>, String> {
+        Ok(self
+            .db
+            .list_smart_folders_canonical()?
+            .into_iter()
+            .map(|row| {
+                let id = row.smart_folder_id;
+                (id, self.smart_folder_bitmap_len(id))
+            })
+            .collect())
     }
 
     /// Get the current bitmap length for a smart folder (after compiler has run).

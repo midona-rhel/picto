@@ -125,7 +125,7 @@ export function startSidebarSettle(): () => void {
       hadExactDeltas = true;
     }
 
-    // 7. Smart folder count deltas (from compiler publish)
+    // 7. Exact smart folder counts emitted after bitmap compilation
     if (changes.smart_folder_counts?.length) {
       store.set(applySmartFolderCountsAtom, changes.smart_folder_counts);
       hadExactDeltas = true;
@@ -148,9 +148,8 @@ export function startSidebarSettle(): () => void {
     }
 
     // 10. Compiler batch done without any count deltas — SAFETY NET.
-    //     Normal compiler publishes carry both sidebar_counts (via engine) or
-    //     smart_folder_counts (via compiler callback). This fires only if
-    //     neither is present.
+    //     Compiler events should carry sidebar or smart-folder counts. This fires
+    //     only if neither is present.
     if (changes.compiler_batch_done) {
       if (!sidebar_counts && !changes.smart_folder_counts?.length) {
         needsTreeRefresh = true;
