@@ -17,8 +17,13 @@ or rename it for architecture. Finish this path and delete only code proven to c
 
 ## Content and delivery contract
 
-- A subscription can be triggered manually. A subscription group can run all of its members on a
-  saved daily, weekly, or monthly schedule. Both triggers enqueue the same durable query jobs.
+- A subscription owns one or more queries and a `manual`, `daily`, `weekly`, or `monthly` schedule.
+  Running a subscription manually or from its schedule enqueues all enabled queries through the same
+  durable job path.
+- An individual query can be run manually for testing or catch-up, but queries never own schedules
+  and are never scheduled independently.
+- Groups organize subscriptions and may provide a manual run-all action; groups do not own recurring
+  schedules.
 - A run streams completed downloads into durable ingest while later posts are still downloading.
   It must not download the entire result set before ingestion begins.
 - A multi-image post becomes one image collection when automatic collections are enabled. The
@@ -57,7 +62,7 @@ Release gaps:
 - parsed rating metadata is not carried through canonical ingest
 - the source picker advertises sites without source-specific metadata validation or live proof
 - application shutdown does not clearly await detached subscription executors
-- group due-time can be affected by member query history instead of the group's scheduled-run history
+- recurring schedules are currently stored and executed on groups instead of subscriptions
 - Python and Rust both participate in metadata normalization instead of having one clear owner
 - removed source ids remain in active bridge, adapter, policy, or autocomplete code
 - the real create/run/fail/retry/import flow has not been proved in Electron
@@ -83,7 +88,7 @@ small internal edit.
 
 The intended production flow is deliberately small:
 
-`manual/group trigger -> durable query job -> gallery-dl item stream -> post assembler -> add_media queue -> ingest result -> persisted run progress`
+`manual/scheduled subscription trigger -> durable query jobs -> gallery-dl item streams -> post assembler -> add_media queue -> ingest results -> persisted run progress`
 
 - The trigger decides when work starts; it does not perform downloads itself.
 - The source adapter emits normalized media items and explicit post completion information.
@@ -157,7 +162,8 @@ Make the stored recovery action truthful:
 - finalization is scoped to the current run so stale or overlapping work cannot settle another run
 - library close and application shutdown cancel and await active subscription executors
 - deleting or resetting an active subscription first cancels and settles its work
-- scheduled group due-time is group-owned; manual query or subscription runs do not postpone it
+- scheduled due-time is subscription-owned; a manual query run does not postpone the subscription
+- a manual full-subscription run counts as that subscription's latest run and resets its due time
 
 Deleting a subscription removes its definition and runtime history but never imported media. Resetting
 preserves the definition and imported media, clears its run/download tracking and issues, and makes
@@ -171,14 +177,17 @@ Acceptance:
 - stop is idempotent and leaves no running task or leased job
 - delete/reset cannot leave a worker, job, ingest row, or runtime task orphaned
 - closing the library leaves no gallery-dl process or detached subscription executor running
-- daily, weekly, monthly, manual, and paused group scheduling have deterministic tests
+- daily, weekly, monthly, manual, and paused subscription scheduling have deterministic tests
+- individual query runs never create or alter recurring schedule state
 
 Implementation checkpoint:
 
 - Persist retry scheduling and add one worker path for due retries.
 - Make startup reconciliation and multi-query finalization agree on the same terminal-state rule.
 - Scope finalization by run id and connect executor cancellation to worker shutdown.
-- Persist or derive group schedule due-time from group runs, not the latest manually run member query.
+- Move recurring schedule ownership from groups to subscriptions in the current pre-1.0 schema and
+  active API; do not retain group-schedule compatibility fields.
+- Derive subscription due-time from full-subscription runs, never individual query runs.
 - Finish stop, reset, and delete against that rule; do not special-case them in the UI.
 - Verify this wave manually by stopping a live run, restarting Picto during another run, and retrying
   one reproducible failure. Do not begin source certification until these settle correctly.

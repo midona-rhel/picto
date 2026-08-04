@@ -54,8 +54,8 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [x] Replace newest-500 retry scans with one indexed attempt lookup.
 - [x] S1: Give query and subscription issues stable non-null identity.
 - [ ] S2: Classify every meaningful failure through one persisted recovery disposition.
-- [ ] S3: Make retry, restart, shutdown, scheduling, stop, reset, delete, and multi-query
-      finalization durable and safe.
+- [ ] S3: Move schedules from groups to subscriptions; make retry, restart, shutdown, stop, reset,
+      delete, and multi-query finalization durable and safe.
 - [ ] S4: Finish one streaming metadata/collection ingest path and delete proven competitors.
 - [ ] S5: Keep run-scoped progress visible and the run active through terminal ingest; make Health
       actions truthful and uncapped.
@@ -65,7 +65,8 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 Phase gates:
 
 - Runtime gate after S3: stop/restart/retry manually verified; shutdown leaves no gallery-dl process,
-  executor, lease, or false active run; group schedules pass interval, pause, and manual-run tests.
+  executor, lease, or false active run; subscription schedules pass interval, pause, full-run, and
+  manual-query tests.
 - Delivery gate after S5: streaming, collection modes, metadata, and progress manually verified.
 - Release gate after S6: every visible source has deterministic and credential-backed live proof.
 
