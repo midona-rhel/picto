@@ -17,8 +17,8 @@ or rename it for architecture. Finish this path and delete only code proven to c
 
 ## Content and delivery contract
 
-- A subscription can run on its saved daily, weekly, or monthly schedule and can also be triggered
-  manually. Both triggers enqueue the same durable query jobs.
+- A subscription can be triggered manually. A subscription group can run all of its members on a
+  saved daily, weekly, or monthly schedule. Both triggers enqueue the same durable query jobs.
 - A run streams completed downloads into durable ingest while later posts are still downloading.
   It must not download the entire result set before ingestion begins.
 - A multi-image post becomes one image collection when automatic collections are enabled. The
@@ -49,12 +49,50 @@ Already working and retained:
 
 Release gaps:
 
-- issue identity includes mutable message text
-- SQLite uniqueness does not deduplicate subscription-wide issues whose `query_id` is null
-- issue rows do not state a recovery action or next retry time
 - not every failure path maps to one stable persisted issue
 - Health displays issues but cannot consistently expose the correct recovery action
+- non-collection runs under-report downloaded files
+- ingest progress is subscription-wide instead of run-scoped and disappears before queued ingest settles
+- pending collection flushing assumes post assets are contiguous and can strand interleaved posts
+- parsed rating metadata is not carried through canonical ingest
+- the source picker advertises sites without source-specific metadata validation or live proof
+- application shutdown does not clearly await detached subscription executors
+- group due-time can be affected by member query history instead of the group's scheduled-run history
+- Python and Rust both participate in metadata normalization instead of having one clear owner
+- removed source ids remain in active bridge, adapter, policy, or autocomplete code
 - the real create/run/fail/retry/import flow has not been proved in Electron
+
+## Phase execution rules
+
+This phase is executed in order. Do not mix source-specific fixes into runtime correctness, do not
+change the existing subscription UI structure, and do not resume general performance cleanup until
+this PBI is archived.
+
+1. Finish failure classification and durable recovery.
+2. Finish streaming post assembly, metadata handoff, and run-scoped accounting.
+3. Connect the existing progress and Health UI to that persisted truth.
+4. Certify sources in bounded batches and expose only sources that pass.
+5. Run one complete Electron workflow and archive the PBI.
+
+Each implementation slice must remove any production path it replaces, pass focused Rust tests, pass
+`cargo check`, and leave `git diff --check` clean before the next slice begins. A full alpha gate and
+manual application verification are required at the end of each execution wave, not after every
+small internal edit.
+
+## Runtime boundary
+
+The intended production flow is deliberately small:
+
+`manual/group trigger -> durable query job -> gallery-dl item stream -> post assembler -> add_media queue -> ingest result -> persisted run progress`
+
+- The trigger decides when work starts; it does not perform downloads itself.
+- The source adapter emits normalized media items and explicit post completion information.
+- The post assembler commits a complete multi-image post as one collection, or commits each image
+  independently when automatic collections are disabled.
+- The canonical ingest queue owns database insertion, duplicate reuse, and derivative scheduling.
+- Persisted run/query/ingest state owns progress and recovery. In-memory task state is only a live
+  projection and must be reconstructible after restart.
+- A run is complete only when all query work and all ingest rows created by that run are terminal.
 
 ## Phase tickets
 
@@ -96,6 +134,13 @@ Acceptance:
 - debug noise does not change classification
 - cancellation produces no open failure issue
 
+Implementation checkpoint:
+
+- First add the typed disposition and focused classification tests.
+- Then route gallery-dl, validation, ingest enqueue, executor, and startup reconciliation failures
+  through it one boundary at a time.
+- Remove old message-based classification only after all call sites use the typed path.
+
 ### S3. Durable recovery semantics
 
 Make the stored recovery action truthful:
@@ -109,7 +154,10 @@ Make the stored recovery action truthful:
 - a worker consumes due automatic retries and enqueues one deduplicated retry job
 - startup requeues interrupted query work instead of silently forfeiting it
 - a failed or panicked query finalizes its run only after every sibling query is terminal
+- finalization is scoped to the current run so stale or overlapping work cannot settle another run
+- library close and application shutdown cancel and await active subscription executors
 - deleting or resetting an active subscription first cancels and settles its work
+- scheduled group due-time is group-owned; manual query or subscription runs do not postpone it
 
 Deleting a subscription removes its definition and runtime history but never imported media. Resetting
 preserves the definition and imported media, clears its run/download tracking and issues, and makes
@@ -122,20 +170,56 @@ Acceptance:
 - success resolves only the matching issue
 - stop is idempotent and leaves no running task or leased job
 - delete/reset cannot leave a worker, job, ingest row, or runtime task orphaned
+- closing the library leaves no gallery-dl process or detached subscription executor running
+- daily, weekly, monthly, manual, and paused group scheduling have deterministic tests
 
-### S4. Remove competing backend paths
+Implementation checkpoint:
+
+- Persist retry scheduling and add one worker path for due retries.
+- Make startup reconciliation and multi-query finalization agree on the same terminal-state rule.
+- Scope finalization by run id and connect executor cancellation to worker shutdown.
+- Persist or derive group schedule due-time from group runs, not the latest manually run member query.
+- Finish stop, reset, and delete against that rule; do not special-case them in the UI.
+- Verify this wave manually by stopping a live run, restarting Picto during another run, and retrying
+  one reproducible failure. Do not begin source certification until these settle correctly.
+
+### S4. Finish the one streaming ingest path and remove competitors
 
 Trace create, run, query run, retry, stop, reset, issue read, and ingest handoff from dispatch to
 `SubscriptionRuntimeService`. Consolidate construction only where it removes duplicate behavior.
 Delete `core/src/db/write/subscriptions.rs` if reachability confirms it is dead. Do not move the
 service through the engine merely to satisfy the old PBI wording.
 
+The same path must:
+
+- count every downloaded single and collection member correctly
+- carry rating and all other supported post metadata through canonical ingest and exact-hash reuse
+- flush every complete post even if gallery-dl interleaves assets from different posts
+- leave incomplete posts retryable instead of silently dropping or partially archiving them
+
 Acceptance:
 
 - one production path exists for each behavior
 - no subscription import bypasses canonical ingest
 - no unused subscription command or persistence implementation remains
+- collection and non-collection modes preserve the same child metadata
+- interleaved posts cannot leave completed collections pending in memory
 - command parity and focused tests stay green
+
+Implementation checkpoint:
+
+- Define an explicit source-stream event for media items and post completion; do not infer post
+  completion from contiguous ordering.
+- Queue ready singles and complete posts immediately while the downloader continues.
+- Require every subscription queue path to populate its existing `query_run_id`, and count ingest
+  rows through that origin so progress and restart recovery account for exactly this run.
+- Use one metadata builder for collection and non-collection modes. Rating, source URLs, timestamps,
+  tags, title, and notes must reach child entities through the same ingest path.
+- Keep the gallery-dl bridge responsible for transport and raw extractor events; normalized Picto
+  metadata has one Rust owner before canonical ingest.
+- Delete a competing subscription-only ingest or metadata path in the same change that replaces it.
+- Verify this wave manually with one single-image post, one multi-image post in each collection mode,
+  and enough results to observe download and ingest overlapping.
 
 ### S5. Truthful Health actions
 
@@ -154,6 +238,10 @@ The frontend does not infer recovery from message text.
 The existing subscription workspace remains. This ticket changes only progress truth, recovery
 actions, pagination, and error reporting; it is not a UI rewrite.
 
+Progress is scoped to the current run and stays visible until all of that run's ingest rows are
+imported, reused, or failed. Historical queue rows never inflate current progress, and finishing
+downloads does not imply ingestion is complete.
+
 "Retry all" is a backend operation over all eligible unresolved attempts, not the first 50 or 100
 rows loaded for display. It returns a truthful attempted/queued/failed result, and the UI reports a
 failure instead of silently discarding it. Health history is paginated; display limits never change
@@ -165,6 +253,18 @@ Acceptance:
 - resolved issues do not appear as active
 - refreshing or reopening preserves the same Health state
 - bulk retry cannot report success when every retry failed
+- download and ingest counters remain truthful while both stages overlap
+
+Implementation checkpoint:
+
+- Derive every counter from persisted rows scoped by run id; do not patch historical subscription
+  totals into a current progress event.
+- Keep the current progress card until the run's last ingest row is terminal, then retain the settled
+  result in History.
+- Bind Health buttons directly to `recovery_action` and make backend bulk operations independent of
+  UI pagination.
+- Verify this wave manually after S4: watch counters advance during a run, reload the subscriptions
+  screen, restart Picto, and confirm the same active or settled state returns.
 
 ### S6. Release verification and closure
 
@@ -184,6 +284,10 @@ For every advertised source, a credential-backed run must prove:
 - visible progress while download and ingest overlap
 - rerun deduplication and restart recovery
 
+The source picker is an allowlist of passed sources, not a gallery-dl capability list. Any source
+without deterministic metadata validation and a recorded live pass stays hidden until it earns
+support. Contradictory credential declarations must be fixed or the source removed from the allowlist.
+
 Then run the real Electron workflow:
 
 1. create a subscription and query
@@ -194,6 +298,44 @@ Then run the real Electron workflow:
 6. restart and confirm settled history, media, and no open duplicate issue
 
 Archive this PBI only after that smoke passes.
+
+## Source certification waves
+
+Do not attempt all sources at once. The registry entry for a source is not permission to advertise
+it. Certification proceeds in small batches:
+
+1. Prove the shared harness with one public booru and one authenticated source.
+2. Certify the strongest initial candidates: Gelbooru, Danbooru, Pixiv, e621, and FurAffinity.
+3. Certify remaining sources individually; hide any source that lacks credentials, deterministic
+   metadata expectations, or a successful live run.
+
+For each source, record the tested query, expected post identity, expected child count, expected
+source URLs, timestamps, tags/rating, authentication mode, collection behavior, rerun result, and
+verification date. Store no secrets or downloaded user content in Git.
+
+User verification is requested only when a batch is mechanically ready. The user supplies local
+credentials and expected examples, runs or observes the live workflow, and accepts the visible
+result. A failed certification creates a bounded source fix inside S6; it does not trigger a new
+subscription architecture.
+
+The certification runner is strict. Missing credentials, placeholder queries, rate limits, network
+failures, and inconclusive probes do not pass a source. Remove stale production references for source
+ids no longer registered. OnlyFans-like content reached through a third-party aggregator proves that
+aggregator, not native OnlyFans support.
+
+## Agent plan
+
+- Coordinator: owns contract decisions, shared runtime/schema integration, review, verification, and
+  commits.
+- Runtime agent: S2 classification only.
+- Recovery agent: S3 queue/reconciliation semantics only, after S2 lands.
+- Streaming agent: S4 source event and post assembly only.
+- Ingest agent: S4 metadata/origin propagation only, with a disjoint file set.
+- Frontend agent: S5 existing progress and Health surfaces only, after backend contracts stabilize.
+- Verification agents: S6 source fixtures and live-check reports in disjoint source batches.
+
+Agents do not refactor adjacent code, create compatibility shims, stage, or commit. The coordinator
+reviews every patch against this behavior contract and rejects changes that add a second path.
 
 ## Out of scope
 

@@ -50,14 +50,24 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 
 ## Phase 3: PBI-575 Subscriptions
 
+- [x] Freeze unrelated performance and cleanup work until subscription closure.
 - [x] Replace newest-500 retry scans with one indexed attempt lookup.
 - [x] S1: Give query and subscription issues stable non-null identity.
 - [ ] S2: Classify every meaningful failure through one persisted recovery disposition.
-- [ ] S3: Make retry, restart, stop, reset, delete, and multi-query finalization durable and safe.
-- [ ] S4: Keep `SubscriptionRuntimeService` as the one path and delete proven competitors.
-- [ ] S5: Make Health actions truthful, uncapped, paginated, and driven by persisted recovery.
-- [ ] S6: Verify every advertised source with streamed ingest, metadata, collections, restart, and
-      a real credential-backed Electron run; then archive PBI-575.
+- [ ] S3: Make retry, restart, shutdown, scheduling, stop, reset, delete, and multi-query
+      finalization durable and safe.
+- [ ] S4: Finish one streaming metadata/collection ingest path and delete proven competitors.
+- [ ] S5: Keep run-scoped progress visible and the run active through terminal ingest; make Health
+      actions truthful and uncapped.
+- [ ] S6: Certify sources in bounded batches, expose only passed sources, run the real Electron
+      workflow, and archive PBI-575.
+
+Phase gates:
+
+- Runtime gate after S3: stop/restart/retry manually verified; shutdown leaves no gallery-dl process,
+  executor, lease, or false active run; group schedules pass interval, pause, and manual-run tests.
+- Delivery gate after S5: streaming, collection modes, metadata, and progress manually verified.
+- Release gate after S6: every visible source has deterministic and credential-backed live proof.
 
 ## Phase 4: PBI-577 Duplicates
 
