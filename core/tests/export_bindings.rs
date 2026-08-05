@@ -8,8 +8,8 @@
 use ts_rs::TS;
 
 fn normalize_generated_bindings() {
-    let generated_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../src/shared/types/generated");
+    let generated_root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../src/shared/types/generated");
     let mut directories = vec![generated_root];
 
     while let Some(directory) = directories.pop() {
