@@ -14,6 +14,10 @@ Evidence:
 ## Problem
 First-time users have no guidance on the required first step: creating a library. They land in an empty state with no indication of what to do, leading to confusion and failed workflows (downloads, imports, subscriptions all require an active library).
 
+Observed again on 2026-08-05: Picto opened the Libraries dialog but still mounted the normal
+library UI and invoked library-scoped commands. The grid rendered a raw `No library is open` IPC
+error behind the dialog, while Tag Manager and Subscriptions remained available in the sidebar.
+
 ## Scope
 - First-launch detection (no libraries exist)
 - Welcome / onboarding screen or modal
@@ -30,12 +34,20 @@ First-time users have no guidance on the required first step: creating a library
 2. User cannot accidentally bypass library creation and end up in a broken empty state.
 3. After library creation, user lands in the library with enough context to start using the app.
 4. Subsequent launches skip onboarding and go directly to the last active library.
+5. Until a library opens successfully, the renderer does not invoke library-scoped commands such as
+   grid, sidebar, settings, view preferences, or sync reads.
+6. The no-library state never displays a raw backend/IPC error or Retry action behind the Libraries
+   dialog.
+7. Library-only navigation and actions are hidden or disabled until a library opens successfully.
 
 ## Test Cases
 1. Fresh install, first launch — onboarding screen appears.
 2. Complete onboarding — lands in new library, ready to use.
 3. Second launch — goes straight to library, no onboarding.
 4. Delete all libraries, relaunch — onboarding reappears.
+5. Launch with no active library — no library-scoped IPC calls are made and no error state renders.
+6. Close or cancel the Libraries dialog with no active library — the app remains in a deliberate
+   setup state with library-only navigation unavailable.
 
 ## Risk
 Low. Primarily UI work with simple first-launch detection logic.

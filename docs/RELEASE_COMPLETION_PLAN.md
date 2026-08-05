@@ -136,7 +136,8 @@ Phase gates:
 - [ ] Delete archived PBIs, historical plans, and stale architecture documents after closure.
 - [ ] Replace the large guide program with concise release-accurate user documentation.
 - [x] Delete unreproduced bug buckets, absent Random work, and legacy-parity menu work.
-- [ ] Make first launch lead directly to creating a library, then archive PBI-227.
+- [ ] Make first launch lead directly to creating a library; do not mount library-scoped UI or issue
+      library-scoped backend calls until open succeeds; then archive PBI-227.
 
 ## Phase 9: Release Gate
 
