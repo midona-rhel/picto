@@ -53,8 +53,6 @@ export type SubscriptionDetailState = {
 
 export type SubscriptionsWizardState = {
   open: boolean;
-  /** Pre-selected site when opened from a site-specific affordance. */
-  initialSiteId: string | null;
 };
 
 export const EMPTY_SUBSCRIPTION_DETAIL_STATE: SubscriptionDetailState = {
@@ -73,7 +71,7 @@ export const subscriptionsCoversAtom = atom<Map<string, string>>(new Map());
 export const subscriptionsSelectionAtom = atom<SubscriptionsSelection>(null);
 export const subscriptionsDetailTabAtom = atom<SubscriptionDetailTab>('queries');
 export const subscriptionsDetailAtom = atom<SubscriptionDetailState>(EMPTY_SUBSCRIPTION_DETAIL_STATE);
-export const subscriptionsWizardAtom = atom<SubscriptionsWizardState>({ open: false, initialSiteId: null });
+export const subscriptionsWizardAtom = atom<SubscriptionsWizardState>({ open: false });
 export const subscriptionsAccountsModalAtom = atom<{ open: boolean; focusSiteId: string | null }>({
   open: false,
   focusSiteId: null,

@@ -24,6 +24,7 @@ async fn add_subscription_query_infers_query_kind_from_legacy_site() {
         .create_subscription("Test".to_string(), None, None, None)
         .await
         .unwrap();
+    assert_eq!(subscription.schedule, "daily");
     let query = runtime
         .add_subscription_query(
             subscription.id.clone(),

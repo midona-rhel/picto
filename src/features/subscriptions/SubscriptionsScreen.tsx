@@ -132,15 +132,10 @@ export function SubscriptionsScreen() {
       if (!result.autoCollections) {
         await subscriptionsController.setAutoCollections(subscription.id, false);
       }
-      await subscriptionsController.addQuery(subscription.id, result.siteId, result.queryText);
-      if (result.runNow) {
-        markSubscriptionRunTriggered();
-        await subscriptionsController.run(subscription.id);
-      }
       navigateTo({ kind: 'subscription', id: subscription.id });
-      setWizard({ open: false, initialSiteId: null });
+      setWizard({ open: false });
     });
-  }, [act, setSelection, setWizard]);
+  }, [act, navigateTo, setWizard]);
 
   const busy = busyKey != null;
   const detailController = {
@@ -346,7 +341,7 @@ export function SubscriptionsScreen() {
             progressBySubscriptionId={progressBySubscriptionId}
             runningSubscriptionIds={snapshot.runningSubscriptionIds}
             onSelect={navigateTo}
-            onFollow={() => setWizard({ open: true, initialSiteId: null })}
+            onAdd={() => setWizard({ open: true })}
             onOpenAccounts={() => setAccountsModal({ open: true, focusSiteId: null })}
             onSubscriptionMenu={(position, id) => {
               const subscription = snapshot.subscriptions.find((sub) => sub.id === id);
@@ -441,13 +436,9 @@ export function SubscriptionsScreen() {
 
       <NewSubscriptionDialog
         open={wizard.open}
-        sites={snapshot?.sites ?? []}
-        credentialSiteCategories={new Set((snapshot?.credentials ?? []).map((credential) => credential.site_category))}
-        initialSiteId={wizard.initialSiteId}
         busy={busy}
-        onOpenAccounts={(siteId) => setAccountsModal({ open: true, focusSiteId: siteId })}
         onCreate={(result) => void createFromWizard(result)}
-        onClose={() => setWizard({ open: false, initialSiteId: null })}
+        onClose={() => setWizard({ open: false })}
       />
 
       <AccountsModal

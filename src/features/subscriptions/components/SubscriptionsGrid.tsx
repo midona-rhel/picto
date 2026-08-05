@@ -109,7 +109,7 @@ export function SubscriptionsGrid({
   progressBySubscriptionId,
   runningSubscriptionIds,
   onSelect,
-  onFollow,
+  onAdd,
   onOpenAccounts,
   onSubscriptionMenu,
   onGroupMenu,
@@ -122,7 +122,7 @@ export function SubscriptionsGrid({
   progressBySubscriptionId: Map<string, SubscriptionProgressEvent>;
   runningSubscriptionIds: string[];
   onSelect: (selection: SubscriptionsSelection) => void;
-  onFollow: () => void;
+  onAdd: () => void;
   onOpenAccounts: () => void;
   onSubscriptionMenu: (position: { x: number; y: number }, id: string) => void;
   onGroupMenu: (position: { x: number; y: number }, id: string) => void;
@@ -234,15 +234,15 @@ export function SubscriptionsGrid({
           <span className={styles.heroTitle}>Subscriptions</span>
           <span className={styles.muted}>
             {cards.length === 0
-              ? 'Nothing followed yet'
+              ? 'No subscriptions yet'
               : liveSelected.size > 1
                 ? `${liveSelected.size} of ${cards.length} selected`
-                : `${cards.length} follow${cards.length === 1 ? '' : 's'}`}
+                : `${cards.length} subscription${cards.length === 1 ? '' : 's'}`}
           </span>
         </div>
         <div className={styles.heroActions}>
-          <ActionButton variant="primary" onClick={onFollow}>
-            <IconPlus size={14} /> Follow…
+          <ActionButton variant="primary" onClick={onAdd}>
+            <IconPlus size={14} /> Add
           </ActionButton>
           <ActionButton variant="ghost" onClick={onOpenAccounts}>
             <IconShieldLock size={14} /> Accounts
@@ -252,7 +252,7 @@ export function SubscriptionsGrid({
 
       {cards.length === 0 ? (
         <div className={styles.sectionEmptyLine}>
-          Follow an artist, character or tag — new posts land in your library automatically.
+          Create a subscription, then add the artists, tags, or accounts it should follow.
         </div>
       ) : (
         <div

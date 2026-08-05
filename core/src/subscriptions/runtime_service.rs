@@ -296,8 +296,8 @@ impl<'a> SubscriptionRuntimeService<'a> {
         let now = chrono::Utc::now().to_rfc3339();
         let subscription_id = self.db.with_write(|conn| {
             conn.execute(
-                "INSERT INTO subscription (name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, auto_collections, uuid, date_added)
-                 VALUES (?1, '', 0, ?2, ?3, ?4, 1, ?5, ?6)",
+                "INSERT INTO subscription (name, site_id, schedule, paused, group_id, initial_post_limit, periodic_post_limit, auto_collections, uuid, date_added)
+                 VALUES (?1, '', 'daily', 0, ?2, ?3, ?4, 1, ?5, ?6)",
                 params![
                     name,
                     group_id,
@@ -313,7 +313,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
         Ok(SubscriptionInfo {
             id: subscription_id.to_string(),
             name,
-            schedule: "manual".to_string(),
+            schedule: "daily".to_string(),
             paused: false,
             group_id: group_id.map(|id| id.to_string()),
             initial_post_limit: initial_post_limit.unwrap_or(100),
