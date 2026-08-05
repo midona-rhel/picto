@@ -805,86 +805,24 @@ impl LibraryDatabase {
         })
     }
 
-    pub fn plan_ingest_duplicate_review(
+    pub fn find_ingest_duplicate_review_candidates(
         &self,
         prepared: &types::IngestPreparedSingle,
         threshold: u32,
-    ) -> Result<types::IngestDuplicatePlan, String> {
+    ) -> Result<Vec<types::PerceptualHashCandidate>, String> {
         let Some(perceptual_hash) = prepared.perceptual_hash.as_deref() else {
-            return Ok(types::IngestDuplicatePlan::default());
+            return Ok(Vec::new());
         };
 
         let candidates = self.find_perceptual_hash_candidates(perceptual_hash, threshold)?;
-        let exact_matches: Vec<types::PerceptualHashCandidate> = candidates
-            .iter()
-            .filter(|candidate| candidate.distance == 0)
-            .cloned()
-            .collect();
-        let near_matches: Vec<types::PerceptualHashCandidate> = candidates
-            .iter()
-            .filter(|candidate| candidate.distance > 0)
-            .cloned()
-            .collect();
-
-        let mut plan = types::IngestDuplicatePlan::default();
         let mut review_candidates = Vec::<types::PerceptualHashCandidate>::new();
         let mut seen_review_files = std::collections::HashSet::<i64>::new();
-        let mut push_review_candidate = |candidate: types::PerceptualHashCandidate| {
+        for candidate in candidates {
             if seen_review_files.insert(candidate.file_id) {
                 review_candidates.push(candidate);
             }
-        };
-
-        if exact_matches.len() == 1 {
-            let candidate = &exact_matches[0];
-            if let Some(existing) =
-                self.get_existing_import_target_by_file_hash(&candidate.file_hash)?
-            {
-                let quality = crate::duplicates::quality::compare_static_image_quality(
-                    &crate::duplicates::quality::ComparableImageCandidate {
-                        mime_type: &existing.mime_type,
-                        size_bytes: existing.size_bytes,
-                        pixel_width: existing.pixel_width,
-                        pixel_height: existing.pixel_height,
-                        frame_count: existing.frame_count,
-                    },
-                    &crate::duplicates::quality::ComparableImageCandidate {
-                        mime_type: &prepared.mime_type,
-                        size_bytes: prepared.size_bytes,
-                        pixel_width: prepared.pixel_width,
-                        pixel_height: prepared.pixel_height,
-                        frame_count: prepared.frame_count,
-                    },
-                );
-                plan.action = match quality {
-                    crate::duplicates::quality::ImageQualityDecision::LeftBetter => {
-                        types::IngestDuplicateAction::ReuseExisting {
-                            entity_hash: existing.entity_hash,
-                        }
-                    }
-                    crate::duplicates::quality::ImageQualityDecision::RightBetter => {
-                        types::IngestDuplicateAction::PreferNewOverExisting {
-                            existing_entity_hash: existing.entity_hash,
-                        }
-                    }
-                    crate::duplicates::quality::ImageQualityDecision::Ambiguous => {
-                        push_review_candidate(candidate.clone());
-                        types::IngestDuplicateAction::None
-                    }
-                };
-            }
-        } else {
-            for candidate in exact_matches {
-                push_review_candidate(candidate);
-            }
         }
-
-        for candidate in near_matches {
-            push_review_candidate(candidate);
-        }
-
-        plan.review_candidates = review_candidates;
-        Ok(plan)
+        Ok(review_candidates)
     }
 
     pub fn upsert_duplicate_pair_for_review(

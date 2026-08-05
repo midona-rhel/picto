@@ -335,23 +335,6 @@ pub fn build_ingest_change_impact(
     impact
 }
 
-async fn add_subscription_entity_association(
-    canonical_db: &LibraryDatabase,
-    subscription_id: i64,
-    entity_hash: &str,
-) {
-    let Ok(state) = crate::state::get_state() else {
-        return;
-    };
-    let service = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
-        canonical_db,
-        &state.library_root,
-    );
-    let _ = service
-        .add_subscription_entity(subscription_id, entity_hash)
-        .await;
-}
-
 async fn merge_existing_import_target(
     canonical_db: &LibraryDatabase,
     existing: &crate::db::query::ingest::ExistingImportTarget,
@@ -423,11 +406,6 @@ async fn merge_existing_import_target(
         flags.metadata_changed = true;
     }
 
-    if let Some(subscription_id) = request.subscription_id {
-        add_subscription_entity_association(canonical_db, subscription_id, &existing.entity_hash)
-            .await;
-    }
-
     Ok(SingleIngestOutcome {
         entity_hash: existing.entity_hash.clone(),
         file_hash: existing.file_hash.clone(),
@@ -469,17 +447,8 @@ pub async fn ingest_single_path(
     prepared_single.perceptual_hash = imported_phash.clone();
 
     let threshold = duplicate_review_distance_threshold();
-    let duplicate_plan = canonical_db.plan_ingest_duplicate_review(&prepared_single, threshold)?;
-
-    if let crate::db::types::IngestDuplicateAction::ReuseExisting { entity_hash } =
-        &duplicate_plan.action
-    {
-        if let Some(existing) =
-            canonical_db.get_existing_import_target_by_entity_hash(entity_hash)?
-        {
-            return merge_existing_import_target(canonical_db, &existing, request).await;
-        }
-    }
+    let review_candidates =
+        canonical_db.find_ingest_duplicate_review_candidates(&prepared_single, threshold)?;
 
     let work_types = work_types_for_new_ingest(
         &prepared_single.mime_type,
@@ -502,51 +471,15 @@ pub async fn ingest_single_path(
         .get_existing_import_target_by_file_hash(&prepared_single.entity_hash)?
         .ok_or_else(|| "Inserted ingest target could not be reloaded".to_string())?;
 
-    let mut final_entity_hash = prepared_single.entity_hash.clone();
-    let mut final_entity_id = entity_id;
-    let mut final_file_id = imported_target.file_id;
-    let mut disposition = SingleIngestDisposition::Imported;
-
-    match &duplicate_plan.action {
-        crate::db::types::IngestDuplicateAction::PreferNewOverExisting {
-            existing_entity_hash,
-        } => {
-            let resolution = canonical_db.resolve_duplicate_pair(
-                "smart_merge",
-                existing_entity_hash,
-                &prepared_single.entity_hash,
-                None,
-            )?;
-            if let Some(loser_hash) = resolution.loser_hash.as_deref() {
-                let _ = blob_store.delete(loser_hash);
-            }
-            if let Some(winner_hash) = resolution.winner_hash {
-                final_entity_hash = winner_hash.clone();
-                if let Some(winner) =
-                    canonical_db.get_existing_import_target_by_entity_hash(&winner_hash)?
-                {
-                    final_entity_id = winner.entity_id;
-                    final_file_id = winner.file_id;
-                }
-            }
-        }
-        crate::db::types::IngestDuplicateAction::ReuseExisting { .. } => {
-            disposition = SingleIngestDisposition::Reused;
-        }
-        crate::db::types::IngestDuplicateAction::None => {}
-    }
-
-    if !duplicate_plan.review_candidates.is_empty() {
-        canonical_db.record_duplicate_review_candidates(
-            imported_target.file_id,
-            &duplicate_plan.review_candidates,
-        )?;
+    if !review_candidates.is_empty() {
+        canonical_db
+            .record_duplicate_review_candidates(imported_target.file_id, &review_candidates)?;
     }
 
     Ok(SingleIngestOutcome {
-        entity_hash: final_entity_hash,
+        entity_hash: prepared_single.entity_hash.clone(),
         file_hash: prepared_single.entity_hash.clone(),
-        disposition,
+        disposition: SingleIngestDisposition::Imported,
         mime: prepared_blob.mime,
         size: prepared_blob.size,
         has_thumbnail: capabilities_for_stored_media(
@@ -563,8 +496,8 @@ pub async fn ingest_single_path(
                 || !prepared_single.source_urls.is_empty(),
         },
         scheduled_work: work_types.len(),
-        entity_id: Some(final_entity_id),
-        file_id: Some(final_file_id),
+        entity_id: Some(entity_id),
+        file_id: Some(imported_target.file_id),
     })
 }
 
@@ -587,7 +520,6 @@ pub async fn materialize_collection(
     let mut new_members = Vec::<(IngestPreparedSingle, usize, ResolvedCollectionMember)>::new();
     let mut resolved_members = vec![None; members.len()];
     let mut pending_review_pairs = Vec::<(String, Vec<PerceptualHashCandidate>)>::new();
-    let mut pending_exact_upgrades = Vec::<(String, String)>::new();
     let mut imported_hashes = Vec::new();
     let mut flags = IngestFlags::default();
     let mut scheduled_work = 0usize;
@@ -623,43 +555,10 @@ pub async fn materialize_collection(
         prepared_single.perceptual_hash = imported_phash.clone();
 
         let threshold = duplicate_review_distance_threshold();
-        let duplicate_plan =
-            canonical_db.plan_ingest_duplicate_review(&prepared_single, threshold)?;
-
-        if let crate::db::types::IngestDuplicateAction::ReuseExisting { entity_hash } =
-            &duplicate_plan.action
-        {
-            if let Some(existing) =
-                canonical_db.get_existing_import_target_by_entity_hash(entity_hash)?
-            {
-                let merge = merge_existing_import_target(canonical_db, &existing, &request).await?;
-                flags.merge(&merge.flags);
-                existing_member_ids.push(existing.entity_id);
-                resolved_members[member_index] = Some(ResolvedCollectionMember {
-                    metadata: member.metadata.clone(),
-                    entity_hash: existing.entity_hash.clone(),
-                    file_hash: existing.file_hash.clone(),
-                    disposition: SingleIngestDisposition::Reused,
-                });
-                continue;
-            }
-        }
-
-        if let crate::db::types::IngestDuplicateAction::PreferNewOverExisting {
-            existing_entity_hash,
-        } = &duplicate_plan.action
-        {
-            pending_exact_upgrades.push((
-                existing_entity_hash.clone(),
-                prepared_single.entity_hash.clone(),
-            ));
-        }
-
-        if !duplicate_plan.review_candidates.is_empty() {
-            pending_review_pairs.push((
-                prepared_single.entity_hash.clone(),
-                duplicate_plan.review_candidates.clone(),
-            ));
+        let review_candidates =
+            canonical_db.find_ingest_duplicate_review_candidates(&prepared_single, threshold)?;
+        if !review_candidates.is_empty() {
+            pending_review_pairs.push((prepared_single.entity_hash.clone(), review_candidates));
         }
 
         scheduled_work += work_types_for_new_ingest(
@@ -697,7 +596,7 @@ pub async fn materialize_collection(
         .iter()
         .map(|(member, _, _)| member.clone())
         .collect();
-    let mut new_member_results: Vec<(usize, ResolvedCollectionMember)> = new_members
+    let new_member_results: Vec<(usize, ResolvedCollectionMember)> = new_members
         .into_iter()
         .map(|(_, member_index, identity)| (member_index, identity))
         .collect();
@@ -732,30 +631,6 @@ pub async fn materialize_collection(
             continue;
         };
         canonical_db.record_duplicate_review_candidates(new_target.file_id, candidates)?;
-    }
-
-    for (existing_hash, new_hash) in &pending_exact_upgrades {
-        let resolution = canonical_db.resolve_duplicate_pair(
-            "smart_merge",
-            existing_hash,
-            new_hash,
-            Some(collection_id),
-        )?;
-        if let Some(winner_hash) = resolution.winner_hash.clone() {
-            for (_, member) in &mut new_member_results {
-                if member.entity_hash == *new_hash {
-                    member.entity_hash = winner_hash.clone();
-                    if let Some(winner) =
-                        canonical_db.get_existing_import_target_by_entity_hash(&winner_hash)?
-                    {
-                        member.file_hash = winner.file_hash;
-                    }
-                }
-            }
-        }
-        if let Some(loser_hash) = resolution.loser_hash.as_deref() {
-            let _ = blob_store.delete(loser_hash);
-        }
     }
 
     imported_hashes.extend(new_hashes);
@@ -1114,7 +989,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn ingest_single_auto_resolves_exact_phash_when_new_image_is_clearly_better() {
+    async fn ingest_single_keeps_both_exact_phash_files_for_review() {
         let (_tmp, db, blob_store, source_root) = open_test_library();
         let image = patterned_image(96, 96);
         let jpeg_path = source_root.join("existing.jpg");
@@ -1137,11 +1012,11 @@ mod tests {
 
         assert!(first.disposition.is_imported());
         assert!(second.disposition.is_imported());
-        assert_eq!(db.get_duplicate_count().expect("duplicate count"), 0);
+        assert_eq!(db.get_duplicate_count().expect("duplicate count"), 1);
         assert!(db
             .get_existing_import_target_by_file_hash(&first.file_hash)
             .expect("old target")
-            .is_none());
+            .is_some());
         assert!(db
             .get_existing_import_target_by_file_hash(&second.file_hash)
             .expect("new target")
@@ -1151,11 +1026,11 @@ mod tests {
                 conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?;
             let file_count: i64 =
                 conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| row.get(0))?;
-            assert_eq!(entity_count, 1);
-            assert_eq!(file_count, 1);
+            assert_eq!(entity_count, 2);
+            assert_eq!(file_count, 2);
             Ok(())
         })
-        .expect("inspect exact phash auto-resolution");
+        .expect("inspect exact phash review");
     }
 
     #[tokio::test]

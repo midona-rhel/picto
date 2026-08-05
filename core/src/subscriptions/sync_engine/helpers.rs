@@ -110,7 +110,7 @@ pub(super) fn compute_committed_cursor(
 
 #[cfg(test)]
 mod tests {
-    use super::compute_committed_cursor;
+    use super::{compute_committed_cursor, initial_history_has_more};
     use std::collections::HashSet;
 
     #[test]
@@ -134,9 +134,27 @@ mod tests {
             Some("104".to_string())
         );
     }
+
+    #[test]
+    fn full_initial_batch_keeps_history_cursor_for_the_next_run() {
+        assert!(initial_history_has_more(
+            false,
+            true,
+            Some(100),
+            100,
+            Some("12345"),
+        ));
+        assert!(!initial_history_has_more(
+            false,
+            true,
+            Some(100),
+            99,
+            Some("12345"),
+        ));
+    }
 }
 
-pub(super) fn should_continue_initial_pagination(
+pub(super) fn initial_history_has_more(
     completed_initial_run: bool,
     completed_cleanly: bool,
     post_limit: Option<u32>,

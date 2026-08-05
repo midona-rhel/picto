@@ -826,9 +826,9 @@ pub async fn get_running_subscription_progress(
 ) -> Result<serde_json::Value, String> {
     let mut result = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::get_running_subscription_progress();
     for event in &mut result {
-        if let Ok(subscription_id) = event.subscription_id.parse::<i64>() {
+        if let Some(Ok(query_id)) = event.query_id.as_deref().map(str::parse::<i64>) {
             if let Ok(counts) = runtime_service(state)
-                .count_subscription_ingest_queue(subscription_id)
+                .count_current_ingest_queue(query_id)
                 .await
             {
                 event.queued_for_ingest = counts.queued;

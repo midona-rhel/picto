@@ -21,7 +21,7 @@ export function HistoryTab({ runs }: { runs: SubscriptionRunRecord[] }) {
         <span>Started</span>
         <span>Status</span>
         <span className={styles.qCellNum}>Fetched</span>
-        <span className={styles.qCellNum}>Already in library</span>
+        <span className={styles.qCellNum}>Reused duplicate</span>
         <span>Notes</span>
       </div>
       {visible.map((run) => {

@@ -481,93 +481,31 @@ async fn run_job_inner(
         };
     }
 
-    let mut total_errors = Vec::new();
-    let mut failure_kind = None;
-    let mut cancelled = false;
-
-    loop {
-        let current_query = match runtime.get_subscription_query(query.query_id).await {
-            Ok(Some(query)) => query,
-            _ => query.clone(),
-        };
-        let subscription_limit = if current_query.completed_initial_run {
-            sub.periodic_post_limit as u32
-        } else {
-            sub.initial_post_limit as u32
-        };
-        // For the initial run the subscription limit is a TOTAL budget across
-        // continuation batches, not a per-batch size — "first sync: up to N
-        // posts" must stop at N, not crawl the site's entire history N at a
-        // time. Each batch requests only what's left of the budget.
-        let effective_limit = if current_query.completed_initial_run || subscription_limit == 0 {
-            subscription_limit
-        } else {
-            let already_fetched = current_query.posts_found.max(0) as u32;
-            let remaining = subscription_limit.saturating_sub(already_fetched);
-            if remaining == 0 {
-                tracing::info!(
-                    query_id = current_query.query_id,
-                    initial_post_limit = subscription_limit,
-                    posts_found = already_fetched,
-                    "initial post budget exhausted — marking initial run complete"
-                );
-                let _ = runtime
-                    .set_query_completed_initial_run(current_query.query_id, true)
-                    .await;
-                let _ = runtime
-                    .set_query_resume_state(current_query.query_id, None, None)
-                    .await;
-                break;
-            }
-            remaining
-        };
-        let post_limit = effective_query_post_limit(app_settings.sub_batch_size, effective_limit);
-        let progress: SyncProgress = engine
-            .sync_query(
-                job.run_id,
-                sub.subscription_id,
-                current_query.query_id,
-                &current_query.query_text,
-                current_query.display_name.as_deref(),
-                &current_query.site_id,
-                post_limit,
-                current_query.completed_initial_run,
-                current_query.resume_cursor.as_deref(),
-                current_query.resume_strategy.as_deref(),
-                cancel.clone(),
-            )
-            .await;
-        if !progress.errors.is_empty() {
-            total_errors.extend(progress.errors.clone());
-        }
-        if progress.failure_kind.is_some() {
-            failure_kind = progress.failure_kind.clone();
-        }
-        if progress.cancelled {
-            cancelled = true;
-            break;
-        }
-
-        let refreshed = runtime
-            .get_subscription_query(query.query_id)
-            .await
-            .ok()
-            .flatten();
-        let needs_continuation = refreshed.as_ref().is_some_and(|query| {
-            !query.completed_initial_run
-                && query
-                    .resume_cursor
-                    .as_ref()
-                    .is_some_and(|cursor| !cursor.is_empty())
-        });
-        if !needs_continuation {
-            break;
-        }
-    }
+    let subscription_limit = if query.completed_initial_run {
+        sub.periodic_post_limit as u32
+    } else {
+        sub.initial_post_limit as u32
+    };
+    let post_limit = effective_query_post_limit(app_settings.sub_batch_size, subscription_limit);
+    let progress: SyncProgress = engine
+        .sync_query(
+            job.run_id,
+            sub.subscription_id,
+            query.query_id,
+            &query.query_text,
+            query.display_name.as_deref(),
+            &query.site_id,
+            post_limit,
+            query.completed_initial_run,
+            query.resume_cursor.as_deref(),
+            query.resume_strategy.as_deref(),
+            cancel,
+        )
+        .await;
 
     JobOutcome {
-        cancelled,
-        failure_kind,
-        errors: total_errors,
+        cancelled: progress.cancelled,
+        failure_kind: progress.failure_kind,
+        errors: progress.errors,
     }
 }

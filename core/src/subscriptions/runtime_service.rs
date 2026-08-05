@@ -84,6 +84,22 @@ pub struct SubscriptionRuntimeService<'a> {
     library_root: PathBuf,
 }
 
+pub async fn link_subscription_entity(
+    db: &LibraryDatabase,
+    subscription_id: i64,
+    entity_hash: &str,
+) -> Result<bool, String> {
+    let entity_hash = entity_hash.to_string();
+    db.with_write(move |conn| {
+        let entity_id: i64 = conn.query_row(
+            "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",
+            [&entity_hash],
+            |row| row.get(0),
+        )?;
+        add_subscription_entity(conn, subscription_id, entity_id)
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct RunnableSubscription {
     pub subscription: Subscription,
@@ -1161,15 +1177,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
         subscription_id: i64,
         entity_hash: &str,
     ) -> Result<bool, String> {
-        let entity_hash = entity_hash.to_string();
-        self.db.with_write(move |conn| {
-            let entity_id: i64 = conn.query_row(
-                "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",
-                [&entity_hash],
-                |row| row.get(0),
-            )?;
-            add_subscription_entity(conn, subscription_id, entity_id)
-        })
+        link_subscription_entity(self.db, subscription_id, entity_hash).await
     }
 
     pub async fn upsert_subscription_post_collection(
@@ -1261,13 +1269,26 @@ impl<'a> SubscriptionRuntimeService<'a> {
         })
     }
 
-    pub async fn count_subscription_ingest_queue(
+    pub async fn count_current_ingest_queue(
         &self,
-        subscription_id: i64,
+        query_id: i64,
     ) -> Result<IngestQueueCounts, String> {
         self.db.with_read(|conn| {
             conn.query_row(
-                "SELECT
+                "WITH current_query_run AS (
+                     SELECT query_run_id, run_id
+                     FROM subscription_query_run
+                     WHERE query_id = ?1
+                     ORDER BY query_run_id DESC
+                     LIMIT 1
+                 ), target_query_runs AS (
+                     SELECT qr.query_run_id
+                     FROM subscription_query_run qr
+                     JOIN current_query_run current
+                       ON (current.run_id IS NOT NULL AND qr.run_id = current.run_id)
+                       OR (current.run_id IS NULL AND qr.query_run_id = current.query_run_id)
+                 )
+                 SELECT
                      COALESCE(SUM(CASE WHEN i.status = 'pending' THEN 1 ELSE 0 END), 0),
                      COALESCE(SUM(CASE WHEN i.status = 'running' THEN 1 ELSE 0 END), 0),
                      COALESCE(SUM(CASE WHEN i.status = 'complete' AND i.result_kind = 'imported' THEN 1 ELSE 0 END), 0),
@@ -1275,8 +1296,8 @@ impl<'a> SubscriptionRuntimeService<'a> {
                      COALESCE(SUM(CASE WHEN i.status = 'failed' THEN 1 ELSE 0 END), 0)
                  FROM ingest_queue_item i
                  JOIN ingest_queue q ON q.queue_id = i.queue_id
-                 WHERE q.subscription_id = ?1",
-                [subscription_id],
+                 WHERE q.query_run_id IN (SELECT query_run_id FROM target_query_runs)",
+                [query_id],
                 |row| {
                     Ok(IngestQueueCounts {
                         queued: row.get::<_, i64>(0)? as usize,

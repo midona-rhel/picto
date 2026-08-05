@@ -244,7 +244,7 @@ export function SubscriptionDetail({
               {lastRun && lastRun.files_downloaded > 0 &&
                 ` · last run fetched ${lastRun.files_downloaded}`}
               {lastRun && lastRun.files_skipped > 0 &&
-                ` (${lastRun.files_skipped} already in your library)`}
+                ` (${lastRun.files_skipped} duplicate reused)`}
             </span>
           </div>
         </div>

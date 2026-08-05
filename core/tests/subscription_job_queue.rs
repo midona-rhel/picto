@@ -451,6 +451,76 @@ async fn full_run_derives_its_snapshot_from_durable_work() {
 }
 
 #[tokio::test]
+async fn current_ingest_counts_exclude_previous_runs() {
+    let (dir, db) = open_db();
+    let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
+    let subscription = runtime
+        .create_subscription("Current Counts".to_string(), None, None, None)
+        .await
+        .unwrap();
+    let subscription_id = subscription.id.parse::<i64>().unwrap();
+    let query = runtime
+        .add_subscription_query(
+            subscription.id,
+            "gelbooru".to_string(),
+            Some("search".to_string()),
+            "1girl".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    let query_id = query.id.parse::<i64>().unwrap();
+    let old_run = runtime
+        .create_subscription_run(subscription_id)
+        .await
+        .unwrap();
+    let old_query_run = runtime
+        .create_subscription_query_run(Some(old_run), subscription_id, query_id)
+        .await
+        .unwrap();
+    let current_run = runtime
+        .create_subscription_run(subscription_id)
+        .await
+        .unwrap();
+    let current_query_run = runtime
+        .create_subscription_query_run(Some(current_run), subscription_id, query_id)
+        .await
+        .unwrap();
+
+    let conn = raw_conn(&dir);
+    for (query_run_id, queue_status, item_status, result_kind) in [
+        (old_query_run, "complete", "complete", Some("imported")),
+        (current_query_run, "running", "pending", None),
+        (current_query_run, "running", "complete", Some("reused")),
+    ] {
+        conn.execute(
+            "INSERT INTO ingest_queue (
+                 queue_kind, source_kind, subscription_id, query_id, query_run_id,
+                 status, created_at, updated_at
+             ) VALUES ('single', 'subscription', ?1, ?2, ?3, ?4, 'now', 'now')",
+            rusqlite::params![subscription_id, query_id, query_run_id, queue_status],
+        )
+        .unwrap();
+        let queue_id = conn.last_insert_rowid();
+        conn.execute(
+            "INSERT INTO ingest_queue_item (
+                 queue_id, source_path, payload_json, status, result_kind, created_at, updated_at
+             ) VALUES (?1, '/tmp/source', '{}', ?2, ?3, 'now', 'now')",
+            rusqlite::params![queue_id, item_status, result_kind],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let counts = runtime.count_current_ingest_queue(query_id).await.unwrap();
+    assert_eq!(counts.queued, 1);
+    assert_eq!(counts.ingesting, 0);
+    assert_eq!(counts.ingested, 0);
+    assert_eq!(counts.reused, 1);
+    assert_eq!(counts.failed, 0);
+}
+
+#[tokio::test]
 async fn failed_ingest_fails_an_otherwise_successful_run() {
     let (dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));

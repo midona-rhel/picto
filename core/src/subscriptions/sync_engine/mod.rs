@@ -18,8 +18,6 @@ mod retry;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use chrono::Utc;
-
 use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::AppSettings;
@@ -48,15 +46,13 @@ pub struct SyncProgress {
 fn query_run_completion(
     status: &str,
     progress: &SyncProgress,
-    prior_files: usize,
-    prior_posts: usize,
 ) -> crate::subscriptions::types::SubscriptionQueryRunCompletion {
     crate::subscriptions::types::SubscriptionQueryRunCompletion {
         status: status.to_string(),
         failure_kind: progress.failure_kind.clone(),
         error_message: progress.errors.last().cloned(),
-        posts_processed: progress.posts_processed.saturating_sub(prior_posts) as i64,
-        files_downloaded: progress.files_downloaded.saturating_sub(prior_files) as i64,
+        posts_processed: progress.posts_processed as i64,
+        files_downloaded: progress.files_downloaded as i64,
         files_skipped: progress.files_skipped as i64,
         metadata_validated: progress.metadata_validated as i64,
         metadata_invalid: progress.metadata_invalid as i64,
@@ -171,9 +167,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
         self
     }
 
-    async fn finalize_current_post_progress(
+    fn finalize_current_post_progress(
         &self,
-        query_id: i64,
         progress: &mut SyncProgress,
         posts_processed_this_run: &mut usize,
     ) {
@@ -183,15 +178,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         progress.posts_processed += 1;
         *posts_processed_this_run += 1;
-        let _ = self
-            .runtime_service()
-            .update_query_progress(
-                query_id,
-                &Utc::now().to_rfc3339(),
-                progress.files_downloaded as i64,
-                progress.posts_processed as i64,
-            )
-            .await;
 
         progress.current_post_id = None;
         progress.current_post_items = 0;

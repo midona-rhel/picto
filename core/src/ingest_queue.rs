@@ -17,7 +17,7 @@ use crate::ingest::{
     CollectionIngestMember, IngestBatchSummary, IngestSourceKind, SingleIngestDisposition,
     SingleIngestOutcome, SingleIngestRequest,
 };
-use crate::subscriptions::runtime_service::SubscriptionRuntimeService;
+use crate::subscriptions::runtime_service::{link_subscription_entity, SubscriptionRuntimeService};
 use crate::subscriptions::source_adapter::ParsedMetadata;
 use crate::tags::logging::{preview_tag_strings, summarize_tag_strings};
 
@@ -1357,6 +1357,10 @@ async fn process_single_queue(
 
     let outcome: SingleIngestOutcome = ingest_single_path(db, blob_store, &payload.request).await?;
 
+    if let Some(subscription_id) = queue.subscription_id {
+        link_subscription_entity(db, subscription_id, &outcome.entity_hash).await?;
+    }
+
     let mut summary = IngestBatchSummary::default();
     summary.flags.merge(&outcome.flags);
     if let Some(folder_id) = payload.target_folder_id {
@@ -1668,6 +1672,14 @@ async fn process_collection_queue(
             .await;
         }
         if let Some(collection_id) = collection_id {
+            let collection_hash = db.with_read(move |conn| {
+                conn.query_row(
+                    "SELECT entity_hash FROM media_entity WHERE entity_id = ?1",
+                    [collection_id],
+                    |row| row.get::<_, String>(0),
+                )
+            })?;
+            link_subscription_entity(db, context.subscription_id, &collection_hash).await?;
             persist_subscription_collection_association(db, context, collection_id).await;
             reconcile_subscription_collection_order(
                 db,
@@ -1830,6 +1842,27 @@ async fn process_queue_entry(
     }
 }
 
+async fn release_failed_subscription_archive(library_root: &Path, queue: &IngestQueueEntry) {
+    let (Some(subscription_id), Some(query_id), Some(post_id)) = (
+        queue.subscription_id,
+        queue.query_id,
+        queue.post_id.as_ref(),
+    ) else {
+        return;
+    };
+    let prefix =
+        crate::subscriptions::archive::subscription_query_archive_prefix(subscription_id, query_id);
+    if let Err(error) = crate::subscriptions::archive::clear_post_archive_entries_at_root(
+        library_root,
+        &prefix,
+        std::slice::from_ref(post_id),
+    )
+    .await
+    {
+        warn!(queue_id = queue.queue_id, %error, "Failed to release subscription archive entry after ingest failure");
+    }
+}
+
 pub async fn start_worker_loop(
     db: Arc<LibraryDatabase>,
     blob_store: Arc<BlobStore>,
@@ -1862,6 +1895,9 @@ pub async fn start_worker_loop(
         };
 
         let result = process_queue_entry(&db, &blob_store, queue.clone()).await;
+        if result.is_err() {
+            release_failed_subscription_archive(&library_root, &queue).await;
+        }
         if let Some(run_id) = db
             .subscription_run_id_for_ingest_queue(queue.queue_id)
             .await
@@ -2024,6 +2060,117 @@ mod tests {
             .unwrap();
         assert_eq!(entity_count, 1);
         assert!(!staged.root.exists());
+    }
+
+    #[tokio::test]
+    async fn subscription_single_ingest_links_the_imported_entity() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(&library_root).unwrap();
+        fs::create_dir_all(&source_root).unwrap();
+        let source = source_root.join("download.png");
+        write_image(&source, 64);
+
+        let db = Arc::new(LibraryDatabase::open(&library_root).unwrap());
+        let blob_store = Arc::new(BlobStore::open(&library_root).unwrap());
+        let runtime = SubscriptionRuntimeService::new(&db, &library_root);
+        let subscription = runtime
+            .create_subscription("Artist".to_string(), None, None, None)
+            .await
+            .unwrap();
+        let subscription_id = subscription.id.parse::<i64>().unwrap();
+        let request = SingleIngestRequest {
+            source_kind: IngestSourceKind::Subscription,
+            path: source.clone(),
+            tag_strings: Vec::new(),
+            source_urls: Vec::new(),
+            name: None,
+            notes: None,
+            created_at: None,
+            initial_status: 0,
+            skip_thumbnail: false,
+            tag_provenance_mask: crate::db::types::TAG_PROVENANCE_UNKNOWN,
+            subscription_id: Some(subscription_id),
+        };
+        db.enqueue_ingest_queue(
+            IngestQueueKind::Single,
+            "subscription",
+            Some(subscription_id),
+            None,
+            None,
+            None,
+            Some("post-1"),
+            Some("site"),
+            None,
+            None,
+            vec![(
+                source,
+                None,
+                IngestQueueItemPayload {
+                    request,
+                    subscription_metadata: None,
+                    target_folder_id: None,
+                },
+                false,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let queue = db.lease_next_ingest_queue().await.unwrap().unwrap();
+        process_queue_entry(&db, &blob_store, queue).await.unwrap();
+
+        db.with_read(move |conn| {
+            let linked: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM subscription_entity WHERE subscription_id = ?1",
+                [subscription_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(linked, 1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_subscription_ingest_releases_only_its_post_archive_entry() {
+        let temp = TempDir::new().unwrap();
+        let archive_path = temp.path().join("gdl-archive.sqlite3");
+        let conn = Connection::open(&archive_path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE archive (entry TEXT PRIMARY KEY);
+             INSERT INTO archive VALUES ('picto_s7_q9_site_post-42_file');
+             INSERT INTO archive VALUES ('picto_s7_q9_site_post-43_file');",
+        )
+        .unwrap();
+        drop(conn);
+        let queue = IngestQueueEntry {
+            queue_id: 1,
+            queue_kind: IngestQueueKind::Single,
+            source_kind: "subscription".to_string(),
+            subscription_id: Some(7),
+            query_id: Some(9),
+            query_run_id: Some(11),
+            cleanup_root: None,
+            post_id: Some("post-42".to_string()),
+            category: Some("site".to_string()),
+            preferred_name: None,
+            expected_count: None,
+            status: "failed".to_string(),
+        };
+
+        release_failed_subscription_archive(temp.path(), &queue).await;
+
+        let conn = Connection::open(&archive_path).unwrap();
+        let entries = conn
+            .prepare("SELECT entry FROM archive ORDER BY entry")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(entries, vec!["picto_s7_q9_site_post-43_file"]);
     }
 
     #[test]

@@ -205,28 +205,6 @@ pub struct PerceptualHashCandidate {
     pub distance: u32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum IngestDuplicateAction {
-    None,
-    ReuseExisting { entity_hash: String },
-    PreferNewOverExisting { existing_entity_hash: String },
-}
-
-#[derive(Debug, Clone)]
-pub struct IngestDuplicatePlan {
-    pub action: IngestDuplicateAction,
-    pub review_candidates: Vec<PerceptualHashCandidate>,
-}
-
-impl Default for IngestDuplicatePlan {
-    fn default() -> Self {
-        Self {
-            action: IngestDuplicateAction::None,
-            review_candidates: Vec::new(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct CollectionRecord {
     pub id: i64,

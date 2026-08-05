@@ -1,5 +1,4 @@
 use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
 
 use chrono::Utc;
 use tokio_util::sync::CancellationToken;
@@ -19,7 +18,7 @@ use crate::subscriptions::source_adapter::{
 };
 
 use super::helpers::{
-    cleanup_subscription_temp_root, compute_committed_cursor, should_continue_initial_pagination,
+    cleanup_subscription_temp_root, compute_committed_cursor, initial_history_has_more,
 };
 use super::{
     query_run_completion, PendingCollection, PendingMember, SubscriptionSyncEngine, SyncProgress,
@@ -73,15 +72,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             )
             .await;
             return progress;
-        }
-        progress.files_downloaded = prior_files;
-        progress.posts_processed = prior_posts;
-        {
-            let now = Utc::now().to_rfc3339();
-            let _ = self
-                .runtime_service()
-                .update_query_progress(query_id, &now, prior_files as i64, prior_posts as i64)
-                .await;
         }
         let inbox_limit = effective_inbox_limit(self.settings.sub_inbox_pause_limit);
 
@@ -195,7 +185,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             &format!("Starting gallery-dl for '{}'...", query_text),
         );
 
-        let use_archive = completed_initial_run;
         info!(
             query_id,
             url = %url,
@@ -203,7 +192,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             range_start,
             abort_threshold = ?abort_threshold,
             completed_initial_run,
-            use_archive,
+            use_archive = true,
             archive_prefix = %archive_prefix,
             resume_cursor = ?resume_cursor,
             resume_strategy = ?resume_strategy,
@@ -222,16 +211,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
             abort_threshold,
             sleep_request: self.settings.sub_rate_limit_secs,
             auth: credential.gallery_dl_auth.clone(),
-            archive_path: if use_archive {
-                archive_path
-            } else {
-                PathBuf::new()
-            },
-            archive_prefix: if use_archive {
-                Some(archive_prefix)
-            } else {
-                None
-            },
+            archive_path,
+            archive_prefix: Some(archive_prefix),
             cancel: cancel.clone(),
         };
 
@@ -331,11 +312,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                             Ok(Some(post_id)) => {
                                 committed_post_ids.insert(post_id);
                                 self.finalize_current_post_progress(
-                                    query_id,
                                     &mut progress,
                                     &mut posts_processed_this_run,
-                                )
-                                .await;
+                                );
                             }
                             Ok(None) => {}
                             Err(error) => {
@@ -420,11 +399,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         Ok(Some(post_id)) => {
                             committed_post_ids.insert(post_id);
                             self.finalize_current_post_progress(
-                                query_id,
                                 &mut progress,
                                 &mut posts_processed_this_run,
-                            )
-                            .await;
+                            );
                         }
                         Ok(None) => {}
                         Err(error) => {
@@ -506,11 +483,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         );
                         if first_item_for_post {
                             self.finalize_current_post_progress(
-                                query_id,
                                 &mut progress,
                                 &mut posts_processed_this_run,
-                            )
-                            .await;
+                            );
                         }
                     }
                     Err(error) => {
@@ -567,7 +542,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         .runtime_service()
                         .finish_subscription_query_run(
                             query_run_id,
-                            query_run_completion("failed", &progress, prior_files, prior_posts),
+                            query_run_completion("failed", &progress),
                         )
                         .await;
                 }
@@ -601,7 +576,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         .runtime_service()
                         .finish_subscription_query_run(
                             query_run_id,
-                            query_run_completion("failed", &progress, prior_files, prior_posts),
+                            query_run_completion("failed", &progress),
                         )
                         .await;
                 }
@@ -764,11 +739,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         Ok(Some(post_id)) => {
                             committed_post_ids.insert(post_id);
                             self.finalize_current_post_progress(
-                                query_id,
                                 &mut progress,
                                 &mut posts_processed_this_run,
-                            )
-                            .await;
+                            );
                         }
                         Ok(None) => {}
                         Err(error) => {
@@ -820,11 +793,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     Ok(Some(post_id)) => {
                         committed_post_ids.insert(post_id);
                         self.finalize_current_post_progress(
-                            query_id,
                             &mut progress,
                             &mut posts_processed_this_run,
-                        )
-                        .await;
+                        );
                     }
                     Ok(None) => {}
                     Err(error) => {
@@ -924,7 +895,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         );
         progress.resume_cursor = next_resume_cursor.clone();
         let unique_post_count = all_post_ids.len();
-        let continue_initial_pagination = should_continue_initial_pagination(
+        let initial_history_has_more = initial_history_has_more(
             completed_initial_run,
             completed_cleanly,
             post_limit,
@@ -934,7 +905,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         if !completed_initial_run {
             let persisted_cursor = if completed_cleanly {
-                if continue_initial_pagination {
+                if initial_history_has_more {
                     next_resume_cursor.clone()
                 } else {
                     None
@@ -955,8 +926,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .update_query_progress(
                     query_id,
                     &now,
-                    progress.files_downloaded as i64,
-                    progress.posts_processed as i64,
+                    prior_files.saturating_add(progress.files_downloaded) as i64,
+                    prior_posts.saturating_add(progress.posts_processed) as i64,
                 )
                 .await;
         }
@@ -965,14 +936,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
             query_id,
             completed_cleanly,
             completed_initial_run,
-            continue_initial_pagination,
+            initial_history_has_more,
             unique_post_count,
             next_resume_cursor = ?next_resume_cursor,
             exit_code = run_summary.exit_code,
             "sync_query: pagination decision"
         );
 
-        if !completed_initial_run && completed_cleanly && !continue_initial_pagination {
+        if !completed_initial_run && completed_cleanly && !initial_history_has_more {
             info!(query_id, "sync_query: marking initial run as complete");
             let _ = self
                 .runtime_service()
@@ -982,9 +953,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .runtime_service()
                 .set_query_resume_state(query_id, None, None)
                 .await;
-        } else if continue_initial_pagination {
+        } else if initial_history_has_more {
             info!(query_id, next_resume_cursor = ?next_resume_cursor, fetched_items = total_items,
-                post_limit = ?post_limit, "sync_query: initial run continues; resuming next chunk");
+                post_limit = ?post_limit, "sync_query: more initial history remains for the next run");
         }
 
         info!(
@@ -1010,7 +981,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .runtime_service()
                 .finish_subscription_query_run(
                     query_run_id,
-                    query_run_completion(status, &progress, prior_files, prior_posts),
+                    query_run_completion(status, &progress),
                 )
                 .await;
         }

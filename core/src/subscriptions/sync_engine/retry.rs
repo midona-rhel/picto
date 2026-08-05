@@ -279,7 +279,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .runtime_service()
                 .finish_subscription_query_run(
                     query_run_id,
-                    query_run_completion(status, &progress, 0, 0),
+                    query_run_completion(status, &progress),
                 )
                 .await;
         }
