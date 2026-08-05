@@ -291,7 +291,9 @@ CREATE TABLE IF NOT EXISTS subscription_query_run (
     error_message        TEXT,
     posts_processed      INTEGER NOT NULL DEFAULT 0,
     files_downloaded     INTEGER NOT NULL DEFAULT 0,
-    files_skipped        INTEGER NOT NULL DEFAULT 0
+    files_skipped        INTEGER NOT NULL DEFAULT 0,
+    metadata_validated   INTEGER NOT NULL DEFAULT 0,
+    metadata_invalid     INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS subscription_query_job (
@@ -636,7 +638,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         ),
         (
             "subscription_query_run",
-            "SELECT query_run_id, run_id, subscription_id, query_id, started_at, finished_at, status, failure_kind, error_message, posts_processed, files_downloaded, files_skipped FROM subscription_query_run WHERE 0",
+            "SELECT query_run_id, run_id, subscription_id, query_id, started_at, finished_at, status, failure_kind, error_message, posts_processed, files_downloaded, files_skipped, metadata_validated, metadata_invalid FROM subscription_query_run WHERE 0",
         ),
         (
             "subscription_query_job",

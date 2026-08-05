@@ -163,7 +163,7 @@ pub async fn execute_query_job(
     .catch_unwind()
     .await;
 
-    let mut result = match result {
+    let result = match result {
         Ok(result) => result,
         Err(_) => {
             let message = "Subscription executor panicked".to_string();
@@ -207,42 +207,11 @@ pub async fn execute_query_job(
         }
     };
 
-    if let Some(run_id) = job.run_id {
-        let _ = runtime
-            .accumulate_subscription_run_counters(
-                run_id,
-                result.files_downloaded_delta as i64,
-                result.files_skipped as i64,
-                result.metadata_validated as i64,
-                result.metadata_invalid as i64,
-            )
-            .await;
-    }
-
     if result.cancelled && shutdown.is_cancelled() {
         let _ = runtime
             .requeue_interrupted_subscription_query_job(job.job_id)
             .await;
         return;
-    }
-
-    if let Some(run_id) = job.run_id {
-        match wait_for_run_ingest(db.as_ref(), run_id, &shutdown).await {
-            Ok(Some(counts)) if counts.failed > 0 => {
-                result.failure_kind = Some(FailureKind::IngestQueueFailure.as_str().to_string());
-                result.errors.push(format!(
-                    "{} downloaded file{} could not be added to the library",
-                    counts.failed,
-                    if counts.failed == 1 { "" } else { "s" },
-                ));
-            }
-            Ok(Some(_)) => {}
-            Ok(None) => return,
-            Err(error) => {
-                result.failure_kind = Some(FailureKind::IngestQueueFailure.as_str().to_string());
-                result.errors.push(error);
-            }
-        }
     }
 
     let failure_kind = result.failure_kind.clone();
@@ -296,23 +265,6 @@ pub async fn execute_query_job(
     .await;
 }
 
-async fn wait_for_run_ingest(
-    db: &LibraryDatabase,
-    run_id: i64,
-    shutdown: &CancellationToken,
-) -> Result<Option<crate::ingest_queue::IngestQueueCounts>, String> {
-    loop {
-        let counts = db.count_subscription_run_ingest_queue(run_id).await?;
-        if counts.queued == 0 && counts.ingesting == 0 {
-            return Ok(Some(counts));
-        }
-        tokio::select! {
-            _ = shutdown.cancelled() => return Ok(None),
-            _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
-        }
-    }
-}
-
 async fn finalize_if_idle(
     runtime: &crate::subscriptions::runtime_service::SubscriptionRuntimeService<'_>,
     running_subs: &RunningSubscriptions,
@@ -323,6 +275,10 @@ async fn finalize_if_idle(
     query_id: Option<String>,
     query_name: Option<String>,
 ) -> Result<(), String> {
+    if let Some(run_id) = run_id {
+        crate::subscriptions::settlement::settle_run(runtime, running_subs, run_id).await?;
+        return Ok(());
+    }
     let subscription_id_num: i64 = subscription_id
         .parse()
         .map_err(|_| format!("Invalid subscription id: {subscription_id}"))?;
@@ -334,25 +290,7 @@ async fn finalize_if_idle(
         skipped,
         metadata_validated,
         metadata_invalid,
-    ) = if let Some(run_id) = run_id {
-        let Some(run) = runtime
-            .finalize_subscription_run_if_terminal(run_id)
-            .await?
-        else {
-            return Ok(());
-        };
-        (
-            run.status,
-            run.failure_kind,
-            run.error_message,
-            run.files_downloaded as usize,
-            run.files_skipped as usize,
-            run.metadata_validated as usize,
-            run.metadata_invalid as usize,
-        )
-    } else {
-        ("succeeded".to_string(), None, None, 0, 0, 0, 0)
-    };
+    ) = ("succeeded".to_string(), None, None, 0, 0, 0, 0);
     if !clear_subscription_guard_if_idle(runtime, running_subs, subscription_id_num).await? {
         return Ok(());
     }
@@ -378,10 +316,6 @@ async fn finalize_if_idle(
 }
 
 struct JobOutcome {
-    files_downloaded_delta: usize,
-    files_skipped: usize,
-    metadata_validated: usize,
-    metadata_invalid: usize,
     cancelled: bool,
     failure_kind: Option<String>,
     errors: Vec<String>,
@@ -404,10 +338,6 @@ async fn failed_job_outcome(
         )
         .await;
     JobOutcome {
-        files_downloaded_delta: 0,
-        files_skipped: 0,
-        metadata_validated: 0,
-        metadata_invalid: 0,
         cancelled: false,
         failure_kind: Some(failure_kind.as_str().to_string()),
         errors: vec![message],
@@ -545,20 +475,12 @@ async fn run_job_inner(
             )
             .await;
         return JobOutcome {
-            files_downloaded_delta: progress.files_downloaded,
-            files_skipped: progress.files_skipped,
-            metadata_validated: progress.metadata_validated,
-            metadata_invalid: progress.metadata_invalid,
             cancelled: progress.cancelled,
             failure_kind: progress.failure_kind,
             errors: progress.errors,
         };
     }
 
-    let mut total_downloaded_delta = 0usize;
-    let mut total_skipped = 0usize;
-    let mut total_metadata_validated = 0usize;
-    let mut total_metadata_invalid = 0usize;
     let mut total_errors = Vec::new();
     let mut failure_kind = None;
     let mut cancelled = false;
@@ -568,7 +490,6 @@ async fn run_job_inner(
             Ok(Some(query)) => query,
             _ => query.clone(),
         };
-        let prior_files = current_query.files_found.max(0) as usize;
         let subscription_limit = if current_query.completed_initial_run {
             sub.periodic_post_limit as u32
         } else {
@@ -616,10 +537,6 @@ async fn run_job_inner(
                 cancel.clone(),
             )
             .await;
-        total_downloaded_delta += progress.files_downloaded.saturating_sub(prior_files);
-        total_skipped += progress.files_skipped;
-        total_metadata_validated += progress.metadata_validated;
-        total_metadata_invalid += progress.metadata_invalid;
         if !progress.errors.is_empty() {
             total_errors.extend(progress.errors.clone());
         }
@@ -649,10 +566,6 @@ async fn run_job_inner(
     }
 
     JobOutcome {
-        files_downloaded_delta: total_downloaded_delta,
-        files_skipped: total_skipped,
-        metadata_validated: total_metadata_validated,
-        metadata_invalid: total_metadata_invalid,
         cancelled,
         failure_kind,
         errors: total_errors,

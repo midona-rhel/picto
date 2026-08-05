@@ -44,7 +44,8 @@ async fn settle_panicked_job(
         )
         .await;
     if let Some(run_id) = job.run_id {
-        let _ = runtime.finalize_subscription_run_if_terminal(run_id).await;
+        let _ = crate::subscriptions::settlement::settle_run(&runtime, running_subs, run_id).await;
+        return;
     }
     let _ = clear_subscription_guard_if_idle(&runtime, running_subs, job.subscription_id).await;
     crate::runtime_state::remove_task(&format!("sub:{}", job.subscription_id));

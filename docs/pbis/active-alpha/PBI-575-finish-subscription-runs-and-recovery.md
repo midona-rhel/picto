@@ -54,8 +54,6 @@ Already working and retained:
 
 Release gaps:
 
-- non-collection runs under-report downloaded files
-- ingest progress is subscription-wide instead of run-scoped and disappears before queued ingest settles
 - pending collection flushing assumes post assets are contiguous and can strand interleaved posts
 - parsed rating metadata is not carried through canonical ingest
 - the source picker advertises sites without source-specific metadata validation or live proof
@@ -203,12 +201,16 @@ Implementation checkpoint:
 
 ### S4. Finish the one streaming ingest path and remove competitors
 
-Checkpoint completed on 2026-08-05: downloaded assets now increment the same counter for single and
-collection paths; cancellation and restart preserve pending ingest instead of marking it stale; an
-interrupted running ingest is returned to pending at startup; missing queue input is a visible
-failure rather than a fake reuse; and a full run cannot settle before its ingest queues are terminal.
-Imported and reused post members retain their truthful outcome while both remain valid collection
-members. History now labels fetched files and exact reuse explicitly. Live reset/re-run proof remains.
+Checkpoint completed on 2026-08-05: downloading and ingest are independent workers joined by durable
+rows, not an executor wait loop. Query jobs own downloader statistics, ingest items own
+imported/reused/failed outcomes, and one idempotent finalizer writes the terminal run snapshot after
+both sides settle. Either worker may invoke it; only the first terminal transition publishes.
+Restart recovery requeues ingest leases, settles durable terminal runs, then repairs interrupted query
+leases. Item outcomes and their parent ingest queue commit in one SQLite transaction, and completed
+ingest evidence remains until its run snapshot exists. A cursor advances only after the whole fetched
+batch is durably enqueued; failed handoffs are removed from gallery-dl's archive for retry. Missing
+queue input is a visible failure, not fake reuse. This changes only the current pre-1.0 schema; no
+migration or compatibility path is added. Live reset/re-run and interrupted-run proof remain.
 
 Trace create, run, query run, retry, stop, reset, issue read, and ingest handoff from dispatch to
 `SubscriptionRuntimeService`. Consolidate construction only where it removes duplicate behavior.

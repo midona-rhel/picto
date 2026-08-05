@@ -45,6 +45,24 @@ pub struct SyncProgress {
     pub resume_cursor: Option<String>,
 }
 
+fn query_run_completion(
+    status: &str,
+    progress: &SyncProgress,
+    prior_files: usize,
+    prior_posts: usize,
+) -> crate::subscriptions::types::SubscriptionQueryRunCompletion {
+    crate::subscriptions::types::SubscriptionQueryRunCompletion {
+        status: status.to_string(),
+        failure_kind: progress.failure_kind.clone(),
+        error_message: progress.errors.last().cloned(),
+        posts_processed: progress.posts_processed.saturating_sub(prior_posts) as i64,
+        files_downloaded: progress.files_downloaded.saturating_sub(prior_files) as i64,
+        files_skipped: progress.files_skipped as i64,
+        metadata_validated: progress.metadata_validated as i64,
+        metadata_invalid: progress.metadata_invalid as i64,
+    }
+}
+
 pub struct SubscriptionSyncEngine<'a> {
     db: &'a LibraryDatabase,
     library_root: PathBuf,
@@ -158,10 +176,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
         query_id: i64,
         progress: &mut SyncProgress,
         posts_processed_this_run: &mut usize,
-        completed_initial_run: bool,
-        resume_strategy: &Option<String>,
-        range_start: u32,
-        all_post_ids: &std::collections::HashSet<String>,
     ) {
         if progress.current_post_id.is_none() {
             return;
@@ -169,20 +183,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         progress.posts_processed += 1;
         *posts_processed_this_run += 1;
-
-        let cursor = helpers::compute_incremental_cursor(
-            resume_strategy.as_deref(),
-            range_start,
-            *posts_processed_this_run,
-            all_post_ids,
-        );
-        progress.resume_cursor = cursor.clone();
-        if !completed_initial_run {
-            let _ = self
-                .runtime_service()
-                .set_query_resume_state(query_id, cursor, resume_strategy.clone())
-                .await;
-        }
         let _ = self
             .runtime_service()
             .update_query_progress(
@@ -206,16 +206,17 @@ impl<'a> SubscriptionSyncEngine<'a> {
         query_run_id: Option<i64>,
         sub_id_str: &str,
         progress: &mut SyncProgress,
-    ) -> Result<(), String> {
+    ) -> Result<Option<String>, String> {
         let Some(pc) = pending_collections.remove(pending_key) else {
-            return Ok(());
+            return Ok(None);
         };
+        let post_id = pc.post_id.clone();
         self.enqueue_pending_collection(pc, subscription_id, query_id, query_run_id)
             .await?;
         progress.queued_for_ingest += 1;
         self.set_phase("queueing");
         self.emit_progress_force(sub_id_str, progress, "Queued post for ingest");
-        Ok(())
+        Ok(Some(post_id))
     }
 
     async fn enqueue_pending_collection(

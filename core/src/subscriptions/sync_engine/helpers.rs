@@ -91,13 +91,14 @@ pub(super) async fn maybe_cleanup_subscription_temp_root(db: &LibraryDatabase, t
     }
 }
 
-pub(super) fn compute_incremental_cursor(
+pub(super) fn compute_committed_cursor(
+    completed_cleanly: bool,
     resume_strategy: Option<&str>,
     range_start: u32,
     posts_this_run: usize,
     all_post_ids: &HashSet<String>,
 ) -> Option<String> {
-    if posts_this_run == 0 {
+    if !completed_cleanly || posts_this_run == 0 {
         return None;
     }
     match resume_strategy {
@@ -112,6 +113,34 @@ pub(super) fn compute_incremental_cursor(
             min_id.map(|id| id.to_string())
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::compute_committed_cursor;
+    use std::collections::HashSet;
+
+    #[test]
+    fn cursor_advances_only_after_the_whole_batch_commits() {
+        let post_ids = HashSet::from(["105".to_string(), "104".to_string()]);
+
+        assert_eq!(
+            compute_committed_cursor(false, Some("range_offset"), 1, 1, &post_ids),
+            None
+        );
+        assert_eq!(
+            compute_committed_cursor(false, Some("tag_id_lt"), 1, 1, &post_ids),
+            None
+        );
+        assert_eq!(
+            compute_committed_cursor(true, Some("range_offset"), 1, 2, &post_ids),
+            Some("2".to_string())
+        );
+        assert_eq!(
+            compute_committed_cursor(true, Some("tag_id_lt"), 1, 2, &post_ids),
+            Some("104".to_string())
+        );
     }
 }
 

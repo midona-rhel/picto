@@ -1,6 +1,7 @@
 use picto_core::db::LibraryDatabase;
 use picto_core::ingest_queue::IngestQueueItemResultKind;
 use picto_core::subscriptions::runtime_service::SubscriptionRuntimeService;
+use picto_core::subscriptions::types::SubscriptionQueryRunCompletion;
 
 fn open_db() -> (tempfile::TempDir, LibraryDatabase) {
     let dir = tempfile::tempdir().unwrap();
@@ -292,7 +293,7 @@ async fn full_run_finalizes_only_after_its_own_jobs_are_terminal() {
 }
 
 #[tokio::test]
-async fn full_run_waits_for_its_durable_ingest_queues() {
+async fn full_run_derives_its_snapshot_from_durable_work() {
     let (dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
     let subscription = runtime
@@ -342,13 +343,16 @@ async fn full_run_waits_for_its_durable_ingest_queues() {
         )
         .unwrap();
         let queue_id = conn.last_insert_rowid();
-        conn.execute(
+        conn.execute_batch(&format!(
             "INSERT INTO ingest_queue_item (
                  queue_id, source_path, page_num, payload_json, delete_after_ingest,
                  status, created_at, updated_at
-             ) VALUES (?1, '/tmp/item', 0, '{}', 1, 'pending', 'now', 'now')",
-            [queue_id],
-        )
+             ) VALUES ({queue_id}, '/tmp/first', 0, '{{}}', 1, 'pending', 'now', 'now');
+             INSERT INTO ingest_queue_item (
+                 queue_id, source_path, page_num, payload_json, delete_after_ingest,
+                 status, created_at, updated_at
+             ) VALUES ({queue_id}, '/tmp/second', 1, '{{}}', 1, 'pending', 'now', 'now');"
+        ))
         .unwrap();
     }
 
@@ -364,30 +368,182 @@ async fn full_run_waits_for_its_durable_ingest_queues() {
 
     db.mark_ingest_queue_item_complete(
         1,
-        IngestQueueItemResultKind::Reused,
-        Some("entity".to_string()),
-        Some("file".to_string()),
+        IngestQueueItemResultKind::Imported,
+        Some("first-entity".to_string()),
+        Some("first-file".to_string()),
     )
     .await
     .unwrap();
     db.mark_ingest_queue_item_complete(
-        1,
+        2,
         IngestQueueItemResultKind::Reused,
-        Some("entity".to_string()),
-        Some("file".to_string()),
+        Some("second-entity".to_string()),
+        Some("second-file".to_string()),
     )
     .await
     .unwrap();
+    db.mark_ingest_queue_item_complete(
+        2,
+        IngestQueueItemResultKind::Reused,
+        Some("second-entity".to_string()),
+        Some("second-file".to_string()),
+    )
+    .await
+    .unwrap();
+    runtime
+        .finish_subscription_query_run(
+            query_run_id,
+            SubscriptionQueryRunCompletion {
+                status: "succeeded".to_string(),
+                failure_kind: None,
+                error_message: None,
+                posts_processed: 2,
+                files_downloaded: 2,
+                files_skipped: 0,
+                metadata_validated: 2,
+                metadata_invalid: 1,
+            },
+        )
+        .await
+        .unwrap();
     raw_conn(&dir)
         .execute("UPDATE ingest_queue SET status = 'complete'", [])
         .unwrap();
+    db.cleanup_ingest_queue().await.unwrap();
+    assert_eq!(
+        raw_conn(&dir)
+            .query_row("SELECT COUNT(*) FROM ingest_queue", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
     let run = runtime
         .finalize_subscription_run_if_terminal(run_id)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(run.status, "succeeded");
+    assert_eq!(run.files_downloaded, 2);
     assert_eq!(run.files_skipped, 1);
+    assert_eq!(run.metadata_validated, 2);
+    assert_eq!(run.metadata_invalid, 1);
+    assert!(runtime
+        .finalize_subscription_run_if_terminal(run_id)
+        .await
+        .unwrap()
+        .is_none());
+    db.cleanup_ingest_queue().await.unwrap();
+    assert_eq!(
+        raw_conn(&dir)
+            .query_row("SELECT COUNT(*) FROM ingest_queue", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+    let persisted = runtime
+        .list_subscription_runs(subscription_id, 1)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(persisted.files_downloaded, 2);
+    assert_eq!(persisted.files_skipped, 1);
+}
+
+#[tokio::test]
+async fn failed_ingest_fails_an_otherwise_successful_run() {
+    let (dir, db) = open_db();
+    let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
+    let subscription = runtime
+        .create_subscription("Failed Ingest Test".to_string(), None, None, None)
+        .await
+        .unwrap();
+    let subscription_id = subscription.id.parse::<i64>().unwrap();
+    let query = runtime
+        .add_subscription_query(
+            subscription.id,
+            "gelbooru".to_string(),
+            Some("search".to_string()),
+            "1girl".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    let query_id = query.id.parse::<i64>().unwrap();
+    let run_id = runtime
+        .create_subscription_run(subscription_id)
+        .await
+        .unwrap();
+    let (job_id, _) = runtime
+        .enqueue_subscription_query_job(
+            Some(run_id),
+            subscription_id,
+            query_id,
+            "gelbooru",
+            "query_sync",
+            "subscription",
+            None,
+        )
+        .await
+        .unwrap();
+    let query_run_id = runtime
+        .create_subscription_query_run(Some(run_id), subscription_id, query_id)
+        .await
+        .unwrap();
+    let conn = raw_conn(&dir);
+    conn.execute(
+        "INSERT INTO ingest_queue (
+             queue_kind, source_kind, subscription_id, query_id, query_run_id,
+             status, last_error, created_at, updated_at
+         ) VALUES ('single', 'subscription', ?1, ?2, ?3,
+                   'failed', 'queued source disappeared', 'now', 'now')",
+        rusqlite::params![subscription_id, query_id, query_run_id],
+    )
+    .unwrap();
+    let queue_id = conn.last_insert_rowid();
+    conn.execute(
+        "INSERT INTO ingest_queue_item (
+             queue_id, source_path, page_num, payload_json, delete_after_ingest,
+             status, result_kind, last_error, created_at, updated_at
+         ) VALUES (?1, '/tmp/missing', 0, '{}', 1,
+                   'failed', 'failed', 'queued source disappeared', 'now', 'now')",
+        [queue_id],
+    )
+    .unwrap();
+    drop(conn);
+
+    runtime
+        .finish_subscription_query_run(
+            query_run_id,
+            SubscriptionQueryRunCompletion {
+                status: "succeeded".to_string(),
+                failure_kind: None,
+                error_message: None,
+                posts_processed: 1,
+                files_downloaded: 1,
+                files_skipped: 0,
+                metadata_validated: 1,
+                metadata_invalid: 0,
+            },
+        )
+        .await
+        .unwrap();
+    runtime
+        .finish_subscription_query_job(job_id, "succeeded", None, None)
+        .await
+        .unwrap();
+    let run = runtime
+        .finalize_subscription_run_if_terminal(run_id)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(run.status, "failed");
+    assert_eq!(run.failure_kind.as_deref(), Some("ingest_queue_failure"));
+    assert_eq!(
+        run.error_message.as_deref(),
+        Some("queued source disappeared")
+    );
+    assert_eq!(run.files_downloaded, 1);
 }
 
 #[tokio::test]

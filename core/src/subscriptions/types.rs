@@ -90,6 +90,20 @@ pub struct SubscriptionQueryRunRecord {
     pub posts_processed: i64,
     pub files_downloaded: i64,
     pub files_skipped: i64,
+    pub metadata_validated: i64,
+    pub metadata_invalid: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SubscriptionQueryRunCompletion {
+    pub status: String,
+    pub failure_kind: Option<String>,
+    pub error_message: Option<String>,
+    pub posts_processed: i64,
+    pub files_downloaded: i64,
+    pub files_skipped: i64,
+    pub metadata_validated: i64,
+    pub metadata_invalid: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

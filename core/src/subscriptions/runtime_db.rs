@@ -3,7 +3,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use super::types::{
     SubscriptionDownloadAttemptRecord, SubscriptionDownloadAttemptUpsert, SubscriptionIssueRecord,
     SubscriptionPostMemberRecord, SubscriptionPostMemberUpsert, SubscriptionQueryJob,
-    SubscriptionQueryRunRecord, SubscriptionRunRecord,
+    SubscriptionQueryRunCompletion, SubscriptionQueryRunRecord, SubscriptionRunRecord,
 };
 use crate::subscriptions::gallery_dl_runner::FailureKind;
 
@@ -39,6 +39,8 @@ fn map_subscription_query_run_row(
         posts_processed: row.get(9)?,
         files_downloaded: row.get(10)?,
         files_skipped: row.get(11)?,
+        metadata_validated: row.get(12)?,
+        metadata_invalid: row.get(13)?,
     })
 }
 
@@ -136,8 +138,8 @@ pub struct SubscriptionReconcileReport {
 
 /// Restore durable subscription work after an app quit/crash mid-run.
 ///
-/// Safe only at library open, before the site-runner worker starts: any
-/// A leased job returns to the queue and keeps its original full-run identity.
+/// Safe only at library open, before the site-runner worker starts. A leased
+/// job returns to the queue and keeps its original full-run identity.
 /// Execution history records the interruption, but queued jobs and runs remain
 /// active so the normal worker can finish them after startup.
 pub fn reconcile_stale_subscription_runtime(
@@ -164,7 +166,13 @@ pub fn reconcile_stale_subscription_runtime(
            AND NOT EXISTS (
                SELECT 1 FROM subscription_query_job j
                WHERE j.run_id = subscription_run.run_id
-                 AND j.status IN ('queued', 'running')
+           )
+           AND NOT EXISTS (
+               SELECT 1
+               FROM ingest_queue q
+               JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
+               WHERE qr.run_id = subscription_run.run_id
+                 AND q.status IN ('pending', 'running')
            )",
         params![now, stale, interrupted],
     )?;
@@ -208,44 +216,6 @@ pub fn create_subscription_run(conn: &Connection, subscription_id: i64) -> rusql
     Ok(conn.last_insert_rowid())
 }
 
-pub fn finish_subscription_run(
-    conn: &Connection,
-    run_id: i64,
-    status: &str,
-    failure_kind: Option<&str>,
-    error_message: Option<&str>,
-    files_downloaded: i64,
-    files_skipped: i64,
-    metadata_validated: i64,
-    metadata_invalid: i64,
-) -> rusqlite::Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE subscription_run
-         SET finished_at = ?1,
-             status = ?2,
-             failure_kind = ?3,
-             error_message = ?4,
-             files_downloaded = ?5,
-             files_skipped = ?6,
-             metadata_validated = ?7,
-             metadata_invalid = ?8
-         WHERE run_id = ?9",
-        params![
-            now,
-            status,
-            failure_kind,
-            error_message,
-            files_downloaded,
-            files_skipped,
-            metadata_validated,
-            metadata_invalid,
-            run_id
-        ],
-    )?;
-    Ok(())
-}
-
 pub fn finalize_subscription_run_status(
     conn: &Connection,
     run_id: i64,
@@ -272,6 +242,17 @@ pub fn finalize_subscription_run_if_terminal(
     conn: &Connection,
     run_id: i64,
 ) -> rusqlite::Result<Option<SubscriptionRunRecord>> {
+    let is_running: bool = conn
+        .query_row(
+            "SELECT status = 'running' FROM subscription_run WHERE run_id = ?1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .unwrap_or(false);
+    if !is_running {
+        return Ok(None);
+    }
     let active_jobs: i64 = conn.query_row(
         "SELECT COUNT(*) FROM subscription_query_job
          WHERE run_id = ?1 AND status IN ('queued', 'running')",
@@ -294,7 +275,7 @@ pub fn finalize_subscription_run_if_terminal(
         return Ok(None);
     }
 
-    let failure: Option<(String, Option<String>, Option<String>)> = conn
+    let job_failure: Option<(String, Option<String>, Option<String>)> = conn
         .query_row(
             "SELECT status, failure_kind, error_message
              FROM subscription_query_job
@@ -305,7 +286,19 @@ pub fn finalize_subscription_run_if_terminal(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .optional()?;
-    let (status, failure_kind, error_message) = match failure {
+    let ingest_failure: Option<String> = conn
+        .query_row(
+            "SELECT q.last_error
+             FROM ingest_queue q
+             JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
+             WHERE qr.run_id = ?1 AND q.status = 'failed'
+             ORDER BY q.queue_id DESC
+             LIMIT 1",
+            [run_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let (status, failure_kind, error_message) = match job_failure {
         Some((job_status, failure_kind, error_message)) => {
             let status = if job_status == "failed" {
                 "failed"
@@ -314,15 +307,58 @@ pub fn finalize_subscription_run_if_terminal(
             };
             (status, failure_kind, error_message)
         }
+        None if ingest_failure.is_some() => (
+            "failed",
+            Some(FailureKind::IngestQueueFailure.as_str().to_string()),
+            ingest_failure,
+        ),
         None => ("succeeded", None, None),
     };
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE subscription_run
-         SET finished_at = ?1, status = ?2, failure_kind = ?3, error_message = ?4
-         WHERE run_id = ?5 AND status = 'running'",
-        params![now, status, failure_kind, error_message, run_id],
+    let (files_downloaded, files_skipped): (i64, i64) = conn.query_row(
+        "SELECT COUNT(i.item_id),
+                COALESCE(SUM(CASE WHEN i.result_kind = 'reused' THEN 1 ELSE 0 END), 0)
+         FROM ingest_queue q
+         JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
+         JOIN ingest_queue_item i ON i.queue_id = q.queue_id
+         WHERE qr.run_id = ?1",
+        [run_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
+    let (metadata_validated, metadata_invalid): (i64, i64) = conn.query_row(
+        "SELECT COALESCE(SUM(metadata_validated), 0),
+                COALESCE(SUM(metadata_invalid), 0)
+         FROM subscription_query_run
+         WHERE run_id = ?1",
+        [run_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let now = chrono::Utc::now().to_rfc3339();
+    let changed = conn.execute(
+        "UPDATE subscription_run
+         SET finished_at = ?1,
+             status = ?2,
+             failure_kind = ?3,
+             error_message = ?4,
+             files_downloaded = ?5,
+             files_skipped = ?6,
+             metadata_validated = ?7,
+             metadata_invalid = ?8
+         WHERE run_id = ?9 AND status = 'running'",
+        params![
+            now,
+            status,
+            failure_kind,
+            error_message,
+            files_downloaded,
+            files_skipped,
+            metadata_validated,
+            metadata_invalid,
+            run_id
+        ],
+    )?;
+    if changed == 0 {
+        return Ok(None);
+    }
     conn.query_row(
         "SELECT run_id, subscription_id, started_at, finished_at, status,
                 failure_kind, error_message, files_downloaded, files_skipped,
@@ -332,32 +368,6 @@ pub fn finalize_subscription_run_if_terminal(
         map_subscription_run_row,
     )
     .optional()
-}
-
-pub fn accumulate_subscription_run_counters(
-    conn: &Connection,
-    run_id: i64,
-    files_downloaded_delta: i64,
-    files_skipped_delta: i64,
-    metadata_validated_delta: i64,
-    metadata_invalid_delta: i64,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE subscription_run
-         SET files_downloaded = files_downloaded + ?1,
-             files_skipped = files_skipped + ?2,
-             metadata_validated = metadata_validated + ?3,
-             metadata_invalid = metadata_invalid + ?4
-         WHERE run_id = ?5",
-        params![
-            files_downloaded_delta,
-            files_skipped_delta,
-            metadata_validated_delta,
-            metadata_invalid_delta,
-            run_id
-        ],
-    )?;
-    Ok(())
 }
 
 pub fn list_subscription_runs(
@@ -375,6 +385,14 @@ pub fn list_subscription_runs(
          LIMIT ?2",
     )?;
     let rows = stmt.query_map(params![subscription_id, limit], map_subscription_run_row)?;
+    rows.collect()
+}
+
+pub fn list_running_subscription_run_ids(conn: &Connection) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT run_id FROM subscription_run WHERE status = 'running' ORDER BY run_id",
+    )?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
     rows.collect()
 }
 
@@ -396,12 +414,7 @@ pub fn create_subscription_query_run(
 pub fn finish_subscription_query_run(
     conn: &Connection,
     query_run_id: i64,
-    status: &str,
-    failure_kind: Option<&str>,
-    error_message: Option<&str>,
-    posts_processed: i64,
-    files_downloaded: i64,
-    files_skipped: i64,
+    completion: &SubscriptionQueryRunCompletion,
 ) -> rusqlite::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
@@ -412,16 +425,20 @@ pub fn finish_subscription_query_run(
              error_message = ?4,
              posts_processed = ?5,
              files_downloaded = ?6,
-             files_skipped = ?7
-         WHERE query_run_id = ?8",
+             files_skipped = ?7,
+             metadata_validated = ?8,
+             metadata_invalid = ?9
+         WHERE query_run_id = ?10",
         params![
             now,
-            status,
-            failure_kind,
-            error_message,
-            posts_processed,
-            files_downloaded,
-            files_skipped,
+            completion.status,
+            completion.failure_kind,
+            completion.error_message,
+            completion.posts_processed,
+            completion.files_downloaded,
+            completion.files_skipped,
+            completion.metadata_validated,
+            completion.metadata_invalid,
             query_run_id
         ],
     )?;
@@ -436,7 +453,7 @@ pub fn list_subscription_query_runs(
     let mut stmt = conn.prepare_cached(
         "SELECT query_run_id, run_id, subscription_id, query_id, started_at, finished_at,
                 status, failure_kind, error_message, posts_processed,
-                files_downloaded, files_skipped
+                files_downloaded, files_skipped, metadata_validated, metadata_invalid
          FROM subscription_query_run
          WHERE query_id = ?1
          ORDER BY query_run_id DESC

@@ -82,6 +82,14 @@ pub struct IngestQueueItem {
     pub resolved_file_hash: Option<String>,
 }
 
+#[derive(Debug)]
+struct IngestQueueItemCompletion {
+    item_id: i64,
+    result_kind: IngestQueueItemResultKind,
+    resolved_entity_hash: String,
+    resolved_file_hash: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct IngestQueueCounts {
     pub queued: usize,
@@ -382,13 +390,6 @@ fn mark_ingest_queue_item_status(
     resolved_file_hash: Option<&str>,
     last_error: Option<&str>,
 ) -> rusqlite::Result<()> {
-    let previous_status: Option<String> = conn
-        .query_row(
-            "SELECT status FROM ingest_queue_item WHERE item_id = ?1",
-            [item_id],
-            |row| row.get(0),
-        )
-        .optional()?;
     conn.execute(
         "UPDATE ingest_queue_item
          SET status = ?1,
@@ -408,22 +409,6 @@ fn mark_ingest_queue_item_status(
             item_id
         ],
     )?;
-    if result_kind == Some(IngestQueueItemResultKind::Reused)
-        && previous_status.as_deref() != Some("complete")
-    {
-        conn.execute(
-            "UPDATE subscription_run
-             SET files_skipped = files_skipped + 1
-             WHERE run_id = (
-                 SELECT qr.run_id
-                 FROM ingest_queue_item i
-                 JOIN ingest_queue q ON q.queue_id = i.queue_id
-                 JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
-                 WHERE i.item_id = ?1
-             )",
-            [item_id],
-        )?;
-    }
     Ok(())
 }
 
@@ -442,6 +427,39 @@ fn mark_ingest_queue_status(
     Ok(())
 }
 
+fn complete_ingest_queue(
+    conn: &Connection,
+    queue_id: i64,
+    completions: &[IngestQueueItemCompletion],
+) -> rusqlite::Result<()> {
+    let mut stmt =
+        conn.prepare("SELECT item_id FROM ingest_queue_item WHERE queue_id = ?1 ORDER BY item_id")?;
+    let expected = stmt
+        .query_map([queue_id], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<HashSet<_>>>()?;
+    let actual = completions
+        .iter()
+        .map(|completion| completion.item_id)
+        .collect::<HashSet<_>>();
+    if expected.is_empty() || actual != expected || actual.len() != completions.len() {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "completion set does not match ingest queue {queue_id}"
+        )));
+    }
+    for completion in completions {
+        mark_ingest_queue_item_status(
+            conn,
+            completion.item_id,
+            "complete",
+            Some(completion.result_kind),
+            Some(&completion.resolved_entity_hash),
+            Some(&completion.resolved_file_hash),
+            None,
+        )?;
+    }
+    mark_ingest_queue_status(conn, queue_id, "complete", None)
+}
+
 fn count_ingest_queue_by_subscription(
     conn: &Connection,
     subscription_id: i64,
@@ -457,34 +475,6 @@ fn count_ingest_queue_by_subscription(
          JOIN ingest_queue q ON q.queue_id = i.queue_id
          WHERE q.subscription_id = ?1",
         [subscription_id],
-        |row| {
-            Ok(IngestQueueCounts {
-                queued: row.get::<_, i64>(0)? as usize,
-                ingesting: row.get::<_, i64>(1)? as usize,
-                ingested: row.get::<_, i64>(2)? as usize,
-                reused: row.get::<_, i64>(3)? as usize,
-                failed: row.get::<_, i64>(4)? as usize,
-            })
-        },
-    )
-}
-
-fn count_ingest_queue_by_run(
-    conn: &Connection,
-    run_id: i64,
-) -> rusqlite::Result<IngestQueueCounts> {
-    conn.query_row(
-        "SELECT
-             COALESCE(SUM(CASE WHEN i.status = 'pending' THEN 1 ELSE 0 END), 0),
-             COALESCE(SUM(CASE WHEN i.status = 'running' THEN 1 ELSE 0 END), 0),
-             COALESCE(SUM(CASE WHEN i.status = 'complete' AND i.result_kind = 'imported' THEN 1 ELSE 0 END), 0),
-             COALESCE(SUM(CASE WHEN i.status = 'complete' AND i.result_kind = 'reused' THEN 1 ELSE 0 END), 0),
-             COALESCE(SUM(CASE WHEN i.status = 'failed' THEN 1 ELSE 0 END), 0)
-         FROM ingest_queue_item i
-         JOIN ingest_queue q ON q.queue_id = i.queue_id
-         JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
-         WHERE qr.run_id = ?1",
-        [run_id],
         |row| {
             Ok(IngestQueueCounts {
                 queued: row.get::<_, i64>(0)? as usize,
@@ -515,7 +505,37 @@ fn requeue_running_ingest(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 fn delete_completed_ingest_queues(conn: &Connection) -> rusqlite::Result<usize> {
-    Ok(conn.execute("DELETE FROM ingest_queue WHERE status = 'complete'", [])?)
+    Ok(conn.execute(
+        "DELETE FROM ingest_queue
+         WHERE status = 'complete'
+           AND (
+               query_run_id IS NULL
+               OR NOT EXISTS (
+                   SELECT 1
+                   FROM subscription_query_run qr
+                   JOIN subscription_run r ON r.run_id = qr.run_id
+                   WHERE qr.query_run_id = ingest_queue.query_run_id
+                     AND r.status = 'running'
+               )
+           )",
+        [],
+    )?)
+}
+
+fn subscription_run_id_for_ingest_queue(
+    conn: &Connection,
+    queue_id: i64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT qr.run_id
+         FROM ingest_queue q
+         JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
+         WHERE q.queue_id = ?1",
+        [queue_id],
+        |row| row.get::<_, Option<i64>>(0),
+    )
+    .optional()
+    .map(Option::flatten)
 }
 
 fn count_retained_sources_under_root(
@@ -684,8 +704,12 @@ impl LibraryDatabase {
         })
     }
 
-    pub async fn mark_ingest_queue_complete(&self, queue_id: i64) -> Result<(), String> {
-        self.with_write(move |conn| mark_ingest_queue_status(conn, queue_id, "complete", None))
+    async fn complete_ingest_queue(
+        &self,
+        queue_id: i64,
+        completions: Vec<IngestQueueItemCompletion>,
+    ) -> Result<(), String> {
+        self.with_write(move |conn| complete_ingest_queue(conn, queue_id, &completions))
     }
 
     pub async fn mark_ingest_queue_failed(
@@ -716,11 +740,11 @@ impl LibraryDatabase {
         self.with_read(move |conn| count_ingest_queue_by_subscription(conn, subscription_id))
     }
 
-    pub async fn count_subscription_run_ingest_queue(
+    pub async fn subscription_run_id_for_ingest_queue(
         &self,
-        run_id: i64,
-    ) -> Result<IngestQueueCounts, String> {
-        self.with_read(move |conn| count_ingest_queue_by_run(conn, run_id))
+        queue_id: i64,
+    ) -> Result<Option<i64>, String> {
+        self.with_read(move |conn| subscription_run_id_for_ingest_queue(conn, queue_id))
     }
 
     pub async fn list_duplicate_failed_single_queue_candidates(
@@ -1245,7 +1269,7 @@ async fn process_single_queue(
     blob_store: &Arc<BlobStore>,
     queue: &IngestQueueEntry,
     item: &IngestQueueItem,
-) -> Result<(), String> {
+) -> Result<Vec<IngestQueueItemCompletion>, String> {
     let mut payload: IngestQueueItemPayload =
         serde_json::from_str(&item.payload_json).map_err(|err| err.to_string())?;
     log_ingest_queue_payload("execute_single", queue.queue_id, item.item_id, &payload);
@@ -1330,13 +1354,6 @@ async fn process_single_queue(
         SingleIngestDisposition::Imported => IngestQueueItemResultKind::Imported,
         SingleIngestDisposition::Reused => IngestQueueItemResultKind::Reused,
     };
-    db.mark_ingest_queue_item_complete(
-        item.item_id,
-        result_kind,
-        Some(outcome.entity_hash.clone()),
-        Some(outcome.file_hash.clone()),
-    )
-    .await?;
     crate::background_work::enqueue_missing_derivative_jobs(
         db,
         blob_store,
@@ -1352,10 +1369,12 @@ async fn process_single_queue(
             .await;
         }
     }
-    if item.delete_after_ingest {
-        delete_source_file_if_owned(&item.source_path).await;
-    }
-    Ok(())
+    Ok(vec![IngestQueueItemCompletion {
+        item_id: item.item_id,
+        result_kind,
+        resolved_entity_hash: outcome.entity_hash,
+        resolved_file_hash: outcome.file_hash,
+    }])
 }
 
 #[derive(Debug)]
@@ -1421,7 +1440,7 @@ async fn process_collection_queue(
     blob_store: &Arc<BlobStore>,
     queue: &IngestQueueEntry,
     items: &[IngestQueueItem],
-) -> Result<(), String> {
+) -> Result<Vec<IngestQueueItemCompletion>, String> {
     let subscription = subscription_collection_context(queue)?;
     let preferred_name = queue
         .preferred_name
@@ -1623,25 +1642,19 @@ async fn process_collection_queue(
         crate::ingest::attach_current_sidebar_counts(db, impact),
     );
 
-    for (item, member) in processable_items
+    let completions = processable_items
         .into_iter()
         .zip(result.resolved_members.iter())
-    {
-        let result_kind = match member.disposition {
-            SingleIngestDisposition::Imported => IngestQueueItemResultKind::Imported,
-            SingleIngestDisposition::Reused => IngestQueueItemResultKind::Reused,
-        };
-        db.mark_ingest_queue_item_complete(
-            item.item_id,
-            result_kind,
-            Some(member.entity_hash.clone()),
-            Some(member.file_hash.clone()),
-        )
-        .await?;
-        if item.delete_after_ingest {
-            delete_source_file_if_owned(&item.source_path).await;
-        }
-    }
+        .map(|(item, member)| IngestQueueItemCompletion {
+            item_id: item.item_id,
+            result_kind: match member.disposition {
+                SingleIngestDisposition::Imported => IngestQueueItemResultKind::Imported,
+                SingleIngestDisposition::Reused => IngestQueueItemResultKind::Reused,
+            },
+            resolved_entity_hash: member.entity_hash.clone(),
+            resolved_file_hash: member.file_hash.clone(),
+        })
+        .collect::<Vec<_>>();
     let derivative_entity_hashes = unique_entity_hashes(
         result
             .resolved_members
@@ -1670,7 +1683,7 @@ async fn process_collection_queue(
             .await;
         }
     }
-    Ok(())
+    Ok(completions)
 }
 
 async fn repair_duplicate_failed_single_queues(db: &Arc<LibraryDatabase>) -> Result<(), String> {
@@ -1723,8 +1736,14 @@ async fn process_queue_entry(
     };
 
     match result {
-        Ok(()) => {
-            db.mark_ingest_queue_complete(queue.queue_id).await?;
+        Ok(completions) => {
+            db.complete_ingest_queue(queue.queue_id, completions)
+                .await?;
+            for item in &items {
+                if item.delete_after_ingest {
+                    delete_source_file_if_owned(&item.source_path).await;
+                }
+            }
             maybe_cleanup_root(db, queue.cleanup_root.as_deref()).await;
             Ok(())
         }
@@ -1743,6 +1762,8 @@ async fn process_queue_entry(
 pub async fn start_worker_loop(
     db: Arc<LibraryDatabase>,
     blob_store: Arc<BlobStore>,
+    library_root: PathBuf,
+    running_subscriptions: crate::types::RunningSubscriptions,
     cancel: CancellationToken,
 ) {
     if let Err(error) = repair_duplicate_failed_single_queues(&db).await {
@@ -1769,7 +1790,28 @@ pub async fn start_worker_loop(
             continue;
         };
 
-        if let Err(error) = process_queue_entry(&db, &blob_store, queue.clone()).await {
+        let result = process_queue_entry(&db, &blob_store, queue.clone()).await;
+        if let Some(run_id) = db
+            .subscription_run_id_for_ingest_queue(queue.queue_id)
+            .await
+            .ok()
+            .flatten()
+        {
+            let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+                db.as_ref(),
+                &library_root,
+            );
+            if let Err(error) = crate::subscriptions::settlement::settle_run(
+                &runtime,
+                &running_subscriptions,
+                run_id,
+            )
+            .await
+            {
+                warn!(run_id, error = %error, "Failed to settle subscription run after ingest");
+            }
+        }
+        if let Err(error) = result {
             warn!(queue_id = queue.queue_id, error = %error, "Ingest queue entry failed");
         }
     }
@@ -1909,6 +1951,58 @@ mod tests {
             .unwrap();
         assert_eq!(queue_status, "pending");
         assert_eq!(item_status, "pending");
+    }
+
+    #[test]
+    fn queue_completion_requires_and_commits_every_item() {
+        let conn = Connection::open_in_memory().unwrap();
+        setup_queue_schema(&conn);
+        conn.execute(
+            "INSERT INTO ingest_queue (
+                 queue_id, queue_kind, source_kind, subscription_id, status, created_at, updated_at
+             ) VALUES (1, 'collection', 'subscription', 7, 'running', 'now', 'now')",
+            [],
+        )
+        .unwrap();
+        conn.execute_batch(
+            "INSERT INTO ingest_queue_item (
+                 item_id, queue_id, source_path, payload_json, delete_after_ingest,
+                 status, created_at, updated_at
+             ) VALUES
+                 (1, 1, '/tmp/a', '{}', 1, 'running', 'now', 'now'),
+                 (2, 1, '/tmp/b', '{}', 1, 'running', 'now', 'now');",
+        )
+        .unwrap();
+        let completion = |item_id| IngestQueueItemCompletion {
+            item_id,
+            result_kind: IngestQueueItemResultKind::Imported,
+            resolved_entity_hash: format!("entity-{item_id}"),
+            resolved_file_hash: format!("file-{item_id}"),
+        };
+
+        assert!(complete_ingest_queue(&conn, 1, &[completion(1)]).is_err());
+        let unchanged: (String, i64) = conn
+            .query_row(
+                "SELECT q.status,
+                        (SELECT COUNT(*) FROM ingest_queue_item WHERE queue_id = q.queue_id AND status = 'running')
+                 FROM ingest_queue q WHERE q.queue_id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(unchanged, ("running".to_string(), 2));
+
+        complete_ingest_queue(&conn, 1, &[completion(1), completion(2)]).unwrap();
+        let completed: (String, i64) = conn
+            .query_row(
+                "SELECT q.status,
+                        (SELECT COUNT(*) FROM ingest_queue_item WHERE queue_id = q.queue_id AND status = 'complete')
+                 FROM ingest_queue q WHERE q.queue_id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(completed, ("complete".to_string(), 2));
     }
 
     #[test]

@@ -75,12 +75,39 @@ pub async fn start_workers(
         handles.push(("subscription_scheduler", handle));
     }
 
-    // ── Subscription runtime reconcile (must precede the site runner) ──
+    // Restore ingest leases before reconciling runs so queued work remains
+    // authoritative after an interrupted shutdown.
+    if let Err(error) = canonical_db.cleanup_ingest_queue().await {
+        tracing::warn!(error = %error, "Ingest queue cleanup failed");
+    }
+
+    // ── Subscription runtime recovery (must precede the site runner) ──
     {
         let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
             canonical_db.as_ref(),
             library_root,
         );
+        // A crash can leave a run marked running after all of its durable work
+        // completed. Settle that truth before stale-state repair classifies
+        // genuinely empty runs as interrupted.
+        match runtime.list_running_subscription_run_ids().await {
+            Ok(run_ids) => {
+                for run_id in run_ids {
+                    if let Err(error) = crate::subscriptions::settlement::settle_run(
+                        &runtime,
+                        running_subscriptions,
+                        run_id,
+                    )
+                    .await
+                    {
+                        tracing::warn!(run_id, error = %error, "Subscription startup settlement failed");
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Failed to list unsettled subscription runs")
+            }
+        }
         match runtime.reconcile_subscription_runtime_state().await {
             Ok(report) => {
                 tracing::info!(?report, "Subscription runtime reconciled at startup")
@@ -108,23 +135,18 @@ pub async fn start_workers(
         handles.push(("subscription_site_runner", handle));
     }
 
-    // ── Ingest queue cleanup + worker ──────────────────
+    // ── Ingest queue worker ────────────────────────────
     {
-        let cleanup_db = canonical_db.clone();
-        tokio::spawn(async move {
-            if let Err(e) = cleanup_db.cleanup_ingest_queue().await {
-                tracing::warn!(error = %e, "Ingest queue cleanup failed");
-            } else {
-                tracing::debug!("Ingest queue cleanup complete");
-            }
-        });
-
         let ingest_db = canonical_db.clone();
         let ingest_blob = blob_store.clone();
+        let ingest_root = library_root.to_path_buf();
+        let ingest_running = running_subscriptions.clone();
         let ingest_cancel = cancel.clone();
         let handle = tokio::spawn(crate::ingest_queue::start_worker_loop(
             ingest_db,
             ingest_blob,
+            ingest_root,
+            ingest_running,
             ingest_cancel,
         ));
         handles.push(("ingest_queue", handle));

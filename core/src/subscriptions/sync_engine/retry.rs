@@ -10,7 +10,9 @@ use crate::subscriptions::source_adapter::{
 };
 
 use super::helpers::maybe_cleanup_subscription_temp_root;
-use super::{PendingCollection, PendingMember, SubscriptionSyncEngine, SyncProgress};
+use super::{
+    query_run_completion, PendingCollection, PendingMember, SubscriptionSyncEngine, SyncProgress,
+};
 
 impl<'a> SubscriptionSyncEngine<'a> {
     pub async fn retry_failed_post(
@@ -277,12 +279,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .runtime_service()
                 .finish_subscription_query_run(
                     query_run_id,
-                    status,
-                    progress.failure_kind.clone(),
-                    progress.errors.last().cloned(),
-                    progress.posts_processed as i64,
-                    progress.files_downloaded as i64,
-                    progress.files_skipped as i64,
+                    query_run_completion(status, &progress, 0, 0),
                 )
                 .await;
         }

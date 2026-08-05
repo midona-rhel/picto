@@ -12,16 +12,15 @@ use super::archive::{
     clear_subscription_archive_entries_at_root, subscription_query_archive_prefix,
 };
 use super::runtime_db::{
-    accumulate_subscription_run_counters, add_subscription_entity,
-    cancel_pending_subscription_jobs_for_subscription, count_active_subscription_query_jobs,
-    create_subscription_query_run, create_subscription_run, enqueue_subscription_query_job,
-    finalize_subscription_run_if_terminal, finalize_subscription_run_status,
-    find_unresolved_subscription_download_attempts, finish_subscription_query_job,
-    finish_subscription_query_run, finish_subscription_run, get_subscription_post_collection,
+    add_subscription_entity, cancel_pending_subscription_jobs_for_subscription,
+    count_active_subscription_query_jobs, create_subscription_query_run, create_subscription_run,
+    enqueue_subscription_query_job, finalize_subscription_run_if_terminal,
+    finalize_subscription_run_status, find_unresolved_subscription_download_attempts,
+    finish_subscription_query_job, finish_subscription_query_run, get_subscription_post_collection,
     lease_subscription_query_job, list_queued_subscription_query_jobs,
-    list_retryable_subscription_download_attempts, list_subscription_download_attempts,
-    list_subscription_issues, list_subscription_post_members, list_subscription_query_jobs_for_run,
-    list_subscription_query_runs, list_subscription_runs,
+    list_retryable_subscription_download_attempts, list_running_subscription_run_ids,
+    list_subscription_download_attempts, list_subscription_issues, list_subscription_post_members,
+    list_subscription_query_jobs_for_run, list_subscription_query_runs, list_subscription_runs,
     mark_subscription_download_attempt_retrying, requeue_interrupted_subscription_query_job,
     reschedule_subscription_query_job, reset_subscription_query_state, reset_subscription_state,
     resolve_subscription_download_attempt, resolve_subscription_issues,
@@ -34,7 +33,8 @@ use super::types::{
     OwnedSubscriptionDownloadAttemptUpsert, OwnedSubscriptionPostMemberUpsert, Subscription,
     SubscriptionDownloadAttemptRecord, SubscriptionDownloadAttemptUpsert, SubscriptionGroup,
     SubscriptionIssueRecord, SubscriptionPostMemberRecord, SubscriptionPostMemberUpsert,
-    SubscriptionQuery, SubscriptionQueryJob, SubscriptionQueryRunRecord, SubscriptionRunRecord,
+    SubscriptionQuery, SubscriptionQueryJob, SubscriptionQueryRunCompletion,
+    SubscriptionQueryRunRecord, SubscriptionRunRecord,
 };
 
 #[derive(Debug, Clone)]
@@ -766,33 +766,6 @@ impl<'a> SubscriptionRuntimeService<'a> {
         Ok(report)
     }
 
-    pub async fn finish_subscription_run(
-        &self,
-        run_id: i64,
-        status: &str,
-        failure_kind: Option<String>,
-        error_message: Option<String>,
-        files_downloaded: i64,
-        files_skipped: i64,
-        metadata_validated: i64,
-        metadata_invalid: i64,
-    ) -> Result<(), String> {
-        let status = status.to_string();
-        self.db.with_write(move |conn| {
-            finish_subscription_run(
-                conn,
-                run_id,
-                &status,
-                failure_kind.as_deref(),
-                error_message.as_deref(),
-                files_downloaded,
-                files_skipped,
-                metadata_validated,
-                metadata_invalid,
-            )
-        })
-    }
-
     pub async fn finalize_subscription_run_status(
         &self,
         run_id: i64,
@@ -820,26 +793,6 @@ impl<'a> SubscriptionRuntimeService<'a> {
             .with_write(move |conn| finalize_subscription_run_if_terminal(conn, run_id))
     }
 
-    pub async fn accumulate_subscription_run_counters(
-        &self,
-        run_id: i64,
-        files_downloaded_delta: i64,
-        files_skipped_delta: i64,
-        metadata_validated_delta: i64,
-        metadata_invalid_delta: i64,
-    ) -> Result<(), String> {
-        self.db.with_write(move |conn| {
-            accumulate_subscription_run_counters(
-                conn,
-                run_id,
-                files_downloaded_delta,
-                files_skipped_delta,
-                metadata_validated_delta,
-                metadata_invalid_delta,
-            )
-        })
-    }
-
     pub async fn create_subscription_query_run(
         &self,
         run_id: Option<i64>,
@@ -854,26 +807,10 @@ impl<'a> SubscriptionRuntimeService<'a> {
     pub async fn finish_subscription_query_run(
         &self,
         query_run_id: i64,
-        status: &str,
-        failure_kind: Option<String>,
-        error_message: Option<String>,
-        posts_processed: i64,
-        files_downloaded: i64,
-        files_skipped: i64,
+        completion: SubscriptionQueryRunCompletion,
     ) -> Result<(), String> {
-        let status = status.to_string();
-        self.db.with_write(move |conn| {
-            finish_subscription_query_run(
-                conn,
-                query_run_id,
-                &status,
-                failure_kind.as_deref(),
-                error_message.as_deref(),
-                posts_processed,
-                files_downloaded,
-                files_skipped,
-            )
-        })
+        self.db
+            .with_write(move |conn| finish_subscription_query_run(conn, query_run_id, &completion))
     }
 
     pub async fn update_query_progress(
@@ -1288,6 +1225,10 @@ impl<'a> SubscriptionRuntimeService<'a> {
     ) -> Result<Vec<SubscriptionRunRecord>, String> {
         self.db
             .with_read(|conn| list_subscription_runs(conn, subscription_id, limit))
+    }
+
+    pub async fn list_running_subscription_run_ids(&self) -> Result<Vec<i64>, String> {
+        self.db.with_read(list_running_subscription_run_ids)
     }
 
     pub async fn list_subscription_query_runs(

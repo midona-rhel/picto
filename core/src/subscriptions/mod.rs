@@ -12,6 +12,7 @@ pub mod run_orchestrator;
 pub(crate) mod runtime_db;
 pub mod runtime_service;
 pub mod runtime_tasks;
+pub mod settlement;
 pub mod site_runner;
 pub mod site_verification;
 pub mod source_adapter;
