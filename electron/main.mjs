@@ -356,6 +356,9 @@ process.on('unhandledRejection', (reason) => {
 });
 
 app.on('second-instance', () => {
+  // Native hot reload can overlap the old and new Electron processes briefly.
+  // Do not let that development-only overlap steal focus from the active app.
+  if (isDev) return;
   // Another instance tried to launch — focus the existing main window.
   const win = windowManager.getWindow('main');
   if (win && !win.isDestroyed()) {
