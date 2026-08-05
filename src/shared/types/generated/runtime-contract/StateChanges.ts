@@ -12,92 +12,92 @@ import type { TagChangeDetails } from "./TagChangeDetails";
  * *what kind* of state change happened. The frontend derives stale resources
  * from these changes directly.
  */
-export type StateChanges = { domains: Array<Domain>, entity_hashes?: Array<string>, member_hashes?: Array<string>, folder_ids?: Array<number>, smart_folder_ids?: Array<number>, compiler_batch_done?: boolean, 
+export type StateChanges = { domains: Array<Domain>, entity_hashes?: Array<string>, member_hashes?: Array<string>, folder_ids?: Array<number>, smart_folder_ids?: Array<number>, compiler_batch_done?: boolean,
 /**
  * Entity status transitions (inbox/active/trash).
  */
-status_changed?: boolean, 
+status_changed?: boolean,
 /**
  * Tags added/removed on specific entities.
  */
-tags_changed?: boolean, 
+tags_changed?: boolean,
 /**
  * Exact tag additions/removals when available.
  */
-tag_changes?: TagChangeDetails, 
+tag_changes?: TagChangeDetails,
 /**
  * Tag hierarchy, aliases, merges, or renames changed.
  */
-tag_structure_changed?: boolean, 
+tag_structure_changed?: boolean,
 /**
  * Folder IDs where membership changed (files added/removed).
  */
-folder_membership_changed?: Array<number>, 
+folder_membership_changed?: Array<number>,
 /**
  * View preferences changed (zoom, sort, display mode).
  */
-view_prefs_changed?: boolean, 
+view_prefs_changed?: boolean,
 /**
  * Generic media metadata changed (name, rating, notes, urls, etc.).
  */
-media_metadata_changed?: boolean, 
+media_metadata_changed?: boolean,
 /**
  * Exact media metadata fields that changed when available.
  */
-media_fields_changed?: Array<MediaMetadataField>, 
+media_fields_changed?: Array<MediaMetadataField>,
 /**
  * Deferred media derivatives changed (thumbnail, colors, phash, analysis).
  */
-media_derivatives_changed?: boolean, 
+media_derivatives_changed?: boolean,
 /**
  * Exact derived media fields that changed when available.
  */
-derivative_fields_changed?: Array<MediaDerivativeField>, 
+derivative_fields_changed?: Array<MediaDerivativeField>,
 /**
  * Grid scopes not derivable from other fact fields (e.g. `collection:{id}`).
  * The frontend includes these when deriving stale grid resources.
  */
-extra_grid_scopes?: Array<string>, 
+extra_grid_scopes?: Array<string>,
 /**
  * Subscription group IDs that changed.
  */
-group_ids?: Array<number>, 
+group_ids?: Array<number>,
 /**
  * Subscription IDs that changed.
  */
-subscription_ids?: Array<number>, 
+subscription_ids?: Array<number>,
 /**
  * Subscription query IDs that changed.
  */
-query_ids?: Array<number>, 
+query_ids?: Array<number>,
 /**
  * Credential site categories that changed.
  */
-credential_categories?: Array<string>, 
+credential_categories?: Array<string>,
 /**
  * Folder tree parent changes: [[folder_id, new_parent_id | null], ...]
  */
-folder_parent_changes?: Array<[number, number | null]>, 
+folder_parent_changes?: Array<[number, number | null]>,
 /**
  * Folder tree order changes: [[folder_id, new_sort_order], ...]
  */
-folder_order_changes?: Array<[number, number]>, 
+folder_order_changes?: Array<[number, number]>,
 /**
  * Smart folder tree parent changes: [[sf_id, new_parent_id | null], ...]
  */
-smart_folder_parent_changes?: Array<[number, number | null]>, 
+smart_folder_parent_changes?: Array<[number, number | null]>,
 /**
  * Smart folder tree order changes: [[sf_id, new_sort_order], ...]
  */
-smart_folder_order_changes?: Array<[number, number]>, 
+smart_folder_order_changes?: Array<[number, number]>,
 /**
  * Sidebar node patches — partial updates, creates, or deletes for exact settle.
  */
-sidebar_node_patches?: Array<SidebarNodePatch>, 
+sidebar_node_patches?: Array<SidebarNodePatch>,
 /**
  * Exact smart folder counts after their bitmaps are recomputed.
  */
-smart_folder_counts?: Array<[number, number]>, 
+smart_folder_counts?: Array<[number, number]>,
 /**
  * Grid items were reordered (not added/removed — just order changed).
  */

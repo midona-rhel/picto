@@ -7,6 +7,36 @@
 
 use ts_rs::TS;
 
+fn normalize_generated_bindings() {
+    let generated_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../src/shared/types/generated");
+    let mut directories = vec![generated_root];
+
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                directories.push(path);
+                continue;
+            }
+            if path.extension().and_then(|extension| extension.to_str()) != Some("ts") {
+                continue;
+            }
+
+            let source = std::fs::read_to_string(&path).unwrap();
+            let normalized = source
+                .lines()
+                .map(str::trim_end)
+                .collect::<Vec<_>>()
+                .join("\n")
+                + "\n";
+            if source != normalized {
+                std::fs::write(path, normalized).unwrap();
+            }
+        }
+    }
+}
+
 #[test]
 fn export_all_bindings() {
     // dispatch::typed
@@ -120,4 +150,6 @@ fn export_all_bindings() {
     picto_core::types::GridSortSpec::export().unwrap();
     picto_core::types::ViewPrefsPatch::export().unwrap();
     picto_core::types::FolderReorderMove::export().unwrap();
+
+    normalize_generated_bindings();
 }
