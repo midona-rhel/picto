@@ -3,6 +3,7 @@ import type {
   CredentialHealth,
   FailedPostGroup,
   SubscriptionProgressEvent,
+  SubscriptionInfo,
   SubscriptionQueryInfo,
   SubscriptionSiteInfo,
 } from '../../shared/types/subscriptions';
@@ -63,6 +64,26 @@ export function describeSubscriptionState(input: {
   if (input.paused) return 'paused';
   if (input.failedPostCount > 0 || input.openIssueCount > 0) return 'attention';
   return 'idle';
+}
+
+export function isQueryUpToDate(query: SubscriptionQueryInfo, failedPostCount = 0): boolean {
+  return !query.paused
+    && query.completed_initial_run
+    && query.last_success_at != null
+    && query.last_failure_kind == null
+    && failedPostCount === 0;
+}
+
+export function isSubscriptionUpToDate(
+  subscription: SubscriptionInfo,
+  failedPostCount = 0,
+  openIssueCount = 0,
+): boolean {
+  return !subscription.paused
+    && subscription.queries.length > 0
+    && failedPostCount === 0
+    && openIssueCount === 0
+    && subscription.queries.every((query) => isQueryUpToDate(query));
 }
 
 export function parseCookies(raw: string): Record<string, string> {

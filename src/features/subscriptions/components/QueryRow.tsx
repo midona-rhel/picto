@@ -12,7 +12,7 @@ import type {
   SubscriptionSiteInfo,
 } from '../../../shared/types/subscriptions';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip/KbdTooltip';
-import { describeFailure, formatRelativeTime, getSiteLabel } from '../subscriptionUtils';
+import { describeFailure, formatRelativeTime, getSiteLabel, isQueryUpToDate } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
 
 /** One dense table row in the queries table. */
@@ -53,7 +53,16 @@ export function QueryRow({
     ? describeFailure(query.last_failure_kind, query.last_failure_message)
     : null;
   const hasFailure = failedCount > 0 || (query.last_failure_kind != null && !running);
-  const tone = running ? 'running' : paused ? 'paused' : hasFailure ? 'attention' : 'idle';
+  const upToDate = !running && !paused && isQueryUpToDate(query, failedCount);
+  const tone = running
+    ? 'running'
+    : paused
+      ? 'paused'
+      : hasFailure
+        ? 'attention'
+        : upToDate
+          ? 'success'
+          : 'idle';
   const toneLabel = running
     ? progress
       ? `${progress.files_downloaded} down · ${progress.ingested} in`
@@ -64,7 +73,9 @@ export function QueryRow({
         ? `${failedCount} failed`
         : query.last_failure_kind
           ? failureText ?? 'Failed'
-          : 'Idle';
+          : upToDate
+            ? 'Up to date'
+            : 'Idle';
   const dotClass =
     tone === 'running'
       ? styles.qDotRunning
@@ -72,12 +83,15 @@ export function QueryRow({
         ? styles.qDotPaused
         : tone === 'attention'
           ? styles.qDotAttention
-          : styles.qDotIdle;
+          : tone === 'success'
+            ? styles.qDotSuccess
+            : styles.qDotIdle;
 
   return (
     <div className={styles.qRow}>
       <span className={styles.qCellName}>
         <span className={styles.qName} title={query.query_text}>{label}</span>
+        {upToDate && <span className={styles.upToDateChip}>Up to date</span>}
         {authWarning && (
           <KbdTooltip label={`${authWarning} — click to manage account`}>
             <button type="button" className={styles.qAuthChip} onClick={onOpenAuth}>

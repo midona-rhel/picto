@@ -40,6 +40,8 @@ import {
   getQueryAuthState,
   getQueryFailedCount,
   getSiteLabel,
+  isQueryUpToDate,
+  isSubscriptionUpToDate,
 } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
 
@@ -138,6 +140,11 @@ export function SubscriptionDetail({
   const groupName = groups.find((group) => group.id === subscription.group_id)?.name ?? null;
   const openIssueCount = detail.issues.filter((issue) => issue.status !== 'resolved').length;
   const healthy = detail.failedPosts.length === 0 && openIssueCount === 0;
+  const upToDate = !running && isSubscriptionUpToDate(
+    subscription,
+    detail.failedPosts.length,
+    openIssueCount,
+  );
 
   // Plain-language facts for the overview
   const lastCheckTime = subscription.queries.reduce<string | null>(
@@ -261,6 +268,9 @@ export function SubscriptionDetail({
             <div key={query.id} className={styles.ovFollowRow}>
               <span className={styles.ovFollowName}>
                 {query.display_name?.trim() || query.query_text}
+                {!running && isQueryUpToDate(query, getQueryFailedCount(query.id, detail.failedPosts)) && (
+                  <span className={styles.upToDateChip}>Up to date</span>
+                )}
               </span>
               <span className={styles.ovFollowMeta}>
                 on {getSiteLabel(query.site_id, snapshot.sites)}
@@ -301,8 +311,8 @@ export function SubscriptionDetail({
             </KbdTooltip>
             <span className={styles.heroMeta}>
               <StatusBadge
-                tone={state}
-                label={state === 'running' ? 'Running' : state === 'paused' ? 'Paused' : state === 'attention' ? 'Needs attention' : 'Idle'}
+                tone={upToDate ? 'success' : state}
+                label={upToDate ? 'Up to date' : state === 'running' ? 'Running' : state === 'paused' ? 'Paused' : state === 'attention' ? 'Needs attention' : 'Idle'}
               />
               <span className={styles.muted}>{subscription.total_files.toLocaleString()} files</span>
               {groupName && <span className={styles.muted}>in {groupName}</span>}

@@ -8,6 +8,7 @@ import type {
 import type { SubscriptionListMetrics } from '../../../shared/types/subscriptionsWorkspace';
 import type { SubscriptionsSelection } from '../../../state/subscriptionsWorkspace';
 import { mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
+import { isSubscriptionUpToDate } from '../subscriptionUtils';
 import { ActionButton } from './ActionButton';
 import styles from '../SubscriptionsScreen.module.css';
 
@@ -21,6 +22,7 @@ interface CardModel {
   running: boolean;
   paused: boolean;
   attention: boolean;
+  upToDate: boolean;
 }
 
 /** Pick the newest member's cover as the group cover. */
@@ -83,6 +85,7 @@ function FollowCard({
       <span className={styles.followName}>
         <span className={`${styles.qDot} ${dotClass}`.trim()} />
         <span className={styles.followNameText}>{card.name}</span>
+        {card.upToDate && <span className={styles.upToDateChip}>Up to date</span>}
       </span>
       <span className={styles.followMeta}>
         {card.files.toLocaleString()} files
@@ -148,6 +151,14 @@ export function SubscriptionsGrid({
       running: group.subscriptions.some((sub) => running.has(sub.id) || progressBySubscriptionId.has(sub.id)),
       paused: group.subscriptions.length > 0 && group.subscriptions.every((sub) => sub.paused),
       attention: group.subscriptions.some((sub) => hasAttention(sub.id)),
+      upToDate: group.subscriptions.length > 0
+        && !group.subscriptions.some((sub) => running.has(sub.id) || progressBySubscriptionId.has(sub.id))
+        && group.subscriptions.every((sub) =>
+          isSubscriptionUpToDate(
+            sub,
+            listMetrics[sub.id]?.failedPostCount ?? 0,
+            listMetrics[sub.id]?.openIssueCount ?? 0,
+          )),
     })),
     ...subscriptions
       .filter((sub) => !grouped.has(sub.id))
@@ -161,6 +172,13 @@ export function SubscriptionsGrid({
         running: running.has(sub.id) || progressBySubscriptionId.has(sub.id),
         paused: sub.paused,
         attention: hasAttention(sub.id),
+        upToDate: !running.has(sub.id)
+          && !progressBySubscriptionId.has(sub.id)
+          && isSubscriptionUpToDate(
+            sub,
+            listMetrics[sub.id]?.failedPostCount ?? 0,
+            listMetrics[sub.id]?.openIssueCount ?? 0,
+          ),
       })),
   ].sort((a, b) => b.files - a.files || a.name.localeCompare(b.name));
 

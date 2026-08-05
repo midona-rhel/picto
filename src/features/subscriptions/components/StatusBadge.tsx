@@ -4,7 +4,7 @@ export function StatusBadge({
   tone,
   label,
 }: {
-  tone: 'running' | 'paused' | 'attention' | 'idle';
+  tone: 'running' | 'paused' | 'attention' | 'success' | 'idle';
   label: string;
 }) {
   const toneClass = tone === 'running'
@@ -13,7 +13,9 @@ export function StatusBadge({
       ? styles.statusPaused
       : tone === 'attention'
         ? styles.statusAttention
-        : styles.statusIdle;
+        : tone === 'success'
+          ? styles.statusSuccess
+          : styles.statusIdle;
 
   return (
     <span className={`${styles.statusBadge} ${toneClass}`.trim()}>
