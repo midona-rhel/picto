@@ -19,8 +19,7 @@ use crate::subscriptions::source_adapter::{
 };
 
 use super::helpers::{
-    compute_committed_cursor, maybe_cleanup_subscription_temp_root,
-    should_continue_initial_pagination,
+    cleanup_subscription_temp_root, compute_committed_cursor, should_continue_initial_pagination,
 };
 use super::{
     query_run_completion, PendingCollection, PendingMember, SubscriptionSyncEngine, SyncProgress,
@@ -907,7 +906,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
         }
 
-        maybe_cleanup_subscription_temp_root(self.db, &run_summary.temp_dir).await;
+        cleanup_subscription_temp_root(&run_summary.temp_dir).await;
 
         self.set_phase("finalizing");
         self.emit_progress_force(&sub_id_str, &progress, "Finalizing...");

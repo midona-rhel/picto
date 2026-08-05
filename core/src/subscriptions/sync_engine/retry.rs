@@ -9,7 +9,7 @@ use crate::subscriptions::source_adapter::{
     DownloadedItem, GalleryDlSourceAdapter, SubscriptionSourceAdapter,
 };
 
-use super::helpers::maybe_cleanup_subscription_temp_root;
+use super::helpers::cleanup_subscription_temp_root;
 use super::{
     query_run_completion, PendingCollection, PendingMember, SubscriptionSyncEngine, SyncProgress,
 };
@@ -256,7 +256,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
         }
 
-        maybe_cleanup_subscription_temp_root(self.db, &run_summary.temp_dir).await;
+        cleanup_subscription_temp_root(&run_summary.temp_dir).await;
         if run_summary.failed_items.is_empty() {
             let _ = self
                 .runtime_service()

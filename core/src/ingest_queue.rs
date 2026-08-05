@@ -83,6 +83,12 @@ pub struct IngestQueueItem {
 }
 
 #[derive(Debug)]
+pub struct StagedIngestSources {
+    pub root: PathBuf,
+    pub paths: Vec<PathBuf>,
+}
+
+#[derive(Debug)]
 struct IngestQueueItemCompletion {
     item_id: i64,
     result_kind: IngestQueueItemResultKind,
@@ -139,6 +145,71 @@ fn collect_files_recursive(dir: &Path) -> Vec<PathBuf> {
         }
     }
     files
+}
+
+/// Copy producer-owned files into durable library storage before queueing them.
+/// Once this returns, the producer may delete its source directory without
+/// invalidating the ingest queue.
+pub async fn stage_ingest_sources(
+    library_root: &Path,
+    source_paths: &[PathBuf],
+) -> Result<StagedIngestSources, String> {
+    if source_paths.is_empty() {
+        return Err("Cannot stage an empty ingest batch".to_string());
+    }
+
+    let root = library_root
+        .join("ingest-queue")
+        .join(format!("{:016x}", rand::random::<u64>()));
+    tokio::fs::create_dir_all(&root)
+        .await
+        .map_err(|error| format!("Failed to create ingest staging directory: {error}"))?;
+
+    let mut staged_paths = Vec::with_capacity(source_paths.len());
+    for (index, source_path) in source_paths.iter().enumerate() {
+        let mut staged_path = root.join(format!("{index:04}"));
+        if let Some(extension) = source_path.extension() {
+            staged_path.set_extension(extension);
+        }
+        let partial_path = staged_path.with_extension(format!(
+            "{}.part",
+            staged_path
+                .extension()
+                .and_then(|extension| extension.to_str())
+                .unwrap_or("media")
+        ));
+
+        let stage_result = async {
+            tokio::fs::copy(source_path, &partial_path)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Failed to stage ingest source {}: {error}",
+                        source_path.display()
+                    )
+                })?;
+            tokio::fs::rename(&partial_path, &staged_path)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "Failed to commit staged ingest source {}: {error}",
+                        source_path.display()
+                    )
+                })
+        }
+        .await;
+
+        if let Err(error) = stage_result {
+            let _ = tokio::fs::remove_dir_all(&root).await;
+            return Err(error);
+        }
+        staged_paths.push(staged_path);
+    }
+
+    Ok(StagedIngestSources {
+        root,
+        paths: staged_paths,
+    })
 }
 
 fn collect_import_paths(root: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
@@ -1879,6 +1950,80 @@ mod tests {
     fn write_video_fixture(path: &Path) {
         // Enough of an ISO base media header for the MIME detector to identify MP4.
         fs::write(path, b"\0\0\0\x18ftypmp42\0\0\0\0mp42isom\0\0\0\0").unwrap();
+    }
+
+    #[tokio::test]
+    async fn staged_ingest_sources_survive_producer_cleanup() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        let producer_root = temp.path().join("gallery-download");
+        fs::create_dir_all(&library_root).unwrap();
+        fs::create_dir_all(&producer_root).unwrap();
+        let source = producer_root.join("download.png");
+        write_image(&source, 64);
+        let expected = fs::read(&source).unwrap();
+
+        let staged = stage_ingest_sources(&library_root, &[source])
+            .await
+            .unwrap();
+        let staged_path = staged.paths[0].clone();
+        fs::remove_dir_all(&producer_root).unwrap();
+
+        assert!(staged.root.starts_with(library_root.join("ingest-queue")));
+        assert_eq!(fs::read(&staged_path).unwrap(), expected);
+
+        let db = Arc::new(LibraryDatabase::open(&library_root).unwrap());
+        let blob_store = Arc::new(BlobStore::open(&library_root).unwrap());
+        let request = SingleIngestRequest {
+            source_kind: IngestSourceKind::Subscription,
+            path: staged_path.clone(),
+            tag_strings: Vec::new(),
+            source_urls: Vec::new(),
+            name: None,
+            notes: None,
+            created_at: None,
+            initial_status: 0,
+            skip_thumbnail: false,
+            tag_provenance_mask: crate::db::types::TAG_PROVENANCE_UNKNOWN,
+            subscription_id: None,
+        };
+        db.enqueue_ingest_queue(
+            IngestQueueKind::Single,
+            "subscription",
+            None,
+            None,
+            None,
+            Some(&staged.root),
+            None,
+            None,
+            None,
+            None,
+            vec![(
+                staged_path,
+                None,
+                IngestQueueItemPayload {
+                    request,
+                    subscription_metadata: None,
+                    target_folder_id: None,
+                },
+                true,
+            )],
+        )
+        .await
+        .unwrap();
+
+        let queue = db.lease_next_ingest_queue().await.unwrap().unwrap();
+        process_queue_entry(&db, &blob_store, queue).await.unwrap();
+
+        let entity_count = db
+            .with_read(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+            })
+            .unwrap();
+        assert_eq!(entity_count, 1);
+        assert!(!staged.root.exists());
     }
 
     #[test]

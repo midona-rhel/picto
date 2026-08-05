@@ -226,10 +226,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
         query_id: i64,
         query_run_id: Option<i64>,
     ) -> Result<i64, String> {
-        let cleanup_root = pc
+        let source_paths = pc
             .members
-            .first()
-            .and_then(|member| helpers::detect_gallery_dl_root(&member.file_path));
+            .iter()
+            .map(|member| member.file_path.clone())
+            .collect::<Vec<_>>();
+        let staged =
+            crate::ingest_queue::stage_ingest_sources(&self.library_root, &source_paths).await?;
         let items: Vec<(
             PathBuf,
             Option<i64>,
@@ -238,10 +241,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
         )> = pc
             .members
             .into_iter()
-            .map(|member| {
+            .zip(staged.paths.iter().cloned())
+            .map(|(member, staged_path)| {
                 let request = helpers::build_subscription_ingest_request(
                     subscription_id,
-                    &member.file_path,
+                    &staged_path,
                     &member.metadata,
                     false,
                     0,
@@ -253,7 +257,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     &request.tag_strings,
                 );
                 (
-                    member.file_path,
+                    staged_path,
                     Some(member.page_num as i64),
                     crate::ingest_queue::IngestQueueItemPayload {
                         request,
@@ -264,21 +268,28 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 )
             })
             .collect();
-        self.db
+        let result = self
+            .db
             .enqueue_ingest_queue(
                 crate::ingest_queue::IngestQueueKind::Collection,
                 "subscription",
                 Some(subscription_id),
                 Some(query_id),
                 query_run_id,
-                cleanup_root.as_deref(),
+                Some(&staged.root),
                 Some(&pc.post_id),
                 Some(&pc.category),
                 Some(&pc.preferred_name),
                 pc.expected_count.map(i64::from),
                 items,
             )
-            .await
+            .await;
+        if result.is_ok() {
+            helpers::release_producer_sources(&source_paths).await;
+        } else {
+            let _ = tokio::fs::remove_dir_all(&staged.root).await;
+        }
+        result
     }
 
     async fn enqueue_single_subscription_item(
@@ -289,10 +300,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
         file_path: &std::path::Path,
         metadata: &ParsedMetadata,
     ) -> Result<i64, String> {
-        let cleanup_root = helpers::detect_gallery_dl_root(file_path);
+        let staged = crate::ingest_queue::stage_ingest_sources(
+            &self.library_root,
+            &[file_path.to_path_buf()],
+        )
+        .await?;
+        let staged_path = staged.paths[0].clone();
         let request = helpers::build_subscription_ingest_request(
             subscription_id,
-            file_path,
+            &staged_path,
             metadata,
             false,
             0,
@@ -303,20 +319,21 @@ impl<'a> SubscriptionSyncEngine<'a> {
             metadata,
             &request.tag_strings,
         );
-        self.db
+        let result = self
+            .db
             .enqueue_ingest_queue(
                 crate::ingest_queue::IngestQueueKind::Single,
                 "subscription",
                 Some(subscription_id),
                 Some(query_id),
                 query_run_id,
-                cleanup_root.as_deref(),
+                Some(&staged.root),
                 metadata.post_id.as_deref(),
                 metadata.category.as_deref(),
                 preferred_import_name(metadata).as_deref(),
                 metadata.page_count.map(i64::from),
                 vec![(
-                    file_path.to_path_buf(),
+                    staged_path,
                     metadata.page_num.map(i64::from),
                     crate::ingest_queue::IngestQueueItemPayload {
                         request,
@@ -326,7 +343,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     true,
                 )],
             )
-            .await
+            .await;
+        if result.is_ok() {
+            helpers::release_producer_sources(&[file_path.to_path_buf()]).await;
+        } else {
+            let _ = tokio::fs::remove_dir_all(&staged.root).await;
+        }
+        result
     }
 
     async fn record_issue(

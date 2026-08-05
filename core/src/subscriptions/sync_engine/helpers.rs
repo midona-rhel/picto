@@ -1,9 +1,8 @@
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use tracing::{info, warn};
 
-use crate::db::LibraryDatabase;
 use crate::subscriptions::import_policy::preferred_import_name;
 use crate::subscriptions::source_adapter::ParsedMetadata;
 use crate::tags::logging::{preview_tag_strings, summarize_tag_strings};
@@ -70,23 +69,16 @@ pub(super) fn log_subscription_ingest_request_shape(
     );
 }
 
-pub(super) fn detect_gallery_dl_root(path: &Path) -> Option<PathBuf> {
-    path.ancestors().find_map(|ancestor| {
-        let name = ancestor.file_name()?.to_str()?;
-        if name.starts_with("picto_gdl_") {
-            Some(ancestor.to_path_buf())
-        } else {
-            None
-        }
-    })
+pub(super) async fn cleanup_subscription_temp_root(temp_root: &Path) {
+    crate::subscriptions::gallery_dl_runner::cleanup_temp_dir(temp_root).await;
 }
 
-pub(super) async fn maybe_cleanup_subscription_temp_root(db: &LibraryDatabase, temp_root: &Path) {
-    match db.has_retained_ingest_sources_for_root(temp_root).await {
-        Ok(true) => {}
-        Ok(false) => crate::subscriptions::gallery_dl_runner::cleanup_temp_dir(temp_root).await,
-        Err(error) => {
-            warn!(path = %temp_root.display(), error = %error, "Failed to inspect temp-root ingest ownership")
+pub(super) async fn release_producer_sources(source_paths: &[std::path::PathBuf]) {
+    for source_path in source_paths {
+        if let Err(error) = tokio::fs::remove_file(source_path).await {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                warn!(path = %source_path.display(), error = %error, "Failed to release staged subscription source");
+            }
         }
     }
 }
