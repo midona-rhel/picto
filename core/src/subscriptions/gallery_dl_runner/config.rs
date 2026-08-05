@@ -7,23 +7,12 @@ use super::RunOptions;
 pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
     let mut extractor = serde_json::Map::new();
 
-    extractor.insert(
-        "sleep-request".into(),
-        serde_json::Value::Number(
-            serde_json::Number::from_f64(opts.sleep_request).unwrap_or(serde_json::Number::from(2)),
-        ),
-    );
+    let one_second = serde_json::Value::Number(serde_json::Number::from(1));
+    extractor.insert("sleep-request".into(), one_second.clone());
 
-    // Delay between FILE downloads (sleep-request only paces page/API requests).
-    // Without this, bulk runs fire hundreds of media downloads back-to-back and
-    // CDNs (gelbooru especially) start refusing until retries are exhausted —
-    // observed as mass "gallery-dl exhausted item retries" failures.
-    extractor.insert(
-        "sleep".into(),
-        serde_json::Value::Number(
-            serde_json::Number::from_f64(1.0).unwrap_or(serde_json::Number::from(1)),
-        ),
-    );
+    // gallery-dl downloads synchronously. Pace both its extractor/API requests
+    // and its separate media-download stream at one request per second.
+    extractor.insert("sleep".into(), one_second);
 
     extractor.insert("metadata".into(), serde_json::Value::Bool(true));
 
@@ -164,7 +153,7 @@ mod tests {
     use super::RunOptions;
 
     #[test]
-    fn build_config_keeps_booru_tags_when_api_credentials_are_present() {
+    fn build_config_paces_requests_and_keeps_booru_tags_with_credentials() {
         let opts = RunOptions {
             subscription_id: Some(1),
             query_id: Some(2),
@@ -173,7 +162,6 @@ mod tests {
             post_limit: Some(1),
             range_start: 1,
             abort_threshold: None,
-            sleep_request: 2.0,
             auth: Some(GalleryDlAuthConfig {
                 site_category: "gelbooru".to_string(),
                 fragment: serde_json::json!({
@@ -187,6 +175,20 @@ mod tests {
         };
 
         let config = build_config(&opts, std::path::Path::new("/tmp"));
+        let extractor = config
+            .get("extractor")
+            .and_then(|value| value.as_object())
+            .expect("extractor config");
+        assert_eq!(
+            extractor
+                .get("sleep-request")
+                .and_then(|value| value.as_u64()),
+            Some(1)
+        );
+        assert_eq!(
+            extractor.get("sleep").and_then(|value| value.as_u64()),
+            Some(1)
+        );
         let gelbooru = config
             .get("extractor")
             .and_then(|value| value.get("gelbooru"))

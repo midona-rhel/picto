@@ -63,8 +63,6 @@ pub struct RunOptions {
     /// Abort after N consecutive skipped files (maps to `-A N`).
     /// None = no abort (first run / initial sync).
     pub abort_threshold: Option<u32>,
-    /// Seconds between HTTP requests during extraction (`sleep-request`).
-    pub sleep_request: f64,
     /// Optional gallery-dl auth fragment for site authentication.
     pub auth: Option<GalleryDlAuthConfig>,
     /// Path to the download archive SQLite DB.
@@ -186,11 +184,7 @@ impl GalleryDlRunner {
             site_id = %opts.site_id,
             gelbooru_tags_enabled = config_bool_at(&config, &["extractor", "gelbooru", "tags"]).unwrap_or(false),
             danbooru_tags_enabled = config_bool_at(&config, &["extractor", "danbooru", "tags"]).unwrap_or(false),
-            sleep_request = config
-                .get("extractor")
-                .and_then(|extractor| extractor.get("sleep-request"))
-                .and_then(|value| value.as_f64())
-                .unwrap_or(opts.sleep_request),
+            request_interval_seconds = 1,
             metadata_enabled = config_bool_at(&config, &["extractor", "metadata"]).unwrap_or(false),
             config_path = %config_path.display(),
             "gallery-dl tag config prepared"

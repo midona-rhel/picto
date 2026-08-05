@@ -60,9 +60,6 @@ pub struct AppSettings {
     /// Pause subscription downloads when inbox file count exceeds this. 0 = no limit.
     #[serde(default = "default_sub_inbox_pause_limit")]
     pub sub_inbox_pause_limit: u32,
-    /// Seconds between HTTP requests during gallery-dl extraction (`sleep-request`).
-    #[serde(default = "default_sub_rate_limit_secs")]
-    pub sub_rate_limit_secs: f64,
     /// Max files per gallery-dl invocation (`--range 1-N`).
     #[serde(default = "default_sub_batch_size")]
     pub sub_batch_size: u32,
@@ -138,9 +135,6 @@ fn default_sub_abort_threshold() -> u32 {
 fn default_sub_inbox_pause_limit() -> u32 {
     1000
 }
-fn default_sub_rate_limit_secs() -> f64 {
-    2.0
-}
 fn default_sub_batch_size() -> u32 {
     100
 }
@@ -196,7 +190,6 @@ impl Default for AppSettings {
             show_tree_guides: true,
             sub_abort_threshold: default_sub_abort_threshold(),
             sub_inbox_pause_limit: default_sub_inbox_pause_limit(),
-            sub_rate_limit_secs: default_sub_rate_limit_secs(),
             sub_batch_size: default_sub_batch_size(),
             watch_folder_default_status: default_watch_folder_default_status(),
             ai_tagger_wd14_enabled: false,

@@ -138,7 +138,6 @@ pub async fn verify_site(
         });
     }
 
-    let settings = state.settings.get();
     let binary_path = crate::media_processing::gallery_dl_path::gallery_dl_path()?.clone();
     let runner = GalleryDlRunner::new(binary_path);
     let post_limit = post_limit
@@ -153,7 +152,6 @@ pub async fn verify_site(
         post_limit: Some(post_limit),
         range_start: 1,
         abort_threshold: None,
-        sleep_request: settings.sub_rate_limit_secs,
         auth: resolved.gallery_dl_auth,
         // Empty path → runner skips the download archive entirely.
         archive_path: std::path::PathBuf::new(),

@@ -221,7 +221,6 @@ async fn live_subscription_source_readiness_matrix() {
         .expect("open test library");
     let mut settings = state.settings.get();
     settings.sub_batch_size = 1;
-    settings.sub_rate_limit_secs = 0.25;
     settings.sub_abort_threshold = 1;
     state.settings.update(settings);
 

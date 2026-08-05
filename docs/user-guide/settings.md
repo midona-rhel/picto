@@ -42,7 +42,7 @@ View information about the current library: name, path, and file count. See [Lib
 
 Configure subscription download behavior:
 
-- **Rate Limit** — Seconds between requests (0.5-30, default ~1s). Lower values download faster but may trigger rate limiting from sites.
+- Subscription downloads are serial. Picto waits one second before the next request or file download to the same source, and failed requests retry with increasing backoff.
 - **Batch Size** — Maximum files per subscription run. Set to unlimited or a specific number (1-5000).
 - **Abort Threshold** — Stop a subscription run after this many consecutive already-downloaded files (1-500, default 10). Prevents re-scanning your entire download history.
 - **Default Import Status** — Whether watched folders import as Inbox or Active by default.

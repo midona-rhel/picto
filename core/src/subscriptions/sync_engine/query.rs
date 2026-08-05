@@ -197,7 +197,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             resume_cursor = ?resume_cursor,
             resume_strategy = ?resume_strategy,
             has_credential,
-            sleep_request = self.settings.sub_rate_limit_secs,
+            request_interval_seconds = 1,
             "sync_query: run options"
         );
 
@@ -209,7 +209,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             post_limit,
             range_start,
             abort_threshold,
-            sleep_request: self.settings.sub_rate_limit_secs,
             auth: credential.gallery_dl_auth.clone(),
             archive_path,
             archive_prefix: Some(archive_prefix),

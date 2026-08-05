@@ -82,7 +82,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             post_limit: None,
             range_start: 1,
             abort_threshold: None,
-            sleep_request: self.settings.sub_rate_limit_secs,
             auth: credential.gallery_dl_auth.clone(),
             archive_path: PathBuf::new(),
             archive_prefix: None,
