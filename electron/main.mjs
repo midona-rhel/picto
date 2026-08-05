@@ -45,6 +45,11 @@ if (!gotLock) {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDev = !app.isPackaged;
+if (isDev && process.platform === 'darwin') {
+  // Native hot reload launches a replacement Electron process. Accessory mode
+  // keeps that process launch from activating Picto over the user's editor.
+  app.setActivationPolicy('accessory');
+}
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:8080';
 const SMOKE_SETTLE_MS = 1500;
 let nativeClosePromise = null;
