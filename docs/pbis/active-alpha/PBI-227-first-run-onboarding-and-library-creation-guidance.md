@@ -38,7 +38,9 @@ error behind the dialog, while Tag Manager and Subscriptions remained available 
    grid, sidebar, settings, view preferences, or sync reads.
 6. The no-library state never displays a raw backend/IPC error or Retry action behind the Libraries
    dialog.
-7. Library-only navigation and actions are hidden or disabled until a library opens successfully.
+7. On a cold start with no library, no library feature navigation is visible, including Tag Manager,
+   Subscriptions, folders, and smart folders. Only the create/open-library setup flow is shown until
+   a library opens successfully.
 
 ## Test Cases
 1. Fresh install, first launch — onboarding screen appears.
@@ -47,7 +49,7 @@ error behind the dialog, while Tag Manager and Subscriptions remained available 
 4. Delete all libraries, relaunch — onboarding reappears.
 5. Launch with no active library — no library-scoped IPC calls are made and no error state renders.
 6. Close or cancel the Libraries dialog with no active library — the app remains in a deliberate
-   setup state with library-only navigation unavailable.
+   setup state with no library feature navigation visible.
 
 ## Risk
 Low. Primarily UI work with simple first-launch detection logic.

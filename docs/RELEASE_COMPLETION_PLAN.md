@@ -137,7 +137,8 @@ Phase gates:
 - [ ] Replace the large guide program with concise release-accurate user documentation.
 - [x] Delete unreproduced bug buckets, absent Random work, and legacy-parity menu work.
 - [ ] Make first launch lead directly to creating a library; do not mount library-scoped UI or issue
-      library-scoped backend calls until open succeeds; then archive PBI-227.
+      library-scoped backend calls until open succeeds, and show no library feature navigation in
+      the cold no-library state; then archive PBI-227.
 
 ## Phase 9: Release Gate
 
