@@ -11,10 +11,7 @@ pub async fn activate_subscription_guard(
 ) -> Result<CancellationToken, String> {
     let mut map = running_subs.lock().await;
     if map.contains_key(subscription_id) {
-        return Err(format!(
-            "Subscription {} is already running",
-            subscription_id
-        ));
+        return Err("This subscription is already running.".to_string());
     }
     let cancel = CancellationToken::new();
     map.insert(subscription_id.to_string(), cancel.clone());

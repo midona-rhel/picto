@@ -46,18 +46,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let sub_id_str = subscription_id.to_string();
         let adapter = GalleryDlSourceAdapter::new(self.runner.binary_path().clone());
 
-        let (prior_files, prior_posts, query_kind) = {
+        let query_kind = {
             let q = self
                 .runtime_service()
                 .get_subscription_query(query_id)
                 .await;
             match q {
-                Ok(Some(q)) => (q.files_found as usize, q.posts_found as usize, q.query_kind),
-                _ => (
-                    0,
-                    0,
-                    crate::subscriptions::source_adapter::infer_query_kind(site_id).to_string(),
-                ),
+                Ok(Some(q)) => q.query_kind,
+                _ => crate::subscriptions::source_adapter::infer_query_kind(site_id).to_string(),
             }
         };
         if let Err(error) = adapter.validate_query_kind(site_id, &query_kind) {
@@ -226,6 +222,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let mut posts_to_unarchive: HashSet<String> = HashSet::new();
         let mut total_items: usize = 0;
         let mut posts_processed_this_run: usize = 0;
+        let mut committed_files_this_run: usize = 0;
 
         info!(query_id, "sync_query: waiting for gallery-dl items...");
 
@@ -308,8 +305,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                             )
                             .await
                         {
-                            Ok(Some(post_id)) => {
+                            Ok(Some((post_id, file_count))) => {
                                 committed_post_ids.insert(post_id);
+                                committed_files_this_run += file_count;
                                 self.finalize_current_post_progress(
                                     &mut progress,
                                     &mut posts_processed_this_run,
@@ -395,8 +393,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         )
                         .await
                     {
-                        Ok(Some(post_id)) => {
+                        Ok(Some((post_id, file_count))) => {
                             committed_post_ids.insert(post_id);
+                            committed_files_this_run += file_count;
                             self.finalize_current_post_progress(
                                 &mut progress,
                                 &mut posts_processed_this_run,
@@ -469,6 +468,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .await
                 {
                     Ok(_) => {
+                        committed_files_this_run += 1;
                         let first_item_for_post = item
                             .metadata
                             .post_id
@@ -735,8 +735,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         )
                         .await
                     {
-                        Ok(Some(post_id)) => {
+                        Ok(Some((post_id, file_count))) => {
                             committed_post_ids.insert(post_id);
+                            committed_files_this_run += file_count;
                             self.finalize_current_post_progress(
                                 &mut progress,
                                 &mut posts_processed_this_run,
@@ -789,8 +790,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     )
                     .await
                 {
-                    Ok(Some(post_id)) => {
+                    Ok(Some((post_id, file_count))) => {
                         committed_post_ids.insert(post_id);
+                        committed_files_this_run += file_count;
                         self.finalize_current_post_progress(
                             &mut progress,
                             &mut posts_processed_this_run,
@@ -918,15 +920,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .await;
         }
 
-        if completed_cleanly {
-            let now = Utc::now().to_rfc3339();
+        if completed_cleanly || committed_files_this_run > 0 || progress.posts_processed > 0 {
+            let last_check_time = completed_cleanly.then(|| Utc::now().to_rfc3339());
             let _ = self
                 .runtime_service()
-                .update_query_progress(
+                .add_query_progress(
                     query_id,
-                    &now,
-                    prior_files.saturating_add(progress.files_downloaded) as i64,
-                    prior_posts.saturating_add(progress.posts_processed) as i64,
+                    last_check_time,
+                    committed_files_this_run as i64,
+                    progress.posts_processed as i64,
                 )
                 .await;
         }

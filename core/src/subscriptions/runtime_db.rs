@@ -699,17 +699,25 @@ pub fn count_active_subscription_query_jobs(
     )
 }
 
-pub fn update_query_progress(
+pub fn add_query_progress(
     conn: &Connection,
     query_id: i64,
-    last_check_time: &str,
-    files_found: i64,
-    posts_found: i64,
+    last_check_time: Option<&str>,
+    files_found_delta: i64,
+    posts_found_delta: i64,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE subscription_query SET last_check_time = ?1, files_found = ?2, posts_found = ?3
+        "UPDATE subscription_query
+         SET last_check_time = COALESCE(?1, last_check_time),
+             files_found = files_found + ?2,
+             posts_found = posts_found + ?3
          WHERE query_id = ?4",
-        params![last_check_time, files_found, posts_found, query_id],
+        params![
+            last_check_time,
+            files_found_delta,
+            posts_found_delta,
+            query_id
+        ],
     )?;
     Ok(())
 }
@@ -1140,7 +1148,7 @@ pub fn list_subscription_download_attempts(
 
 #[cfg(test)]
 mod tests {
-    use super::find_unresolved_subscription_download_attempts;
+    use super::{add_query_progress, find_unresolved_subscription_download_attempts};
     use crate::db::core::schema::LIBRARY_DDL;
     use rusqlite::{params, Connection};
 
@@ -1289,6 +1297,54 @@ mod tests {
                 .find_map(|attempt| attempt.retry_url.as_deref()),
             Some("https://retry.example/new-higher-id")
         );
+    }
+
+    #[test]
+    fn query_progress_keeps_accepted_work_from_interrupted_segments() {
+        let conn = Connection::open_in_memory().expect("open database");
+        conn.execute_batch(LIBRARY_DDL).expect("create schema");
+        conn.execute(
+            "INSERT INTO subscription (subscription_id, name, site_id, date_added)
+             VALUES (1, 'Test subscription', 'gelbooru', '2026-01-01')",
+            [],
+        )
+        .expect("insert subscription");
+        conn.execute(
+            "INSERT INTO subscription_query (
+                 query_id, subscription_id, site_id, query_text,
+                 last_check_time, files_found, posts_found
+             ) VALUES (1, 1, 'gelbooru', 'test', 'previous-check', 95, 95)",
+            [],
+        )
+        .expect("insert query");
+
+        add_query_progress(&conn, 1, None, 5, 5).expect("add interrupted progress");
+        let interrupted = conn
+            .query_row(
+                "SELECT last_check_time, files_found, posts_found
+                 FROM subscription_query WHERE query_id = 1",
+                [],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<String>>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                },
+            )
+            .expect("read interrupted progress");
+        assert_eq!(interrupted, (Some("previous-check".to_string()), 100, 100));
+
+        add_query_progress(&conn, 1, Some("successful-check"), 0, 0)
+            .expect("record successful check");
+        let last_check: String = conn
+            .query_row(
+                "SELECT last_check_time FROM subscription_query WHERE query_id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read successful check");
+        assert_eq!(last_check, "successful-check");
     }
 }
 

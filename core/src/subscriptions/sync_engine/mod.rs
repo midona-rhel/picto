@@ -192,17 +192,18 @@ impl<'a> SubscriptionSyncEngine<'a> {
         query_run_id: Option<i64>,
         sub_id_str: &str,
         progress: &mut SyncProgress,
-    ) -> Result<Option<String>, String> {
+    ) -> Result<Option<(String, usize)>, String> {
         let Some(pc) = pending_collections.remove(pending_key) else {
             return Ok(None);
         };
         let post_id = pc.post_id.clone();
+        let file_count = pc.members.len();
         self.enqueue_pending_collection(pc, subscription_id, query_id, query_run_id)
             .await?;
         progress.queued_for_ingest += 1;
         self.set_phase("queueing");
         self.emit_progress_force(sub_id_str, progress, "Queued post for ingest");
-        Ok(Some(post_id))
+        Ok(Some((post_id, file_count)))
     }
 
     async fn enqueue_pending_collection(

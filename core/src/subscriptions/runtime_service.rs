@@ -12,7 +12,7 @@ use super::archive::{
     clear_subscription_archive_entries_at_root, subscription_query_archive_prefix,
 };
 use super::runtime_db::{
-    add_subscription_entity, cancel_pending_subscription_jobs_for_subscription,
+    add_query_progress, add_subscription_entity, cancel_pending_subscription_jobs_for_subscription,
     count_active_subscription_query_jobs, create_subscription_query_run, create_subscription_run,
     enqueue_subscription_query_job, finalize_subscription_run_if_terminal,
     finalize_subscription_run_status, find_unresolved_subscription_download_attempts,
@@ -25,7 +25,7 @@ use super::runtime_db::{
     reschedule_subscription_query_job, reset_subscription_query_state, reset_subscription_state,
     resolve_subscription_download_attempt, resolve_subscription_issues,
     set_query_completed_initial_run, set_query_resume_state, set_query_terminal_state,
-    set_subscription_issue_next_retry, update_query_progress, upsert_subscription_download_attempt,
+    set_subscription_issue_next_retry, upsert_subscription_download_attempt,
     upsert_subscription_issue, upsert_subscription_post_collection,
     upsert_subscription_post_member,
 };
@@ -829,16 +829,21 @@ impl<'a> SubscriptionRuntimeService<'a> {
             .with_write(move |conn| finish_subscription_query_run(conn, query_run_id, &completion))
     }
 
-    pub async fn update_query_progress(
+    pub async fn add_query_progress(
         &self,
         query_id: i64,
-        last_check_time: &str,
-        files_found: i64,
-        posts_found: i64,
+        last_check_time: Option<String>,
+        files_found_delta: i64,
+        posts_found_delta: i64,
     ) -> Result<(), String> {
-        let last_check_time = last_check_time.to_string();
         self.db.with_write(move |conn| {
-            update_query_progress(conn, query_id, &last_check_time, files_found, posts_found)
+            add_query_progress(
+                conn,
+                query_id,
+                last_check_time.as_deref(),
+                files_found_delta,
+                posts_found_delta,
+            )
         })
     }
 

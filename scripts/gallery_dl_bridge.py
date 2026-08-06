@@ -262,6 +262,10 @@ def _log_booru_tag_diagnostics(
 
 
 def _canonical_post_url(category: str | None, meta: dict[str, Any]) -> str | None:
+    if category == "pixiv":
+        post_id = _post_id(meta)
+        if post_id:
+            return f"https://www.pixiv.net/en/artworks/{post_id}"
     if category == "gelbooru":
         post_id = _trim(meta.get("id"))
         if post_id:
@@ -290,7 +294,10 @@ def _media_url(category: str | None, meta: dict[str, Any]) -> str | None:
         file_meta = meta.get("file")
         if isinstance(file_meta, dict):
             return _trim(file_meta.get("url"))
-    return _trim(meta.get("file_url")) or _trim(meta.get("media_url"))
+    media_url = _trim(meta.get("file_url")) or _trim(meta.get("media_url"))
+    if category == "pixiv":
+        return media_url or _trim(meta.get("url"))
+    return media_url
 
 
 def _ordered_source_urls(category: str | None, meta: dict[str, Any]) -> list[str]:

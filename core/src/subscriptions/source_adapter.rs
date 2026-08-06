@@ -239,11 +239,30 @@ mod tests {
     #[test]
     fn validate_query_kind_matches_site_descriptor() {
         let pixiv = describe_site("pixiv").expect("pixiv descriptor");
+        let pixiv_user = describe_site("pixivuser").expect("pixiv user descriptor");
         assert!(pixiv.query_kinds.iter().any(|kind| kind.id == "search"));
-        assert!(pixiv.query_kinds.iter().any(|kind| kind.id == "user"));
+        assert!(!pixiv.query_kinds.iter().any(|kind| kind.id == "user"));
+        assert!(pixiv_user.query_kinds.iter().any(|kind| kind.id == "user"));
+        assert!(!pixiv_user
+            .query_kinds
+            .iter()
+            .any(|kind| kind.id == "search"));
         assert!(validate_query_kind("pixiv", "search").is_ok());
-        assert!(validate_query_kind("pixiv", "user").is_ok());
+        assert!(validate_query_kind("pixiv", "user").is_err());
+        assert!(validate_query_kind("pixivuser", "user").is_ok());
         assert!(validate_query_kind("pixiv", "creator").is_err());
+    }
+
+    #[test]
+    fn pixiv_user_and_search_build_their_specific_artwork_urls() {
+        assert_eq!(
+            crate::subscriptions::gallery_dl_runner::build_url("pixivuser", "1234").as_deref(),
+            Some("https://www.pixiv.net/en/users/1234/artworks")
+        );
+        assert_eq!(
+            crate::subscriptions::gallery_dl_runner::build_url("pixiv", "landscape").as_deref(),
+            Some("https://www.pixiv.net/en/tags/landscape/artworks?s_mode=s_tag")
+        );
     }
 
     #[test]

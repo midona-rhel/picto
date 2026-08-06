@@ -126,6 +126,7 @@ export interface MultiCardMenuContext {
   subscriptionIds: string[];
   groupIds: string[];
   groups: SubscriptionGroupInfo[];
+  anyRunning: boolean;
   onRunSelected: () => void;
   onPauseSelected: (paused: boolean) => void;
   onMoveSelectedToGroup: (groupId: number | null) => void;
@@ -136,7 +137,12 @@ export function buildMultiCardMenu(ctx: MultiCardMenuContext): MenuEntry[] {
   const total = ctx.subscriptionIds.length + ctx.groupIds.length;
   const subsOnly = ctx.groupIds.length === 0;
   return [
-    { label: `Run ${total} Now`, icon: <IconPlayerPlay size={14} />, action: ctx.onRunSelected },
+    {
+      label: `Run ${total} Now`,
+      icon: <IconPlayerPlay size={14} />,
+      action: ctx.onRunSelected,
+      disabled: ctx.anyRunning,
+    },
     { label: `Pause ${total}`, icon: <IconPlayerPause size={14} />, action: () => ctx.onPauseSelected(true) },
     { label: `Resume ${total}`, icon: <IconPlayerPlay size={14} />, action: () => ctx.onPauseSelected(false) },
     sep(),

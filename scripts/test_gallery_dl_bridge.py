@@ -70,5 +70,33 @@ class GelbooruNormalizationTests(unittest.TestCase):
         self.assertNotIn(["copyright", "mario_(series)"], normalized["tags"])
 
 
+class PixivNormalizationTests(unittest.TestCase):
+    def test_user_and_search_imports_prefer_the_artwork_page(self) -> None:
+        meta = {
+            "category": "pixiv",
+            "id": 114223105,
+            "url": "https://i.pximg.net/img-original/example_p0.png",
+            "tags": ["original"],
+            "user": {"id": 1234, "name": "Artist"},
+        }
+
+        for query_url in (
+            "https://www.pixiv.net/en/users/1234/artworks",
+            "https://www.pixiv.net/en/tags/original/artworks?s_mode=s_tag",
+        ):
+            with self.subTest(query_url=query_url):
+                normalized = gallery_dl_bridge._normalized_metadata(  # noqa: SLF001
+                    query_url,
+                    meta,
+                )
+                post_url = "https://www.pixiv.net/en/artworks/114223105"
+                self.assertEqual(normalized["canonical_post_url"], post_url)
+                self.assertEqual(normalized["source_url"], post_url)
+                self.assertEqual(
+                    normalized["source_urls"],
+                    [post_url, "https://i.pximg.net/img-original/example_p0.png"],
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

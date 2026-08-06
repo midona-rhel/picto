@@ -130,8 +130,8 @@ export function SubscriptionDetail({
   const [mode, setMode] = useAtom(subscriptionsDetailModeAtom);
 
   const metrics = snapshot.listMetrics[subscription.id];
-  const running = progress != null;
-  const state = describeSubscriptionState({
+  const running = progress != null || snapshot.runningSubscriptionIds.includes(subscription.id);
+  const state = running ? 'running' : describeSubscriptionState({
     paused: subscription.paused,
     progress,
     failedPostCount: metrics?.failedPostCount ?? 0,
@@ -169,7 +169,7 @@ export function SubscriptionDetail({
 
   const overviewSection = (
     <div className={styles.overview}>
-      {running && progress ? (
+      {running ? (
         <div className={styles.ovStatus}>
           <span className={`${styles.ovIcon} ${styles.ovIconRunning}`.trim()}>
             <IconRefresh size={18} />
@@ -177,7 +177,9 @@ export function SubscriptionDetail({
           <div className={styles.ovStatusText}>
             <span className={styles.ovHeadline}>Checking for new posts…</span>
             <span className={styles.ovSub}>
-              {progress.files_downloaded} downloaded · {progress.ingested} added to your library so far
+              {progress
+                ? `${progress.files_downloaded} downloaded · ${progress.ingested} added to your library so far`
+                : 'Starting the subscription run…'}
             </span>
           </div>
         </div>
@@ -403,13 +405,14 @@ export function SubscriptionDetail({
                   credentials: snapshot.credentials,
                   credentialHealth: snapshot.credentialHealth,
                 });
-                const queryRunning = running && progress?.query_id === query.id;
+                const queryRunning = progress?.query_id === query.id;
                 return (
                   <QueryRow
                     key={query.id}
                     query={query}
                     sites={snapshot.sites}
-                    running={queryRunning || (running && progress?.query_id == null)}
+                    running={queryRunning}
+                    runDisabled={running}
                     paused={query.paused}
                     failedCount={getQueryFailedCount(query.id, detail.failedPosts)}
                     authWarning={auth.tone === 'attention' ? auth.label : null}

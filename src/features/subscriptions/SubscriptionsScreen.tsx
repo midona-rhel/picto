@@ -264,10 +264,14 @@ export function SubscriptionsScreen() {
         ...groupIds.flatMap((gid) =>
           snapshot.groups.find((g) => g.id === gid)?.subscriptions.map((s) => s.id) ?? []),
       ];
+      const anyRunning = allSubIds.some(
+        (id) => snapshot.runningSubscriptionIds.includes(id) || progressBySubscriptionId.has(id),
+      );
       contextMenu.openAt(position, buildMultiCardMenu({
         subscriptionIds,
         groupIds,
         groups: snapshot.groups,
+        anyRunning,
         onRunSelected: () => {
           markSubscriptionRunTriggered();
           void act('multi:run', async () => {
@@ -299,9 +303,8 @@ export function SubscriptionsScreen() {
           );
         },
       }));
-      void allSubIds;
     },
-    [contextMenu, snapshot, act, confirm],
+    [contextMenu, snapshot, progressBySubscriptionId, act, confirm],
   );
 
   const commitRename = useCallback(

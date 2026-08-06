@@ -277,10 +277,13 @@ the action target or summary counts.
 Acceptance:
 
 - each backend recovery action has one visible, enabled UI action or an explicit no-action state
+- Run actions are unavailable whenever durable runtime state says the subscription is already active
+- backend failures are shown as plain product messages without Electron IPC transport prefixes
 - resolved issues do not appear as active
 - refreshing or reopening preserves the same Health state
 - bulk retry cannot report success when every retry failed
 - download and ingest counters remain truthful while both stages overlap
+- accepted media from an interrupted segment remains included in query totals after the run resumes
 
 Implementation checkpoint:
 

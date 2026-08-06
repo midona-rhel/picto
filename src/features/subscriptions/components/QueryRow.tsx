@@ -20,6 +20,7 @@ export function QueryRow({
   query,
   sites,
   running,
+  runDisabled,
   paused,
   failedCount,
   authWarning,
@@ -35,6 +36,7 @@ export function QueryRow({
   query: SubscriptionQueryInfo;
   sites: SubscriptionSiteInfo[];
   running: boolean;
+  runDisabled: boolean;
   paused: boolean;
   failedCount: number;
   /** Non-null when the site needs auth attention; text shown on the chip. */
@@ -132,7 +134,7 @@ export function QueryRow({
               type="button"
               className={styles.querySmallBtn}
               onClick={() => (paused ? onPause(false) : onRun())}
-              disabled={busy}
+              disabled={busy || runDisabled}
             >
               <IconPlayerPlay size={14} />
             </button>
