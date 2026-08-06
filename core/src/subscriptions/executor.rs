@@ -15,8 +15,10 @@ use crate::subscriptions::runtime_tasks::{
     publish_finished, publish_panic, schedule_progress_snapshot_clear,
 };
 use crate::subscriptions::source_adapter::runner_key_for_site;
-use crate::subscriptions::sync_engine::{SubscriptionSyncEngine, SyncProgress};
-use crate::subscriptions::types::SubscriptionQueryJob;
+use crate::subscriptions::sync_engine::{
+    query_run_completion, SubscriptionSyncEngine, SyncProgress,
+};
+use crate::subscriptions::types::{SubscriptionQueryJob, SubscriptionQueryRunCompletion};
 use crate::types::RunningSubscriptions;
 use tokio_util::sync::CancellationToken;
 
@@ -82,6 +84,7 @@ pub async fn execute_query_job(
                 &format!("Subscription {}", job.subscription_id),
                 &sub_id_str,
                 job.run_id,
+                None,
                 "subscription",
                 Some(job.query_id.to_string()),
                 None,
@@ -147,6 +150,13 @@ pub async fn execute_query_job(
             query.display_name.as_deref(),
         )
     };
+    let query_run_id = match runtime
+        .create_subscription_query_run(job.run_id, job.subscription_id, job.query_id)
+        .await
+    {
+        Ok(query_run_id) => query_run_id,
+        Err(error) => fail_job_and_finalize!(FailureKind::Runtime, error),
+    };
 
     let result = AssertUnwindSafe(run_job_inner(
         db.clone(),
@@ -158,12 +168,13 @@ pub async fn execute_query_job(
         job.clone(),
         group_name.clone(),
         query_name.clone(),
+        query_run_id,
         cancel.clone(),
     ))
     .catch_unwind()
     .await;
 
-    let result = match result {
+    let mut result = match result {
         Ok(result) => result,
         Err(_) => {
             let message = "Subscription executor panicked".to_string();
@@ -184,6 +195,24 @@ pub async fn execute_query_job(
                     Some(message.clone()),
                 )
                 .await;
+            if let Err(error) = runtime
+                .record_subscription_query_source_completion(
+                    query_run_id,
+                    SubscriptionQueryRunCompletion {
+                        status: "failed".to_string(),
+                        failure_kind: Some(FailureKind::Panic.as_str().to_string()),
+                        error_message: Some(message.clone()),
+                        posts_processed: 0,
+                        files_downloaded: 0,
+                        files_skipped: 0,
+                        metadata_validated: 0,
+                        metadata_invalid: 0,
+                    },
+                )
+                .await
+            {
+                tracing::warn!(query_run_id, error = %error, "Failed to persist panicked subscription query");
+            }
             publish_panic(
                 &sub_id_str,
                 &sub.name,
@@ -198,6 +227,7 @@ pub async fn execute_query_job(
                 &sub.name,
                 &sub_id_str,
                 job.run_id,
+                Some(query_run_id),
                 mode,
                 Some(job.query_id.to_string()),
                 Some(query_name),
@@ -207,11 +237,33 @@ pub async fn execute_query_job(
         }
     };
 
+    // An interrupted source is not complete. Leave its query run as `running`
+    // so startup cancels that attempt and replays only the requeued job.
     if result.cancelled && shutdown.is_cancelled() {
         let _ = runtime
             .requeue_interrupted_subscription_query_job(job.job_id)
             .await;
         return;
+    }
+
+    if let Err(error) = runtime
+        .record_subscription_query_source_completion(result.query_run_id, result.completion.clone())
+        .await
+    {
+        result.failure_kind = Some(FailureKind::Runtime.as_str().to_string());
+        result.errors.push(format!(
+            "Failed to persist subscription source completion: {error}"
+        ));
+        let mut failed_completion = result.completion.clone();
+        failed_completion.status = "failed".to_string();
+        failed_completion.failure_kind = result.failure_kind.clone();
+        failed_completion.error_message = result.errors.last().cloned();
+        if let Err(retry_error) = runtime
+            .record_subscription_query_source_completion(result.query_run_id, failed_completion)
+            .await
+        {
+            tracing::warn!(query_run_id = result.query_run_id, error = %retry_error, "Failed to persist subscription source completion after retry");
+        }
     }
 
     let failure_kind = result.failure_kind.clone();
@@ -237,6 +289,12 @@ pub async fn execute_query_job(
                         next_retry_at,
                     )
                     .await;
+                let _ = crate::subscriptions::settlement::settle_query_run(
+                    &runtime,
+                    &running_subs,
+                    result.query_run_id,
+                )
+                .await;
                 return;
             }
         }
@@ -258,6 +316,7 @@ pub async fn execute_query_job(
         &sub.name,
         &sub_id_str,
         job.run_id,
+        Some(result.query_run_id),
         mode,
         Some(job.query_id.to_string()),
         Some(query_name),
@@ -271,10 +330,16 @@ async fn finalize_if_idle(
     subscription_name: &str,
     subscription_id: &str,
     run_id: Option<i64>,
+    query_run_id: Option<i64>,
     mode: &str,
     query_id: Option<String>,
     query_name: Option<String>,
 ) -> Result<(), String> {
+    if let Some(query_run_id) = query_run_id {
+        crate::subscriptions::settlement::settle_query_run(runtime, running_subs, query_run_id)
+            .await?;
+        return Ok(());
+    }
     if let Some(run_id) = run_id {
         crate::subscriptions::settlement::settle_run(runtime, running_subs, run_id).await?;
         return Ok(());
@@ -319,12 +384,33 @@ struct JobOutcome {
     cancelled: bool,
     failure_kind: Option<String>,
     errors: Vec<String>,
+    query_run_id: i64,
+    completion: SubscriptionQueryRunCompletion,
+}
+
+fn job_outcome(query_run_id: i64, progress: SyncProgress) -> JobOutcome {
+    let status = if progress.cancelled {
+        "cancelled"
+    } else if progress.errors.is_empty() && progress.failure_kind.is_none() {
+        "succeeded"
+    } else {
+        "failed"
+    };
+    let completion = query_run_completion(status, &progress);
+    JobOutcome {
+        cancelled: progress.cancelled,
+        failure_kind: progress.failure_kind,
+        errors: progress.errors,
+        query_run_id,
+        completion,
+    }
 }
 
 async fn failed_job_outcome(
     runtime: &crate::subscriptions::runtime_service::SubscriptionRuntimeService<'_>,
     subscription_id: i64,
     query_id: i64,
+    query_run_id: i64,
     failure_kind: FailureKind,
     message: String,
 ) -> JobOutcome {
@@ -337,11 +423,14 @@ async fn failed_job_outcome(
             None,
         )
         .await;
-    JobOutcome {
-        cancelled: false,
-        failure_kind: Some(failure_kind.as_str().to_string()),
-        errors: vec![message],
-    }
+    job_outcome(
+        query_run_id,
+        SyncProgress {
+            failure_kind: Some(failure_kind.as_str().to_string()),
+            errors: vec![message],
+            ..Default::default()
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -355,6 +444,7 @@ async fn run_job_inner(
     job: SubscriptionQueryJob,
     group_name: Option<String>,
     _query_name: String,
+    query_run_id: i64,
     cancel: tokio_util::sync::CancellationToken,
 ) -> JobOutcome {
     let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
@@ -396,6 +486,7 @@ async fn run_job_inner(
                 &runtime,
                 sub.subscription_id,
                 query.query_id,
+                query_run_id,
                 FailureKind::Environment,
                 error,
             )
@@ -422,6 +513,7 @@ async fn run_job_inner(
                     &runtime,
                     sub.subscription_id,
                     query.query_id,
+                    query_run_id,
                     FailureKind::Runtime,
                     error,
                 )
@@ -433,6 +525,7 @@ async fn run_job_inner(
                 &runtime,
                 sub.subscription_id,
                 query.query_id,
+                query_run_id,
                 FailureKind::MissingRetry,
                 format!(
                     "No failed download attempts found for post {} on query {}",
@@ -454,6 +547,7 @@ async fn run_job_inner(
                 &runtime,
                 sub.subscription_id,
                 query.query_id,
+                query_run_id,
                 FailureKind::MissingRetry,
                 format!("No retry URL recorded for post {}", post_id),
             )
@@ -466,6 +560,7 @@ async fn run_job_inner(
         }
         let progress = engine
             .retry_failed_post(
+                query_run_id,
                 sub.subscription_id,
                 query.query_id,
                 &canonical_site_id,
@@ -474,11 +569,7 @@ async fn run_job_inner(
                 cancel,
             )
             .await;
-        return JobOutcome {
-            cancelled: progress.cancelled,
-            failure_kind: progress.failure_kind,
-            errors: progress.errors,
-        };
+        return job_outcome(query_run_id, progress);
     }
 
     let subscription_limit = if query.completed_initial_run {
@@ -489,7 +580,7 @@ async fn run_job_inner(
     let post_limit = effective_query_post_limit(app_settings.sub_batch_size, subscription_limit);
     let progress: SyncProgress = engine
         .sync_query(
-            job.run_id,
+            query_run_id,
             sub.subscription_id,
             query.query_id,
             &query.query_text,
@@ -503,9 +594,5 @@ async fn run_job_inner(
         )
         .await;
 
-    JobOutcome {
-        cancelled: progress.cancelled,
-        failure_kind: progress.failure_kind,
-        errors: progress.errors,
-    }
+    job_outcome(query_run_id, progress)
 }

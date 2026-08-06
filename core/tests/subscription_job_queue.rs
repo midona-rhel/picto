@@ -15,6 +15,45 @@ fn raw_conn(dir: &tempfile::TempDir) -> rusqlite::Connection {
     rusqlite::Connection::open(dir.path().join("library.db")).unwrap()
 }
 
+fn source_completion(
+    status: &str,
+    failure_kind: Option<&str>,
+    error_message: Option<&str>,
+    files: i64,
+) -> SubscriptionQueryRunCompletion {
+    SubscriptionQueryRunCompletion {
+        status: status.to_string(),
+        failure_kind: failure_kind.map(str::to_string),
+        error_message: error_message.map(str::to_string),
+        posts_processed: files,
+        files_downloaded: files,
+        files_skipped: 0,
+        metadata_validated: files,
+        metadata_invalid: 0,
+    }
+}
+
+async fn open_query_fixture(name: &str) -> (tempfile::TempDir, LibraryDatabase, i64, i64) {
+    let (dir, db) = open_db();
+    let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
+    let subscription = runtime
+        .create_subscription(name.to_string(), None, None, None)
+        .await
+        .unwrap();
+    let subscription_id = subscription.id.parse::<i64>().unwrap();
+    let query = runtime
+        .add_subscription_query(
+            subscription.id,
+            "gelbooru".to_string(),
+            Some("search".to_string()),
+            "1girl".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    (dir, db, subscription_id, query.id.parse().unwrap())
+}
+
 #[tokio::test]
 async fn add_subscription_query_infers_query_kind_from_legacy_site() {
     let (_dir, db) = open_db();
@@ -115,11 +154,36 @@ async fn subscription_query_jobs_queue_lease_and_finish() {
             .unwrap(),
         1
     );
+    let query_run_id = runtime
+        .create_subscription_query_run(Some(run_id), subscription_id, query_id)
+        .await
+        .unwrap();
+    runtime
+        .record_subscription_query_source_completion(
+            query_run_id,
+            source_completion("succeeded", None, None, 0),
+        )
+        .await
+        .unwrap();
+    assert!(runtime
+        .finalize_subscription_query_run_if_terminal(query_run_id)
+        .await
+        .unwrap()
+        .is_none());
 
     runtime
         .finish_subscription_query_job(job_id, "succeeded", None, None)
         .await
         .unwrap();
+    assert_eq!(
+        runtime
+            .finalize_subscription_query_run_if_terminal(query_run_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "succeeded"
+    );
     assert_eq!(
         runtime
             .count_active_subscription_query_jobs(subscription_id)
@@ -358,9 +422,22 @@ async fn full_run_derives_its_snapshot_from_durable_work() {
     }
 
     runtime
+        .record_subscription_query_source_completion(query_run_id, {
+            let mut completion = source_completion("succeeded", None, None, 2);
+            completion.metadata_invalid = 1;
+            completion
+        })
+        .await
+        .unwrap();
+    runtime
         .finish_subscription_query_job(job_id, "succeeded", None, None)
         .await
         .unwrap();
+    assert!(runtime
+        .finalize_subscription_query_run_if_terminal(query_run_id)
+        .await
+        .unwrap()
+        .is_none());
     assert!(runtime
         .finalize_subscription_run_if_terminal(run_id)
         .await
@@ -391,25 +468,16 @@ async fn full_run_derives_its_snapshot_from_durable_work() {
     )
     .await
     .unwrap();
-    runtime
-        .finish_subscription_query_run(
-            query_run_id,
-            SubscriptionQueryRunCompletion {
-                status: "succeeded".to_string(),
-                failure_kind: None,
-                error_message: None,
-                posts_processed: 2,
-                files_downloaded: 2,
-                files_skipped: 0,
-                metadata_validated: 2,
-                metadata_invalid: 1,
-            },
-        )
-        .await
-        .unwrap();
     raw_conn(&dir)
         .execute("UPDATE ingest_queue SET status = 'complete'", [])
         .unwrap();
+    let query_run = runtime
+        .finalize_subscription_query_run_if_terminal(query_run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(query_run.status, "succeeded");
+    assert!(query_run.finished_at.is_some());
     db.cleanup_ingest_queue().await.unwrap();
     assert_eq!(
         raw_conn(&dir)
@@ -583,18 +651,9 @@ async fn failed_ingest_fails_an_otherwise_successful_run() {
     drop(conn);
 
     runtime
-        .finish_subscription_query_run(
+        .record_subscription_query_source_completion(
             query_run_id,
-            SubscriptionQueryRunCompletion {
-                status: "succeeded".to_string(),
-                failure_kind: None,
-                error_message: None,
-                posts_processed: 1,
-                files_downloaded: 1,
-                files_skipped: 0,
-                metadata_validated: 1,
-                metadata_invalid: 0,
-            },
+            source_completion("succeeded", None, None, 1),
         )
         .await
         .unwrap();
@@ -602,6 +661,16 @@ async fn failed_ingest_fails_an_otherwise_successful_run() {
         .finish_subscription_query_job(job_id, "succeeded", None, None)
         .await
         .unwrap();
+    let query_run = runtime
+        .finalize_subscription_query_run_if_terminal(query_run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(query_run.status, "failed");
+    assert_eq!(
+        query_run.failure_kind.as_deref(),
+        Some("ingest_queue_failure")
+    );
     let run = runtime
         .finalize_subscription_run_if_terminal(run_id)
         .await
@@ -615,6 +684,39 @@ async fn failed_ingest_fails_an_otherwise_successful_run() {
         Some("queued source disappeared")
     );
     assert_eq!(run.files_downloaded, 1);
+
+    let source_failed_query_run = runtime
+        .create_subscription_query_run(None, subscription_id, query_id)
+        .await
+        .unwrap();
+    raw_conn(&dir)
+        .execute(
+            "INSERT INTO ingest_queue (
+                 queue_kind, source_kind, subscription_id, query_id, query_run_id,
+                 status, last_error, created_at, updated_at
+             ) VALUES ('single', 'subscription', ?1, ?2, ?3,
+                       'failed', 'secondary ingest failure', 'now', 'now')",
+            rusqlite::params![subscription_id, query_id, source_failed_query_run],
+        )
+        .unwrap();
+    runtime
+        .record_subscription_query_source_completion(
+            source_failed_query_run,
+            source_completion("failed", Some("network"), Some("source request failed"), 0),
+        )
+        .await
+        .unwrap();
+    let source_failed = runtime
+        .finalize_subscription_query_run_if_terminal(source_failed_query_run)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(source_failed.status, "failed");
+    assert_eq!(source_failed.failure_kind.as_deref(), Some("network"));
+    assert_eq!(
+        source_failed.error_message.as_deref(),
+        Some("source request failed")
+    );
 }
 
 #[tokio::test]
@@ -653,6 +755,74 @@ async fn query_only_jobs_do_not_create_full_subscription_runs() {
         .await
         .unwrap()
         .is_empty());
+}
+
+#[tokio::test]
+async fn query_run_stays_running_across_restart_until_its_ingest_is_terminal() {
+    let (dir, db, subscription_id, query_id) = open_query_fixture("Query Settlement").await;
+    let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
+    let query_run_id = runtime
+        .create_subscription_query_run(None, subscription_id, query_id)
+        .await
+        .unwrap();
+    raw_conn(&dir)
+        .execute(
+            "INSERT INTO ingest_queue (
+                 queue_kind, source_kind, subscription_id, query_id, query_run_id,
+                 status, created_at, updated_at
+             ) VALUES ('single', 'subscription', ?1, ?2, ?3, 'pending', 'now', 'now')",
+            rusqlite::params![subscription_id, query_id, query_run_id],
+        )
+        .unwrap();
+    runtime
+        .record_subscription_query_source_completion(
+            query_run_id,
+            source_completion("succeeded", None, None, 1),
+        )
+        .await
+        .unwrap();
+
+    let report = runtime
+        .reconcile_subscription_runtime_state()
+        .await
+        .unwrap();
+    assert_eq!(report.query_runs_finalized, 0);
+    let active = runtime
+        .list_subscription_query_runs(query_id, 1)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(active.status, "running");
+    assert!(active.finished_at.is_none());
+    assert_eq!(
+        raw_conn(&dir)
+            .query_row(
+                "SELECT status FROM subscription_query_run WHERE query_run_id = ?1",
+                [query_run_id],
+                |row| row.get::<_, String>(0),
+            )
+            .unwrap(),
+        "settling_succeeded"
+    );
+    assert!(runtime
+        .finalize_subscription_query_run_if_terminal(query_run_id)
+        .await
+        .unwrap()
+        .is_none());
+
+    raw_conn(&dir)
+        .execute(
+            "UPDATE ingest_queue SET status = 'complete' WHERE query_run_id = ?1",
+            [query_run_id],
+        )
+        .unwrap();
+    let settled = runtime
+        .finalize_subscription_query_run_if_terminal(query_run_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(settled.status, "succeeded");
+    assert!(settled.finished_at.is_some());
 }
 
 #[tokio::test]
@@ -954,6 +1124,10 @@ async fn startup_reconcile_requeues_interrupted_jobs_in_the_same_run() {
         .await
         .unwrap();
     runtime.lease_subscription_query_job(job_id).await.unwrap();
+    let interrupted_query_run = runtime
+        .create_subscription_query_run(Some(run_id), subscription_id, query_id)
+        .await
+        .unwrap();
 
     let report = runtime
         .reconcile_subscription_runtime_state()
@@ -961,6 +1135,7 @@ async fn startup_reconcile_requeues_interrupted_jobs_in_the_same_run() {
         .unwrap();
     assert_eq!(report.jobs_requeued, 1);
     assert_eq!(report.orphan_runs_finalized, 0);
+    assert_eq!(report.query_runs_finalized, 1);
 
     assert_eq!(
         runtime
@@ -982,6 +1157,73 @@ async fn startup_reconcile_requeues_interrupted_jobs_in_the_same_run() {
     assert_eq!(queued.len(), 1);
     assert_eq!(queued[0].job_id, job_id);
     assert_eq!(queued[0].run_id, Some(run_id));
+    let query_run = runtime
+        .list_subscription_query_runs(query_id, 1)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_eq!(query_run.query_run_id, interrupted_query_run);
+    assert_eq!(query_run.status, "cancelled");
+}
+
+#[tokio::test]
+async fn startup_reconcile_does_not_replay_a_source_complete_job() {
+    let (_dir, db, subscription_id, query_id) = open_query_fixture("Source Complete").await;
+    let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
+    let run_id = runtime
+        .create_subscription_run(subscription_id)
+        .await
+        .unwrap();
+    let (job_id, _) = runtime
+        .enqueue_subscription_query_job(
+            Some(run_id),
+            subscription_id,
+            query_id,
+            "gelbooru",
+            "query_sync",
+            "subscription",
+            None,
+        )
+        .await
+        .unwrap();
+    runtime.lease_subscription_query_job(job_id).await.unwrap();
+    let query_run_id = runtime
+        .create_subscription_query_run(Some(run_id), subscription_id, query_id)
+        .await
+        .unwrap();
+    runtime
+        .record_subscription_query_source_completion(
+            query_run_id,
+            source_completion("succeeded", None, None, 1),
+        )
+        .await
+        .unwrap();
+
+    let report = runtime
+        .reconcile_subscription_runtime_state()
+        .await
+        .unwrap();
+    assert_eq!(report.source_complete_jobs_finalized, 1);
+    assert_eq!(report.jobs_requeued, 0);
+    let jobs = runtime
+        .list_subscription_query_jobs_for_run(run_id)
+        .await
+        .unwrap();
+    assert_eq!(jobs[0].status, "succeeded");
+    assert!(runtime
+        .list_queued_subscription_query_jobs(10)
+        .await
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        runtime
+            .finalize_subscription_query_run_if_terminal(query_run_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "succeeded"
+    );
 }
 
 #[tokio::test]

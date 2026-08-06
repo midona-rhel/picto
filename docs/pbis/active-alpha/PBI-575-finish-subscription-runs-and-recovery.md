@@ -269,6 +269,12 @@ Progress is scoped to the current run and stays visible until all of that run's 
 imported, reused, or failed. Historical queue rows never inflate current progress, and finishing
 downloads does not imply ingestion is complete.
 
+Backend checkpoint on 2026-08-06: query runs now persist gallery-dl's outcome as an internal
+settling state while their public status remains running. A query remains active across restart
+while any ingest row with its `query_run_id` is pending or running; the executor and ingest worker
+share one idempotent settlement path, and an ingest failure overrides an otherwise successful source
+result. This uses the existing schema and adds no migration or compatibility path.
+
 "Retry all" is a backend operation over all eligible unresolved attempts, not the first 50 or 100
 rows loaded for display. It returns a truthful attempted/queued/failed result, and the UI reports a
 failure instead of silently discarding it. Health history is paginated; display limits never change

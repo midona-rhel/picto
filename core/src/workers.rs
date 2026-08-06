@@ -87,9 +87,32 @@ pub async fn start_workers(
             canonical_db.as_ref(),
             library_root,
         );
-        // A crash can leave a run marked running after all of its durable work
-        // completed. Settle that truth before stale-state repair classifies
-        // genuinely empty runs as interrupted.
+        match runtime.reconcile_subscription_runtime_state().await {
+            Ok(report) => {
+                tracing::info!(?report, "Subscription runtime reconciled at startup")
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Subscription runtime reconcile failed")
+            }
+        }
+        match runtime.list_unsettled_subscription_query_run_ids().await {
+            Ok(query_run_ids) => {
+                for query_run_id in query_run_ids {
+                    if let Err(error) = crate::subscriptions::settlement::settle_query_run(
+                        &runtime,
+                        running_subscriptions,
+                        query_run_id,
+                    )
+                    .await
+                    {
+                        tracing::warn!(query_run_id, error = %error, "Subscription query startup settlement failed");
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Failed to list unsettled subscription query runs")
+            }
+        }
         match runtime.list_running_subscription_run_ids().await {
             Ok(run_ids) => {
                 for run_id in run_ids {
@@ -106,14 +129,6 @@ pub async fn start_workers(
             }
             Err(error) => {
                 tracing::warn!(error = %error, "Failed to list unsettled subscription runs")
-            }
-        }
-        match runtime.reconcile_subscription_runtime_state().await {
-            Ok(report) => {
-                tracing::info!(?report, "Subscription runtime reconciled at startup")
-            }
-            Err(error) => {
-                tracing::warn!(error = %error, "Subscription runtime reconcile failed")
             }
         }
     }

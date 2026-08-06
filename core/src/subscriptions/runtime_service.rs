@@ -14,15 +14,17 @@ use super::archive::{
 use super::runtime_db::{
     add_query_progress, add_subscription_entity, cancel_pending_subscription_jobs_for_subscription,
     count_active_subscription_query_jobs, create_subscription_query_run, create_subscription_run,
-    enqueue_subscription_query_job, finalize_subscription_run_if_terminal,
-    finalize_subscription_run_status, find_unresolved_subscription_download_attempts,
-    finish_subscription_query_job, finish_subscription_query_run, get_subscription_post_collection,
-    lease_subscription_query_job, list_queued_subscription_query_jobs,
-    list_retryable_subscription_download_attempts, list_running_subscription_run_ids,
-    list_subscription_download_attempts, list_subscription_issues, list_subscription_post_members,
-    list_subscription_query_jobs_for_run, list_subscription_query_runs, list_subscription_runs,
-    mark_subscription_download_attempt_retrying, requeue_interrupted_subscription_query_job,
-    reschedule_subscription_query_job, reset_subscription_query_state, reset_subscription_state,
+    enqueue_subscription_query_job, finalize_subscription_query_run_if_terminal,
+    finalize_subscription_run_if_terminal, finalize_subscription_run_status,
+    find_unresolved_subscription_download_attempts, finish_subscription_query_job,
+    get_subscription_post_collection, lease_subscription_query_job,
+    list_queued_subscription_query_jobs, list_retryable_subscription_download_attempts,
+    list_running_subscription_run_ids, list_subscription_download_attempts,
+    list_subscription_issues, list_subscription_post_members, list_subscription_query_jobs_for_run,
+    list_subscription_query_runs, list_subscription_runs,
+    mark_subscription_download_attempt_retrying, record_subscription_query_source_completion,
+    requeue_interrupted_subscription_query_job, reschedule_subscription_query_job,
+    reset_subscription_query_state, reset_subscription_state,
     resolve_subscription_download_attempt, resolve_subscription_issues,
     set_query_completed_initial_run, set_query_resume_state, set_query_terminal_state,
     set_subscription_issue_next_retry, upsert_subscription_download_attempt,
@@ -820,13 +822,34 @@ impl<'a> SubscriptionRuntimeService<'a> {
         })
     }
 
-    pub async fn finish_subscription_query_run(
+    pub async fn list_unsettled_subscription_query_run_ids(&self) -> Result<Vec<i64>, String> {
+        self.db.with_read(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT query_run_id FROM subscription_query_run
+                 WHERE status LIKE 'settling_%'
+                 ORDER BY query_run_id",
+            )?;
+            let rows = stmt.query_map([], |row| row.get(0))?;
+            rows.collect()
+        })
+    }
+
+    pub async fn record_subscription_query_source_completion(
         &self,
         query_run_id: i64,
         completion: SubscriptionQueryRunCompletion,
     ) -> Result<(), String> {
+        self.db.with_write(move |conn| {
+            record_subscription_query_source_completion(conn, query_run_id, &completion)
+        })
+    }
+
+    pub async fn finalize_subscription_query_run_if_terminal(
+        &self,
+        query_run_id: i64,
+    ) -> Result<Option<SubscriptionQueryRunRecord>, String> {
         self.db
-            .with_write(move |conn| finish_subscription_query_run(conn, query_run_id, &completion))
+            .with_write(move |conn| finalize_subscription_query_run_if_terminal(conn, query_run_id))
     }
 
     pub async fn add_query_progress(

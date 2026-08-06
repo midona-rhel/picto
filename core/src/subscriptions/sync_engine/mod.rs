@@ -43,7 +43,7 @@ pub struct SyncProgress {
     pub resume_cursor: Option<String>,
 }
 
-fn query_run_completion(
+pub(crate) fn query_run_completion(
     status: &str,
     progress: &SyncProgress,
 ) -> crate::subscriptions::types::SubscriptionQueryRunCompletion {

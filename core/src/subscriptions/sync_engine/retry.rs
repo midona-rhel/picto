@@ -11,13 +11,13 @@ use crate::subscriptions::source_adapter::{
 
 use super::helpers::cleanup_subscription_temp_root;
 use super::{
-    incomplete_post_detail, query_run_completion, PendingCollection, PendingMember,
-    SubscriptionSyncEngine, SyncProgress,
+    incomplete_post_detail, PendingCollection, PendingMember, SubscriptionSyncEngine, SyncProgress,
 };
 
 impl<'a> SubscriptionSyncEngine<'a> {
     pub async fn retry_failed_post(
         &mut self,
+        query_run_id: i64,
         subscription_id: i64,
         query_id: i64,
         site_id: &str,
@@ -28,6 +28,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         self.current_query_id = Some(query_id);
         self.current_query_name = Some(format!("retry:{expected_post_id}"));
         let mut progress = SyncProgress::default();
+        let query_run_id = Some(query_run_id);
         let sub_id_str = subscription_id.to_string();
         let adapter = GalleryDlSourceAdapter::new(self.runner.binary_path().clone());
 
@@ -68,12 +69,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 rate_limiter.wait_for_slot(&domain).await;
             }
         }
-
-        let query_run_id = self
-            .runtime_service()
-            .create_subscription_query_run(None, subscription_id, query_id)
-            .await
-            .ok();
 
         let opts = RunOptions {
             subscription_id: Some(subscription_id),
@@ -301,22 +296,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     subscription_id,
                     Some(query_id),
                     FailureKind::DownloadFailure,
-                )
-                .await;
-        }
-        if let Some(query_run_id) = query_run_id {
-            let status = if progress.cancelled {
-                "cancelled"
-            } else if progress.errors.is_empty() && run_summary.failed_items.is_empty() {
-                "succeeded"
-            } else {
-                "failed"
-            };
-            let _ = self
-                .runtime_service()
-                .finish_subscription_query_run(
-                    query_run_id,
-                    query_run_completion(status, &progress),
                 )
                 .await;
         }

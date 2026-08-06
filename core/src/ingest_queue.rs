@@ -593,22 +593,6 @@ fn delete_completed_ingest_queues(conn: &Connection) -> rusqlite::Result<usize> 
     )?)
 }
 
-fn subscription_run_id_for_ingest_queue(
-    conn: &Connection,
-    queue_id: i64,
-) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT qr.run_id
-         FROM ingest_queue q
-         JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
-         WHERE q.queue_id = ?1",
-        [queue_id],
-        |row| row.get::<_, Option<i64>>(0),
-    )
-    .optional()
-    .map(Option::flatten)
-}
-
 fn count_retained_sources_under_root(
     conn: &Connection,
     cleanup_root: &str,
@@ -809,13 +793,6 @@ impl LibraryDatabase {
         subscription_id: i64,
     ) -> Result<IngestQueueCounts, String> {
         self.with_read(move |conn| count_ingest_queue_by_subscription(conn, subscription_id))
-    }
-
-    pub async fn subscription_run_id_for_ingest_queue(
-        &self,
-        queue_id: i64,
-    ) -> Result<Option<i64>, String> {
-        self.with_read(move |conn| subscription_run_id_for_ingest_queue(conn, queue_id))
     }
 
     pub async fn list_duplicate_failed_single_queue_candidates(
@@ -1898,24 +1875,19 @@ pub async fn start_worker_loop(
         if result.is_err() {
             release_failed_subscription_archive(&library_root, &queue).await;
         }
-        if let Some(run_id) = db
-            .subscription_run_id_for_ingest_queue(queue.queue_id)
-            .await
-            .ok()
-            .flatten()
-        {
+        if let Some(query_run_id) = queue.query_run_id {
             let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
                 db.as_ref(),
                 &library_root,
             );
-            if let Err(error) = crate::subscriptions::settlement::settle_run(
+            if let Err(error) = crate::subscriptions::settlement::settle_query_run(
                 &runtime,
                 &running_subscriptions,
-                run_id,
+                query_run_id,
             )
             .await
             {
-                warn!(run_id, error = %error, "Failed to settle subscription run after ingest");
+                warn!(query_run_id, error = %error, "Failed to settle subscription query run after ingest");
             }
         }
         if let Err(error) = result {

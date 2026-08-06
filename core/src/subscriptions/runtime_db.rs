@@ -129,6 +129,7 @@ fn map_subscription_post_member_row(
 
 #[derive(Debug, Default)]
 pub struct SubscriptionReconcileReport {
+    pub source_complete_jobs_finalized: usize,
     pub jobs_requeued: usize,
     pub orphan_runs_finalized: usize,
     pub query_runs_finalized: usize,
@@ -150,6 +151,42 @@ pub fn reconcile_stale_subscription_runtime(
     let interrupted = "Interrupted — the app was closed while this run was active";
     let mut report = SubscriptionReconcileReport::default();
 
+    let source_complete_jobs: Vec<(i64, String, Option<String>, Option<String>)> = {
+        let mut stmt = conn.prepare(
+            "SELECT job.job_id, substr(query_run.status, 10),
+                    query_run.failure_kind, query_run.error_message
+             FROM subscription_query_job job
+             JOIN subscription_query_run query_run
+               ON query_run.subscription_id = job.subscription_id
+              AND query_run.query_id = job.query_id
+              AND query_run.run_id IS job.run_id
+              AND query_run.started_at >= job.started_at
+             WHERE job.status = 'running'
+               AND query_run.status LIKE 'settling_%'
+               AND query_run.query_run_id = (
+                   SELECT MAX(candidate.query_run_id)
+                   FROM subscription_query_run candidate
+                   WHERE candidate.subscription_id = job.subscription_id
+                     AND candidate.query_id = job.query_id
+                     AND candidate.run_id IS job.run_id
+                     AND candidate.started_at >= job.started_at
+               )",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for (job_id, status, failure_kind, error_message) in source_complete_jobs {
+        report.source_complete_jobs_finalized += conn.execute(
+            "UPDATE subscription_query_job
+             SET status = ?1, finished_at = ?2,
+                 failure_kind = COALESCE(failure_kind, ?3),
+                 error_message = COALESCE(error_message, ?4)
+             WHERE job_id = ?5 AND status = 'running'",
+            params![status, now, failure_kind, error_message, job_id],
+        )?;
+    }
     report.jobs_requeued = conn.execute(
         "UPDATE subscription_query_job
          SET status = 'queued', started_at = NULL, finished_at = NULL,
@@ -263,6 +300,16 @@ pub fn finalize_subscription_run_if_terminal(
         return Ok(None);
     }
 
+    let active_query_runs: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM subscription_query_run
+         WHERE run_id = ?1 AND finished_at IS NULL",
+        [run_id],
+        |row| row.get(0),
+    )?;
+    if active_query_runs > 0 {
+        return Ok(None);
+    }
+
     let active_ingest: i64 = conn.query_row(
         "SELECT COUNT(*)
          FROM ingest_queue q
@@ -288,7 +335,7 @@ pub fn finalize_subscription_run_if_terminal(
         .optional()?;
     let ingest_failure: Option<String> = conn
         .query_row(
-            "SELECT q.last_error
+            "SELECT COALESCE(q.last_error, 'Subscription ingest failed')
              FROM ingest_queue q
              JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
              WHERE qr.run_id = ?1 AND q.status = 'failed'
@@ -411,27 +458,24 @@ pub fn create_subscription_query_run(
     Ok(conn.last_insert_rowid())
 }
 
-pub fn finish_subscription_query_run(
+pub fn record_subscription_query_source_completion(
     conn: &Connection,
     query_run_id: i64,
     completion: &SubscriptionQueryRunCompletion,
 ) -> rusqlite::Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE subscription_query_run
-         SET finished_at = ?1,
-             status = ?2,
-             failure_kind = ?3,
-             error_message = ?4,
-             posts_processed = ?5,
-             files_downloaded = ?6,
-             files_skipped = ?7,
-             metadata_validated = ?8,
-             metadata_invalid = ?9
-         WHERE query_run_id = ?10",
+         SET status = ?1,
+             failure_kind = ?2,
+             error_message = ?3,
+             posts_processed = ?4,
+             files_downloaded = ?5,
+             files_skipped = ?6,
+             metadata_validated = ?7,
+             metadata_invalid = ?8
+         WHERE query_run_id = ?9 AND status = 'running'",
         params![
-            now,
-            completion.status,
+            format!("settling_{}", completion.status),
             completion.failure_kind,
             completion.error_message,
             completion.posts_processed,
@@ -445,6 +489,116 @@ pub fn finish_subscription_query_run(
     Ok(())
 }
 
+pub fn finalize_subscription_query_run_if_terminal(
+    conn: &Connection,
+    query_run_id: i64,
+) -> rusqlite::Result<Option<SubscriptionQueryRunRecord>> {
+    let state: Option<(
+        String,
+        Option<String>,
+        Option<String>,
+        bool,
+        bool,
+        Option<String>,
+    )> = conn
+        .query_row(
+            "SELECT query_run.status, query_run.failure_kind, query_run.error_message,
+                    EXISTS (
+                        SELECT 1 FROM subscription_query_job job
+                        WHERE job.subscription_id = query_run.subscription_id
+                          AND job.query_id = query_run.query_id
+                          AND job.run_id IS query_run.run_id
+                          AND job.status = 'running'
+                          AND job.started_at IS NOT NULL
+                          AND job.started_at <= query_run.started_at
+                    ),
+                    EXISTS (
+                        SELECT 1 FROM ingest_queue queue
+                        WHERE queue.query_run_id = query_run.query_run_id
+                          AND queue.status IN ('pending', 'running')
+                    ),
+                    (
+                        SELECT COALESCE(queue.last_error, 'Subscription ingest failed')
+                        FROM ingest_queue queue
+                        WHERE queue.query_run_id = query_run.query_run_id
+                          AND queue.status = 'failed'
+                        ORDER BY queue.queue_id DESC LIMIT 1
+                    )
+             FROM subscription_query_run query_run
+             WHERE query_run.query_run_id = ?1
+               AND query_run.status LIKE 'settling_%'",
+            [query_run_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((
+        settling_status,
+        source_failure_kind,
+        source_error_message,
+        active_source_job,
+        active_ingest,
+        ingest_failure,
+    )) = state
+    else {
+        return Ok(None);
+    };
+    if active_source_job || active_ingest {
+        return Ok(None);
+    }
+    let source_status = settling_status
+        .strip_prefix("settling_")
+        .unwrap_or("failed")
+        .to_string();
+    let (status, failure_kind, error_message) = if source_status == "succeeded" {
+        if let Some(error) = ingest_failure {
+            (
+                "failed".to_string(),
+                Some(FailureKind::IngestQueueFailure.as_str().to_string()),
+                Some(error),
+            )
+        } else {
+            (source_status, source_failure_kind, source_error_message)
+        }
+    } else {
+        (source_status, source_failure_kind, source_error_message)
+    };
+    let now = chrono::Utc::now().to_rfc3339();
+    let changed = conn.execute(
+        "UPDATE subscription_query_run
+         SET finished_at = ?1, status = ?2, failure_kind = ?3, error_message = ?4
+         WHERE query_run_id = ?5 AND status = ?6",
+        params![
+            now,
+            status,
+            failure_kind,
+            error_message,
+            query_run_id,
+            settling_status
+        ],
+    )?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT query_run_id, run_id, subscription_id, query_id, started_at, finished_at,
+                status, failure_kind, error_message, posts_processed,
+                files_downloaded, files_skipped, metadata_validated, metadata_invalid
+         FROM subscription_query_run WHERE query_run_id = ?1",
+        [query_run_id],
+        map_subscription_query_run_row,
+    )
+    .optional()
+}
+
 pub fn list_subscription_query_runs(
     conn: &Connection,
     query_id: i64,
@@ -452,7 +606,8 @@ pub fn list_subscription_query_runs(
 ) -> rusqlite::Result<Vec<SubscriptionQueryRunRecord>> {
     let mut stmt = conn.prepare_cached(
         "SELECT query_run_id, run_id, subscription_id, query_id, started_at, finished_at,
-                status, failure_kind, error_message, posts_processed,
+                CASE WHEN status LIKE 'settling_%' THEN 'running' ELSE status END,
+                failure_kind, error_message, posts_processed,
                 files_downloaded, files_skipped, metadata_validated, metadata_invalid
          FROM subscription_query_run
          WHERE query_id = ?1
