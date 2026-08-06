@@ -8,7 +8,6 @@
 //! Key source files consulted:
 //! - `gallery_dl/option.py` — CLI flag definitions (argparse)
 //! - `gallery_dl/job.py` — DownloadJob, skip/abort logic (lines 621-632)
-//! - `gallery_dl/postprocessor/metadata.py` — sidecar JSON writer
 //! - `gallery_dl/archive.py` — SQLite download archive
 //! - `gallery_dl/extractor/danbooru.py` — tag_string_* fields
 //! - `gallery_dl/extractor/e621.py` — nested tags dict
@@ -91,7 +90,9 @@ struct BridgeEvent {
     #[serde(default)]
     file_path: Option<String>,
     #[serde(default)]
-    metadata: Option<ParsedMetadata>,
+    metadata: Option<serde_json::Value>,
+    #[serde(default)]
+    item_url: Option<String>,
 }
 
 #[derive(Default)]
@@ -279,10 +280,13 @@ impl GalleryDlRunner {
                         tracing::warn!(line = trimmed, "gallery-dl bridge: invalid NDJSON event");
                         continue;
                     };
+                    let metadata = event.metadata.as_ref().map(|raw| {
+                        metadata::parse_metadata_with_url(raw, event.item_url.as_deref())
+                    });
                     match event.event.as_str() {
                         "item_discovered" => {
                             stats.discovered_items += 1;
-                            if let Some(metadata) = event.metadata {
+                            if let Some(metadata) = metadata {
                                 if let Some(post_id) = metadata.post_id {
                                     stats.discovered_post_ids.insert(post_id);
                                 }
@@ -292,7 +296,7 @@ impl GalleryDlRunner {
                             let Some(file_path) = event.file_path else {
                                 continue;
                             };
-                            let Some(metadata) = event.metadata else {
+                            let Some(metadata) = metadata else {
                                 continue;
                             };
                             log_bridge_item_intake(&metadata);
@@ -314,14 +318,14 @@ impl GalleryDlRunner {
                         }
                         "item_skipped_archive" => {
                             stats.skipped_archive_items += 1;
-                            if let Some(metadata) = event.metadata {
+                            if let Some(metadata) = metadata {
                                 if let Some(post_id) = metadata.post_id {
                                     stats.discovered_post_ids.insert(post_id);
                                 }
                             }
                         }
                         "item_failed_final" => {
-                            if let Some(metadata) = event.metadata {
+                            if let Some(metadata) = metadata {
                                 if let Some(post_id) = metadata.post_id.clone() {
                                     stats.discovered_post_ids.insert(post_id);
                                 }

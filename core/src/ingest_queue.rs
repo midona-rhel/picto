@@ -1186,21 +1186,6 @@ pub async fn enqueue_watch_path(
     Ok(())
 }
 
-fn subscription_item_key(metadata: &ParsedMetadata) -> Option<String> {
-    metadata.item_key.clone().or_else(|| {
-        let category = metadata.category.as_deref()?;
-        let target = metadata
-            .post_id
-            .as_deref()
-            .or(metadata.canonical_post_url.as_deref())
-            .or(metadata.media_url.as_deref())?;
-        Some(format!(
-            "{category}:{target}:{}",
-            metadata.page_num.unwrap_or(0)
-        ))
-    })
-}
-
 async fn persist_subscription_post_member(
     canonical_db: &LibraryDatabase,
     subscription_id: i64,
@@ -1226,8 +1211,9 @@ async fn persist_subscription_post_member(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown");
-    let item_key = subscription_item_key(metadata)
-        .unwrap_or_else(|| format!("{site_id}:{post_id}:{}", metadata.page_num.unwrap_or(0)));
+    let Some(item_key) = metadata.item_key.clone() else {
+        return;
+    };
     let _ = runtime
         .upsert_subscription_post_member(
             crate::subscriptions::types::OwnedSubscriptionPostMemberUpsert {
@@ -1357,7 +1343,7 @@ async fn process_single_queue(
         queue.subscription_id,
         payload.subscription_metadata.as_ref(),
     ) {
-        if let Some(item_key) = subscription_item_key(metadata) {
+        if let Some(item_key) = metadata.item_key.clone() {
             let runtime = crate::state::get_state()
                 .ok()
                 .map(|state| SubscriptionRuntimeService::new(db, &state.library_root));
@@ -1627,7 +1613,7 @@ async fn process_collection_queue(
             };
             metadata.post_id = Some(context.post_id.to_string());
             metadata.category = Some(context.category.to_string());
-            if let Some(item_key) = subscription_item_key(&metadata) {
+            if let Some(item_key) = metadata.item_key.clone() {
                 if let Ok(state) = crate::state::get_state() {
                     let runtime = SubscriptionRuntimeService::new(db, &state.library_root);
                     let _ = runtime

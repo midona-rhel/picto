@@ -7,21 +7,6 @@ use crate::subscriptions::import_policy::preferred_import_name;
 use crate::subscriptions::source_adapter::ParsedMetadata;
 use crate::tags::logging::{preview_tag_strings, summarize_tag_strings};
 
-pub(super) fn metadata_item_key(metadata: &ParsedMetadata) -> Option<String> {
-    metadata.item_key.clone().or_else(|| {
-        let category = metadata.category.as_deref()?;
-        let target = metadata
-            .post_id
-            .as_deref()
-            .or(metadata.canonical_post_url.as_deref())
-            .or(metadata.media_url.as_deref())?;
-        Some(format!(
-            "{category}:{target}:{}",
-            metadata.page_num.unwrap_or(0)
-        ))
-    })
-}
-
 pub(super) fn build_subscription_ingest_request(
     subscription_id: i64,
     file_path: &Path,

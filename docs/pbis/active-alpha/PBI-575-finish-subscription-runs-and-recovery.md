@@ -54,11 +54,12 @@ Already working and retained:
 - interleaved post assembly that queues complete posts without requiring contiguous source events
 - source rating classification carried through canonical ingest as a `rating:` tag while Picto's
   numeric media rating remains user-owned
+- Rust-owned metadata normalization for live bridge events and validation fixtures;
+  Python only serializes raw gallery-dl values
 
 Release gaps:
 
 - the source picker advertises sites without source-specific metadata validation or live proof
-- Python and Rust both participate in metadata normalization instead of having one clear owner
 - the real create/run/fail/retry/import flow has not been proved in Electron
 
 ## Phase execution rules

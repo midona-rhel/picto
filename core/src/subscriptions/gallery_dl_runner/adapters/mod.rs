@@ -4,7 +4,6 @@ mod fallback;
 mod pixiv;
 mod twitter;
 
-use super::sites::canonical_site_id;
 use serde_json::Value;
 
 pub(super) trait SiteAdapter: Sync {
@@ -13,31 +12,38 @@ pub(super) trait SiteAdapter: Sync {
         let _ = json;
         None
     }
-    fn collect_source_urls(&self, json: &Value) -> Vec<String> {
-        let mut urls = Vec::new();
-        push_unique_url(&mut urls, json.get("file_url").and_then(|v| v.as_str()));
-        push_unique_url(&mut urls, json.get("url").and_then(|v| v.as_str()));
-        push_unique_url(&mut urls, json.get("source").and_then(|v| v.as_str()));
-        urls
-    }
 }
 
-pub(super) fn push_unique_url(urls: &mut Vec<String>, value: Option<&str>) {
-    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+pub(super) fn append_tag_values(tags: &mut Vec<(String, String)>, namespace: &str, value: &Value) {
+    if let Some(raw) = value.as_str() {
+        tags.extend(
+            raw.split_whitespace()
+                .map(|tag| (namespace.to_string(), tag.to_string())),
+        );
+        return;
+    }
+    let Some(values) = value.as_array() else {
         return;
     };
-    if !urls.iter().any(|existing| existing == value) {
-        urls.push(value.to_string());
+    for value in values {
+        let tag = value
+            .as_str()
+            .or_else(|| value.get("name").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|tag| !tag.is_empty());
+        if let Some(tag) = tag {
+            tags.push((namespace.to_string(), tag.to_string()));
+        }
     }
 }
 
-/// Select the adapter for a gallery-dl sidecar JSON by its `category` field.
+/// Select the adapter for raw gallery-dl metadata by its `category` field.
 pub(super) fn adapter_for_json(json: &Value) -> &'static dyn SiteAdapter {
     let cat = json
         .get("category")
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
-        .map(canonical_site_id)
+        .map(super::metadata::canonical_metadata_category)
         .unwrap_or("");
 
     match cat {

@@ -80,7 +80,7 @@ pub static SITES: &[SiteEntry] = &[
         supports_account: true,
         auth_supported: true,
         auth_required_for_full_access: true,
-        auth_strictly_required: false,
+        auth_strictly_required: true,
         manual_credential_types: API_KEY_MANUAL_CREDENTIAL_TYPES,
         oauth_provider: None,
     },

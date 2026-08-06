@@ -4,7 +4,6 @@ use crate::subscriptions::gallery_dl_runner::FailureKind;
 use crate::subscriptions::source_adapter::{FailedDownloadedItem, ParsedMetadata};
 use crate::subscriptions::types::OwnedSubscriptionDownloadAttemptUpsert;
 
-use super::helpers::metadata_item_key;
 use super::SubscriptionSyncEngine;
 
 impl<'a> SubscriptionSyncEngine<'a> {
@@ -30,8 +29,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or(site_id);
-        let item_key = metadata_item_key(metadata)
-            .unwrap_or_else(|| format!("{category}:{post_id}:{}", metadata.page_num.unwrap_or(0)));
+        let Some(item_key) = metadata.item_key.clone() else {
+            return;
+        };
         let _ = self
             .runtime_service()
             .upsert_subscription_post_member(
@@ -59,7 +59,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
     ) {
         let next_retry_at = (Utc::now() + Duration::minutes(15)).to_rfc3339();
         let metadata = &failed.metadata;
-        let item_key = metadata_item_key(metadata)
+        let item_key = metadata
+            .item_key
+            .clone()
             .unwrap_or_else(|| format!("unknown:{}:{}", query_id, Utc::now().timestamp_millis()));
         let _ = self
             .runtime_service()
