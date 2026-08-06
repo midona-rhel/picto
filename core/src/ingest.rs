@@ -154,11 +154,36 @@ pub fn metadata_notes_text(metadata: &ParsedMetadata) -> Option<String> {
 }
 
 pub fn normalize_subscription_tags(metadata: &ParsedMetadata) -> Vec<String> {
-    metadata
+    let mut tags: Vec<String> = metadata
         .tags
         .iter()
         .map(|(ns, st)| normalize::combine_tag(ns, st))
-        .collect()
+        .collect();
+    if let Some(rating) = normalize_source_rating(metadata) {
+        let rating_tag = normalize::combine_tag("rating", rating);
+        if !tags.contains(&rating_tag) {
+            tags.push(rating_tag);
+        }
+    }
+    tags
+}
+
+fn normalize_source_rating(metadata: &ParsedMetadata) -> Option<&'static str> {
+    let rating = metadata.rating.as_deref()?.trim().to_ascii_lowercase();
+    let canonical = match rating.as_str() {
+        "g" | "general" => "general",
+        "s" => match metadata.category.as_deref() {
+            Some("e621") => "safe",
+            Some("danbooru" | "gelbooru") => "sensitive",
+            _ => "s",
+        },
+        "safe" => "safe",
+        "sensitive" => "sensitive",
+        "q" | "questionable" => "questionable",
+        "e" | "explicit" => "explicit",
+        _ => return None,
+    };
+    Some(canonical)
 }
 
 fn build_import_options(request: &SingleIngestRequest) -> ImportOptions {
@@ -697,6 +722,32 @@ mod tests {
         assert!(normalized.iter().any(|tag| tag == "creator:foo_artist"));
     }
 
+    #[test]
+    fn normalize_subscription_tags_preserves_source_rating_as_a_tag() {
+        for (category, rating, expected) in [
+            ("e621", "s", "rating:safe"),
+            ("danbooru", "s", "rating:sensitive"),
+            ("gelbooru", "q", "rating:questionable"),
+        ] {
+            let metadata = ParsedMetadata {
+                rating: Some(rating.to_string()),
+                category: Some(category.to_string()),
+                ..Default::default()
+            };
+            assert_eq!(normalize_subscription_tags(&metadata), vec![expected]);
+        }
+
+        let existing = ParsedMetadata {
+            tags: vec![("rating".to_string(), "explicit".to_string())],
+            rating: Some("e".to_string()),
+            ..Default::default()
+        };
+        assert_eq!(
+            normalize_subscription_tags(&existing),
+            vec!["rating:explicit"]
+        );
+    }
+
     fn open_test_library() -> (TempDir, LibraryDatabase, BlobStore, PathBuf) {
         let tmp = TempDir::new().expect("tempdir");
         let library_root = tmp.path().join("library");
@@ -920,7 +971,10 @@ mod tests {
 
         let mut reimport = request_for_path(&source_path);
         reimport.initial_status = 1;
-        reimport.tag_strings = vec!["general:incoming".to_string()];
+        reimport.tag_strings = vec![
+            "general:incoming".to_string(),
+            "rating:questionable".to_string(),
+        ];
         reimport.source_urls = vec![
             "https://existing.example/post".to_string(),
             "https://incoming.example/post".to_string(),
@@ -946,6 +1000,9 @@ mod tests {
         assert!(tags
             .iter()
             .any(|tag| tag.namespace == "general" && tag.subtag == "incoming"));
+        assert!(tags
+            .iter()
+            .any(|tag| tag.namespace == "rating" && tag.subtag == "questionable"));
         db.with_read(|conn| {
             let (status, name, notes, rating, urls_json, date_created): (
                 i64,

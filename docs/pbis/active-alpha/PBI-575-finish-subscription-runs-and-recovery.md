@@ -51,11 +51,12 @@ Already working and retained:
 - atomic stop, reset, and definition-only delete behavior
 - indexed lookup of unresolved retry attempts across all history
 - rebuilt subscription workspace with Health and History views
+- interleaved post assembly that queues complete posts without requiring contiguous source events
+- source rating classification carried through canonical ingest as a `rating:` tag while Picto's
+  numeric media rating remains user-owned
 
 Release gaps:
 
-- pending collection flushing assumes post assets are contiguous and can strand interleaved posts
-- parsed rating metadata is not carried through canonical ingest
 - the source picker advertises sites without source-specific metadata validation or live proof
 - Python and Rust both participate in metadata normalization instead of having one clear owner
 - removed source ids remain in active bridge, adapter, policy, or autocomplete code
@@ -211,6 +212,11 @@ ingest evidence remains until its run snapshot exists. A cursor advances only af
 batch is durably enqueued; failed handoffs are removed from gallery-dl's archive for retry. Missing
 queue input is a visible failure, not fake reuse. This changes only the current pre-1.0 schema; no
 migration or compatibility path is added. Live reset/re-run and interrupted-run proof remain.
+
+Source content ratings now use the shared tag path for single items, collection children, and
+exact-hash reuse. Source-specific shorthand is normalized where its meaning is known (`s` means
+safe on e621 and sensitive on Danbooru/Gelbooru); it is never written into Picto's numeric user
+rating field.
 
 Trace create, run, query run, retry, stop, reset, issue read, and ingest handoff from dispatch to
 `SubscriptionRuntimeService`. Consolidate construction only where it removes duplicate behavior.
