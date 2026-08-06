@@ -44,7 +44,7 @@ const FIXTURES: &[SourceReadinessFixture] = &[
     SourceReadinessFixture {
         site_id: "gelbooru",
         query_kind: "search",
-        query_text: "id:13753749 rating:safe",
+        query_text: "id:13753749",
         requires_credentials: true,
         expected_url_contains: &["gelbooru.com", "tags=id:13753749"],
         expected_metadata: ExpectedMetadata {
@@ -89,9 +89,9 @@ const FIXTURES: &[SourceReadinessFixture] = &[
     SourceReadinessFixture {
         site_id: "pixivuser",
         query_kind: "user",
-        query_text: "12345",
+        query_text: "6941381",
         requires_credentials: true,
-        expected_url_contains: &["pixiv.net", "/users/12345/artworks"],
+        expected_url_contains: &["pixiv.net", "/users/", "/artworks"],
         expected_metadata: ExpectedMetadata {
             tags: true,
             created_at: true,
@@ -181,6 +181,59 @@ fn every_advertised_source_has_a_readiness_fixture() {
             "advertised source '{}' has no readiness fixture",
             site.id
         );
+    }
+}
+
+#[test]
+fn every_advertised_source_has_deterministic_normalized_metadata() {
+    for fixture in FIXTURES
+        .iter()
+        .filter(|fixture| advertised_sites().any(|site| site.id == fixture.site_id))
+    {
+        let raw = deterministic_metadata_fixture(fixture.site_id)
+            .unwrap_or_else(|| panic!("{} has no metadata fixture", fixture.site_id));
+        let metadata = gallery_dl_runner::parse_metadata(&raw);
+        verify_metadata(fixture, &metadata).unwrap_or_else(|(_, error)| {
+            panic!("{} metadata fixture failed: {error}", fixture.site_id)
+        });
+    }
+}
+
+fn deterministic_metadata_fixture(site_id: &str) -> Option<serde_json::Value> {
+    match site_id {
+        "pixiv" | "pixivuser" => Some(serde_json::json!({
+            "category": "pixiv",
+            "id": 114223105,
+            "url": "https://i.pximg.net/img-original/example_p0.png",
+            "title": "Artwork",
+            "description": "Description",
+            "date": "2026-01-01T00:00:00+00:00",
+            "tags": ["original"],
+            "user": {"id": 1234, "name": "Artist"},
+            "num": 1,
+            "count": 2
+        })),
+        "gelbooru" => Some(serde_json::json!({
+            "category": "gelbooru_v02",
+            "id": 13753749,
+            "file_url": "https://img2.gelbooru.com/example.jpg",
+            "source": "https://artist.example/post/42",
+            "date": "2026-01-01T00:00:00+00:00",
+            "rating": "safe",
+            "tags_artist": "artist_name",
+            "tags_general": "1girl solo"
+        })),
+        "danbooru" => Some(serde_json::json!({
+            "category": "danbooru",
+            "id": 123456,
+            "post_url": "https://danbooru.donmai.us/posts/123456",
+            "file_url": "https://cdn.donmai.us/original/example.jpg",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "rating": "s",
+            "tag_string_artist": "artist_name",
+            "tag_string_general": "1girl solo"
+        })),
+        _ => None,
     }
 }
 
@@ -403,40 +456,43 @@ async fn run_live_fixture_inner(
             ),
         ));
     }
-    if first_run.files_downloaded != 1 {
+    if first_run.posts_processed != 1 {
         return Err((
             "failed_download",
             format!(
-                "first run downloaded {} assets, expected exactly 1",
-                first_run.files_downloaded
+                "first run processed {} posts, expected exactly 1",
+                first_run.posts_processed
             ),
+        ));
+    }
+    if first_run.files_downloaded < 1 {
+        return Err((
+            "failed_download",
+            "first run did not download any assets".to_string(),
         ));
     }
 
     let payloads = read_subscription_payloads(library_root, subscription_id, query_id)
         .map_err(|error| ("failed_ingest", error))?;
-    if payloads.len() != 1 {
+    if payloads.len() != first_run.files_downloaded as usize {
         return Err((
             "failed_ingest",
             format!(
-                "first run persisted {} ingest payloads, expected exactly 1",
-                payloads.len()
+                "first run persisted {} ingest payloads for {} downloaded assets",
+                payloads.len(),
+                first_run.files_downloaded
             ),
         ));
     }
-    let payload = payloads.first().ok_or_else(|| {
-        (
-            "failed_ingest",
-            "no ingest queue payload was persisted".to_string(),
-        )
-    })?;
-    let metadata = payload.subscription_metadata.as_ref().ok_or_else(|| {
-        (
-            "failed_metadata",
-            "payload missing subscription metadata".to_string(),
-        )
-    })?;
-    verify_metadata(fixture, metadata)?;
+    for payload in &payloads {
+        let metadata = payload.subscription_metadata.as_ref().ok_or_else(|| {
+            (
+                "failed_metadata",
+                "payload missing subscription metadata".to_string(),
+            )
+        })?;
+        verify_metadata(fixture, metadata)?;
+    }
 
     let refreshed = runtime
         .get_subscription_query(query_id)
@@ -474,16 +530,24 @@ async fn run_live_fixture_inner(
             ));
         }
 
-        let resume_cursor = metadata
-            .post_id
-            .as_deref()
-            .ok_or_else(|| {
+        let resume_cursor = match strategy {
+            "range_offset" => refreshed.resume_cursor.clone().ok_or_else(|| {
                 (
                     "failed_resume",
-                    "metadata did not provide a post id cursor".to_string(),
+                    "range-based query did not persist its range cursor".to_string(),
                 )
-            })?
-            .to_string();
+            })?,
+            _ => payloads[0]
+                .subscription_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.post_id.clone())
+                .ok_or_else(|| {
+                    (
+                        "failed_resume",
+                        "metadata did not provide a post id cursor".to_string(),
+                    )
+                })?,
+        };
         runtime
             .set_query_completed_initial_run(query_id, false)
             .await

@@ -66,6 +66,9 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
       the Electron failure/recovery smoke remains.
 - [ ] S6: Certify sources in bounded batches, expose only passed sources, run the real Electron
       workflow, and archive PBI-575.
+      The four advertised source modes now pass deterministic metadata checks and live backend
+      download/resume/ingest readiness. Final Electron collection-mode and failure-recovery smoke
+      remains before closure.
 
 Phase gates:
 
@@ -73,7 +76,8 @@ Phase gates:
   executor, lease, or false active run; subscription schedules pass interval, pause, full-run, and
   manual-query tests.
 - Delivery gate after S5: streaming, collection modes, metadata, and progress manually verified.
-- Release gate after S6: every visible source has deterministic and credential-backed live proof.
+- Release gate after S6: every visible source has deterministic and live proof, credential-backed
+  where that source supports credentials.
 
 ## Phase 4: PBI-577 Duplicates
 

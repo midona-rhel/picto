@@ -77,7 +77,7 @@ pub static SITES: &[SiteEntry] = &[
         url_template: "https://gelbooru.com/index.php?page=post&s=list&tags={query}",
         example_query: "1girl solo",
         supports_query: true,
-        supports_account: true,
+        supports_account: false,
         auth_supported: true,
         auth_required_for_full_access: true,
         auth_strictly_required: true,

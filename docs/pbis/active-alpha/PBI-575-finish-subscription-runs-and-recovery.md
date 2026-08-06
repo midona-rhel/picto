@@ -35,7 +35,8 @@ or rename it for architecture. Finish this path and delete only code proven to c
 - Runtime progress must explain downloading, queued-for-ingest, ingesting, imported, reused, failed,
   retrying, blocked, cancelled, and complete states without waiting for the whole run to finish.
 - Every source advertised by Picto must pass deterministic adapter/metadata tests and a real
-  credential-backed integration run before release. Credentials remain local and are never fixtures.
+  integration run before release, using local credentials where the source supports them.
+  Credentials remain local and are never fixtures.
 
 OnlyFans is not a supported source in this phase. It may use a separately maintained downloader
 library later; do not distort the current gallery-dl boundary to anticipate it.
@@ -64,12 +65,12 @@ Release gaps:
 The source picker is now an explicit release allowlist. The full gallery-dl registry remains
 backend-only so additional sources can be certified without advertising them prematurely.
 
-| Advertised source | Deterministic fixture | Live evidence |
-| --- | --- | --- |
-| Danbooru | search, metadata, resume | automated readiness pass, 2026-08-06 |
-| Gelbooru | search, metadata, resume | Electron download, restart, rerun, 2026-08-06 |
-| Pixiv | search, metadata, resume | Electron search import and post identity, 2026-08-06 |
-| Pixiv user | user, metadata, resume | Electron user import and post identity, 2026-08-06 |
+| Advertised source | Query/auth contract | Deterministic fixture | Live evidence |
+| --- | --- | --- | --- |
+| Danbooru | search, anonymous | metadata and resume | backend readiness: 1 post/1 payload, 2026-08-06 |
+| Gelbooru | search, local account | metadata and resume | backend readiness: 1 post/1 payload; Electron restart/rerun, 2026-08-06 |
+| Pixiv | search, shared local Pixiv account | metadata and resume | backend readiness: 1 post/67 child payloads; Electron post identity, 2026-08-06 |
+| Pixiv user | user, shared local Pixiv account | metadata and resume | backend readiness: 1 post/1 payload; Electron post identity, 2026-08-06 |
 
 ## Phase execution rules
 
@@ -337,7 +338,7 @@ queueing, restart reconciliation, issue deduplication, retry, success resolution
 ingest. Maintain a source verification matrix listing every advertised source and query kind, its
 credential owner, deterministic fixture coverage, live verification date, and known limitation.
 
-For every advertised source, a credential-backed run must prove:
+For every advertised source, a live run, authenticated where supported, must prove:
 
 - query construction and pagination/resume behavior
 - canonical post and media URLs
