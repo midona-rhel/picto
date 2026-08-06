@@ -140,7 +140,7 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
                 .filter(|s| !s.is_empty())
         })
         .or_else(|| {
-            // Kemono/Coomer posts may use "subject" instead of "title"
+            // Coomer posts may use "subject" instead of "title".
             json.get("subject")
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())

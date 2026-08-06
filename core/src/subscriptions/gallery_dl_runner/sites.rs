@@ -100,8 +100,6 @@ pub static SITES: &[SiteEntry] = &[
         manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
-    // 3dbooru (behoimi.org) removed 2026-07: host unreachable (connection
-    // timeout on http/https, 100% packet loss) — site appears dead.
     SiteEntry {
         id: "artstation",
         domain: "artstation.com",
@@ -267,8 +265,6 @@ pub static SITES: &[SiteEntry] = &[
         manual_credential_types: GENERIC_MANUAL_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
-    // kemono (kemono.cr) removed 2026-07: file servers down since ~April 2026,
-    // site serves previews only and is likely dying. Pawchive is the replacement.
     SiteEntry {
         id: "coomer",
         domain: "coomer.st",
@@ -460,7 +456,6 @@ pub fn canonical_site_id(id: &str) -> &str {
         "e621.net" => "e621",
         "furaffinity.net" => "furaffinity",
         "yande.re" => "yandere",
-        "kemono.party" | "kemono.su" | "kemonoparty" => "kemono",
         "coomer.party" | "coomer.su" | "comerparty" | "coomerparty" => "coomer",
         "pawchive.pw" | "pawchive.st" => "pawchive",
         "baraag.net" => "baraag",
@@ -475,7 +470,6 @@ pub fn credential_site_aliases(id: &str) -> &'static [&'static str] {
         "e621" => &["e621.net"],
         "furaffinity" => &["furaffinity.net"],
         "yandere" => &["yande.re"],
-        "kemono" => &["kemono.party", "kemono.su", "kemonoparty"],
         "coomer" => &["coomer.party", "coomer.su", "comerparty", "coomerparty"],
         "pawchive" => &["pawchive.pw", "pawchive.st"],
         "baraag" => &["baraag.net"],

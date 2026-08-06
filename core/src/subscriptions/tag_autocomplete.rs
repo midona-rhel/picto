@@ -48,7 +48,6 @@ fn autocomplete_style(site_id: &str) -> Option<(AutocompleteStyle, &'static str)
         "safebooru" => Some((AutocompleteStyle::GelbooruV02, "https://safebooru.org")),
         "yandere" => Some((AutocompleteStyle::Moebooru, "https://yande.re")),
         "konachan" => Some((AutocompleteStyle::Moebooru, "https://konachan.com")),
-        "3dbooru" => Some((AutocompleteStyle::Moebooru, "https://3dbooru.org")),
         _ => None,
     }
 }

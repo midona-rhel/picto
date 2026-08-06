@@ -41,8 +41,8 @@ pub(super) fn adapter_for_json(json: &Value) -> &'static dyn SiteAdapter {
         .unwrap_or("");
 
     match cat {
-        "danbooru" | "gelbooru" | "rule34" | "3dbooru" | "sankaku" | "idolcomplex"
-        | "safebooru" | "yandere" | "konachan" => &danbooru::ADAPTER,
+        "danbooru" | "gelbooru" | "rule34" | "sankaku" | "idolcomplex" | "safebooru"
+        | "yandere" | "konachan" => &danbooru::ADAPTER,
         "e621" | "e926" => &e621::ADAPTER,
         "twitter" => &twitter::ADAPTER,
         "pixiv" | "pixivuser" => &pixiv::ADAPTER,

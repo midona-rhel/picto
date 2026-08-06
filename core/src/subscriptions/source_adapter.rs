@@ -33,7 +33,7 @@ pub fn infer_query_kind(site_id: &str) -> &'static str {
         "fantia" => "fanclub",
         "tumblr" => "blog",
         other => match site_by_id(other) {
-            // Account-only sites (kemono, coomer, pawchive, webtoons, ...)
+            // Account-only sites (coomer, pawchive, webtoons, ...)
             // only validate as "user" — "search" would fail validate_query_kind.
             Some(site) if site.supports_account && !site.supports_query => "user",
             _ => "search",

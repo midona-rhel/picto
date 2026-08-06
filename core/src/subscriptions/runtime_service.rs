@@ -763,8 +763,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
             rows.collect()
         })?;
         for (query_id, site_id, kind) in kinds {
-            // Queries for removed sites (e.g. kemono) are left untouched — they
-            // fail at run time with "Unknown site", which is the right error.
+            // Queries for removed sites are left untouched and fail clearly at run time.
             if crate::subscriptions::gallery_dl_runner::site_by_id(&site_id).is_none() {
                 continue;
             }

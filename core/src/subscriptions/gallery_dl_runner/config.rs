@@ -18,7 +18,7 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
 
     // Fetch categorized tags (tags_artist, tags_character, etc.) from post HTML.
     // Only for booru sites that support it — enabling globally causes extra
-    // HTTP requests on sites like Kemono/Coomer that don't have tag categories.
+    // HTTP requests on sites like Coomer that don't have tag categories.
     let tags_true = serde_json::Value::Bool(true);
     for booru in [
         "gelbooru",
@@ -29,7 +29,6 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
         "konachan",
         "sankaku",
         "idolcomplex",
-        "3dbooru",
     ] {
         let site_obj = extractor
             .entry(booru)

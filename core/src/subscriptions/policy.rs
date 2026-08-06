@@ -53,8 +53,9 @@ pub fn resolve_finished_status_text(status: &str, failure_kind: Option<&str>) ->
 
 pub fn default_resume_strategy_for_site(site_id: &str) -> Option<&'static str> {
     match crate::subscriptions::gallery_dl_runner::canonical_site_id(site_id) {
-        "danbooru" | "gelbooru" | "3dbooru" | "safebooru" | "rule34" | "yandere" | "e621"
-        | "konachan" => Some("tag_id_lt"),
+        "danbooru" | "gelbooru" | "safebooru" | "rule34" | "yandere" | "e621" | "konachan" => {
+            Some("tag_id_lt")
+        }
         // All other sites use sequential range-based pagination via --post-range
         _ => Some("range_offset"),
     }

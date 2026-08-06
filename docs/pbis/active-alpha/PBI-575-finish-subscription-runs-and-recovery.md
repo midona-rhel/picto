@@ -59,7 +59,6 @@ Release gaps:
 
 - the source picker advertises sites without source-specific metadata validation or live proof
 - Python and Rust both participate in metadata normalization instead of having one clear owner
-- removed source ids remain in active bridge, adapter, policy, or autocomplete code
 - the real create/run/fail/retry/import flow has not been proved in Electron
 
 ## Phase execution rules

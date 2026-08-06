@@ -235,7 +235,7 @@ pub async fn verify_site(
         ));
     }
     // Query-style booru sites must produce tags; account-style sites may be
-    // tagless by design (kemono, coomer, webtoons, instagram...).
+    // tagless by design (coomer, webtoons, instagram...).
     if site.supports_query && downloaded > 0 {
         let tagless = items.iter().filter(|i| i.tag_count == 0).count();
         if tagless == downloaded {
