@@ -410,10 +410,8 @@ pub async fn get_sites(
     _state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    Ok(
-        serde_json::to_value(&crate::subscriptions::gallery_dl_runner::SITES)
-            .map_err(|e| e.to_string())?,
-    )
+    let sites: Vec<_> = crate::subscriptions::gallery_dl_runner::advertised_sites().collect();
+    serde_json::to_value(sites).map_err(|e| e.to_string())
 }
 
 /// State-changed: moves a subscription into/out of a group → subscription_ids + group_ids.

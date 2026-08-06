@@ -42,8 +42,8 @@ pub use metadata_validation::{
     SiteMetadataValidationResult,
 };
 pub use sites::{
-    build_url, canonical_site_id, credential_site_aliases, extract_domain, site_by_id,
-    substitute_query, SiteEntry, SITES,
+    advertised_sites, build_url, canonical_site_id, credential_site_aliases, extract_domain,
+    site_by_id, substitute_query, SiteEntry, ADVERTISED_SITE_IDS, SITES,
 };
 
 pub struct RunOptions {

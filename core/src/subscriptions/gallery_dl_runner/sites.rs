@@ -449,6 +449,14 @@ pub static SITES: &[SiteEntry] = &[
     },
 ];
 
+/// Sources exposed by the release UI. The full registry remains available for
+/// bounded certification without advertising unfinished integrations.
+pub const ADVERTISED_SITE_IDS: &[&str] = &["pixiv", "pixivuser", "gelbooru", "danbooru"];
+
+pub fn advertised_sites() -> impl Iterator<Item = &'static SiteEntry> {
+    ADVERTISED_SITE_IDS.iter().filter_map(|id| site_by_id(id))
+}
+
 /// Canonicalize legacy/alias site ids to current internal ids.
 pub fn canonical_site_id(id: &str) -> &str {
     match id {

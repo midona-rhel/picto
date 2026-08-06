@@ -59,8 +59,17 @@ Already working and retained:
 
 Release gaps:
 
-- the source picker advertises sites without source-specific metadata validation or live proof
 - the real create/run/fail/retry/import flow has not been proved in Electron
+
+The source picker is now an explicit release allowlist. The full gallery-dl registry remains
+backend-only so additional sources can be certified without advertising them prematurely.
+
+| Advertised source | Deterministic fixture | Live evidence |
+| --- | --- | --- |
+| Danbooru | search, metadata, resume | automated readiness pass, 2026-08-06 |
+| Gelbooru | search, metadata, resume | Electron download, restart, rerun, 2026-08-06 |
+| Pixiv | search, metadata, resume | Electron search import and post identity, 2026-08-06 |
+| Pixiv user | user, metadata, resume | Electron user import and post identity, 2026-08-06 |
 
 ## Phase execution rules
 

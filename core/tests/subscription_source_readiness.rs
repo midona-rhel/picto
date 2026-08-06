@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use picto_core::db::LibraryDatabase;
 use picto_core::ingest_queue::IngestQueueItemPayload;
 use picto_core::subscriptions::credential_service::SubscriptionCredentialService;
-use picto_core::subscriptions::gallery_dl_runner;
+use picto_core::subscriptions::gallery_dl_runner::{self, advertised_sites};
 use picto_core::subscriptions::policy::{apply_resume_to_query, default_resume_strategy_for_site};
 use picto_core::subscriptions::runtime_service::SubscriptionRuntimeService;
 use picto_core::subscriptions::source_adapter::{
@@ -87,6 +87,21 @@ const FIXTURES: &[SourceReadinessFixture] = &[
         expected_cursor_strategy: Some("range_offset"),
     },
     SourceReadinessFixture {
+        site_id: "pixivuser",
+        query_kind: "user",
+        query_text: "12345",
+        requires_credentials: true,
+        expected_url_contains: &["pixiv.net", "/users/12345/artworks"],
+        expected_metadata: ExpectedMetadata {
+            tags: true,
+            created_at: true,
+            title_or_description: true,
+            rating: false,
+            page_fields: true,
+        },
+        expected_cursor_strategy: Some("range_offset"),
+    },
+    SourceReadinessFixture {
         site_id: "furaffinity",
         query_kind: "user",
         query_text: "example",
@@ -155,6 +170,17 @@ fn readiness_fixtures_have_valid_descriptors_and_urls() {
                 expected
             );
         }
+    }
+}
+
+#[test]
+fn every_advertised_source_has_a_readiness_fixture() {
+    for site in advertised_sites() {
+        assert!(
+            FIXTURES.iter().any(|fixture| fixture.site_id == site.id),
+            "advertised source '{}' has no readiness fixture",
+            site.id
+        );
     }
 }
 
