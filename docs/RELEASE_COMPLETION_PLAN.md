@@ -54,21 +54,17 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [x] Replace newest-500 retry scans with one indexed attempt lookup.
 - [x] S1: Give query and subscription issues stable non-null identity.
 - [x] S2: Classify every meaningful failure through one persisted recovery disposition.
-- [ ] S3: Move schedules from groups to subscriptions; make retry, restart, shutdown, stop, reset,
+- [x] S3: Move schedules from groups to subscriptions; make retry, restart, shutdown, stop, reset,
       delete, and multi-query finalization durable and safe.
-      Automated implementation and tests are complete; live Stop/restart/retry verification remains.
-- [ ] S4: Finish one streaming metadata/collection ingest path and delete proven competitors.
-      Automated canonical-ingest, metadata parity, post assembly, and terminal settlement checks are
-      complete; the Electron collection/non-collection streaming smoke remains.
-- [ ] S5: Keep run-scoped progress visible and the run active through terminal ingest; make Health
+- [x] S4: Finish one streaming metadata/collection ingest path and delete proven competitors.
+- [x] S5: Keep run-scoped progress visible and the run active through terminal ingest; make Health
       actions truthful and uncapped.
-      Automated Health actions, cursor paging, exact-post retry, and uncapped bulk retry are complete;
-      the Electron failure/recovery smoke remains.
-- [ ] S6: Certify sources in bounded batches, expose only passed sources, run the real Electron
+- [x] S6: Certify sources in bounded batches, expose only passed sources, run the real Electron
       workflow, and archive PBI-575.
-      The four advertised source modes now pass deterministic metadata checks and live backend
-      download/resume/ingest readiness. Final Electron collection-mode and failure-recovery smoke
-      remains before closure.
+
+Accepted 2026-08-07: Electron collection/non-collection import, progress, stop/resume, and settled
+state matched the contract. The advertised Danbooru, Gelbooru, Pixiv search, and Pixiv user modes
+also passed deterministic metadata and live backend download/resume/ingest certification.
 
 Phase gates:
 

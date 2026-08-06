@@ -4,6 +4,12 @@
 
 P1 release blocker.
 
+## Completion
+
+Completed and accepted on 2026-08-07. The Electron smoke confirmed collection and non-collection
+imports, visible progress through ingest, stop/resume behavior, and settled runtime state. All four
+advertised source modes passed deterministic metadata checks and live backend readiness runs.
+
 ## Behavior contract
 
 A subscription is a persistent definition containing one or more queries. Running it durably queues
@@ -58,9 +64,7 @@ Already working and retained:
 - Rust-owned metadata normalization for live bridge events and validation fixtures;
   Python only serializes raw gallery-dl values
 
-Release gaps:
-
-- the real create/run/fail/retry/import flow has not been proved in Electron
+Release gaps: none for this PBI.
 
 The source picker is now an explicit release allowlist. The full gallery-dl registry remains
 backend-only so additional sources can be certified without advertising them prematurely.
