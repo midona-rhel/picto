@@ -1,4 +1,4 @@
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::query::duplicates::DuplicateSingleRef;
 use crate::db::types::{
@@ -147,6 +147,21 @@ pub fn resolve_duplicate_pair(
     right: DuplicateSingleRef,
     preferred_collection_id: Option<i64>,
 ) -> rusqlite::Result<DuplicateResolutionResult> {
+    let status: Option<String> = conn
+        .query_row(
+            "SELECT status FROM duplicate
+             WHERE (file_id_a = ?1 AND file_id_b = ?2)
+                OR (file_id_a = ?2 AND file_id_b = ?1)",
+            params![left.file_id, right.file_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if status.as_deref() != Some("detected") {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "duplicate pair is not awaiting review".to_string(),
+        ));
+    }
+
     if action == "not_duplicate" {
         conn.execute(
             "UPDATE duplicate

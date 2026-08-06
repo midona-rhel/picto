@@ -2103,6 +2103,10 @@ fn resolve_duplicate_pair_requires_explicit_collection_choice_for_cross_collecti
             "INSERT INTO single_media_entity (entity_id, file_id) VALUES (3, 1), (4, 2)",
             [],
         )?;
+        conn.execute(
+            "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (1, 2, 0)",
+            [],
+        )?;
         Ok(())
     })
     .expect("seed duplicate conflict data");
@@ -2115,6 +2119,56 @@ fn resolve_duplicate_pair_requires_explicit_collection_choice_for_cross_collecti
     let conflict = result.conflict.expect("conflict payload");
     assert_eq!(conflict.winner_collection_id, Some(1));
     assert_eq!(conflict.loser_collection_id, Some(2));
+}
+
+#[test]
+fn resolve_duplicate_pair_rejects_entities_without_a_detected_pair() {
+    let db = open_test_db();
+    db.with_write(|conn| {
+        conn.execute_batch(LIBRARY_DDL)?;
+        conn.execute(
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+             ) VALUES
+                (1, 'left_single', 'single', 1, 'Left', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (2, 'right_single', 'single', 1, 'Right', '2026-04-01', '2026-04-01', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO media_file (
+                file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, has_audio,
+                perceptual_hash, date_added
+             ) VALUES
+                (1, 'file_left', 'image/png', 1, 100, 100, 0, 'hash_left', '2026-04-01'),
+                (2, 'file_right', 'image/png', 1, 100, 100, 0, 'hash_right', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
+            [],
+        )?;
+        Ok(())
+    })
+    .expect("seed unrelated entities");
+
+    let error = db
+        .resolve_duplicate_pair("keep_left", "left_single", "right_single", None)
+        .expect_err("unreviewed entities must not resolve");
+    assert!(error.contains("not awaiting review"));
+
+    let (entities, files) = db
+        .with_read(|conn| {
+            Ok((
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+            ))
+        })
+        .expect("count surviving rows");
+    assert_eq!((entities, files), (2, 2));
 }
 
 #[test]
