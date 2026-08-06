@@ -1244,7 +1244,7 @@ pub fn resolve_subscription_download_attempt(
     item_key: &str,
 ) -> rusqlite::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
+    let changed = conn.execute(
         "UPDATE subscription_download_attempt
          SET status = 'resolved',
              resolved_at = ?1,
@@ -1252,9 +1252,31 @@ pub fn resolve_subscription_download_attempt(
              next_retry_at = NULL
          WHERE subscription_id = ?2
            AND query_id IS ?3
-           AND item_key = ?4",
+           AND item_key = ?4
+           AND status <> 'resolved'
+           AND resolved_at IS NULL",
         params![now, subscription_id, query_id, item_key],
     )?;
+    if changed > 0 {
+        let unresolved: i64 = conn.query_row(
+            "SELECT COUNT(*)
+             FROM subscription_download_attempt
+             WHERE subscription_id = ?1
+               AND query_id IS ?2
+               AND status NOT IN ('resolved', 'succeeded')
+               AND resolved_at IS NULL",
+            params![subscription_id, query_id],
+            |row| row.get(0),
+        )?;
+        if unresolved == 0 {
+            resolve_subscription_issues(
+                conn,
+                subscription_id,
+                query_id,
+                FailureKind::DownloadFailure,
+            )?;
+        }
+    }
     Ok(())
 }
 
@@ -1441,7 +1463,7 @@ mod tests {
     use super::{
         add_query_progress, find_unresolved_subscription_post_attempts,
         list_subscription_download_attempts_page, list_subscription_issues_page,
-        list_subscription_retry_targets,
+        list_subscription_retry_targets, resolve_subscription_download_attempt,
     };
     use crate::db::core::schema::LIBRARY_DDL;
     use rusqlite::{params, Connection};
@@ -1687,6 +1709,30 @@ mod tests {
         assert_eq!(issues.total_count, 1);
         assert_eq!(issues.items.len(), 1);
         assert!(issues.next_cursor.is_none());
+
+        resolve_subscription_download_attempt(&conn, 1, Some(1), "pixiv:42:0")
+            .expect("resolve first member");
+        let issue_status: String = conn
+            .query_row(
+                "SELECT status FROM subscription_issue WHERE issue_id = ?1",
+                [issues.items[0].issue_id],
+                |row| row.get(0),
+            )
+            .expect("read issue status");
+        assert_eq!(issue_status, "open");
+
+        resolve_subscription_download_attempt(&conn, 1, Some(1), "pixiv:42:1")
+            .expect("resolve second member");
+        resolve_subscription_download_attempt(&conn, 1, Some(1), "pixivuser:42:2")
+            .expect("resolve final member");
+        let issue_status: String = conn
+            .query_row(
+                "SELECT status FROM subscription_issue WHERE issue_id = ?1",
+                [issues.items[0].issue_id],
+                |row| row.get(0),
+            )
+            .expect("read resolved issue status");
+        assert_eq!(issue_status, "resolved");
     }
 
     #[test]

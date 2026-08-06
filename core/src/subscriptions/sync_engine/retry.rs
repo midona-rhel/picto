@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 
 use crate::subscriptions::gallery_dl_runner::{FailureKind, RunOptions};
-use crate::subscriptions::import_policy::{collection_group_parts, validate_metadata_for_site};
+use crate::subscriptions::import_policy::{
+    collection_group_parts, individual_import_metadata, validate_metadata_for_site,
+};
 use crate::subscriptions::source_adapter::{
     DownloadedItem, GalleryDlSourceAdapter, SubscriptionSourceAdapter,
 };
@@ -147,13 +149,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 continue;
             }
 
+            let import_metadata = individual_import_metadata(&item.metadata, self.auto_collections);
             match self
                 .enqueue_single_subscription_item(
                     subscription_id,
                     query_id,
                     query_run_id,
                     &item.file_path,
-                    &item.metadata,
+                    import_metadata.as_ref(),
                 )
                 .await
             {
@@ -289,16 +292,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
         }
 
         cleanup_subscription_temp_root(&run_summary.temp_dir).await;
-        if run_summary.failed_items.is_empty() {
-            let _ = self
-                .runtime_service()
-                .resolve_subscription_issues(
-                    subscription_id,
-                    Some(query_id),
-                    FailureKind::DownloadFailure,
-                )
-                .await;
-        }
         progress
     }
 }

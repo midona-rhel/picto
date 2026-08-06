@@ -1,5 +1,7 @@
 //! Subscription import and metadata policy helpers.
 
+use std::borrow::Cow;
+
 use crate::subscriptions::source_adapter::ParsedMetadata;
 
 pub fn normalized_title(metadata: &ParsedMetadata) -> Option<String> {
@@ -28,6 +30,27 @@ pub fn generated_subscription_name(metadata: &ParsedMetadata) -> Option<String> 
 
 pub fn preferred_import_name(metadata: &ParsedMetadata) -> Option<String> {
     normalized_title(metadata).or_else(|| generated_subscription_name(metadata))
+}
+
+pub fn individual_import_metadata(
+    metadata: &ParsedMetadata,
+    auto_collections: bool,
+) -> Cow<'_, ParsedMetadata> {
+    if auto_collections || !metadata.page_count.is_some_and(|count| count > 1) {
+        return Cow::Borrowed(metadata);
+    }
+
+    let base = preferred_import_name(metadata).unwrap_or_else(|| {
+        format!(
+            "{}_{}",
+            metadata.category.as_deref().unwrap_or("unknown"),
+            metadata.post_id.as_deref().unwrap_or("unknown"),
+        )
+    });
+    let page = metadata.page_num.unwrap_or(1).max(1);
+    let mut page_metadata = metadata.clone();
+    page_metadata.title = Some(format!("{base}_p{page}"));
+    Cow::Owned(page_metadata)
 }
 
 pub fn should_replace_existing_name(existing_name: &str, metadata: &ParsedMetadata) -> bool {
@@ -148,6 +171,29 @@ mod tests {
             ..Default::default()
         };
         assert!(collection_group_parts("twitter", &second_file).is_some());
+    }
+
+    #[test]
+    fn individual_import_metadata_names_multi_image_pages_consistently() {
+        let metadata = ParsedMetadata {
+            category: Some("pixiv".to_string()),
+            post_id: Some("42".to_string()),
+            title: Some("Artwork".to_string()),
+            page_count: Some(3),
+            page_num: Some(1),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            individual_import_metadata(&metadata, false)
+                .title
+                .as_deref(),
+            Some("Artwork_p1")
+        );
+        assert!(matches!(
+            individual_import_metadata(&metadata, true),
+            Cow::Borrowed(_)
+        ));
     }
 
     #[test]

@@ -7,7 +7,7 @@ use tracing::{info, warn};
 use crate::subscriptions::archive::subscription_query_archive_prefix;
 use crate::subscriptions::gallery_dl_runner::{FailureKind, RunOptions};
 use crate::subscriptions::import_policy::{
-    collection_group_parts, preferred_import_name, validate_metadata_for_site,
+    collection_group_parts, individual_import_metadata, validate_metadata_for_site,
 };
 use crate::subscriptions::policy::{
     apply_resume_to_query, default_resume_strategy_for_site, effective_inbox_limit,
@@ -370,26 +370,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     &format!("Queueing {post_id_display}..."),
                 );
 
-                let is_multi = item.metadata.page_count.map_or(false, |c| c > 1);
-                let import_metadata;
-                let metadata_ref = if !self.auto_collections && is_multi {
-                    let base = preferred_import_name(&item.metadata).unwrap_or_else(|| {
-                        format!(
-                            "{}_{}",
-                            item.metadata.category.as_deref().unwrap_or("unknown"),
-                            post_id_display,
-                        )
-                    });
-                    let page = item.metadata.page_num.map(|n| n + 1).unwrap_or(1);
-                    import_metadata = {
-                        let mut m = item.metadata.clone();
-                        m.title = Some(format!("{}_p{}", base, page));
-                        m
-                    };
-                    &import_metadata
-                } else {
-                    &item.metadata
-                };
+                let import_metadata =
+                    individual_import_metadata(&item.metadata, self.auto_collections);
 
                 match self
                     .enqueue_single_subscription_item(
@@ -397,7 +379,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         query_id,
                         query_run_id,
                         &item.file_path,
-                        metadata_ref,
+                        import_metadata.as_ref(),
                     )
                     .await
                 {

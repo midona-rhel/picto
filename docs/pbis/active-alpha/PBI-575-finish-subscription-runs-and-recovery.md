@@ -227,6 +227,13 @@ exact-hash reuse. Source-specific shorthand is normalized where its meaning is k
 safe on e621 and sensitive on Danbooru/Gelbooru); it is never written into Picto's numeric user
 rating field.
 
+Normal runs and exact-post retries now share the same non-collection page metadata rule, including
+gallery-dl's 1-based page number. A successful download no longer clears a query-wide download issue;
+the issue closes only when canonical ingest has resolved the final durable failed attempt for that
+query. Subscription member, collection, ordering, and attempt bookkeeping now runs directly against
+the queue's database and propagates failure, so the queue cannot report success with stale recovery
+state. The Electron collection/non-collection streaming smoke remains before S4 closes.
+
 Trace create, run, query run, retry, stop, reset, issue read, and ingest handoff from dispatch to
 `SubscriptionRuntimeService`. Consolidate construction only where it removes duplicate behavior.
 Delete `core/src/db/write/subscriptions.rs` if reachability confirms it is dead. Do not move the

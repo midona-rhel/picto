@@ -17,7 +17,7 @@ use crate::ingest::{
     CollectionIngestMember, IngestBatchSummary, IngestSourceKind, SingleIngestDisposition,
     SingleIngestOutcome, SingleIngestRequest,
 };
-use crate::subscriptions::runtime_service::{link_subscription_entity, SubscriptionRuntimeService};
+use crate::subscriptions::runtime_service::link_subscription_entity;
 use crate::subscriptions::source_adapter::ParsedMetadata;
 use crate::tags::logging::{preview_tag_strings, summarize_tag_strings};
 
@@ -1186,24 +1186,20 @@ pub async fn enqueue_watch_path(
     Ok(())
 }
 
-async fn persist_subscription_post_member(
+fn persist_subscription_post_member(
     canonical_db: &LibraryDatabase,
     subscription_id: i64,
     metadata: &ParsedMetadata,
     entity_hash: Option<&str>,
     status: &str,
-) {
-    let Ok(state) = crate::state::get_state() else {
-        return;
-    };
-    let runtime = SubscriptionRuntimeService::new(canonical_db, &state.library_root);
+) -> Result<(), String> {
     let Some(post_id) = metadata
         .post_id
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return;
+        return Ok(());
     };
     let site_id = metadata
         .category
@@ -1212,51 +1208,60 @@ async fn persist_subscription_post_member(
         .filter(|value| !value.is_empty())
         .unwrap_or("unknown");
     let Some(item_key) = metadata.item_key.clone() else {
-        return;
+        return Ok(());
     };
-    let _ = runtime
-        .upsert_subscription_post_member(
-            crate::subscriptions::types::OwnedSubscriptionPostMemberUpsert {
+    let site_id = site_id.to_string();
+    let post_id = post_id.to_string();
+    let canonical_post_url = metadata.canonical_post_url.clone();
+    let media_url = metadata.media_url.clone();
+    let entity_hash = entity_hash.map(ToOwned::to_owned);
+    let status = status.to_string();
+    let page_num = metadata.page_num.map(i64::from);
+    canonical_db.with_write(move |conn| {
+        crate::subscriptions::runtime_db::upsert_subscription_post_member(
+            conn,
+            crate::subscriptions::types::SubscriptionPostMemberUpsert {
                 subscription_id,
-                site_id: site_id.to_string(),
-                post_id: post_id.to_string(),
-                item_key,
-                page_num: metadata.page_num.map(i64::from),
-                canonical_post_url: metadata.canonical_post_url.clone(),
-                media_url: metadata.media_url.clone(),
-                entity_hash: entity_hash.map(ToOwned::to_owned),
-                status: status.to_string(),
+                site_id: &site_id,
+                post_id: &post_id,
+                item_key: &item_key,
+                page_num,
+                canonical_post_url: canonical_post_url.as_deref(),
+                media_url: media_url.as_deref(),
+                entity_hash: entity_hash.as_deref(),
+                status: &status,
             },
         )
-        .await;
+    })
 }
 
-async fn reconcile_subscription_collection_order(
+fn reconcile_subscription_collection_order(
     canonical_db: &LibraryDatabase,
     subscription_id: i64,
     site_id: &str,
     post_id: &str,
     collection_id: i64,
-) {
-    let Ok(state) = crate::state::get_state() else {
-        return;
-    };
-    let runtime = SubscriptionRuntimeService::new(canonical_db, &state.library_root);
-    let Ok(members) = runtime
-        .list_subscription_post_members(subscription_id, site_id, post_id)
-        .await
-    else {
-        return;
-    };
+) -> Result<(), String> {
+    let site_id = site_id.to_string();
+    let post_id = post_id.to_string();
+    let members = canonical_db.with_read(move |conn| {
+        crate::subscriptions::runtime_db::list_subscription_post_members(
+            conn,
+            subscription_id,
+            &site_id,
+            &post_id,
+        )
+    })?;
     let ordered_hashes: Vec<String> = members
         .into_iter()
         .filter(|member| matches!(member.status.as_str(), "imported" | "reused"))
         .filter_map(|member| member.entity_hash)
         .collect();
     if ordered_hashes.is_empty() {
-        return;
+        return Ok(());
     }
-    let _ = canonical_db.reorder_collection_members_by_hashes(collection_id, &ordered_hashes);
+    canonical_db.reorder_collection_members_by_hashes(collection_id, &ordered_hashes)?;
+    Ok(())
 }
 
 async fn delete_source_file_if_owned(path: &str) {
@@ -1344,18 +1349,14 @@ async fn process_single_queue(
         payload.subscription_metadata.as_ref(),
     ) {
         if let Some(item_key) = metadata.item_key.clone() {
-            let runtime = crate::state::get_state()
-                .ok()
-                .map(|state| SubscriptionRuntimeService::new(db, &state.library_root));
-            if let Some(runtime) = runtime {
-                let _ = runtime
-                    .resolve_subscription_download_attempt(
-                        subscription_id,
-                        queue.query_id,
-                        &item_key,
-                    )
-                    .await;
-            }
+            db.with_write(move |conn| {
+                crate::subscriptions::runtime_db::resolve_subscription_download_attempt(
+                    conn,
+                    subscription_id,
+                    queue.query_id,
+                    &item_key,
+                )
+            })?;
         }
         persist_subscription_post_member(
             db,
@@ -1363,8 +1364,7 @@ async fn process_single_queue(
             metadata,
             Some(outcome.entity_hash.as_str()),
             outcome.disposition.result_kind(),
-        )
-        .await;
+        )?;
     }
 
     let should_emit = outcome.disposition.is_imported()
@@ -1444,33 +1444,22 @@ fn subscription_collection_context(
     }
 }
 
-async fn persist_subscription_collection_association(
+fn persist_subscription_collection_association(
     db: &LibraryDatabase,
     context: &SubscriptionCollectionContext<'_>,
     collection_id: i64,
-) {
-    let Ok(state) = crate::state::get_state() else {
-        return;
-    };
-    let runtime = SubscriptionRuntimeService::new(db, &state.library_root);
-    if let Err(error) = runtime
-        .upsert_subscription_post_collection(
+) -> Result<(), String> {
+    let site_id = context.category.to_string();
+    let post_id = context.post_id.to_string();
+    db.with_write(move |conn| {
+        crate::subscriptions::runtime_db::upsert_subscription_post_collection(
+            conn,
             context.subscription_id,
-            context.category,
-            context.post_id,
+            &site_id,
+            &post_id,
             collection_id,
         )
-        .await
-    {
-        warn!(
-            subscription_id = context.subscription_id,
-            category = context.category,
-            post_id = context.post_id,
-            collection_id,
-            %error,
-            "Failed to persist subscription collection association"
-        );
-    }
+    })
 }
 
 async fn process_collection_queue(
@@ -1550,37 +1539,28 @@ async fn process_collection_queue(
     let (processable_items, members): (Vec<_>, Vec<_>) = processable.into_iter().unzip();
 
     let (existing_collection_id, prior_member_hashes) = if let Some(context) = &subscription {
-        let runtime = crate::state::get_state()
-            .ok()
-            .map(|state| SubscriptionRuntimeService::new(db, &state.library_root));
-        let existing_collection_id = match &runtime {
-            Some(runtime) => runtime
-                .get_subscription_post_collection(
-                    context.subscription_id,
-                    context.category,
-                    context.post_id,
-                )
-                .await
-                .ok()
-                .flatten(),
-            None => None,
-        };
-        let prior_member_hashes = match runtime {
-            Some(runtime) => runtime
-                .list_subscription_post_members(
-                    context.subscription_id,
-                    context.category,
-                    context.post_id,
-                )
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|member| matches!(member.status.as_str(), "imported" | "reused"))
-                .filter_map(|member| member.entity_hash)
-                .collect(),
-            None => Vec::new(),
-        };
-        (existing_collection_id, prior_member_hashes)
+        let subscription_id = context.subscription_id;
+        let category = context.category.to_string();
+        let post_id = context.post_id.to_string();
+        db.with_read(move |conn| {
+            let collection_id = crate::subscriptions::runtime_db::get_subscription_post_collection(
+                conn,
+                subscription_id,
+                &category,
+                &post_id,
+            )?;
+            let member_hashes = crate::subscriptions::runtime_db::list_subscription_post_members(
+                conn,
+                subscription_id,
+                &category,
+                &post_id,
+            )?
+            .into_iter()
+            .filter(|member| matches!(member.status.as_str(), "imported" | "reused"))
+            .filter_map(|member| member.entity_hash)
+            .collect();
+            Ok((collection_id, member_hashes))
+        })?
     } else {
         (None, Vec::new())
     };
@@ -1614,16 +1594,14 @@ async fn process_collection_queue(
             metadata.post_id = Some(context.post_id.to_string());
             metadata.category = Some(context.category.to_string());
             if let Some(item_key) = metadata.item_key.clone() {
-                if let Ok(state) = crate::state::get_state() {
-                    let runtime = SubscriptionRuntimeService::new(db, &state.library_root);
-                    let _ = runtime
-                        .resolve_subscription_download_attempt(
-                            context.subscription_id,
-                            queue.query_id,
-                            &item_key,
-                        )
-                        .await;
-                }
+                db.with_write(move |conn| {
+                    crate::subscriptions::runtime_db::resolve_subscription_download_attempt(
+                        conn,
+                        context.subscription_id,
+                        queue.query_id,
+                        &item_key,
+                    )
+                })?;
             }
             persist_subscription_post_member(
                 db,
@@ -1631,8 +1609,7 @@ async fn process_collection_queue(
                 &metadata,
                 Some(member.entity_hash.as_str()),
                 member.disposition.result_kind(),
-            )
-            .await;
+            )?;
         }
         if let Some(collection_id) = collection_id {
             let collection_hash = db.with_read(move |conn| {
@@ -1643,15 +1620,14 @@ async fn process_collection_queue(
                 )
             })?;
             link_subscription_entity(db, context.subscription_id, &collection_hash).await?;
-            persist_subscription_collection_association(db, context, collection_id).await;
+            persist_subscription_collection_association(db, context, collection_id)?;
             reconcile_subscription_collection_order(
                 db,
                 context.subscription_id,
                 context.category,
                 context.post_id,
                 collection_id,
-            )
-            .await;
+            )?;
         }
     }
 
@@ -2032,7 +2008,10 @@ mod tests {
 
         let db = Arc::new(LibraryDatabase::open(&library_root).unwrap());
         let blob_store = Arc::new(BlobStore::open(&library_root).unwrap());
-        let runtime = SubscriptionRuntimeService::new(&db, &library_root);
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            &db,
+            &library_root,
+        );
         let subscription = runtime
             .create_subscription("Artist".to_string(), None, None, None)
             .await
@@ -2086,6 +2065,122 @@ mod tests {
                 |row| row.get(0),
             )?;
             assert_eq!(linked, 1);
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn subscription_collection_ingest_persists_children_metadata_and_tracking() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        let source_root = temp.path().join("source");
+        fs::create_dir_all(&library_root).unwrap();
+        fs::create_dir_all(&source_root).unwrap();
+        let first = source_root.join("first.png");
+        let second = source_root.join("second.png");
+        write_image(&first, 32);
+        write_image(&second, 224);
+
+        let db = Arc::new(LibraryDatabase::open(&library_root).unwrap());
+        let blob_store = Arc::new(BlobStore::open(&library_root).unwrap());
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            &db,
+            &library_root,
+        );
+        let subscription = runtime
+            .create_subscription("Artist".to_string(), None, None, None)
+            .await
+            .unwrap();
+        let subscription_id = subscription.id.parse::<i64>().unwrap();
+        let payload = |path: &Path, page_num: u32| IngestQueueItemPayload {
+            request: SingleIngestRequest {
+                source_kind: IngestSourceKind::Subscription,
+                path: path.to_path_buf(),
+                tag_strings: vec!["creator:artist".to_string(), "rating:safe".to_string()],
+                source_urls: vec!["https://example.test/post/42".to_string()],
+                name: Some(format!("Artwork p{page_num}")),
+                notes: Some("Post notes".to_string()),
+                created_at: Some("2026-01-01T00:00:00Z".to_string()),
+                initial_status: 0,
+                skip_thumbnail: false,
+                tag_provenance_mask: crate::db::types::TAG_PROVENANCE_UNKNOWN,
+                subscription_id: Some(subscription_id),
+            },
+            subscription_metadata: Some(ParsedMetadata {
+                post_id: Some("42".to_string()),
+                category: Some("pixiv".to_string()),
+                page_num: Some(page_num),
+                page_count: Some(2),
+                item_key: Some(format!("pixiv:42:{page_num}")),
+                canonical_post_url: Some("https://example.test/post/42".to_string()),
+                ..Default::default()
+            }),
+            target_folder_id: None,
+        };
+
+        db.enqueue_ingest_queue(
+            IngestQueueKind::Collection,
+            "subscription",
+            Some(subscription_id),
+            None,
+            None,
+            None,
+            Some("42"),
+            Some("pixiv"),
+            Some("Artwork"),
+            Some(2),
+            vec![
+                (first.clone(), Some(1), payload(&first, 1), false),
+                (second.clone(), Some(2), payload(&second, 2), false),
+            ],
+        )
+        .await
+        .unwrap();
+
+        let queue = db.lease_next_ingest_queue().await.unwrap().unwrap();
+        process_queue_entry(&db, &blob_store, queue).await.unwrap();
+
+        db.with_read(move |conn| {
+            let collection_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM media_entity WHERE entity_kind = 'collection' AND member_count = 2",
+                [],
+                |row| row.get(0),
+            )?;
+            let tagged_children: i64 = conn.query_row(
+                "SELECT COUNT(DISTINCT child.entity_id)
+                 FROM media_entity child
+                 JOIN entity_tag et ON et.entity_id = child.entity_id
+                 JOIN tag t ON t.tag_id = et.tag_id
+                 WHERE child.parent_collection_entity_id IS NOT NULL
+                   AND t.namespace = 'creator' AND t.subtag = 'artist'",
+                [],
+                |row| row.get(0),
+            )?;
+            let source_children: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM media_entity
+                 WHERE parent_collection_entity_id IS NOT NULL
+                   AND source_urls_json LIKE '%example.test/post/42%'",
+                [],
+                |row| row.get(0),
+            )?;
+            let tracked_members: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM subscription_post_member
+                 WHERE subscription_id = ?1 AND site_id = 'pixiv' AND post_id = '42'",
+                [subscription_id],
+                |row| row.get(0),
+            )?;
+            let tracked_collection: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM subscription_post_collection
+                 WHERE subscription_id = ?1 AND site_id = 'pixiv' AND post_id = '42'",
+                [subscription_id],
+                |row| row.get(0),
+            )?;
+            assert_eq!(collection_count, 1);
+            assert_eq!(tagged_children, 2);
+            assert_eq!(source_children, 2);
+            assert_eq!(tracked_members, 2);
+            assert_eq!(tracked_collection, 1);
             Ok(())
         })
         .unwrap();

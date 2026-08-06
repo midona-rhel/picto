@@ -58,6 +58,8 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
       delete, and multi-query finalization durable and safe.
       Automated implementation and tests are complete; live Stop/restart/retry verification remains.
 - [ ] S4: Finish one streaming metadata/collection ingest path and delete proven competitors.
+      Automated canonical-ingest, metadata parity, post assembly, and terminal settlement checks are
+      complete; the Electron collection/non-collection streaming smoke remains.
 - [ ] S5: Keep run-scoped progress visible and the run active through terminal ingest; make Health
       actions truthful and uncapped.
       Automated Health actions, cursor paging, exact-post retry, and uncapped bulk retry are complete;
