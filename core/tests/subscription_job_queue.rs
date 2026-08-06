@@ -1,5 +1,6 @@
 use picto_core::db::LibraryDatabase;
 use picto_core::ingest_queue::IngestQueueItemResultKind;
+use picto_core::subscriptions::run_orchestrator::SubscriptionRunOrchestrator;
 use picto_core::subscriptions::runtime_service::SubscriptionRuntimeService;
 use picto_core::subscriptions::types::SubscriptionQueryRunCompletion;
 
@@ -52,6 +53,75 @@ async fn open_query_fixture(name: &str) -> (tempfile::TempDir, LibraryDatabase, 
         .await
         .unwrap();
     (dir, db, subscription_id, query.id.parse().unwrap())
+}
+
+#[tokio::test]
+async fn bulk_failed_post_retry_queues_every_distinct_retryable_post_once() {
+    let (dir, db, subscription_id, query_id) = open_query_fixture("Bulk Retry").await;
+    let conn = raw_conn(&dir);
+    conn.execute(
+        "INSERT INTO subscription_issue (
+             issue_key, subscription_id, query_id, issue_kind, status, message,
+             first_seen_at, last_seen_at, recovery_action
+         ) VALUES (?1, ?2, ?3, 'download_failure', 'open', 'Download failed',
+                   '2026-01-01', '2026-01-01', 'retry_now')",
+        rusqlite::params![
+            format!("query:{query_id}:download_failure"),
+            subscription_id,
+            query_id
+        ],
+    )
+    .unwrap();
+    for (attempt_id, item_key, post_id) in [
+        (1, "gelbooru:one:0", "one"),
+        (2, "gelbooru:one:1", "one"),
+        (3, "gelbooru:two:0", "two"),
+    ] {
+        conn.execute(
+            "INSERT INTO subscription_download_attempt (
+                 attempt_id, subscription_id, query_id, item_key, site_category, post_id,
+                 status, retry_url, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, 'gelbooru', ?5, 'pending', ?6,
+                       '2026-01-01', '2026-01-01')",
+            rusqlite::params![
+                attempt_id,
+                subscription_id,
+                query_id,
+                item_key,
+                post_id,
+                format!("https://gelbooru.com/post/{post_id}")
+            ],
+        )
+        .unwrap();
+    }
+    drop(conn);
+
+    let db = std::sync::Arc::new(db);
+    let running = std::sync::Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()));
+    let result = SubscriptionRunOrchestrator::retry_failed_posts(
+        &db,
+        dir.path(),
+        &running,
+        subscription_id.to_string(),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(result.eligible, 2);
+    assert_eq!(result.queued, 2);
+    assert_eq!(result.already_queued, 0);
+    assert_eq!(result.failed, 0);
+    let conn = raw_conn(&dir);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM subscription_query_job
+             WHERE subscription_id = ?1 AND job_kind = 'retry_post' AND status = 'queued'",
+            [subscription_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        2
+    );
 }
 
 #[tokio::test]

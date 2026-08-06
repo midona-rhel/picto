@@ -60,6 +60,8 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [ ] S4: Finish one streaming metadata/collection ingest path and delete proven competitors.
 - [ ] S5: Keep run-scoped progress visible and the run active through terminal ingest; make Health
       actions truthful and uncapped.
+      Automated Health actions, cursor paging, exact-post retry, and uncapped bulk retry are complete;
+      the Electron failure/recovery smoke remains.
 - [ ] S6: Certify sources in bounded batches, expose only passed sources, run the real Electron
       workflow, and archive PBI-575.
 

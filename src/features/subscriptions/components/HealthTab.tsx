@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { IconExternalLink, IconRefresh } from '@tabler/icons-react';
+import { IconExternalLink, IconPencil, IconRefresh, IconShieldLock } from '@tabler/icons-react';
 import type { FailedPostGroup, SubscriptionIssueRecord } from '../../../shared/types/subscriptions';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip/KbdTooltip';
 import { ActionButton } from './ActionButton';
@@ -28,44 +28,63 @@ export function HealthTab({
   failedPosts,
   issues,
   busy,
-  onRetryPosts,
+  onRetryAll,
+  onRetryPost,
   onOpenUrl,
+  onFixCredentials,
+  onReviewQuery,
+  failedPostTotalCount,
+  issueTotalCount,
+  retryablePostCount,
+  hasMore,
+  onLoadMore,
 }: {
   failedPosts: FailedPostGroup[];
   issues: SubscriptionIssueRecord[];
   busy: boolean;
-  onRetryPosts: (posts: FailedPostGroup[]) => void;
+  onRetryAll: () => void;
+  onRetryPost: (post: FailedPostGroup) => void;
   onOpenUrl: (url: string) => void;
+  onFixCredentials: (issue: SubscriptionIssueRecord) => void;
+  onReviewQuery: (issue: SubscriptionIssueRecord) => void;
+  failedPostTotalCount: number;
+  issueTotalCount: number;
+  retryablePostCount: number;
+  hasMore: boolean;
+  onLoadMore: () => void;
 }) {
   const groups = useMemo(() => groupByReason(failedPosts), [failedPosts]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [showAllExpanded, setShowAllExpanded] = useState(false);
   const openIssues = issues.filter((issue) => issue.status !== 'resolved');
-  const retryable = failedPosts.filter((post) => post.canRetry);
+  const retryNowQueryIds = new Set(
+    openIssues
+      .filter((issue) => issue.recovery_action === 'retry_now')
+      .map((issue) => issue.query_id),
+  );
 
-  if (failedPosts.length === 0 && openIssues.length === 0) {
+  if (failedPostTotalCount === 0 && issueTotalCount === 0) {
     return <EmptyState title="All healthy" description="No failed posts and no open issues." />;
   }
 
   return (
     <div className={styles.healthStack}>
-      {failedPosts.length > 0 && (
+      {failedPostTotalCount > 0 && (
         <div className={styles.section}>
           <div className={styles.sectionHeader}>
             <span className={styles.subsectionTitle}>
-              Failed posts ({failedPosts.length})
+              Failed posts ({failedPostTotalCount})
             </span>
             <ActionButton
               variant="secondary"
               compact
-              disabled={busy || retryable.length === 0}
-              onClick={() => onRetryPosts(retryable)}
+              disabled={busy || retryablePostCount === 0}
+              onClick={onRetryAll}
             >
-              <IconRefresh size={13} /> Retry all ({retryable.length})
+              <IconRefresh size={13} /> Retry all
             </ActionButton>
           </div>
           {[...groups.entries()].map(([reason, posts]) => {
-            const groupRetryable = posts.filter((post) => post.canRetry);
             const isOpen = expanded === reason;
             return (
               <div key={reason} className={styles.healthGroup}>
@@ -78,14 +97,6 @@ export function HealthTab({
                     {posts.length} post{posts.length === 1 ? '' : 's'}
                   </button>
                   <span className={styles.healthGroupReason} title={reason}>{reason}</span>
-                  <ActionButton
-                    variant="ghost"
-                    compact
-                    disabled={busy || groupRetryable.length === 0}
-                    onClick={() => onRetryPosts(groupRetryable)}
-                  >
-                    Retry
-                  </ActionButton>
                 </div>
                 {isOpen && (showAllExpanded ? posts : posts.slice(0, EXPANDED_POST_CAP)).map((post) => (
                   <div key={post.key} className={styles.healthRow}>
@@ -107,6 +118,16 @@ export function HealthTab({
                         </button>
                       </KbdTooltip>
                     )}
+                    {post.queryId != null && retryNowQueryIds.has(Number(post.queryId)) && (
+                      <ActionButton
+                        variant="ghost"
+                        compact
+                        disabled={busy}
+                        onClick={() => onRetryPost(post)}
+                      >
+                        Retry
+                      </ActionButton>
+                    )}
                   </div>
                 ))}
                 {isOpen && !showAllExpanded && posts.length > EXPANDED_POST_CAP && (
@@ -124,10 +145,10 @@ export function HealthTab({
         </div>
       )}
 
-      {openIssues.length > 0 && (
+      {issueTotalCount > 0 && (
         <div className={styles.section}>
           <div className={styles.sectionHeader}>
-            <span className={styles.subsectionTitle}>Open issues ({openIssues.length})</span>
+            <span className={styles.subsectionTitle}>Open issues ({issueTotalCount})</span>
           </div>
           {openIssues.map((issue) => (
             <div key={issue.issue_id} className={styles.issueCard}>
@@ -137,9 +158,39 @@ export function HealthTab({
               </div>
               <div>{issue.message}</div>
               {issue.detail && <div className={styles.muted}>{issue.detail}</div>}
+              {issue.recovery_action === 'fix_credentials' && (
+                <ActionButton variant="secondary" compact disabled={busy} onClick={() => onFixCredentials(issue)}>
+                  <IconShieldLock size={13} /> Fix login
+                </ActionButton>
+              )}
+              {issue.recovery_action === 'retry_now' && (
+                <ActionButton variant="secondary" compact disabled={busy} onClick={onRetryAll}>
+                  <IconRefresh size={13} /> Retry now
+                </ActionButton>
+              )}
+              {issue.recovery_action === 'review_query' && (
+                <ActionButton variant="secondary" compact disabled={busy} onClick={() => onReviewQuery(issue)}>
+                  <IconPencil size={13} /> Review query
+                </ActionButton>
+              )}
+              {issue.recovery_action === 'retry_automatically' && (
+                <div className={styles.muted}>
+                  {issue.next_retry_at
+                    ? `Retries automatically ${formatRelativeTime(issue.next_retry_at)}.`
+                    : 'Retries automatically when the source is available.'}
+                </div>
+              )}
+              {issue.recovery_action === 'none' && (
+                <div className={styles.muted}>Retrying will not fix this problem.</div>
+              )}
             </div>
           ))}
         </div>
+      )}
+      {hasMore && (
+        <button type="button" className={styles.historyMore} disabled={busy} onClick={onLoadMore}>
+          Load more
+        </button>
       )}
     </div>
   );

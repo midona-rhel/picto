@@ -313,7 +313,6 @@ impl SubscriptionRunOrchestrator {
         running_subs: &RunningSubscriptions,
         subscription_id: String,
         query_id: String,
-        site_id: String,
         post_id: String,
         settings: &SettingsStore,
     ) -> Result<(), String> {
@@ -340,21 +339,8 @@ impl SubscriptionRunOrchestrator {
             .await?
             .ok_or_else(|| format!("Query {} not found", query_id))?;
 
-        let canonical_site_id =
-            crate::subscriptions::gallery_dl_runner::canonical_site_id(&site_id).to_string();
-        if canonical_site_id
-            != crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id)
-        {
-            return Err("retry site_id does not match the query site".to_string());
-        }
-
         let matching = runtime
-            .find_unresolved_subscription_download_attempts(
-                sub_id,
-                qid,
-                &canonical_site_id,
-                &post_id,
-            )
+            .find_unresolved_subscription_post_attempts(sub_id, qid, &post_id)
             .await?;
         if matching.is_empty() {
             return Err(format!(
@@ -382,8 +368,7 @@ impl SubscriptionRunOrchestrator {
             Some(query_name.clone()),
         );
 
-        if let Err(error) =
-            enqueue_retry_job(&runtime, sub_id, qid, &canonical_site_id, &post_id).await
+        if let Err(error) = enqueue_retry_job(&runtime, sub_id, qid, &query.site_id, &post_id).await
         {
             release_guard_and_task(running_subs, &subscription_id).await;
             return Err(error);
@@ -394,6 +379,72 @@ impl SubscriptionRunOrchestrator {
         let _ = settings;
         let _ = query;
         Ok(())
+    }
+
+    pub async fn retry_failed_posts(
+        db: &Arc<LibraryDatabase>,
+        library_root: &std::path::Path,
+        running_subs: &RunningSubscriptions,
+        subscription_id: String,
+    ) -> Result<crate::subscriptions::types::SubscriptionBulkRetryResult, String> {
+        let sub_id: i64 = subscription_id
+            .parse()
+            .map_err(|_| format!("Invalid subscription id: {subscription_id}"))?;
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            db.as_ref(),
+            library_root,
+        );
+        let sub = runtime
+            .get_subscription(sub_id)
+            .await?
+            .ok_or_else(|| format!("Subscription {subscription_id} not found"))?;
+        if sub.paused {
+            return Err(format!("Subscription {subscription_id} is paused"));
+        }
+
+        let targets = runtime.list_subscription_retry_targets(sub_id).await?;
+        let mut result = crate::subscriptions::types::SubscriptionBulkRetryResult {
+            eligible: targets.len(),
+            queued: 0,
+            already_queued: 0,
+            failed: 0,
+        };
+        if targets.is_empty() {
+            return Ok(result);
+        }
+
+        let _cancel = activate_subscription_guard(running_subs, &subscription_id).await?;
+        for target in targets {
+            match runtime
+                .enqueue_subscription_query_job(
+                    None,
+                    sub_id,
+                    target.query_id,
+                    &target.site_id,
+                    "retry_post",
+                    "retry",
+                    Some(&target.post_id),
+                )
+                .await
+            {
+                Ok((_job_id, true)) => result.queued += 1,
+                Ok((_job_id, false)) => result.already_queued += 1,
+                Err(_) => result.failed += 1,
+            }
+        }
+
+        if result.queued == 0 {
+            release_guard_and_task(running_subs, &subscription_id).await;
+        } else {
+            publish_start(
+                &subscription_id,
+                &sub.name,
+                "query",
+                None,
+                Some("Retry failed posts".to_string()),
+            );
+        }
+        Ok(result)
     }
 }
 

@@ -2,6 +2,7 @@ import { atom } from 'jotai';
 import type { SubscriptionWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
 import type {
   FailedPostGroup,
+  SubscriptionDownloadAttemptRecord,
   SubscriptionIssueRecord,
   SubscriptionProgressEvent,
   SubscriptionRunRecord,
@@ -49,6 +50,12 @@ export type SubscriptionDetailState = {
   runs: SubscriptionRunRecord[];
   issues: SubscriptionIssueRecord[];
   failedPosts: FailedPostGroup[];
+  attempts: SubscriptionDownloadAttemptRecord[];
+  issueNextCursor: number | null;
+  failedPostNextCursor: number | null;
+  issueTotalCount: number;
+  failedPostTotalCount: number;
+  retryablePostCount: number;
 };
 
 export type SubscriptionsWizardState = {
@@ -62,6 +69,12 @@ export const EMPTY_SUBSCRIPTION_DETAIL_STATE: SubscriptionDetailState = {
   runs: [],
   issues: [],
   failedPosts: [],
+  attempts: [],
+  issueNextCursor: null,
+  failedPostNextCursor: null,
+  issueTotalCount: 0,
+  failedPostTotalCount: 0,
+  retryablePostCount: 0,
 };
 
 export const subscriptionsWorkspaceSnapshotAtom = atom<SubscriptionWorkspaceSnapshot | null>(null);

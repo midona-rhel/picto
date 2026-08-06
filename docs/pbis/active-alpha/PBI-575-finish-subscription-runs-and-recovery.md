@@ -290,6 +290,12 @@ while any ingest row with its `query_run_id` is pending or running; the executor
 share one idempotent settlement path, and an ingest failure overrides an otherwise successful source
 result. This uses the existing schema and adds no migration or compatibility path.
 
+Health checkpoint on 2026-08-06: issue and failed-post reads are cursor-paged while SQLite returns
+uncapped totals. Persisted recovery actions directly drive Fix login, Retry now, Review query,
+automatic-retry, and terminal no-action states. Retry all is one guarded backend operation over every
+eligible unresolved post, and exact-post retry uses query/post identity rather than extractor
+category aliases. The Electron failure/recovery smoke remains before S5 closes.
+
 "Retry all" is a backend operation over all eligible unresolved attempts, not the first 50 or 100
 rows loaded for display. It returns a truthful attempted/queued/failed result, and the UI reports a
 failure instead of silently discarding it. Health history is paginated; display limits never change

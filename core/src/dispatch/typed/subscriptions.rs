@@ -248,8 +248,13 @@ pub struct StopSubscriptionQueryInput {
 pub struct RetrySubscriptionFailedPostInput {
     pub subscription_id: String,
     pub query_id: String,
-    pub site_id: String,
     pub post_id: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct RetrySubscriptionFailedPostsInput {
+    pub subscription_id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -271,6 +276,7 @@ pub struct ListSubscriptionQueryRunsInput {
 pub struct ListSubscriptionIssuesInput {
     pub subscription_id: String,
     pub query_id: Option<String>,
+    pub cursor: Option<i64>,
     pub limit: Option<i64>,
 }
 
@@ -279,6 +285,7 @@ pub struct ListSubscriptionIssuesInput {
 pub struct ListSubscriptionDownloadAttemptsInput {
     pub subscription_id: String,
     pub query_id: Option<String>,
+    pub cursor: Option<i64>,
     pub limit: Option<i64>,
 }
 
@@ -882,7 +889,12 @@ pub async fn list_subscription_issues(
         .transpose()
         .map_err(|_| "Invalid query id".to_string())?;
     let result = runtime_service(state)
-        .list_subscription_issues(subscription_id, query_id, input.limit.unwrap_or(50).max(1))
+        .list_subscription_issues_page(
+            subscription_id,
+            query_id,
+            input.cursor,
+            input.limit.unwrap_or(50).clamp(1, 200),
+        )
         .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
@@ -901,10 +913,11 @@ pub async fn list_subscription_download_attempts(
         .transpose()
         .map_err(|_| "Invalid query id".to_string())?;
     let result = runtime_service(state)
-        .list_subscription_download_attempts(
+        .list_subscription_download_attempts_page(
             subscription_id,
             query_id,
-            input.limit.unwrap_or(50).max(1),
+            input.cursor,
+            input.limit.unwrap_or(50).clamp(1, 200),
         )
         .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
@@ -976,12 +989,26 @@ pub async fn retry_subscription_failed_post(
         &state.running_subscriptions,
         input.subscription_id,
         input.query_id,
-        input.site_id,
         input.post_id,
         &state.settings,
     )
     .await?;
     Ok(())
+}
+
+pub async fn retry_subscription_failed_posts(
+    state: &AppState,
+    input: RetrySubscriptionFailedPostsInput,
+) -> Result<serde_json::Value, String> {
+    let result =
+        crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::retry_failed_posts(
+            &state.engine.db_arc(),
+            &state.library_root,
+            &state.running_subscriptions,
+            input.subscription_id,
+        )
+        .await?;
+    serde_json::to_value(result).map_err(|error| error.to_string())
 }
 
 pub async fn list_credentials(

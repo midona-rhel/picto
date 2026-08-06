@@ -119,6 +119,12 @@ export interface SubscriptionIssueRecord {
   next_retry_at: string | null;
 }
 
+export interface SubscriptionIssuePage {
+  items: SubscriptionIssueRecord[];
+  next_cursor: number | null;
+  total_count: number;
+}
+
 export interface SubscriptionDownloadAttemptRecord {
   attempt_id: number;
   subscription_id: number;
@@ -141,6 +147,13 @@ export interface SubscriptionDownloadAttemptRecord {
   resolved_at: string | null;
 }
 
+export interface SubscriptionDownloadAttemptPage {
+  items: SubscriptionDownloadAttemptRecord[];
+  next_cursor: number | null;
+  failed_post_count: number;
+  retryable_post_count: number;
+}
+
 export interface FailedPostGroup {
   key: string;
   queryId: string | null;
@@ -154,7 +167,13 @@ export interface FailedPostGroup {
   status: string;
   lastError: string | null;
   nextRetryAt: string | null;
-  canRetry: boolean;
+}
+
+export interface SubscriptionBulkRetryResult {
+  eligible: number;
+  queued: number;
+  already_queued: number;
+  failed: number;
 }
 
 export interface CredentialDomain {

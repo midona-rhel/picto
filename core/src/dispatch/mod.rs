@@ -137,6 +137,7 @@ const WRITE_COMMANDS: &[&str] = &[
     "run_subscription_query",
     "stop_subscription_query",
     "retry_subscription_failed_post",
+    "retry_subscription_failed_posts",
     "set_credential",
     "delete_credential",
     "pixiv_oauth_start",
@@ -441,6 +442,13 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "retry_subscription_failed_post" => {
             call!(
                 typed::subscriptions::retry_subscription_failed_post,
+                &state,
+                args
+            )
+        }
+        "retry_subscription_failed_posts" => {
+            call!(
+                typed::subscriptions::retry_subscription_failed_posts,
                 &state,
                 args
             )

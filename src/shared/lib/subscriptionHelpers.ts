@@ -13,18 +13,21 @@ export function groupFailedPostAttempts(
   attempts: SubscriptionDownloadAttemptRecord[],
   queries: SubscriptionQueryInfo[],
 ): FailedPostGroup[] {
-  const queryNameById = new Map(queries.map((query) => [query.id, query.display_name?.trim() || query.query_text]));
+  const queryById = new Map(queries.map((query) => [query.id, query]));
   const grouped = new Map<string, FailedPostGroup>();
 
   for (const attempt of attempts) {
     if (!attempt.post_id || attempt.resolved_at) continue;
     if (attempt.status === 'resolved' || attempt.status === 'succeeded') continue;
 
-    const siteId = attempt.site_category ?? 'unknown';
     const queryId = attempt.query_id == null ? null : String(attempt.query_id);
-    const key = `${queryId ?? 'none'}:${siteId}:${attempt.post_id}`;
+    const query = queryId ? queryById.get(queryId) : null;
+    const siteId = query?.site_id ?? attempt.site_category ?? 'unknown';
+    const key = `${queryId ?? 'none'}:${attempt.post_id}`;
     const existing = grouped.get(key);
-    const queryLabel = queryId ? queryNameById.get(queryId) ?? `Query ${queryId}` : 'Unknown query';
+    const queryLabel = queryId
+      ? query?.display_name?.trim() || query?.query_text || `Query ${queryId}`
+      : 'Unknown query';
 
     if (!existing) {
       grouped.set(key, {
@@ -40,7 +43,6 @@ export function groupFailedPostAttempts(
         status: attempt.status,
         lastError: attempt.last_error,
         nextRetryAt: attempt.next_retry_at,
-        canRetry: Boolean(queryId && attempt.post_id),
       });
       continue;
     }

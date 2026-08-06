@@ -16,12 +16,12 @@ use super::runtime_db::{
     count_active_subscription_query_jobs, create_subscription_query_run, create_subscription_run,
     enqueue_subscription_query_job, finalize_subscription_query_run_if_terminal,
     finalize_subscription_run_if_terminal, finalize_subscription_run_status,
-    find_unresolved_subscription_download_attempts, finish_subscription_query_job,
-    get_subscription_post_collection, lease_subscription_query_job,
+    finish_subscription_query_job, get_subscription_post_collection, lease_subscription_query_job,
     list_queued_subscription_query_jobs, list_retryable_subscription_download_attempts,
-    list_running_subscription_run_ids, list_subscription_download_attempts,
-    list_subscription_issues, list_subscription_post_members, list_subscription_query_jobs_for_run,
-    list_subscription_query_runs, list_subscription_runs,
+    list_running_subscription_run_ids, list_subscription_download_attempts_page,
+    list_subscription_issues, list_subscription_issues_page, list_subscription_post_members,
+    list_subscription_query_jobs_for_run, list_subscription_query_runs,
+    list_subscription_retry_targets, list_subscription_runs,
     mark_subscription_download_attempt_retrying, record_subscription_query_source_completion,
     requeue_interrupted_subscription_query_job, reschedule_subscription_query_job,
     reset_subscription_query_state, reset_subscription_state,
@@ -1157,24 +1157,29 @@ impl<'a> SubscriptionRuntimeService<'a> {
         })
     }
 
-    pub async fn find_unresolved_subscription_download_attempts(
+    pub async fn find_unresolved_subscription_post_attempts(
         &self,
         subscription_id: i64,
         query_id: i64,
-        site_category: &str,
         post_id: &str,
     ) -> Result<Vec<SubscriptionDownloadAttemptRecord>, String> {
-        let site_category = site_category.to_string();
         let post_id = post_id.to_string();
         self.db.with_read(move |conn| {
-            find_unresolved_subscription_download_attempts(
+            super::runtime_db::find_unresolved_subscription_post_attempts(
                 conn,
                 subscription_id,
                 query_id,
-                &site_category,
                 &post_id,
             )
         })
+    }
+
+    pub async fn list_subscription_retry_targets(
+        &self,
+        subscription_id: i64,
+    ) -> Result<Vec<crate::subscriptions::types::SubscriptionRetryTarget>, String> {
+        self.db
+            .with_read(move |conn| list_subscription_retry_targets(conn, subscription_id))
     }
 
     pub async fn upsert_subscription_post_member(
@@ -1285,14 +1290,27 @@ impl<'a> SubscriptionRuntimeService<'a> {
             .with_read(|conn| list_subscription_issues(conn, subscription_id, query_id, limit))
     }
 
-    pub async fn list_subscription_download_attempts(
+    pub async fn list_subscription_issues_page(
         &self,
         subscription_id: i64,
         query_id: Option<i64>,
+        cursor: Option<i64>,
         limit: i64,
-    ) -> Result<Vec<SubscriptionDownloadAttemptRecord>, String> {
-        self.db.with_read(|conn| {
-            list_subscription_download_attempts(conn, subscription_id, query_id, limit)
+    ) -> Result<crate::subscriptions::types::SubscriptionIssuePage, String> {
+        self.db.with_read(move |conn| {
+            list_subscription_issues_page(conn, subscription_id, query_id, cursor, limit)
+        })
+    }
+
+    pub async fn list_subscription_download_attempts_page(
+        &self,
+        subscription_id: i64,
+        query_id: Option<i64>,
+        cursor: Option<i64>,
+        limit: i64,
+    ) -> Result<crate::subscriptions::types::SubscriptionDownloadAttemptPage, String> {
+        self.db.with_read(move |conn| {
+            list_subscription_download_attempts_page(conn, subscription_id, query_id, cursor, limit)
         })
     }
 

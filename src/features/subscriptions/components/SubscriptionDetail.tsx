@@ -61,7 +61,8 @@ export interface DetailController {
   deleteQuery: (queryId: string) => void;
   editQuery: (queryId: number, siteId: string, queryText: string, displayName: string | null, notes: string | null) => Promise<void>;
   addQuery: (subscriptionId: string, siteId: string, queryText: string) => Promise<void>;
-  retryFailedPosts: (posts: FailedPostGroup[]) => void;
+  retryFailedPosts: () => void;
+  retryFailedPost: (post: FailedPostGroup) => void;
   openExternalUrl: (url: string) => void;
 }
 
@@ -108,6 +109,7 @@ export function SubscriptionDetail({
   busy,
   controller,
   onOpenAccounts,
+  onLoadMoreHealth,
   onOpenMenu,
 }: {
   subscription: SubscriptionInfo;
@@ -123,6 +125,7 @@ export function SubscriptionDetail({
   controller: DetailController;
   onTabChange?: (tab: SubscriptionDetailTab) => void;
   onOpenAccounts: (siteId: string | null) => void;
+  onLoadMoreHealth: () => void;
   /** Opens the shared subscription context menu at a screen position. */
   onOpenMenu: (position: { x: number; y: number }) => void;
 }) {
@@ -138,11 +141,11 @@ export function SubscriptionDetail({
     openIssueCount: metrics?.openIssueCount ?? 0,
   });
   const groupName = groups.find((group) => group.id === subscription.group_id)?.name ?? null;
-  const openIssueCount = detail.issues.filter((issue) => issue.status !== 'resolved').length;
-  const healthy = detail.failedPosts.length === 0 && openIssueCount === 0;
+  const openIssueCount = detail.issueTotalCount;
+  const healthy = detail.failedPostTotalCount === 0 && openIssueCount === 0;
   const upToDate = !running && isSubscriptionUpToDate(
     subscription,
-    detail.failedPosts.length,
+    detail.failedPostTotalCount,
     openIssueCount,
   );
 
@@ -163,8 +166,7 @@ export function SubscriptionDetail({
       }),
     }))
     .find((entry) => entry.auth.tone === 'attention');
-  const retryable = detail.failedPosts.filter((post) => post.canRetry);
-  const failedCount = detail.failedPosts.length;
+  const failedCount = detail.failedPostTotalCount;
   const lastRun = detail.runs[0] ?? null;
 
   const overviewSection = (
@@ -206,12 +208,12 @@ export function SubscriptionDetail({
               {failedCount === 0 && !authAttention && 'Something needs attention — see the technical view.'}
             </span>
             <span className={styles.ovActions}>
-              {retryable.length > 0 && (
+              {detail.retryablePostCount > 0 && (
                 <ActionButton
                   variant="secondary"
                   compact
                   disabled={busy}
-                  onClick={() => controller.retryFailedPosts(retryable)}
+                  onClick={controller.retryFailedPosts}
                 >
                   <IconRefresh size={13} /> Try again
                 </ActionButton>
@@ -456,8 +458,22 @@ export function SubscriptionDetail({
               failedPosts={detail.failedPosts}
               issues={detail.issues}
               busy={busy}
-              onRetryPosts={controller.retryFailedPosts}
+              onRetryAll={controller.retryFailedPosts}
+              onRetryPost={controller.retryFailedPost}
               onOpenUrl={controller.openExternalUrl}
+              onFixCredentials={(issue) => {
+                const query = subscription.queries.find((entry) => Number(entry.id) === issue.query_id);
+                onOpenAccounts(query?.site_id ?? null);
+              }}
+              onReviewQuery={(issue) => {
+                const query = subscription.queries.find((entry) => Number(entry.id) === issue.query_id);
+                if (query) setEditing(query);
+              }}
+              failedPostTotalCount={detail.failedPostTotalCount}
+              issueTotalCount={detail.issueTotalCount}
+              retryablePostCount={detail.retryablePostCount}
+              hasMore={detail.issueNextCursor != null || detail.failedPostNextCursor != null}
+              onLoadMore={onLoadMoreHealth}
             />
           )}
         </section>

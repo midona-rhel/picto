@@ -6,10 +6,11 @@ import type {
   CredentialHealth,
   PixivOAuthExchangeResult,
   PixivOAuthStartResult,
-  SubscriptionDownloadAttemptRecord,
+  SubscriptionDownloadAttemptPage,
+  SubscriptionBulkRetryResult,
   SubscriptionGroupInfo,
   SubscriptionInfo,
-  SubscriptionIssueRecord,
+  SubscriptionIssuePage,
   SubscriptionProgressEvent,
   SubscriptionRunRecord,
   SubscriptionSiteInfo,
@@ -242,10 +243,15 @@ export function stopSubscriptionQuery(subscriptionId: string, queryId: string): 
 export function retrySubscriptionFailedPost(input: {
   subscription_id: string;
   query_id: string;
-  site_id: string;
   post_id: string;
 }): Promise<void> {
   return invoke<void>('retry_subscription_failed_post', input as unknown as Record<string, unknown>);
+}
+
+export function retrySubscriptionFailedPosts(subscriptionId: string): Promise<SubscriptionBulkRetryResult> {
+  return invoke<SubscriptionBulkRetryResult>('retry_subscription_failed_posts', {
+    subscription_id: subscriptionId,
+  });
 }
 
 export function getRunningSubscriptions(): Promise<string[]> {
@@ -267,10 +273,12 @@ export function listSubscriptionIssues(
   subscriptionId: string,
   queryId?: string | null,
   limit = 50,
-): Promise<SubscriptionIssueRecord[]> {
-  return invoke<SubscriptionIssueRecord[]>('list_subscription_issues', {
+  cursor?: number | null,
+): Promise<SubscriptionIssuePage> {
+  return invoke<SubscriptionIssuePage>('list_subscription_issues', {
     subscription_id: subscriptionId,
     query_id: queryId ?? null,
+    cursor: cursor ?? null,
     limit,
   });
 }
@@ -279,10 +287,12 @@ export function listSubscriptionDownloadAttempts(
   subscriptionId: string,
   queryId?: string | null,
   limit = 50,
-): Promise<SubscriptionDownloadAttemptRecord[]> {
-  return invoke<SubscriptionDownloadAttemptRecord[]>('list_subscription_download_attempts', {
+  cursor?: number | null,
+): Promise<SubscriptionDownloadAttemptPage> {
+  return invoke<SubscriptionDownloadAttemptPage>('list_subscription_download_attempts', {
     subscription_id: subscriptionId,
     query_id: queryId ?? null,
+    cursor: cursor ?? null,
     limit,
   });
 }

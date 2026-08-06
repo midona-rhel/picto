@@ -46,6 +46,17 @@ function healthRank(site: AuthSiteSnapshot): number {
   return 3;
 }
 
+async function listAllOpenIssues(subscriptionId: string): Promise<SubscriptionIssueRecord[]> {
+  const items: SubscriptionIssueRecord[] = [];
+  let cursor: number | null = null;
+  do {
+    const page = await listSubscriptionIssues(subscriptionId, null, 100, cursor);
+    items.push(...page.items);
+    cursor = page.next_cursor;
+  } while (cursor != null);
+  return items;
+}
+
 export const authController = {
   async loadWorkspaceSnapshot(): Promise<AuthWorkspaceSnapshot> {
     const [sites, subscriptions, credentials, healthEntries] = await Promise.all([
@@ -62,7 +73,7 @@ export const authController = {
 
     await Promise.all(
       subscriptions.map(async (subscription) => {
-        const issues = await listSubscriptionIssues(subscription.id, null, 100);
+        const issues = await listAllOpenIssues(subscription.id);
         const authIssues = issues.filter(isAuthIssue);
         if (!authIssues.length) return;
         const siteKeys = new Set(

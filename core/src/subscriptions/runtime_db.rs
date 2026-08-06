@@ -1139,6 +1139,53 @@ pub fn list_subscription_issues(
     rows.collect()
 }
 
+pub fn list_subscription_issues_page(
+    conn: &Connection,
+    subscription_id: i64,
+    query_id: Option<i64>,
+    cursor: Option<i64>,
+    limit: i64,
+) -> rusqlite::Result<crate::subscriptions::types::SubscriptionIssuePage> {
+    let total_count = conn.query_row(
+        "SELECT COUNT(*)
+         FROM subscription_issue
+         WHERE subscription_id = ?1
+           AND (?2 IS NULL OR query_id = ?2)
+           AND status <> 'resolved'",
+        params![subscription_id, query_id],
+        |row| row.get(0),
+    )?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT issue_id, issue_key, subscription_id, query_id, issue_kind, status,
+                message, detail, first_seen_at, last_seen_at, resolved_at,
+                recovery_action, next_retry_at
+         FROM subscription_issue
+         WHERE subscription_id = ?1
+           AND (?2 IS NULL OR query_id = ?2)
+           AND status <> 'resolved'
+           AND (?3 IS NULL OR issue_id < ?3)
+         ORDER BY issue_id DESC
+         LIMIT ?4",
+    )?;
+    let rows = stmt.query_map(
+        params![subscription_id, query_id, cursor, limit + 1],
+        map_subscription_issue_row,
+    )?;
+    let mut items: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
+    let has_more = items.len() as i64 > limit;
+    if has_more {
+        items.truncate(limit as usize);
+    }
+    let next_cursor = has_more
+        .then(|| items.last().map(|issue| issue.issue_id))
+        .flatten();
+    Ok(crate::subscriptions::types::SubscriptionIssuePage {
+        items,
+        next_cursor,
+        total_count,
+    })
+}
+
 pub fn upsert_subscription_download_attempt(
     conn: &Connection,
     input: SubscriptionDownloadAttemptUpsert<'_>,
@@ -1252,11 +1299,10 @@ pub fn list_retryable_subscription_download_attempts(
     rows.collect()
 }
 
-pub fn find_unresolved_subscription_download_attempts(
+pub fn find_unresolved_subscription_post_attempts(
     conn: &Connection,
     subscription_id: i64,
     query_id: i64,
-    site_category: &str,
     post_id: &str,
 ) -> rusqlite::Result<Vec<SubscriptionDownloadAttemptRecord>> {
     let mut stmt = conn.prepare_cached(
@@ -1266,24 +1312,95 @@ pub fn find_unresolved_subscription_download_attempts(
          FROM subscription_download_attempt
          WHERE subscription_id = ?1
            AND query_id = ?2
-           AND site_category = ?3
-           AND post_id = ?4
+           AND post_id = ?3
            AND status <> 'resolved'
          ORDER BY updated_at DESC, attempt_id DESC",
     )?;
     let rows = stmt.query_map(
-        params![subscription_id, query_id, site_category, post_id],
+        params![subscription_id, query_id, post_id],
         map_subscription_download_attempt_row,
     )?;
     rows.collect()
 }
 
-pub fn list_subscription_download_attempts(
+pub fn list_subscription_retry_targets(
+    conn: &Connection,
+    subscription_id: i64,
+) -> rusqlite::Result<Vec<crate::subscriptions::types::SubscriptionRetryTarget>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT DISTINCT attempt.query_id, query.site_id, attempt.post_id
+         FROM subscription_download_attempt attempt
+         JOIN subscription_query query ON query.query_id = attempt.query_id
+         WHERE attempt.subscription_id = ?1
+           AND attempt.query_id IS NOT NULL
+           AND attempt.post_id IS NOT NULL
+           AND attempt.status NOT IN ('resolved', 'succeeded')
+           AND attempt.resolved_at IS NULL
+           AND COALESCE(attempt.retry_url, attempt.canonical_post_url) IS NOT NULL
+           AND EXISTS (
+               SELECT 1
+               FROM subscription_issue issue
+               WHERE issue.subscription_id = attempt.subscription_id
+                 AND issue.query_id = attempt.query_id
+                 AND issue.status = 'open'
+                 AND issue.recovery_action = 'retry_now'
+           )
+         ORDER BY attempt.query_id ASC, attempt.post_id ASC",
+    )?;
+    let rows = stmt.query_map([subscription_id], |row| {
+        Ok(crate::subscriptions::types::SubscriptionRetryTarget {
+            query_id: row.get(0)?,
+            site_id: row.get(1)?,
+            post_id: row.get(2)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn list_subscription_download_attempts_page(
     conn: &Connection,
     subscription_id: i64,
     query_id: Option<i64>,
+    cursor: Option<i64>,
     limit: i64,
-) -> rusqlite::Result<Vec<SubscriptionDownloadAttemptRecord>> {
+) -> rusqlite::Result<crate::subscriptions::types::SubscriptionDownloadAttemptPage> {
+    let failed_post_count = conn.query_row(
+        "SELECT COUNT(*) FROM (
+             SELECT attempt.query_id, attempt.post_id
+             FROM subscription_download_attempt attempt
+             WHERE attempt.subscription_id = ?1
+               AND (?2 IS NULL OR attempt.query_id = ?2)
+               AND attempt.post_id IS NOT NULL
+               AND attempt.status NOT IN ('resolved', 'succeeded')
+               AND attempt.resolved_at IS NULL
+             GROUP BY attempt.query_id, attempt.post_id
+         )",
+        params![subscription_id, query_id],
+        |row| row.get(0),
+    )?;
+    let retryable_post_count = conn.query_row(
+        "SELECT COUNT(*) FROM (
+             SELECT attempt.query_id, attempt.post_id
+             FROM subscription_download_attempt attempt
+             WHERE attempt.subscription_id = ?1
+               AND (?2 IS NULL OR attempt.query_id = ?2)
+               AND attempt.query_id IS NOT NULL
+               AND attempt.post_id IS NOT NULL
+               AND attempt.status NOT IN ('resolved', 'succeeded')
+               AND attempt.resolved_at IS NULL
+               AND COALESCE(attempt.retry_url, attempt.canonical_post_url) IS NOT NULL
+               AND EXISTS (
+                   SELECT 1 FROM subscription_issue issue
+                   WHERE issue.subscription_id = attempt.subscription_id
+                     AND issue.query_id = attempt.query_id
+                     AND issue.status = 'open'
+                     AND issue.recovery_action = 'retry_now'
+               )
+             GROUP BY attempt.query_id, attempt.post_id
+         )",
+        params![subscription_id, query_id],
+        |row| row.get(0),
+    )?;
     let mut stmt = conn.prepare_cached(
         "SELECT attempt_id, subscription_id, query_id, query_run_id, item_key, site_category,
                 post_id, page_num, canonical_post_url, media_url, retry_url, retry_count,
@@ -1291,19 +1408,41 @@ pub fn list_subscription_download_attempts(
          FROM subscription_download_attempt
          WHERE subscription_id = ?1
            AND (?2 IS NULL OR query_id = ?2)
-         ORDER BY updated_at DESC, attempt_id DESC
-         LIMIT ?3",
+           AND status NOT IN ('resolved', 'succeeded')
+           AND resolved_at IS NULL
+           AND (?3 IS NULL OR attempt_id < ?3)
+         ORDER BY attempt_id DESC
+         LIMIT ?4",
     )?;
     let rows = stmt.query_map(
-        params![subscription_id, query_id, limit],
+        params![subscription_id, query_id, cursor, limit + 1],
         map_subscription_download_attempt_row,
     )?;
-    rows.collect()
+    let mut items: Vec<_> = rows.collect::<rusqlite::Result<_>>()?;
+    let has_more = items.len() as i64 > limit;
+    if has_more {
+        items.truncate(limit as usize);
+    }
+    let next_cursor = has_more
+        .then(|| items.last().map(|attempt| attempt.attempt_id))
+        .flatten();
+    Ok(
+        crate::subscriptions::types::SubscriptionDownloadAttemptPage {
+            items,
+            next_cursor,
+            failed_post_count,
+            retryable_post_count,
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{add_query_progress, find_unresolved_subscription_download_attempts};
+    use super::{
+        add_query_progress, find_unresolved_subscription_post_attempts,
+        list_subscription_download_attempts_page, list_subscription_issues_page,
+        list_subscription_retry_targets,
+    };
     use crate::db::core::schema::LIBRARY_DDL;
     use rusqlite::{params, Connection};
 
@@ -1351,7 +1490,6 @@ mod tests {
             [],
         )
         .expect("insert query");
-
         insert_attempt(
             &conn,
             1,
@@ -1395,12 +1533,12 @@ mod tests {
         insert_attempt(
             &conn,
             4,
-            "wrong-site",
-            "gelbooru",
+            "source-alias",
+            "danbooru_v2",
             "post-1",
             "pending",
             "2026-04-01",
-            "https://retry.example/wrong-site",
+            "https://retry.example/source-alias",
         );
         for attempt_id in 10..515 {
             insert_attempt(
@@ -1422,11 +1560,10 @@ mod tests {
                  FROM subscription_download_attempt
                  WHERE subscription_id = ?1
                    AND query_id = ?2
-                   AND site_category = ?3
-                   AND post_id = ?4
+                   AND post_id = ?3
                    AND status <> 'resolved'
                  ORDER BY updated_at DESC, attempt_id DESC",
-                params![1, 1, "danbooru", "post-1"],
+                params![1, 1, "post-1"],
                 |row| row.get(3),
             )
             .expect("explain retry lookup");
@@ -1435,23 +1572,121 @@ mod tests {
             "retry lookup must use its index: {query_plan}"
         );
 
-        let matches =
-            find_unresolved_subscription_download_attempts(&conn, 1, 1, "danbooru", "post-1")
-                .expect("find retry attempts");
+        let matches = find_unresolved_subscription_post_attempts(&conn, 1, 1, "post-1")
+            .expect("find retry attempts");
 
         assert_eq!(
             matches
                 .iter()
                 .map(|attempt| attempt.item_key.as_str())
                 .collect::<Vec<_>>(),
-            ["new-match-higher-id", "new-match", "old-match"]
+            [
+                "source-alias",
+                "new-match-higher-id",
+                "new-match",
+                "old-match"
+            ]
         );
         assert_eq!(
             matches
                 .iter()
                 .find_map(|attempt| attempt.retry_url.as_deref()),
-            Some("https://retry.example/new-higher-id")
+            Some("https://retry.example/source-alias")
         );
+    }
+
+    #[test]
+    fn bulk_retry_targets_are_distinct_uncapped_and_use_the_query_site() {
+        let conn = Connection::open_in_memory().expect("open database");
+        conn.execute_batch(LIBRARY_DDL).expect("create schema");
+        conn.execute(
+            "INSERT INTO subscription (subscription_id, name, site_id, date_added)
+             VALUES (1, 'Test subscription', 'pixivuser', '2026-01-01')",
+            [],
+        )
+        .expect("insert subscription");
+        conn.execute(
+            "INSERT INTO subscription_query (query_id, subscription_id, site_id, query_text)
+             VALUES (1, 1, 'pixivuser', '12345')",
+            [],
+        )
+        .expect("insert query");
+        conn.execute(
+            "INSERT INTO subscription_issue (
+                 issue_key, subscription_id, query_id, issue_kind, status, message,
+                 first_seen_at, last_seen_at, recovery_action
+             ) VALUES ('query:1:download_failure', 1, 1, 'download_failure', 'open',
+                       'Download failed', '2026-01-01', '2026-01-01', 'retry_now')",
+            [],
+        )
+        .expect("insert retry issue");
+
+        insert_attempt(
+            &conn,
+            1,
+            "pixiv:42:0",
+            "pixiv",
+            "42",
+            "pending",
+            "2026-01-01",
+            "https://www.pixiv.net/artworks/42",
+        );
+        insert_attempt(
+            &conn,
+            4,
+            "pixivuser:42:2",
+            "pixivuser",
+            "42",
+            "pending",
+            "2026-01-01",
+            "https://www.pixiv.net/artworks/42",
+        );
+        insert_attempt(
+            &conn,
+            2,
+            "pixiv:42:1",
+            "pixiv",
+            "42",
+            "pending",
+            "2026-01-01",
+            "https://www.pixiv.net/artworks/42",
+        );
+        insert_attempt(
+            &conn,
+            3,
+            "resolved",
+            "pixiv",
+            "43",
+            "resolved",
+            "2026-01-01",
+            "https://www.pixiv.net/artworks/43",
+        );
+
+        assert_eq!(
+            list_subscription_retry_targets(&conn, 1).expect("list targets"),
+            [crate::subscriptions::types::SubscriptionRetryTarget {
+                query_id: 1,
+                site_id: "pixivuser".to_string(),
+                post_id: "42".to_string(),
+            }]
+        );
+
+        let attempts = list_subscription_download_attempts_page(&conn, 1, None, None, 1)
+            .expect("first attempt page");
+        assert_eq!(attempts.items.len(), 1);
+        assert!(attempts.next_cursor.is_some());
+        assert_eq!(attempts.failed_post_count, 1);
+        assert_eq!(attempts.retryable_post_count, 1);
+        let next_attempts =
+            list_subscription_download_attempts_page(&conn, 1, None, attempts.next_cursor, 10)
+                .expect("second attempt page");
+        assert_eq!(next_attempts.items.len(), 2);
+        assert!(next_attempts.next_cursor.is_none());
+
+        let issues = list_subscription_issues_page(&conn, 1, None, None, 1).expect("issue page");
+        assert_eq!(issues.total_count, 1);
+        assert_eq!(issues.items.len(), 1);
+        assert!(issues.next_cursor.is_none());
     }
 
     #[test]

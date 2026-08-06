@@ -15,6 +15,7 @@ import {
   refreshSubscriptionsWorkspace,
 } from '../../runtime/subscriptionsSettle';
 import type { SubscriptionInfo } from '../../shared/types/subscriptions';
+import { groupFailedPostAttempts } from '../../shared/lib/subscriptionHelpers';
 import { AccountsModal } from './components/AccountsModal';
 import { SubscriptionsGrid } from './components/SubscriptionsGrid';
 import { GroupDetail } from './components/GroupDetail';
@@ -77,7 +78,20 @@ export function SubscriptionsScreen() {
         subscriptionsController.listIssues(subscription.id),
         subscriptionsController.listFailedPosts(subscription),
       ]);
-      setDetail({ loading: false, error: null, subscriptionId: subscription.id, runs, issues, failedPosts });
+      setDetail({
+        loading: false,
+        error: null,
+        subscriptionId: subscription.id,
+        runs,
+        issues: issues.items,
+        failedPosts: failedPosts.failedPosts,
+        attempts: failedPosts.attempts,
+        issueNextCursor: issues.next_cursor,
+        failedPostNextCursor: failedPosts.nextCursor,
+        issueTotalCount: issues.total_count,
+        failedPostTotalCount: failedPosts.totalCount,
+        retryablePostCount: failedPosts.retryableCount,
+      });
     } catch (err) {
       setDetail({
         ...EMPTY_SUBSCRIPTION_DETAIL_STATE,
@@ -114,6 +128,37 @@ export function SubscriptionsScreen() {
       setBusyKey(null);
     }
   }, [setBusyKey, setError]);
+
+  const loadMoreHealth = useCallback(async () => {
+    if (!selectedSubscription || busyKey) return;
+    const issueCursor = detail.issueNextCursor;
+    const attemptCursor = detail.failedPostNextCursor;
+    if (issueCursor == null && attemptCursor == null) return;
+    await act('health:more', async () => {
+      const [issues, failed] = await Promise.all([
+        issueCursor == null
+          ? Promise.resolve(null)
+          : subscriptionsController.listIssues(selectedSubscription.id, issueCursor),
+        attemptCursor == null
+          ? Promise.resolve(null)
+          : subscriptionsController.listFailedPosts(selectedSubscription, attemptCursor),
+      ]);
+      setDetail((current) => {
+        const attempts = failed ? [...current.attempts, ...failed.attempts] : current.attempts;
+        return {
+          ...current,
+          issues: issues ? [...current.issues, ...issues.items] : current.issues,
+          attempts,
+          failedPosts: groupFailedPostAttempts(attempts, selectedSubscription.queries),
+          issueNextCursor: issues ? issues.next_cursor : current.issueNextCursor,
+          failedPostNextCursor: failed ? failed.nextCursor : current.failedPostNextCursor,
+          issueTotalCount: issues?.total_count ?? current.issueTotalCount,
+          failedPostTotalCount: failed?.totalCount ?? current.failedPostTotalCount,
+          retryablePostCount: failed?.retryableCount ?? current.retryablePostCount,
+        };
+      });
+    }, { refresh: false });
+  }, [act, busyKey, detail.failedPostNextCursor, detail.issueNextCursor, selectedSubscription, setDetail]);
 
   /** User-initiated navigation inside the workspace — recorded in app history. */
   const navigateTo = useCallback((next: typeof selection) => {
@@ -409,24 +454,27 @@ export function SubscriptionsScreen() {
             busy={busy}
             controller={{
               ...detailController,
-              retryFailedPosts: (posts) => {
+              retryFailedPosts: () => {
                 void act('retryposts', async () => {
-                  await subscriptionsController.retryFailedPosts(
-                    posts
-                      .filter((post) => post.queryId != null)
-                      .map((post) => ({
-                        subscription_id: selectedSubscription.id,
-                        query_id: post.queryId as string,
-                        site_id: post.siteId,
-                        post_id: post.postId,
-                      })),
-                  );
+                  await subscriptionsController.retryFailedPosts(selectedSubscription.id);
+                  await refreshDetail(selectedSubscription);
+                });
+              },
+              retryFailedPost: (post) => {
+                if (!post.queryId) return;
+                void act(`retrypost:${post.key}`, async () => {
+                  await subscriptionsController.retryFailedPost({
+                    subscription_id: selectedSubscription.id,
+                    query_id: post.queryId as string,
+                    post_id: post.postId,
+                  });
                   await refreshDetail(selectedSubscription);
                 });
               },
             }}
             onTabChange={setActiveTab}
             onOpenAccounts={(siteId) => setAccountsModal({ open: true, focusSiteId: siteId })}
+            onLoadMoreHealth={() => void loadMoreHealth()}
             onOpenMenu={(position) => openSubscriptionMenu(position, selectedSubscription)}
           />
         ) : (

@@ -499,10 +499,9 @@ async fn run_job_inner(
             crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id).to_string();
         let post_id = job.post_id.as_deref().unwrap_or_default();
         let matching = match runtime
-            .find_unresolved_subscription_download_attempts(
+            .find_unresolved_subscription_post_attempts(
                 sub.subscription_id,
                 query.query_id,
-                &canonical_site_id,
                 post_id,
             )
             .await

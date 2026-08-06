@@ -145,6 +145,13 @@ pub struct SubscriptionIssueRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscriptionIssuePage {
+    pub items: Vec<SubscriptionIssueRecord>,
+    pub next_cursor: Option<i64>,
+    pub total_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubscriptionDownloadAttemptRecord {
     pub attempt_id: i64,
     pub subscription_id: i64,
@@ -165,6 +172,29 @@ pub struct SubscriptionDownloadAttemptRecord {
     pub created_at: String,
     pub updated_at: String,
     pub resolved_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscriptionDownloadAttemptPage {
+    pub items: Vec<SubscriptionDownloadAttemptRecord>,
+    pub next_cursor: Option<i64>,
+    pub failed_post_count: i64,
+    pub retryable_post_count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubscriptionRetryTarget {
+    pub query_id: i64,
+    pub site_id: String,
+    pub post_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SubscriptionBulkRetryResult {
+    pub eligible: usize,
+    pub queued: usize,
+    pub already_queued: usize,
+    pub failed: usize,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -29,6 +29,7 @@ import {
   resetSubscription,
   resetSubscriptionQuery,
   retrySubscriptionFailedPost,
+  retrySubscriptionFailedPosts,
   runGroup,
   runSubscription,
   runSubscriptionQuery,
@@ -53,10 +54,8 @@ import type {
   CredentialType,
   PixivOAuthExchangeResult,
   PixivOAuthStartResult,
-  FailedPostGroup,
   SubscriptionGroupInfo,
   SubscriptionInfo,
-  SubscriptionIssueRecord,
   SubscriptionProgressEvent,
   SubscriptionRunRecord,
   SubscriptionSiteInfo,
@@ -88,16 +87,14 @@ export const subscriptionsController = {
     const metricsEntries = await Promise.all(
       subscriptions.map(async (subscription) => {
         const [issues, attempts] = await Promise.all([
-          listSubscriptionIssues(subscription.id, null, 100),
-          listSubscriptionDownloadAttempts(subscription.id, null, 100),
+          listSubscriptionIssues(subscription.id, null, 1),
+          listSubscriptionDownloadAttempts(subscription.id, null, 1),
         ]);
-        const failedPosts = groupFailedPostAttempts(attempts, subscription.queries);
-        const openIssueCount = issues.filter((issue) => issue.status !== 'resolved').length;
         return [
           subscription.id,
           {
-            failedPostCount: failedPosts.length,
-            openIssueCount,
+            failedPostCount: attempts.failed_post_count,
+            openIssueCount: issues.total_count,
             lastActivityAt: deriveLastActivityAt(subscription),
           },
         ] as const;
@@ -131,13 +128,19 @@ export const subscriptionsController = {
     return listSubscriptionRuns(subscriptionId, 20);
   },
 
-  async listIssues(subscriptionId: string): Promise<SubscriptionIssueRecord[]> {
-    return listSubscriptionIssues(subscriptionId, null, 50);
+  async listIssues(subscriptionId: string, cursor?: number | null) {
+    return listSubscriptionIssues(subscriptionId, null, 50, cursor);
   },
 
-  async listFailedPosts(subscription: SubscriptionInfo): Promise<FailedPostGroup[]> {
-    const attempts = await listSubscriptionDownloadAttempts(subscription.id, null, 100);
-    return groupFailedPostAttempts(attempts, subscription.queries);
+  async listFailedPosts(subscription: SubscriptionInfo, cursor?: number | null) {
+    const page = await listSubscriptionDownloadAttempts(subscription.id, null, 100, cursor);
+    return {
+      attempts: page.items,
+      failedPosts: groupFailedPostAttempts(page.items, subscription.queries),
+      nextCursor: page.next_cursor,
+      totalCount: page.failed_post_count,
+      retryableCount: page.retryable_post_count,
+    };
   },
 
   getSites(): Promise<SubscriptionSiteInfo[]> {
@@ -207,21 +210,14 @@ export const subscriptionsController = {
     return new Map(records.map((record) => [record.subscription_id, record.entity_hash]));
   },
 
-  /** Retry failed posts one at a time — the backend serializes per-site anyway. */
-  async retryFailedPosts(
-    posts: Array<{ subscription_id: string; query_id: string; site_id: string; post_id: string }>,
-  ): Promise<{ ok: number; failed: number }> {
-    let ok = 0;
-    let failed = 0;
-    for (const post of posts) {
-      try {
-        await retrySubscriptionFailedPost(post);
-        ok++;
-      } catch {
-        failed++;
-      }
+  async retryFailedPosts(subscriptionId: string) {
+    const result = await retrySubscriptionFailedPosts(subscriptionId);
+    if (result.failed > 0) {
+      throw new Error(
+        `Queued ${result.queued} failed post${result.queued === 1 ? '' : 's'}, but ${result.failed} could not be queued.`,
+      );
     }
-    return { ok, failed };
+    return result;
   },
 
   rename(id: string, name: string): Promise<void> {
@@ -294,7 +290,6 @@ export const subscriptionsController = {
   retryFailedPost(input: {
     subscription_id: string;
     query_id: string;
-    site_id: string;
     post_id: string;
   }): Promise<void> {
     return retrySubscriptionFailedPost(input);
