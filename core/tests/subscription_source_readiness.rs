@@ -157,41 +157,6 @@ fn readiness_resume_url_uses_same_query_shaping_as_sync_engine() {
     assert!(url.contains("id:%3C123456") || url.contains("id:<123456"));
 }
 
-#[test]
-fn readiness_metadata_contract_separates_post_and_asset_fields() {
-    let metadata = ParsedMetadata {
-        tags: vec![
-            ("creator".to_string(), "artist".to_string()),
-            (String::new(), "landscape".to_string()),
-        ],
-        description: Some("body".to_string()),
-        source_url: Some("https://example.test/post/42".to_string()),
-        source_urls: vec!["https://example.test/post/42".to_string()],
-        media_url: Some("https://cdn.example.test/file.jpg".to_string()),
-        rating: Some("safe".to_string()),
-        title: Some("title".to_string()),
-        post_id: Some("42".to_string()),
-        created_at: Some("2026-04-24T00:00:00Z".to_string()),
-        category: Some("example".to_string()),
-        page_num: Some(0),
-        page_count: Some(1),
-        canonical_post_url: Some("https://example.test/post/42".to_string()),
-        item_key: Some("example:42:0".to_string()),
-        raw_metadata: Some(serde_json::json!({"id": 42})),
-    };
-
-    let post = metadata.post_metadata();
-    let asset = metadata.asset_metadata();
-
-    assert_eq!(post.post_id.as_deref(), Some("42"));
-    assert_eq!(post.tags.len(), 2);
-    assert_eq!(
-        asset.media_url.as_deref(),
-        Some("https://cdn.example.test/file.jpg")
-    );
-    assert_eq!(asset.item_key.as_deref(), Some("example:42:0"));
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 #[ignore = "requires network and may require real service credentials"]
 async fn live_subscription_source_readiness_matrix() {

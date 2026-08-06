@@ -6,10 +6,7 @@ use serde::Serialize;
 use crate::subscriptions::gallery_dl_runner::{canonical_site_id, site_by_id, SiteEntry};
 
 pub use gallery_dl::{GalleryDlSourceAdapter, SubscriptionSourceAdapter};
-pub use types::{
-    AssetMetadata, DownloadedItem, FailedDownloadedItem, ParsedMetadata, PostMetadata,
-    SourceRunEvent,
-};
+pub use types::{DownloadedItem, FailedDownloadedItem, ParsedMetadata};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SiteQueryKind {

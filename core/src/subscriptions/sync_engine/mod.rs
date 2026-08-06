@@ -92,6 +92,38 @@ pub(super) struct PendingCollection {
     pub members: Vec<PendingMember>,
 }
 
+impl PendingCollection {
+    fn push_member(&mut self, member: PendingMember) -> (usize, bool) {
+        let advertised_count = member.metadata.page_count.unwrap_or(0);
+        self.expected_count =
+            Some(self.expected_count.unwrap_or(0).max(advertised_count)).filter(|count| *count > 0);
+        self.members.push(member);
+        (self.members.len(), self.is_complete(false))
+    }
+
+    fn is_complete(&self, source_finished: bool) -> bool {
+        match self.expected_count {
+            Some(expected) => self.members.len() >= expected as usize,
+            None => source_finished && !self.members.is_empty(),
+        }
+    }
+}
+
+fn incomplete_post_detail(post: &PendingCollection) -> String {
+    match post.expected_count {
+        Some(expected) => format!(
+            "Post {} downloaded {} of {expected} expected files",
+            post.post_id,
+            post.members.len(),
+        ),
+        None => format!(
+            "Post {} ended before its file count was known; downloaded {} files",
+            post.post_id,
+            post.members.len(),
+        ),
+    }
+}
+
 impl<'a> SubscriptionSyncEngine<'a> {
     pub fn new(
         db: &'a LibraryDatabase,
@@ -172,10 +204,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
         progress: &mut SyncProgress,
         posts_processed_this_run: &mut usize,
     ) {
-        if progress.current_post_id.is_none() {
-            return;
-        }
-
         progress.posts_processed += 1;
         *posts_processed_this_run += 1;
 
@@ -351,5 +379,59 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .runtime_service()
             .upsert_subscription_issue(subscription_id, query_id, failure_kind, message, detail)
             .await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{PendingCollection, PendingMember};
+    use crate::subscriptions::source_adapter::ParsedMetadata;
+    use std::path::PathBuf;
+
+    fn member(page_num: u32, page_count: Option<u32>) -> PendingMember {
+        PendingMember {
+            file_path: PathBuf::from(format!("{page_num}.jpg")),
+            metadata: ParsedMetadata {
+                page_num: Some(page_num),
+                page_count,
+                ..Default::default()
+            },
+            page_num,
+        }
+    }
+
+    fn pending(expected_count: Option<u32>, member_count: usize) -> PendingCollection {
+        PendingCollection {
+            category: "pixiv".to_string(),
+            post_id: "42".to_string(),
+            preferred_name: "post".to_string(),
+            expected_count,
+            members: (0..member_count)
+                .map(|page_num| member(page_num as u32, expected_count))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn pending_collection_requires_every_advertised_member() {
+        assert!(!pending(Some(3), 2).is_complete(false));
+        assert!(pending(Some(3), 3).is_complete(false));
+    }
+
+    #[test]
+    fn unknown_member_count_waits_for_source_completion() {
+        assert!(!pending(None, 2).is_complete(false));
+        assert!(pending(None, 2).is_complete(true));
+    }
+
+    #[test]
+    fn interleaved_posts_complete_independently() {
+        let mut first = pending(None, 0);
+        let mut second = pending(None, 0);
+
+        assert!(!first.push_member(member(0, Some(2))).1);
+        assert!(!second.push_member(member(0, Some(2))).1);
+        assert!(first.push_member(member(1, Some(2))).1);
+        assert!(second.push_member(member(1, Some(2))).1);
     }
 }

@@ -11,7 +11,8 @@ use crate::subscriptions::source_adapter::{
 
 use super::helpers::cleanup_subscription_temp_root;
 use super::{
-    query_run_completion, PendingCollection, PendingMember, SubscriptionSyncEngine, SyncProgress,
+    incomplete_post_detail, query_run_completion, PendingCollection, PendingMember,
+    SubscriptionSyncEngine, SyncProgress,
 };
 
 impl<'a> SubscriptionSyncEngine<'a> {
@@ -92,6 +93,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let runner_handle = tokio::spawn(async move { adapter.run(&opts, item_tx).await });
 
         let mut pending_collections: HashMap<String, PendingCollection> = HashMap::new();
+        let mut accepted_files = 0usize;
+        let mut accepted_post = false;
         while let Some(item) = item_rx.recv().await {
             if cancel.is_cancelled() {
                 progress.cancelled = true;
@@ -125,6 +128,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 continue;
             }
             progress.metadata_validated += 1;
+            progress.files_downloaded += 1;
             let collection_parts = collection_group_parts(site_id, &item.metadata);
             let is_collection_member = self.auto_collections && collection_parts.is_some();
             if is_collection_member {
@@ -139,15 +143,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         expected_count: None,
                         members: Vec::new(),
                     });
-                pending.expected_count = Some(
-                    pending
-                        .expected_count
-                        .unwrap_or(0)
-                        .max(item.metadata.page_count.unwrap_or(0)),
-                )
-                .filter(|count| *count > 0);
                 let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
-                pending.members.push(PendingMember {
+                pending.push_member(PendingMember {
                     file_path: item.file_path,
                     metadata: item.metadata,
                     page_num,
@@ -165,7 +162,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 )
                 .await
             {
-                Ok(_) => progress.queued_for_ingest += 1,
+                Ok(_) => {
+                    progress.queued_for_ingest += 1;
+                    accepted_files += 1;
+                    if !accepted_post {
+                        accepted_post = true;
+                        progress.posts_processed += 1;
+                    }
+                }
                 Err(error) => {
                     progress.failure_kind =
                         Some(FailureKind::IngestQueueFailure.as_str().to_string());
@@ -233,11 +237,33 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         if !progress.cancelled {
             for pc in pending_collections.into_values() {
+                if !pc.is_complete(true) {
+                    let detail = incomplete_post_detail(&pc);
+                    progress.failure_kind = Some(FailureKind::DownloadFailure.as_str().to_string());
+                    progress.errors.push(detail.clone());
+                    self.record_issue(
+                        subscription_id,
+                        Some(query_id),
+                        FailureKind::DownloadFailure,
+                        "A retried subscription post did not download completely",
+                        Some(&detail),
+                    )
+                    .await;
+                    continue;
+                }
+                let file_count = pc.members.len();
                 match self
                     .enqueue_pending_collection(pc, subscription_id, query_id, query_run_id)
                     .await
                 {
-                    Ok(_) => progress.queued_for_ingest += 1,
+                    Ok(_) => {
+                        progress.queued_for_ingest += 1;
+                        accepted_files += file_count;
+                        if !accepted_post {
+                            accepted_post = true;
+                            progress.posts_processed += 1;
+                        }
+                    }
                     Err(error) => {
                         progress.failure_kind =
                             Some(FailureKind::IngestQueueFailure.as_str().to_string());
@@ -253,6 +279,18 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     }
                 }
             }
+        }
+
+        if accepted_files > 0 {
+            let _ = self
+                .runtime_service()
+                .add_query_progress(
+                    query_id,
+                    None,
+                    accepted_files as i64,
+                    progress.posts_processed as i64,
+                )
+                .await;
         }
 
         cleanup_subscription_temp_root(&run_summary.temp_dir).await;

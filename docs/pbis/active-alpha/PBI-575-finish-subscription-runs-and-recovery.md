@@ -235,8 +235,8 @@ Acceptance:
 
 Implementation checkpoint:
 
-- Define an explicit source-stream event for media items and post completion; do not infer post
-  completion from contiguous ordering.
+- Group streamed assets by normalized post identity. Queue a post when its advertised child count is
+  complete, or at source EOF when no count exists; never infer completion from contiguous ordering.
 - Queue ready singles and complete posts immediately while the downloader continues.
 - Require every subscription queue path to populate its existing `query_run_id`, and count ingest
   rows through that origin so progress and restart recovery account for exactly this run.

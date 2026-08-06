@@ -21,7 +21,8 @@ use super::helpers::{
     cleanup_subscription_temp_root, compute_committed_cursor, initial_history_has_more,
 };
 use super::{
-    query_run_completion, PendingCollection, PendingMember, SubscriptionSyncEngine, SyncProgress,
+    incomplete_post_detail, query_run_completion, PendingCollection, PendingMember,
+    SubscriptionSyncEngine, SyncProgress,
 };
 
 impl<'a> SubscriptionSyncEngine<'a> {
@@ -216,7 +217,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let runner_handle = tokio::spawn(async move { adapter.run(&opts, item_tx).await });
 
         let mut pending_collections: HashMap<String, PendingCollection> = HashMap::new();
-        let mut current_pending_collection_key: Option<String> = None;
         let mut all_post_ids: HashSet<String> = HashSet::new();
         let mut committed_post_ids: HashSet<String> = HashSet::new();
         let mut posts_to_unarchive: HashSet<String> = HashSet::new();
@@ -285,62 +285,26 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 let (category, post_id, preferred_name) = collection_parts.unwrap();
                 let key = format!("{category}:{post_id}");
 
-                if current_pending_collection_key
-                    .as_deref()
-                    .is_some_and(|current| current != key)
-                {
-                    if let Some(previous_key) = current_pending_collection_key.take() {
-                        let pending_post_id = pending_collections
-                            .get(&previous_key)
-                            .map(|collection| collection.post_id.clone());
-                        match self
-                            .flush_pending_collection(
-                                &previous_key,
-                                &mut pending_collections,
-                                subscription_id,
-                                query_id,
-                                query_run_id,
-                                &sub_id_str,
-                                &mut progress,
-                            )
-                            .await
-                        {
-                            Ok(Some((post_id, file_count))) => {
-                                committed_post_ids.insert(post_id);
-                                committed_files_this_run += file_count;
-                                self.finalize_current_post_progress(
-                                    &mut progress,
-                                    &mut posts_processed_this_run,
-                                );
-                            }
-                            Ok(None) => {}
-                            Err(error) => {
-                                posts_to_unarchive.extend(pending_post_id);
-                                progress.failure_kind =
-                                    Some(FailureKind::IngestQueueFailure.as_str().to_string());
-                                progress.errors.push(format!(
-                                    "Failed to queue collection for ingest: {error}"
-                                ));
-                                self.record_issue(
-                                    subscription_id,
-                                    Some(query_id),
-                                    FailureKind::IngestQueueFailure,
-                                    "Failed to queue subscription collection for ingest",
-                                    Some(&error),
-                                )
-                                .await;
-                            }
-                        }
-                    }
-                }
+                let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
 
-                let is_new_post = progress.current_post_id.as_deref() != Some(&post_id);
-                if is_new_post {
-                    progress.current_post_id = Some(post_id.clone());
-                    progress.current_post_items = 0;
-                }
-                current_pending_collection_key = Some(key.clone());
-                progress.current_post_items += 1;
+                let (buffered_items, ready) = {
+                    let pending = pending_collections.entry(key.clone()).or_insert_with(|| {
+                        PendingCollection {
+                            category,
+                            post_id: post_id.clone(),
+                            preferred_name,
+                            expected_count: None,
+                            members: Vec::new(),
+                        }
+                    });
+                    pending.push_member(PendingMember {
+                        file_path: item.file_path,
+                        metadata: item.metadata,
+                        page_num,
+                    })
+                };
+                progress.current_post_id = Some(post_id.clone());
+                progress.current_post_items = buffered_items;
                 let short_id = if post_id.len() > 4 {
                     &post_id[post_id.len() - 4..]
                 } else {
@@ -350,40 +314,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 self.emit_progress(
                     &sub_id_str,
                     &progress,
-                    &format!(
-                        "Stashing post ..{short_id} ({})",
-                        progress.current_post_items
-                    ),
+                    &format!("Stashing post ..{short_id} ({buffered_items})"),
                 );
-                let page_count = item.metadata.page_count.unwrap_or(0);
-                let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
-
-                let pending =
-                    pending_collections
-                        .entry(key.clone())
-                        .or_insert_with(|| PendingCollection {
-                            category,
-                            post_id,
-                            preferred_name,
-                            expected_count: None,
-                            members: Vec::new(),
-                        });
-                pending.expected_count = Some(pending.expected_count.unwrap_or(0).max(page_count))
-                    .filter(|count| *count > 0);
-
-                pending.members.push(PendingMember {
-                    file_path: item.file_path,
-                    metadata: item.metadata,
-                    page_num,
-                });
-            } else {
-                if let Some(previous_key) = current_pending_collection_key.take() {
+                if ready {
                     let pending_post_id = pending_collections
-                        .get(&previous_key)
+                        .get(&key)
                         .map(|collection| collection.post_id.clone());
                     match self
                         .flush_pending_collection(
-                            &previous_key,
+                            &key,
                             &mut pending_collections,
                             subscription_id,
                             query_id,
@@ -394,12 +333,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         .await
                     {
                         Ok(Some((post_id, file_count))) => {
-                            committed_post_ids.insert(post_id);
                             committed_files_this_run += file_count;
-                            self.finalize_current_post_progress(
-                                &mut progress,
-                                &mut posts_processed_this_run,
-                            );
+                            if committed_post_ids.insert(post_id) {
+                                self.finalize_current_post_progress(
+                                    &mut progress,
+                                    &mut posts_processed_this_run,
+                                );
+                            }
                         }
                         Ok(None) => {}
                         Err(error) => {
@@ -420,7 +360,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         }
                     }
                 }
-
+            } else {
                 progress.current_post_id = Some(
                     item.metadata
                         .post_id
@@ -707,80 +647,21 @@ impl<'a> SubscriptionSyncEngine<'a> {
             cancelled = progress.cancelled,
             "sync_query: finalizing pending collections"
         );
-        if progress.cancelled {
-            // A cancelled run must not lose posts that already finished
-            // downloading: flush every buffered post whose full file set is on
-            // disk. Incomplete posts are dropped AND un-archived so the next
-            // run re-fetches them whole — otherwise their already-downloaded
-            // files would archive-skip and the post could never complete.
-            let keys: Vec<String> = pending_collections.keys().cloned().collect();
-            for key in keys {
-                let complete = pending_collections.get(&key).is_some_and(|pc| {
-                    pc.expected_count
-                        .is_some_and(|expected| pc.members.len() as u32 >= expected)
-                });
-                if complete {
-                    let pending_post_id = pending_collections
-                        .get(&key)
-                        .map(|collection| collection.post_id.clone());
-                    match self
-                        .flush_pending_collection(
-                            &key,
-                            &mut pending_collections,
-                            subscription_id,
-                            query_id,
-                            query_run_id,
-                            &sub_id_str,
-                            &mut progress,
-                        )
-                        .await
-                    {
-                        Ok(Some((post_id, file_count))) => {
-                            committed_post_ids.insert(post_id);
-                            committed_files_this_run += file_count;
-                            self.finalize_current_post_progress(
-                                &mut progress,
-                                &mut posts_processed_this_run,
-                            );
-                        }
-                        Ok(None) => {}
-                        Err(error) => {
-                            posts_to_unarchive.extend(pending_post_id);
-                            progress.failure_kind =
-                                Some(FailureKind::IngestQueueFailure.as_str().to_string());
-                            progress
-                                .errors
-                                .push(format!("Failed to queue collection for ingest: {error}"));
-                            self.record_issue(
-                                subscription_id,
-                                Some(query_id),
-                                FailureKind::IngestQueueFailure,
-                                "Failed to queue subscription collection for ingest",
-                                Some(&error),
-                            )
-                            .await;
-                        }
-                    }
-                } else if let Some(pc) = pending_collections.remove(&key) {
-                    info!(
-                        query_id,
-                        post_id = %pc.post_id,
-                        members = pc.members.len(),
-                        expected = ?pc.expected_count,
-                        "sync_query: dropping incomplete post at cancellation; clearing its archive entries for full re-fetch"
-                    );
-                    posts_to_unarchive.insert(pc.post_id);
-                }
-            }
-        }
-        if !progress.cancelled {
-            if let Some(last_key) = current_pending_collection_key.take() {
+        // Complete posts queue immediately above. Anything left here either
+        // has no advertised size and can close at normal EOF, or is incomplete
+        // and must be fetched again as a whole post.
+        let pending_keys: Vec<String> = pending_collections.keys().cloned().collect();
+        for key in pending_keys {
+            let complete = pending_collections
+                .get(&key)
+                .is_some_and(|post| post.is_complete(!progress.cancelled));
+            if complete {
                 let pending_post_id = pending_collections
-                    .get(&last_key)
+                    .get(&key)
                     .map(|collection| collection.post_id.clone());
                 match self
                     .flush_pending_collection(
-                        &last_key,
+                        &key,
                         &mut pending_collections,
                         subscription_id,
                         query_id,
@@ -791,12 +672,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .await
                 {
                     Ok(Some((post_id, file_count))) => {
-                        committed_post_ids.insert(post_id);
                         committed_files_this_run += file_count;
-                        self.finalize_current_post_progress(
-                            &mut progress,
-                            &mut posts_processed_this_run,
-                        );
+                        if committed_post_ids.insert(post_id) {
+                            self.finalize_current_post_progress(
+                                &mut progress,
+                                &mut posts_processed_this_run,
+                            );
+                        }
                     }
                     Ok(None) => {}
                     Err(error) => {
@@ -816,8 +698,33 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         .await;
                     }
                 }
+            } else if let Some(post) = pending_collections.remove(&key) {
+                let detail = incomplete_post_detail(&post);
+                info!(
+                    query_id,
+                    post_id = %post.post_id,
+                    members = post.members.len(),
+                    expected = ?post.expected_count,
+                    cancelled = progress.cancelled,
+                    "sync_query: dropping incomplete post and clearing its archive entries"
+                );
+                posts_to_unarchive.insert(post.post_id);
+                if !progress.cancelled {
+                    progress.failure_kind = Some(FailureKind::DownloadFailure.as_str().to_string());
+                    progress.errors.push(detail.clone());
+                    self.record_issue(
+                        subscription_id,
+                        Some(query_id),
+                        FailureKind::DownloadFailure,
+                        "A subscription post did not download completely",
+                        Some(&detail),
+                    )
+                    .await;
+                }
             }
+        }
 
+        if !progress.cancelled {
             let bridge_discovered_without_downloads = !completed_initial_run
                 && !progress.cancelled
                 && run_summary.exit_code == 0
