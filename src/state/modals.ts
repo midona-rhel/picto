@@ -73,10 +73,11 @@ export interface FolderImportModalState {
   open: boolean;
   path: string;
   targetFolderId: number | null;
+  initialStatus: number;
 }
 
 export const folderImportModalAtom = atom<FolderImportModalState>({
-  open: false, path: '', targetFolderId: null,
+  open: false, path: '', targetFolderId: null, initialStatus: 1,
 });
 
 // ── Tag select modal (wider modal version, opened from context menu / keyboard) ──

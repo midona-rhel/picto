@@ -16,7 +16,7 @@ import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { viewerDisplayStateAtom, viewerDisplayControlsAtom } from '../../state/viewer';
 import * as entityMutations from '../../controllers/entityMutations';
 import { useImageZoom, type ImageSize } from './hooks/useImageZoom';
-import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
+import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
 import { useRecordMediaView } from './hooks/useRecordMediaView';
@@ -88,7 +88,7 @@ export function MediaView({
     return r;
   }, [items, currentIndex]);
 
-  const pipeline = useViewerMediaPipeline({
+  const pipeline = useMediaImagePipeline({
     hash: currentHash || null,
     thumbnailHash: currentItem?.thumbnail_hash ?? null,
     mime: currentMime,

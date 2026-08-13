@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::query::duplicates::DuplicateSingleRef;
@@ -33,24 +35,73 @@ pub fn upsert_duplicate_pair_for_review(
     Ok(())
 }
 
-pub fn insert_duplicate_pairs_for_scan(
+pub fn reconcile_detected_duplicate_pairs(
     conn: &Connection,
     candidate_pairs: &[(i64, i64, u32)],
-) -> rusqlite::Result<usize> {
-    let mut inserted = 0usize;
+) -> rusqlite::Result<Vec<(i64, i64, u32)>> {
+    let mut current = BTreeMap::<(i64, i64), u32>::new();
     for (file_id_a, file_id_b, distance) in candidate_pairs {
         let (a, b) = if file_id_a < file_id_b {
             (*file_id_a, *file_id_b)
         } else {
             (*file_id_b, *file_id_a)
         };
-        inserted += conn.execute(
-            "INSERT OR IGNORE INTO duplicate (file_id_a, file_id_b, distance)
-             VALUES (?1, ?2, ?3)",
-            params![a, b, *distance as i64],
-        )? as usize;
+        current
+            .entry((a, b))
+            .and_modify(|existing| *existing = (*existing).min(*distance))
+            .or_insert(*distance);
     }
-    Ok(inserted)
+
+    let stale_pairs: Vec<(i64, i64)> = {
+        let mut stmt = conn.prepare(
+            "SELECT file_id_a, file_id_b
+             FROM duplicate
+             WHERE status = 'detected'",
+        )?;
+        let rows = stmt
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+    for (file_id_a, file_id_b) in stale_pairs {
+        if !current.contains_key(&(file_id_a, file_id_b)) {
+            conn.execute(
+                "DELETE FROM duplicate
+                 WHERE file_id_a = ?1 AND file_id_b = ?2 AND status = 'detected'",
+                params![file_id_a, file_id_b],
+            )?;
+        }
+    }
+
+    let mut newly_detected = Vec::new();
+    for ((file_id_a, file_id_b), distance) in current {
+        let existing_status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM duplicate WHERE file_id_a = ?1 AND file_id_b = ?2",
+                params![file_id_a, file_id_b],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match existing_status.as_deref() {
+            Some("detected") => {
+                conn.execute(
+                    "UPDATE duplicate SET distance = ?3
+                     WHERE file_id_a = ?1 AND file_id_b = ?2 AND status = 'detected'",
+                    params![file_id_a, file_id_b, distance as i64],
+                )?;
+            }
+            Some(_) => {}
+            None => {
+                conn.execute(
+                    "INSERT INTO duplicate (file_id_a, file_id_b, distance)
+                     VALUES (?1, ?2, ?3)",
+                    params![file_id_a, file_id_b, distance as i64],
+                )?;
+                newly_detected.push((file_id_a, file_id_b, distance));
+            }
+        }
+    }
+    Ok(newly_detected)
 }
 
 fn merged_status(left: i64, right: i64) -> i64 {
@@ -97,10 +148,10 @@ fn choose_winner(
     action: &str,
     left: &DuplicateSingleRef,
     right: &DuplicateSingleRef,
-) -> rusqlite::Result<(DuplicateSingleRef, DuplicateSingleRef)> {
+) -> rusqlite::Result<Option<(DuplicateSingleRef, DuplicateSingleRef)>> {
     match action {
-        "keep_left" => Ok((left.clone(), right.clone())),
-        "keep_right" => Ok((right.clone(), left.clone())),
+        "keep_left" => Ok(Some((left.clone(), right.clone()))),
+        "keep_right" => Ok(Some((right.clone(), left.clone()))),
         "smart_merge" => {
             let decision = crate::duplicates::quality::compare_static_image_quality(
                 &crate::duplicates::quality::ComparableImageCandidate {
@@ -120,18 +171,12 @@ fn choose_winner(
             );
             Ok(match decision {
                 crate::duplicates::quality::ImageQualityDecision::LeftBetter => {
-                    (left.clone(), right.clone())
+                    Some((left.clone(), right.clone()))
                 }
                 crate::duplicates::quality::ImageQualityDecision::RightBetter => {
-                    (right.clone(), left.clone())
+                    Some((right.clone(), left.clone()))
                 }
-                crate::duplicates::quality::ImageQualityDecision::Ambiguous => {
-                    if left.entity_hash <= right.entity_hash {
-                        (left.clone(), right.clone())
-                    } else {
-                        (right.clone(), left.clone())
-                    }
-                }
+                crate::duplicates::quality::ImageQualityDecision::Ambiguous => None,
             })
         }
         other => Err(rusqlite::Error::InvalidParameterName(format!(
@@ -147,6 +192,20 @@ pub fn resolve_duplicate_pair(
     right: DuplicateSingleRef,
     preferred_collection_id: Option<i64>,
 ) -> rusqlite::Result<DuplicateResolutionResult> {
+    let active_or_inbox_entities: i64 = conn.query_row(
+        "SELECT COUNT(*)
+         FROM media_entity
+         WHERE entity_id IN (?1, ?2)
+           AND status IN (0, 1)",
+        params![left.entity_id, right.entity_id],
+        |row| row.get(0),
+    )?;
+    if active_or_inbox_entities != 2 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "duplicate entities must be active or inbox".to_string(),
+        ));
+    }
+
     let status: Option<String> = conn
         .query_row(
             "SELECT status FROM duplicate
@@ -176,6 +235,9 @@ pub fn resolve_duplicate_pair(
             status: DuplicateResolveStatus::Resolved,
             winner_hash: None,
             loser_hash: None,
+            loser_file_hash: None,
+            blob_cleanup_pending: false,
+            cleanup_error: None,
             action: action.to_string(),
             affected_folder_ids: Vec::new(),
             affected_collection_ids: Vec::new(),
@@ -198,6 +260,9 @@ pub fn resolve_duplicate_pair(
             status: DuplicateResolveStatus::Resolved,
             winner_hash: None,
             loser_hash: None,
+            loser_file_hash: None,
+            blob_cleanup_pending: false,
+            cleanup_error: None,
             action: action.to_string(),
             affected_folder_ids: Vec::new(),
             affected_collection_ids: Vec::new(),
@@ -206,7 +271,21 @@ pub fn resolve_duplicate_pair(
         });
     }
 
-    let (winner, loser) = choose_winner(action, &left, &right)?;
+    let Some((winner, loser)) = choose_winner(action, &left, &right)? else {
+        return Ok(DuplicateResolutionResult {
+            status: DuplicateResolveStatus::QualityAmbiguous,
+            winner_hash: None,
+            loser_hash: None,
+            loser_file_hash: None,
+            blob_cleanup_pending: false,
+            cleanup_error: None,
+            action: action.to_string(),
+            affected_folder_ids: Vec::new(),
+            affected_collection_ids: Vec::new(),
+            tags_merged: 0,
+            conflict: None,
+        });
+    };
 
     if winner.parent_collection_entity_id.is_some()
         && loser.parent_collection_entity_id.is_some()
@@ -217,6 +296,9 @@ pub fn resolve_duplicate_pair(
             status: DuplicateResolveStatus::Conflict,
             winner_hash: Some(winner.entity_hash.clone()),
             loser_hash: Some(loser.entity_hash.clone()),
+            loser_file_hash: None,
+            blob_cleanup_pending: false,
+            cleanup_error: None,
             action: action.to_string(),
             affected_folder_ids: Vec::new(),
             affected_collection_ids: Vec::new(),
@@ -404,6 +486,18 @@ pub fn resolve_duplicate_pair(
         ],
     )?;
     conn.execute(
+        "DELETE FROM deferred_work_item
+         WHERE entity_hash = ?1 AND work_type != 'blob_delete'",
+        [&loser.file_hash],
+    )?;
+    conn.execute(
+        "INSERT INTO deferred_work_item
+             (entity_hash, work_type, status, attempt_count, available_at, queued_at)
+         VALUES (?1, 'blob_delete', 'pending', 0, ?2, ?2)
+         ON CONFLICT(entity_hash, work_type) DO NOTHING",
+        params![loser.file_hash, chrono::Utc::now().to_rfc3339()],
+    )?;
+    conn.execute(
         "DELETE FROM duplicate WHERE file_id_a = ?1 OR file_id_b = ?1",
         [loser.file_id],
     )?;
@@ -429,6 +523,9 @@ pub fn resolve_duplicate_pair(
         status: DuplicateResolveStatus::Resolved,
         winner_hash: Some(winner.entity_hash),
         loser_hash: Some(loser.entity_hash),
+        loser_file_hash: Some(loser.file_hash),
+        blob_cleanup_pending: true,
+        cleanup_error: None,
         action: action.to_string(),
         affected_folder_ids,
         affected_collection_ids,

@@ -5,7 +5,7 @@
  * centered modal for forms and confirmations.
  */
 
-import { useEffect, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useId, useState, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { IconX } from '@tabler/icons-react';
 import styles from './GlassModal.module.css';
@@ -25,6 +25,7 @@ export interface GlassModalProps {
 const EXIT_MS = 120;
 
 export function GlassModal({ open, onClose, title, size = 'md', flush = false, footer, children }: GlassModalProps) {
+  const titleId = useId();
   const [visible, setVisible] = useState(false);
   const [closing, setClosing] = useState(false);
 
@@ -67,9 +68,12 @@ export function GlassModal({ open, onClose, title, size = 'md', flush = false, f
       <div
         className={`${styles.panel} ${sizeClass} ${closing ? styles.panelClosing : ''}`}
         onClick={(e) => e.stopPropagation()}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
       >
         <div className={styles.header}>
-          <span className={styles.title}>{title}</span>
+          <span className={styles.title} id={titleId}>{title}</span>
           <button className={styles.closeBtn} onClick={startClose} type="button" title="Close">
             <IconX size={14} />
           </button>

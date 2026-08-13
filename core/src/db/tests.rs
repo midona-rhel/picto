@@ -12,8 +12,10 @@ use crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION;
 use crate::media_processing::colors::{serialize_dominant_palette_blob, DominantColor};
 use crate::subscriptions::gallery_dl_runner::FailureKind;
 use crate::subscriptions::runtime_db::upsert_subscription_issue;
+use img_hash::ImageHash;
 use rusqlite::params;
-use std::sync::Arc;
+use std::sync::{mpsc, Arc};
+use std::time::Duration;
 use tempfile::TempDir;
 
 fn open_test_db() -> LibraryDatabase {
@@ -21,6 +23,12 @@ fn open_test_db() -> LibraryDatabase {
     let db = LibraryDatabase::open(tmp.path()).expect("open library db");
     std::mem::forget(tmp);
     db
+}
+
+fn supported_phash(bytes: [u8; 32]) -> String {
+    ImageHash::<Vec<u8>>::from_bytes(&bytes)
+        .expect("supported pHash")
+        .to_base64()
 }
 
 #[test]
@@ -74,6 +82,122 @@ fn collection_materialization_persists_prepared_perceptual_hashes() {
         .expect("read stored perceptual hash");
 
     assert_eq!(stored_phash.as_deref(), Some("phash-one"));
+}
+
+#[test]
+fn collection_materialization_indexes_phashes_and_records_pairs_atomically() {
+    let db = open_test_db();
+    let first_phash = supported_phash([0_u8; 32]);
+    let mut near_bytes = [0_u8; 32];
+    near_bytes[0] = 1;
+    let second_phash = supported_phash(near_bytes);
+    let member = |entity_hash: &str, perceptual_hash: &str| IngestPreparedSingle {
+        entity_hash: entity_hash.to_string(),
+        name: Some(entity_hash.to_string()),
+        size_bytes: 1,
+        mime_type: "image/png".to_string(),
+        pixel_width: Some(1),
+        pixel_height: Some(1),
+        duration_ms: None,
+        frame_count: Some(1),
+        has_audio: false,
+        status: 1,
+        date_created: "2026-08-14T00:00:00Z".to_string(),
+        date_added: "2026-08-14T00:00:00Z".to_string(),
+        has_thumbnail: false,
+        skip_thumbnail: false,
+        notes: None,
+        source_urls: Vec::new(),
+        tag_strings: Vec::new(),
+        tag_provenance_mask: 0,
+        perceptual_hash: Some(perceptual_hash.to_string()),
+    };
+
+    db.materialize_ingested_collection(
+        "Near pair",
+        &[
+            member("indexed-first", &first_phash),
+            member("indexed-second", &second_phash),
+        ],
+        &[],
+        None,
+    )
+    .expect("materialize indexed collection");
+
+    db.with_read(|conn| {
+        let index_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM media_file_phash_index", [], |row| {
+                row.get(0)
+            })?;
+        let pair_count: i64 =
+            conn.query_row("SELECT COUNT(*) FROM duplicate", [], |row| row.get(0))?;
+        assert_eq!(index_count, 2);
+        assert_eq!(pair_count, 1);
+        Ok(())
+    })
+    .expect("inspect indexed collection");
+}
+
+#[test]
+fn indexed_phash_candidates_apply_live_status_and_follow_replacement() {
+    let db = open_test_db();
+    let phash = supported_phash([42_u8; 32]);
+    let file_id = db
+        .insert_file(
+            "indexed-status-file",
+            "image/png",
+            1,
+            Some(1),
+            Some(1),
+            None,
+            Some(1),
+            false,
+            "2026-08-14T00:00:00Z",
+        )
+        .expect("insert file");
+    let entity_id = db
+        .insert_single(
+            "indexed-status-entity",
+            file_id,
+            Some("indexed"),
+            1,
+            "2026-08-14T00:00:00Z",
+            "2026-08-14T00:00:00Z",
+        )
+        .expect("insert entity");
+    db.replace_file_phash(file_id, Some(&phash))
+        .expect("set pHash");
+
+    let candidate_count = |db: &LibraryDatabase| {
+        db.with_read(|conn| {
+            super::find_perceptual_hash_candidates_on_conn(conn, &phash, 7)
+                .map(|rows| rows.len() as i64)
+        })
+        .expect("query candidates")
+    };
+    assert_eq!(candidate_count(&db), 1);
+
+    db.with_write(|conn| {
+        conn.execute(
+            "UPDATE media_entity SET status = 2 WHERE entity_id = ?1",
+            [entity_id],
+        )?;
+        Ok(())
+    })
+    .expect("trash entity");
+    assert_eq!(candidate_count(&db), 0);
+
+    db.replace_file_phash(file_id, None).expect("clear pHash");
+    db.with_read(|conn| {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM media_file_phash_index WHERE file_id = ?1",
+            [file_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, 0);
+        Ok(())
+    })
+    .expect("inspect cleared pHash index");
 }
 
 #[test]
@@ -1524,12 +1648,17 @@ fn unknown_nonempty_schema_is_rejected_without_mutation() {
 fn current_schema_validation_rejects_missing_tables_columns_and_indexes() {
     for (malformation, expected_error) in [
         ("DROP TABLE media_view", "media_view"),
+        (
+            "DROP TABLE media_file_phash_index",
+            "media_file_phash_index",
+        ),
         ("DROP TABLE sync_ingest_cursor", "sync_ingest_cursor"),
         ("ALTER TABLE folder DROP COLUMN pin_order", "folder"),
         (
             "DROP INDEX idx_media_view_viewed_at",
             "idx_media_view_viewed_at",
         ),
+        ("DROP INDEX idx_mf_phash_p0", "idx_mf_phash_p0"),
         (
             "DROP INDEX idx_ingest_queue_ready",
             "idx_ingest_queue_ready",
@@ -2064,6 +2193,69 @@ fn smart_folder_scope_query_matches_runtime_compiled_bitmap_and_sidebar_count() 
 }
 
 #[test]
+fn run_compiler_waits_for_the_serialized_write_connection() {
+    let db = Arc::new(open_test_db());
+    let (started_tx, started_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let write_guard = db.write_conn.lock().unwrap();
+    let compiler_db = Arc::clone(&db);
+    let handle = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal compiler start");
+        compiler_db.run_compiler(crate::db::projection::compiler::CompilerPlan {
+            rebuild_sidebar: true,
+            ..Default::default()
+        });
+        finished_tx.send(()).expect("signal compiler completion");
+    });
+
+    started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("compiler thread started");
+    let completed_while_writer_locked =
+        finished_rx.recv_timeout(Duration::from_millis(100)).is_ok();
+    drop(write_guard);
+
+    let completed_after_release = finished_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+    handle.join().expect("compiler thread completed");
+
+    assert!(
+        !completed_while_writer_locked,
+        "compiler must wait for the serialized write connection"
+    );
+    assert!(completed_after_release);
+}
+
+#[test]
+fn full_rebuild_waits_for_the_serialized_write_connection() {
+    let db = Arc::new(open_test_db());
+    let (started_tx, started_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let write_guard = db.write_conn.lock().unwrap();
+    let rebuild_db = Arc::clone(&db);
+    let handle = std::thread::spawn(move || {
+        started_tx.send(()).expect("signal rebuild start");
+        rebuild_db.full_rebuild();
+        finished_tx.send(()).expect("signal rebuild completion");
+    });
+
+    started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("rebuild thread started");
+    let completed_while_writer_locked =
+        finished_rx.recv_timeout(Duration::from_millis(100)).is_ok();
+    drop(write_guard);
+
+    let completed_after_release = finished_rx.recv_timeout(Duration::from_secs(2)).is_ok();
+    handle.join().expect("rebuild thread completed");
+
+    assert!(
+        !completed_while_writer_locked,
+        "full rebuild must wait for the serialized write connection"
+    );
+    assert!(completed_after_release);
+}
+
+#[test]
 fn resolve_duplicate_pair_requires_explicit_collection_choice_for_cross_collection_members() {
     let db = open_test_db();
     db.with_write(|conn| {
@@ -2104,6 +2296,16 @@ fn resolve_duplicate_pair_requires_explicit_collection_choice_for_cross_collecti
             [],
         )?;
         conn.execute(
+            "INSERT INTO folder (folder_id, name, date_added, date_modified)
+             VALUES (10, 'Folder', '2026-04-01', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO folder_member (folder_id, entity_id, position_rank)
+             VALUES (10, 4, 1)",
+            [],
+        )?;
+        conn.execute(
             "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (1, 2, 0)",
             [],
         )?;
@@ -2119,6 +2321,29 @@ fn resolve_duplicate_pair_requires_explicit_collection_choice_for_cross_collecti
     let conflict = result.conflict.expect("conflict payload");
     assert_eq!(conflict.winner_collection_id, Some(1));
     assert_eq!(conflict.loser_collection_id, Some(2));
+
+    let result = db
+        .resolve_duplicate_pair("keep_left", "left_single", "right_single", Some(1))
+        .expect("resolve with selected collection");
+    assert!(matches!(result.status, DuplicateResolveStatus::Resolved));
+    assert_eq!(result.loser_file_hash.as_deref(), Some("file_right"));
+    assert_eq!(result.affected_collection_ids, vec![1, 2]);
+    assert_eq!(result.affected_folder_ids, vec![10]);
+    db.with_read(|conn| {
+        let (parent_collection, folder_membership): (Option<i64>, i64) = conn.query_row(
+            "SELECT
+                (SELECT parent_collection_entity_id FROM media_entity WHERE entity_hash = 'left_single'),
+                (SELECT COUNT(*) FROM folder_member fm
+                 JOIN media_entity me ON me.entity_id = fm.entity_id
+                 WHERE fm.folder_id = 10 AND me.entity_hash = 'left_single')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        assert_eq!(parent_collection, Some(1));
+        assert_eq!(folder_membership, 1);
+        Ok(())
+    })
+    .expect("verify ownership and folder reference repointing");
 }
 
 #[test]
@@ -2169,6 +2394,663 @@ fn resolve_duplicate_pair_rejects_entities_without_a_detected_pair() {
         })
         .expect("count surviving rows");
     assert_eq!((entities, files), (2, 2));
+}
+
+#[test]
+fn resolve_duplicate_pair_rejects_stale_trash_candidates_without_mutation() {
+    let db = open_test_db();
+    db.with_write(|conn| {
+        conn.execute_batch(LIBRARY_DDL)?;
+        conn.execute(
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+             ) VALUES
+                (1, 'left_single', 'single', 1, 'Left', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (2, 'right_single', 'single', 1, 'Right', '2026-04-01', '2026-04-01', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO media_file (
+                file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, has_audio,
+                perceptual_hash, date_added
+             ) VALUES
+                (1, 'file_left', 'image/png', 100, 100, 100, 0, 'hash_left', '2026-04-01'),
+                (2, 'file_right', 'image/jpeg', 200, 200, 200, 0, 'hash_right', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (1, 2, 0)",
+            [],
+        )?;
+        conn.execute("UPDATE media_entity SET status = 2 WHERE entity_id = 2", [])?;
+        Ok(())
+    })
+    .expect("seed stale trash duplicate fixture");
+
+    let error = db
+        .resolve_duplicate_pair("smart_merge", "left_single", "right_single", None)
+        .expect_err("stale trash candidates must not resolve");
+    assert!(error.contains("active or inbox"));
+
+    db.with_read(|conn| {
+        let (entities, files, duplicate_status): (i64, i64, String) = conn.query_row(
+            "SELECT
+                (SELECT COUNT(*) FROM media_entity),
+                (SELECT COUNT(*) FROM media_file),
+                (SELECT status FROM duplicate WHERE file_id_a = 1 AND file_id_b = 2)",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(
+            (entities, files, duplicate_status.as_str()),
+            (2, 2, "detected")
+        );
+        Ok(())
+    })
+    .expect("verify stale trash resolution made no mutation");
+}
+
+#[test]
+fn duplicate_similarity_uses_the_full_256_bit_hash() {
+    let db = open_test_db();
+    db.with_write(|conn| {
+        conn.execute_batch(LIBRARY_DDL)?;
+        conn.execute(
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+             ) VALUES
+                (1, 'left_single', 'single', 1, 'Left', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (2, 'right_single', 'single', 1, 'Right', '2026-04-01', '2026-04-01', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO media_file (
+                file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, frame_count,
+                has_audio, perceptual_hash, date_added
+             ) VALUES
+                (1, 'file_left', 'image/png', 1, 100, 100, 1, 0, 'hash_left', '2026-04-01'),
+                (2, 'file_right', 'image/png', 1, 100, 100, 1, 0, 'hash_right', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (1, 2, 64)",
+            [],
+        )?;
+        Ok(())
+    })
+    .expect("seed duplicate percentage data");
+
+    let page = db
+        .get_duplicate_pairs(None, 10, Some("detected".to_string()), None)
+        .expect("read duplicate page");
+    assert_eq!(page.items[0].similarity_pct, 75.0);
+}
+
+#[test]
+fn duplicate_visibility_includes_inbox_and_excludes_trash_immediately() {
+    let db = open_test_db();
+    db.with_write(|conn| {
+        conn.execute_batch(LIBRARY_DDL)?;
+        conn.execute(
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+             ) VALUES
+                (1, 'inbox_single', 'single', 0, 'Inbox', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (2, 'active_single', 'single', 1, 'Active', '2026-04-01', '2026-04-01', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO media_file (
+                file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, frame_count,
+                has_audio, perceptual_hash, date_added
+             ) VALUES
+                (1, 'inbox_file', 'image/png', 1, 100, 100, 1, 0, 'hash_inbox', '2026-04-01'),
+                (2, 'active_file', 'image/png', 1, 100, 100, 1, 0, 'hash_active', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (1, 2, 4)",
+            [],
+        )?;
+        Ok(())
+    })
+    .expect("seed inbox duplicate fixture");
+
+    assert_eq!(db.get_duplicate_count().unwrap(), 1);
+    assert_eq!(
+        db.get_duplicate_pairs(None, 10, Some("detected".to_string()), None)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+
+    db.with_write(|conn| {
+        conn.execute("UPDATE media_entity SET status = 2 WHERE entity_id = 1", [])?;
+        Ok(())
+    })
+    .expect("move inbox candidate to trash");
+    assert_eq!(db.get_duplicate_count().unwrap(), 0);
+    assert!(db
+        .get_duplicate_pairs(None, 10, Some("detected".to_string()), None)
+        .unwrap()
+        .items
+        .is_empty());
+
+    db.with_write(|conn| {
+        conn.execute("UPDATE media_entity SET status = 0 WHERE entity_id = 1", [])?;
+        Ok(())
+    })
+    .expect("restore inbox candidate");
+    assert_eq!(db.get_duplicate_count().unwrap(), 1);
+    assert_eq!(
+        db.get_duplicate_pairs(None, 10, Some("detected".to_string()), None)
+            .unwrap()
+            .items
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn duplicate_rescan_reconciles_detected_truth_and_preserves_decisions() {
+    let db = open_test_db();
+    let mut one_bit = [0u8; 32];
+    one_bit[0] = 0x80;
+    let mut two_bits = [0u8; 32];
+    two_bits[0] = 0x03;
+    let far = [0xffu8; 32];
+    let hashes = [
+        ImageHash::<Vec<u8>>::from_bytes(&[0u8; 32])
+            .unwrap()
+            .to_base64(),
+        ImageHash::<Vec<u8>>::from_bytes(&one_bit)
+            .unwrap()
+            .to_base64(),
+        ImageHash::<Vec<u8>>::from_bytes(&two_bits)
+            .unwrap()
+            .to_base64(),
+    ];
+
+    db.with_write(|conn| {
+        conn.execute_batch(LIBRARY_DDL)?;
+        conn.execute(
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+             ) VALUES
+                (1, 'scan_a', 'single', 1, 'A', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (2, 'scan_b', 'single', 1, 'B', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (3, 'scan_c', 'single', 1, 'C', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (4, 'scan_short', 'single', 1, 'Short', '2026-04-01', '2026-04-01', '2026-04-01')",
+            [],
+        )?;
+        for (file_id, hash) in hashes.iter().enumerate() {
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height,
+                    frame_count, has_audio, perceptual_hash, date_added
+                 ) VALUES (?1, ?2, 'image/png', 1, 1, 1, 1, 0, ?3, '2026-04-01')",
+                params![file_id as i64 + 1, format!("scan_file_{file_id}"), hash],
+            )?;
+            conn.execute(
+                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (?1, ?1)",
+                [file_id as i64 + 1],
+            )?;
+        }
+        let short_hash = ImageHash::<Vec<u8>>::from_bytes(&[0u8; 8])
+            .unwrap()
+            .to_base64();
+        conn.execute(
+            "INSERT INTO media_file (
+                file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height,
+                frame_count, has_audio, perceptual_hash, date_added
+             ) VALUES (4, 'scan_short_file', 'image/png', 1, 1, 1, 1, 0, ?1, '2026-04-01')",
+            [&short_hash],
+        )?;
+        conn.execute(
+            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (4, 4)",
+            [],
+        )?;
+        Ok(())
+    })
+    .expect("seed rescan fixture");
+
+    let first = db.scan_duplicates(Some(2), Some(2)).expect("initial scan");
+    assert_eq!(first.candidates_found, 2);
+    assert_eq!(first.pairs_inserted, 2);
+    assert_eq!(first.reviewable_detected_new, 2);
+    assert_eq!(first.files_scanned, 4);
+    assert_eq!(first.files_with_phash, 3);
+
+    db.with_write(|conn| {
+        conn.execute(
+            "UPDATE duplicate SET status = 'ignored_false_positive'
+             WHERE file_id_a = 1 AND file_id_b = 3",
+            [],
+        )?;
+        Ok(())
+    })
+    .expect("preserve explicit decision");
+
+    let narrowed = db.scan_duplicates(Some(1), Some(1)).expect("narrow scan");
+    assert_eq!(narrowed.candidates_found, 1);
+    assert_eq!(narrowed.pairs_inserted, 0);
+    assert_eq!(narrowed.reviewable_detected_new, 0);
+    assert_eq!(narrowed.reviewable_detected_total, 1);
+
+    let mut changed_b = [0u8; 32];
+    changed_b[0] = 0xc0;
+    let changed_b = ImageHash::<Vec<u8>>::from_bytes(&changed_b)
+        .unwrap()
+        .to_base64();
+    let far = ImageHash::<Vec<u8>>::from_bytes(&far).unwrap().to_base64();
+    db.with_write(|conn| {
+        conn.execute(
+            "UPDATE media_file SET perceptual_hash = ?1 WHERE file_id = 2",
+            [&changed_b],
+        )?;
+        conn.execute(
+            "UPDATE media_file SET perceptual_hash = ?1 WHERE file_id = 3",
+            [&far],
+        )?;
+        Ok(())
+    })
+    .expect("change hashes");
+
+    let changed = db
+        .scan_duplicates(Some(2), Some(2))
+        .expect("rescan changed hashes");
+    assert_eq!(changed.candidates_found, 1);
+    assert_eq!(changed.pairs_inserted, 0);
+    assert_eq!(changed.reviewable_detected_new, 0);
+    let pairs = db
+        .get_duplicate_pairs(None, 10, Some("detected".to_string()), None)
+        .expect("read reconciled pairs");
+    assert_eq!(pairs.items.len(), 1);
+    assert_eq!(pairs.items[0].distance, 2.0);
+
+    db.with_read(|conn| {
+        let ignored: String = conn.query_row(
+            "SELECT status FROM duplicate WHERE file_id_a = 1 AND file_id_b = 3",
+            [],
+            |row| row.get(0),
+        )?;
+        let stale_detected: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM duplicate
+             WHERE status = 'detected' AND file_id_a = 2 AND file_id_b = 3",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(ignored, "ignored_false_positive");
+        assert_eq!(stale_detected, 0);
+        Ok(())
+    })
+    .expect("verify reconciled statuses");
+}
+
+#[test]
+fn duplicate_resolution_decisions_preserve_truth_and_report_physical_hash() {
+    for action in [
+        "not_duplicate",
+        "keep_both",
+        "keep_left",
+        "keep_right",
+        "smart_merge",
+    ] {
+        let db = open_test_db();
+        db.with_write(|conn| {
+            conn.execute_batch(LIBRARY_DDL)?;
+            conn.execute(
+                "INSERT INTO media_entity (
+                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+                 ) VALUES
+                    (1, 'left_single', 'single', 1, 'Left', '2026-04-01', '2026-04-01', '2026-04-01'),
+                    (2, 'right_single', 'single', 1, 'Right', '2026-04-01', '2026-04-01', '2026-04-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, frame_count,
+                    has_audio, perceptual_hash, date_added
+                 ) VALUES
+                    (1, 'physical_left', 'image/png', 200, 200, 200, 1, 0, 'hash_left', '2026-04-01'),
+                    (2, 'physical_right', 'image/jpeg', 100, 100, 100, 1, 0, 'hash_right', '2026-04-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (1, 2, 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO deferred_work_item
+                    (entity_hash, work_type, status, attempt_count, available_at, queued_at)
+                 VALUES
+                    ('physical_right', 'thumbnail', 'pending', 0, '2026-04-01', '2026-04-01'),
+                    ('physical_right', 'dominant_colors', 'pending', 0, '2026-04-01', '2026-04-01'),
+                    ('physical_right', 'perceptual_hash', 'pending', 0, '2026-04-01', '2026-04-01')",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("seed decision data");
+
+        let result = db
+            .resolve_duplicate_pair(action, "left_single", "right_single", None)
+            .expect("resolve duplicate decision");
+
+        assert!(matches!(result.status, DuplicateResolveStatus::Resolved));
+        match action {
+            "not_duplicate" => {
+                assert!(result.winner_hash.is_none());
+                assert!(result.loser_file_hash.is_none());
+                assert_eq!(db.get_duplicate_count().unwrap(), 0);
+                db.with_read(|conn| {
+                    let status: String = conn.query_row(
+                        "SELECT status FROM duplicate WHERE file_id_a = 1 AND file_id_b = 2",
+                        [],
+                        |row| row.get(0),
+                    )?;
+                    assert_eq!(status, "ignored_false_positive");
+                    Ok(())
+                })
+                .expect("read not-duplicate decision");
+            }
+            "keep_both" => {
+                assert!(result.winner_hash.is_none());
+                assert!(result.loser_file_hash.is_none());
+                db.with_read(|conn| {
+                    let (entities, status): (i64, String) = conn.query_row(
+                        "SELECT (SELECT COUNT(*) FROM media_entity),
+                                (SELECT status FROM duplicate WHERE file_id_a = 1 AND file_id_b = 2)",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )?;
+                    assert_eq!(entities, 2);
+                    assert_eq!(status, "dismissed_keep_both");
+                    Ok(())
+                })
+                .expect("read keep-both decision");
+            }
+            "keep_left" | "smart_merge" => {
+                assert_eq!(result.winner_hash.as_deref(), Some("left_single"));
+                assert_eq!(result.loser_hash.as_deref(), Some("right_single"));
+                assert_eq!(result.loser_file_hash.as_deref(), Some("physical_right"));
+                assert_eq!(db.get_duplicate_count().unwrap(), 0);
+            }
+            "keep_right" => {
+                assert_eq!(result.winner_hash.as_deref(), Some("right_single"));
+                assert_eq!(result.loser_hash.as_deref(), Some("left_single"));
+                assert_eq!(result.loser_file_hash.as_deref(), Some("physical_left"));
+                assert_eq!(db.get_duplicate_count().unwrap(), 0);
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+#[test]
+fn duplicate_resolution_persists_after_database_reopen() {
+    let temp = TempDir::new().expect("create restart fixture");
+    {
+        let db = LibraryDatabase::open(temp.path()).expect("open initial database");
+        db.with_write(|conn| {
+            conn.execute_batch(LIBRARY_DDL)?;
+            conn.execute(
+                "INSERT INTO media_entity (
+                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+                 ) VALUES
+                    (1, 'left_single', 'single', 1, 'Left', '2026-04-01', '2026-04-01', '2026-04-01'),
+                    (2, 'right_single', 'single', 1, 'Right', '2026-04-01', '2026-04-01', '2026-04-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, frame_count,
+                    has_audio, perceptual_hash, date_added
+                 ) VALUES
+                    (1, 'physical_left', 'image/png', 200, 200, 200, 1, 0, 'hash_left', '2026-04-01'),
+                    (2, 'physical_right', 'image/jpeg', 100, 100, 100, 1, 0, 'hash_right', '2026-04-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (1, 2, 0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO deferred_work_item
+                    (entity_hash, work_type, status, attempt_count, available_at, queued_at)
+                 VALUES
+                    ('physical_right', 'thumbnail', 'pending', 0, '2026-04-01', '2026-04-01'),
+                    ('physical_right', 'dominant_colors', 'pending', 0, '2026-04-01', '2026-04-01'),
+                    ('physical_right', 'perceptual_hash', 'pending', 0, '2026-04-01', '2026-04-01')",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("seed restart fixture");
+
+        let result = db
+            .resolve_duplicate_pair("keep_left", "left_single", "right_single", None)
+            .expect("resolve before restart");
+        assert_eq!(result.loser_file_hash.as_deref(), Some("physical_right"));
+        assert!(result.blob_cleanup_pending);
+
+        let remaining_jobs = db
+            .list_deferred_work_items(DeferredWorkFilter {
+                entity_hash: Some("physical_right".to_string()),
+                ..Default::default()
+            })
+            .expect("list loser deferred work");
+        assert_eq!(remaining_jobs.len(), 1);
+        assert_eq!(remaining_jobs[0].work_type, DeferredWorkType::BlobDelete);
+
+        let jobs = db
+            .list_deferred_work_items(DeferredWorkFilter {
+                work_type: Some(DeferredWorkType::BlobDelete),
+                ..Default::default()
+            })
+            .expect("list pending blob cleanup");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].entity_hash, "physical_right");
+        assert_eq!(
+            jobs[0].status,
+            crate::background_work::DeferredWorkStatus::Pending
+        );
+
+        let claimed = db
+            .claim_next_deferred_work_items()
+            .expect("claim blob cleanup");
+        assert_eq!(claimed.len(), 1);
+    }
+
+    let reopened = LibraryDatabase::open(temp.path()).expect("reopen database");
+    assert_eq!(reopened.reset_running_deferred_work_items().unwrap(), 1);
+    let recovered = reopened
+        .list_deferred_work_items(DeferredWorkFilter {
+            work_type: Some(DeferredWorkType::BlobDelete),
+            ..Default::default()
+        })
+        .expect("read recovered cleanup");
+    assert_eq!(
+        recovered[0].status,
+        crate::background_work::DeferredWorkStatus::Pending
+    );
+    reopened
+        .retry_blob_delete_for_hash("physical_right", "simulated cleanup failure")
+        .expect("persist cleanup retry");
+    let retried = reopened
+        .list_deferred_work_items(DeferredWorkFilter {
+            work_type: Some(DeferredWorkType::BlobDelete),
+            ..Default::default()
+        })
+        .expect("read cleanup retry");
+    assert_eq!(retried[0].attempt_count, 1);
+    assert_eq!(
+        retried[0].last_error.as_deref(),
+        Some("simulated cleanup failure")
+    );
+    reopened
+        .complete_blob_delete_for_hash("physical_right")
+        .expect("complete cleanup by hash");
+    assert!(reopened
+        .list_deferred_work_items(DeferredWorkFilter {
+            entity_hash: Some("physical_right".to_string()),
+            ..Default::default()
+        })
+        .unwrap()
+        .is_empty());
+    reopened
+        .with_read(|conn| {
+            let (entities, files, detected): (i64, i64, i64) = conn.query_row(
+                "SELECT
+                    (SELECT COUNT(*) FROM media_entity),
+                    (SELECT COUNT(*) FROM media_file),
+                    (SELECT COUNT(*) FROM duplicate WHERE status = 'detected')",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            assert_eq!((entities, files, detected), (1, 1, 0));
+            Ok(())
+        })
+        .expect("verify duplicate resolution after restart");
+}
+
+#[test]
+fn smart_merge_preserves_both_files_when_quality_is_ambiguous() {
+    let db = open_test_db();
+    db.with_write(|conn| {
+        conn.execute_batch(LIBRARY_DDL)?;
+        conn.execute(
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+             ) VALUES
+                (1, 'left_single', 'single', 1, 'Left', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (2, 'right_single', 'single', 1, 'Right', '2026-04-01', '2026-04-01', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO media_file (
+                file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, frame_count,
+                has_audio, perceptual_hash, date_added
+             ) VALUES
+                (1, 'file_left', 'image/png', 1000, 100, 100, 1, 0, 'hash_left', '2026-04-01'),
+                (2, 'file_right', 'image/png', 1000, 100, 100, 1, 0, 'hash_right', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (1, 2, 0)",
+            [],
+        )?;
+        Ok(())
+    })
+    .expect("seed ambiguous duplicate pair");
+
+    let result = db
+        .resolve_duplicate_pair("smart_merge", "left_single", "right_single", None)
+        .expect("evaluate smart merge");
+    assert!(matches!(
+        result.status,
+        DuplicateResolveStatus::QualityAmbiguous
+    ));
+
+    let (entities, review_pairs) = db
+        .with_read(|conn| {
+            Ok((
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| {
+                    row.get::<_, i64>(0)
+                })?,
+                conn.query_row(
+                    "SELECT COUNT(*) FROM duplicate WHERE status = 'detected'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?,
+            ))
+        })
+        .expect("count preserved duplicate rows");
+    assert_eq!((entities, review_pairs), (2, 1));
+}
+
+#[test]
+fn smart_merge_keeps_the_quality_winner_and_preserves_its_other_matches() {
+    let db = open_test_db();
+    db.with_write(|conn| {
+        conn.execute_batch(LIBRARY_DDL)?;
+        conn.execute(
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+             ) VALUES
+                (1, 'larger_png', 'single', 1, 'Larger PNG', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (2, 'smaller_jpeg', 'single', 1, 'Smaller JPEG', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (3, 'other_match', 'single', 1, 'Other match', '2026-04-01', '2026-04-01', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO media_file (
+                file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, frame_count,
+                has_audio, perceptual_hash, date_added
+             ) VALUES
+                (1, 'file_png', 'image/png', 1200000, 4570, 1191, 1, 0, 'hash_a', '2026-04-01'),
+                (2, 'file_jpeg', 'image/jpeg', 225600, 4096, 1067, 1, 0, 'hash_b', '2026-04-01'),
+                (3, 'file_other', 'image/png', 1000, 100, 100, 1, 0, 'hash_c', '2026-04-01')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2), (3, 3)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (1, 2, 0), (1, 3, 1), (2, 3, 1)",
+            [],
+        )?;
+        Ok(())
+    })
+    .expect("seed connected duplicate pairs");
+
+    let result = db
+        .resolve_duplicate_pair("smart_merge", "larger_png", "smaller_jpeg", None)
+        .expect("smart merge quality winner");
+    assert!(matches!(result.status, DuplicateResolveStatus::Resolved));
+    assert_eq!(result.winner_hash.as_deref(), Some("larger_png"));
+    assert_eq!(result.loser_hash.as_deref(), Some("smaller_jpeg"));
+
+    db.with_read(|conn| {
+        let surviving_entities: Vec<String> = conn
+            .prepare("SELECT entity_hash FROM media_entity ORDER BY entity_id")?
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        let surviving_pairs: Vec<(i64, i64)> = conn
+            .prepare("SELECT file_id_a, file_id_b FROM duplicate WHERE status = 'detected'")?
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        assert_eq!(surviving_entities, vec!["larger_png", "other_match"]);
+        assert_eq!(surviving_pairs, vec![(1, 3)]);
+        Ok(())
+    })
+    .expect("inspect surviving duplicate graph");
 }
 
 #[test]

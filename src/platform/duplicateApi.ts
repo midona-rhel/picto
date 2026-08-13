@@ -41,7 +41,7 @@ export interface DuplicateCollectionConflict {
 }
 
 export interface DuplicateResolutionResult {
-  status: 'resolved' | 'conflict';
+  status: 'resolved' | 'conflict' | 'quality_ambiguous';
   winner_hash: string | null;
   loser_hash: string | null;
   action: string;
@@ -49,6 +49,8 @@ export interface DuplicateResolutionResult {
   affected_collection_ids: number[];
   tags_merged: number;
   conflict: DuplicateCollectionConflict | null;
+  blob_cleanup_pending: boolean;
+  cleanup_error: string | null;
 }
 
 export function scanDuplicates(threshold?: number | null): Promise<DuplicateScanSummary> {

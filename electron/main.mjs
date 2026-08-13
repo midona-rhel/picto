@@ -22,7 +22,9 @@ import { registerIpcHandlers } from './ipc/registerHandlers.mjs';
 import { createAutoUpdaterService } from './services/autoUpdater.mjs';
 
 const isPackagedSmoke = process.env.PICTO_PACKAGED_SMOKE === '1';
-if (isPackagedSmoke && process.env.PICTO_SMOKE_APP_DATA) {
+const isE2E = process.env.PICTO_E2E === '1';
+const isAutomation = isPackagedSmoke || isE2E;
+if (isAutomation && process.env.PICTO_SMOKE_APP_DATA) {
   app.setPath('appData', process.env.PICTO_SMOKE_APP_DATA);
   app.setPath('userData', path.join(process.env.PICTO_SMOKE_APP_DATA, 'user-data'));
 }
@@ -37,7 +39,7 @@ if (process.env.PICTO_EXPERIMENTAL_GPU_FLAGS === '1') {
 
 // Single instance guard — prevent multiple Picto processes from running.
 // If another instance is already running, focus its window and quit this one.
-const gotLock = isPackagedSmoke || app.requestSingleInstanceLock();
+const gotLock = isAutomation || app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 }
@@ -182,7 +184,7 @@ const windowManager = createWindowManager({
 const updaterService = createAutoUpdaterService({
   app,
   isDev,
-  isSmoke: isPackagedSmoke,
+  isSmoke: isAutomation,
   sendToAllWindows: (...args) => windowManager.sendToAllWindows(...args),
 });
 

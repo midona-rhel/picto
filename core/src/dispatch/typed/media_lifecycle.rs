@@ -77,6 +77,7 @@ pub async fn add_media(state: &AppState, input: AddMediaInput) -> Result<(), Str
 pub struct SweepOrphanedBlobsResult {
     pub deleted_count: u64,
     pub freed_bytes: u64,
+    pub errors: Vec<String>,
 }
 
 /// Remove blob files no media_file row references anymore. Blobs younger
@@ -90,13 +91,44 @@ pub async fn sweep_orphaned_blobs(
         let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()
     })?;
-    let (deleted_count, freed_bytes) = state
+    let candidates = state
         .blob_store
-        .sweep_orphans(&referenced, std::time::Duration::from_secs(600));
-    tracing::info!(deleted_count, freed_bytes, "orphaned blob sweep complete");
+        .orphan_candidates(&referenced, std::time::Duration::from_secs(600))
+        .map_err(|error| format!("Failed to enumerate orphaned blobs: {error}"))?;
+    let mut deleted_count = 0;
+    let mut freed_bytes = 0;
+    let mut errors = Vec::new();
+    for candidate in candidates {
+        match state
+            .engine
+            .db()
+            .enqueue_blob_delete_and_attempt(&state.blob_store, &candidate.hash)
+        {
+            Ok(crate::db::types::BlobCleanupResult::Deleted) => {
+                deleted_count += candidate.file_count;
+                freed_bytes += candidate.bytes;
+            }
+            Ok(crate::db::types::BlobCleanupResult::CancelledReferenced) => {}
+            Err(error) => {
+                tracing::error!(
+                    file_hash = %candidate.hash,
+                    error = %error,
+                    "Orphan blob cleanup deferred"
+                );
+                errors.push(format!("{}: {error}", candidate.hash));
+            }
+        }
+    }
+    tracing::info!(
+        deleted_count,
+        freed_bytes,
+        errors = errors.len(),
+        "orphaned blob sweep complete"
+    );
     Ok(serde_json::to_value(SweepOrphanedBlobsResult {
         deleted_count,
         freed_bytes,
+        errors,
     })
     .map_err(|e| e.to_string())?)
 }

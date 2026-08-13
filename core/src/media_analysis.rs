@@ -86,6 +86,7 @@ fn build_context(
         DeferredWorkType::Thumbnail => caps.can_thumbnail(),
         DeferredWorkType::DominantColors => caps.can_dominant_colors,
         DeferredWorkType::PerceptualHash => caps.can_perceptual_hash,
+        DeferredWorkType::BlobDelete => false,
     });
     if !wants_any {
         return Ok(None);
@@ -399,15 +400,14 @@ pub async fn process_deferred_batch(
     .await
     {
         Ok((_, changed_fields)) => {
-            for job in jobs {
-                db.complete_deferred_work_item(job.work_id)?;
-            }
             emit_derivative_state_change(&entity_hash, &changed_fields);
-            Ok(())
+            db.complete_deferred_work_batch(jobs)
         }
         Err(error) => {
-            for job in jobs {
-                db.retry_deferred_work_item(job.work_id, job.attempt_count + 1, &error)?;
+            if let Err(settlement_error) = db.retry_deferred_work_batch(jobs, &error) {
+                return Err(format!(
+                    "{error}; deferred work settlement failed: {settlement_error}"
+                ));
             }
             Err(error)
         }

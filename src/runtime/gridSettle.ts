@@ -54,7 +54,7 @@ export function classifyGridAction(
   scope: BaseScope,
   visibleEntityHashes: string[],
 ): GridAction {
-  if (changes.status_changed && scope.kind === 'system') {
+  if (changes.status_changed) {
     return 'reconcile_membership';
   }
 
@@ -120,7 +120,7 @@ export function classifyGridAction(
   return 'ignore';
 }
 
-function processStateChange(changes: StateChanges) {
+export function processStateChange(changes: StateChanges) {
   const { scope, visibleEntityHashes } = store.get(gridReconcileContextAtom);
   const action = classifyGridAction(changes, scope, visibleEntityHashes);
 
@@ -130,33 +130,11 @@ function processStateChange(changes: StateChanges) {
     case 'reconcile_metadata':
       gridController.reconcile(true);
       break;
-    case 'reconcile_membership': {
-      const hashes = changes.entity_hashes;
-      if (hashes?.length) {
-        const visible = new Set(visibleEntityHashes);
-        const newHashes = hashes.filter((h) => !visible.has(h));
-        const existingHashes = hashes.filter((h) => visible.has(h));
-
-        if (newHashes.length > 0 && existingHashes.length > 0 && changes.status_changed && scope.kind === 'system') {
-          gridController.removeItems(existingHashes);
-          gridController.insertItems(newHashes);
-          break;
-        }
-
-        if (newHashes.length > 0) {
-          gridController.insertItems(newHashes);
-          break;
-        }
-
-        if (changes.status_changed && scope.kind === 'system'
-            && hashes.every((h) => visible.has(h))) {
-          gridController.removeItems(hashes);
-          break;
-        }
-      }
-      gridController.reconcile(false);
+    case 'reconcile_membership':
+      // Membership changes must be settled by the canonical query. Hash-only
+      // insertion cannot know whether the current scope contains the entity.
+      gridController.loadFirstPage({ preserveItems: true });
       break;
-    }
     case 'reorder':
       gridController.reconcile(false);
       break;
@@ -172,16 +150,18 @@ function processStateChange(changes: StateChanges) {
  */
 export function startGridSettle(): () => void {
   let cancelled = false;
-  let pendingChanges: StateChanges | null = null;
+  let pendingReload = false;
 
-  // When transition settles, replay any queued event
+  // Coalesce every event during a transition into one canonical reload. Keeping
+  // only the latest payload can lose a relevant event behind an unrelated one.
   const unsubPhase = store.sub(gridTransitionPhaseAtom, () => {
     if (cancelled) return;
     const phase = store.get(gridTransitionPhaseAtom);
-    if ((phase === 'idle' || phase === 'fading_in') && pendingChanges) {
-      const changes = pendingChanges;
-      pendingChanges = null;
-      if (store.get(gridActiveAtom)) processStateChange(changes);
+    if ((phase === 'idle' || phase === 'fading_in') && pendingReload) {
+      pendingReload = false;
+      if (store.get(gridActiveAtom)) {
+        gridController.loadFirstPage({ preserveItems: true });
+      }
     }
   });
 
@@ -191,8 +171,7 @@ export function startGridSettle(): () => void {
 
     const phase = store.get(gridTransitionPhaseAtom);
     if (phase === 'fading_out' || phase === 'waiting') {
-      // Queue the latest event — will be replayed when transition settles
-      pendingChanges = event.payload.changes;
+      pendingReload = true;
       return;
     }
 

@@ -1,5 +1,7 @@
 //! Deferred work + analysis results — split from db/mod.rs, same `impl LibraryDatabase`.
 
+use crate::blob_store::BlobStore;
+
 use super::*;
 
 impl LibraryDatabase {
@@ -99,6 +101,21 @@ impl LibraryDatabase {
             }
             Ok(())
         })
+    }
+
+    /// Request physical blob cleanup and immediately make one lease-aware
+    /// attempt. The durable row is created before touching the filesystem, so
+    /// a busy importer or an actual delete failure remains retryable.
+    pub fn enqueue_blob_delete_and_attempt(
+        &self,
+        blob_store: &BlobStore,
+        file_hash: &str,
+    ) -> Result<types::BlobCleanupResult, String> {
+        self.enqueue_deferred_jobs(
+            file_hash,
+            &[crate::background_work::DeferredWorkType::BlobDelete],
+        )?;
+        self.cleanup_blob_delete_if_unreferenced(blob_store, file_hash)
     }
 
     pub fn ensure_deferred_jobs_present(
@@ -298,6 +315,94 @@ impl LibraryDatabase {
         })
     }
 
+    /// Settle every claimed job independently. If deleting a completed row
+    /// fails, return that job to the retry queue before moving on.
+    pub fn complete_deferred_work_batch(
+        &self,
+        jobs: &[types::ClaimedDeferredWorkItem],
+    ) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for job in jobs {
+            if let Err(error) = self.complete_deferred_work_item(job.work_id) {
+                let retry_error = format!("Completion cleanup failed: {error}");
+                match self.retry_deferred_work_item(
+                    job.work_id,
+                    job.attempt_count.saturating_add(1),
+                    &retry_error,
+                ) {
+                    Ok(()) => errors.push(format!(
+                        "work item {} completion failed and was requeued: {error}",
+                        job.work_id
+                    )),
+                    Err(retry_failure) => errors.push(format!(
+                        "work item {} completion failed: {error}; requeue failed: {retry_failure}",
+                        job.work_id
+                    )),
+                }
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
+    /// Delete a blob only while holding the database write transaction.
+    ///
+    /// Reimports serialize on the same writer boundary. A live media_file
+    /// reference cancels only the obsolete blob-delete job; derivative work is
+    /// deliberately left untouched.
+    pub fn cleanup_blob_delete_if_unreferenced(
+        &self,
+        blob_store: &BlobStore,
+        file_hash: &str,
+    ) -> Result<types::BlobCleanupResult, String> {
+        let file_hash = file_hash.to_string();
+        let Some(_blob_lease) = blob_store.try_acquire_hash_lease(&file_hash) else {
+            return Err(format!("blob hash {file_hash} is being imported"));
+        };
+        self.with_write(|conn| {
+            let referenced: Option<i64> = conn
+                .query_row(
+                    "SELECT 1 FROM media_file WHERE file_hash = ?1 LIMIT 1",
+                    [&file_hash],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if referenced.is_some() {
+                conn.execute(
+                    "DELETE FROM deferred_work_item
+                     WHERE entity_hash = ?1 AND work_type = 'blob_delete'",
+                    [&file_hash],
+                )?;
+                return Ok(types::BlobCleanupResult::CancelledReferenced);
+            }
+
+            blob_store
+                .delete(&file_hash)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            conn.execute(
+                "DELETE FROM deferred_work_item
+                 WHERE entity_hash = ?1",
+                [&file_hash],
+            )?;
+            Ok(types::BlobCleanupResult::Deleted)
+        })
+    }
+
+    pub fn complete_blob_delete_for_hash(&self, file_hash: &str) -> Result<(), String> {
+        let file_hash = file_hash.to_string();
+        self.with_write(move |conn| {
+            conn.execute(
+                "DELETE FROM deferred_work_item
+                 WHERE entity_hash = ?1 AND work_type = 'blob_delete'",
+                [file_hash],
+            )?;
+            Ok(())
+        })
+    }
+
     pub fn retry_deferred_work_item(
         &self,
         work_id: i64,
@@ -312,6 +417,70 @@ impl LibraryDatabase {
         };
         let now = chrono::Utc::now().to_rfc3339();
         self.with_write(move |conn| {
+            conn.execute(
+                "UPDATE deferred_work_item
+                 SET status = 'pending',
+                     attempt_count = ?2,
+                     available_at = ?3,
+                     last_error = ?4,
+                     queued_at = ?5,
+                     started_at = NULL,
+                     last_error_at = ?5
+                 WHERE work_id = ?1",
+                rusqlite::params![work_id, next_attempt, available_at, error, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Requeue every claimed job even when one retry write fails.
+    pub fn retry_deferred_work_batch(
+        &self,
+        jobs: &[types::ClaimedDeferredWorkItem],
+        error: &str,
+    ) -> Result<(), String> {
+        let mut errors = Vec::new();
+        for job in jobs {
+            if let Err(retry_failure) = self.retry_deferred_work_item(
+                job.work_id,
+                job.attempt_count.saturating_add(1),
+                error,
+            ) {
+                errors.push(format!(
+                    "work item {} requeue failed: {retry_failure}",
+                    job.work_id
+                ));
+            }
+        }
+        if errors.is_empty() {
+            Ok(())
+        } else {
+            Err(errors.join("; "))
+        }
+    }
+
+    pub fn retry_blob_delete_for_hash(&self, file_hash: &str, error: &str) -> Result<(), String> {
+        let file_hash = file_hash.to_string();
+        let error = error.to_string();
+        self.with_write(move |conn| {
+            let Some((work_id, attempt_count)): Option<(i64, i64)> = conn
+                .query_row(
+                    "SELECT work_id, attempt_count
+                     FROM deferred_work_item
+                     WHERE entity_hash = ?1 AND work_type = 'blob_delete'",
+                    [&file_hash],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?
+            else {
+                return Ok(());
+            };
+            let next_attempt = attempt_count.saturating_add(1);
+            let exp = (next_attempt.saturating_sub(1)).clamp(0, 10) as u32;
+            let delay_secs = (30_i64.saturating_mul(1_i64 << exp)).min(60 * 60);
+            let available_at =
+                (chrono::Utc::now() + chrono::Duration::seconds(delay_secs)).to_rfc3339();
+            let now = chrono::Utc::now().to_rfc3339();
             conn.execute(
                 "UPDATE deferred_work_item
                  SET status = 'pending',

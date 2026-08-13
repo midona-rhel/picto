@@ -14,10 +14,14 @@
 //!   path. A file at a content-addressed path is therefore always complete —
 //!   which is what makes the existence-skip and hash-as-filename safe.
 
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Weak};
+
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 #[derive(thiserror::Error, Debug)]
 pub enum BlobError {
@@ -30,6 +34,13 @@ pub enum BlobError {
 }
 
 pub type BlobResult<T> = Result<T, BlobError>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OrphanBlobCandidate {
+    pub hash: String,
+    pub file_count: u64,
+    pub bytes: u64,
+}
 
 pub fn mime_to_extension(mime: &str) -> &'static str {
     match mime {
@@ -94,6 +105,11 @@ pub struct BlobStore {
     /// Unique per open, so a re-open never disturbs an in-flight writer
     /// still holding the previous instance.
     staging: PathBuf,
+    hash_locks: Arc<Mutex<HashMap<String, Weak<Semaphore>>>>,
+}
+
+pub(crate) struct BlobHashLease {
+    _permit: OwnedSemaphorePermit,
 }
 
 impl Drop for BlobStore {
@@ -135,7 +151,39 @@ impl BlobStore {
             rand::random::<u32>()
         ));
         fs::create_dir_all(&staging)?;
-        Ok(Self { root, staging })
+        Ok(Self {
+            root,
+            staging,
+            hash_locks: Arc::new(Mutex::new(HashMap::new())),
+        })
+    }
+
+    fn hash_lock(&self, hex_hash: &str) -> Arc<Semaphore> {
+        let mut locks = self.hash_locks.lock().unwrap();
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(hex_hash).and_then(Weak::upgrade) {
+            return lock;
+        }
+        let lock = Arc::new(Semaphore::new(1));
+        locks.insert(hex_hash.to_string(), Arc::downgrade(&lock));
+        lock
+    }
+
+    /// Serialize blob publication and the following database reference write.
+    pub(crate) async fn acquire_hash_lease(&self, hex_hash: &str) -> BlobHashLease {
+        let permit = self
+            .hash_lock(hex_hash)
+            .acquire_owned()
+            .await
+            .expect("blob hash semaphore remains open");
+        BlobHashLease { _permit: permit }
+    }
+
+    /// Cleanup must not wait behind an import while holding the DB writer.
+    /// Returning `None` leaves the durable job for a later retry.
+    pub(crate) fn try_acquire_hash_lease(&self, hex_hash: &str) -> Option<BlobHashLease> {
+        let permit = self.hash_lock(hex_hash).try_acquire_owned().ok()?;
+        Some(BlobHashLease { _permit: permit })
     }
 
     /// Write an original file with extension. Skips if already exists (idempotent).
@@ -253,8 +301,8 @@ impl BlobStore {
 
     /// Delete all thumbnail variants for a hash (both `.jpg` and `.png`).
     pub fn delete_thumbnail(&self, hex_hash: &str) -> BlobResult<()> {
-        let _ = fs::remove_file(self.thumbnail_path_with_ext(hex_hash, "jpg")?);
-        let _ = fs::remove_file(self.thumbnail_path_with_ext(hex_hash, "png")?);
+        remove_file_if_exists(self.thumbnail_path_with_ext(hex_hash, "jpg")?)?;
+        remove_file_if_exists(self.thumbnail_path_with_ext(hex_hash, "png")?)?;
         Ok(())
     }
 
@@ -273,80 +321,97 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Delete every blob (originals and thumbnails) whose hash is not in
-    /// `referenced`, skipping files newer than `min_age` so in-flight ingest
-    /// staging is never raced. Returns (files_deleted, bytes_freed).
-    pub fn sweep_orphans(
+    /// Enumerate unreferenced, old blob hashes without deleting anything.
+    /// Physical deletion is owned by the database-backed cleanup contract so
+    /// the reference check cannot become stale between enumeration and delete.
+    pub fn orphan_candidates(
         &self,
         referenced: &std::collections::HashSet<String>,
         min_age: std::time::Duration,
-    ) -> (u64, u64) {
-        let mut deleted: u64 = 0;
-        let mut freed: u64 = 0;
+    ) -> BlobResult<Vec<OrphanBlobCandidate>> {
+        let mut candidates: std::collections::HashMap<String, (u64, u64, bool)> =
+            std::collections::HashMap::new();
         let now = std::time::SystemTime::now();
         for top in ["f", "t"] {
             let top_dir = self.root.join(top);
             let shard_a = match fs::read_dir(&top_dir) {
                 Ok(entries) => entries,
-                Err(_) => continue,
+                Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                Err(error) => return Err(error.into()),
             };
-            for ab in shard_a.flatten() {
+            for ab in shard_a {
+                let ab = ab?;
                 let shard_b = match fs::read_dir(ab.path()) {
                     Ok(entries) => entries,
-                    Err(_) => continue,
+                    Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                    Err(error) => return Err(error.into()),
                 };
-                for cd in shard_b.flatten() {
+                for cd in shard_b {
+                    let cd = cd?;
                     let files = match fs::read_dir(cd.path()) {
                         Ok(entries) => entries,
-                        Err(_) => continue,
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+                        Err(error) => return Err(error.into()),
                     };
-                    for file in files.flatten() {
+                    for file in files {
+                        let file = file?;
                         let name = file.file_name();
                         let name_str = name.to_string_lossy();
                         let hash = name_str.split('.').next().unwrap_or("");
-                        if hash.is_empty() || referenced.contains(hash) {
+                        if hash.len() != 64
+                            || !hash.chars().all(|c| c.is_ascii_hexdigit())
+                            || referenced.contains(hash)
+                        {
                             continue;
                         }
-                        let meta = match file.metadata() {
-                            Ok(meta) => meta,
-                            Err(_) => continue,
-                        };
-                        let old_enough = meta
-                            .modified()
-                            .ok()
-                            .and_then(|mtime| now.duration_since(mtime).ok())
+                        let meta = file.metadata()?;
+                        if !meta.is_file() {
+                            continue;
+                        }
+                        let mtime = meta.modified()?;
+                        let old_enough = now
+                            .duration_since(mtime)
                             .map(|age| age >= min_age)
                             .unwrap_or(false);
-                        if !old_enough {
-                            continue;
-                        }
-                        let size = meta.len();
-                        if fs::remove_file(file.path()).is_ok() {
-                            deleted += 1;
-                            freed += size;
-                        }
+                        let entry = candidates.entry(hash.to_string()).or_insert((0, 0, true));
+                        entry.0 += 1;
+                        entry.1 += meta.len();
+                        entry.2 &= old_enough;
                     }
                 }
             }
         }
-        (deleted, freed)
+
+        Ok(candidates
+            .into_iter()
+            .filter_map(|(hash, (file_count, bytes, all_old))| {
+                all_old.then_some(OrphanBlobCandidate {
+                    hash,
+                    file_count,
+                    bytes,
+                })
+            })
+            .collect())
     }
 
     /// Delete both original and thumbnail for a hash.
-    pub fn delete(&self, hex_hash: &str) -> BlobResult<()> {
+    pub(crate) fn delete(&self, hex_hash: &str) -> BlobResult<()> {
         // Delete originals matching `<hash>.<ext>` in shard dir.
         let (ab, cd) = shard_prefix(hex_hash)?;
         let orig_dir = self.root.join("f").join(ab).join(cd);
-        if orig_dir.is_dir() {
-            if let Ok(entries) = fs::read_dir(&orig_dir) {
-                for entry in entries.flatten() {
+        match fs::read_dir(&orig_dir) {
+            Ok(entries) => {
+                for entry in entries {
+                    let entry = entry?;
                     let name = entry.file_name();
                     let name_str = name.to_string_lossy();
                     if name_str.starts_with(&format!("{}.", hex_hash)) {
-                        let _ = fs::remove_file(entry.path());
+                        remove_file_if_exists(entry.path())?;
                     }
                 }
             }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
         }
         self.delete_thumbnail(hex_hash)?;
         Ok(())
@@ -426,6 +491,14 @@ fn shard_prefix(hex_hash: &str) -> BlobResult<(&str, &str)> {
     Ok((&hex_hash[0..2], &hex_hash[2..4]))
 }
 
+fn remove_file_if_exists(path: PathBuf) -> BlobResult<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,5 +570,42 @@ mod tests {
             store.staging.clone()
         };
         assert!(!staging.exists());
+    }
+
+    #[test]
+    fn delete_is_idempotent_when_blob_is_missing() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+
+        store.delete(&test_hash()).unwrap();
+    }
+
+    #[test]
+    fn delete_reports_filesystem_failures() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let hash = test_hash();
+        let path = store.original_path_with_ext(&hash, Some("png")).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::create_dir(path).unwrap();
+
+        let error = store
+            .delete(&hash)
+            .expect_err("directory cannot be deleted as a file");
+        assert!(matches!(error, BlobError::Io(_)));
+    }
+
+    #[test]
+    fn orphan_enumeration_reports_filesystem_failures() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let shard = dir.path().join("blobs").join("f").join("aa");
+        fs::create_dir_all(shard.parent().unwrap()).unwrap();
+        fs::write(&shard, b"not a directory").unwrap();
+
+        let error = store
+            .orphan_candidates(&std::collections::HashSet::new(), std::time::Duration::ZERO)
+            .expect_err("invalid shard layout must be reported");
+        assert!(matches!(error, BlobError::Io(_)));
     }
 }

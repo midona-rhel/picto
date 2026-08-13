@@ -799,6 +799,7 @@ pub async fn delete_folder(state: &AppState, input: DeleteFolderInput) -> Result
         crate::ingest::attach_current_sidebar_counts(
             state.engine.db(),
             folder_deletion_impact(&folder_ids),
+            false,
         ),
     );
     Ok(())

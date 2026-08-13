@@ -64,6 +64,7 @@ pub struct PreparedBlobImport {
     pub num_frames: Option<i64>,
     pub has_audio: bool,
     pub has_thumbnail: bool,
+    pub thumbnail: Option<(Vec<u8>, String)>,
     pub name: Option<String>,
     pub created_at: Option<String>,
     pub tags_applied: Vec<String>,
@@ -76,7 +77,6 @@ pub struct ImportPipeline;
 
 impl ImportPipeline {
     pub async fn prepare_blob_import(
-        blob_store: &BlobStore,
         path: &Path,
         options: &ImportOptions,
     ) -> ImportResult<PreparedBlobImport> {
@@ -103,12 +103,6 @@ impl ImportPipeline {
                     .await
                     .ok()
             };
-
-        let blob_ext = crate::blob_store::mime_to_extension(&source.mime_type);
-        blob_store.write_original(&hex_hash, &file_data, Some(blob_ext))?;
-        if let Some((ref thumb_bytes, ref thumb_ext)) = thumbnail_result {
-            blob_store.write_thumbnail(&hex_hash, thumb_bytes, thumb_ext)?;
-        }
 
         let name = options.name.clone().or_else(|| {
             path.file_stem()
@@ -141,10 +135,23 @@ impl ImportPipeline {
             num_frames: source.num_frames.map(|n| n as i64),
             has_audio: source.has_audio,
             has_thumbnail: thumbnail_result.is_some(),
+            thumbnail: thumbnail_result,
             name,
             created_at,
             tags_applied,
             file_bytes: file_data,
         })
+    }
+
+    pub fn persist_blob_import(
+        blob_store: &BlobStore,
+        prepared: &PreparedBlobImport,
+    ) -> ImportResult<()> {
+        let blob_ext = crate::blob_store::mime_to_extension(&prepared.mime);
+        blob_store.write_original(&prepared.hex_hash, &prepared.file_bytes, Some(blob_ext))?;
+        if let Some((thumb_bytes, thumb_ext)) = &prepared.thumbnail {
+            blob_store.write_thumbnail(&prepared.hex_hash, thumb_bytes, thumb_ext)?;
+        }
+        Ok(())
     }
 }

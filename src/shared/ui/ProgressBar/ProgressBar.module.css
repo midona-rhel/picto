@@ -14,8 +14,24 @@
   transition: width 250ms var(--ease-default);
 }
 
+.indeterminate {
+  width: 35%;
+  animation: progress-indeterminate 900ms ease-in-out infinite;
+}
+
+@keyframes progress-indeterminate {
+  from { transform: translateX(-110%); }
+  to { transform: translateX(310%); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .fill {
     transition: none;
+  }
+
+  .indeterminate {
+    width: 100%;
+    animation: none;
+    opacity: 0.55;
   }
 }

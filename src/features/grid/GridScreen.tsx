@@ -70,10 +70,11 @@ import { AiTaggerPanel } from '../ai-tagger/AiTaggerPanel';
 import { useGridArrowNav } from './hooks/useGridArrowNav';
 import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
-import { filesController } from '../../controllers/filesController';
+import { filesController, manualImportParamsForScope } from '../../controllers/filesController';
 import { collectionsController } from '../../controllers/collectionsController';
 import { viewerController } from '../../controllers/viewerController';
 import { nodeIdToGridScope } from '../../shared/lib/gridScope';
+import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import styles from './GridScreen.module.css';
 
 // ── Smart collection naming (ported from legacy) ──
@@ -213,10 +214,12 @@ export function GridScreen() {
           open: true,
           path: paths[0],
           targetFolderId: folderId ?? null,
+          initialStatus: manualImportParamsForScope(scope).initial_status,
         });
       } else {
         // File import — direct
-        void filesController.addMedia(paths, folderId != null ? { parent_folder_id: folderId } : {});
+        void filesController.addMedia(paths, manualImportParamsForScope(scope,
+          folderId != null ? { parent_folder_id: folderId } : {}));
       }
     });
 
@@ -731,20 +734,13 @@ export function GridScreen() {
       const showImport = !hasSearch && scopeKey !== 'inbox' && scopeKey !== 'untagged' && scopeKey !== 'smart_folder';
 
       return (
-        <div className={styles.empty}>
-          {/* Glass picture frame indicator */}
-          <div className={styles.emptyFrame}>
-            <div className={styles.emptyFrameGlass}>
-              <div className={styles.emptyFrameInner}>
-                <IconPhoto size={28} stroke={1.2} style={{ color: 'var(--color-bg-app)', opacity: 1 }} />
-              </div>
-            </div>
-          </div>
-          <span className={styles.emptyTitle}>{emptyTitle}</span>
-          <span className={styles.emptyDesc}>{emptyDesc}</span>
-          {showImport && (
-            <div className={styles.emptyActions}>
-              <button className={styles.emptyBtn} type="button" onClick={() => {
+        <EmptyState
+          icon={<IconPhoto size={28} stroke={1.2} style={{ color: 'var(--color-bg-app)', opacity: 1 }} />}
+          title={emptyTitle}
+          description={emptyDesc}
+          actions={showImport ? (
+            <>
+              <EmptyStateAction onClick={() => {
                 void (async () => {
                   try {
                     const result = await (window as any).picto.dialog.open({
@@ -753,7 +749,8 @@ export function GridScreen() {
                     });
                     if (result) {
                       const paths = Array.isArray(result) ? result : [result];
-                      await filesController.addMedia(paths);
+                      await filesController.addMedia(paths, manualImportParamsForScope(gridScope,
+                        gridScope.kind === 'folder' ? { parent_folder_id: gridScope.id } : {}));
                     }
                   } catch (err) {
                     console.error('[grid] import files failed:', err);
@@ -762,8 +759,8 @@ export function GridScreen() {
               }}>
                 <IconUpload size={14} stroke={1.5} />
                 Import Files
-              </button>
-              <button className={styles.emptyBtn} type="button" onClick={() => {
+              </EmptyStateAction>
+              <EmptyStateAction onClick={() => {
                 void (async () => {
                   try {
                     const result = await (window as any).picto.dialog.open({
@@ -771,7 +768,10 @@ export function GridScreen() {
                     });
                     if (result) {
                       const folderPath = typeof result === 'string' ? result : result[0];
-                      await filesController.addMedia([folderPath], { preserve_structure: true });
+                      await filesController.addMedia([folderPath], manualImportParamsForScope(gridScope, {
+                        preserve_structure: true,
+                        parent_folder_id: gridScope.kind === 'folder' ? gridScope.id : null,
+                      }));
                     }
                   } catch (err) {
                     console.error('[grid] import folder failed:', err);
@@ -780,10 +780,10 @@ export function GridScreen() {
               }}>
                 <IconFolderPlus size={14} stroke={1.5} />
                 Import Folder
-              </button>
-            </div>
-          )}
-        </div>
+              </EmptyStateAction>
+            </>
+          ) : undefined}
+        />
       );
     }
 

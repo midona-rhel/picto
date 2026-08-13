@@ -122,11 +122,48 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
                 let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
                 rows.collect::<rusqlite::Result<std::collections::HashSet<_>>>()
             });
-            if let Ok(referenced) = referenced {
-                let (deleted, freed) =
-                    sweep_blobs.sweep_orphans(&referenced, std::time::Duration::from_secs(600));
-                if deleted > 0 {
-                    tracing::info!(deleted, freed, "startup orphaned blob sweep complete");
+            match referenced {
+                Ok(referenced) => match sweep_blobs
+                    .orphan_candidates(&referenced, std::time::Duration::from_secs(600))
+                {
+                    Ok(candidates) => {
+                        let mut deleted = 0;
+                        let mut freed = 0;
+                        let mut errors = 0;
+                        for candidate in candidates {
+                            match sweep_db
+                                .enqueue_blob_delete_and_attempt(&sweep_blobs, &candidate.hash)
+                            {
+                                Ok(crate::db::types::BlobCleanupResult::Deleted) => {
+                                    deleted += candidate.file_count;
+                                    freed += candidate.bytes;
+                                }
+                                Ok(crate::db::types::BlobCleanupResult::CancelledReferenced) => {}
+                                Err(error) => {
+                                    errors += 1;
+                                    tracing::error!(
+                                        file_hash = %candidate.hash,
+                                        error = %error,
+                                        "Startup orphan blob cleanup deferred"
+                                    );
+                                }
+                            }
+                        }
+                        if deleted > 0 || errors > 0 {
+                            tracing::info!(
+                                deleted,
+                                freed,
+                                errors,
+                                "startup orphaned blob sweep complete"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(error = %error, "Startup orphaned blob enumeration failed");
+                    }
+                },
+                Err(error) => {
+                    tracing::error!(error = %error, "Startup orphaned blob reference query failed");
                 }
             }
         });

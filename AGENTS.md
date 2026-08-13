@@ -6,8 +6,10 @@ media-entity lookup and scope filtering fast; SQLite remains the source of truth
 Media entities are images, videos, or image collections. Collections contain images only and
 are aggregates over their children rather than second owners of child metadata.
 
-`All` contains active media only. Inbox media is uncommitted and Trash media is pending deletion;
-neither appears in `All`, folders, smart folders, or any of their counts.
+`All` means the accepted main collection, not every stored media entity. Only active media belongs
+to it. Inbox media is still awaiting acceptance into the main collection; Trash media is leaving
+the main collection and awaiting deletion or restoration. Inbox and Trash media must not appear in
+`All`, folders, smart folders, main-collection search results, or any of their counts.
 
 The product must support imports, subscriptions, duplicate review, automatic tagging, tag
 management, folders, smart folders, search, untagged and uncategorized scopes, recently viewed

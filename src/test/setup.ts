@@ -1,5 +1,19 @@
 import '@testing-library/jest-dom';
 
+Object.defineProperty(window, 'matchMedia', {
+  configurable: true,
+  value: (query: string): MediaQueryList => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }),
+});
+
 const storage = new Map<string, string>();
 
 Object.defineProperty(globalThis, 'localStorage', {

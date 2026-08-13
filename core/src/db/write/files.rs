@@ -32,10 +32,7 @@ pub fn update_file_analysis(
     dominant_palette_blob: Option<&[u8]>,
 ) -> rusqlite::Result<()> {
     if let Some(ph) = perceptual_hash {
-        conn.execute(
-            "UPDATE media_file SET perceptual_hash = ?1 WHERE file_id = ?2",
-            params![ph, file_id],
-        )?;
+        replace_file_phash(conn, file_id, Some(ph))?;
     }
     if let Some(hex) = dominant_color_hex {
         conn.execute(
@@ -61,6 +58,32 @@ pub fn replace_file_phash(
         "UPDATE media_file SET perceptual_hash = ?1 WHERE file_id = ?2",
         params![perceptual_hash, file_id],
     )?;
+    conn.execute(
+        "DELETE FROM media_file_phash_index WHERE file_id = ?1",
+        [file_id],
+    )?;
+    if let Some(partitions) =
+        perceptual_hash.and_then(crate::duplicates::phash::indexed_partition_values)
+    {
+        conn.execute(
+            "INSERT INTO media_file_phash_index (
+                 file_id,
+                 partition_0, partition_1, partition_2, partition_3,
+                 partition_4, partition_5, partition_6, partition_7
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![
+                file_id,
+                partitions[0],
+                partitions[1],
+                partitions[2],
+                partitions[3],
+                partitions[4],
+                partitions[5],
+                partitions[6],
+                partitions[7],
+            ],
+        )?;
+    }
     Ok(())
 }
 

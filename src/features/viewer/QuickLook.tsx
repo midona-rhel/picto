@@ -14,7 +14,7 @@ import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import * as entityMutations from '../../controllers/entityMutations';
 import { useImageZoom, type ImageSize } from './hooks/useImageZoom';
-import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
+import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { useRecordMediaView } from './hooks/useRecordMediaView';
 import { VideoPlayer } from './video/VideoPlayer';
 import styles from './QuickLook.module.css';
@@ -62,7 +62,7 @@ export function QuickLook({
     return r;
   }, [items, currentIndex]);
 
-  const pipeline = useViewerMediaPipeline({
+  const pipeline = useMediaImagePipeline({
     hash: currentHash || null,
     thumbnailHash: currentItem?.thumbnail_hash ?? null,
     mime: currentMime,

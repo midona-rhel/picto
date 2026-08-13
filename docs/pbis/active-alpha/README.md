@@ -6,21 +6,16 @@ superseded audits, and site-by-site subscription notes live in `docs/pbis/archiv
 ## Release blockers
 
 1. [PBI-603-release-finalization-and-integration-gate.md](PBI-603-release-finalization-and-integration-gate.md)
-   - resolve the current merge state
-   - make the complete verification lane green
-   - remove remaining schema/runtime compatibility drift
-2. [PBI-575-finish-subscription-runs-and-recovery.md](PBI-575-finish-subscription-runs-and-recovery.md)
-   - make subscription runs reliable and recoverable
-   - consolidate site verification into one maintained matrix
-3. [PBI-577-greenfield-duplicates-and-rejected-media-reset.md](PBI-577-greenfield-duplicates-and-rejected-media-reset.md)
-   - activate the already-present canonical duplicate backend through a usable review surface
-4. [PBI-604-tag-manager-activation.md](PBI-604-tag-manager-activation.md)
+   - keep the complete verification lane green and prove release packaging
+2. [PBI-529-frontend-notifications-and-error-feedback.md](PBI-529-frontend-notifications-and-error-feedback.md)
+   - finish one shared non-modal path for actionable operation failures
+3. [PBI-604-tag-manager-activation.md](PBI-604-tag-manager-activation.md)
    - implement the rebuilt tag manager against the canonical tag API
-5. [PBI-605-ai-tagging-activation.md](PBI-605-ai-tagging-activation.md)
+4. [PBI-605-ai-tagging-activation.md](PBI-605-ai-tagging-activation.md)
    - prove model download, inference, review, apply, and import automation end to end
-6. [PBI-602-multi-device-sync-architecture.md](PBI-602-multi-device-sync-architecture.md)
+5. [PBI-602-multi-device-sync-architecture.md](PBI-602-multi-device-sync-architecture.md)
    - finish safe two-device folder sync and restart recovery
-7. [PBI-227-first-run-onboarding-and-library-creation-guidance.md](PBI-227-first-run-onboarding-and-library-creation-guidance.md)
+6. [PBI-227-first-run-onboarding-and-library-creation-guidance.md](PBI-227-first-run-onboarding-and-library-creation-guidance.md)
    - make first launch lead directly to creating a library
 
 ## Backlog policy

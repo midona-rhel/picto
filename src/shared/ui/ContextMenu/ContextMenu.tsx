@@ -136,30 +136,36 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
 
   // Viewport clamping
   useLayoutEffect(() => {
-    const el = menuRef.current;
-    if (!el) return;
+    const placeMenu = () => {
+      const el = menuRef.current;
+      if (!el) return;
 
-    const prevMaxH = el.style.maxHeight;
-    el.style.maxHeight = 'none';
-    const w = el.offsetWidth;
-    const h = el.offsetHeight;
-    el.style.maxHeight = prevMaxH;
+      const prevMaxH = el.style.maxHeight;
+      el.style.maxHeight = 'none';
+      const w = el.offsetWidth;
+      const h = el.offsetHeight;
+      el.style.maxHeight = prevMaxH;
 
-    const zoom = getZoomFactor();
-    const { width: adjVw, height: adjVh } = getViewportCSS(zoom);
-    const margin = 12;
-    let x = position.x / zoom;
-    let y = position.y / zoom;
-    let ox = 'left';
-    let oy = 'top';
+      const zoom = getZoomFactor();
+      const { width: adjVw, height: adjVh } = getViewportCSS(zoom);
+      const margin = 12;
+      let x = position.x / zoom;
+      let y = position.y / zoom;
+      let ox = 'left';
+      let oy = 'top';
 
-    if (x + w > adjVw - margin) { x = adjVw - w - margin; ox = 'right'; }
-    if (y + h > adjVh - margin) { y = adjVh - h - margin; oy = 'bottom'; }
-    if (x < margin) x = margin;
-    if (y < margin) y = margin;
+      if (x + w > adjVw - margin) { x = adjVw - w - margin; ox = 'right'; }
+      if (y + h > adjVh - margin) { y = adjVh - h - margin; oy = 'bottom'; }
+      if (x < margin) x = margin;
+      if (y < margin) y = margin;
 
-    setPos({ x, y });
-    setOrigin(`${oy} ${ox}`);
+      setPos({ x, y });
+      setOrigin(`${oy} ${ox}`);
+    };
+
+    placeMenu();
+    window.addEventListener('resize', placeMenu);
+    return () => window.removeEventListener('resize', placeMenu);
   }, [position, cleaned.length]);
 
   useEffect(() => { if (searchable) searchRef.current?.focus(); }, [searchable]);
@@ -212,6 +218,8 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
       <div
         ref={menuRef}
         className={`${styles.menu} ${closing ? styles.menuClosing : ''}`}
+        role="menu"
+        aria-label="Context menu"
         style={pos
           ? { left: pos.x, top: pos.y, width: width ?? undefined, transformOrigin: origin }
           : { left: -9999, top: -9999, width: width ?? undefined, visibility: 'hidden' as const }
@@ -237,7 +245,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
 
         <div className={styles.items}>
           {cleaned.map((entry, i) => {
-            if (isSeparator(entry)) return <div key={i} className={styles.separator} />;
+            if (isSeparator(entry)) return <div key={i} className={styles.separator} role="separator" />;
 
             if (isCustom(entry)) {
               return (
@@ -253,9 +261,12 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
               const isOpen = openSubmenuLabel === entry.label;
               const cls = [styles.item, focusIdx === i ? styles.focused : ''].filter(Boolean).join(' ');
               return (
-                <div key={entry.label} data-menu-idx={i}>
+                <div key={entry.label} data-menu-idx={i} className={styles.submenuItem}>
                   <div
                     className={cls}
+                    role="menuitem"
+                    aria-haspopup="menu"
+                    aria-expanded={isOpen}
                     onClick={() => setOpenSubmenuLabel(isOpen ? null : entry.label)}
                     onMouseEnter={() => { setFocusIdx(i); handleSubmenuIntent(entry.label); }}
                   >
@@ -287,6 +298,8 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
               <div
                 key={i}
                 className={cls}
+                role="menuitem"
+                aria-disabled={entry.disabled || undefined}
                 onClick={() => { if (entry.disabled) return; entry.action(); startClose(); }}
                 onMouseEnter={() => { setFocusIdx(i); handleSubmenuIntent(null); }}
                 onMouseLeave={() => setFocusIdx(-1)}
@@ -326,21 +339,27 @@ function SubmenuPanel({
     const el = ref.current;
     if (!parent || !el) return;
 
-    const zoom = getZoomFactor();
-    const { width: adjVw, height: adjVh } = getViewportCSS(zoom);
-    const parentRect = parent.getBoundingClientRect();
-    const triggerEl = parent.querySelector(`[data-menu-idx="${itemIdx}"]`);
-    const itemRect = triggerEl?.getBoundingClientRect() ?? parentRect;
-    const margin = 12;
+    const reposition = () => {
+      const zoom = getZoomFactor();
+      const { width: adjVw, height: adjVh } = getViewportCSS(zoom);
+      const parentRect = parent.getBoundingClientRect();
+      const triggerEl = parent.querySelector(`[data-menu-idx="${itemIdx}"]`);
+      const itemRect = triggerEl?.getBoundingClientRect() ?? parentRect;
+      const margin = 12;
 
-    let left = parentRect.right / zoom + 4;
-    let top = itemRect.top / zoom - 3;
-    let ox = 'left';
-    if (left + el.offsetWidth > adjVw - margin) { left = parentRect.left / zoom - el.offsetWidth - 4; ox = 'right'; }
-    if (top + el.offsetHeight > adjVh - margin) top = adjVh - el.offsetHeight - margin;
-    if (top < margin) top = margin;
-    setPos({ left, top });
-    setSubOrigin(`top ${ox}`);
+      let left = parentRect.right / zoom + 4;
+      let top = itemRect.top / zoom - 3;
+      let ox = 'left';
+      if (left + el.offsetWidth > adjVw - margin) { left = parentRect.left / zoom - el.offsetWidth - 4; ox = 'right'; }
+      if (top + el.offsetHeight > adjVh - margin) top = adjVh - el.offsetHeight - margin;
+      if (top < margin) top = margin;
+      setPos({ left, top });
+      setSubOrigin(`top ${ox}`);
+    };
+
+    reposition();
+    window.addEventListener('resize', reposition);
+    return () => window.removeEventListener('resize', reposition);
   }, [parentRef, itemIdx]);
 
   const cleaned = cleanSeparators(items);
@@ -349,6 +368,8 @@ function SubmenuPanel({
     <div
       ref={ref}
       className={styles.menu}
+      role="menu"
+      aria-label="Context submenu"
       style={{ left: pos.left, top: pos.top, width: 'auto', transformOrigin: subOrigin }}
       onPointerDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
@@ -356,12 +377,14 @@ function SubmenuPanel({
     >
       <div className={styles.items}>
         {cleaned.map((entry, i) => {
-          if (isSeparator(entry)) return <div key={i} className={styles.separator} />;
+          if (isSeparator(entry)) return <div key={i} className={styles.separator} role="separator" />;
           if (isCustom(entry)) return <div key={entry.key} className={styles.customItem}>{entry.render()}</div>;
           if (isSubmenu(entry)) return null; // No nested submenus
           const cls = [styles.item, entry.disabled ? styles.disabled : '', entry.danger ? styles.danger : ''].filter(Boolean).join(' ');
           return (
             <div key={i} className={cls}
+              role="menuitem"
+              aria-disabled={entry.disabled || undefined}
               onClick={() => { if (entry.disabled) return; entry.action(); onClose(); }}>
               <span className={styles.iconSlot}>{entry.icon ?? null}</span>
               <span className={styles.label}>{entry.label}</span>

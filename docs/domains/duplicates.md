@@ -2,7 +2,9 @@
 
 ## Overview
 
-Duplicate detection uses perceptual hashing (img_hash DoubleGradient 8x8). Candidate pairs are stored in the `duplicate` table for manual review or automatic resolution.
+Duplicate detection uses perceptual hashing (`img_hash` DoubleGradient 16x16, 256-bit). Candidate pairs are
+stored in the `duplicate` table for manual review or automatic resolution. Similarity is computed
+from physical files; review decisions address the owning media entities.
 
 ## Resolution Actions
 
@@ -18,7 +20,8 @@ Duplicate detection uses perceptual hashing (img_hash DoubleGradient 8x8). Candi
 
 ### Free entity (not in a collection)
 
-The loser's `media_entity` is **deleted**. It does not survive the merge. The entity, its file record, and the blob are all removed. Before deletion:
+The intended result is that the loser's `media_entity`, file record, and unreferenced blob are
+removed. Before deletion:
 
 - Tags, source URLs, notes are merged onto the winner
 - Rating is consolidated (higher value wins)
@@ -27,31 +30,42 @@ The loser's `media_entity` is **deleted**. It does not survive the merge. The en
 
 ### Collection member
 
-The loser's `media_entity` **survives** — it stays in its collection. Instead of being deleted, it is **repointed** to the winner's file via `repoint_entity_to_file()`. The flow:
+One physical file has one single media entity, so duplicate resolution never keeps a second entity
+that points at the winner's file. Metadata and external references move to the winner, the loser
+entity/file are deleted, and the winner occupies at most one collection membership. If both sides
+belong to different collections, resolution requires the user to choose the surviving collection;
+Picto does not silently keep both owners. Affected collection aggregates are rebuilt afterward.
 
-1. Metadata (tags, URLs, notes, rating, timestamps) is merged onto the winner
-2. The entity's `entity_file` row is updated to reference the winner's `file_id`
-3. The loser's file record and blob are deleted
-4. `sync_collection_aggregate_metadata()` re-syncs the collection (cover, tags, counts, rating, status)
-5. Folder memberships and subscription associations transfer to the winner
-
-The collection member slot stays intact — it just references the surviving file now.
+Blob reclamation and reference repointing are release evidence, not assumptions. A duplicate
+resolution is not certified until the smoke/test path proves both the database state and physical
+original/thumbnail cleanup.
 
 ### Edge cases
 
-- **Loser was the collection cover**: Cover rotates to the next member automatically (`handle_cover_file_deletion`)
-- **Collection becomes empty**: Auto-deleted (members are orphaned, collection entity removed)
+- **Loser was the collection cover**: The aggregate cover is recalculated from its surviving members
+- **Collection becomes empty**: The empty collection aggregate is removed
 - **Single-member collection after merge**: Preserved (not auto-collapsed)
 
 ## Auto-Merge During Subscription Import
 
-When `auto_merge_enabled` is true, newly imported images are checked against existing files via BK-tree lookup. Auto-merge only fires for **exact perceptual hash matches** (distance = 0) with optional dimension matching. The merge logic is identical to manual resolution — collection membership is handled the same way.
+When `auto_merge_enabled` is true, newly imported images are checked against existing files through
+the ingest duplicate path. Exact perceptual hash matches may auto-resolve only for comparable
+static images when the quality decision is unambiguous. Near matches are imported and create
+review work; they are not silently rejected or merged.
+
+`All` is the accepted active main collection. Inbox and Trash are separate lifecycle scopes and
+must not inflate `All`, folder, smart-folder, or main-search counts. Duplicate review deliberately
+spans Active and Inbox so newly imported media can be reviewed before acceptance; Trash is excluded
+from duplicate candidates and duplicate-related sidebar counts.
 
 ## Key Files
 
 | File | Role |
 |------|------|
-| `core/src/duplicates/orchestrator.rs` | Merge orchestration, metadata consolidation, collection-aware branching |
-| `core/src/sqlite/files.rs` | `delete_file_inner` — deletes file + its media_entity |
-| `core/src/folders/collections_db.rs` | `repoint_entity_to_file`, `sync_collection_aggregate_metadata` |
-| `core/src/subscriptions/sync_engine/importing.rs` | Auto-merge trigger during subscription import |
+| `core/src/db/mod.rs` | Native duplicate scan, candidate pagination, and resolution entrypoints |
+| `core/src/db/query/duplicates.rs` | File-based scan sources, candidate reads, and duplicate counts |
+| `core/src/db/write/duplicates.rs` | Candidate persistence and resolution/repointing writes |
+| `core/src/duplicates/quality.rs` | Conservative quality comparison for merge decisions |
+| `core/src/dispatch/typed/duplicates.rs` | IPC handlers for scan, review, and resolution |
+| `core/src/engine/duplicates.rs` | Application-engine duplicate boundary |
+| `core/src/blob_store.rs` | Physical original/thumbnail blob storage and reclamation |

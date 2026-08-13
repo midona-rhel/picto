@@ -121,7 +121,6 @@ export type ScopeKind =
   | 'folder'
   | 'smart_folder'
   | 'collection'
-  | 'similar'
   | 'search'
   | 'tag';
 

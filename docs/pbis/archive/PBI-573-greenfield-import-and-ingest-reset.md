@@ -13,10 +13,10 @@ This document is based on an in-repo audit of the current import pipeline, watch
 - `Legacy removed` when replaced one-off import paths for that activated slice are deleted.
 
 Activation depends on:
-- [PBI-567-greenfield-library-database-reset.md](./docs/pbis/active-alpha/PBI-567-greenfield-library-database-reset.md)
-- [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
-- [PBI-576-greenfield-deferred-work-and-background-processing-reset.md](./docs/pbis/active-alpha/PBI-576-greenfield-deferred-work-and-background-processing-reset.md)
-- [PBI-577-greenfield-duplicates-and-rejected-media-reset.md](./docs/pbis/active-alpha/PBI-577-greenfield-duplicates-and-rejected-media-reset.md) where duplicate and exact/near pHash behavior is part of the activated flow
+- [PBI-567-greenfield-library-database-reset.md](PBI-567-greenfield-library-database-reset.md)
+- [PBI-568-greenfield-backend-engine-boundary-reset.md](PBI-568-greenfield-backend-engine-boundary-reset.md)
+- [PBI-576-greenfield-deferred-work-and-background-processing-reset.md](PBI-576-greenfield-deferred-work-and-background-processing-reset.md)
+- [PBI-577-greenfield-duplicates-and-rejected-media-reset.md](PBI-577-greenfield-duplicates-and-rejected-media-reset.md) where duplicate and exact/near pHash behavior is part of the activated flow
 
 ## Problem
 The application still has multiple ingestion paths that conceptually do the same thing but are shaped around different callers and historical shortcuts.

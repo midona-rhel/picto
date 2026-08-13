@@ -11,7 +11,32 @@ import {
   shellOpenPath,
   shellShowInFolder,
 } from '../platform/shellApi';
-import type { EntityTarget } from '../shared/types/canonical';
+import type { BaseScope, EntityTarget } from '../shared/types/canonical';
+
+export const MEDIA_STATUS_INBOX = 0;
+export const MEDIA_STATUS_ACTIVE = 1;
+
+export interface MediaImportParams {
+  tag_strings?: string[];
+  source_urls?: string[];
+  initial_status?: number;
+  parent_folder_id?: number | null;
+  preserve_structure?: boolean;
+  collection_name?: string | null;
+}
+
+/** Resolve the destination for a manual import from the currently open grid. */
+export function manualImportParamsForScope(
+  scope: BaseScope,
+  params: Omit<MediaImportParams, 'initial_status'> = {},
+): Omit<MediaImportParams, 'initial_status'> & { initial_status: number } {
+  return {
+    ...params,
+    initial_status: scope.kind === 'system' && scope.key === 'inbox'
+      ? MEDIA_STATUS_INBOX
+      : MEDIA_STATUS_ACTIVE,
+  };
+}
 
 export const filesController = {
   getFolderCoverHash(folderId: number): Promise<string | null> {
@@ -20,14 +45,7 @@ export const filesController = {
 
   addMedia(
     paths: string[],
-    params?: {
-      tag_strings?: string[];
-      source_urls?: string[];
-      initial_status?: number;
-      parent_folder_id?: number | null;
-      preserve_structure?: boolean;
-      collection_name?: string | null;
-    },
+    params?: MediaImportParams,
   ): Promise<void> {
     return addMedia(paths, params);
   },

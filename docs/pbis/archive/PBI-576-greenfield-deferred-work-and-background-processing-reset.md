@@ -100,11 +100,11 @@ The queue model stays shared even if executors differ.
 - PBI-575 subscriptions use this for heavy follow-up processing, not for gallery-dl network runs themselves
 - PBI-569 must not hide derivative generation inside media reads
 - PBI-578 bulk actions may enqueue follow-up work for many entities at once
-- this PBI supersedes the narrow intent of [PBI-545-deferred-work-queue.md](./docs/pbis/active-alpha/PBI-545-deferred-work-queue.md)
+- this PBI supersedes the narrow intent of [PBI-545-deferred-work-queue.md](PBI-545-deferred-work-queue.md)
 
-This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
-This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).
-This PBI must follow the cross-layer comment rules in [PBI-580-cross-layer-comment-rules.md](./docs/pbis/active-alpha/PBI-580-cross-layer-comment-rules.md).
+This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](PBI-572-cross-layer-naming-contract.md).
+This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](PBI-579-cross-layer-testing-rules.md).
+This PBI must follow the cross-layer comment rules in [PBI-580-cross-layer-comment-rules.md](PBI-580-cross-layer-comment-rules.md).
 
 ## Acceptance criteria
 This PBI is complete only when:

@@ -1,13 +1,6 @@
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 
 use crate::db::types::{DuplicatePairPage, DuplicatePairRecord};
-
-#[derive(Debug, Clone)]
-pub struct DuplicateFindSource {
-    pub perceptual_hash: Option<String>,
-    pub mime_type: String,
-    pub frame_count: Option<i64>,
-}
 
 #[derive(Debug, Clone)]
 pub struct DuplicateScanSource {
@@ -21,13 +14,7 @@ pub struct DuplicateScanSource {
 #[derive(Debug, Clone)]
 pub struct PerceptualHashSource {
     pub file_id: i64,
-    pub entity_id: i64,
-    pub entity_hash: String,
-    pub file_hash: String,
     pub mime_type: String,
-    pub size_bytes: i64,
-    pub pixel_width: Option<i64>,
-    pub pixel_height: Option<i64>,
     pub frame_count: Option<i64>,
     pub perceptual_hash: String,
 }
@@ -37,6 +24,7 @@ pub struct DuplicateSingleRef {
     pub entity_id: i64,
     pub file_id: i64,
     pub entity_hash: String,
+    pub file_hash: String,
     pub status: i64,
     pub mime_type: String,
     pub size_bytes: i64,
@@ -51,87 +39,67 @@ pub struct DuplicateSingleRef {
     pub collection_ordinal: Option<i64>,
 }
 
-pub fn get_duplicate_find_source(
-    conn: &Connection,
-    source_hash: &str,
-) -> rusqlite::Result<Option<DuplicateFindSource>> {
-    conn.query_row(
-        "SELECT mf.perceptual_hash, mf.mime_type, mf.frame_count
-         FROM media_entity me
-         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-         JOIN media_file mf ON mf.file_id = sme.file_id
-         WHERE me.entity_hash = ?1",
-        [source_hash],
-        |row| {
-            Ok(DuplicateFindSource {
-                perceptual_hash: row.get(0)?,
-                mime_type: row.get(1)?,
-                frame_count: row.get(2)?,
-            })
-        },
-    )
-    .optional()
-}
-
 pub fn list_perceptual_hash_sources(
     conn: &Connection,
-    excluded_entity_hash: Option<&str>,
 ) -> rusqlite::Result<Vec<PerceptualHashSource>> {
-    let sql = if excluded_entity_hash.is_some() {
-        "SELECT
-             mf.file_id,
-             me.entity_id,
-             me.entity_hash,
-             mf.file_hash,
-             mf.mime_type,
-             mf.size_bytes,
-             mf.pixel_width,
-             mf.pixel_height,
-             mf.frame_count,
-             mf.perceptual_hash
+    let mut stmt = conn.prepare(
+        "SELECT mf.file_id, mf.mime_type, mf.frame_count, mf.perceptual_hash
          FROM media_entity me
          JOIN single_media_entity sme ON sme.entity_id = me.entity_id
          JOIN media_file mf ON mf.file_id = sme.file_id
          WHERE mf.perceptual_hash IS NOT NULL
-           AND me.entity_hash != ?1"
-    } else {
+           AND me.status IN (0, 1)",
+    )?;
+    let rows = stmt.query_map([], map_perceptual_hash_source)?;
+    rows.collect()
+}
+
+/// Return a superset of pHash matches using the durable eight-way partition
+/// index. Callers must verify the full Hamming distance before acting.
+pub fn list_indexed_perceptual_hash_sources(
+    conn: &Connection,
+    partitions: &[i64; 8],
+) -> rusqlite::Result<Vec<PerceptualHashSource>> {
+    let mut stmt = conn.prepare_cached(
         "SELECT
              mf.file_id,
-             me.entity_id,
-             me.entity_hash,
-             mf.file_hash,
              mf.mime_type,
-             mf.size_bytes,
-             mf.pixel_width,
-             mf.pixel_height,
              mf.frame_count,
              mf.perceptual_hash
-         FROM media_entity me
-         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-         JOIN media_file mf ON mf.file_id = sme.file_id
-         WHERE mf.perceptual_hash IS NOT NULL"
-    };
-    let mut stmt = conn.prepare(sql)?;
-    let rows = if let Some(excluded_entity_hash) = excluded_entity_hash {
-        stmt.query_map([excluded_entity_hash], map_perceptual_hash_source)?
-    } else {
-        stmt.query_map([], map_perceptual_hash_source)?
-    };
+         FROM media_file_phash_index idx
+         JOIN media_file mf ON mf.file_id = idx.file_id
+         JOIN single_media_entity sme ON sme.file_id = mf.file_id
+         JOIN media_entity me ON me.entity_id = sme.entity_id
+         WHERE me.status IN (0, 1)
+           AND (
+                idx.partition_0 = ?1 OR idx.partition_1 = ?2
+             OR idx.partition_2 = ?3 OR idx.partition_3 = ?4
+             OR idx.partition_4 = ?5 OR idx.partition_5 = ?6
+             OR idx.partition_6 = ?7 OR idx.partition_7 = ?8
+           )",
+    )?;
+    let rows = stmt.query_map(
+        params![
+            partitions[0],
+            partitions[1],
+            partitions[2],
+            partitions[3],
+            partitions[4],
+            partitions[5],
+            partitions[6],
+            partitions[7],
+        ],
+        map_perceptual_hash_source,
+    )?;
     rows.collect()
 }
 
 fn map_perceptual_hash_source(row: &rusqlite::Row<'_>) -> rusqlite::Result<PerceptualHashSource> {
     Ok(PerceptualHashSource {
         file_id: row.get(0)?,
-        entity_id: row.get(1)?,
-        entity_hash: row.get(2)?,
-        file_hash: row.get(3)?,
-        mime_type: row.get(4)?,
-        size_bytes: row.get(5)?,
-        pixel_width: row.get(6)?,
-        pixel_height: row.get(7)?,
-        frame_count: row.get(8)?,
-        perceptual_hash: row.get(9)?,
+        mime_type: row.get(1)?,
+        frame_count: row.get(2)?,
+        perceptual_hash: row.get(3)?,
     })
 }
 
@@ -143,7 +111,8 @@ pub fn list_duplicate_scan_sources(
          FROM media_entity me
          JOIN single_media_entity sme ON sme.entity_id = me.entity_id
          JOIN media_file mf ON mf.file_id = sme.file_id
-         WHERE mf.perceptual_hash IS NOT NULL",
+         WHERE mf.perceptual_hash IS NOT NULL
+           AND me.status IN (0, 1)",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(DuplicateScanSource {
@@ -159,7 +128,15 @@ pub fn list_duplicate_scan_sources(
 
 pub fn count_duplicate_pairs(conn: &Connection, status: &str) -> rusqlite::Result<i64> {
     conn.query_row(
-        "SELECT COUNT(*) FROM duplicate WHERE status = ?1",
+        "SELECT COUNT(*)
+         FROM duplicate d
+         JOIN single_media_entity sme_a ON sme_a.file_id = d.file_id_a
+         JOIN media_entity me_a ON me_a.entity_id = sme_a.entity_id
+         JOIN single_media_entity sme_b ON sme_b.file_id = d.file_id_b
+         JOIN media_entity me_b ON me_b.entity_id = sme_b.entity_id
+         WHERE d.status = ?1
+           AND me_a.status IN (0, 1)
+           AND me_b.status IN (0, 1)",
         [status],
         |row| row.get(0),
     )
@@ -171,7 +148,16 @@ pub fn count_duplicate_pairs_with_max_distance(
     max_distance: i64,
 ) -> rusqlite::Result<i64> {
     conn.query_row(
-        "SELECT COUNT(*) FROM duplicate WHERE status = ?1 AND distance <= ?2",
+        "SELECT COUNT(*)
+         FROM duplicate d
+         JOIN single_media_entity sme_a ON sme_a.file_id = d.file_id_a
+         JOIN media_entity me_a ON me_a.entity_id = sme_a.entity_id
+         JOIN single_media_entity sme_b ON sme_b.file_id = d.file_id_b
+         JOIN media_entity me_b ON me_b.entity_id = sme_b.entity_id
+         WHERE d.status = ?1
+           AND d.distance <= ?2
+           AND me_a.status IN (0, 1)
+           AND me_b.status IN (0, 1)",
         params![status, max_distance],
         |row| row.get(0),
     )
@@ -235,7 +221,9 @@ pub fn get_duplicate_pairs_paginated(
          JOIN media_entity me_a ON me_a.entity_id = sme_a.entity_id
          JOIN single_media_entity sme_b ON sme_b.file_id = d.file_id_b
          JOIN media_entity me_b ON me_b.entity_id = sme_b.entity_id
-         WHERE d.status = ?1{cursor_clause}{distance_clause}
+         WHERE d.status = ?1
+           AND me_a.status IN (0, 1)
+           AND me_b.status IN (0, 1){cursor_clause}{distance_clause}
          ORDER BY d.distance ASC, d.file_id_a ASC, d.file_id_b ASC
          LIMIT {limit_param}"
     );
@@ -247,7 +235,7 @@ pub fn get_duplicate_pairs_paginated(
                 hash_a: row.get(0)?,
                 hash_b: row.get(1)?,
                 distance: distance as f64,
-                similarity_pct: ((1.0 - distance as f64 / 64.0) * 100.0).round(),
+                similarity_pct: ((1.0 - distance as f64 / 256.0) * 100.0).round(),
                 status: row.get(3)?,
             },
             row.get::<_, i64>(4)?,
@@ -280,6 +268,7 @@ pub fn get_duplicate_single_ref_by_hash(
              me.entity_id,
              sme.file_id,
              me.entity_hash,
+             mf.file_hash,
              me.status,
              mf.mime_type,
              mf.size_bytes,
@@ -302,18 +291,19 @@ pub fn get_duplicate_single_ref_by_hash(
                 entity_id: row.get(0)?,
                 file_id: row.get(1)?,
                 entity_hash: row.get(2)?,
-                status: row.get(3)?,
-                mime_type: row.get(4)?,
-                size_bytes: row.get(5)?,
-                pixel_width: row.get(6)?,
-                pixel_height: row.get(7)?,
-                frame_count: row.get(8)?,
-                notes: row.get(9)?,
-                source_urls_json: row.get(10)?,
-                rating: row.get(11)?,
-                date_created: row.get(12)?,
-                parent_collection_entity_id: row.get(13)?,
-                collection_ordinal: row.get(14)?,
+                file_hash: row.get(3)?,
+                status: row.get(4)?,
+                mime_type: row.get(5)?,
+                size_bytes: row.get(6)?,
+                pixel_width: row.get(7)?,
+                pixel_height: row.get(8)?,
+                frame_count: row.get(9)?,
+                notes: row.get(10)?,
+                source_urls_json: row.get(11)?,
+                rating: row.get(12)?,
+                date_created: row.get(13)?,
+                parent_collection_entity_id: row.get(14)?,
+                collection_ordinal: row.get(15)?,
             })
         },
     )

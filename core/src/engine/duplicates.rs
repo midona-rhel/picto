@@ -6,13 +6,6 @@ use crate::runtime_contract::state_change::Domain;
 use super::ApplicationEngine;
 
 impl ApplicationEngine {
-    pub fn find_similar(
-        &self,
-        source_hash: &str,
-    ) -> Result<crate::types::FindSimilarResponse, String> {
-        self.db.find_similar(source_hash)
-    }
-
     pub fn scan_duplicates(
         &self,
         threshold: Option<u32>,
@@ -23,10 +16,9 @@ impl ApplicationEngine {
             rebuild_sidebar: true,
             ..Default::default()
         });
-        crate::events::emit_state_changed(
-            "scan_duplicates",
-            ChangeImpact::new().add_domain(Domain::Sidebar),
-        );
+        let mut impact = ChangeImpact::new().add_domain(Domain::Sidebar);
+        impact.sidebar_counts = self.settled_sidebar_counts();
+        crate::events::emit_state_changed("scan_duplicates", impact);
         Ok(result)
     }
 
@@ -71,12 +63,19 @@ impl ApplicationEngine {
             if result.tags_merged > 0 {
                 impact = impact.tags_changed().all_smart_folder_scopes_changed();
             }
-            crate::events::emit_state_changed("resolve_duplicate_pair", impact);
             self.db.run_compiler(CompilerPlan {
                 rebuild_sidebar: true,
                 rebuild_all_smart_folders: result.tags_merged > 0,
                 ..Default::default()
             });
+            if result.tags_merged > 0 {
+                if let Ok(counts) = self.all_smart_folder_counts() {
+                    impact.smart_folder_ids = Some(counts.iter().map(|(id, _)| *id).collect());
+                    impact.smart_folder_counts = Some(counts);
+                }
+            }
+            impact.sidebar_counts = self.settled_sidebar_counts();
+            crate::events::emit_state_changed("resolve_duplicate_pair", impact);
         }
         Ok(result)
     }

@@ -31,10 +31,6 @@ export function reconcileEntityView(
   } as unknown as Record<string, unknown>);
 }
 
-export function getEntityGridItems(hashes: string[]): Promise<CanonicalEntityGridItem[]> {
-  return invoke<CanonicalEntityGridItem[]>('get_entity_grid_items', { entity_hashes: hashes });
-}
-
 export function getEntityDetails(entityHash: string): Promise<CanonicalEntityDetails | null> {
   return invoke<CanonicalEntityDetails | null>('get_entity_details', { entity_hash: entityHash });
 }

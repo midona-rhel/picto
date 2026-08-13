@@ -2,7 +2,6 @@
 //! All user-controlled values are bound as parameters, never inlined into SQL.
 //! Implements query-time grouping for collection visibility.
 
-use base64::Engine;
 use rusqlite::{Connection, ToSql};
 
 use crate::db::types::{
@@ -106,7 +105,7 @@ fn read_grid_item(row: &rusqlite::Row) -> rusqlite::Result<EntityGridItem> {
 /// Single entry point for all grid queries. All values are parameterized.
 ///
 /// `preresolved_ids` carries pre-resolved entity_id sets for bitmap-backed
-/// scopes (SmartFolder). Scopes that need DB access (Similar) resolve inline.
+/// scopes (SmartFolder).
 pub fn query_entity_view(
     conn: &Connection,
     q: &EntityViewQuery,
@@ -146,13 +145,7 @@ pub fn query_entity_view(
     }
 
     // Scope
-    apply_scope(
-        conn,
-        &q.base_scope,
-        &mut where_parts,
-        &mut bound,
-        preresolved_ids,
-    );
+    apply_scope(&q.base_scope, &mut where_parts, &mut bound, preresolved_ids);
 
     // Filters
     apply_filters(&q.filters, &mut where_parts, &mut bound);
@@ -202,13 +195,7 @@ pub fn query_entity_view(
             cw.push("me.parent_collection_entity_id IS NULL".into());
         }
         let mut count_bound: Vec<Box<dyn ToSql>> = Vec::new();
-        apply_scope(
-            conn,
-            &q.base_scope,
-            &mut cw,
-            &mut count_bound,
-            preresolved_ids,
-        );
+        apply_scope(&q.base_scope, &mut cw, &mut count_bound, preresolved_ids);
         apply_filters(&q.filters, &mut cw, &mut count_bound);
         let count_sql = format!(
             "SELECT
@@ -275,7 +262,6 @@ pub fn query_entity_view(
 }
 
 fn apply_scope(
-    conn: &Connection,
     scope: &crate::db::types::BaseScope,
     parts: &mut Vec<String>,
     bound: &mut Vec<Box<dyn ToSql>>,
@@ -364,27 +350,6 @@ fn apply_scope(
                     "me.entity_id IN (SELECT rowid FROM entity_fts WHERE entity_fts MATCH ?{idx})"
                 ));
                 bound.push(Box::new(format!("{}*", search_text)));
-            }
-        }
-        ScopeKind::Similar => {
-            // Resolve perceptual hash similarity inline using the DB connection.
-            // scope.key carries the source entity_hash.
-            parts.push("me.status = 1".into());
-            let source_hash = scope.key.as_deref().unwrap_or("");
-            if !source_hash.is_empty() {
-                let similar_ids = resolve_similar_ids(conn, source_hash);
-                if similar_ids.is_empty() {
-                    parts.push("1=0".into());
-                } else {
-                    let id_list = similar_ids
-                        .iter()
-                        .map(|id| id.to_string())
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    parts.push(format!("me.entity_id IN ({id_list})"));
-                }
-            } else {
-                parts.push("1=0".into());
             }
         }
     }
@@ -592,73 +557,6 @@ fn parse_cursor(conn: &Connection, cursor: &str) -> Option<(String, i64)> {
     Some((sort_val, entity_id))
 }
 
-// ── Similar scope resolution ─────────────────────────────────────────
-
-/// Hamming distance threshold for perceptual hash similarity.
-const SIMILAR_HAMMING_THRESHOLD: u32 = 10;
-
-/// Resolve entity_ids of entities with perceptual hashes similar to the
-/// source entity identified by `source_entity_hash`.
-/// The simple linear scan is intentional until representative-library profiling proves it slow.
-fn resolve_similar_ids(conn: &Connection, source_entity_hash: &str) -> Vec<i64> {
-    let engine = base64::engine::general_purpose::STANDARD;
-
-    // Look up the source entity's perceptual hash
-    let source_phash: Option<String> = conn
-        .query_row(
-            "SELECT mf.perceptual_hash
-             FROM media_entity me
-             JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-             JOIN media_file mf ON mf.file_id = sme.file_id
-             WHERE me.entity_hash = ?1",
-            [source_entity_hash],
-            |row| row.get(0),
-        )
-        .ok()
-        .flatten();
-
-    let source_bytes = match source_phash.and_then(|h| engine.decode(h).ok()) {
-        Some(b) => b,
-        None => return vec![],
-    };
-
-    // Scan all entities with perceptual hashes and compute hamming distances
-    let mut stmt = match conn.prepare(
-        "SELECT me.entity_id, mf.perceptual_hash
-         FROM media_entity me
-         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-         JOIN media_file mf ON mf.file_id = sme.file_id
-         WHERE mf.perceptual_hash IS NOT NULL
-           AND me.entity_hash != ?1
-           AND me.status = 1",
-    ) {
-        Ok(s) => s,
-        Err(_) => return vec![],
-    };
-
-    let rows = match stmt.query_map([source_entity_hash], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    }) {
-        Ok(r) => r,
-        Err(_) => return vec![],
-    };
-
-    let mut result = Vec::new();
-    for row in rows.flatten() {
-        let (entity_id, phash_b64) = row;
-        if let Ok(candidate_bytes) = engine.decode(&phash_b64) {
-            if candidate_bytes.len() == source_bytes.len() {
-                let distance = hamming_distance(&source_bytes, &candidate_bytes);
-                if distance <= SIMILAR_HAMMING_THRESHOLD {
-                    result.push(entity_id);
-                }
-            }
-        }
-    }
-
-    result
-}
-
 /// Batch fetch grid items by entity_hash. Used for targeted reconciliation
 /// and eager grid insertion, not for driving the main grid.
 pub fn get_entity_grid_items_by_hash(
@@ -677,14 +575,6 @@ pub fn get_entity_grid_items_by_hash(
     let params: Vec<&dyn ToSql> = hashes.iter().map(|h| h as &dyn ToSql).collect();
     let rows = stmt.query_map(params.as_slice(), read_grid_item)?;
     rows.collect()
-}
-
-/// Bitwise hamming distance between two byte slices of equal length.
-fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
-    a.iter()
-        .zip(b.iter())
-        .map(|(x, y)| (x ^ y).count_ones())
-        .sum()
 }
 
 #[cfg(test)]

@@ -22,6 +22,8 @@ use std::sync::{Arc, Mutex};
 
 use rusqlite::{Connection, OptionalExtension};
 
+use crate::blob_store::BlobHashLease;
+
 use self::projection::bitmaps::BitmapStore;
 use self::types::*;
 
@@ -71,6 +73,72 @@ fn entity_hashes_for_ids(conn: &Connection, ids: &[i64]) -> rusqlite::Result<Vec
     Ok(out)
 }
 
+fn find_perceptual_hash_candidates_on_conn(
+    conn: &Connection,
+    perceptual_hash: &str,
+    threshold: u32,
+) -> rusqlite::Result<Vec<types::PerceptualHashCandidate>> {
+    let Some(source) = crate::duplicates::phash::parse_supported_hash(perceptual_hash) else {
+        return Ok(Vec::new());
+    };
+
+    let rows = if threshold <= crate::duplicates::phash::MAX_INDEXED_DISTANCE {
+        let Some(partitions) = crate::duplicates::phash::indexed_partition_values(perceptual_hash)
+        else {
+            return Ok(Vec::new());
+        };
+        query::duplicates::list_indexed_perceptual_hash_sources(conn, &partitions)?
+    } else {
+        query::duplicates::list_perceptual_hash_sources(conn)?
+    };
+
+    let mut candidates = Vec::new();
+    for row in rows {
+        if !crate::media_capabilities::capabilities_for_stored_media(
+            &row.mime_type,
+            row.frame_count,
+        )
+        .can_perceptual_hash
+        {
+            continue;
+        }
+        let Some(candidate_hash) =
+            crate::duplicates::phash::parse_supported_hash(&row.perceptual_hash)
+        else {
+            continue;
+        };
+        let distance = source.dist(&candidate_hash);
+        if distance <= threshold {
+            candidates.push(types::PerceptualHashCandidate {
+                file_id: row.file_id,
+                distance,
+            });
+        }
+    }
+    candidates.sort_by(|left, right| {
+        left.distance
+            .cmp(&right.distance)
+            .then_with(|| left.file_id.cmp(&right.file_id))
+    });
+    Ok(candidates)
+}
+
+fn record_duplicate_review_candidates_on_conn(
+    conn: &Connection,
+    imported_file_id: i64,
+    candidates: &[types::PerceptualHashCandidate],
+) -> rusqlite::Result<()> {
+    for candidate in candidates {
+        write::duplicates::upsert_duplicate_pair_for_review(
+            conn,
+            imported_file_id,
+            candidate.file_id,
+            candidate.distance,
+        )?;
+    }
+    Ok(())
+}
+
 /// Everything replay needs to materialize an ingested single (the blob itself
 /// is fetched by hash). Derived fields (phash, colors) are excluded.
 fn ingest_entity_created_payload(prepared: &types::IngestPreparedSingle) -> serde_json::Value {
@@ -102,7 +170,7 @@ fn insert_prepared_single(
     device_id: &str,
     prepared: &types::IngestPreparedSingle,
     deferred_work_types: &[crate::background_work::DeferredWorkType],
-) -> rusqlite::Result<i64> {
+) -> rusqlite::Result<(i64, i64)> {
     let source_urls_json = if prepared.source_urls.is_empty() {
         None
     } else {
@@ -186,7 +254,7 @@ fn insert_prepared_single(
         &ingest_entity_created_payload(prepared),
     )?;
 
-    Ok(entity_id)
+    Ok((entity_id, file_id))
 }
 
 /// Sync-relevant fields of an entity metadata patch (absent = unchanged,
@@ -750,81 +818,6 @@ impl LibraryDatabase {
         self.with_read(|conn| query::ingest::get_derivative_targets_by_entity_hashes(conn, &hashes))
     }
 
-    pub fn find_perceptual_hash_candidates(
-        &self,
-        perceptual_hash: &str,
-        threshold: u32,
-    ) -> Result<Vec<types::PerceptualHashCandidate>, String> {
-        let perceptual_hash = perceptual_hash.to_string();
-        self.with_read(move |conn| {
-            use img_hash::ImageHash;
-
-            let source = match ImageHash::<Vec<u8>>::from_base64(&perceptual_hash) {
-                Ok(value) => value,
-                Err(_) => return Ok(Vec::new()),
-            };
-
-            let mut candidates = Vec::new();
-            for row in query::duplicates::list_perceptual_hash_sources(conn, None)? {
-                let candidate_phash = row.perceptual_hash;
-                if !crate::media_capabilities::capabilities_for_stored_media(
-                    &row.mime_type,
-                    row.frame_count,
-                )
-                .can_perceptual_hash
-                {
-                    continue;
-                }
-                let Ok(candidate_hash) = ImageHash::<Vec<u8>>::from_base64(&candidate_phash) else {
-                    continue;
-                };
-                let distance = source.dist(&candidate_hash);
-                if distance <= threshold {
-                    candidates.push(types::PerceptualHashCandidate {
-                        file_id: row.file_id,
-                        entity_id: row.entity_id,
-                        entity_hash: row.entity_hash,
-                        file_hash: row.file_hash,
-                        mime_type: row.mime_type,
-                        size_bytes: row.size_bytes,
-                        pixel_width: row.pixel_width,
-                        pixel_height: row.pixel_height,
-                        frame_count: row.frame_count,
-                        perceptual_hash: candidate_phash,
-                        distance,
-                    });
-                }
-            }
-
-            candidates.sort_by(|left, right| {
-                left.distance
-                    .cmp(&right.distance)
-                    .then_with(|| left.entity_hash.cmp(&right.entity_hash))
-            });
-            Ok(candidates)
-        })
-    }
-
-    pub fn find_ingest_duplicate_review_candidates(
-        &self,
-        prepared: &types::IngestPreparedSingle,
-        threshold: u32,
-    ) -> Result<Vec<types::PerceptualHashCandidate>, String> {
-        let Some(perceptual_hash) = prepared.perceptual_hash.as_deref() else {
-            return Ok(Vec::new());
-        };
-
-        let candidates = self.find_perceptual_hash_candidates(perceptual_hash, threshold)?;
-        let mut review_candidates = Vec::<types::PerceptualHashCandidate>::new();
-        let mut seen_review_files = std::collections::HashSet::<i64>::new();
-        for candidate in candidates {
-            if seen_review_files.insert(candidate.file_id) {
-                review_candidates.push(candidate);
-            }
-        }
-        Ok(review_candidates)
-    }
-
     pub fn upsert_duplicate_pair_for_review(
         &self,
         file_id_a: i64,
@@ -838,34 +831,28 @@ impl LibraryDatabase {
         })
     }
 
-    pub fn record_duplicate_review_candidates(
-        &self,
-        imported_file_id: i64,
-        candidates: &[types::PerceptualHashCandidate],
-    ) -> Result<(), String> {
-        let review_candidates = candidates.to_vec();
-        self.with_write(move |conn| {
-            for candidate in &review_candidates {
-                write::duplicates::upsert_duplicate_pair_for_review(
-                    conn,
-                    imported_file_id,
-                    candidate.file_id,
-                    candidate.distance,
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    pub fn insert_ingested_single(
+    pub(crate) fn insert_ingested_single_with_blob_lease(
         &self,
         prepared: &types::IngestPreparedSingle,
         deferred_work_types: &[crate::background_work::DeferredWorkType],
-    ) -> Result<i64, String> {
+        duplicate_threshold: u32,
+        _blob_lease: BlobHashLease,
+    ) -> Result<(i64, bool), String> {
         let prepared = prepared.clone();
         let deferred_work = deferred_work_types.to_vec();
         self.with_write(move |conn| {
-            insert_prepared_single(conn, &self.device_id, &prepared, &deferred_work)
+            let candidates = prepared
+                .perceptual_hash
+                .as_deref()
+                .map(|phash| {
+                    find_perceptual_hash_candidates_on_conn(conn, phash, duplicate_threshold)
+                })
+                .transpose()?
+                .unwrap_or_default();
+            let (entity_id, file_id) =
+                insert_prepared_single(conn, &self.device_id, &prepared, &deferred_work)?;
+            record_duplicate_review_candidates_on_conn(conn, file_id, &candidates)?;
+            Ok((entity_id, !candidates.is_empty()))
         })
     }
 
@@ -876,15 +863,50 @@ impl LibraryDatabase {
         existing_member_ids: &[i64],
         existing_collection_id: Option<i64>,
     ) -> Result<(i64, String, Vec<String>), String> {
+        let (collection_id, collection_hash, new_hashes, _) = self
+            .materialize_ingested_collection_with_blob_leases(
+                name,
+                new_members,
+                existing_member_ids,
+                existing_collection_id,
+                crate::duplicates::phash::MAX_INDEXED_DISTANCE,
+                Vec::new(),
+            )?;
+        Ok((collection_id, collection_hash, new_hashes))
+    }
+
+    pub(crate) fn materialize_ingested_collection_with_blob_leases(
+        &self,
+        name: &str,
+        new_members: &[types::IngestPreparedSingle],
+        existing_member_ids: &[i64],
+        existing_collection_id: Option<i64>,
+        duplicate_threshold: u32,
+        blob_leases: Vec<BlobHashLease>,
+    ) -> Result<(i64, String, Vec<String>, bool), String> {
         let collection_name = name.to_string();
         let prepared = new_members.to_vec();
         let existing_ids = existing_member_ids.to_vec();
+        let blob_leases = blob_leases;
         self.with_write(move |conn| {
+            let _blob_leases = blob_leases;
             let mut member_ids = existing_ids;
             let mut new_hashes = Vec::with_capacity(prepared.len());
+            let mut duplicates_changed = false;
 
             for member in &prepared {
-                let entity_id = insert_prepared_single(conn, &self.device_id, member, &[])?;
+                let candidates = member
+                    .perceptual_hash
+                    .as_deref()
+                    .map(|phash| {
+                        find_perceptual_hash_candidates_on_conn(conn, phash, duplicate_threshold)
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
+                let (entity_id, file_id) =
+                    insert_prepared_single(conn, &self.device_id, member, &[])?;
+                record_duplicate_review_candidates_on_conn(conn, file_id, &candidates)?;
+                duplicates_changed |= !candidates.is_empty();
                 member_ids.push(entity_id);
                 new_hashes.push(member.entity_hash.clone());
             }
@@ -925,7 +947,12 @@ impl LibraryDatabase {
                     &serde_json::json!({ "members": members }),
                 )?;
             }
-            Ok((collection_id, collection_hash, new_hashes))
+            Ok((
+                collection_id,
+                collection_hash,
+                new_hashes,
+                duplicates_changed,
+            ))
         })
     }
 
@@ -1508,76 +1535,6 @@ impl LibraryDatabase {
         self.with_read(query::tags::get_namespace_summary)
     }
 
-    pub fn find_similar(
-        &self,
-        source_hash: &str,
-    ) -> Result<crate::types::FindSimilarResponse, String> {
-        let source_hash = source_hash.to_string();
-        let source = self
-            .with_read(|conn| query::duplicates::get_duplicate_find_source(conn, &source_hash))?;
-
-        let Some(source) = source else {
-            return Ok(crate::types::FindSimilarResponse {
-                source_hash,
-                items: Vec::new(),
-            });
-        };
-        let Some(source_phash) = source.perceptual_hash else {
-            return Ok(crate::types::FindSimilarResponse {
-                source_hash,
-                items: Vec::new(),
-            });
-        };
-
-        if !crate::media_capabilities::capabilities_for_stored_media(
-            &source.mime_type,
-            source.frame_count,
-        )
-        .can_perceptual_hash
-        {
-            return Ok(crate::types::FindSimilarResponse {
-                source_hash,
-                items: Vec::new(),
-            });
-        }
-
-        let candidates = self.with_read(|conn| {
-            query::duplicates::list_perceptual_hash_sources(conn, Some(&source_hash))
-        })?;
-
-        use img_hash::ImageHash;
-
-        let Ok(source_hash_image) = ImageHash::<Vec<u8>>::from_base64(&source_phash) else {
-            return Ok(crate::types::FindSimilarResponse {
-                source_hash,
-                items: Vec::new(),
-            });
-        };
-
-        let mut items: Vec<crate::types::SimilarItem> = candidates
-            .into_iter()
-            .filter_map(|candidate| {
-                if !crate::media_capabilities::capabilities_for_stored_media(
-                    &candidate.mime_type,
-                    candidate.frame_count,
-                )
-                .can_perceptual_hash
-                {
-                    return None;
-                }
-                let candidate_hash =
-                    ImageHash::<Vec<u8>>::from_base64(&candidate.perceptual_hash).ok()?;
-                Some(crate::types::SimilarItem {
-                    hash: candidate.entity_hash,
-                    distance: source_hash_image.dist(&candidate_hash),
-                })
-            })
-            .collect();
-        items.sort_by_key(|item| item.distance);
-
-        Ok(crate::types::FindSimilarResponse { source_hash, items })
-    }
-
     pub fn scan_duplicates(
         &self,
         threshold: Option<u32>,
@@ -1587,8 +1544,7 @@ impl LibraryDatabase {
         let review_threshold = review_threshold.unwrap_or(threshold);
         let files = self.with_read(query::duplicates::list_duplicate_scan_sources)?;
 
-        use img_hash::ImageHash;
-        let parsed: Vec<(i64, String, ImageHash<Vec<u8>>)> = files
+        let parsed: Vec<_> = files
             .iter()
             .filter_map(|row| {
                 if !crate::media_capabilities::capabilities_for_stored_media(
@@ -1601,31 +1557,21 @@ impl LibraryDatabase {
                 }
                 Some((
                     row.file_id,
-                    row.entity_hash.clone(),
-                    ImageHash::<Vec<u8>>::from_base64(&row.perceptual_hash).ok()?,
+                    crate::duplicates::phash::parse_supported_hash(&row.perceptual_hash)?,
                 ))
             })
             .collect();
 
-        let mut candidate_pairs = Vec::<(i64, i64, u32)>::new();
-        let mut closest_distance: Option<u32> = None;
-        for index in 0..parsed.len() {
-            let (file_id_a, _, ref hash_a) = parsed[index];
-            for (file_id_b, _, hash_b) in parsed.iter().skip(index + 1) {
-                let distance = hash_a.dist(hash_b);
-                if distance <= threshold {
-                    candidate_pairs.push((file_id_a, *file_id_b, distance));
-                    closest_distance = Some(match closest_distance {
-                        Some(current) => current.min(distance),
-                        None => distance,
-                    });
-                }
-            }
-        }
+        let candidate_pairs = crate::duplicates::phash::find_candidate_pairs(&parsed, threshold);
+        let closest_distance = candidate_pairs
+            .iter()
+            .map(|(_, _, distance)| *distance)
+            .min();
 
-        let pairs_inserted = self.with_write(|conn| {
-            write::duplicates::insert_duplicate_pairs_for_scan(conn, &candidate_pairs)
+        let newly_detected = self.with_write(|conn| {
+            write::duplicates::reconcile_detected_duplicate_pairs(conn, &candidate_pairs)
         })?;
+        let pairs_inserted = newly_detected.len();
 
         let reviewable_detected_total = self.with_read(|conn| {
             query::duplicates::count_duplicate_pairs_with_max_distance(
@@ -1635,11 +1581,10 @@ impl LibraryDatabase {
             )
         })? as usize;
 
-        let reviewable_detected_new = candidate_pairs
+        let reviewable_detected_new = newly_detected
             .iter()
             .filter(|(_, _, distance)| *distance <= review_threshold)
-            .count()
-            .min(pairs_inserted);
+            .count();
 
         Ok(types::DuplicateScanSummary {
             candidates_found: candidate_pairs.len(),
@@ -1749,13 +1694,13 @@ impl LibraryDatabase {
 
     /// Run a compiler plan (called after write operations).
     pub fn run_compiler(&self, plan: projection::compiler::CompilerPlan) {
-        let conn = self.read_conn.lock().unwrap();
+        let conn = self.write_conn.lock().unwrap();
         projection::compiler::execute_plan(&conn, &self.bitmaps, &plan);
     }
 
     /// Full rebuild of all projections from authoritative data.
     pub fn full_rebuild(&self) {
-        let conn = self.read_conn.lock().unwrap();
+        let conn = self.write_conn.lock().unwrap();
         projection::compiler::full_rebuild(&conn, &self.bitmaps);
     }
 

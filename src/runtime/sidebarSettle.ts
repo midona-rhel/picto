@@ -3,9 +3,8 @@
  *
  * Count sources:
  *   - sidebar_counts (on engine write events):
- *     active, inbox, trash, untagged — exact
- *     uncategorized — exact on engine path, -1 on legacy dispatch paths
- *     duplicates — always -1 (manager-owned, not scope data)
+ *     active, inbox, trash, uncategorized, untagged — exact
+ *     duplicates — exact when duplicate visibility or rows changed; otherwise -1 leaves it intact
  *   - smart_folder_counts (on compiler_batch_done):
  *     per-smart-folder counts after bitmap recompilation — exact
  *

@@ -6,11 +6,10 @@
 
 import { getDefaultStore } from 'jotai';
 import {
-  getEntityGridItems,
   queryEntityView,
   reconcileEntityView,
 } from '../platform/entityApi';
-import type { BaseScope, EntityViewQuery, CanonicalEntityGridItem } from '../shared/types/canonical';
+import type { BaseScope, EntityViewQuery } from '../shared/types/canonical';
 import {
   getViewPrefs,
   setViewPrefs,
@@ -29,7 +28,6 @@ import {
   gridSoftTransitionActionAtom,
 } from '../state/grid';
 import { clearSelectionAtom } from '../state/selection';
-import { sortedMergeGridItems } from './gridItemMerge';
 
 const store = getDefaultStore();
 
@@ -60,17 +58,6 @@ function scopeToKey(scope: BaseScope): string {
 function currentQuery(limit: number): EntityViewQuery {
   const q = store.get(currentGridQueryAtom);
   return { ...q, page: { limit } };
-}
-
-function uniqueEntityGridItems(items: CanonicalEntityGridItem[]): CanonicalEntityGridItem[] {
-  const seen = new Set<string>();
-  const unique: CanonicalEntityGridItem[] = [];
-  for (const item of items) {
-    if (seen.has(item.entity_hash)) continue;
-    seen.add(item.entity_hash);
-    unique.push(item);
-  }
-  return unique;
 }
 
 export const gridController = {
@@ -249,36 +236,6 @@ export const gridController = {
     store.set(gridItemsAtom, filtered);
     const prevTotal = store.get(gridTotalCountAtom);
     if (prevTotal != null) store.set(gridTotalCountAtom, Math.max(0, prevTotal - removedCount));
-  },
-
-  /** Insert specific new items into the grid at their sorted position. */
-  async insertItems(entityHashes: string[]) {
-    const currentItems = store.get(gridItemsAtom);
-    const existingSet = new Set(currentItems.map((i) => i.entity_hash));
-    const requested = Array.from(new Set(entityHashes));
-    const newHashes = requested.filter((h) => !existingSet.has(h));
-    if (newHashes.length === 0) return;
-
-    try {
-      const fetchedItems = await getEntityGridItems(newHashes);
-      const newItems = uniqueEntityGridItems(fetchedItems);
-      if (newItems.length === 0) return;
-
-      const sortField = store.get(gridSortFieldAtom);
-      const sortDir = store.get(gridSortDirectionAtom);
-      const merged = uniqueEntityGridItems(
-        sortedMergeGridItems(store.get(gridItemsAtom), newItems, sortField, sortDir),
-      );
-
-      store.set(gridItemsAtom, merged);
-      const prevTotal = store.get(gridTotalCountAtom);
-      if (prevTotal != null) {
-        const addedCount = merged.length - currentItems.length;
-        store.set(gridTotalCountAtom, prevTotal + Math.max(0, addedCount));
-      }
-    } catch {
-      void this.reconcile(false);
-    }
   },
 
   async reconcile(metadataOnly: boolean): Promise<boolean> {

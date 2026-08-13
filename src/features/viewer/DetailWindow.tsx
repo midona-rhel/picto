@@ -21,7 +21,7 @@ import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { useImageZoom, type ImageSize, type ZoomState } from './hooks/useImageZoom';
-import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
+import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { useRecordMediaView } from './hooks/useRecordMediaView';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
@@ -189,7 +189,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     return r;
   }, [images, currentIndex]);
 
-  const pipeline = useViewerMediaPipeline({
+  const pipeline = useMediaImagePipeline({
     hash: currentImage?.hash ?? null,
     thumbnailHash: currentImage?.hash ?? null,
     mime: currentImage?.mime ?? '',

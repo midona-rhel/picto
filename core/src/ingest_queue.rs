@@ -1384,6 +1384,7 @@ async fn process_single_queue(
             crate::ingest::attach_current_sidebar_counts(
                 db,
                 build_ingest_change_impact(&summary, extra_grid_scopes),
+                summary.flags.duplicates_changed,
             ),
         );
     }
@@ -1661,7 +1662,7 @@ async fn process_collection_queue(
     }
     crate::events::emit_state_changed(
         "ingest_queue_collection_commit",
-        crate::ingest::attach_current_sidebar_counts(db, impact),
+        crate::ingest::attach_current_sidebar_counts(db, impact, summary.flags.duplicates_changed),
     );
 
     let completions = processable_items

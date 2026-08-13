@@ -47,6 +47,10 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [x] Verify grid, sidebar, folder, smart-folder, tag, and special-scope counts agree.
 - [x] Verify recently viewed is unique per entity and ordered by latest view.
 - [x] Remove incomplete batch rename and no-op folder actions; retain drag-and-drop folder Move.
+- [x] Make manual file drag-and-drop honor the active lifecycle destination. Inbox imports remain
+      Inbox media, and every open grid settles membership from its canonical query after import.
+      Verify `All` remains unchanged, Inbox increases, and the same canonical `add_media` path is
+      used rather than adding a second import implementation.
 
 ## Phase 3: PBI-575 Subscriptions
 
@@ -77,13 +81,23 @@ Phase gates:
 
 ## Phase 4: PBI-577 Duplicates
 
-- [ ] Require an existing unresolved candidate before destructive resolution.
-- [ ] Make failed loser-blob cleanup visible and repairable.
-- [ ] Test every decision and cross-collection ownership choice.
-- [ ] Verify reference repointing and blob state after restart.
-- [ ] Measure the simple scan on a representative library before optimizing it.
-- [ ] Delete unused similar-media code if no release surface calls it.
-- [ ] Run the Electron duplicate-review smoke and archive PBI-577.
+- [x] Preserve the existing-candidate guard in the release test lane before every destructive
+      resolution.
+- [x] Make failed loser original/thumbnail blob cleanup visible and durably retryable.
+- [x] Test every decision and cross-collection ownership choice against a live candidate.
+- [x] Verify reference repointing, All/Inbox/Trash boundaries, and blob state after restart.
+- [x] Measure and replace the unconditional quadratic scan. The exact indexed implementation
+      matched brute force on 4,096 deterministic 256-bit hashes and all tested thresholds; the
+      release measurement was 13.57 ms brute force and 20.00 ms indexed at this small population,
+      with no unsupported large-library speed claim.
+- [x] Replace per-import full-library pHash scans with a durable eight-partition SQLite index for
+      the normal 97% threshold. Candidate lookup and pair insertion now share the import write
+      transaction; a one-million-row query-plan probe used all eight indexes and returned one
+      synthetic candidate in about 1 ms.
+- [x] Delete unused similar-media commands, types, BK-tree path, and parity exception.
+- [x] Run the packaged Electron duplicate-review smoke through rendered controls. Evidence:
+      `artifacts/duplicates/smoke.json` on 2026-08-14.
+- [x] Archived PBI-577 after focused, full-suite, package, restart, and UI-smoke verification.
 
 ## Phase 5: PBI-604 Tag Manager
 

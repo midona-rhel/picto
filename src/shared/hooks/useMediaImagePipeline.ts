@@ -1,5 +1,5 @@
 /**
- * useViewerMediaPipeline — flicker-free two-layer image loading.
+ * useMediaImagePipeline — flicker-free two-layer image loading.
  *
  * Key behavior: the CURRENT image stays visible until the NEXT image's
  * thumbnail is fully decoded. No blank frames during navigation.
@@ -13,7 +13,7 @@
  */
 
 import { useState, useEffect, useCallback, type RefObject, type SyntheticEvent } from 'react';
-import { mediaThumbnailUrl, mediaFileUrl } from '../../../shared/lib/mediaUrl';
+import { mediaThumbnailUrl, mediaFileUrl } from '../lib/mediaUrl';
 
 export interface MediaPipelineInput {
   hash: string | null;
@@ -35,7 +35,7 @@ export interface MediaPipelineOutput {
   handleFullLoad: (e: SyntheticEvent<HTMLImageElement>) => void;
 }
 
-export function useViewerMediaPipeline({
+export function useMediaImagePipeline({
   hash,
   thumbnailHash,
   mime,
@@ -44,7 +44,9 @@ export function useViewerMediaPipeline({
   neighborHashes = [],
 }: MediaPipelineInput): MediaPipelineOutput {
   // What's currently shown to the user (lags behind `hash` until new thumb is ready)
-  const [displayedHash, setDisplayedHash] = useState(hash);
+  // Start empty so the first render takes the same thumbnail-first path as navigation.
+  const [displayedHash, setDisplayedHash] = useState<string | null>(null);
+  const [displayedThumbnailHash, setDisplayedThumbnailHash] = useState<string | null>(null);
   const [thumbUrl, setThumbUrl] = useState('');
   const [fullUrl, setFullUrl] = useState('');
   const [thumbLoaded, setThumbLoaded] = useState(false);
@@ -52,12 +54,21 @@ export function useViewerMediaPipeline({
 
   // Preload the next thumbnail in the background. Only swap when ready.
   useEffect(() => {
-    if (!hash) { setDisplayedHash(null); setThumbUrl(''); setFullUrl(''); return; }
-    if (hash === displayedHash) return; // Already showing this hash
+    if (!hash) {
+      setDisplayedHash(null);
+      setDisplayedThumbnailHash(null);
+      setThumbUrl('');
+      setFullUrl('');
+      return;
+    }
+
+    const requestedThumbnailHash = thumbnailHash ?? hash;
+    if (hash === displayedHash && requestedThumbnailHash === displayedThumbnailHash) return;
 
     if (isVideo) {
       // Videos don't have thumbnails to preload — swap immediately
       setDisplayedHash(hash);
+      setDisplayedThumbnailHash(requestedThumbnailHash);
       setThumbUrl('');
       setFullUrl('');
       setThumbLoaded(true);
@@ -65,7 +76,7 @@ export function useViewerMediaPipeline({
       return;
     }
 
-    const newThumbUrl = mediaThumbnailUrl(thumbnailHash ?? hash);
+    const newThumbUrl = mediaThumbnailUrl(requestedThumbnailHash);
     let cancelled = false;
 
     const img = new Image();
@@ -73,6 +84,7 @@ export function useViewerMediaPipeline({
       if (cancelled) return;
       // New thumbnail is decoded — commit the swap
       setDisplayedHash(hash);
+      setDisplayedThumbnailHash(requestedThumbnailHash);
       setThumbUrl(newThumbUrl);
       setThumbLoaded(true);
       setFullVisible(false);
@@ -85,6 +97,7 @@ export function useViewerMediaPipeline({
       if (cancelled) return;
       // Still swap even on error — show broken state rather than stuck on old image
       setDisplayedHash(hash);
+      setDisplayedThumbnailHash(requestedThumbnailHash);
       setThumbUrl(newThumbUrl);
       setThumbLoaded(false);
       setFullVisible(false);
@@ -100,6 +113,7 @@ export function useViewerMediaPipeline({
     if (hash && !displayedHash) {
       const url = mediaThumbnailUrl(thumbnailHash ?? hash);
       setDisplayedHash(hash);
+      setDisplayedThumbnailHash(thumbnailHash ?? hash);
       setThumbUrl(url);
       setThumbLoaded(false);
     }

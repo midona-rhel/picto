@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   IconArrowLeft,
   IconArrowRight,
   IconArrowsJoin,
+  IconAspectRatio,
   IconCheck,
   IconCopy,
+  IconLayersDifference,
+  IconMinus,
+  IconPlus,
   IconRefresh,
   IconX,
 } from '@tabler/icons-react';
@@ -19,11 +23,38 @@ import {
 } from '../../platform/duplicateApi';
 import type { CanonicalEntityDetails } from '../../shared/types/canonical';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
+import { showErrorNotification, showInfoNotification, showWarningNotification } from '../../shared/lib/notifications';
+import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
+import btnStyles from '../../shared/styles/actionButton.module.css';
+import iconStyles from '../../shared/styles/iconButton.module.css';
+import { GlassModal } from '../../shared/ui/GlassModal';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { ProgressBar } from '../../shared/ui/ProgressBar';
 import { PropertyRow } from '../../shared/ui/PropertyRow/PropertyRow';
+import { useLinkedComparisonZoom } from './useLinkedComparisonZoom';
 import styles from './DuplicatesScreen.module.css';
 
 const PAGE_SIZE = 100;
+const LOADING_MESSAGE_DELAY_MS = 200;
+
+interface LoadPairsOptions {
+  showLoading?: boolean;
+  resetProgress?: boolean;
+}
+
+function useDelayedFlag(active: boolean, delayMs = LOADING_MESSAGE_DELAY_MS): boolean {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    if (!active) {
+      setVisible(false);
+      return;
+    }
+    const timeout = window.setTimeout(() => setVisible(true), delayMs);
+    return () => window.clearTimeout(timeout);
+  }, [active, delayMs]);
+  return visible;
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -44,36 +75,111 @@ interface ConflictChoice {
 
 interface MediaCardProps {
   side: 'left' | 'right';
+  previewRef: React.RefObject<HTMLDivElement>;
+  zoom: ReturnType<typeof useLinkedComparisonZoom>;
+  differenceActive: boolean;
+  differenceImages: { left: CanonicalEntityDetails; right: CanonicalEntityDetails } | null;
   details: CanonicalEntityDetails | null;
   loading: boolean;
   onKeep: () => void;
   disabled: boolean;
 }
 
-function MediaCard({ side, details, loading, onKeep, disabled }: MediaCardProps) {
+function DifferenceComposite({
+  side,
+  images,
+  zoom,
+}: {
+  side: 'left' | 'right';
+  images: { left: CanonicalEntityDetails; right: CanonicalEntityDetails };
+  zoom: ReturnType<typeof useLinkedComparisonZoom>;
+}) {
+  const aspectRatio = images.left.pixel_width && images.left.pixel_height
+    ? images.left.pixel_width / images.left.pixel_height
+    : 1;
+  const imageUrl = (details: CanonicalEntityDetails) => mediaFileUrl(details.thumbnail_hash, details.mime_type);
+  const fallback = (details: CanonicalEntityDetails) => mediaThumbnailUrl(details.thumbnail_hash);
+  return (
+    <div
+      className={`${styles.previewLayers} ${styles.differenceComposite}`}
+      style={zoom.differenceFrameStyle(side, aspectRatio)}
+      data-testid={`${side}-difference-composite`}
+    >
+      <img
+        src={imageUrl(images.left)}
+        onError={(event) => { event.currentTarget.onerror = null; event.currentTarget.src = fallback(images.left); }}
+        alt=""
+        draggable={false}
+      />
+      <img
+        className={styles.differenceLayer}
+        src={imageUrl(images.right)}
+        onError={(event) => { event.currentTarget.onerror = null; event.currentTarget.src = fallback(images.right); }}
+        alt=""
+        draggable={false}
+      />
+    </div>
+  );
+}
+
+function MediaCard({ side, previewRef, zoom, differenceActive, differenceImages, details, loading, onKeep, disabled }: MediaCardProps) {
   const label = side === 'left' ? 'Left candidate' : 'Right candidate';
-  const fullUrl = details ? mediaFileUrl(details.thumbnail_hash, details.mime_type) : '';
+  const fullImgRef = useRef<HTMLImageElement>(null);
+  const pipeline = useMediaImagePipeline({
+    hash: details?.entity_hash ?? null,
+    thumbnailHash: details?.thumbnail_hash ?? null,
+    mime: details?.mime_type ?? '',
+    isVideo: false,
+    imgRef: fullImgRef,
+  });
+  const thumbnailUrl = details ? mediaThumbnailUrl(details.thumbnail_hash) : '';
   return (
     <article className={styles.mediaCard}>
       <header className={styles.cardHeader}>
         <span className={styles.sideLabel}>{label}</span>
-        <button className={styles.keepButton} onClick={onKeep} disabled={disabled || !details}>
-          <IconCheck size={15} /> Keep {side}
-        </button>
+        <KbdTooltip label={`Keep ${side}`} shortcut={side === 'left' ? 'L' : 'R'}>
+          <button className={btnStyles.btn} onClick={onKeep} disabled={disabled || !details} aria-label={`Keep ${side}`}>
+            <IconCheck size={15} /> <span className={styles.keepLabel}>Keep {side}</span>
+          </button>
+        </KbdTooltip>
       </header>
-      <div className={styles.preview}>
-        {loading && <div className={styles.previewState}>Loading metadata...</div>}
+      <div
+        ref={previewRef}
+        data-testid={`${side}-preview`}
+        className={`${styles.preview} ${zoom.draggingSide === side ? styles.previewDragging : ''}`}
+        onPointerDown={(event) => zoom.handlers.onPointerDown(side, event)}
+        onPointerMove={(event) => zoom.handlers.onPointerMove(side, event)}
+        onPointerUp={zoom.handlers.onPointerUp}
+        onPointerCancel={zoom.handlers.onPointerUp}
+        onDoubleClick={zoom.fit}
+      >
+        {loading && !details && <div className={styles.previewState}>Loading metadata...</div>}
         {!loading && !details && <div className={styles.previewState}>Media unavailable</div>}
-        {details && (
-          <img
-            src={fullUrl}
-            onError={(event) => {
-              event.currentTarget.onerror = null;
-              event.currentTarget.src = mediaThumbnailUrl(details.thumbnail_hash);
-            }}
-            alt={details.name ?? label}
-            draggable={false}
-          />
+        {details && !differenceActive && (
+          <div className={styles.previewLayers} style={zoom.frameStyle(side)} data-testid={`${side}-preview-layers`}>
+            <img
+              className={styles.thumbnailImage}
+              src={pipeline.thumbUrl || thumbnailUrl}
+              onLoad={pipeline.handleThumbLoad}
+              alt={details.name ?? label}
+              draggable={false}
+            />
+            {pipeline.fullUrl && (
+              <img
+                ref={fullImgRef}
+                className={styles.fullImage}
+                src={pipeline.fullUrl}
+                onLoad={pipeline.handleFullLoad}
+                onError={(event) => { event.currentTarget.style.display = 'none'; }}
+                alt=""
+                decoding="async"
+                draggable={false}
+              />
+            )}
+          </div>
+        )}
+        {differenceActive && differenceImages && (
+          <DifferenceComposite side={side} images={differenceImages} zoom={zoom} />
         )}
       </div>
       {details && (
@@ -105,33 +211,61 @@ export function DuplicatesScreen() {
   const [scanning, setScanning] = useState(false);
   const [resolving, setResolving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
   const [left, setLeft] = useState<CanonicalEntityDetails | null>(null);
   const [right, setRight] = useState<CanonicalEntityDetails | null>(null);
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [conflict, setConflict] = useState<ConflictChoice | null>(null);
+  const [differenceHovered, setDifferenceHovered] = useState(false);
+  const [differenceFocused, setDifferenceFocused] = useState(false);
   const requestIdRef = useRef(0);
+  const scanningRef = useRef(false);
+  const leftPreviewRef = useRef<HTMLDivElement>(null);
+  const rightPreviewRef = useRef<HTMLDivElement>(null);
 
   const currentPair = pairs[index] ?? null;
   const resolvedCount = Math.max(0, initialTotal - total);
+  const zoom = useLinkedComparisonZoom({
+    leftContainerRef: leftPreviewRef,
+    rightContainerRef: rightPreviewRef,
+    leftImageSize: left?.pixel_width && left.pixel_height
+      ? { width: left.pixel_width, height: left.pixel_height }
+      : null,
+    rightImageSize: right?.pixel_width && right.pixel_height
+      ? { width: right.pixel_width, height: right.pixel_height }
+      : null,
+    pairKey: currentPair ? `${currentPair.hash_a}:${currentPair.hash_b}` : '',
+  });
+  const differenceImages = left && right ? { left, right } : null;
+  const differenceActive = !metadataLoading && (differenceHovered || differenceFocused);
+  const showLoadingMessage = useDelayedFlag(loading);
+  const showScanProgress = useDelayedFlag(scanning);
 
-  const loadPairs = useCallback(async () => {
-    setLoading(true);
+  const reportFailure = useCallback((cause: unknown, title = 'Duplicate review failed') => {
+    const message = cause instanceof Error ? cause.message : String(cause);
+    setError(message);
+    showErrorNotification({ title, message });
+  }, []);
+
+  const loadPairs = useCallback(async ({
+    showLoading = true,
+    resetProgress = true,
+  }: LoadPairsOptions = {}) => {
+    if (showLoading) setLoading(true);
     setError(null);
     try {
       const page = await getDuplicatePairs({ limit: PAGE_SIZE });
       setPairs(page.items);
       setTotal(page.total);
-      setInitialTotal(page.total);
+      if (resetProgress) setInitialTotal(page.total);
       setNextCursor(page.next_cursor);
       setHasMore(page.has_more);
-      setIndex(0);
+      setIndex((current) => resetProgress ? 0 : Math.min(current, Math.max(0, page.items.length - 1)));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      reportFailure(cause, 'Unable to load duplicate review');
     } finally {
-      setLoading(false);
+      if (showLoading) setLoading(false);
     }
-  }, []);
+  }, [reportFailure]);
 
   useEffect(() => {
     void loadPairs();
@@ -139,6 +273,7 @@ export function DuplicatesScreen() {
 
   useEffect(() => {
     if (!currentPair) {
+      requestIdRef.current += 1;
       setLeft(null);
       setRight(null);
       return;
@@ -158,12 +293,12 @@ export function DuplicatesScreen() {
       })
       .catch((cause) => {
         if (requestId !== requestIdRef.current) return;
-        setError(cause instanceof Error ? cause.message : String(cause));
+        reportFailure(cause, 'Unable to load duplicate media');
       })
       .finally(() => {
         if (requestId === requestIdRef.current) setMetadataLoading(false);
       });
-  }, [currentPair]);
+  }, [currentPair, reportFailure]);
 
   const loadMore = useCallback(async () => {
     if (!hasMore || !nextCursor || loadingMore) return;
@@ -178,24 +313,15 @@ export function DuplicatesScreen() {
       setHasMore(page.has_more);
       setTotal(page.total);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      reportFailure(cause, 'Unable to load more duplicate pairs');
     } finally {
       setLoadingMore(false);
     }
-  }, [hasMore, loadingMore, nextCursor]);
+  }, [hasMore, loadingMore, nextCursor, reportFailure]);
 
   useEffect(() => {
     if (hasMore && index >= pairs.length - 4) void loadMore();
   }, [hasMore, index, loadMore, pairs.length]);
-
-  const removeCurrentPair = useCallback(() => {
-    setPairs((current) => {
-      const next = current.filter((_, pairIndex) => pairIndex !== index);
-      setIndex((currentIndex) => Math.min(currentIndex, Math.max(0, next.length - 1)));
-      return next;
-    });
-    setTotal((current) => Math.max(0, current - 1));
-  }, [index]);
 
   const finishResolution = useCallback(async (
     pair: DuplicatePair,
@@ -215,34 +341,49 @@ export function DuplicatesScreen() {
         setConflict({ pair, action, conflict: result.conflict });
         return;
       }
+      if (result.status === 'quality_ambiguous') {
+        showWarningNotification({
+          title: 'Smart merge needs a choice',
+          message: 'No clear quality winner. Choose left or right, or keep both.',
+        });
+        return;
+      }
+      if (result.blob_cleanup_pending) {
+        showWarningNotification({
+          title: 'Duplicate cleanup pending',
+          message: result.cleanup_error?.trim() || 'Blob cleanup will retry automatically.',
+        });
+      }
       setConflict(null);
-      removeCurrentPair();
-      setNotice(action === 'not_duplicate' ? 'Marked as different media.' : 'Duplicate decision saved.');
+      await loadPairs({ showLoading: false, resetProgress: false });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      reportFailure(cause, 'Unable to resolve duplicate pair');
     } finally {
       setResolving(false);
     }
-  }, [removeCurrentPair]);
+  }, [loadPairs, reportFailure]);
 
   const scan = useCallback(async () => {
+    if (scanningRef.current) return;
+    scanningRef.current = true;
     setScanning(true);
     setError(null);
-    setNotice(null);
     try {
       const summary = await scanDuplicates();
-      setNotice(
-        summary.reviewable_detected_new > 0
-          ? `Found ${summary.reviewable_detected_new} new review pair${summary.reviewable_detected_new === 1 ? '' : 's'}.`
-          : `Scan complete. ${summary.reviewable_detected_total} pair${summary.reviewable_detected_total === 1 ? '' : 's'} need review.`,
-      );
-      await loadPairs();
+      showInfoNotification({
+        title: 'Duplicate scan complete',
+        message: summary.reviewable_detected_new > 0
+          ? `Found ${summary.reviewable_detected_new} new review pairs`
+          : 'Scan complete — no new review pairs',
+      });
+      await loadPairs({ showLoading: false, resetProgress: true });
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      reportFailure(cause, 'Unable to scan for duplicates');
     } finally {
+      scanningRef.current = false;
       setScanning(false);
     }
-  }, [loadPairs]);
+  }, [loadPairs, reportFailure]);
 
   const goPrevious = useCallback(() => setIndex((current) => Math.max(0, current - 1)), []);
   const goNext = useCallback(() => {
@@ -255,7 +396,7 @@ export function DuplicatesScreen() {
       if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
       if (event.key === 'ArrowLeft') goPrevious();
       if (event.key === 'ArrowRight') goNext();
-      if (!currentPair || resolving || conflict) return;
+      if (!currentPair || resolving || metadataLoading || conflict) return;
       const shortcuts: Partial<Record<string, DuplicateAction>> = {
         l: 'keep_left',
         r: 'keep_right',
@@ -267,95 +408,150 @@ export function DuplicatesScreen() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [conflict, currentPair, finishResolution, goNext, goPrevious, resolving]);
-
-  const progressTotal = initialTotal || total;
-  const similarity = useMemo(() => currentPair ? `${currentPair.similarity_pct.toFixed(0)}% similar` : '', [currentPair]);
+  }, [conflict, currentPair, finishResolution, goNext, goPrevious, metadataLoading, resolving]);
 
   if (loading) {
-    return <div className={styles.centerState}>Loading duplicate review queue...</div>;
+    return (
+      <div className={styles.centerState} aria-busy="true">
+        {showLoadingMessage ? 'Loading duplicate review queue...' : null}
+      </div>
+    );
   }
 
   if (!currentPair) {
+    const title = error
+      ? 'Unable to load duplicate review'
+      : resolvedCount > 0 ? 'Review complete' : 'No duplicate pairs';
+    const description = error
+      ? error
+      : resolvedCount > 0
+        ? `${resolvedCount} decisions saved.`
+        : 'Scan the library to find similar images.';
     return (
-      <section className={styles.emptyState}>
-        <div className={styles.emptyIcon}><IconCopy size={30} /></div>
-        <h1>{resolvedCount > 0 ? 'Review complete' : 'No duplicate pairs'}</h1>
-        <p>{resolvedCount > 0 ? `${resolvedCount} decisions saved.` : 'Scan the library to compare perceptually similar images.'}</p>
-        {error && <div className={styles.errorBanner}>{error}</div>}
-        {notice && <div className={styles.noticeBanner}>{notice}</div>}
-        <button className={styles.primaryButton} onClick={scan} disabled={scanning}>
-          <IconRefresh size={16} /> {scanning ? 'Scanning...' : 'Scan library'}
-        </button>
-      </section>
+      <EmptyState
+        icon={<IconCopy size={28} stroke={1.2} style={{ color: 'var(--color-bg-app)' }} />}
+        title={title}
+        description={description}
+        actions={(
+          <EmptyStateAction onClick={scan} disabled={scanning || resolving}>
+            <IconRefresh size={14} stroke={1.5} /> {error ? 'Retry' : 'Scan library'}
+          </EmptyStateAction>
+        )}
+        progress={showScanProgress ? <ProgressBar indeterminate height={2} /> : null}
+      />
     );
   }
 
   return (
     <section className={styles.root} aria-label="Duplicate review">
-      <header className={styles.toolbar}>
-        <div>
-          <div className={styles.eyebrow}>Duplicate review</div>
-          <h1>{similarity}</h1>
+      <header className={styles.comparisonHeader}>
+        <div className={styles.headerNav}>
+          <KbdTooltip label="Previous pair" shortcut="ArrowLeft">
+            <button className={`${iconStyles.iconBtn} ${index === 0 || resolving ? iconStyles.iconBtnDisabled : ''}`} onClick={goPrevious} disabled={index === 0 || resolving} aria-label="Previous pair">
+              <IconArrowLeft size={17} />
+            </button>
+          </KbdTooltip>
+          <span className={styles.position}>{index + 1} / {total}</span>
+          <KbdTooltip label="Next pair" shortcut="ArrowRight">
+            <button className={`${iconStyles.iconBtn} ${index >= pairs.length - 1 || resolving ? iconStyles.iconBtnDisabled : ''}`} onClick={goNext} disabled={index >= pairs.length - 1 || resolving} aria-label="Next pair">
+              <IconArrowRight size={17} />
+            </button>
+          </KbdTooltip>
         </div>
-        <div className={styles.toolbarMeta}>
-          <span>{index + 1} of {total}</span>
-          <button className={styles.secondaryButton} onClick={scan} disabled={scanning || resolving}>
-            <IconRefresh size={15} /> {scanning ? 'Scanning...' : 'Re-scan'}
+        <div className={styles.zoomControls}>
+          <KbdTooltip label="Zoom out">
+            <button className={iconStyles.iconBtn} onClick={zoom.zoomOut} aria-label="Zoom out">
+              <IconMinus size={16} />
+            </button>
+          </KbdTooltip>
+          <span className={styles.zoomPercent}>{zoom.zoomPercent}%</span>
+          <KbdTooltip label="Zoom in">
+            <button className={iconStyles.iconBtn} onClick={zoom.zoomIn} aria-label="Zoom in">
+              <IconPlus size={16} />
+            </button>
+          </KbdTooltip>
+          <KbdTooltip label="Fit both images">
+            <button className={`${iconStyles.iconBtn} ${zoom.isFit ? iconStyles.iconBtnFilled : ''}`} onClick={zoom.fit} aria-label="Fit both images" aria-pressed={zoom.isFit}>
+              <IconAspectRatio size={16} />
+            </button>
+          </KbdTooltip>
+          <KbdTooltip label="Hold to highlight differences">
+            <button
+              className={`${iconStyles.iconBtn} ${differenceActive ? iconStyles.iconBtnActive : ''}`}
+              onMouseEnter={() => setDifferenceHovered(true)}
+              onMouseLeave={() => setDifferenceHovered(false)}
+              onFocus={() => setDifferenceFocused(true)}
+              onBlur={() => setDifferenceFocused(false)}
+              disabled={metadataLoading || !differenceImages}
+              aria-label="Highlight differences"
+              aria-pressed={differenceActive}
+            >
+              <IconLayersDifference size={16} />
+            </button>
+          </KbdTooltip>
+        </div>
+        <KbdTooltip label="Re-scan library">
+          <button className={`${iconStyles.iconBtn} ${scanning || resolving ? iconStyles.iconBtnDisabled : ''}`} onClick={scan} disabled={scanning || resolving} aria-label="Re-scan library">
+            <IconRefresh size={17} />
           </button>
-        </div>
+        </KbdTooltip>
       </header>
 
-      {progressTotal > 0 && <ProgressBar done={resolvedCount} total={progressTotal} height={2} />}
-      {error && <div className={styles.errorBanner}>{error}</div>}
-      {notice && <div className={styles.noticeBanner}>{notice}</div>}
-
-      <div className={styles.comparison}>
-        <MediaCard side="left" details={left} loading={metadataLoading} disabled={resolving} onKeep={() => void finishResolution(currentPair, 'keep_left')} />
-        <div className={styles.divider}><span>VS</span></div>
-        <MediaCard side="right" details={right} loading={metadataLoading} disabled={resolving} onKeep={() => void finishResolution(currentPair, 'keep_right')} />
-      </div>
-
-      <footer className={styles.actions}>
-        <button className={styles.iconButton} onClick={goPrevious} disabled={index === 0 || resolving} aria-label="Previous pair">
-          <IconArrowLeft size={18} />
-        </button>
-        <button className={styles.secondaryButton} onClick={() => void finishResolution(currentPair, 'not_duplicate')} disabled={resolving}>
-          <IconX size={15} /> Not duplicates <kbd>N</kbd>
-        </button>
-        <button className={styles.secondaryButton} onClick={() => void finishResolution(currentPair, 'keep_both')} disabled={resolving}>
-          <IconCopy size={15} /> Keep both
-        </button>
-        <button className={styles.primaryButton} onClick={() => void finishResolution(currentPair, 'smart_merge')} disabled={resolving}>
-          <IconArrowsJoin size={16} /> Smart merge <kbd>S</kbd>
-        </button>
-        <button className={styles.iconButton} onClick={goNext} disabled={index >= pairs.length - 1 || resolving} aria-label="Next pair">
-          <IconArrowRight size={18} />
-        </button>
-      </footer>
-
-      {conflict && (
-        <div className={styles.conflictBackdrop} role="dialog" aria-modal="true" aria-labelledby="duplicate-conflict-title">
-          <div className={styles.conflictCard}>
-            <div className={styles.eyebrow}>Collection ownership conflict</div>
-            <h2 id="duplicate-conflict-title">Choose the surviving collection</h2>
-            <p>Both files belong to different collections. The surviving media entity can remain in only one.</p>
-            <div className={styles.conflictActions}>
-              {conflict.conflict.winner_collection_id != null && (
-                <button className={styles.primaryButton} onClick={() => void finishResolution(conflict.pair, conflict.action, conflict.conflict.winner_collection_id!)} disabled={resolving}>
-                  Collection {conflict.conflict.winner_collection_id}
-                </button>
-              )}
-              {conflict.conflict.loser_collection_id != null && (
-                <button className={styles.primaryButton} onClick={() => void finishResolution(conflict.pair, conflict.action, conflict.conflict.loser_collection_id!)} disabled={resolving}>
-                  Collection {conflict.conflict.loser_collection_id}
-                </button>
-              )}
-              <button className={styles.secondaryButton} onClick={() => setConflict(null)} disabled={resolving}>Cancel</button>
-            </div>
-          </div>
+      {showScanProgress && (
+        <div className={styles.scanProgress} role="status" aria-label="Scanning duplicate pairs">
+          <ProgressBar indeterminate height={2} />
         </div>
       )}
+
+      <div className={styles.comparison}>
+        <MediaCard side="left" previewRef={leftPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceImages={differenceImages} details={left} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_left')} />
+        <MediaCard side="right" previewRef={rightPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceImages={differenceImages} details={right} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_right')} />
+      </div>
+
+      <footer className={styles.footer}>
+        <div className={styles.footerActions}>
+          <KbdTooltip label="These are different media" shortcut="N">
+            <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'not_duplicate')} disabled={resolving || metadataLoading}>
+              <IconX size={15} /> Not duplicates
+            </button>
+          </KbdTooltip>
+          <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'keep_both')} disabled={resolving || metadataLoading}>
+            <IconCopy size={15} /> Keep both
+          </button>
+          <KbdTooltip label="Keep the stronger file and merge metadata" shortcut="S">
+            <button className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={() => void finishResolution(currentPair, 'smart_merge')} disabled={resolving || metadataLoading}>
+              <IconArrowsJoin size={16} /> Smart merge
+            </button>
+          </KbdTooltip>
+          <span className={styles.similarity}>{currentPair.similarity_pct.toFixed(0)}% match</span>
+        </div>
+      </footer>
+
+      <GlassModal
+        open={conflict != null}
+        onClose={() => setConflict(null)}
+        title="Choose the surviving collection"
+        size="sm"
+        footer={conflict && (
+          <>
+            <button className={btnStyles.btn} onClick={() => setConflict(null)} disabled={resolving}>Cancel</button>
+            {conflict.conflict.winner_collection_id != null && (
+              <button className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={() => void finishResolution(conflict.pair, conflict.action, conflict.conflict.winner_collection_id!)} disabled={resolving}>
+                Collection {conflict.conflict.winner_collection_id}
+              </button>
+            )}
+            {conflict.conflict.loser_collection_id != null && (
+              <button className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={() => void finishResolution(conflict.pair, conflict.action, conflict.conflict.loser_collection_id!)} disabled={resolving}>
+                Collection {conflict.conflict.loser_collection_id}
+              </button>
+            )}
+          </>
+        )}
+      >
+        <p className={styles.conflictText}>
+          Both files belong to different collections. Choose which collection keeps the surviving media entity.
+        </p>
+      </GlassModal>
     </section>
   );
 }

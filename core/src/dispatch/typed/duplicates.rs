@@ -42,21 +42,7 @@ pub struct ResolveDuplicatePairInput {
     pub preferred_collection_id: Option<i64>,
 }
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct FindSimilarInput {
-    pub hash: String,
-}
-
 // ─── Handlers ──────────────────────────────────────────────────────────────
-
-pub async fn find_similar(
-    state: &AppState,
-    input: FindSimilarInput,
-) -> Result<serde_json::Value, String> {
-    let result = state.engine.find_similar(&input.hash)?;
-    serde_json::to_value(&result).map_err(|e| e.to_string())
-}
 
 pub async fn scan_duplicates(
     state: &AppState,
@@ -104,18 +90,43 @@ pub async fn resolve_duplicate_pair(
     state: &AppState,
     input: ResolveDuplicatePairInput,
 ) -> Result<serde_json::Value, String> {
-    let result = state.engine.resolve_duplicate_pair(
+    let mut result = state.engine.resolve_duplicate_pair(
         &input.action,
         &input.hash_a,
         &input.hash_b,
         input.preferred_collection_id,
     )?;
-    if matches!(
-        result.status,
-        crate::db::types::DuplicateResolveStatus::Resolved
-    ) {
-        if let Some(loser_hash) = result.loser_hash.as_deref() {
-            let _ = state.blob_store.delete(loser_hash);
+    if result.blob_cleanup_pending {
+        if let Some(file_hash) = result.loser_file_hash.as_deref() {
+            match state
+                .engine
+                .db()
+                .cleanup_blob_delete_if_unreferenced(&state.blob_store, file_hash)
+            {
+                Ok(_) => result.blob_cleanup_pending = false,
+                Err(error) => {
+                    let message = format!(
+                        "Loser blob cleanup is pending for {file_hash}; it will be retried automatically: {error}"
+                    );
+                    result.cleanup_error = Some(
+                        match state
+                            .engine
+                            .db()
+                            .retry_blob_delete_for_hash(file_hash, &message)
+                        {
+                            Ok(()) => message,
+                            Err(retry_error) => format!(
+                                "{message}; retry state could not be updated: {retry_error}"
+                            ),
+                        },
+                    );
+                }
+            }
+        } else {
+            result.cleanup_error = Some(
+                "Loser blob cleanup is pending, but no physical file hash was returned; it will be retried automatically."
+                    .to_string(),
+            );
         }
     }
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)

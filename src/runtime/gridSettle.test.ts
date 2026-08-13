@@ -1,7 +1,31 @@
-import { describe, expect, it } from 'vitest';
-import { classifyGridAction } from './gridSettle';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getDefaultStore } from 'jotai';
+import { gridController } from '../controllers/gridController';
+import { gridActiveAtom, gridItemsAtom, gridScopeAtom, gridTransitionPhaseAtom } from '../state/grid';
+import { classifyGridAction, processStateChange, startGridSettle } from './gridSettle';
+
+const { stateChangedListeners } = vi.hoisted(() => ({
+  stateChangedListeners: [] as Array<(event: { payload: { changes: Record<string, unknown> } }) => void>,
+}));
+
+vi.mock('../platform/ipc', () => ({
+  listen: vi.fn((_event: string, handler: (event: { payload: { changes: Record<string, unknown> } }) => void) => {
+    stateChangedListeners.push(handler);
+    return Promise.resolve(() => {});
+  }),
+}));
+
+const store = getDefaultStore();
 
 describe('grid runtime settling', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    store.set(gridItemsAtom, []);
+    store.set(gridActiveAtom, true);
+    store.set(gridTransitionPhaseAtom, 'idle');
+    stateChangedListeners.length = 0;
+  });
+
   it('settles system lifecycle changes even when extra scopes are present', () => {
     expect(classifyGridAction(
       {
@@ -30,5 +54,42 @@ describe('grid runtime settling', () => {
       { kind: 'smart_folder', id: 7 },
       [],
     )).toBe('ignore');
+  });
+
+  it.each([
+    ['Trash', { kind: 'system', key: 'trash' }],
+    ['folder', { kind: 'folder', id: 7 }],
+    ['smart folder', { kind: 'smart_folder', id: 9 }],
+    ['Inbox', { kind: 'system', key: 'inbox' }],
+    ['All', { kind: 'system', key: 'all' }],
+  ] as const)('reloads the canonical query after an import in %s', (_label, scope) => {
+    store.set(gridScopeAtom, scope);
+    const reload = vi.spyOn(gridController, 'loadFirstPage').mockResolvedValue(undefined);
+
+    processStateChange({
+      entity_hashes: ['new-active-entity'],
+      status_changed: true,
+    });
+
+    expect(reload).toHaveBeenCalledWith({ preserveItems: true });
+  });
+
+  it('coalesces all transition-time events into one canonical reload', async () => {
+    const reload = vi.spyOn(gridController, 'loadFirstPage').mockResolvedValue(undefined);
+    store.set(gridTransitionPhaseAtom, 'waiting');
+    const stop = startGridSettle();
+    const listener = stateChangedListeners[stateChangedListeners.length - 1];
+    expect(listener).toBeDefined();
+
+    listener!({ payload: { changes: { status_changed: true } } });
+    listener!({ payload: { changes: { media_derivatives_changed: true } } });
+    expect(reload).not.toHaveBeenCalled();
+
+    store.set(gridTransitionPhaseAtom, 'idle');
+    await Promise.resolve();
+    expect(reload).toHaveBeenCalledTimes(1);
+    expect(reload).toHaveBeenCalledWith({ preserveItems: true });
+
+    stop();
   });
 });

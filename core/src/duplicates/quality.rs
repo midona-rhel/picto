@@ -23,23 +23,6 @@ fn is_lossless_hint(mime_type: &str) -> bool {
     )
 }
 
-fn preserves_alpha_hint(mime_type: &str) -> bool {
-    matches!(
-        mime_type,
-        "image/png"
-            | "image/webp"
-            | "image/gif"
-            | "image/avif"
-            | "image/heif"
-            | "image/heic"
-            | "image/jxl"
-            | "image/qoi"
-            | "image/tiff"
-            | "image/bmp"
-            | "image/x-icon"
-    )
-}
-
 fn pixel_count(candidate: &ComparableImageCandidate<'_>) -> i64 {
     candidate
         .pixel_width
@@ -67,17 +50,6 @@ pub fn compare_static_image_quality(
 
     let left_lossless = is_lossless_hint(left.mime_type);
     let right_lossless = is_lossless_hint(right.mime_type);
-    let left_alpha = preserves_alpha_hint(left.mime_type);
-    let right_alpha = preserves_alpha_hint(right.mime_type);
-
-    if left_alpha != right_alpha {
-        if left_alpha && left_pixels.saturating_mul(10) >= right_pixels.saturating_mul(9) {
-            return ImageQualityDecision::LeftBetter;
-        }
-        if right_alpha && right_pixels.saturating_mul(10) >= left_pixels.saturating_mul(9) {
-            return ImageQualityDecision::RightBetter;
-        }
-    }
 
     if left_lossless != right_lossless {
         if left_lossless && left_pixels.saturating_mul(10) >= right_pixels.saturating_mul(9) {
@@ -179,6 +151,29 @@ mod tests {
         assert_eq!(
             compare_static_image_quality(&large_jpeg, &smaller_png),
             ImageQualityDecision::Ambiguous
+        );
+    }
+
+    #[test]
+    fn prefers_the_larger_lossless_candidate_from_duplicate_review() {
+        let png = ComparableImageCandidate {
+            mime_type: "image/png",
+            size_bytes: 1_200_000,
+            pixel_width: Some(4570),
+            pixel_height: Some(1191),
+            frame_count: Some(1),
+        };
+        let jpeg = ComparableImageCandidate {
+            mime_type: "image/jpeg",
+            size_bytes: 225_600,
+            pixel_width: Some(4096),
+            pixel_height: Some(1067),
+            frame_count: Some(1),
+        };
+
+        assert_eq!(
+            compare_static_image_quality(&png, &jpeg),
+            ImageQualityDecision::LeftBetter
         );
     }
 }

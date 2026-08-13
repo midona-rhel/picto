@@ -16,11 +16,6 @@ struct GetHashInput {
 }
 
 #[derive(serde::Deserialize)]
-struct GetHashesInput {
-    entity_hashes: Vec<String>,
-}
-
-#[derive(serde::Deserialize)]
 struct PatchEntitiesInput {
     target: crate::db::types::EntityTarget,
     patch: crate::db::types::MediaEntityPatch,
@@ -192,11 +187,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
             state.engine.record_media_view(&input.entity_hash)?;
             return ok_null();
         }
-        "get_entity_grid_items" => {
-            let input: GetHashesInput = from_args(args)?;
-            let result = state.engine.get_entity_grid_items(&input.entity_hashes)?;
-            return to_json(&result);
-        }
         "patch_media_entities" => {
             let input: PatchEntitiesInput = from_args(args)?;
             let result = state
@@ -242,9 +232,24 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "delete_entities" => {
             let input: DeleteEntitiesInput = from_args(args)?;
             let result = state.engine.delete_entities(input.target)?;
-            // Transaction is committed — reclaim blobs whose last reference died.
+            // The entity transaction is committed. Queue each physical
+            // cleanup before attempting it so failures remain retryable.
+            let mut cleanup_errors = Vec::new();
             for hash in &result.freed_file_hashes {
-                let _ = state.blob_store.delete(hash);
+                if let Err(error) = state
+                    .engine
+                    .db()
+                    .enqueue_blob_delete_and_attempt(&state.blob_store, hash)
+                {
+                    tracing::error!(file_hash = %hash, error = %error, "Blob cleanup pending after entity deletion");
+                    cleanup_errors.push(format!("{hash}: {error}"));
+                }
+            }
+            if !cleanup_errors.is_empty() {
+                return Err(format!(
+                    "Entities were deleted, but blob cleanup is pending: {}",
+                    cleanup_errors.join("; ")
+                ));
             }
             return to_json(&result);
         }
@@ -270,7 +275,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "delete_tag" => call!(typed::tags::delete_tag, &state, args),
 
         // ── Duplicates ────────────────────────────────────────
-        "find_similar" => call!(typed::duplicates::find_similar, &state, args),
         "scan_duplicates" => call!(typed::duplicates::scan_duplicates, &state, args),
         "get_duplicate_pairs" => call!(typed::duplicates::get_duplicate_pairs, &state, args),
         "resolve_duplicate_pair" => call!(typed::duplicates::resolve_duplicate_pair, &state, args),

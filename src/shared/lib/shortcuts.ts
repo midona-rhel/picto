@@ -43,7 +43,6 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'file.addToLastFolder',    label: 'Add to Last Folder',   group: 'File', keys: 'Shift+D',        description: 'Add selected files to the last used folder' },
   { id: 'file.removeFromFolder',   label: 'Remove from Folder',   group: 'File', keys: 'Mod+Shift+Backspace' },
   { id: 'file.regenerateThumbnail', label: 'Regenerate Thumbnail', group: 'File', keys: 'Mod+Shift+T',   description: 'Regenerate thumbnails for selected files' },
-  { id: 'file.findSimilar',        label: 'Find Visually Similar', group: 'File', keys: 'Mod+Shift+S',   description: 'Find images visually similar to the selected image' },
   { id: 'file.openDefaultApp',     label: 'Open with Default App', group: 'File', keys: 'Shift+Enter' },
   { id: 'file.revealInFolder',     label: 'Reveal in Folder',     group: 'File', keys: 'Mod+Enter' },
   { id: 'file.openNewWindow',      label: 'Open in New Window',   group: 'File', keys: 'Mod+O' },

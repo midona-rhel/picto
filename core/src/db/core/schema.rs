@@ -4,7 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 108;
+pub const CURRENT_SCHEMA_VERSION: i64 = 110;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -55,6 +55,28 @@ CREATE TABLE IF NOT EXISTS media_file (
     color_analysis_version INTEGER NOT NULL DEFAULT 0,
     date_added           TEXT    NOT NULL
 );
+
+-- Exact candidate index for the normal duplicate threshold (distance <= 7).
+-- Candidate rows are always verified against the full pHash before use.
+CREATE TABLE IF NOT EXISTS media_file_phash_index (
+    file_id     INTEGER PRIMARY KEY REFERENCES media_file(file_id) ON DELETE CASCADE,
+    partition_0 INTEGER NOT NULL,
+    partition_1 INTEGER NOT NULL,
+    partition_2 INTEGER NOT NULL,
+    partition_3 INTEGER NOT NULL,
+    partition_4 INTEGER NOT NULL,
+    partition_5 INTEGER NOT NULL,
+    partition_6 INTEGER NOT NULL,
+    partition_7 INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mf_phash_p0 ON media_file_phash_index(partition_0);
+CREATE INDEX IF NOT EXISTS idx_mf_phash_p1 ON media_file_phash_index(partition_1);
+CREATE INDEX IF NOT EXISTS idx_mf_phash_p2 ON media_file_phash_index(partition_2);
+CREATE INDEX IF NOT EXISTS idx_mf_phash_p3 ON media_file_phash_index(partition_3);
+CREATE INDEX IF NOT EXISTS idx_mf_phash_p4 ON media_file_phash_index(partition_4);
+CREATE INDEX IF NOT EXISTS idx_mf_phash_p5 ON media_file_phash_index(partition_5);
+CREATE INDEX IF NOT EXISTS idx_mf_phash_p6 ON media_file_phash_index(partition_6);
+CREATE INDEX IF NOT EXISTS idx_mf_phash_p7 ON media_file_phash_index(partition_7);
 
 CREATE TABLE IF NOT EXISTS single_media_entity (
     entity_id  INTEGER PRIMARY KEY REFERENCES media_entity(entity_id) ON DELETE CASCADE,
@@ -382,7 +404,7 @@ CREATE TABLE IF NOT EXISTS subscription_post_member (
 CREATE TABLE IF NOT EXISTS deferred_work_item (
     work_id       INTEGER PRIMARY KEY,
     entity_hash   TEXT    NOT NULL,
-    work_type     TEXT    NOT NULL CHECK (work_type IN ('thumbnail', 'dominant_colors', 'perceptual_hash')),
+    work_type     TEXT    NOT NULL CHECK (work_type IN ('thumbnail', 'dominant_colors', 'perceptual_hash', 'blob_delete')),
     status        TEXT    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running')),
     attempt_count INTEGER NOT NULL DEFAULT 0,
     available_at  TEXT    NOT NULL,
@@ -504,7 +526,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 108
+SELECT 110
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -567,6 +589,10 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         (
             "media_view",
             "SELECT entity_id, viewed_at FROM media_view WHERE 0",
+        ),
+        (
+            "media_file_phash_index",
+            "SELECT file_id, partition_0, partition_1, partition_2, partition_3, partition_4, partition_5, partition_6, partition_7 FROM media_file_phash_index WHERE 0",
         ),
         (
             "media_file",
@@ -706,6 +732,46 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
             "idx_media_view_viewed_at",
             "media_view",
             &[("viewed_at", true)],
+        ),
+        (
+            "idx_mf_phash_p0",
+            "media_file_phash_index",
+            &[("partition_0", false)],
+        ),
+        (
+            "idx_mf_phash_p1",
+            "media_file_phash_index",
+            &[("partition_1", false)],
+        ),
+        (
+            "idx_mf_phash_p2",
+            "media_file_phash_index",
+            &[("partition_2", false)],
+        ),
+        (
+            "idx_mf_phash_p3",
+            "media_file_phash_index",
+            &[("partition_3", false)],
+        ),
+        (
+            "idx_mf_phash_p4",
+            "media_file_phash_index",
+            &[("partition_4", false)],
+        ),
+        (
+            "idx_mf_phash_p5",
+            "media_file_phash_index",
+            &[("partition_5", false)],
+        ),
+        (
+            "idx_mf_phash_p6",
+            "media_file_phash_index",
+            &[("partition_6", false)],
+        ),
+        (
+            "idx_mf_phash_p7",
+            "media_file_phash_index",
+            &[("partition_7", false)],
         ),
         (
             "idx_entity_tag_tag_id",

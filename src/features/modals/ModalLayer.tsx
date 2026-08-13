@@ -126,6 +126,7 @@ export function ModalLayer() {
           void filesController.addMedia([folderImport.path], {
             preserve_structure: true,
             parent_folder_id: folderImport.targetFolderId,
+            initial_status: folderImport.initialStatus,
           });
           setFolderImport({ ...folderImport, open: false });
         }}

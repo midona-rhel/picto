@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use crate::background_work::DeferredWorkType;
 use crate::blob_store::BlobStore;
 use crate::db::projection::compiler::CompilerPlan;
-use crate::db::types::{IngestPreparedSingle, MediaEntityPatch, PerceptualHashCandidate};
+use crate::db::types::{IngestPreparedSingle, MediaEntityPatch};
 use crate::db::LibraryDatabase;
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::media_analysis;
@@ -27,6 +27,7 @@ pub struct IngestFlags {
     pub status_changed: bool,
     pub tags_changed: bool,
     pub metadata_changed: bool,
+    pub duplicates_changed: bool,
 }
 
 impl IngestFlags {
@@ -34,6 +35,7 @@ impl IngestFlags {
         self.status_changed |= other.status_changed;
         self.tags_changed |= other.tags_changed;
         self.metadata_changed |= other.metadata_changed;
+        self.duplicates_changed |= other.duplicates_changed;
     }
 }
 
@@ -117,6 +119,28 @@ pub struct ResolvedCollectionMember {
     pub entity_hash: String,
     pub file_hash: String,
     pub disposition: SingleIngestDisposition,
+}
+
+struct PreparedCollectionMember {
+    member_index: usize,
+    request: SingleIngestRequest,
+    metadata: Option<ParsedMetadata>,
+    blob: crate::import::pipeline::PreparedBlobImport,
+}
+
+async fn acquire_collection_blob_leases(
+    blob_store: &BlobStore,
+    hashes: impl IntoIterator<Item = String>,
+) -> Vec<crate::blob_store::BlobHashLease> {
+    let mut hashes: Vec<String> = hashes.into_iter().collect();
+    hashes.sort();
+    hashes.dedup();
+
+    let mut leases = Vec::with_capacity(hashes.len());
+    for hash in hashes {
+        leases.push(blob_store.acquire_hash_lease(&hash).await);
+    }
+    leases
 }
 
 pub fn dedupe_urls(mut urls: Vec<String>) -> Vec<String> {
@@ -212,14 +236,14 @@ fn build_import_options(request: &SingleIngestRequest) -> ImportOptions {
 }
 
 fn prepared_from_blob_import(
-    prepared: crate::import::pipeline::PreparedBlobImport,
+    prepared: &crate::import::pipeline::PreparedBlobImport,
     request: &SingleIngestRequest,
 ) -> IngestPreparedSingle {
     IngestPreparedSingle {
-        entity_hash: prepared.hex_hash,
-        name: prepared.name,
+        entity_hash: prepared.hex_hash.clone(),
+        name: prepared.name.clone(),
         size_bytes: prepared.size as i64,
-        mime_type: prepared.mime,
+        mime_type: prepared.mime.clone(),
         pixel_width: prepared.pixel_width,
         pixel_height: prepared.pixel_height,
         duration_ms: prepared.duration_ms,
@@ -228,6 +252,7 @@ fn prepared_from_blob_import(
         status: request.initial_status,
         date_created: prepared
             .created_at
+            .clone()
             .unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
         date_added: chrono::Utc::now().to_rfc3339(),
         has_thumbnail: prepared.has_thumbnail,
@@ -312,6 +337,7 @@ pub fn apply_compiler_plan(db: &LibraryDatabase, flags: &IngestFlags, folder_ids
 pub fn attach_current_sidebar_counts(
     db: &LibraryDatabase,
     impact: crate::runtime_contract::change_builder::ChangeImpact,
+    duplicates_changed: bool,
 ) -> crate::runtime_contract::change_builder::ChangeImpact {
     match db.get_scope_counts() {
         Ok(counts) => impact.sidebar_counts(crate::runtime_contract::state_change::SidebarCounts {
@@ -320,8 +346,11 @@ pub fn attach_current_sidebar_counts(
             trash: counts.trash,
             uncategorized: counts.uncategorized,
             untagged: counts.untagged,
-            // Not recomputed here; negative = "leave as-is" for the frontend.
-            duplicates: -1,
+            duplicates: if duplicates_changed {
+                db.get_duplicate_count().unwrap_or(-1)
+            } else {
+                -1
+            },
         }),
         Err(_) => impact,
     }
@@ -453,17 +482,21 @@ pub async fn ingest_single_path(
     request: &SingleIngestRequest,
 ) -> Result<SingleIngestOutcome, String> {
     let options = build_import_options(request);
-    let prepared_blob = ImportPipeline::prepare_blob_import(blob_store, &request.path, &options)
+    let prepared_blob = ImportPipeline::prepare_blob_import(&request.path, &options)
         .await
         .map_err(|err| err.to_string())?;
 
+    let blob_lease = blob_store.acquire_hash_lease(&prepared_blob.hex_hash).await;
+    ImportPipeline::persist_blob_import(blob_store, &prepared_blob)
+        .map_err(|err| err.to_string())?;
     if let Some(existing) =
         canonical_db.get_existing_import_target_by_file_hash_write(&prepared_blob.hex_hash)?
     {
+        drop(blob_lease);
         return merge_existing_import_target(canonical_db, &existing, request).await;
     }
 
-    let mut prepared_single = prepared_from_blob_import(prepared_blob.clone(), request);
+    let mut prepared_single = prepared_from_blob_import(&prepared_blob, request);
     let imported_phash = compute_comparable_image_phash(
         &prepared_blob.file_bytes,
         &prepared_blob.mime,
@@ -472,17 +505,19 @@ pub async fn ingest_single_path(
     prepared_single.perceptual_hash = imported_phash.clone();
 
     let threshold = duplicate_review_distance_threshold();
-    let review_candidates =
-        canonical_db.find_ingest_duplicate_review_candidates(&prepared_single, threshold)?;
-
     let work_types = work_types_for_new_ingest(
         &prepared_single.mime_type,
         prepared_single.frame_count,
         !prepared_blob.has_thumbnail && !request.skip_thumbnail,
         prepared_single.perceptual_hash.is_some(),
     );
-    let entity_id = match canonical_db.insert_ingested_single(&prepared_single, &work_types) {
-        Ok(entity_id) => entity_id,
+    let (entity_id, duplicates_changed) = match canonical_db.insert_ingested_single_with_blob_lease(
+        &prepared_single,
+        &work_types,
+        threshold,
+        blob_lease,
+    ) {
+        Ok(result) => result,
         Err(error) => {
             if let Some(existing) = canonical_db
                 .get_existing_import_target_by_file_hash_write(&prepared_single.entity_hash)?
@@ -495,11 +530,6 @@ pub async fn ingest_single_path(
     let imported_target = canonical_db
         .get_existing_import_target_by_file_hash(&prepared_single.entity_hash)?
         .ok_or_else(|| "Inserted ingest target could not be reloaded".to_string())?;
-
-    if !review_candidates.is_empty() {
-        canonical_db
-            .record_duplicate_review_candidates(imported_target.file_id, &review_candidates)?;
-    }
 
     Ok(SingleIngestOutcome {
         entity_hash: prepared_single.entity_hash.clone(),
@@ -519,6 +549,7 @@ pub async fn ingest_single_path(
             metadata_changed: prepared_single.name.is_some()
                 || prepared_single.notes.is_some()
                 || !prepared_single.source_urls.is_empty(),
+            duplicates_changed,
         },
         scheduled_work: work_types.len(),
         entity_id: Some(entity_id),
@@ -535,34 +566,76 @@ pub async fn materialize_collection(
     prior_member_hashes: &[String],
 ) -> Result<CollectionIngestOutcome, String> {
     let mut existing_member_ids = Vec::new();
+    let mut existing_member_id_set = HashSet::new();
     // Members materialized by an earlier partial queue join this collection
     // during a later queue attempt.
     for hash in prior_member_hashes {
         if let Some(existing) = canonical_db.get_existing_import_target_by_entity_hash(hash)? {
-            existing_member_ids.push(existing.entity_id);
+            if existing_member_id_set.insert(existing.entity_id) {
+                existing_member_ids.push(existing.entity_id);
+            }
         }
     }
-    let mut new_members = Vec::<(IngestPreparedSingle, usize, ResolvedCollectionMember)>::new();
     let mut resolved_members = vec![None; members.len()];
-    let mut pending_review_pairs = Vec::<(String, Vec<PerceptualHashCandidate>)>::new();
     let mut imported_hashes = Vec::new();
     let mut flags = IngestFlags::default();
     let mut scheduled_work = 0usize;
 
+    let mut prepared_collection_members = Vec::with_capacity(members.len());
     for (member_index, member) in members.iter().enumerate() {
-        let request = &member.request;
-        let options = build_import_options(request);
-        let prepared_blob =
-            ImportPipeline::prepare_blob_import(blob_store, &request.path, &options)
-                .await
+        let options = build_import_options(&member.request);
+        let prepared_blob = ImportPipeline::prepare_blob_import(&member.request.path, &options)
+            .await
+            .map_err(|err| err.to_string())?;
+        // Preparation is deliberately complete before any hash lease is
+        // acquired, so decode and thumbnail work never holds the DB boundary.
+        prepared_collection_members.push(PreparedCollectionMember {
+            member_index,
+            request: member.request.clone(),
+            metadata: member.metadata.clone(),
+            blob: prepared_blob,
+        });
+    }
+
+    let collection_hashes: BTreeSet<String> = prepared_collection_members
+        .iter()
+        .map(|member| member.blob.hex_hash.clone())
+        .collect();
+
+    // Acquire every distinct hash in canonical order before publishing any
+    // blob. This prevents reversed collection order from deadlocking, while
+    // deduplication prevents a collection from reacquiring its own permit.
+    let blob_leases =
+        acquire_collection_blob_leases(blob_store, collection_hashes.iter().cloned()).await;
+    let mut persisted_hashes = HashSet::new();
+    for member in &prepared_collection_members {
+        if persisted_hashes.insert(member.blob.hex_hash.clone()) {
+            ImportPipeline::persist_blob_import(blob_store, &member.blob)
                 .map_err(|err| err.to_string())?;
-        if let Some(existing) =
-            canonical_db.get_existing_import_target_by_file_hash_write(&prepared_blob.hex_hash)?
-        {
-            let merge = merge_existing_import_target(canonical_db, &existing, &request).await?;
+        }
+    }
+
+    let mut existing_by_hash = HashMap::new();
+    for hash in collection_hashes {
+        if let Some(existing) = canonical_db.get_existing_import_target_by_file_hash_write(&hash)? {
+            existing_by_hash.insert(hash, existing);
+        }
+    }
+
+    let mut new_members = Vec::<(IngestPreparedSingle, usize, ResolvedCollectionMember)>::new();
+    let mut duplicate_new_member_indices = Vec::<(usize, String)>::new();
+    let mut new_hashes_seen = HashSet::new();
+
+    for member in &prepared_collection_members {
+        let hash = &member.blob.hex_hash;
+        if let Some(existing) = existing_by_hash.get(hash).cloned() {
+            if existing_member_id_set.insert(existing.entity_id) {
+                existing_member_ids.push(existing.entity_id);
+            }
+            let merge =
+                merge_existing_import_target(canonical_db, &existing, &member.request).await?;
             flags.merge(&merge.flags);
-            existing_member_ids.push(existing.entity_id);
-            resolved_members[member_index] = Some(ResolvedCollectionMember {
+            resolved_members[member.member_index] = Some(ResolvedCollectionMember {
                 metadata: member.metadata.clone(),
                 entity_hash: existing.entity_hash.clone(),
                 file_hash: existing.file_hash.clone(),
@@ -571,7 +644,13 @@ pub async fn materialize_collection(
             continue;
         }
 
-        let mut prepared_single = prepared_from_blob_import(prepared_blob.clone(), &request);
+        if !new_hashes_seen.insert(hash.clone()) {
+            duplicate_new_member_indices.push((member.member_index, hash.clone()));
+            continue;
+        }
+
+        let prepared_blob = &member.blob;
+        let mut prepared_single = prepared_from_blob_import(prepared_blob, &member.request);
         let imported_phash = compute_comparable_image_phash(
             &prepared_blob.file_bytes,
             &prepared_blob.mime,
@@ -579,23 +658,16 @@ pub async fn materialize_collection(
         )?;
         prepared_single.perceptual_hash = imported_phash.clone();
 
-        let threshold = duplicate_review_distance_threshold();
-        let review_candidates =
-            canonical_db.find_ingest_duplicate_review_candidates(&prepared_single, threshold)?;
-        if !review_candidates.is_empty() {
-            pending_review_pairs.push((prepared_single.entity_hash.clone(), review_candidates));
-        }
-
         scheduled_work += work_types_for_new_ingest(
             &prepared_single.mime_type,
             prepared_single.frame_count,
-            !prepared_blob.has_thumbnail && !request.skip_thumbnail,
+            !prepared_blob.has_thumbnail && !member.request.skip_thumbnail,
             prepared_single.perceptual_hash.is_some(),
         )
         .len();
         new_members.push((
             prepared_single.clone(),
-            member_index,
+            member.member_index,
             ResolvedCollectionMember {
                 metadata: member.metadata.clone(),
                 entity_hash: prepared_single.entity_hash.clone(),
@@ -625,13 +697,17 @@ pub async fn materialize_collection(
         .into_iter()
         .map(|(_, member_index, identity)| (member_index, identity))
         .collect();
-    let (collection_id, collection_hash, new_hashes) = canonical_db
-        .materialize_ingested_collection(
+    let threshold = duplicate_review_distance_threshold();
+    let (collection_id, collection_hash, new_hashes, duplicates_changed) = canonical_db
+        .materialize_ingested_collection_with_blob_leases(
             preferred_name,
             &prepared_members,
             &existing_member_ids,
             existing_collection_id,
+            threshold,
+            blob_leases,
         )?;
+    flags.duplicates_changed |= duplicates_changed;
 
     let batch: Vec<(String, Vec<DeferredWorkType>)> = prepared_members
         .iter()
@@ -650,17 +726,24 @@ pub async fn materialize_collection(
         canonical_db.ensure_deferred_jobs_present_batch(batch)?;
     }
 
-    for (new_hash, candidates) in &pending_review_pairs {
-        let Some(new_target) = canonical_db.get_existing_import_target_by_entity_hash(new_hash)?
-        else {
-            continue;
-        };
-        canonical_db.record_duplicate_review_candidates(new_target.file_id, candidates)?;
-    }
-
     imported_hashes.extend(new_hashes);
     for (member_index, member) in new_member_results {
         resolved_members[member_index] = Some(member);
+    }
+    for (member_index, hash) in duplicate_new_member_indices {
+        let existing = canonical_db
+            .get_existing_import_target_by_file_hash_write(&hash)?
+            .ok_or_else(|| format!("deduplicated collection member {hash} was not inserted"))?;
+        let merge =
+            merge_existing_import_target(canonical_db, &existing, &members[member_index].request)
+                .await?;
+        flags.merge(&merge.flags);
+        resolved_members[member_index] = Some(ResolvedCollectionMember {
+            metadata: members[member_index].metadata.clone(),
+            entity_hash: existing.entity_hash,
+            file_hash: existing.file_hash,
+            disposition: SingleIngestDisposition::Reused,
+        });
     }
     let resolved_members: Vec<ResolvedCollectionMember> = resolved_members
         .into_iter()
@@ -687,8 +770,9 @@ pub async fn materialize_collection(
 #[cfg(test)]
 mod tests {
     use super::{
-        ingest_single_path, materialize_collection, normalize_subscription_tags,
-        CollectionIngestMember, IngestSourceKind, SingleIngestDisposition, SingleIngestRequest,
+        acquire_collection_blob_leases, attach_current_sidebar_counts, ingest_single_path,
+        materialize_collection, normalize_subscription_tags, CollectionIngestMember,
+        IngestSourceKind, SingleIngestDisposition, SingleIngestRequest,
     };
     use crate::blob_store::BlobStore;
     use crate::db::types::{ExpansionMode, MediaEntityPatch};
@@ -701,6 +785,8 @@ mod tests {
     use std::fs;
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use std::time::Duration;
     use tempfile::TempDir;
 
     #[test]
@@ -913,6 +999,18 @@ mod tests {
         let first = ingest_single_path(&db, &blob_store, &request_for_path(&source_path))
             .await
             .expect("first ingest");
+        let original_path = blob_store
+            .find_original(&first.file_hash, Some("png"))
+            .expect("find original")
+            .expect("original exists")
+            .0;
+        fs::remove_file(original_path).expect("remove original for repair test");
+        let thumbnail_path = blob_store
+            .find_thumbnail_path(&first.file_hash)
+            .expect("find thumbnail")
+            .expect("thumbnail exists");
+        fs::remove_file(thumbnail_path).expect("remove thumbnail for repair test");
+
         let second = ingest_single_path(&db, &blob_store, &request_for_path(&source_path))
             .await
             .expect("second ingest");
@@ -926,6 +1024,13 @@ mod tests {
         assert!(!second.flags.tags_changed);
         assert!(!second.flags.metadata_changed);
         assert!(!second.flags.status_changed);
+        assert!(blob_store
+            .read_original(&first.file_hash, Some("png"))
+            .is_ok());
+        assert!(blob_store
+            .read_thumbnail(&first.file_hash)
+            .expect("read repaired thumbnail")
+            .is_some());
         db.with_read(|conn| {
             let entity_count: i64 =
                 conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?;
@@ -1070,6 +1175,12 @@ mod tests {
         assert!(first.disposition.is_imported());
         assert!(second.disposition.is_imported());
         assert_eq!(db.get_duplicate_count().expect("duplicate count"), 1);
+        let impact = attach_current_sidebar_counts(
+            &db,
+            crate::runtime_contract::change_builder::ChangeImpact::new(),
+            true,
+        );
+        assert_eq!(impact.sidebar_counts.expect("sidebar counts").duplicates, 1);
         assert!(db
             .get_existing_import_target_by_file_hash(&first.file_hash)
             .expect("old target")
@@ -1175,6 +1286,35 @@ mod tests {
         .expect("inspect near phash review");
     }
 
+    #[tokio::test]
+    async fn concurrent_near_phash_ingests_cannot_miss_the_review_pair() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+        let base = patterned_image(96, 96);
+        let near = build_near_duplicate_variant(&base);
+        let first_path = source_root.join("concurrent_near_a.png");
+        let second_path = source_root.join("concurrent_near_b.png");
+        write_image(&first_path, &base, ImageFormat::Png);
+        write_image(&second_path, &near, ImageFormat::Png);
+
+        let db = Arc::new(db);
+        let blob_store = Arc::new(blob_store);
+        let first_request = request_for_path(&first_path);
+        let second_request = request_for_path(&second_path);
+        let (first, second) = tokio::join!(
+            ingest_single_path(&db, &blob_store, &first_request),
+            ingest_single_path(&db, &blob_store, &second_request),
+        );
+        assert!(first
+            .expect("first concurrent ingest")
+            .disposition
+            .is_imported());
+        assert!(second
+            .expect("second concurrent ingest")
+            .disposition
+            .is_imported());
+        assert_eq!(db.get_duplicate_count().expect("duplicate count"), 1);
+    }
+
     fn collection_member(path: &Path, page_num: u32) -> CollectionIngestMember {
         CollectionIngestMember {
             request: SingleIngestRequest {
@@ -1209,6 +1349,112 @@ mod tests {
             )
         })
         .expect("read member_count")
+    }
+
+    #[tokio::test]
+    async fn collection_hash_leases_do_not_deadlock_in_reversed_order() {
+        let (_tmp, _db, blob_store, _source_root) = open_test_library();
+        let first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let second = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let result = tokio::time::timeout(Duration::from_secs(1), async {
+            tokio::join!(
+                async {
+                    let leases = acquire_collection_blob_leases(
+                        &blob_store,
+                        vec![first.to_string(), second.to_string()],
+                    )
+                    .await;
+                    drop(leases);
+                },
+                async {
+                    let leases = acquire_collection_blob_leases(
+                        &blob_store,
+                        vec![second.to_string(), first.to_string()],
+                    )
+                    .await;
+                    drop(leases);
+                },
+            )
+        })
+        .await;
+        assert!(result.is_ok(), "reversed collection lease order deadlocked");
+    }
+
+    #[tokio::test]
+    async fn collection_duplicate_hash_members_create_one_membership() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+        let path = source_root.join("duplicate.png");
+        write_image(&path, &solid_image(96, 96, 120), ImageFormat::Png);
+
+        let outcome = tokio::time::timeout(
+            Duration::from_secs(2),
+            materialize_collection(
+                &db,
+                &blob_store,
+                "duplicate members",
+                &[collection_member(&path, 0), collection_member(&path, 1)],
+                None,
+                &[],
+            ),
+        )
+        .await
+        .expect("duplicate collection members deadlocked")
+        .expect("duplicate collection members failed");
+
+        let collection_id = outcome.collection_id.expect("collection created");
+        assert_eq!(read_member_count(&db, collection_id), 1);
+        assert_eq!(outcome.imported_hashes.len(), 1);
+        assert_eq!(outcome.resolved_members.len(), 2);
+        assert_eq!(
+            outcome.resolved_members[0].entity_hash,
+            outcome.resolved_members[1].entity_hash
+        );
+        assert!(outcome.resolved_members[0].disposition.is_imported());
+        assert!(matches!(
+            outcome.resolved_members[1].disposition,
+            SingleIngestDisposition::Reused
+        ));
+    }
+
+    #[tokio::test]
+    async fn existing_collection_member_republishes_a_missing_original() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+        let path = source_root.join("collection-repair.png");
+        write_image(&path, &solid_image(96, 96, 145), ImageFormat::Png);
+
+        let first = materialize_collection(
+            &db,
+            &blob_store,
+            "repair collection",
+            &[collection_member(&path, 0)],
+            None,
+            &[],
+        )
+        .await
+        .expect("initial collection materialization");
+        let collection_id = first.collection_id.expect("collection created");
+        let file_hash = first.resolved_members[0].file_hash.clone();
+        let original_path = blob_store
+            .find_original(&file_hash, Some("png"))
+            .expect("find original")
+            .expect("original exists")
+            .0;
+        fs::remove_file(original_path).expect("remove original for repair test");
+
+        let repaired = materialize_collection(
+            &db,
+            &blob_store,
+            "repair collection",
+            &[collection_member(&path, 0)],
+            Some(collection_id),
+            &[],
+        )
+        .await
+        .expect("repair collection materialization");
+
+        assert_eq!(repaired.collection_id, Some(collection_id));
+        assert_eq!(read_member_count(&db, collection_id), 1);
+        assert!(blob_store.read_original(&file_hash, Some("png")).is_ok());
     }
 
     #[tokio::test]

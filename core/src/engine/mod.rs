@@ -51,6 +51,20 @@ impl ApplicationEngine {
         self.db.clone()
     }
 
+    fn settled_sidebar_counts(
+        &self,
+    ) -> Option<crate::runtime_contract::state_change::SidebarCounts> {
+        let counts = self.db.get_scope_counts().ok()?;
+        Some(crate::runtime_contract::state_change::SidebarCounts {
+            active: counts.active,
+            inbox: counts.inbox,
+            trash: counts.trash,
+            uncategorized: counts.uncategorized,
+            untagged: counts.untagged,
+            duplicates: self.db.get_duplicate_count().unwrap_or(-1),
+        })
+    }
+
     /// Commit a write result: rebuild projections, then emit their settled state.
     /// Every engine write method calls this after the db write succeeds.
     fn commit_write(&self, change: &WriteChange) {
@@ -153,20 +167,105 @@ impl ApplicationEngine {
             }
         }
 
-        // Sidebar counts — SQL-based via get_scope_counts (includes uncategorized/untagged).
-        // Duplicates is a manager-owned count, not a scope count — left as -1.
-        if let Ok(sc) = self.db.get_scope_counts() {
-            impact.sidebar_counts = Some(crate::runtime_contract::state_change::SidebarCounts {
-                active: sc.active,
-                inbox: sc.inbox,
-                trash: sc.trash,
-                uncategorized: sc.uncategorized,
-                untagged: sc.untagged,
-                duplicates: -1, // Manager-owned, not scope data
-            });
+        // Scope counts are authoritative after the compiler settles. Duplicate
+        // visibility depends on entity status, so status transitions must
+        // publish the exact duplicate count just like deletions do.
+        if let Some(mut counts) = self.settled_sidebar_counts() {
+            if !change.status_changed && !change.entities_deleted {
+                counts.duplicates = -1;
+            }
+            impact.sidebar_counts = Some(counts);
         }
 
         crate::events::emit_state_changed(&change.origin, impact);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::types::{EntityTarget, EntityTargetKind};
+    use std::sync::{Arc, Mutex};
+    use tempfile::TempDir;
+
+    #[test]
+    fn status_changes_emit_settled_duplicate_counts() {
+        let temp = TempDir::new().expect("create test library");
+        let db = Arc::new(LibraryDatabase::open(temp.path()).expect("open test library"));
+        db.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO media_entity
+                    (entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified)
+                 VALUES
+                    (1, 'inbox-entity', 'single', 0, 'Inbox', '2026-08-14', '2026-08-14', '2026-08-14'),
+                    (2, 'active-entity', 'single', 1, 'Active', '2026-08-14', '2026-08-14', '2026-08-14')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO media_file
+                    (file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, frame_count,
+                     has_audio, perceptual_hash, date_added)
+                 VALUES
+                    (1, 'inbox-file', 'image/png', 1, 1, 1, 1, 0, 'inbox-phash', '2026-08-14'),
+                    (2, 'active-file', 'image/png', 1, 1, 1, 1, 0, 'active-phash', '2026-08-14')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO duplicate (file_id_a, file_id_b, distance) VALUES (1, 2, 1)",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("seed duplicate pair");
+
+        let events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
+        let captured_events = Arc::clone(&events);
+        crate::events::set_event_callback(move |name, payload| {
+            if name == crate::events::event_names::RUNTIME_STATE_CHANGED {
+                if let Ok(event) = serde_json::from_str::<serde_json::Value>(payload) {
+                    captured_events.lock().unwrap().push(event);
+                }
+            }
+        });
+
+        let engine = ApplicationEngine::new(db);
+        let target = || EntityTarget {
+            kind: EntityTargetKind::EntityHashes,
+            entity_hashes: Some(vec!["inbox-entity".to_string()]),
+            query: None,
+            excluded_entity_hashes: None,
+        };
+
+        engine
+            .set_entity_status(target(), 2)
+            .expect("move duplicate candidate to trash");
+        engine
+            .set_entity_status(target(), 0)
+            .expect("restore duplicate candidate to inbox");
+        engine
+            .resolve_duplicate_pair("keep_both", "inbox-entity", "active-entity", None)
+            .expect("resolve duplicate pair");
+
+        let events = events.lock().unwrap();
+        let status_events: Vec<_> = events
+            .iter()
+            .filter(|event| event["origin"] == "set_entity_status")
+            .collect();
+        assert_eq!(status_events.len(), 2);
+        assert_eq!(status_events[0]["sidebar_counts"]["duplicates"], 0);
+        assert_eq!(status_events[1]["sidebar_counts"]["duplicates"], 1);
+        let resolution_event = events
+            .iter()
+            .find(|event| event["origin"] == "resolve_duplicate_pair")
+            .expect("duplicate resolution event");
+        assert_eq!(resolution_event["sidebar_counts"]["duplicates"], 0);
+
+        // Do not leave a test callback installed for later tests in this process.
+        crate::events::set_event_callback(|_, _| {});
     }
 }
 

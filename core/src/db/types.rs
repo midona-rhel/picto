@@ -133,6 +133,12 @@ pub struct DuplicateScanSummary {
     pub closest_distance: Option<u32>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlobCleanupResult {
+    Deleted,
+    CancelledReferenced,
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct FileStats {
     pub total: i64,
@@ -167,6 +173,7 @@ pub struct DuplicatePairPage {
 pub enum DuplicateResolveStatus {
     Resolved,
     Conflict,
+    QualityAmbiguous,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -182,6 +189,10 @@ pub struct DuplicateResolutionResult {
     pub status: DuplicateResolveStatus,
     pub winner_hash: Option<String>,
     pub loser_hash: Option<String>,
+    pub loser_file_hash: Option<String>,
+    pub blob_cleanup_pending: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cleanup_error: Option<String>,
     pub action: String,
     pub affected_folder_ids: Vec<i64>,
     pub affected_collection_ids: Vec<i64>,
@@ -193,15 +204,6 @@ pub struct DuplicateResolutionResult {
 #[derive(Debug, Clone)]
 pub struct PerceptualHashCandidate {
     pub file_id: i64,
-    pub entity_id: i64,
-    pub entity_hash: String,
-    pub file_hash: String,
-    pub mime_type: String,
-    pub size_bytes: i64,
-    pub pixel_width: Option<i64>,
-    pub pixel_height: Option<i64>,
-    pub frame_count: Option<i64>,
-    pub perceptual_hash: String,
     pub distance: u32,
 }
 
@@ -333,7 +335,6 @@ pub enum ScopeKind {
     Folder,
     SmartFolder,
     Collection,
-    Similar,
     Search,
     Tag,
 }
