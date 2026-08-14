@@ -124,20 +124,20 @@ reference application-reference UI pass and must reuse this canonical API rather
 
 ## Phase 7: PBI-602 Folder Sync
 
-- [ ] Replace the architecture document with a short folder-sync behavior contract.
-- [ ] Use one `sync_cycle` for startup, periodic, and manual sync.
-- [ ] Upload verified blobs before operations that reference them.
-- [ ] Verify downloaded content hashes before storing originals.
-- [ ] Reject symlinks and paths escaping the selected sync root.
-- [ ] Park missing-prerequisite operations instead of advancing past them.
-- [ ] Stop safely on unknown operation versions or types.
-- [ ] Track and retry missing blobs.
-- [ ] Enqueue derivatives exactly once after remote blob hydration.
-- [ ] Persist last success, failure, pending work, and missing-media state.
-- [ ] Sync subscription definitions and groups; keep credentials and run history device-local.
-- [ ] Preserve tag provenance during replay.
-- [ ] Report uploads, downloads, pending work, failures, and derivative catch-up truthfully.
-- [ ] Pass two-device restore, corruption, ordering, and restart tests, then archive PBI-602.
+- [x] Replace the architecture document with a short folder-sync behavior contract.
+- [x] Use one `sync_cycle` for startup, periodic, and manual sync.
+- [x] Upload verified blobs before operations that reference them.
+- [x] Verify downloaded content hashes before storing originals.
+- [x] Reject symlinks and paths escaping the selected sync root.
+- [x] Park missing-prerequisite operations instead of advancing past them.
+- [x] Stop safely on unknown operation versions or types.
+- [x] Track and retry missing blobs.
+- [x] Enqueue derivatives exactly once after remote blob hydration.
+- [x] Persist last success, failure, pending work, and missing-media state.
+- [x] Sync subscription definitions and groups; keep credentials and run history device-local.
+- [x] Preserve tag provenance during replay.
+- [x] Report uploads, downloads, pending work, failures, and derivative catch-up truthfully.
+- [x] Pass two-device restore, corruption, ordering, and restart tests, then archive PBI-602.
 
 ## Phase 8: Performance, Deletion, and PBI Cleanup
 

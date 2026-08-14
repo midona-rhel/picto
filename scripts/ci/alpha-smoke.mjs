@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 
 const SMOKE_PREFIX = '[picto-packaged-smoke] ';
@@ -21,6 +22,7 @@ const FAILURE_EVENTS = new Set([
   'uncaught-exception',
   'unhandled-rejection',
   'bootstrap-failed',
+  'sync-smoke-failed',
   'shutdown-failed',
 ]);
 const PROCESS_TIMEOUT_MS = 30_000;
@@ -158,10 +160,10 @@ function launch(executable, env) {
   });
 }
 
-export function evaluateRun(run) {
+export function evaluateRun(run, requiredEvents = REQUIRED_EVENTS) {
   const events = new Set(run.reports.map((report) => report.event));
   const failures = run.reports.filter((report) => FAILURE_EVENTS.has(report.event));
-  const missing = [...REQUIRED_EVENTS].filter((event) => !events.has(event));
+  const missing = [...requiredEvents].filter((event) => !events.has(event));
   const reasons = [];
   if (run.spawnError) reasons.push(`launch failed: ${run.spawnError}`);
   if (run.timedOut) reasons.push('process timed out');
@@ -196,7 +198,7 @@ async function main() {
   const reportPath = path.resolve(args.report || path.join('artifacts', 'alpha-smoke', `${platform}.json`));
   const startedAt = new Date().toISOString();
   let temporaryRoot = null;
-  let run = null;
+  const runs = [];
   let temporaryRootCreated = false;
   let cleanupSucceeded = true;
   let executable = null;
@@ -206,17 +208,75 @@ async function main() {
     executable = await findUnpackedExecutable({ distDir, platform });
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-packaged-smoke-'));
     temporaryRootCreated = true;
-    const appData = path.join(temporaryRoot, 'app-data');
-    const libraryRoot = path.join(temporaryRoot, 'library');
-    await Promise.all([fs.mkdir(appData), fs.mkdir(libraryRoot)]);
-    const env = {
-      ...process.env,
-      PICTO_PACKAGED_SMOKE: '1',
-      PICTO_SMOKE_APP_DATA: appData,
-      PICTO_LIBRARY_ROOT: libraryRoot,
-    };
-    delete env.ELECTRON_RUN_AS_NODE;
-    run = await launch(executable, env);
+    const deviceAHome = path.join(temporaryRoot, 'device-a-home');
+    const deviceBHome = path.join(temporaryRoot, 'device-b-home');
+    const deviceAAppData = path.join(temporaryRoot, 'device-a-app-data');
+    const deviceBAppData = path.join(temporaryRoot, 'device-b-app-data');
+    const deviceALibrary = path.join(temporaryRoot, 'device-a-library');
+    const deviceBLibrary = path.join(temporaryRoot, 'device-b-library');
+    const syncRoot = path.join(temporaryRoot, 'sync-root');
+    const mediaPath = path.join(temporaryRoot, 'smoke.bmp');
+    const mediaBytes = Buffer.from(
+      '424d3a0000000000000036000000280000000100000001000000010018000000000004000000130b0000130b000000000000000000000000ff00',
+      'hex',
+    );
+    const mediaHash = createHash('sha256').update(mediaBytes).digest('hex');
+    await Promise.all([
+      fs.mkdir(deviceAHome),
+      fs.mkdir(deviceBHome),
+      fs.mkdir(deviceAAppData),
+      fs.mkdir(deviceBAppData),
+      fs.mkdir(deviceALibrary),
+      fs.mkdir(deviceBLibrary),
+      fs.mkdir(syncRoot),
+      fs.writeFile(mediaPath, mediaBytes),
+    ]);
+    const phases = [
+      {
+        name: 'device-a-publish',
+        phase: 'publish',
+        expected: 'sync-device-a-published',
+        home: deviceAHome,
+        appData: deviceAAppData,
+        library: deviceALibrary,
+      },
+      {
+        name: 'device-b-publish',
+        phase: 'peer',
+        expected: 'sync-device-b-published',
+        home: deviceBHome,
+        appData: deviceBAppData,
+        library: deviceBLibrary,
+      },
+      {
+        name: 'device-a-verify',
+        phase: 'verify',
+        expected: 'two-device-sync-complete',
+        home: deviceAHome,
+        appData: deviceAAppData,
+        library: deviceALibrary,
+      },
+    ];
+
+    for (const phase of phases) {
+      const env = {
+        ...process.env,
+        HOME: phase.home,
+        USERPROFILE: phase.home,
+        PICTO_PACKAGED_SMOKE: '1',
+        PICTO_SMOKE_APP_DATA: phase.appData,
+        PICTO_LIBRARY_ROOT: phase.library,
+        PICTO_SMOKE_SYNC_ROOT: syncRoot,
+        PICTO_SMOKE_SYNC_PHASE: phase.phase,
+        PICTO_SMOKE_MEDIA_PATH: mediaPath,
+        PICTO_SMOKE_MEDIA_HASH: mediaHash,
+      };
+      delete env.ELECTRON_RUN_AS_NODE;
+      const run = await launch(executable, env);
+      runs.push({ name: phase.name, expected: phase.expected, ...run });
+      const required = new Set([...REQUIRED_EVENTS, phase.expected]);
+      if (evaluateRun(run, required).length > 0) break;
+    }
   } catch (error) {
     setupError = error instanceof Error ? error.message : String(error);
   } finally {
@@ -227,7 +287,20 @@ async function main() {
     }
   }
 
-  const reasons = setupError ? [setupError] : evaluateRun(run);
+  const reasons = setupError ? [setupError] : runs.flatMap((run) => {
+    const required = new Set([...REQUIRED_EVENTS, run.expected]);
+    return evaluateRun(run, required).map((reason) => `${run.name}: ${reason}`);
+  });
+  if (!setupError && runs.length !== 3) reasons.push(`expected 3 smoke phases, completed ${runs.length}`);
+  if (!setupError && runs.length === 3) {
+    const event = (name) => runs.flatMap((run) => run.reports).find((report) => report.event === name);
+    const deviceA = event('sync-device-a-published')?.device_id;
+    const deviceB = event('sync-device-b-published')?.device_id;
+    const restartedA = event('two-device-sync-complete')?.device_id;
+    if (!deviceA || !deviceB || !restartedA) reasons.push('sync smoke did not report every device identity');
+    else if (deviceA === deviceB) reasons.push('device A and device B used the same sync identity');
+    else if (deviceA !== restartedA) reasons.push('device A identity changed across restart');
+  }
   if (temporaryRootCreated && !cleanupSucceeded) reasons.push('temporary root was not removed');
   const report = {
     platform,
@@ -237,12 +310,13 @@ async function main() {
     passed: reasons.length === 0,
     reasons,
     temporary_root_removed: temporaryRootCreated ? cleanupSucceeded : null,
-    exit_code: run?.code ?? null,
-    signal: run?.signal ?? null,
-    timed_out: run?.timedOut ?? false,
-    events: run?.reports ?? [],
-    stdout_tail: run?.stdout ?? '',
-    stderr_tail: run?.stderr ?? '',
+    exit_code: runs.find((run) => run.code !== 0)?.code ?? runs.at(-1)?.code ?? null,
+    signal: runs.find((run) => run.signal)?.signal ?? null,
+    timed_out: runs.some((run) => run.timedOut),
+    events: runs.flatMap((run) => run.reports),
+    stdout_tail: runs.map((run) => `[${run.name}]\n${run.stdout}`).join('\n'),
+    stderr_tail: runs.map((run) => `[${run.name}]\n${run.stderr}`).join('\n'),
+    runs: runs.map(({ expected: _expected, ...run }) => run),
   };
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
   await fs.writeFile(reportPath, `${JSON.stringify(report, null, 2)}\n`);
