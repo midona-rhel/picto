@@ -6,6 +6,7 @@ import { Notifications } from '@mantine/notifications';
 import '@mantine/notifications/styles.css';
 import '@mantine/core/styles.css';
 import { AppShell } from '../app/AppShell';
+import { LibraryGate } from '../features/library/LibraryGate';
 import '../app/globals.css';
 
 // One store for the entire app. Controllers and runtime settle mutate
@@ -17,7 +18,9 @@ createRoot(document.getElementById('root')!).render(
     <MantineProvider defaultColorScheme="dark">
       <Provider store={store}>
         <Notifications position="top-right" />
-        <AppShell />
+        <LibraryGate>
+          <AppShell />
+        </LibraryGate>
       </Provider>
     </MantineProvider>
   </StrictMode>,
