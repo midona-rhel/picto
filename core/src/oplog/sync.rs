@@ -1055,7 +1055,8 @@ mod tests {
 
     #[tokio::test]
     async fn subscription_definitions_converge_while_runtime_state_stays_local() {
-        let backend = MemoryBackend::new();
+        let remote_root = TempDir::new().unwrap();
+        let backend = crate::oplog::backend_fs::FsBackend::open(remote_root.path()).unwrap();
         let source_root = TempDir::new().unwrap();
         let target_root = TempDir::new().unwrap();
         let source =
@@ -1114,6 +1115,11 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+
+        drop(target);
+        let target =
+            LibraryDatabase::open_with_device_id(target_root.path(), "subscriptions-b".into())
+                .unwrap();
 
         target
             .with_write(|conn| {
