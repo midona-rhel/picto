@@ -608,13 +608,14 @@ impl LibraryDatabase {
         &self,
         ops: &[crate::oplog::OpRecord],
         cursor_updates: &[(String, i64)],
-    ) -> Result<Option<usize>, String> {
+    ) -> Result<Option<Vec<usize>>, String> {
         let conn = self.write_conn.lock().unwrap();
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-        let mut applied = 0usize;
-        for op in ops {
+        let mut applied = Vec::new();
+        for (index, op) in ops.iter().enumerate() {
             match remote_ops::apply_remote_op(&tx, op).map_err(|e| e.to_string())? {
-                remote_ops::RemoteOpOutcome::Applied => applied += 1,
+                remote_ops::RemoteOpOutcome::Applied => applied.push(index),
+                remote_ops::RemoteOpOutcome::Ignored => {}
                 remote_ops::RemoteOpOutcome::Pending(reason) => {
                     tx.rollback().map_err(|e| e.to_string())?;
                     tracing::info!(
@@ -637,7 +638,7 @@ impl LibraryDatabase {
         }
         tx.commit().map_err(|e| e.to_string())?;
         drop(conn);
-        if applied > 0 {
+        if !applied.is_empty() {
             // Projections are derived; rebuild after remote truth changed.
             self.full_rebuild();
         }

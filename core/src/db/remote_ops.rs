@@ -9,6 +9,7 @@ use super::*;
 
 pub(super) enum RemoteOpOutcome {
     Applied,
+    Ignored,
     Pending(String),
 }
 
@@ -217,16 +218,26 @@ pub(super) fn apply_remote_op(
     conn: &Connection,
     op: &crate::oplog::OpRecord,
 ) -> rusqlite::Result<RemoteOpOutcome> {
-    if let Some(reason) = missing_prerequisite(conn, op)? {
+    let Some(op) = crate::oplog::conflict::accept_remote_op(conn, op)? else {
+        return Ok(RemoteOpOutcome::Ignored);
+    };
+    if let Some(reason) = missing_prerequisite(conn, &op)? {
         return Ok(RemoteOpOutcome::Pending(reason));
     }
     let key = op.entity_key.as_str();
     let p = &op.payload;
     let now = chrono::Utc::now().to_rfc3339();
     match op.op_type.as_str() {
-        "entity_created" => {
-            if entity_id_by_hash(conn, key)?.is_some() {
+        "entity_created" | "entity_recreated" => {
+            let existing_id = entity_id_by_hash(conn, key)?;
+            if op.op_type == "entity_created" && existing_id.is_some() {
                 return Ok(RemoteOpOutcome::Applied); // content-addressed: already materialized
+            }
+            if let Some(entity_id) = existing_id {
+                // A recreate is a new metadata generation for the same content
+                // hash. Reset the old entity even when cross-device delivery
+                // brings this op in before its older delete.
+                write::entities::delete_entities(conn, &[entity_id])?;
             }
             conn.execute(
                 "DELETE FROM media_file WHERE file_hash = ?1
@@ -587,4 +598,348 @@ pub(super) fn apply_remote_op(
         }
     }
     Ok(RemoteOpOutcome::Applied)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::oplog::OpRecord;
+    use rusqlite::params;
+
+    fn db() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::db::core::schema::LIBRARY_DDL)
+            .unwrap();
+        conn
+    }
+
+    fn op(
+        hlc: &str,
+        device: &str,
+        op_type: &str,
+        key: &str,
+        payload: serde_json::Value,
+    ) -> OpRecord {
+        OpRecord {
+            op_version: 1,
+            op_type: op_type.to_owned(),
+            entity_key: key.to_owned(),
+            payload,
+            hlc: hlc.to_owned(),
+            device_id: device.to_owned(),
+        }
+    }
+
+    fn entity(conn: &Connection, id: i64, hash: &str, status: i64) {
+        conn.execute(
+            "INSERT INTO media_file
+             (file_id, file_hash, mime_type, size_bytes, date_added)
+             VALUES (?1, ?2, 'image/jpeg', 1, '2026-01-01')",
+            params![id, hash],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO media_entity
+             (entity_id, entity_hash, entity_kind, status, date_created, date_added, date_modified)
+             VALUES (?1, ?2, 'single', ?3, '2026-01-01', '2026-01-01', '2026-01-01')",
+            params![id, hash, status],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (?1, ?1)",
+            [id],
+        )
+        .unwrap();
+    }
+
+    fn folder(conn: &Connection, id: i64, uuid: &str) {
+        conn.execute(
+            "INSERT INTO folder (folder_id, name, uuid, date_added, date_modified)
+             VALUES (?1, 'Folder', ?2, '2026-01-01', '2026-01-01')",
+            params![id, uuid],
+        )
+        .unwrap();
+    }
+
+    fn consumed(conn: &Connection, op: OpRecord) {
+        assert!(matches!(
+            apply_remote_op(conn, &op).unwrap(),
+            RemoteOpOutcome::Applied | RemoteOpOutcome::Ignored
+        ));
+    }
+
+    #[test]
+    fn stale_remote_operation_is_consumed_without_reporting_a_write() {
+        let conn = db();
+        entity(&conn, 1, "h1", 1);
+        consumed(
+            &conn,
+            op(
+                "0000000000002-0000",
+                "b",
+                "entity_status_changed",
+                "h1",
+                serde_json::json!({"status": 3}),
+            ),
+        );
+        assert!(matches!(
+            apply_remote_op(
+                &conn,
+                &op(
+                    "0000000000001-0000",
+                    "a",
+                    "entity_status_changed",
+                    "h1",
+                    serde_json::json!({"status": 2}),
+                ),
+            )
+            .unwrap(),
+            RemoteOpOutcome::Ignored
+        ));
+    }
+
+    #[test]
+    fn late_status_and_metadata_do_not_overwrite_newer_fields() {
+        let conn = db();
+        entity(&conn, 1, "h1", 1);
+        consumed(
+            &conn,
+            op(
+                "0000000000002-0000",
+                "b",
+                "entity_status_changed",
+                "h1",
+                serde_json::json!({"status": 3}),
+            ),
+        );
+        consumed(
+            &conn,
+            op(
+                "0000000000001-0000",
+                "a",
+                "entity_status_changed",
+                "h1",
+                serde_json::json!({"status": 2}),
+            ),
+        );
+        consumed(
+            &conn,
+            op(
+                "0000000000004-0000",
+                "b",
+                "entity_updated",
+                "h1",
+                serde_json::json!({"rating": 5}),
+            ),
+        );
+        consumed(
+            &conn,
+            op(
+                "0000000000003-0000",
+                "a",
+                "entity_updated",
+                "h1",
+                serde_json::json!({"rating": 1, "notes": "kept"}),
+            ),
+        );
+        let row: (i64, Option<i64>, Option<String>) = conn
+            .query_row(
+                "SELECT status, rating, notes FROM media_entity WHERE entity_hash = 'h1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, (3, Some(5), Some("kept".to_owned())));
+    }
+
+    #[test]
+    fn late_tag_payloads_keep_newer_tag_truth_and_merge_new_tags() {
+        let conn = db();
+        entity(&conn, 1, "h1", 1);
+        consumed(
+            &conn,
+            op(
+                "0000000000002-0000",
+                "b",
+                "entity_tags_added",
+                "h1",
+                serde_json::json!({"tags":["general:cat"]}),
+            ),
+        );
+        consumed(
+            &conn,
+            op(
+                "0000000000001-0000",
+                "a",
+                "entity_tags_added",
+                "h1",
+                serde_json::json!({"tags":["general:cat", "general:bird"]}),
+            ),
+        );
+        let tags: Vec<String> = conn
+            .prepare(
+                "SELECT t.namespace || ':' || t.subtag FROM entity_tag et
+                 JOIN tag t ON t.tag_id = et.tag_id
+                 WHERE et.entity_id = 1 ORDER BY 1",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(tags, vec!["general:bird", "general:cat"]);
+    }
+
+    #[test]
+    fn late_membership_payloads_merge_independent_members() {
+        let conn = db();
+        entity(&conn, 1, "h1", 1);
+        entity(&conn, 2, "h2", 1);
+        folder(&conn, 1, "folder-1");
+        consumed(
+            &conn,
+            op(
+                "0000000000002-0000",
+                "b",
+                "folder_members_added",
+                "folder-1",
+                serde_json::json!({"entities":["h1"]}),
+            ),
+        );
+        consumed(
+            &conn,
+            op(
+                "0000000000001-0000",
+                "a",
+                "folder_members_added",
+                "folder-1",
+                serde_json::json!({"entities":["h1", "h2"]}),
+            ),
+        );
+        let members: Vec<String> = conn
+            .prepare(
+                "SELECT me.entity_hash FROM folder_member fm
+                 JOIN media_entity me ON me.entity_id = fm.entity_id
+                 ORDER BY me.entity_hash",
+            )
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(members, vec!["h1", "h2"]);
+    }
+
+    #[test]
+    fn missing_delete_is_consumed_and_explicit_recreate_materializes() {
+        let conn = db();
+        consumed(
+            &conn,
+            op(
+                "0000000000002-0000",
+                "b",
+                "entity_deleted",
+                "h1",
+                serde_json::json!({}),
+            ),
+        );
+        consumed(
+            &conn,
+            op(
+                "0000000000003-0000",
+                "c",
+                "entity_updated",
+                "h1",
+                serde_json::json!({"rating": 1}),
+            ),
+        );
+        consumed(
+            &conn,
+            op(
+                "0000000000004-0000",
+                "c",
+                "entity_recreated",
+                "h1",
+                serde_json::json!({"mime":"image/jpeg","size":1,"status":1}),
+            ),
+        );
+        let rating: Option<i64> = conn
+            .query_row(
+                "SELECT rating FROM media_entity WHERE entity_hash = 'h1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(rating, None);
+        let delete_clock: Option<String> = conn
+            .query_row(
+                "SELECT field_key FROM sync_conflict_clock
+                 WHERE target_kind = 'entity' AND target_key = 'h1' AND field_key = '__create__'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(delete_clock.as_deref(), Some("__create__"));
+    }
+
+    #[test]
+    fn recreate_before_older_delete_resets_metadata_and_survives_late_delete() {
+        let conn = db();
+        consumed(
+            &conn,
+            op(
+                "0000000000001-0000",
+                "a",
+                "entity_created",
+                "h1",
+                serde_json::json!({"mime":"image/jpeg","size":1,"status":1,"name":"old"}),
+            ),
+        );
+        consumed(
+            &conn,
+            op(
+                "0000000000002-0000",
+                "a",
+                "entity_updated",
+                "h1",
+                serde_json::json!({"rating":5}),
+            ),
+        );
+        consumed(
+            &conn,
+            op(
+                "0000000000004-0000",
+                "b",
+                "entity_recreated",
+                "h1",
+                serde_json::json!({"mime":"image/png","size":2,"status":0,"name":"new"}),
+            ),
+        );
+        consumed(
+            &conn,
+            op(
+                "0000000000003-0000",
+                "a",
+                "entity_deleted",
+                "h1",
+                serde_json::json!({}),
+            ),
+        );
+
+        let (name, rating, mime): (Option<String>, Option<i64>, String) = conn
+            .query_row(
+                "SELECT me.name, me.rating, mf.mime_type
+                 FROM media_entity me
+                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
+                 JOIN media_file mf ON mf.file_id = sme.file_id
+                 WHERE me.entity_hash = 'h1'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(name.as_deref(), Some("new"));
+        assert_eq!(rating, None);
+        assert_eq!(mime, "image/png");
+    }
 }

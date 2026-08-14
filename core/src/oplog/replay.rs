@@ -21,12 +21,15 @@ pub enum ReplayError {
     Backend(#[from] super::backend::BackendError),
     #[error("segment {key}: {source}")]
     Segment { key: String, source: SegmentError },
-    #[error("op with unknown version {0} — update required, nothing applied past it")]
+    #[error("unsupported op version {0} — update required, nothing applied")]
     UnknownOpVersion(i64),
+    #[error("unknown op type {0} — update required, nothing applied")]
+    UnknownOpType(String),
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct EntityState {
+    pub created: bool,
     pub kind: String,
     pub deleted: bool,
     pub fields: BTreeMap<String, serde_json::Value>,
@@ -37,6 +40,7 @@ pub struct EntityState {
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
 pub struct ContainerState {
+    pub created: bool,
     pub deleted: bool,
     pub parent: Option<String>,
     pub fields: BTreeMap<String, serde_json::Value>,
@@ -87,8 +91,15 @@ impl TruthState {
         let key = op.entity_key.as_str();
         let p = &op.payload;
         match op.op_type.as_str() {
-            "entity_created" => {
+            "entity_created" | "entity_recreated" => {
+                if op.op_type == "entity_created"
+                    && self.entities.get(key).is_some_and(|entity| entity.created)
+                {
+                    return;
+                }
                 let entity = self.entity(key);
+                *entity = EntityState::default();
+                entity.created = true;
                 entity.deleted = false;
                 entity.kind = p
                     .get("kind")
@@ -205,7 +216,12 @@ impl TruthState {
                 apply_container_op(&mut self.smart_folders, "smart_folder", op);
             }
             "collection_created" => {
+                if self.entities.get(key).is_some_and(|entity| entity.created) {
+                    return;
+                }
                 let entity = self.entity(key);
+                *entity = EntityState::default();
+                entity.created = true;
                 entity.deleted = false;
                 entity.kind = "collection".into();
                 if let Some(name) = p.get("name") {
@@ -256,11 +272,10 @@ impl TruthState {
                 }
             }
             "duplicate_decided" => {
-                self.duplicate_decisions.insert(key.to_string(), p.clone());
+                self.duplicate_decisions
+                    .insert(super::normalized_pair_key(key), p.clone());
             }
-            // Forward compatibility: unknown op types within a known
-            // op_version are ignored here; version gating happens in replay().
-            _ => {}
+            _ => unreachable!("operation vocabulary is validated before replay"),
         }
     }
 }
@@ -275,6 +290,11 @@ fn apply_container_op(
     let suffix = &op.op_type[prefix.len() + 1..];
     match suffix {
         "created" => {
+            if container.created {
+                return;
+            }
+            *container = ContainerState::default();
+            container.created = true;
             container.deleted = false;
             if let Some(obj) = p.as_object() {
                 for (name, value) in obj {
@@ -332,8 +352,14 @@ fn apply_container_op(
 /// Sort ops into the total order and apply. Errors on any op whose version is
 /// newer than this build understands — nothing is guessed or dropped.
 pub fn replay_ops(mut ops: Vec<OpRecord>) -> Result<TruthState, ReplayError> {
-    if let Some(op) = ops.iter().find(|op| op.op_version > OP_VERSION) {
+    if let Some(op) = ops.iter().find(|op| op.op_version != OP_VERSION) {
         return Err(ReplayError::UnknownOpVersion(op.op_version));
+    }
+    if let Some(op) = ops
+        .iter()
+        .find(|op| !super::is_supported_op_type(&op.op_type))
+    {
+        return Err(ReplayError::UnknownOpType(op.op_type.clone()));
     }
     ops.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
     let mut state = TruthState::default();
@@ -467,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn hard_delete_ignores_partial_edits_until_an_explicit_recreate() {
+    fn hard_delete_ignores_partial_edits_and_duplicate_container_creates() {
         let ops = vec![
             op(
                 "001-0000",
@@ -511,6 +537,13 @@ mod tests {
                 serde_json::json!({"entities":["h9"]}),
             ),
             op(
+                "002-0001",
+                "dev_a",
+                "folder_deleted",
+                "f1",
+                serde_json::json!({}),
+            ),
+            op(
                 "003-0000",
                 "dev_a",
                 "folder_created",
@@ -519,8 +552,116 @@ mod tests {
             ),
         ];
         let folder = &replay_ops(ops).unwrap().folders["f1"];
-        assert!(!folder.deleted);
-        assert_eq!(folder.fields["name"], serde_json::json!("Recreated"));
+        assert!(folder.deleted);
+        assert_eq!(folder.fields["name"], serde_json::json!("Art"));
+        assert!(folder.members.contains("h9"));
+    }
+
+    #[test]
+    fn explicit_entity_recreation_resets_truth() {
+        let entity = replay_ops(vec![
+            op(
+                "001-0000",
+                "a",
+                "entity_created",
+                "h1",
+                serde_json::json!({"name":"old","tags":["general:old"]}),
+            ),
+            op(
+                "002-0000",
+                "a",
+                "entity_updated",
+                "h1",
+                serde_json::json!({"rating":5}),
+            ),
+            op(
+                "003-0000",
+                "a",
+                "entity_deleted",
+                "h1",
+                serde_json::json!({}),
+            ),
+            op(
+                "004-0000",
+                "a",
+                "entity_recreated",
+                "h1",
+                serde_json::json!({"name":"new"}),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(entity.entities["h1"].fields.len(), 1);
+        assert!(entity.entities["h1"].tags.is_empty());
+        assert!(!entity.entities["h1"].deleted);
+    }
+
+    #[test]
+    fn collection_create_is_idempotent_after_split() {
+        let collection = replay_ops(vec![
+            op(
+                "001-0000",
+                "a",
+                "collection_created",
+                "c1",
+                serde_json::json!({"name":"old"}),
+            ),
+            op(
+                "002-0000",
+                "a",
+                "collection_members_added",
+                "c1",
+                serde_json::json!({"members":["h1"]}),
+            ),
+            op(
+                "003-0000",
+                "a",
+                "collection_split",
+                "c1",
+                serde_json::json!({}),
+            ),
+            op(
+                "004-0000",
+                "a",
+                "collection_created",
+                "c1",
+                serde_json::json!({"name":"new"}),
+            ),
+        ])
+        .unwrap();
+        assert!(collection.entities["c1"].deleted);
+        assert_eq!(collection.entities["c1"].members, vec!["h1"]);
+        assert_eq!(collection.entities["c1"].fields["name"], "old");
+    }
+
+    #[test]
+    fn duplicate_create_is_idempotent_and_does_not_reset_metadata() {
+        let state = replay_ops(vec![
+            op(
+                "001-0000",
+                "dev_a",
+                "entity_created",
+                "h1",
+                serde_json::json!({"kind":"single","name":"Original"}),
+            ),
+            op(
+                "002-0000",
+                "dev_a",
+                "entity_updated",
+                "h1",
+                serde_json::json!({"rating":5}),
+            ),
+            op(
+                "003-0000",
+                "dev_b",
+                "entity_created",
+                "h1",
+                serde_json::json!({"kind":"single","name":"Duplicate import"}),
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(state.entities["h1"].fields["name"], "Original");
+        assert_eq!(state.entities["h1"].fields["rating"], 5);
     }
 
     #[test]
@@ -537,6 +678,58 @@ mod tests {
         assert!(matches!(
             replay_ops(ops),
             Err(ReplayError::UnknownOpVersion(99))
+        ));
+    }
+
+    #[test]
+    fn older_op_version_also_parks_the_whole_replay() {
+        let mut ops = two_device_history();
+        ops[0].op_version = 0;
+        assert!(matches!(
+            replay_ops(ops),
+            Err(ReplayError::UnknownOpVersion(0))
+        ));
+    }
+
+    #[test]
+    fn reversed_duplicate_pair_keys_share_one_replay_decision() {
+        let state = replay_ops(vec![
+            op(
+                "001-0000",
+                "a",
+                "duplicate_decided",
+                "left|right",
+                serde_json::json!({"action":"keep_both"}),
+            ),
+            op(
+                "002-0000",
+                "b",
+                "duplicate_decided",
+                "right|left",
+                serde_json::json!({"action":"not_duplicate"}),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(state.duplicate_decisions.len(), 1);
+        assert_eq!(
+            state.duplicate_decisions["left|right"]["action"],
+            "not_duplicate"
+        );
+    }
+
+    #[test]
+    fn unknown_op_type_parks_the_whole_replay() {
+        let mut ops = two_device_history();
+        ops.push(op(
+            "009-0000",
+            "dev_c",
+            "entity_cretaed",
+            "x",
+            serde_json::json!({}),
+        ));
+        assert!(matches!(
+            replay_ops(ops),
+            Err(ReplayError::UnknownOpType(op_type)) if op_type == "entity_cretaed"
         ));
     }
 }

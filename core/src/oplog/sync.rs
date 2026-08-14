@@ -17,10 +17,13 @@ use super::backend::SyncBackend;
 use super::backend_fs::FsBackend;
 use super::drain::{drain_outbox_batch, DEFAULT_OPS_PER_SEGMENT};
 use super::remote_library::remote_library_root;
-use super::segment::decode_segment;
+use super::segment::{decode_segment, MAX_SEGMENT_BYTES};
 use super::{OpRecord, OP_VERSION};
 
 pub const MAX_REMOTE_SEGMENTS_PER_CYCLE: usize = 32;
+pub const MAX_REMOTE_OPS_PER_CYCLE: usize = 4096;
+pub const MAX_REMOTE_BYTES_PER_CYCLE: usize = 64 * 1024 * 1024;
+pub const MAX_REMOTE_DEVICES: usize = 256;
 
 pub const KV_SHARE_ROOT: &str = "sync_share_root";
 pub const KV_LIBRARY_NAME: &str = "sync_library_name";
@@ -85,7 +88,7 @@ fn verify_content_hash(hash: &str, bytes: &[u8]) -> Result<(), String> {
 }
 
 fn entity_blob_key(op: &OpRecord) -> Result<Option<(String, String)>, String> {
-    if op.op_type != "entity_created" {
+    if !matches!(op.op_type.as_str(), "entity_created" | "entity_recreated") {
         return Ok(None);
     }
     let hash = op.entity_key.as_str();
@@ -261,10 +264,12 @@ fn sync_change_impact(
     }
     for op_type in &report.applied_op_types {
         impact = match op_type.as_str() {
-            "entity_created" | "entity_deleted" | "entity_status_changed" => impact
-                .add_domains(&[Domain::Files, Domain::Sidebar])
-                .status_changed()
-                .status_sensitive_grid_scopes_changed(),
+            "entity_created" | "entity_recreated" | "entity_deleted" | "entity_status_changed" => {
+                impact
+                    .add_domains(&[Domain::Files, Domain::Sidebar])
+                    .status_changed()
+                    .status_sensitive_grid_scopes_changed()
+            }
             "entity_updated" => impact
                 .add_domain(Domain::Files)
                 .media_metadata_changed()
@@ -330,9 +335,14 @@ impl SyncScopeImpact {
     }
 }
 
-fn resolve_scope_impact(db: &LibraryDatabase, ops: &[OpRecord]) -> Result<SyncScopeImpact, String> {
+fn resolve_scope_impacts(
+    db: &LibraryDatabase,
+    ops: &[OpRecord],
+) -> Result<Vec<SyncScopeImpact>, String> {
     db.with_read(|conn| {
-        let mut impact = SyncScopeImpact::default();
+        let mut impacts = (0..ops.len())
+            .map(|_| SyncScopeImpact::default())
+            .collect::<Vec<_>>();
         let mut folder = conn.prepare_cached("SELECT folder_id FROM folder WHERE uuid = ?1")?;
         let mut smart =
             conn.prepare_cached("SELECT smart_folder_id FROM smart_folder WHERE uuid = ?1")?;
@@ -340,7 +350,8 @@ fn resolve_scope_impact(db: &LibraryDatabase, ops: &[OpRecord]) -> Result<SyncSc
             "SELECT entity_id, parent_collection_entity_id, entity_kind
              FROM media_entity WHERE entity_hash = ?1",
         )?;
-        for op in ops {
+        for (index, op) in ops.iter().enumerate() {
+            let impact = &mut impacts[index];
             if op.op_type.starts_with("folder_") {
                 if let Some(id) = folder
                     .query_row([&op.entity_key], |row| row.get::<_, i64>(0))
@@ -372,19 +383,34 @@ fn resolve_scope_impact(db: &LibraryDatabase, ops: &[OpRecord]) -> Result<SyncSc
                 }
             }
         }
+        let collection_ids = impacts
+            .iter()
+            .flat_map(|impact| impact.collection_ids.iter().copied())
+            .collect::<BTreeSet<_>>();
         let mut collection_folders = conn.prepare_cached(
             "SELECT DISTINCT folder_id FROM folder_member
              WHERE entity_id = ?1 OR entity_id IN (
                  SELECT entity_id FROM media_entity WHERE parent_collection_entity_id = ?1
              )",
         )?;
-        for collection_id in &impact.collection_ids {
+        let mut folders_by_collection = BTreeMap::<i64, Vec<i64>>::new();
+        for collection_id in collection_ids {
             let rows = collection_folders.query_map([collection_id], |row| row.get::<_, i64>(0))?;
             for row in rows {
-                impact.folder_ids.insert(row?);
+                folders_by_collection
+                    .entry(collection_id)
+                    .or_default()
+                    .push(row?);
             }
         }
-        Ok(impact)
+        for impact in &mut impacts {
+            for collection_id in &impact.collection_ids {
+                if let Some(folder_ids) = folders_by_collection.get(collection_id) {
+                    impact.folder_ids.extend(folder_ids);
+                }
+            }
+        }
+        Ok(impacts)
     })
 }
 
@@ -401,14 +427,6 @@ pub async fn run_serialized_sync(
         .map_err(|error| format!("sync worker failed: {error}"))?
 }
 
-/// Parse `oplog/<device>/<seq>.seg` → `(device, seq)`.
-fn parse_segment_key(key: &str) -> Option<(&str, i64)> {
-    let rest = key.strip_prefix("oplog/")?;
-    let (device, file) = rest.split_once('/')?;
-    let seq = file.strip_suffix(".seg")?.parse().ok()?;
-    Some((device, seq))
-}
-
 fn sync_once_inner(
     db: &LibraryDatabase,
     backend: &dyn SyncBackend,
@@ -419,25 +437,17 @@ fn sync_once_inner(
         ..Default::default()
     };
 
-    // Group remote segments per peer device.
-    let mut per_device: BTreeMap<String, BTreeMap<i64, String>> = BTreeMap::new();
-    for key in backend.list("oplog/").map_err(|e| e.to_string())? {
-        if let Some((device, seq)) = parse_segment_key(&key) {
-            if device != db.device_id() {
-                per_device
-                    .entry(device.to_string())
-                    .or_default()
-                    .insert(seq, key);
-            }
-        }
-    }
-
-    let initial_cursors = per_device
-        .keys()
+    // Discover only immediate device directories. Segment keys are addressed
+    // directly from each durable cursor, so a cycle never lists the full log.
+    let mut device_order = backend
+        .list_directories("oplog/", MAX_REMOTE_DEVICES)
+        .map_err(|error| error.to_string())?;
+    device_order.retain(|device| device != db.device_id());
+    let initial_cursors = device_order
+        .iter()
         .map(|device| Ok((device.clone(), db.ingest_cursor(device)?)))
         .collect::<Result<BTreeMap<_, _>, String>>()?;
     let mut cursors = initial_cursors.clone();
-    let mut device_order = per_device.keys().cloned().collect::<Vec<_>>();
     if !device_order.is_empty() {
         let rotation = initial_cursors
             .values()
@@ -447,24 +457,35 @@ fn sync_once_inner(
     }
     let mut new_ops: Vec<OpRecord> = Vec::new();
     let mut candidate_segments = 0usize;
-    while candidate_segments < MAX_REMOTE_SEGMENTS_PER_CYCLE {
+    let mut candidate_bytes = 0usize;
+    let mut budget_exhausted = false;
+    while candidate_segments < MAX_REMOTE_SEGMENTS_PER_CYCLE && !budget_exhausted {
         let mut progressed = false;
         for device in &device_order {
             if candidate_segments >= MAX_REMOTE_SEGMENTS_PER_CYCLE {
                 break;
             }
-            let segments = &per_device[device];
             let Some(cursor) = cursors.get_mut(device) else {
                 continue;
             };
-            let Some(key) = segments.get(&(*cursor + 1)) else {
-                continue;
-            };
-            let Some(bytes) = backend.get(key).map_err(|e| e.to_string())? else {
+            let key = super::drain::segment_key(device, *cursor + 1);
+            let Some(bytes) = backend
+                .get_limited(&key, MAX_SEGMENT_BYTES)
+                .map_err(|error| format!("cannot read segment {key}: {error}"))?
+            else {
                 continue;
             };
             let ops =
                 decode_segment(&bytes).map_err(|e| format!("quarantined segment {key}: {e}"))?;
+            if candidate_bytes.saturating_add(bytes.len()) > MAX_REMOTE_BYTES_PER_CYCLE {
+                budget_exhausted = true;
+                break;
+            }
+            if new_ops.len().saturating_add(ops.len()) > MAX_REMOTE_OPS_PER_CYCLE {
+                budget_exhausted = true;
+                break;
+            }
+            candidate_bytes += bytes.len();
             new_ops.extend(ops);
             *cursor += 1;
             candidate_segments += 1;
@@ -479,13 +500,22 @@ fn sync_once_inner(
         .filter(|(device, cursor)| initial_cursors.get(device).is_some_and(|old| cursor > old))
         .collect::<Vec<_>>();
 
-    if new_ops.is_empty() {
+    if cursor_updates.is_empty() {
         return Ok(report);
     }
-    if let Some(op) = new_ops.iter().find(|op| op.op_version > OP_VERSION) {
+    if let Some(op) = new_ops.iter().find(|op| op.op_version != OP_VERSION) {
         return Err(format!(
-            "peer op version {} is newer than this build supports — update required",
+            "peer op version {} is unsupported; this build requires version {OP_VERSION} — update required",
             op.op_version
+        ));
+    }
+    if let Some(op) = new_ops
+        .iter()
+        .find(|op| !super::is_supported_op_type(&op.op_type))
+    {
+        return Err(format!(
+            "unknown peer op type {}; update required",
+            op.op_type
         ));
     }
     if let Some(blob_store) = blob_store {
@@ -497,13 +527,25 @@ fn sync_once_inner(
         }
     }
     new_ops.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
-    let mut scope_impact = resolve_scope_impact(db, &new_ops)?;
+    let mut before_impacts = resolve_scope_impacts(db, &new_ops)?;
     match db.apply_remote_ops(&new_ops, &cursor_updates)? {
-        Some(applied) => {
-            scope_impact.merge(resolve_scope_impact(db, &new_ops)?);
-            report.ops_applied = applied;
+        Some(applied_indexes) => {
+            let applied_ops = applied_indexes
+                .iter()
+                .map(|index| &new_ops[*index])
+                .collect::<Vec<_>>();
+            let mut after_impacts = resolve_scope_impacts(db, &new_ops)?;
+            let mut scope_impact = SyncScopeImpact::default();
+            for index in &applied_indexes {
+                scope_impact.merge(std::mem::take(&mut before_impacts[*index]));
+                scope_impact.merge(std::mem::take(&mut after_impacts[*index]));
+            }
+            report.ops_applied = applied_ops.len();
             report.segments_consumed = candidate_segments;
-            report.applied_op_types = new_ops.iter().map(|op| op.op_type.clone()).collect();
+            report.applied_op_types = applied_ops
+                .into_iter()
+                .map(|op| op.op_type.clone())
+                .collect();
             report.affected_folder_ids = scope_impact.folder_ids.into_iter().collect();
             report.affected_smart_folder_ids = scope_impact.smart_folder_ids.into_iter().collect();
             report.affected_collection_ids = scope_impact.collection_ids.into_iter().collect();
@@ -557,8 +599,24 @@ mod tests {
             self.inner.get(key)
         }
 
+        fn get_limited(
+            &self,
+            key: &str,
+            max_bytes: usize,
+        ) -> Result<Option<Vec<u8>>, BackendError> {
+            self.inner.get_limited(key, max_bytes)
+        }
+
         fn list(&self, prefix: &str) -> Result<Vec<String>, BackendError> {
             self.inner.list(prefix)
+        }
+
+        fn list_directories(
+            &self,
+            prefix: &str,
+            max_results: usize,
+        ) -> Result<Vec<String>, BackendError> {
+            self.inner.list_directories(prefix, max_results)
         }
 
         fn delete(&self, key: &str) -> Result<(), BackendError> {
@@ -582,6 +640,32 @@ mod tests {
             Ok(rows)
         })
         .unwrap()
+    }
+
+    fn put_ops(backend: &MemoryBackend, device: &str, seq: i64, ops: Vec<OpRecord>) {
+        backend
+            .put(
+                &crate::oplog::drain::segment_key(device, seq),
+                &crate::oplog::segment::encode_segment(&ops).unwrap(),
+            )
+            .unwrap();
+    }
+
+    fn remote_op(
+        hlc: &str,
+        device: &str,
+        op_type: &str,
+        entity_key: &str,
+        payload: serde_json::Value,
+    ) -> OpRecord {
+        OpRecord {
+            op_version: OP_VERSION,
+            op_type: op_type.into(),
+            entity_key: entity_key.into(),
+            payload,
+            hlc: hlc.into(),
+            device_id: device.into(),
+        }
     }
 
     #[test]
@@ -734,6 +818,305 @@ mod tests {
         assert!(scopes.contains(&"folder:7".to_string()));
         assert!(scopes.contains(&"collection:11".to_string()));
         assert!(scopes.contains(&"system:active".to_string()));
+    }
+
+    #[test]
+    fn late_older_ops_cannot_undo_newer_truth_but_independent_fields_merge() {
+        let backend = MemoryBackend::new();
+        let target = open_device("conflict-target");
+        let hash = "b".repeat(64);
+        put_ops(
+            &backend,
+            "creator",
+            1,
+            vec![remote_op(
+                "0000000000001-0000",
+                "creator",
+                "entity_created",
+                &hash,
+                serde_json::json!({
+                    "mime": "image/png",
+                    "size": 1,
+                    "width": 1,
+                    "height": 1,
+                    "status": 1,
+                    "name": "Original"
+                }),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+
+        put_ops(
+            &backend,
+            "status-new",
+            1,
+            vec![remote_op(
+                "0000000000003-0000",
+                "status-new",
+                "entity_status_changed",
+                &hash,
+                serde_json::json!({"status": 2}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+        put_ops(
+            &backend,
+            "status-old",
+            1,
+            vec![remote_op(
+                "0000000000002-0000",
+                "status-old",
+                "entity_status_changed",
+                &hash,
+                serde_json::json!({"status": 1}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+
+        put_ops(
+            &backend,
+            "tag-new",
+            1,
+            vec![remote_op(
+                "0000000000005-0000",
+                "tag-new",
+                "entity_tags_added",
+                &hash,
+                serde_json::json!({"tags": ["general:kept"]}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+        put_ops(
+            &backend,
+            "tag-old",
+            1,
+            vec![remote_op(
+                "0000000000004-0000",
+                "tag-old",
+                "entity_tags_removed",
+                &hash,
+                serde_json::json!({"tags": ["general:kept"]}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+
+        put_ops(
+            &backend,
+            "folder",
+            1,
+            vec![remote_op(
+                "0000000000006-0000",
+                "folder",
+                "folder_created",
+                "folder-conflict",
+                serde_json::json!({"name": "Conflict folder"}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+        put_ops(
+            &backend,
+            "member-new",
+            1,
+            vec![remote_op(
+                "0000000000008-0000",
+                "member-new",
+                "folder_members_added",
+                "folder-conflict",
+                serde_json::json!({"entities": [&hash]}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+        put_ops(
+            &backend,
+            "member-old",
+            1,
+            vec![remote_op(
+                "0000000000007-0000",
+                "member-old",
+                "folder_members_removed",
+                "folder-conflict",
+                serde_json::json!({"entities": [&hash]}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+
+        put_ops(
+            &backend,
+            "name-writer",
+            1,
+            vec![remote_op(
+                "000000000000a-0000",
+                "name-writer",
+                "entity_updated",
+                &hash,
+                serde_json::json!({"name": "Renamed"}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+        put_ops(
+            &backend,
+            "rating-writer",
+            1,
+            vec![remote_op(
+                "0000000000009-0000",
+                "rating-writer",
+                "entity_updated",
+                &hash,
+                serde_json::json!({"rating": 4}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+
+        target
+            .with_read(|conn| {
+                let (status, name, rating): (i64, Option<String>, Option<i64>) = conn.query_row(
+                    "SELECT status, name, rating FROM media_entity WHERE entity_hash = ?1",
+                    [&hash],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                assert_eq!(status, 2);
+                assert_eq!(name.as_deref(), Some("Renamed"));
+                assert_eq!(rating, Some(4));
+                let tag_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM entity_tag et JOIN tag t ON t.tag_id = et.tag_id
+                     JOIN media_entity me ON me.entity_id = et.entity_id
+                     WHERE me.entity_hash = ?1 AND t.namespace = 'general' AND t.subtag = 'kept'",
+                    [&hash],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(tag_count, 1);
+                let folder_count: i64 = conn.query_row(
+                    "SELECT COUNT(*) FROM folder_member fm JOIN folder f ON f.folder_id = fm.folder_id
+                     JOIN media_entity me ON me.entity_id = fm.entity_id
+                     WHERE f.uuid = 'folder-conflict' AND me.entity_hash = ?1",
+                    [&hash],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(folder_count, 1);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn stale_segment_advances_its_cursor_without_reporting_changes() {
+        let backend = MemoryBackend::new();
+        let target = open_device("stale-target");
+        let hash = "c".repeat(64);
+        put_ops(
+            &backend,
+            "peer",
+            1,
+            vec![remote_op(
+                "0000000000001-0000",
+                "peer",
+                "entity_created",
+                &hash,
+                serde_json::json!({"mime":"image/png","size":1,"status":1}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+        put_ops(
+            &backend,
+            "peer",
+            2,
+            vec![remote_op(
+                "0000000000003-0000",
+                "peer",
+                "entity_status_changed",
+                &hash,
+                serde_json::json!({"status":2}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+        put_ops(
+            &backend,
+            "peer",
+            3,
+            vec![remote_op(
+                "0000000000002-0000",
+                "peer",
+                "entity_status_changed",
+                &hash,
+                serde_json::json!({"status":1}),
+            )],
+        );
+
+        let report = sync_once(&target, &backend).unwrap();
+        assert_eq!(report.segments_consumed, 1);
+        assert_eq!(report.ops_applied, 0);
+        assert_eq!(target.ingest_cursor("peer").unwrap(), 3);
+    }
+
+    #[test]
+    fn stale_scope_ops_do_not_contaminate_applied_invalidation() {
+        let backend = MemoryBackend::new();
+        let target = open_device("scope-target");
+        put_ops(
+            &backend,
+            "peer",
+            1,
+            vec![remote_op(
+                "0000000000001-0000",
+                "peer",
+                "folder_created",
+                "folder-1",
+                serde_json::json!({"name":"Initial"}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+        put_ops(
+            &backend,
+            "peer",
+            2,
+            vec![remote_op(
+                "0000000000003-0000",
+                "peer",
+                "folder_updated",
+                "folder-1",
+                serde_json::json!({"name":"Newer"}),
+            )],
+        );
+        sync_once(&target, &backend).unwrap();
+        put_ops(
+            &backend,
+            "peer",
+            3,
+            vec![
+                remote_op(
+                    "0000000000002-0000",
+                    "peer",
+                    "folder_updated",
+                    "folder-1",
+                    serde_json::json!({"name":"Stale"}),
+                ),
+                remote_op(
+                    "0000000000004-0000",
+                    "peer",
+                    "smart_folder_created",
+                    "smart-1",
+                    serde_json::json!({"name":"Applied","predicate":"{}"}),
+                ),
+            ],
+        );
+
+        let report = sync_once(&target, &backend).unwrap();
+        assert_eq!(report.ops_applied, 1);
+        assert!(report.affected_folder_ids.is_empty());
+        assert_eq!(report.affected_smart_folder_ids.len(), 1);
+    }
+
+    #[test]
+    fn empty_segment_is_consumed_once() {
+        let backend = MemoryBackend::new();
+        let target = open_device("empty-target");
+        put_ops(&backend, "peer", 1, Vec::new());
+
+        let report = sync_once(&target, &backend).unwrap();
+        assert_eq!(report.segments_consumed, 1);
+        assert_eq!(report.ops_applied, 0);
+        assert_eq!(target.ingest_cursor("peer").unwrap(), 1);
+        assert_eq!(sync_once(&target, &backend).unwrap().segments_consumed, 0);
     }
 
     #[test]
@@ -967,27 +1350,45 @@ mod tests {
     #[test]
     fn unknown_current_version_op_stops_without_advancing_cursor() {
         let backend = MemoryBackend::new();
-        let dev_a = open_device("unknown-a");
         let dev_b = open_device("unknown-b");
-        let device_id = dev_a.device_id().to_string();
-        dev_a
-            .with_write(|conn| {
-                crate::oplog::record_op(
-                    conn,
-                    &device_id,
-                    "future_truth_operation",
-                    "future-key",
-                    &serde_json::json!({}),
-                )
-            })
-            .unwrap();
-        sync_once(&dev_a, &backend).unwrap();
+        put_ops(
+            &backend,
+            "unknown-a",
+            1,
+            vec![remote_op(
+                "0000000000001-0000",
+                "unknown-a",
+                "future_truth_operation",
+                "future-key",
+                serde_json::json!({}),
+            )],
+        );
 
         let error = sync_once(&dev_b, &backend).unwrap_err();
 
-        assert!(error.contains("unknown remote op type"));
+        assert!(error.contains("unknown peer op type"));
         assert!(error.contains("update required"));
         assert_eq!(dev_b.ingest_cursor("unknown-a").unwrap(), 0);
+    }
+
+    #[test]
+    fn older_op_version_stops_without_advancing_cursor() {
+        let backend = MemoryBackend::new();
+        let target = open_device("old-version-target");
+        let mut old = remote_op(
+            "0000000000001-0000",
+            "old-version-peer",
+            "folder_created",
+            "folder-1",
+            serde_json::json!({"name":"Old protocol"}),
+        );
+        old.op_version = 0;
+        put_ops(&backend, "old-version-peer", 1, vec![old]);
+
+        let error = sync_once(&target, &backend).unwrap_err();
+        assert!(error.contains("version 0 is unsupported"));
+        assert!(error.contains("requires version 1"));
+        assert_eq!(target.ingest_cursor("old-version-peer").unwrap(), 0);
     }
 
     #[test]

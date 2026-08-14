@@ -4,7 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 112;
+pub const CURRENT_SCHEMA_VERSION: i64 = 113;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -507,12 +507,32 @@ CREATE TABLE IF NOT EXISTS op_outbox (
     op_type      TEXT    NOT NULL,
     entity_key   TEXT    NOT NULL,
     payload_json TEXT    NOT NULL,
-    hlc          TEXT    NOT NULL,
+    hlc          TEXT    NOT NULL CHECK (
+        length(hlc) = 18
+        AND substr(hlc, 14, 1) = '-'
+        AND substr(hlc, 1, 13) NOT GLOB '*[^0-9a-f]*'
+        AND substr(hlc, 15, 4) NOT GLOB '*[^0-9a-f]*'
+    ),
     device_id    TEXT    NOT NULL,
     created_at   TEXT    NOT NULL,
     uploaded_seq INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_op_outbox_pending ON op_outbox(op_id) WHERE uploaded_seq IS NULL;
+
+-- Durable last-writer clocks for independently mergeable truth fields.
+CREATE TABLE IF NOT EXISTS sync_conflict_clock (
+    target_kind TEXT NOT NULL,
+    target_key  TEXT NOT NULL,
+    field_key   TEXT NOT NULL,
+    hlc         TEXT NOT NULL CHECK (
+        length(hlc) = 18
+        AND substr(hlc, 14, 1) = '-'
+        AND substr(hlc, 1, 13) NOT GLOB '*[^0-9a-f]*'
+        AND substr(hlc, 15, 4) NOT GLOB '*[^0-9a-f]*'
+    ),
+    device_id   TEXT NOT NULL,
+    PRIMARY KEY (target_kind, target_key, field_key)
+);
 
 -- Per-peer ingestion progress: highest contiguous remote segment applied.
 CREATE TABLE IF NOT EXISTS sync_ingest_cursor (
@@ -525,7 +545,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 112
+SELECT 113
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -711,6 +731,10 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         (
             "sync_ingest_cursor",
             "SELECT device_id, consumed_seq FROM sync_ingest_cursor WHERE 0",
+        ),
+        (
+            "sync_conflict_clock",
+            "SELECT target_kind, target_key, field_key, hlc, device_id FROM sync_conflict_clock WHERE 0",
         ),
     ];
     const REQUIRED_INDEXES: &[(&str, &str, &[(&str, bool)])] = &[

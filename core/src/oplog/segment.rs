@@ -9,6 +9,9 @@
 use super::OpRecord;
 
 pub const SEGMENT_VERSION: u16 = 1;
+pub const MAX_SEGMENT_BYTES: usize = 16 * 1024 * 1024;
+pub const MAX_RECORD_BYTES: usize = 8 * 1024 * 1024;
+pub const MAX_RECORDS_PER_SEGMENT: usize = 1024;
 const MAGIC: &[u8; 4] = b"PSEG";
 
 #[derive(thiserror::Error, Debug)]
@@ -19,6 +22,14 @@ pub enum SegmentError {
     UnknownVersion(u16),
     #[error("op record encode failed: {0}")]
     Encode(#[from] serde_json::Error),
+    #[error("segment exceeds the {MAX_SEGMENT_BYTES}-byte limit")]
+    SegmentTooLarge,
+    #[error("segment contains more than {MAX_RECORDS_PER_SEGMENT} operations")]
+    TooManyRecords,
+    #[error("operation exceeds the {MAX_RECORD_BYTES}-byte limit")]
+    RecordTooLarge,
+    #[error("operation contains a non-canonical HLC")]
+    InvalidHlc,
 }
 
 fn crc32(bytes: &[u8]) -> u32 {
@@ -28,12 +39,21 @@ fn crc32(bytes: &[u8]) -> u32 {
 }
 
 pub fn encode_segment(ops: &[OpRecord]) -> Result<Vec<u8>, SegmentError> {
+    if ops.len() > MAX_RECORDS_PER_SEGMENT {
+        return Err(SegmentError::TooManyRecords);
+    }
     let mut out = Vec::new();
     out.extend_from_slice(MAGIC);
     out.extend_from_slice(&SEGMENT_VERSION.to_le_bytes());
     let mut all_records = Vec::new();
     for op in ops {
+        if !super::is_valid_hlc(&op.hlc) {
+            return Err(SegmentError::InvalidHlc);
+        }
         let bytes = serde_json::to_vec(op)?;
+        if bytes.len() > MAX_RECORD_BYTES {
+            return Err(SegmentError::RecordTooLarge);
+        }
         out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
         out.extend_from_slice(&crc32(&bytes).to_le_bytes());
         out.extend_from_slice(&bytes);
@@ -41,10 +61,16 @@ pub fn encode_segment(ops: &[OpRecord]) -> Result<Vec<u8>, SegmentError> {
     }
     out.extend_from_slice(&0u32.to_le_bytes());
     out.extend_from_slice(&crc32(&all_records).to_le_bytes());
+    if out.len() > MAX_SEGMENT_BYTES {
+        return Err(SegmentError::SegmentTooLarge);
+    }
     Ok(out)
 }
 
 pub fn decode_segment(data: &[u8]) -> Result<Vec<OpRecord>, SegmentError> {
+    if data.len() > MAX_SEGMENT_BYTES {
+        return Err(SegmentError::SegmentTooLarge);
+    }
     if data.len() < 6 || &data[0..4] != MAGIC {
         return Err(SegmentError::Corrupt("bad magic"));
     }
@@ -65,6 +91,12 @@ pub fn decode_segment(data: &[u8]) -> Result<Vec<OpRecord>, SegmentError> {
         if len == 0 {
             break;
         }
+        if len > MAX_RECORD_BYTES {
+            return Err(SegmentError::RecordTooLarge);
+        }
+        if ops.len() >= MAX_RECORDS_PER_SEGMENT {
+            return Err(SegmentError::TooManyRecords);
+        }
         let Some(crc_bytes) = data.get(cursor..cursor + 4) else {
             return Err(SegmentError::Corrupt("truncated record header"));
         };
@@ -79,6 +111,9 @@ pub fn decode_segment(data: &[u8]) -> Result<Vec<OpRecord>, SegmentError> {
         }
         let op: OpRecord = serde_json::from_slice(payload)
             .map_err(|_| SegmentError::Corrupt("record decode failed"))?;
+        if !super::is_valid_hlc(&op.hlc) {
+            return Err(SegmentError::InvalidHlc);
+        }
         all_records.extend_from_slice(payload);
         ops.push(op);
     }
@@ -86,8 +121,12 @@ pub fn decode_segment(data: &[u8]) -> Result<Vec<OpRecord>, SegmentError> {
         return Err(SegmentError::Corrupt("missing segment checksum"));
     };
     let expected_total = u32::from_le_bytes(total_bytes.try_into().unwrap());
+    cursor += 4;
     if crc32(&all_records) != expected_total {
         return Err(SegmentError::Corrupt("segment crc mismatch"));
+    }
+    if cursor != data.len() {
+        return Err(SegmentError::Corrupt("trailing bytes"));
     }
     Ok(ops)
 }
@@ -143,6 +182,43 @@ mod tests {
         assert!(matches!(
             decode_segment(&encoded),
             Err(SegmentError::UnknownVersion(_))
+        ));
+    }
+
+    #[test]
+    fn malformed_hlc_is_rejected_before_it_reaches_sqlite() {
+        let mut ops = sample_ops();
+        ops[0].hlc = "zzzz".into();
+        assert!(matches!(
+            encode_segment(&ops),
+            Err(SegmentError::InvalidHlc)
+        ));
+
+        let payload = serde_json::to_vec(&ops[0]).unwrap();
+        let mut checksummed = Vec::new();
+        checksummed.extend_from_slice(MAGIC);
+        checksummed.extend_from_slice(&SEGMENT_VERSION.to_le_bytes());
+        checksummed.extend_from_slice(&(payload.len() as u32).to_le_bytes());
+        checksummed.extend_from_slice(&crc32(&payload).to_le_bytes());
+        checksummed.extend_from_slice(&payload);
+        checksummed.extend_from_slice(&0u32.to_le_bytes());
+        checksummed.extend_from_slice(&crc32(&payload).to_le_bytes());
+        assert!(matches!(
+            decode_segment(&checksummed),
+            Err(SegmentError::InvalidHlc)
+        ));
+    }
+
+    #[test]
+    fn segment_limits_are_enforced() {
+        let ops = vec![sample_ops()[0].clone(); MAX_RECORDS_PER_SEGMENT + 1];
+        assert!(matches!(
+            encode_segment(&ops),
+            Err(SegmentError::TooManyRecords)
+        ));
+        assert!(matches!(
+            decode_segment(&vec![0; MAX_SEGMENT_BYTES + 1]),
+            Err(SegmentError::SegmentTooLarge)
         ));
     }
 }

@@ -4,7 +4,7 @@
 //! is just transport for immutable files.
 
 use std::fs;
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 
 use super::backend::{BackendError, SyncBackend};
@@ -29,6 +29,16 @@ impl FsBackend {
             return Err(BackendError::Io(format!("invalid object key: {key}")));
         }
         Ok(self.root.join(key))
+    }
+
+    fn directory_for_prefix(&self, prefix: &str) -> Result<PathBuf, BackendError> {
+        validate_list_prefix(prefix)?;
+        let trimmed = prefix.trim_end_matches('/');
+        if trimmed.is_empty() {
+            Ok(self.root.clone())
+        } else {
+            self.path_for(trimmed)
+        }
     }
 
     /// Return whether a path exists without following any symlink component.
@@ -143,6 +153,24 @@ impl SyncBackend for FsBackend {
         }
     }
 
+    fn get_limited(&self, key: &str, max_bytes: usize) -> Result<Option<Vec<u8>>, BackendError> {
+        let path = self.path_for(key)?;
+        if !self.existing_path(&path)? {
+            return Ok(None);
+        }
+        let file = fs::File::open(&path).map_err(|error| BackendError::Io(error.to_string()))?;
+        let mut bytes = Vec::new();
+        file.take(max_bytes.saturating_add(1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| BackendError::Io(error.to_string()))?;
+        if bytes.len() > max_bytes {
+            return Err(BackendError::LimitExceeded(format!(
+                "object {key} exceeds {max_bytes} bytes"
+            )));
+        }
+        Ok(Some(bytes))
+    }
+
     fn list(&self, prefix: &str) -> Result<Vec<String>, BackendError> {
         validate_list_prefix(prefix)?;
         let mut keys = Vec::new();
@@ -178,6 +206,36 @@ impl SyncBackend for FsBackend {
         }
         keys.sort();
         Ok(keys)
+    }
+
+    fn list_directories(
+        &self,
+        prefix: &str,
+        max_results: usize,
+    ) -> Result<Vec<String>, BackendError> {
+        let directory = self.directory_for_prefix(prefix)?;
+        if !self.existing_path(&directory)? {
+            return Ok(Vec::new());
+        }
+        let mut children = Vec::new();
+        let entries =
+            fs::read_dir(&directory).map_err(|error| BackendError::Io(error.to_string()))?;
+        for entry in entries {
+            let entry = entry.map_err(|error| BackendError::Io(error.to_string()))?;
+            let file_type = entry
+                .file_type()
+                .map_err(|error| BackendError::Io(error.to_string()))?;
+            if file_type.is_dir() && !file_type.is_symlink() {
+                children.push(entry.file_name().to_string_lossy().into_owned());
+                if children.len() > max_results {
+                    return Err(BackendError::LimitExceeded(format!(
+                        "more than {max_results} directories under {prefix}"
+                    )));
+                }
+            }
+        }
+        children.sort();
+        Ok(children)
     }
 
     fn delete(&self, key: &str) -> Result<(), BackendError> {
@@ -230,6 +288,14 @@ mod tests {
             vec!["oplog/dev/0001.seg".to_string()]
         );
         assert!(backend.get("oplog/dev/0002.seg").unwrap().is_none());
+        assert_eq!(
+            backend.list_directories("oplog/", 10).unwrap(),
+            vec!["dev".to_string()]
+        );
+        assert!(matches!(
+            backend.get_limited("oplog/dev/0001.seg", 2),
+            Err(BackendError::LimitExceeded(_))
+        ));
     }
 
     #[test]

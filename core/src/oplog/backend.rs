@@ -1,5 +1,5 @@
-//! The storage backend contract for sync: four operations over immutable
-//! objects. Google Drive, Dropbox, S3, WebDAV, or a local directory all fit;
+//! The storage backend contract for immutable sync objects. Google Drive,
+//! Dropbox, S3, WebDAV, or a local directory all fit;
 //! nothing above this trait may depend on backend-specific behavior.
 
 use std::collections::BTreeMap;
@@ -11,6 +11,8 @@ pub enum BackendError {
     AlreadyExists(String),
     #[error("backend IO error: {0}")]
     Io(String),
+    #[error("backend limit exceeded: {0}")]
+    LimitExceeded(String),
 }
 
 pub trait SyncBackend: Send + Sync {
@@ -18,8 +20,18 @@ pub trait SyncBackend: Send + Sync {
     /// taken — remote objects are write-once by contract.
     fn put(&self, key: &str, bytes: &[u8]) -> Result<(), BackendError>;
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, BackendError>;
+    /// Read at most `max_bytes`; oversized objects fail without being fully
+    /// materialized in memory.
+    fn get_limited(&self, key: &str, max_bytes: usize) -> Result<Option<Vec<u8>>, BackendError>;
     /// List keys under a prefix, in lexicographic order.
     fn list(&self, prefix: &str) -> Result<Vec<String>, BackendError>;
+    /// List immediate child directories under a prefix. This is the bounded
+    /// discovery path used by periodic sync instead of listing every object.
+    fn list_directories(
+        &self,
+        prefix: &str,
+        max_results: usize,
+    ) -> Result<Vec<String>, BackendError>;
     /// Remove an object. Only garbage collection may call this.
     fn delete(&self, key: &str) -> Result<(), BackendError>;
 }
@@ -50,6 +62,19 @@ impl SyncBackend for MemoryBackend {
         Ok(self.objects.lock().unwrap().get(key).cloned())
     }
 
+    fn get_limited(&self, key: &str, max_bytes: usize) -> Result<Option<Vec<u8>>, BackendError> {
+        let objects = self.objects.lock().unwrap();
+        let Some(bytes) = objects.get(key) else {
+            return Ok(None);
+        };
+        if bytes.len() > max_bytes {
+            return Err(BackendError::LimitExceeded(format!(
+                "object {key} exceeds {max_bytes} bytes"
+            )));
+        }
+        Ok(Some(bytes.clone()))
+    }
+
     fn list(&self, prefix: &str) -> Result<Vec<String>, BackendError> {
         Ok(self
             .objects
@@ -59,6 +84,31 @@ impl SyncBackend for MemoryBackend {
             .filter(|k| k.starts_with(prefix))
             .cloned()
             .collect())
+    }
+
+    fn list_directories(
+        &self,
+        prefix: &str,
+        max_results: usize,
+    ) -> Result<Vec<String>, BackendError> {
+        let objects = self.objects.lock().unwrap();
+        let mut children = std::collections::BTreeSet::new();
+        for key in objects.keys().filter(|key| key.starts_with(prefix)) {
+            let rest = &key[prefix.len()..];
+            let Some((child, _)) = rest.split_once('/') else {
+                continue;
+            };
+            if child.is_empty() {
+                continue;
+            }
+            children.insert(child.to_owned());
+            if children.len() > max_results {
+                return Err(BackendError::LimitExceeded(format!(
+                    "more than {max_results} directories under {prefix}"
+                )));
+            }
+        }
+        Ok(children.into_iter().collect())
     }
 
     fn delete(&self, key: &str) -> Result<(), BackendError> {
@@ -92,5 +142,23 @@ mod tests {
             backend.list("oplog/").unwrap(),
             vec!["oplog/a/1".to_string(), "oplog/b/2".to_string()]
         );
+        assert_eq!(
+            backend.list_directories("oplog/", 10).unwrap(),
+            vec!["a".to_string(), "b".to_string()]
+        );
+    }
+
+    #[test]
+    fn bounded_reads_and_directory_lists_reject_oversized_inputs() {
+        let backend = MemoryBackend::new();
+        backend.put("oplog/a/1.seg", b"too large").unwrap();
+        assert!(matches!(
+            backend.get_limited("oplog/a/1.seg", 3),
+            Err(BackendError::LimitExceeded(_))
+        ));
+        assert!(matches!(
+            backend.list_directories("oplog/", 0),
+            Err(BackendError::LimitExceeded(_))
+        ));
     }
 }

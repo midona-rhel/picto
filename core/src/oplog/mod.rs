@@ -14,6 +14,7 @@ use rusqlite::Connection;
 
 pub mod backend;
 pub mod backend_fs;
+pub mod conflict;
 pub mod drain;
 pub mod remote_library;
 pub mod replay;
@@ -22,6 +23,55 @@ pub mod sync;
 
 /// Version stamped on every op record. Readers park unknown versions.
 pub const OP_VERSION: i64 = 1;
+
+/// Operations understood by every path that emits, applies, or restores the
+/// current protocol version. Adding an operation requires updating this one
+/// vocabulary and its materializers together.
+pub(crate) fn is_supported_op_type(op_type: &str) -> bool {
+    matches!(
+        op_type,
+        "entity_created"
+            | "entity_recreated"
+            | "entity_status_changed"
+            | "entity_updated"
+            | "entity_deleted"
+            | "entity_tags_added"
+            | "entity_tags_removed"
+            | "tag_renamed"
+            | "tag_merged"
+            | "tag_deleted"
+            | "tag_alias_set"
+            | "tag_implication_set"
+            | "folder_created"
+            | "folder_updated"
+            | "folder_moved"
+            | "folder_deleted"
+            | "folder_members_added"
+            | "folder_members_removed"
+            | "smart_folder_created"
+            | "smart_folder_updated"
+            | "smart_folder_moved"
+            | "smart_folder_deleted"
+            | "collection_created"
+            | "collection_renamed"
+            | "collection_members_added"
+            | "collection_members_removed"
+            | "collection_members_reordered"
+            | "collection_split"
+            | "duplicate_decided"
+    )
+}
+
+pub(crate) fn normalized_pair_key(key: &str) -> String {
+    let Some((left, right)) = key.split_once('|') else {
+        return key.to_owned();
+    };
+    if left <= right {
+        format!("{left}|{right}")
+    } else {
+        format!("{right}|{left}")
+    }
+}
 
 /// One truth mutation, as stored in the outbox and shipped in segments.
 #[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -40,6 +90,17 @@ impl OpRecord {
     pub fn sort_key(&self) -> (&str, &str) {
         (&self.hlc, &self.device_id)
     }
+}
+
+/// Canonical HLC encoding used for durable lexical ordering.
+pub(crate) fn is_valid_hlc(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    bytes.len() == 18
+        && bytes[13] == b'-'
+        && bytes[..13]
+            .iter()
+            .chain(&bytes[14..])
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(byte))
 }
 
 /// Generate a stable random identity token (32 lowercase hex chars).
@@ -62,6 +123,10 @@ pub fn next_hlc() -> String {
         *last = (wall_ms, 0);
     } else {
         last.1 += 1;
+        if last.1 > 0xffff {
+            last.0 += 1;
+            last.1 = 0;
+        }
     }
     format!("{:013x}-{:04x}", last.0, last.1)
 }
@@ -110,19 +175,36 @@ pub fn record_op(
     entity_key: &str,
     payload: &serde_json::Value,
 ) -> rusqlite::Result<()> {
+    if !is_supported_op_type(op_type) {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "unknown local op type {op_type}"
+        )));
+    }
+    let op_type = conflict::local_op_type(conn, op_type, entity_key)?;
+    let hlc = conflict::next_durable_hlc(conn)?;
+    let created_at = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO op_outbox (op_version, op_type, entity_key, payload_json, hlc, device_id, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             OP_VERSION,
-            op_type,
+            &op_type,
             entity_key,
             payload.to_string(),
-            next_hlc(),
+            &hlc,
             device_id,
-            chrono::Utc::now().to_rfc3339(),
+            created_at,
         ],
     )?;
+    let op = OpRecord {
+        op_version: OP_VERSION,
+        op_type,
+        entity_key: entity_key.to_owned(),
+        payload: payload.clone(),
+        hlc,
+        device_id: device_id.to_owned(),
+    };
+    conflict::record_local_op(conn, &op)?;
     Ok(())
 }
 
@@ -152,5 +234,19 @@ mod tests {
     #[test]
     fn device_id_is_stable_within_process() {
         assert_eq!(device_id(), device_id());
+    }
+
+    #[test]
+    fn hlc_validation_requires_the_canonical_fixed_width_encoding() {
+        assert!(is_valid_hlc("0019c7a5f1234-000f"));
+        assert!(!is_valid_hlc("19c7a5f1234-000f"));
+        assert!(!is_valid_hlc("0019C7A5F1234-000f"));
+        assert!(!is_valid_hlc("0019c7a5f1234-zzzz"));
+    }
+
+    #[test]
+    fn operation_vocabulary_is_explicit() {
+        assert!(is_supported_op_type("entity_recreated"));
+        assert!(!is_supported_op_type("entity_cretaed"));
     }
 }
