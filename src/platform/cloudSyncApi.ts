@@ -20,6 +20,9 @@ export interface SyncReport {
   segments_uploaded: number;
   segments_consumed: number;
   ops_applied: number;
+  blobs_uploaded: number;
+  blobs_downloaded: number;
+  pending_prerequisites: number;
 }
 
 export interface SyncCycleResult {

@@ -602,29 +602,40 @@ impl LibraryDatabase {
         &self,
         ops: &[crate::oplog::OpRecord],
         cursor_updates: &[(String, i64)],
-    ) -> Result<usize, String> {
-        let ops = ops.to_vec();
-        let cursors = cursor_updates.to_vec();
-        let applied = self.with_write(move |conn| {
-            let mut applied = 0usize;
-            for op in &ops {
-                remote_ops::apply_remote_op(conn, op)?;
-                applied += 1;
+    ) -> Result<Option<usize>, String> {
+        let conn = self.write_conn.lock().unwrap();
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let mut applied = 0usize;
+        for op in ops {
+            match remote_ops::apply_remote_op(&tx, op).map_err(|e| e.to_string())? {
+                remote_ops::RemoteOpOutcome::Applied => applied += 1,
+                remote_ops::RemoteOpOutcome::Pending(reason) => {
+                    tx.rollback().map_err(|e| e.to_string())?;
+                    tracing::info!(
+                        op_type = op.op_type,
+                        entity_key = op.entity_key,
+                        reason,
+                        "parking remote sync segment until its prerequisite exists"
+                    );
+                    return Ok(None);
+                }
             }
-            for (device, seq) in &cursors {
-                conn.execute(
-                    "INSERT INTO sync_ingest_cursor (device_id, consumed_seq) VALUES (?1, ?2)
-                     ON CONFLICT(device_id) DO UPDATE SET consumed_seq = excluded.consumed_seq",
-                    rusqlite::params![device, seq],
-                )?;
-            }
-            Ok(applied)
-        })?;
+        }
+        for (device, seq) in cursor_updates {
+            tx.execute(
+                "INSERT INTO sync_ingest_cursor (device_id, consumed_seq) VALUES (?1, ?2)
+                 ON CONFLICT(device_id) DO UPDATE SET consumed_seq = excluded.consumed_seq",
+                rusqlite::params![device, seq],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())?;
+        drop(conn);
         if applied > 0 {
             // Projections are derived; rebuild after remote truth changed.
             self.full_rebuild();
         }
-        Ok(applied)
+        Ok(Some(applied))
     }
 
     /// Mark ops as shipped in the given segment.

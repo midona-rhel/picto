@@ -14,7 +14,7 @@ use crate::oplog::remote_library::{
     create_remote_library, detect_share_roots, list_remote_libraries, read_remote_manifest,
     remote_library_root, RemoteLibraryInfo, RemoteLibraryManifest, ShareRootCandidate,
 };
-use crate::oplog::sync::{sync_once, SyncReport};
+use crate::oplog::sync::{sync_cycle, SyncReport};
 use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::runtime_contract::state_change::Domain;
 use crate::state::AppState;
@@ -80,18 +80,16 @@ fn binding(db: &LibraryDatabase) -> Result<Option<(PathBuf, String)>, String> {
 
 /// Run one sync cycle against the bound remote and, if remote ops changed
 /// local truth, tell the frontend to refresh everything derived.
-fn run_bound_sync(db: &Arc<LibraryDatabase>) -> Result<SyncReport, String> {
+fn run_bound_sync(
+    db: &Arc<LibraryDatabase>,
+    blob_store: &crate::blob_store::BlobStore,
+) -> Result<SyncReport, String> {
     let Some((share_root, name)) = binding(db)? else {
         return Err("This library is not connected to a cloud sync remote".to_string());
     };
     let backend = FsBackend::open(&remote_library_root(&share_root, &name))
         .map_err(|e| format!("Cannot open sync remote: {e}"))?;
-    let mut report = sync_once(db, &backend)?;
-    if let Ok(state) = crate::state::get_state() {
-        let (up, down) = crate::oplog::sync::sync_blobs(&state.blob_store, &backend)?;
-        report.blobs_uploaded = up;
-        report.blobs_downloaded = down;
-    }
+    let report = sync_cycle(db, blob_store, &backend)?;
     if report.ops_applied > 0 {
         crate::events::emit_state_changed(
             "cloud_sync",
@@ -157,6 +155,7 @@ pub async fn sync_create_remote_library(
     input: SyncCreateRemoteLibraryInput,
 ) -> Result<SyncCycleResult, String> {
     let db = state.engine.db_arc();
+    let blob_store = state.blob_store.clone();
     let share_root = PathBuf::from(input.share_root.clone());
     let name = input.name.trim().to_string();
     let report = tokio::task::spawn_blocking(move || -> Result<SyncReport, String> {
@@ -170,7 +169,7 @@ pub async fn sync_create_remote_library(
         create_remote_library(&share_root, &manifest)?;
         db.kv_set(KV_SHARE_ROOT, &share_root.display().to_string())?;
         db.kv_set(KV_LIBRARY_NAME, &name)?;
-        run_bound_sync(&db)
+        run_bound_sync(&db, &blob_store)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -182,6 +181,7 @@ pub async fn sync_connect_remote_library(
     input: SyncConnectRemoteLibraryInput,
 ) -> Result<SyncCycleResult, String> {
     let db = state.engine.db_arc();
+    let blob_store = state.blob_store.clone();
     let share_root = PathBuf::from(input.share_root.clone());
     let name = input.name.trim().to_string();
     let report = tokio::task::spawn_blocking(move || -> Result<SyncReport, String> {
@@ -189,7 +189,7 @@ pub async fn sync_connect_remote_library(
         db.adopt_library_uuid(&manifest.library_uuid)?;
         db.kv_set(KV_SHARE_ROOT, &share_root.display().to_string())?;
         db.kv_set(KV_LIBRARY_NAME, &name)?;
-        run_bound_sync(&db)
+        run_bound_sync(&db, &blob_store)
     })
     .await
     .map_err(|e| e.to_string())??;
@@ -206,7 +206,8 @@ pub async fn sync_disconnect(state: &AppState, _input: SyncEmptyInput) -> Result
 
 pub async fn sync_now(state: &AppState, _input: SyncEmptyInput) -> Result<SyncCycleResult, String> {
     let db = state.engine.db_arc();
-    let report = tokio::task::spawn_blocking(move || run_bound_sync(&db))
+    let blob_store = state.blob_store.clone();
+    let report = tokio::task::spawn_blocking(move || run_bound_sync(&db, &blob_store))
         .await
         .map_err(|e| e.to_string())??;
     Ok(SyncCycleResult { report })

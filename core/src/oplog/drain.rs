@@ -27,21 +27,36 @@ pub fn drain_outbox(
 ) -> Result<usize, String> {
     let mut segments_written = 0usize;
     loop {
-        let batch = db.pending_ops(ops_per_segment.max(1))?;
-        if batch.is_empty() {
+        let written = drain_outbox_batch(db, backend, ops_per_segment)?;
+        if written == 0 {
             return Ok(segments_written);
         }
-        let seq = db.next_segment_seq()?;
-        let ids: Vec<i64> = batch.iter().map(|(id, _)| *id).collect();
-        let ops: Vec<_> = batch.into_iter().map(|(_, op)| op).collect();
-        let bytes = encode_segment(&ops).map_err(|e| e.to_string())?;
-        let key = segment_key(db.device_id(), seq);
-        backend
-            .put(&key, &bytes)
-            .map_err(|e| format!("segment upload {key}: {e}"))?;
-        db.mark_ops_uploaded(&ids, seq)?;
-        segments_written += 1;
+        segments_written += written;
     }
+}
+
+/// Upload at most one bounded segment. Runtime sync uses this so a large
+/// outbox cannot monopolize the worker or outrun the blob batch published
+/// immediately before it.
+pub fn drain_outbox_batch(
+    db: &LibraryDatabase,
+    backend: &dyn SyncBackend,
+    ops_per_segment: usize,
+) -> Result<usize, String> {
+    let batch = db.pending_ops(ops_per_segment.max(1))?;
+    if batch.is_empty() {
+        return Ok(0);
+    }
+    let seq = db.next_segment_seq()?;
+    let ids: Vec<i64> = batch.iter().map(|(id, _)| *id).collect();
+    let ops: Vec<_> = batch.into_iter().map(|(_, op)| op).collect();
+    let bytes = encode_segment(&ops).map_err(|e| e.to_string())?;
+    let key = segment_key(db.device_id(), seq);
+    backend
+        .put(&key, &bytes)
+        .map_err(|e| format!("segment upload {key}: {e}"))?;
+    db.mark_ops_uploaded(&ids, seq)?;
+    Ok(1)
 }
 
 #[cfg(test)]

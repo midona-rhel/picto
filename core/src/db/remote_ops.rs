@@ -4,9 +4,13 @@
 use super::*;
 
 // ── Remote op application ────────────────────────────────────────
-// Materializes ops from peer devices into local truth tables. Unknown
-// entities/tags/folders are skipped (their creating op arrives via the same
-// ordered stream); every arm is idempotent so a crashed batch can re-apply.
+// Materializes ops from peer devices into local truth tables. A missing
+// prerequisite parks the containing segment; it is never treated as applied.
+
+pub(super) enum RemoteOpOutcome {
+    Applied,
+    Pending(String),
+}
 
 fn entity_id_by_hash(conn: &Connection, hash: &str) -> rusqlite::Result<Option<i64>> {
     conn.query_row(
@@ -95,17 +99,134 @@ fn entity_ids_for_hashes(conn: &Connection, hashes: &[String]) -> rusqlite::Resu
     Ok(ids)
 }
 
+fn first_missing_entity(conn: &Connection, hashes: &[String]) -> rusqlite::Result<Option<String>> {
+    for hash in hashes {
+        if entity_id_by_hash(conn, hash)?.is_none() {
+            return Ok(Some(hash.clone()));
+        }
+    }
+    Ok(None)
+}
+
+fn missing_prerequisite(
+    conn: &Connection,
+    op: &crate::oplog::OpRecord,
+) -> rusqlite::Result<Option<String>> {
+    let key = op.entity_key.as_str();
+    let p = &op.payload;
+    let missing = |kind: &str, value: &str| Some(format!("missing {kind} {value}"));
+    match op.op_type.as_str() {
+        "entity_status_changed"
+        | "entity_updated"
+        | "collection_split"
+        | "entity_tags_added"
+        | "entity_tags_removed"
+        | "collection_renamed"
+        | "collection_members_added"
+        | "collection_members_removed"
+        | "collection_members_reordered" => {
+            if entity_id_by_hash(conn, key)?.is_none() {
+                return Ok(missing("entity", key));
+            }
+        }
+        "tag_renamed" => {
+            if tag_id_by_key(conn, key)?.is_none() {
+                let target_exists = payload_str(p, "to")
+                    .map(|target| tag_id_by_key(conn, target))
+                    .transpose()?
+                    .flatten()
+                    .is_some();
+                if !target_exists {
+                    return Ok(missing("tag", key));
+                }
+            }
+        }
+        "tag_merged" => {
+            if tag_id_by_key(conn, key)?.is_none() {
+                let target_exists = payload_str(p, "into")
+                    .map(|target| tag_id_by_key(conn, target))
+                    .transpose()?
+                    .flatten()
+                    .is_some();
+                if !target_exists {
+                    return Ok(missing("tag", key));
+                }
+            }
+        }
+        "folder_created" => {
+            if let Some(parent) = payload_str(p, "parent") {
+                if folder_id_by_uuid(conn, parent)?.is_none() {
+                    return Ok(missing("parent folder", parent));
+                }
+            }
+        }
+        "folder_updated" | "folder_moved" | "folder_members_added" | "folder_members_removed" => {
+            if folder_id_by_uuid(conn, key)?.is_none() {
+                return Ok(missing("folder", key));
+            }
+            if op.op_type == "folder_moved" {
+                if let Some(parent) = payload_str(p, "parent") {
+                    if folder_id_by_uuid(conn, parent)?.is_none() {
+                        return Ok(missing("parent folder", parent));
+                    }
+                }
+            }
+        }
+        "smart_folder_created" => {
+            if let Some(parent) = payload_str(p, "parent") {
+                if smart_folder_id_by_uuid(conn, parent)?.is_none() {
+                    return Ok(missing("parent smart folder", parent));
+                }
+            }
+        }
+        "smart_folder_updated" | "smart_folder_moved" => {
+            if smart_folder_id_by_uuid(conn, key)?.is_none() {
+                return Ok(missing("smart folder", key));
+            }
+            if op.op_type == "smart_folder_moved" {
+                if let Some(parent) = payload_str(p, "parent") {
+                    if smart_folder_id_by_uuid(conn, parent)?.is_none() {
+                        return Ok(missing("parent smart folder", parent));
+                    }
+                }
+            }
+        }
+        "duplicate_decided" => {
+            if let Some((hash_a, hash_b)) = key.split_once('|') {
+                if let Some(hash) = first_missing_entity(conn, &[hash_a.into(), hash_b.into()])? {
+                    return Ok(missing("duplicate entity", &hash));
+                }
+            }
+        }
+        _ => {}
+    }
+
+    let referenced = match op.op_type.as_str() {
+        "folder_members_added" | "folder_members_removed" => payload_strings(p, "entities"),
+        "collection_members_added" | "collection_members_removed" => payload_strings(p, "members"),
+        "collection_members_reordered" => payload_strings(p, "order"),
+        _ => Vec::new(),
+    };
+    if let Some(hash) = first_missing_entity(conn, &referenced)? {
+        return Ok(missing("referenced entity", &hash));
+    }
+    Ok(None)
+}
+
 pub(super) fn apply_remote_op(
     conn: &Connection,
     op: &crate::oplog::OpRecord,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<RemoteOpOutcome> {
+    if let Some(reason) = missing_prerequisite(conn, op)? {
+        return Ok(RemoteOpOutcome::Pending(reason));
+    }
     let key = op.entity_key.as_str();
     let p = &op.payload;
     let now = chrono::Utc::now().to_rfc3339();
     match op.op_type.as_str() {
         "entity_created" => {
             if entity_id_by_hash(conn, key)?.is_some() {
-                return Ok(()); // content-addressed: already materialized
+                return Ok(RemoteOpOutcome::Applied); // content-addressed: already materialized
             }
             conn.execute(
                 "DELETE FROM media_file WHERE file_hash = ?1
@@ -212,7 +333,7 @@ pub(super) fn apply_remote_op(
             if let Some(id) = entity_id_by_hash(conn, key)? {
                 let tags = payload_strings(p, "tags");
                 if tags.is_empty() {
-                    return Ok(());
+                    return Ok(RemoteOpOutcome::Applied);
                 }
                 if op.op_type == "entity_tags_added" {
                     write::tags::add_tags(
@@ -315,7 +436,7 @@ pub(super) fn apply_remote_op(
             if let Some(id) = folder_id_by_uuid(conn, key)? {
                 let ids = entity_ids_for_hashes(conn, &payload_strings(p, "entities"))?;
                 if ids.is_empty() {
-                    return Ok(());
+                    return Ok(RemoteOpOutcome::Applied);
                 }
                 if op.op_type == "folder_members_added" {
                     write::folders::add_members(conn, id, &ids, types::ExpansionMode::EntityOnly)?;
@@ -402,7 +523,7 @@ pub(super) fn apply_remote_op(
             if let Some(id) = entity_id_by_hash(conn, key)? {
                 let ids = entity_ids_for_hashes(conn, &payload_strings(p, "members"))?;
                 if ids.is_empty() {
-                    return Ok(());
+                    return Ok(RemoteOpOutcome::Applied);
                 }
                 if op.op_type == "collection_members_added" {
                     write::collections::add_members(conn, id, &ids)?;
@@ -456,10 +577,10 @@ pub(super) fn apply_remote_op(
             }
         }
         other => {
-            // Same op_version but a type this build doesn't know: log and
-            // skip — version gating happens before application.
-            tracing::warn!(op_type = other, "skipping unknown remote op type");
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "unknown remote op type {other}; update required"
+            )));
         }
     }
-    Ok(())
+    Ok(RemoteOpOutcome::Applied)
 }

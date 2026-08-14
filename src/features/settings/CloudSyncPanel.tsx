@@ -28,8 +28,12 @@ export function CloudSyncPanel() {
     cloudSyncController
       .syncNow()
       .then(({ report }) => {
+        const pending =
+          report.pending_prerequisites > 0
+            ? ' Waiting for missing media or an earlier remote change.'
+            : '';
         setMessage(
-          `Synced. Uploaded ${report.segments_uploaded} segment(s), applied ${report.ops_applied} change(s) from other devices.`,
+          `Synced ${report.blobs_uploaded} up/${report.blobs_downloaded} down media, uploaded ${report.segments_uploaded} change batch(es), and applied ${report.ops_applied} remote change(s).${pending}`,
         );
         refreshStatus();
       })
