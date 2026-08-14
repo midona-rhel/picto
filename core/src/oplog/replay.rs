@@ -1,10 +1,10 @@
 //! Deterministic replay: segments from all devices → one canonical truth
 //! state. Ops are sorted into the `(hlc, device_id)` total order and applied
-//! sequentially, which yields last-writer-wins per field for free. Tombstones
-//! mark deletion; a later op targeting a tombstoned thing revives it
-//! (add-wins — a wrongly-kept container is visible and cheap, a silently
-//! dropped edit is not). Same segment set ⇒ byte-identical state and digest,
-//! regardless of arrival order.
+//! sequentially, which yields last-writer-wins per field for free. Hard
+//! deletion is delete-wins against partial edits because live storage removes
+//! the record and its payload; only a later explicit full create can recreate
+//! it. Same segment set ⇒ byte-identical state and digest, regardless of
+//! arrival order.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -111,14 +111,18 @@ impl TruthState {
             }
             "entity_status_changed" => {
                 let entity = self.entity(key);
-                entity.deleted = false;
+                if entity.deleted {
+                    return;
+                }
                 if let Some(status) = p.get("status") {
                     entity.fields.insert("status".into(), status.clone());
                 }
             }
             "entity_updated" => {
                 let entity = self.entity(key);
-                entity.deleted = false;
+                if entity.deleted {
+                    return;
+                }
                 if let Some(obj) = p.as_object() {
                     for (name, value) in obj {
                         entity.fields.insert(name.clone(), value.clone());
@@ -131,7 +135,9 @@ impl TruthState {
             "entity_tags_added" | "entity_tags_removed" => {
                 let add = op.op_type == "entity_tags_added";
                 let entity = self.entity(key);
-                entity.deleted = false;
+                if entity.deleted {
+                    return;
+                }
                 if let Some(tags) = p.get("tags").and_then(|v| v.as_array()) {
                     for tag in tags.iter().filter_map(|t| t.as_str()) {
                         let canonical = Self::tag_key(tag);
@@ -208,7 +214,9 @@ impl TruthState {
             }
             "collection_renamed" => {
                 let entity = self.entity(key);
-                entity.deleted = false;
+                if entity.deleted {
+                    return;
+                }
                 if let Some(name) = p.get("name") {
                     entity.fields.insert("name".into(), name.clone());
                 }
@@ -219,7 +227,9 @@ impl TruthState {
             "collection_members_added" | "collection_members_removed" => {
                 let add = op.op_type == "collection_members_added";
                 let entity = self.entity(key);
-                entity.deleted = false;
+                if entity.deleted {
+                    return;
+                }
                 entity.kind = "collection".into();
                 if let Some(members) = p.get("members").and_then(|v| v.as_array()) {
                     for member in members.iter().filter_map(|m| m.as_str()) {
@@ -235,7 +245,9 @@ impl TruthState {
             }
             "collection_members_reordered" => {
                 let entity = self.entity(key);
-                entity.deleted = false;
+                if entity.deleted {
+                    return;
+                }
                 if let Some(order) = p.get("order").and_then(|v| v.as_array()) {
                     entity.members = order
                         .iter()
@@ -262,7 +274,7 @@ fn apply_container_op(
     let p = &op.payload;
     let suffix = &op.op_type[prefix.len() + 1..];
     match suffix {
-        "created" | "updated" => {
+        "created" => {
             container.deleted = false;
             if let Some(obj) = p.as_object() {
                 for (name, value) in obj {
@@ -274,8 +286,24 @@ fn apply_container_op(
                 }
             }
         }
+        "updated" => {
+            if container.deleted {
+                return;
+            }
+            if let Some(obj) = p.as_object() {
+                for (name, value) in obj {
+                    if name == "parent" {
+                        container.parent = value.as_str().map(|s| s.to_string());
+                    } else {
+                        container.fields.insert(name.clone(), value.clone());
+                    }
+                }
+            }
+        }
         "moved" => {
-            container.deleted = false;
+            if container.deleted {
+                return;
+            }
             container.parent = p
                 .get("parent")
                 .and_then(|v| v.as_str())
@@ -283,7 +311,9 @@ fn apply_container_op(
         }
         "deleted" => container.deleted = true,
         "members_added" | "members_removed" => {
-            container.deleted = false;
+            if container.deleted {
+                return;
+            }
             let add = suffix == "members_added";
             if let Some(entities) = p.get("entities").and_then(|v| v.as_array()) {
                 for entity in entities.iter().filter_map(|e| e.as_str()) {
@@ -437,9 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_edit_resurrects_deleted_container() {
-        // Device A deletes the folder; device B, concurrently but later in
-        // the total order, adds a member. Add-wins: the folder lives.
+    fn hard_delete_ignores_partial_edits_until_an_explicit_recreate() {
         let ops = vec![
             op(
                 "001-0000",
@@ -464,11 +492,9 @@ mod tests {
             ),
         ];
         let state = replay_ops(ops).unwrap();
-        let folder = &state.folders["f1"];
-        assert!(!folder.deleted, "edit after tombstone must resurrect");
-        assert!(folder.members.contains("h9"));
+        assert!(state.folders["f1"].deleted);
+        assert!(!state.folders["f1"].members.contains("h9"));
 
-        // And the reverse order: delete last in the total order → stays dead.
         let ops = vec![
             op(
                 "001-0000",
@@ -487,12 +513,14 @@ mod tests {
             op(
                 "003-0000",
                 "dev_a",
-                "folder_deleted",
+                "folder_created",
                 "f1",
-                serde_json::json!({}),
+                serde_json::json!({"name":"Recreated"}),
             ),
         ];
-        assert!(replay_ops(ops).unwrap().folders["f1"].deleted);
+        let folder = &replay_ops(ops).unwrap().folders["f1"];
+        assert!(!folder.deleted);
+        assert_eq!(folder.fields["name"], serde_json::json!("Recreated"));
     }
 
     #[test]
