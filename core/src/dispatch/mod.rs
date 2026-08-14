@@ -157,6 +157,22 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
 }
 
 async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String, String> {
+    // Cloud-library discovery is needed to open the first library, so these
+    // read-only filesystem commands cannot depend on an existing AppState.
+    match command {
+        "sync_detect_share_roots" => {
+            let input = from_args(args)?;
+            let output = typed::sync::sync_detect_share_roots(input).await?;
+            return to_json(&output);
+        }
+        "sync_list_remote_libraries" => {
+            let input = from_args(args)?;
+            let output = typed::sync::sync_list_remote_libraries(input).await?;
+            return to_json(&output);
+        }
+        _ => {}
+    }
+
     let state = crate::state::get_state()?;
 
     // Commands whose transport shape is already the domain request type.
@@ -276,10 +292,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "get_settings" => call!(typed::system::get_settings, &state, args),
         "save_settings" => call!(typed::system::save_settings, &state, args),
         "sync_get_status" => call!(typed::sync::sync_get_status, &state, args),
-        "sync_detect_share_roots" => call!(typed::sync::sync_detect_share_roots, &state, args),
-        "sync_list_remote_libraries" => {
-            call!(typed::sync::sync_list_remote_libraries, &state, args)
-        }
         "sync_create_remote_library" => {
             call!(typed::sync::sync_create_remote_library, &state, args)
         }
@@ -487,5 +499,17 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "ai_tag_apply" => call!(typed::ai_tagger::ai_tag_apply, &state, args),
 
         _ => Err(format!("Unknown command: {}", command)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn cloud_library_discovery_dispatches_without_library_state() {
+        let json = super::dispatch_inner("sync_detect_share_roots", serde_json::json!({}))
+            .await
+            .expect("detect share roots without an open library");
+        let roots: serde_json::Value = serde_json::from_str(&json).expect("valid JSON response");
+        assert!(roots.is_array());
     }
 }

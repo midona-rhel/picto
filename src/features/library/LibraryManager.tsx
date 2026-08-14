@@ -78,9 +78,9 @@ export function LibraryManager() {
         }
       }
       setCloudLibraries(byService);
-    } catch {
-      // No library open yet — cloud listing needs the backend; hide quietly.
+    } catch (e) {
       setServices([]);
+      setError(String(e));
     }
   }, []);
 

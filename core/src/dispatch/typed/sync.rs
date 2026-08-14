@@ -112,7 +112,6 @@ pub async fn sync_get_status(
 }
 
 pub async fn sync_detect_share_roots(
-    _state: &AppState,
     _input: SyncEmptyInput,
 ) -> Result<Vec<ShareRootCandidate>, String> {
     tokio::task::spawn_blocking(|| Ok(detect_share_roots()))
@@ -121,7 +120,6 @@ pub async fn sync_detect_share_roots(
 }
 
 pub async fn sync_list_remote_libraries(
-    _state: &AppState,
     input: SyncListRemoteLibrariesInput,
 ) -> Result<Vec<RemoteLibraryInfo>, String> {
     let share_root = PathBuf::from(input.share_root);
