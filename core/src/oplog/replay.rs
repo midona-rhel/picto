@@ -63,6 +63,9 @@ pub struct TruthState {
     pub tags: BTreeMap<String, TagState>,
     pub folders: BTreeMap<String, ContainerState>,
     pub smart_folders: BTreeMap<String, ContainerState>,
+    pub subscription_groups: BTreeMap<String, ContainerState>,
+    pub subscriptions: BTreeMap<String, ContainerState>,
+    pub subscription_queries: BTreeMap<String, ContainerState>,
     pub duplicate_decisions: BTreeMap<String, serde_json::Value>,
 }
 
@@ -218,6 +221,107 @@ impl TruthState {
             | "smart_folder_deleted" => {
                 apply_container_op(&mut self.smart_folders, "smart_folder", op);
             }
+            "subscription_group_created" | "subscription_group_updated" => {
+                apply_definition_op(
+                    &mut self.subscription_groups,
+                    "subscription_group",
+                    op,
+                    None,
+                    false,
+                );
+            }
+            "subscription_group_deleted" => {
+                apply_definition_op(
+                    &mut self.subscription_groups,
+                    "subscription_group",
+                    op,
+                    None,
+                    false,
+                );
+                if self
+                    .subscription_groups
+                    .get(key)
+                    .is_some_and(|group| group.deleted)
+                {
+                    for subscription in self.subscriptions.values_mut() {
+                        if subscription.parent.as_deref() == Some(key) {
+                            subscription.parent = None;
+                        }
+                    }
+                }
+            }
+            "subscription_created" | "subscription_updated" => {
+                apply_definition_op(
+                    &mut self.subscriptions,
+                    "subscription",
+                    op,
+                    Some("group_uuid"),
+                    false,
+                );
+                if let Some(subscription) = self.subscriptions.get_mut(key) {
+                    if subscription
+                        .parent
+                        .as_deref()
+                        .and_then(|group_key| self.subscription_groups.get(group_key))
+                        .is_some_and(|group| group.deleted)
+                    {
+                        subscription.parent = None;
+                    }
+                }
+            }
+            "subscription_deleted" => {
+                apply_definition_op(
+                    &mut self.subscriptions,
+                    "subscription",
+                    op,
+                    Some("group_uuid"),
+                    false,
+                );
+                if self
+                    .subscriptions
+                    .get(key)
+                    .is_some_and(|subscription| subscription.deleted)
+                {
+                    for query in self.subscription_queries.values_mut() {
+                        if query.parent.as_deref() == Some(key) {
+                            query.deleted = true;
+                        }
+                    }
+                }
+            }
+            "subscription_query_created" | "subscription_query_updated" => {
+                let subscription_deleted = p
+                    .get("subscription_uuid")
+                    .and_then(|value| value.as_str())
+                    .and_then(|subscription_key| self.subscriptions.get(subscription_key))
+                    .is_some_and(|subscription| subscription.deleted);
+                apply_definition_op(
+                    &mut self.subscription_queries,
+                    "subscription_query",
+                    op,
+                    Some("subscription_uuid"),
+                    subscription_deleted,
+                );
+                if let Some(query) = self.subscription_queries.get_mut(key) {
+                    if query
+                        .parent
+                        .as_deref()
+                        .and_then(|subscription_key| self.subscriptions.get(subscription_key))
+                        .is_some_and(|subscription| subscription.deleted)
+                    {
+                        query.deleted = true;
+                    }
+                }
+            }
+            "subscription_query_deleted" => {
+                apply_definition_op(
+                    &mut self.subscription_queries,
+                    "subscription_query",
+                    op,
+                    Some("subscription_uuid"),
+                    false,
+                );
+            }
             "collection_created" => {
                 if self.entities.get(key).is_some_and(|entity| entity.created) {
                     return;
@@ -279,6 +383,55 @@ impl TruthState {
                     .insert(super::normalized_pair_key(key), p.clone());
             }
             _ => unreachable!("operation vocabulary is validated before replay"),
+        }
+    }
+}
+
+fn apply_definition_op(
+    definitions: &mut BTreeMap<String, ContainerState>,
+    prefix: &str,
+    op: &OpRecord,
+    parent_field: Option<&str>,
+    parent_deleted: bool,
+) {
+    let definition = definitions.entry(op.entity_key.clone()).or_default();
+    let suffix = &op.op_type[prefix.len() + 1..];
+    match suffix {
+        "created" => {
+            if definition.created || definition.deleted {
+                return;
+            }
+            *definition = ContainerState::default();
+            definition.created = true;
+            if parent_deleted {
+                definition.deleted = true;
+            }
+            apply_definition_payload(definition, &op.payload, parent_field);
+        }
+        "updated" => {
+            if definition.deleted {
+                return;
+            }
+            apply_definition_payload(definition, &op.payload, parent_field);
+        }
+        "deleted" => definition.deleted = true,
+        _ => unreachable!("unsupported definition operation {suffix}"),
+    }
+}
+
+fn apply_definition_payload(
+    definition: &mut ContainerState,
+    payload: &serde_json::Value,
+    parent_field: Option<&str>,
+) {
+    let Some(object) = payload.as_object() else {
+        return;
+    };
+    for (name, value) in object {
+        if parent_field == Some(name.as_str()) {
+            definition.parent = value.as_str().map(str::to_owned);
+        } else {
+            definition.fields.insert(name.clone(), value.clone());
         }
     }
 }
@@ -408,6 +561,18 @@ mod tests {
             hlc: hlc.into(),
             device_id: device.into(),
         }
+    }
+
+    // The integration owner enables these operation names in mod.rs. These
+    // reducer tests intentionally bypass that vocabulary gate so this slice
+    // can prove the deterministic definition state independently.
+    fn replay_unvalidated(mut ops: Vec<OpRecord>) -> TruthState {
+        ops.sort_by(|left, right| left.sort_key().cmp(&right.sort_key()));
+        let mut state = TruthState::default();
+        for op in &ops {
+            state.apply(op);
+        }
+        state
     }
 
     fn two_device_history() -> Vec<OpRecord> {
@@ -761,5 +926,214 @@ mod tests {
             replay_ops(ops),
             Err(ReplayError::UnknownOpType(op_type)) if op_type == "entity_cretaed"
         ));
+    }
+
+    #[test]
+    fn subscription_definitions_converge_under_shuffled_arrival() {
+        let ops = vec![
+            op(
+                "010-0000",
+                "a",
+                "subscription_group_created",
+                "group-1",
+                serde_json::json!({"name":"Artists"}),
+            ),
+            op(
+                "011-0000",
+                "a",
+                "subscription_created",
+                "subscription-1",
+                serde_json::json!({"name":"Pixiv","group_uuid":"group-1"}),
+            ),
+            op(
+                "012-0000",
+                "b",
+                "subscription_query_created",
+                "query-1",
+                serde_json::json!({"subscription_uuid":"subscription-1","query_text":"artist"}),
+            ),
+            op(
+                "013-0000",
+                "b",
+                "subscription_updated",
+                "subscription-1",
+                serde_json::json!({"schedule":"daily"}),
+            ),
+        ];
+        let expected = replay_unvalidated(ops.clone()).digest();
+        for _ in 0..50 {
+            let mut shuffled = ops.clone();
+            for index in (1..shuffled.len()).rev() {
+                let swap = (rand::random::<u64>() as usize) % (index + 1);
+                shuffled.swap(index, swap);
+            }
+            assert_eq!(replay_unvalidated(shuffled).digest(), expected);
+        }
+    }
+
+    #[test]
+    fn subscription_updates_merge_independent_fields() {
+        let state = replay_unvalidated(vec![
+            op(
+                "010-0000",
+                "a",
+                "subscription_created",
+                "subscription-1",
+                serde_json::json!({"name":"initial","group_uuid":null}),
+            ),
+            op(
+                "011-0000",
+                "a",
+                "subscription_updated",
+                "subscription-1",
+                serde_json::json!({"name":"renamed"}),
+            ),
+            op(
+                "012-0000",
+                "b",
+                "subscription_updated",
+                "subscription-1",
+                serde_json::json!({"schedule":"weekly","paused":true}),
+            ),
+        ]);
+        let subscription = &state.subscriptions["subscription-1"];
+        assert_eq!(subscription.fields["name"], "renamed");
+        assert_eq!(subscription.fields["schedule"], "weekly");
+        assert_eq!(subscription.fields["paused"], true);
+    }
+
+    #[test]
+    fn deleting_a_group_ungroups_live_subscriptions() {
+        let state = replay_unvalidated(vec![
+            op(
+                "010-0000",
+                "a",
+                "subscription_group_created",
+                "group-1",
+                serde_json::json!({"name":"Artists"}),
+            ),
+            op(
+                "011-0000",
+                "a",
+                "subscription_created",
+                "subscription-1",
+                serde_json::json!({"name":"Pixiv","group_uuid":"group-1"}),
+            ),
+            op(
+                "012-0000",
+                "b",
+                "subscription_group_deleted",
+                "group-1",
+                serde_json::json!({}),
+            ),
+        ]);
+        assert!(state.subscription_groups["group-1"].deleted);
+        assert_eq!(state.subscriptions["subscription-1"].parent, None);
+    }
+
+    #[test]
+    fn subscription_referencing_deleted_group_stays_live_and_ungrouped() {
+        let state = replay_unvalidated(vec![
+            op(
+                "010-0000",
+                "a",
+                "subscription_group_deleted",
+                "group-1",
+                serde_json::json!({}),
+            ),
+            op(
+                "011-0000",
+                "b",
+                "subscription_created",
+                "subscription-1",
+                serde_json::json!({"name":"Pixiv","group_uuid":"group-1"}),
+            ),
+        ]);
+        let subscription = &state.subscriptions["subscription-1"];
+        assert!(subscription.created);
+        assert!(!subscription.deleted);
+        assert_eq!(subscription.parent, None);
+    }
+
+    #[test]
+    fn deleting_a_subscription_cascades_query_tombstones() {
+        let state = replay_unvalidated(vec![
+            op(
+                "010-0000",
+                "a",
+                "subscription_created",
+                "subscription-1",
+                serde_json::json!({"name":"Pixiv"}),
+            ),
+            op(
+                "011-0000",
+                "a",
+                "subscription_query_created",
+                "query-1",
+                serde_json::json!({"subscription_uuid":"subscription-1","query_text":"artist"}),
+            ),
+            op(
+                "012-0000",
+                "b",
+                "subscription_deleted",
+                "subscription-1",
+                serde_json::json!({}),
+            ),
+            op(
+                "013-0000",
+                "c",
+                "subscription_query_created",
+                "query-2",
+                serde_json::json!({"subscription_uuid":"subscription-1","query_text":"later"}),
+            ),
+            op(
+                "014-0000",
+                "c",
+                "subscription_query_deleted",
+                "query-1",
+                serde_json::json!({}),
+            ),
+        ]);
+        assert!(state.subscriptions["subscription-1"].deleted);
+        assert!(state.subscription_queries["query-1"].deleted);
+        assert!(state.subscription_queries["query-2"].deleted);
+    }
+
+    #[test]
+    fn stale_definition_create_and_update_cannot_resurrect() {
+        let state = replay_unvalidated(vec![
+            op(
+                "010-0000",
+                "a",
+                "subscription_created",
+                "subscription-1",
+                serde_json::json!({"name":"original"}),
+            ),
+            op(
+                "011-0000",
+                "a",
+                "subscription_deleted",
+                "subscription-1",
+                serde_json::json!({}),
+            ),
+            op(
+                "012-0000",
+                "b",
+                "subscription_created",
+                "subscription-1",
+                serde_json::json!({"name":"stale create"}),
+            ),
+            op(
+                "013-0000",
+                "c",
+                "subscription_updated",
+                "subscription-1",
+                serde_json::json!({"name":"resurrection"}),
+            ),
+        ]);
+        let subscription = &state.subscriptions["subscription-1"];
+        assert!(subscription.created);
+        assert!(subscription.deleted);
+        assert_eq!(subscription.fields["name"], "original");
     }
 }

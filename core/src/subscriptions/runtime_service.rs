@@ -187,12 +187,25 @@ impl<'a> SubscriptionRuntimeService<'a> {
             return Err("Group name cannot be empty".to_string());
         }
         let now = chrono::Utc::now().to_rfc3339();
+        let uuid = crate::oplog::new_uuid();
+        let device_id = self.db.device_id().to_string();
         let group_id = self.db.with_write(|conn| {
             conn.execute(
                 "INSERT INTO subscription_group (name, uuid, date_added) VALUES (?1, ?2, ?3)",
-                params![trimmed, crate::oplog::new_uuid(), now],
+                params![trimmed, uuid, now],
             )?;
-            Ok(conn.last_insert_rowid())
+            let group_id = conn.last_insert_rowid();
+            crate::oplog::record_op(
+                conn,
+                &device_id,
+                "subscription_group_created",
+                &uuid,
+                &serde_json::json!({
+                    "name": trimmed,
+                    "date_added": now,
+                }),
+            )?;
+            Ok(group_id)
         })?;
 
         Ok(SubscriptionGroupInfo {
@@ -206,14 +219,56 @@ impl<'a> SubscriptionRuntimeService<'a> {
 
     pub async fn delete_group(&self, id: String) -> Result<(), String> {
         let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {id}"))?;
+        let device_id = self.db.device_id().to_string();
         self.db.with_write(|conn| {
+            let group_uuid: Option<String> = conn
+                .query_row(
+                    "SELECT uuid FROM subscription_group WHERE group_id = ?1",
+                    [group_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(group_uuid) = group_uuid else {
+                return Ok(());
+            };
+
+            let mut affected = Vec::new();
+            let mut stmt = conn.prepare_cached(
+                "SELECT subscription_id, uuid
+                 FROM subscription
+                 WHERE group_id = ?1
+                 ORDER BY subscription_id",
+            )?;
+            let rows = stmt.query_map([group_id], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            for row in rows {
+                affected.push(row?);
+            }
+
             conn.execute(
                 "UPDATE subscription SET group_id = NULL WHERE group_id = ?1",
                 [group_id],
             )?;
+            for (_, subscription_uuid) in affected {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_updated",
+                    &subscription_uuid,
+                    &serde_json::json!({ "group_uuid": null }),
+                )?;
+            }
             conn.execute(
                 "DELETE FROM subscription_group WHERE group_id = ?1",
                 [group_id],
+            )?;
+            crate::oplog::record_op(
+                conn,
+                &device_id,
+                "subscription_group_deleted",
+                &group_uuid,
+                &serde_json::json!({}),
             )?;
             Ok(())
         })
@@ -225,11 +280,28 @@ impl<'a> SubscriptionRuntimeService<'a> {
         if trimmed.is_empty() {
             return Err("Name cannot be empty".to_string());
         }
+        let device_id = self.db.device_id().to_string();
         self.db.with_write(|conn| {
+            let uuid: Option<String> = conn
+                .query_row(
+                    "SELECT uuid FROM subscription_group WHERE group_id = ?1",
+                    [group_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
             conn.execute(
                 "UPDATE subscription_group SET name = ?1 WHERE group_id = ?2",
                 params![trimmed, group_id],
             )?;
+            if let Some(uuid) = uuid {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_group_updated",
+                    &uuid,
+                    &serde_json::json!({ "name": trimmed }),
+                )?;
+            }
             Ok(())
         })
     }
@@ -243,11 +315,28 @@ impl<'a> SubscriptionRuntimeService<'a> {
             .parse()
             .map_err(|_| format!("Invalid subscription id: {id}"))?;
         validate_schedule(&schedule)?;
+        let device_id = self.db.device_id().to_string();
         self.db.with_write(|conn| {
+            let uuid: Option<String> = conn
+                .query_row(
+                    "SELECT uuid FROM subscription WHERE subscription_id = ?1",
+                    [subscription_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
             conn.execute(
                 "UPDATE subscription SET schedule = ?1 WHERE subscription_id = ?2",
                 params![schedule, subscription_id],
             )?;
+            if let Some(uuid) = uuid {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_updated",
+                    &uuid,
+                    &serde_json::json!({ "schedule": schedule }),
+                )?;
+            }
             Ok(())
         })
     }
@@ -312,20 +401,55 @@ impl<'a> SubscriptionRuntimeService<'a> {
         periodic_post_limit: Option<u32>,
     ) -> Result<SubscriptionInfo, String> {
         let now = chrono::Utc::now().to_rfc3339();
+        let initial_post_limit = initial_post_limit.unwrap_or(100);
+        let periodic_post_limit = periodic_post_limit.unwrap_or(50);
+        let uuid = crate::oplog::new_uuid();
+        let device_id = self.db.device_id().to_string();
         let subscription_id = self.db.with_write(|conn| {
+            let group_uuid = match group_id {
+                Some(group_id) => Some(
+                    conn.query_row(
+                        "SELECT uuid FROM subscription_group WHERE group_id = ?1",
+                        [group_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .ok_or(rusqlite::Error::QueryReturnedNoRows)?,
+                ),
+                None => None,
+            };
             conn.execute(
-                "INSERT INTO subscription (name, site_id, schedule, paused, group_id, initial_post_limit, periodic_post_limit, auto_collections, uuid, date_added)
-                 VALUES (?1, '', 'daily', 0, ?2, ?3, ?4, 1, ?5, ?6)",
+                "INSERT INTO subscription
+                    (name, schedule, paused, group_id, initial_post_limit,
+                     periodic_post_limit, auto_collections, uuid, date_added)
+                 VALUES (?1, 'daily', 0, ?2, ?3, ?4, 1, ?5, ?6)",
                 params![
                     name,
                     group_id,
-                    initial_post_limit.unwrap_or(100) as i64,
-                    periodic_post_limit.unwrap_or(50) as i64,
-                    crate::oplog::new_uuid(),
+                    initial_post_limit as i64,
+                    periodic_post_limit as i64,
+                    uuid,
                     now
                 ],
             )?;
-            Ok(conn.last_insert_rowid())
+            let subscription_id = conn.last_insert_rowid();
+            crate::oplog::record_op(
+                conn,
+                &device_id,
+                "subscription_created",
+                &uuid,
+                &serde_json::json!({
+                    "name": name,
+                    "schedule": "daily",
+                    "paused": false,
+                    "initial_post_limit": initial_post_limit,
+                    "periodic_post_limit": periodic_post_limit,
+                    "auto_collections": true,
+                    "date_added": now,
+                    "group_uuid": group_uuid,
+                }),
+            )?;
+            Ok(subscription_id)
         })?;
 
         Ok(SubscriptionInfo {
@@ -334,8 +458,8 @@ impl<'a> SubscriptionRuntimeService<'a> {
             schedule: "daily".to_string(),
             paused: false,
             group_id: group_id.map(|id| id.to_string()),
-            initial_post_limit: initial_post_limit.unwrap_or(100),
-            periodic_post_limit: periodic_post_limit.unwrap_or(50),
+            initial_post_limit,
+            periodic_post_limit,
             auto_collections: true,
             created_at: now,
             total_files: 0,
@@ -347,12 +471,50 @@ impl<'a> SubscriptionRuntimeService<'a> {
         let subscription_id: i64 = id
             .parse()
             .map_err(|_| format!("Invalid subscription id: {id}"))?;
+        let device_id = self.db.device_id().to_string();
         self.db.with_write(|conn| {
+            let subscription_uuid: Option<String> = conn
+                .query_row(
+                    "SELECT uuid FROM subscription WHERE subscription_id = ?1",
+                    [subscription_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(subscription_uuid) = subscription_uuid else {
+                return Ok(0);
+            };
+
+            let mut query_uuids = Vec::new();
+            let mut stmt = conn.prepare_cached(
+                "SELECT uuid FROM subscription_query
+                 WHERE subscription_id = ?1
+                 ORDER BY query_id",
+            )?;
+            let rows = stmt.query_map([subscription_id], |row| row.get::<_, String>(0))?;
+            for row in rows {
+                query_uuids.push(row?);
+            }
+            for query_uuid in query_uuids {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_query_deleted",
+                    &query_uuid,
+                    &serde_json::json!({}),
+                )?;
+            }
             conn.execute(
                 "DELETE FROM subscription WHERE subscription_id = ?1",
                 [subscription_id],
-            )
-            .map_err(Into::into)
+            )?;
+            crate::oplog::record_op(
+                conn,
+                &device_id,
+                "subscription_deleted",
+                &subscription_uuid,
+                &serde_json::json!({}),
+            )?;
+            Ok(1)
         })
     }
 
@@ -360,11 +522,28 @@ impl<'a> SubscriptionRuntimeService<'a> {
         let subscription_id: i64 = id
             .parse()
             .map_err(|_| format!("Invalid subscription id: {id}"))?;
+        let device_id = self.db.device_id().to_string();
         self.db.with_write(|conn| {
+            let uuid: Option<String> = conn
+                .query_row(
+                    "SELECT uuid FROM subscription WHERE subscription_id = ?1",
+                    [subscription_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
             conn.execute(
                 "UPDATE subscription SET paused = ?1 WHERE subscription_id = ?2",
                 params![paused as i64, subscription_id],
             )?;
+            if let Some(uuid) = uuid {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_updated",
+                    &uuid,
+                    &serde_json::json!({ "paused": paused }),
+                )?;
+            }
             Ok(())
         })
     }
@@ -377,11 +556,28 @@ impl<'a> SubscriptionRuntimeService<'a> {
         if trimmed.is_empty() {
             return Err("Name cannot be empty".to_string());
         }
+        let device_id = self.db.device_id().to_string();
         self.db.with_write(|conn| {
+            let uuid: Option<String> = conn
+                .query_row(
+                    "SELECT uuid FROM subscription WHERE subscription_id = ?1",
+                    [subscription_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
             conn.execute(
                 "UPDATE subscription SET name = ?1 WHERE subscription_id = ?2",
                 params![trimmed, subscription_id],
             )?;
+            if let Some(uuid) = uuid {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_updated",
+                    &uuid,
+                    &serde_json::json!({ "name": trimmed }),
+                )?;
+            }
             Ok(())
         })
     }
@@ -391,11 +587,28 @@ impl<'a> SubscriptionRuntimeService<'a> {
         subscription_id: i64,
         auto_collections: bool,
     ) -> Result<(), String> {
+        let device_id = self.db.device_id().to_string();
         self.db.with_write(|conn| {
+            let uuid: Option<String> = conn
+                .query_row(
+                    "SELECT uuid FROM subscription WHERE subscription_id = ?1",
+                    [subscription_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
             conn.execute(
                 "UPDATE subscription SET auto_collections = ?1 WHERE subscription_id = ?2",
                 params![auto_collections as i64, subscription_id],
             )?;
+            if let Some(uuid) = uuid {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_updated",
+                    &uuid,
+                    &serde_json::json!({ "auto_collections": auto_collections }),
+                )?;
+            }
             Ok(())
         })
     }
@@ -406,23 +619,42 @@ impl<'a> SubscriptionRuntimeService<'a> {
         subscription_id: i64,
         group_id: Option<i64>,
     ) -> Result<(), String> {
-        if let Some(gid) = group_id {
-            let exists: bool = self.db.with_read(move |conn| {
-                conn.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM subscription_group WHERE group_id = ?1)",
-                    params![gid],
+        let device_id = self.db.device_id().to_string();
+        self.db.with_write(move |conn| {
+            let subscription_uuid: Option<String> = conn
+                .query_row(
+                    "SELECT uuid FROM subscription WHERE subscription_id = ?1",
+                    [subscription_id],
                     |row| row.get(0),
                 )
-            })?;
-            if !exists {
-                return Err(format!("Group {gid} not found"));
-            }
-        }
-        self.db.with_write(move |conn| {
+                .optional()?;
+            let group_uuid = match group_id {
+                Some(group_id) => Some(
+                    conn.query_row(
+                        "SELECT uuid FROM subscription_group WHERE group_id = ?1",
+                        [group_id],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?
+                    .ok_or_else(|| {
+                        rusqlite::Error::InvalidParameterName(format!("Group {group_id} not found"))
+                    })?,
+                ),
+                None => None,
+            };
             conn.execute(
                 "UPDATE subscription SET group_id = ?1 WHERE subscription_id = ?2",
                 params![group_id, subscription_id],
             )?;
+            if let Some(subscription_uuid) = subscription_uuid {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_updated",
+                    &subscription_uuid,
+                    &serde_json::json!({ "group_uuid": group_uuid }),
+                )?;
+            }
             Ok(())
         })
     }
@@ -506,12 +738,21 @@ impl<'a> SubscriptionRuntimeService<'a> {
             &resolved_query_kind,
             &query_text,
         );
+        let query_uuid = crate::oplog::new_uuid();
+        let device_id = self.db.device_id().to_string();
         let query_id = self.db.with_write(|conn| {
+            let subscription_uuid: String = conn.query_row(
+                "SELECT uuid FROM subscription WHERE subscription_id = ?1",
+                [subscription_id],
+                |row| row.get(0),
+            )?;
             conn.execute(
-                "INSERT INTO subscription_query (subscription_id, site_id, query_kind, query_text, display_name, notes)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                "INSERT INTO subscription_query
+                    (subscription_id, uuid, site_id, query_kind, query_text, display_name, notes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                 params![
                     subscription_id,
+                    query_uuid,
                     canonical_site_id,
                     resolved_query_kind,
                     normalized_query,
@@ -519,7 +760,23 @@ impl<'a> SubscriptionRuntimeService<'a> {
                     notes
                 ],
             )?;
-            Ok(conn.last_insert_rowid())
+            let query_id = conn.last_insert_rowid();
+            crate::oplog::record_op(
+                conn,
+                &device_id,
+                "subscription_query_created",
+                &query_uuid,
+                &serde_json::json!({
+                    "subscription_uuid": subscription_uuid,
+                    "site_id": canonical_site_id,
+                    "query_kind": resolved_query_kind,
+                    "query_text": normalized_query,
+                    "display_name": query_text.trim(),
+                    "notes": notes,
+                    "paused": false,
+                }),
+            )?;
+            Ok(query_id)
         })?;
 
         Ok(SubscriptionQueryInfo {
@@ -567,7 +824,18 @@ impl<'a> SubscriptionRuntimeService<'a> {
             &resolved_query_kind,
             &query_text,
         );
+        let device_id = self.db.device_id().to_string();
         self.db.with_write(|conn| {
+            let query_identity: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT q.uuid, s.uuid
+                     FROM subscription_query q
+                     JOIN subscription s ON s.subscription_id = q.subscription_id
+                     WHERE q.query_id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
             conn.execute(
                 "UPDATE subscription_query
                  SET site_id = ?1, query_kind = ?2, query_text = ?3, display_name = ?4, notes = ?5
@@ -581,28 +849,84 @@ impl<'a> SubscriptionRuntimeService<'a> {
                     id
                 ],
             )?;
+            if let Some((query_uuid, subscription_uuid)) = query_identity {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_query_updated",
+                    &query_uuid,
+                    &serde_json::json!({
+                        "subscription_uuid": subscription_uuid,
+                        "site_id": canonical_site_id,
+                        "query_kind": resolved_query_kind,
+                        "query_text": normalized_query,
+                        "display_name": display_name,
+                        "notes": notes,
+                    }),
+                )?;
+            }
             Ok(())
         })
     }
 
     pub async fn delete_subscription_query(&self, id: String) -> Result<(), String> {
         let query_id: i64 = id.parse().map_err(|_| format!("Invalid query id: {id}"))?;
+        let device_id = self.db.device_id().to_string();
         self.db.with_write(|conn| {
+            let query_uuid: Option<String> = conn
+                .query_row(
+                    "SELECT uuid FROM subscription_query WHERE query_id = ?1",
+                    [query_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
             conn.execute(
                 "DELETE FROM subscription_query WHERE query_id = ?1",
                 [query_id],
             )?;
+            if let Some(query_uuid) = query_uuid {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_query_deleted",
+                    &query_uuid,
+                    &serde_json::json!({}),
+                )?;
+            }
             Ok(())
         })
     }
 
     pub async fn pause_subscription_query(&self, id: String, paused: bool) -> Result<(), String> {
         let query_id: i64 = id.parse().map_err(|_| format!("Invalid query id: {id}"))?;
+        let device_id = self.db.device_id().to_string();
         self.db.with_write(|conn| {
+            let query_identity: Option<(String, String)> = conn
+                .query_row(
+                    "SELECT q.uuid, s.uuid
+                     FROM subscription_query q
+                     JOIN subscription s ON s.subscription_id = q.subscription_id
+                     WHERE q.query_id = ?1",
+                    [query_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
             conn.execute(
                 "UPDATE subscription_query SET paused = ?1 WHERE query_id = ?2",
                 params![paused as i64, query_id],
             )?;
+            if let Some((query_uuid, subscription_uuid)) = query_identity {
+                crate::oplog::record_op(
+                    conn,
+                    &device_id,
+                    "subscription_query_updated",
+                    &query_uuid,
+                    &serde_json::json!({
+                        "subscription_uuid": subscription_uuid,
+                        "paused": paused,
+                    }),
+                )?;
+            }
             Ok(())
         })
     }

@@ -94,6 +94,44 @@ fn smart_folder_id_by_uuid(conn: &Connection, uuid: &str) -> rusqlite::Result<Op
     .optional()
 }
 
+fn subscription_group_id_by_uuid(conn: &Connection, uuid: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT group_id FROM subscription_group WHERE uuid = ?1",
+        [uuid],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn subscription_id_by_uuid(conn: &Connection, uuid: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT subscription_id FROM subscription WHERE uuid = ?1",
+        [uuid],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn subscription_query_id_by_uuid(conn: &Connection, uuid: &str) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT query_id FROM subscription_query WHERE uuid = ?1",
+        [uuid],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn target_was_deleted(conn: &Connection, kind: &str, key: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM sync_conflict_clock
+             WHERE target_kind = ?1 AND target_key = ?2 AND field_key = '__delete__'
+         )",
+        rusqlite::params![kind, key],
+        |row| row.get(0),
+    )
+}
+
 fn split_tag_key(key: &str) -> (&str, &str) {
     match key.find(':') {
         Some(idx) => (&key[..idx], &key[idx + 1..]),
@@ -141,6 +179,18 @@ fn payload_strings(p: &serde_json::Value, field: &str) -> Vec<String> {
 fn payload_mask(p: &serde_json::Value, field: &str, default: u64) -> u64 {
     payload_str(p, field)
         .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
+}
+
+fn payload_i64(p: &serde_json::Value, field: &str, default: i64) -> i64 {
+    p.get(field)
+        .and_then(|value| value.as_i64())
+        .unwrap_or(default)
+}
+
+fn payload_bool(p: &serde_json::Value, field: &str, default: bool) -> bool {
+    p.get(field)
+        .and_then(|value| value.as_bool())
         .unwrap_or(default)
 }
 
@@ -361,7 +411,7 @@ fn applied_impact(
         );
     // Metadata changes can alter smart-folder membership and therefore the
     // sidebar counts derived from those smart-folder bitmaps.
-    let rebuild_sidebar = true;
+    let rebuild_sidebar = !op.op_type.starts_with("subscription_");
     let rebuild_folder_sizes = matches!(
         op.op_type.as_str(),
         "entity_recreated"
@@ -479,6 +529,45 @@ fn missing_prerequisite(
                         return Ok(missing("parent smart folder", parent));
                     }
                 }
+            }
+        }
+        "subscription_group_updated" => {
+            if subscription_group_id_by_uuid(conn, key)?.is_none() {
+                return Ok(missing("subscription group", key));
+            }
+        }
+        "subscription_created" | "subscription_updated" => {
+            if op.op_type == "subscription_updated" && subscription_id_by_uuid(conn, key)?.is_none()
+            {
+                return Ok(missing("subscription", key));
+            }
+            if let Some(group_uuid) = payload_str(p, "group_uuid") {
+                if subscription_group_id_by_uuid(conn, group_uuid)?.is_none()
+                    && !target_was_deleted(conn, "subscription_group", group_uuid)?
+                {
+                    return Ok(missing("subscription group", group_uuid));
+                }
+            }
+        }
+        "subscription_query_created" | "subscription_query_updated" => {
+            let subscription_uuid = payload_str(p, "subscription_uuid").ok_or_else(|| {
+                rusqlite::Error::InvalidParameterName(format!(
+                    "{} requires subscription_uuid",
+                    op.op_type
+                ))
+            })?;
+            let parent_deleted = target_was_deleted(conn, "subscription", subscription_uuid)?;
+            if op.op_type == "subscription_query_updated"
+                && subscription_query_id_by_uuid(conn, key)?.is_none()
+            {
+                return Ok(if parent_deleted {
+                    None
+                } else {
+                    missing("subscription query", key)
+                });
+            }
+            if subscription_id_by_uuid(conn, subscription_uuid)?.is_none() && !parent_deleted {
+                return Ok(missing("subscription", subscription_uuid));
             }
         }
         "duplicate_decided" => {
@@ -807,6 +896,181 @@ pub(super) fn apply_remote_op(
         "smart_folder_deleted" => {
             if let Some(id) = smart_folder_id_by_uuid(conn, key)? {
                 write::smart_folders::delete_smart_folder(conn, id)?;
+            }
+        }
+        "subscription_group_created" => {
+            if subscription_group_id_by_uuid(conn, key)?.is_none() {
+                conn.execute(
+                    "INSERT INTO subscription_group (name, uuid, date_added)
+                     VALUES (?1, ?2, ?3)",
+                    rusqlite::params![
+                        payload_str(p, "name").unwrap_or("Subscription group"),
+                        key,
+                        payload_str(p, "date_added").unwrap_or(&now),
+                    ],
+                )?;
+            }
+        }
+        "subscription_group_updated" => {
+            if let Some(id) = subscription_group_id_by_uuid(conn, key)? {
+                if let Some(name) = payload_str(p, "name") {
+                    conn.execute(
+                        "UPDATE subscription_group SET name = ?1 WHERE group_id = ?2",
+                        rusqlite::params![name, id],
+                    )?;
+                }
+            }
+        }
+        "subscription_group_deleted" => {
+            if let Some(id) = subscription_group_id_by_uuid(conn, key)? {
+                conn.execute(
+                    "UPDATE subscription SET group_id = NULL WHERE group_id = ?1",
+                    [id],
+                )?;
+                conn.execute("DELETE FROM subscription_group WHERE group_id = ?1", [id])?;
+            }
+        }
+        "subscription_created" => {
+            if subscription_id_by_uuid(conn, key)?.is_none() {
+                let group_id = payload_str(p, "group_uuid")
+                    .map(|uuid| subscription_group_id_by_uuid(conn, uuid))
+                    .transpose()?
+                    .flatten();
+                conn.execute(
+                    "INSERT INTO subscription (
+                         name, schedule, paused, group_id, initial_post_limit,
+                         periodic_post_limit, auto_collections, uuid, date_added
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    rusqlite::params![
+                        payload_str(p, "name").unwrap_or("Subscription"),
+                        payload_str(p, "schedule").unwrap_or("manual"),
+                        payload_bool(p, "paused", false),
+                        group_id,
+                        payload_i64(p, "initial_post_limit", 100),
+                        payload_i64(p, "periodic_post_limit", 100),
+                        payload_bool(p, "auto_collections", true),
+                        key,
+                        payload_str(p, "date_added").unwrap_or(&now),
+                    ],
+                )?;
+            }
+        }
+        "subscription_updated" => {
+            if let Some(id) = subscription_id_by_uuid(conn, key)? {
+                if let Some(value) = payload_str(p, "name") {
+                    conn.execute(
+                        "UPDATE subscription SET name = ?1 WHERE subscription_id = ?2",
+                        rusqlite::params![value, id],
+                    )?;
+                }
+                if let Some(value) = payload_str(p, "schedule") {
+                    conn.execute(
+                        "UPDATE subscription SET schedule = ?1 WHERE subscription_id = ?2",
+                        rusqlite::params![value, id],
+                    )?;
+                }
+                if let Some(value) = p.get("paused").and_then(|value| value.as_bool()) {
+                    conn.execute(
+                        "UPDATE subscription SET paused = ?1 WHERE subscription_id = ?2",
+                        rusqlite::params![value, id],
+                    )?;
+                }
+                if let Some(value) = p.get("initial_post_limit").and_then(|value| value.as_i64()) {
+                    conn.execute("UPDATE subscription SET initial_post_limit = ?1 WHERE subscription_id = ?2", rusqlite::params![value, id])?;
+                }
+                if let Some(value) = p
+                    .get("periodic_post_limit")
+                    .and_then(|value| value.as_i64())
+                {
+                    conn.execute("UPDATE subscription SET periodic_post_limit = ?1 WHERE subscription_id = ?2", rusqlite::params![value, id])?;
+                }
+                if let Some(value) = p.get("auto_collections").and_then(|value| value.as_bool()) {
+                    conn.execute(
+                        "UPDATE subscription SET auto_collections = ?1 WHERE subscription_id = ?2",
+                        rusqlite::params![value, id],
+                    )?;
+                }
+                if p.get("group_uuid").is_some() {
+                    let group_id = payload_str(p, "group_uuid")
+                        .map(|uuid| subscription_group_id_by_uuid(conn, uuid))
+                        .transpose()?
+                        .flatten();
+                    conn.execute(
+                        "UPDATE subscription SET group_id = ?1 WHERE subscription_id = ?2",
+                        rusqlite::params![group_id, id],
+                    )?;
+                }
+            }
+        }
+        "subscription_deleted" => {
+            if let Some(id) = subscription_id_by_uuid(conn, key)? {
+                conn.execute("DELETE FROM subscription WHERE subscription_id = ?1", [id])?;
+            }
+        }
+        "subscription_query_created" => {
+            if subscription_query_id_by_uuid(conn, key)?.is_none() {
+                if let Some(subscription_id) = payload_str(p, "subscription_uuid")
+                    .map(|uuid| subscription_id_by_uuid(conn, uuid))
+                    .transpose()?
+                    .flatten()
+                {
+                    conn.execute(
+                        "INSERT INTO subscription_query (
+                             subscription_id, site_id, query_kind, query_text,
+                             display_name, notes, paused, uuid
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                        rusqlite::params![
+                            subscription_id,
+                            payload_str(p, "site_id").unwrap_or(""),
+                            payload_str(p, "query_kind").unwrap_or(""),
+                            payload_str(p, "query_text").unwrap_or(""),
+                            p.get("display_name").and_then(|value| value.as_str()),
+                            p.get("notes").and_then(|value| value.as_str()),
+                            payload_bool(p, "paused", false),
+                            key,
+                        ],
+                    )?;
+                }
+            }
+        }
+        "subscription_query_updated" => {
+            if let Some(id) = subscription_query_id_by_uuid(conn, key)? {
+                for (field, column) in [
+                    ("site_id", "site_id"),
+                    ("query_kind", "query_kind"),
+                    ("query_text", "query_text"),
+                ] {
+                    if let Some(value) = payload_str(p, field) {
+                        conn.execute(
+                            &format!(
+                                "UPDATE subscription_query SET {column} = ?1 WHERE query_id = ?2"
+                            ),
+                            rusqlite::params![value, id],
+                        )?;
+                    }
+                }
+                for field in ["display_name", "notes"] {
+                    if p.get(field).is_some() {
+                        let value = p.get(field).and_then(|value| value.as_str());
+                        conn.execute(
+                            &format!(
+                                "UPDATE subscription_query SET {field} = ?1 WHERE query_id = ?2"
+                            ),
+                            rusqlite::params![value, id],
+                        )?;
+                    }
+                }
+                if let Some(value) = p.get("paused").and_then(|value| value.as_bool()) {
+                    conn.execute(
+                        "UPDATE subscription_query SET paused = ?1 WHERE query_id = ?2",
+                        rusqlite::params![value, id],
+                    )?;
+                }
+            }
+        }
+        "subscription_query_deleted" => {
+            if let Some(id) = subscription_query_id_by_uuid(conn, key)? {
+                conn.execute("DELETE FROM subscription_query WHERE query_id = ?1", [id])?;
             }
         }
         "collection_created" => {
@@ -1556,5 +1820,166 @@ mod tests {
         assert_eq!(name.as_deref(), Some("new"));
         assert_eq!(rating, None);
         assert_eq!(mime, "image/png");
+    }
+
+    #[test]
+    fn remote_subscription_definitions_materialize_without_runtime_state() {
+        let conn = db();
+        let operations = [
+            op(
+                "0000000000001-0000",
+                "peer",
+                "subscription_group_created",
+                "group-uuid",
+                serde_json::json!({"name":"Artists","date_added":"2026-01-01"}),
+            ),
+            op(
+                "0000000000002-0000",
+                "peer",
+                "subscription_created",
+                "subscription-uuid",
+                serde_json::json!({
+                    "name":"Daily artists",
+                    "schedule":"daily",
+                    "paused":false,
+                    "initial_post_limit":200,
+                    "periodic_post_limit":50,
+                    "auto_collections":true,
+                    "group_uuid":"group-uuid",
+                    "date_added":"2026-01-02"
+                }),
+            ),
+            op(
+                "0000000000003-0000",
+                "peer",
+                "subscription_query_created",
+                "query-uuid",
+                serde_json::json!({
+                    "subscription_uuid":"subscription-uuid",
+                    "site_id":"gelbooru",
+                    "query_kind":"tag_search",
+                    "query_text":"one_girl",
+                    "display_name":"One girl",
+                    "notes":null,
+                    "paused":false
+                }),
+            ),
+        ];
+        for operation in operations {
+            let outcome = apply_remote_op(&conn, &operation).unwrap();
+            let RemoteOpOutcome::Applied(impact) = outcome else {
+                panic!("definition operation was not applied");
+            };
+            assert!(!impact.rebuild_sidebar);
+            assert!(impact.into_compiler_plan().is_empty());
+        }
+
+        let (name, schedule, group_uuid): (String, String, Option<String>) = conn
+            .query_row(
+                "SELECT s.name, s.schedule, g.uuid
+                 FROM subscription s
+                 LEFT JOIN subscription_group g ON g.group_id = s.group_id
+                 WHERE s.uuid = 'subscription-uuid'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(name, "Daily artists");
+        assert_eq!(schedule, "daily");
+        assert_eq!(group_uuid.as_deref(), Some("group-uuid"));
+
+        conn.execute(
+            "UPDATE subscription_query
+             SET files_found = 17, resume_cursor = 'local-cursor'
+             WHERE uuid = 'query-uuid'",
+            [],
+        )
+        .unwrap();
+        consumed(
+            &conn,
+            op(
+                "0000000000004-0000",
+                "peer",
+                "subscription_query_updated",
+                "query-uuid",
+                serde_json::json!({
+                    "subscription_uuid":"subscription-uuid",
+                    "notes":"portable note",
+                    "paused":true
+                }),
+            ),
+        );
+        let (notes, paused, files_found, cursor): (Option<String>, bool, i64, Option<String>) =
+            conn.query_row(
+                "SELECT notes, paused, files_found, resume_cursor
+                 FROM subscription_query WHERE uuid = 'query-uuid'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )
+            .unwrap();
+        assert_eq!(notes.as_deref(), Some("portable note"));
+        assert!(paused);
+        assert_eq!(files_found, 17);
+        assert_eq!(cursor.as_deref(), Some("local-cursor"));
+    }
+
+    #[test]
+    fn remote_subscription_parent_deletes_settle_without_orphans() {
+        let conn = db();
+        for operation in [
+            op(
+                "0000000000001-0000",
+                "peer",
+                "subscription_group_created",
+                "group-uuid",
+                serde_json::json!({"name":"Group"}),
+            ),
+            op(
+                "0000000000002-0000",
+                "peer",
+                "subscription_group_deleted",
+                "group-uuid",
+                serde_json::json!({}),
+            ),
+            op(
+                "0000000000003-0000",
+                "peer",
+                "subscription_created",
+                "subscription-uuid",
+                serde_json::json!({"name":"Subscription","group_uuid":"group-uuid"}),
+            ),
+            op(
+                "0000000000004-0000",
+                "peer",
+                "subscription_deleted",
+                "subscription-uuid",
+                serde_json::json!({}),
+            ),
+            op(
+                "0000000000005-0000",
+                "peer",
+                "subscription_query_created",
+                "query-uuid",
+                serde_json::json!({
+                    "subscription_uuid":"subscription-uuid",
+                    "site_id":"gelbooru",
+                    "query_kind":"tag_search",
+                    "query_text":"one_girl"
+                }),
+            ),
+        ] {
+            consumed(&conn, operation);
+        }
+
+        let subscriptions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM subscription", [], |row| row.get(0))
+            .unwrap();
+        let queries: i64 = conn
+            .query_row("SELECT COUNT(*) FROM subscription_query", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(subscriptions, 0);
+        assert_eq!(queries, 0);
     }
 }

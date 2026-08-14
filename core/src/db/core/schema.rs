@@ -4,7 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 114;
+pub const CURRENT_SCHEMA_VERSION: i64 = 115;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -186,29 +186,29 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_smart_folder_uuid ON smart_folder(uuid) WH
 CREATE TABLE IF NOT EXISTS subscription_group (
     group_id   INTEGER PRIMARY KEY,
     name       TEXT    NOT NULL,
-    uuid       TEXT,
+    uuid       TEXT    NOT NULL,
     date_added TEXT    NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_group_uuid ON subscription_group(uuid) WHERE uuid IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_group_uuid ON subscription_group(uuid);
 
 CREATE TABLE IF NOT EXISTS subscription (
     subscription_id    INTEGER PRIMARY KEY,
     name               TEXT    NOT NULL,
-    site_id            TEXT    NOT NULL,
     schedule           TEXT    NOT NULL DEFAULT 'manual',
     paused             INTEGER NOT NULL DEFAULT 0,
-    group_id           INTEGER REFERENCES subscription_group(group_id) ON DELETE CASCADE,
+    group_id           INTEGER REFERENCES subscription_group(group_id) ON DELETE SET NULL,
     initial_post_limit INTEGER DEFAULT 100,
     periodic_post_limit INTEGER DEFAULT 100,
     auto_collections   INTEGER NOT NULL DEFAULT 1,
-    uuid               TEXT,
+    uuid               TEXT    NOT NULL,
     date_added         TEXT    NOT NULL
 );
-CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_uuid ON subscription(uuid) WHERE uuid IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_uuid ON subscription(uuid);
 
 CREATE TABLE IF NOT EXISTS subscription_query (
     query_id            INTEGER PRIMARY KEY,
     subscription_id     INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+    uuid                TEXT    NOT NULL,
     site_id             TEXT    NOT NULL,
     query_kind          TEXT    NOT NULL DEFAULT '',
     query_text          TEXT    NOT NULL,
@@ -226,6 +226,7 @@ CREATE TABLE IF NOT EXISTS subscription_query (
     last_failure_kind   TEXT,
     last_failure_message TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_query_uuid ON subscription_query(uuid);
 
 CREATE TABLE IF NOT EXISTS subscription_entity (
     subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
@@ -559,7 +560,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 114
+SELECT 115
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -673,7 +674,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         ),
         (
             "subscription_query",
-            "SELECT query_id, site_id, query_kind, notes, last_success_at, last_failure_at, last_failure_kind, last_failure_message FROM subscription_query WHERE 0",
+            "SELECT query_id, uuid, site_id, query_kind, notes, last_success_at, last_failure_at, last_failure_kind, last_failure_message FROM subscription_query WHERE 0",
         ),
         (
             "subscription_entity",
@@ -838,6 +839,11 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         ),
         ("idx_subscription_uuid", "subscription", &[("uuid", false)]),
         (
+            "idx_subscription_query_uuid",
+            "subscription_query",
+            &[("uuid", false)],
+        ),
+        (
             "idx_ingest_queue_ready",
             "ingest_queue",
             &[
@@ -907,13 +913,12 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         "idx_smart_folder_uuid",
         "idx_subscription_group_uuid",
         "idx_subscription_uuid",
+        "idx_subscription_query_uuid",
         "idx_subscription_issue_key",
     ];
     const PARTIAL_INDEXES: &[(&str, &str)] = &[
         ("idx_folder_uuid", "uuid is not null"),
         ("idx_smart_folder_uuid", "uuid is not null"),
-        ("idx_subscription_group_uuid", "uuid is not null"),
-        ("idx_subscription_uuid", "uuid is not null"),
         ("idx_op_outbox_pending", "uploaded_seq is null"),
     ];
 
@@ -924,6 +929,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
             )
         })?;
     }
+    validate_subscription_definition_columns(conn)?;
     for (index, expected_table, expected_columns) in REQUIRED_INDEXES {
         let actual_index: Option<(String, String)> = conn
             .query_row(
@@ -1003,6 +1009,61 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
     if !normalized_sql.contains("check (status in ('pending', 'failed'))") {
         return Err(format!(
             "Canonical schema version {CURRENT_SCHEMA_VERSION} has incompatible sync_missing_blob status constraints"
+        ));
+    }
+    Ok(())
+}
+
+fn validate_subscription_definition_columns(conn: &Connection) -> Result<(), String> {
+    for table in ["subscription_group", "subscription", "subscription_query"] {
+        let mut statement = conn
+            .prepare(&format!("PRAGMA table_info({table})"))
+            .map_err(|error| format!("Failed to inspect canonical columns for {table}: {error}"))?;
+        let columns = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(1)?, row.get::<_, i64>(3)? != 0))
+            })
+            .map_err(|error| format!("Failed to inspect canonical columns for {table}: {error}"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("Failed to inspect canonical columns for {table}: {error}"))?;
+
+        if !columns
+            .iter()
+            .any(|(name, not_null)| name == "uuid" && *not_null)
+        {
+            return Err(format!(
+                "Canonical schema version {CURRENT_SCHEMA_VERSION} requires {table}.uuid to be NOT NULL"
+            ));
+        }
+
+        if table == "subscription" && columns.iter().any(|(name, _)| name == "site_id") {
+            return Err(format!(
+                "Canonical schema version {CURRENT_SCHEMA_VERSION} must not contain subscription.site_id"
+            ));
+        }
+    }
+
+    let mut statement = conn
+        .prepare("PRAGMA foreign_key_list(subscription)")
+        .map_err(|error| format!("Failed to inspect subscription foreign keys: {error}"))?;
+    let group_delete_action = statement
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(6)?,
+            ))
+        })
+        .map_err(|error| format!("Failed to inspect subscription foreign keys: {error}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Failed to inspect subscription foreign keys: {error}"))?
+        .into_iter()
+        .find_map(|(table, from, on_delete)| {
+            (table == "subscription_group" && from == "group_id").then_some(on_delete)
+        });
+    if group_delete_action.as_deref() != Some("SET NULL") {
+        return Err(format!(
+            "Canonical schema version {CURRENT_SCHEMA_VERSION} requires subscription.group_id to use ON DELETE SET NULL"
         ));
     }
     Ok(())

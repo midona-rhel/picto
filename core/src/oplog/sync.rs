@@ -555,10 +555,25 @@ fn sync_change_impact(
                 .grid_reorder()
                 .all_smart_folder_scopes_changed(),
             "duplicate_decided" => impact.add_domains(&[Domain::Files, Domain::Sidebar]),
+            "subscription_group_created"
+            | "subscription_group_updated"
+            | "subscription_group_deleted"
+            | "subscription_created"
+            | "subscription_updated"
+            | "subscription_deleted"
+            | "subscription_query_created"
+            | "subscription_query_updated"
+            | "subscription_query_deleted" => impact.add_domain(Domain::Subscriptions),
             _ => impact,
         };
     }
-    impact.compiler_batch_done = Some(true);
+    if report
+        .applied_op_types
+        .iter()
+        .any(|op_type| !op_type.starts_with("subscription_"))
+    {
+        impact.compiler_batch_done = Some(true);
+    }
     impact
 }
 
@@ -1036,6 +1051,125 @@ mod tests {
         // Steady state: nothing new for either.
         assert_eq!(sync_once(&dev_a, &backend).unwrap(), SyncReport::default());
         assert_eq!(sync_once(&dev_b, &backend).unwrap(), SyncReport::default());
+    }
+
+    #[tokio::test]
+    async fn subscription_definitions_converge_while_runtime_state_stays_local() {
+        let backend = MemoryBackend::new();
+        let source_root = TempDir::new().unwrap();
+        let target_root = TempDir::new().unwrap();
+        let source =
+            LibraryDatabase::open_with_device_id(source_root.path(), "subscriptions-a".into())
+                .unwrap();
+        let target =
+            LibraryDatabase::open_with_device_id(target_root.path(), "subscriptions-b".into())
+                .unwrap();
+        let service = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            &source,
+            source_root.path(),
+        );
+
+        let group = service.create_group("Artists".into()).await.unwrap();
+        let group_id = group.id.parse::<i64>().unwrap();
+        let subscription = service
+            .create_subscription("Daily artists".into(), Some(group_id), Some(200), Some(50))
+            .await
+            .unwrap();
+        let query = service
+            .add_subscription_query(
+                subscription.id.clone(),
+                "gelbooru".into(),
+                None,
+                "one_girl".into(),
+                Some("portable note".into()),
+            )
+            .await
+            .unwrap();
+
+        sync_once(&source, &backend).unwrap();
+        let report = sync_once(&target, &backend).unwrap();
+        assert_eq!(report.ops_applied, 3);
+        assert!(report
+            .applied_op_types
+            .contains(&"subscription_query_created".to_string()));
+        target
+            .with_read(|conn| {
+                let definition: (String, String, String, String) = conn.query_row(
+                    "SELECT g.name, s.name, q.site_id, q.query_text
+                     FROM subscription_group g
+                     JOIN subscription s ON s.group_id = g.group_id
+                     JOIN subscription_query q ON q.subscription_id = s.subscription_id",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )?;
+                assert_eq!(
+                    definition,
+                    (
+                        "Artists".into(),
+                        "Daily artists".into(),
+                        "gelbooru".into(),
+                        "one_girl".into(),
+                    )
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        target
+            .with_write(|conn| {
+                conn.execute(
+                    "UPDATE subscription_query
+                     SET files_found = 23, resume_cursor = 'target-only'
+                     WHERE query_text = 'one_girl'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        service
+            .pause_subscription_query(query.id.clone(), true)
+            .await
+            .unwrap();
+        sync_once(&source, &backend).unwrap();
+        sync_once(&target, &backend).unwrap();
+        target
+            .with_read(|conn| {
+                let state: (bool, i64, Option<String>) = conn.query_row(
+                    "SELECT paused, files_found, resume_cursor
+                     FROM subscription_query WHERE query_text = 'one_girl'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                assert_eq!(state, (true, 23, Some("target-only".into())));
+                Ok(())
+            })
+            .unwrap();
+
+        service.delete_group(group.id).await.unwrap();
+        sync_once(&source, &backend).unwrap();
+        sync_once(&target, &backend).unwrap();
+        let target_group_id: Option<i64> = target
+            .with_read(|conn| {
+                conn.query_row("SELECT group_id FROM subscription", [], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(target_group_id, None);
+
+        service.delete_subscription(subscription.id).await.unwrap();
+        sync_once(&source, &backend).unwrap();
+        sync_once(&target, &backend).unwrap();
+        target
+            .with_read(|conn| {
+                let subscriptions: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM subscription", [], |row| row.get(0))?;
+                let queries: i64 =
+                    conn.query_row("SELECT COUNT(*) FROM subscription_query", [], |row| {
+                        row.get(0)
+                    })?;
+                assert_eq!((subscriptions, queries), (0, 0));
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

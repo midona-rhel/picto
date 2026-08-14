@@ -29,6 +29,9 @@ fn is_create(op_type: &str) -> bool {
             | "folder_created"
             | "smart_folder_created"
             | "collection_created"
+            | "subscription_group_created"
+            | "subscription_created"
+            | "subscription_query_created"
     )
 }
 
@@ -49,7 +52,13 @@ fn create_is_blocked(
 fn is_delete(op_type: &str) -> bool {
     matches!(
         op_type,
-        "entity_deleted" | "folder_deleted" | "smart_folder_deleted" | "collection_split"
+        "entity_deleted"
+            | "folder_deleted"
+            | "smart_folder_deleted"
+            | "collection_split"
+            | "subscription_group_deleted"
+            | "subscription_deleted"
+            | "subscription_query_deleted"
     )
 }
 
@@ -78,6 +87,15 @@ fn target_kind(op_type: &str) -> Option<&'static str> {
         | "collection_members_removed"
         | "collection_members_reordered"
         | "collection_split" => Some("collection"),
+        "subscription_group_created"
+        | "subscription_group_updated"
+        | "subscription_group_deleted" => Some("subscription_group"),
+        "subscription_created" | "subscription_updated" | "subscription_deleted" => {
+            Some("subscription")
+        }
+        "subscription_query_created"
+        | "subscription_query_updated"
+        | "subscription_query_deleted" => Some("subscription_query"),
         "duplicate_decided" => Some("duplicate"),
         // Structural tag operations deliberately remain on their existing
         // live path in this slice.
@@ -133,9 +151,11 @@ fn slots_for(op: &OpRecord) -> Vec<SlotSpec> {
     }
 
     let fields = match op.op_type.as_str() {
-        "entity_updated" | "folder_updated" | "smart_folder_updated" => {
-            object_fields(&op.payload, &[])
-        }
+        "entity_updated"
+        | "folder_updated"
+        | "smart_folder_updated"
+        | "subscription_group_updated"
+        | "subscription_updated" => object_fields(&op.payload, &[]),
         "entity_status_changed" => vec!["status".to_owned()],
         "entity_tags_added" | "entity_tags_removed" => array_strings(&op.payload, "tags")
             .into_iter()
@@ -170,6 +190,10 @@ fn slots_for(op: &OpRecord) -> Vec<SlotSpec> {
                     .map(|tag| format!("tag:{tag}")),
             );
             fields
+        }
+        "subscription_query_updated" => object_fields(&op.payload, &["subscription_uuid"]),
+        "subscription_group_created" | "subscription_created" | "subscription_query_created" => {
+            object_fields(&op.payload, &[])
         }
         _ => Vec::new(),
     };
@@ -263,9 +287,18 @@ fn filter_payload(op: &OpRecord, accepted: &[SlotSpec]) -> serde_json::Value {
         .collect();
     let mut payload = op.payload.clone();
     match op.op_type.as_str() {
-        "entity_updated" | "folder_updated" | "smart_folder_updated" => {
+        "entity_updated"
+        | "folder_updated"
+        | "smart_folder_updated"
+        | "subscription_group_updated"
+        | "subscription_updated"
+        | "subscription_query_updated" => {
             if let Some(object) = payload.as_object_mut() {
-                object.retain(|field, _| accepted.contains(field.as_str()));
+                object.retain(|field, _| {
+                    accepted.contains(field.as_str())
+                        || (op.op_type == "subscription_query_updated"
+                            && field == "subscription_uuid")
+                });
             }
         }
         "entity_status_changed" => {
@@ -796,5 +829,69 @@ mod tests {
             )
             .unwrap();
         assert_eq!(create_clock, "0000000000003-0000");
+    }
+
+    #[test]
+    fn subscription_definition_updates_filter_stale_fields_independently() {
+        let conn = db();
+        let newer = op(
+            "0000000000002-0000",
+            "b",
+            "subscription_updated",
+            "subscription-1",
+            serde_json::json!({"name":"new","schedule":"daily"}),
+        );
+        let older = op(
+            "0000000000001-0000",
+            "a",
+            "subscription_updated",
+            "subscription-1",
+            serde_json::json!({"name":"old","paused":true}),
+        );
+
+        assert!(accept_remote_op(&conn, &newer).unwrap().is_some());
+        let filtered = accept_remote_op(&conn, &older).unwrap().unwrap();
+        assert_eq!(filtered.payload, serde_json::json!({"paused":true}));
+    }
+
+    #[test]
+    fn subscription_definition_create_cannot_cross_a_tombstone() {
+        let conn = db();
+        assert!(accept_remote_op(
+            &conn,
+            &op(
+                "0000000000002-0000",
+                "a",
+                "subscription_deleted",
+                "subscription-1",
+                serde_json::json!({}),
+            ),
+        )
+        .unwrap()
+        .is_some());
+        assert!(accept_remote_op(
+            &conn,
+            &op(
+                "0000000000003-0000",
+                "b",
+                "subscription_created",
+                "subscription-1",
+                serde_json::json!({"name":"stale"}),
+            ),
+        )
+        .unwrap()
+        .is_none());
+        assert!(accept_remote_op(
+            &conn,
+            &op(
+                "0000000000004-0000",
+                "c",
+                "subscription_updated",
+                "subscription-1",
+                serde_json::json!({"name":"resurrection"}),
+            ),
+        )
+        .unwrap()
+        .is_none());
     }
 }

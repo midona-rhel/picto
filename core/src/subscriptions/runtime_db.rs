@@ -1501,14 +1501,14 @@ mod tests {
         let conn = Connection::open_in_memory().expect("open database");
         conn.execute_batch(LIBRARY_DDL).expect("create schema");
         conn.execute(
-            "INSERT INTO subscription (subscription_id, name, site_id, date_added)
-             VALUES (1, 'Test subscription', 'danbooru', '2026-01-01')",
+            "INSERT INTO subscription (subscription_id, name, uuid, date_added)
+             VALUES (1, 'Test subscription', 'subscription-retry-test', '2026-01-01')",
             [],
         )
         .expect("insert subscription");
         conn.execute(
-            "INSERT INTO subscription_query (query_id, subscription_id, site_id, query_text)
-             VALUES (1, 1, 'danbooru', 'tag:test')",
+            "INSERT INTO subscription_query (query_id, subscription_id, uuid, site_id, query_text)
+             VALUES (1, 1, 'query-retry-test', 'danbooru', 'tag:test')",
             [],
         )
         .expect("insert query");
@@ -1622,14 +1622,14 @@ mod tests {
         let conn = Connection::open_in_memory().expect("open database");
         conn.execute_batch(LIBRARY_DDL).expect("create schema");
         conn.execute(
-            "INSERT INTO subscription (subscription_id, name, site_id, date_added)
-             VALUES (1, 'Test subscription', 'pixivuser', '2026-01-01')",
+            "INSERT INTO subscription (subscription_id, name, uuid, date_added)
+             VALUES (1, 'Test subscription', 'subscription-bulk-retry-test', '2026-01-01')",
             [],
         )
         .expect("insert subscription");
         conn.execute(
-            "INSERT INTO subscription_query (query_id, subscription_id, site_id, query_text)
-             VALUES (1, 1, 'pixivuser', '12345')",
+            "INSERT INTO subscription_query (query_id, subscription_id, uuid, site_id, query_text)
+             VALUES (1, 1, 'query-bulk-retry-test', 'pixivuser', '12345')",
             [],
         )
         .expect("insert query");
@@ -1740,16 +1740,16 @@ mod tests {
         let conn = Connection::open_in_memory().expect("open database");
         conn.execute_batch(LIBRARY_DDL).expect("create schema");
         conn.execute(
-            "INSERT INTO subscription (subscription_id, name, site_id, date_added)
-             VALUES (1, 'Test subscription', 'gelbooru', '2026-01-01')",
+            "INSERT INTO subscription (subscription_id, name, uuid, date_added)
+             VALUES (1, 'Test subscription', 'subscription-progress-test', '2026-01-01')",
             [],
         )
         .expect("insert subscription");
         conn.execute(
             "INSERT INTO subscription_query (
-                 query_id, subscription_id, site_id, query_text,
+                 query_id, subscription_id, uuid, site_id, query_text,
                  last_check_time, files_found, posts_found
-             ) VALUES (1, 1, 'gelbooru', 'test', 'previous-check', 95, 95)",
+             ) VALUES (1, 1, 'query-progress-test', 'gelbooru', 'test', 'previous-check', 95, 95)",
             [],
         )
         .expect("insert query");

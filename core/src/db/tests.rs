@@ -1676,6 +1676,60 @@ fn fresh_library_starts_at_current_canonical_schema_version() {
 }
 
 #[test]
+fn subscription_definitions_use_uuid_identity_and_group_delete_ungroups() {
+    let db = open_test_db();
+    db.with_write(|conn| {
+        for table in ["subscription_group", "subscription", "subscription_query"] {
+            let uuid_not_null: i64 = conn.query_row(
+                &format!(
+                    "SELECT \"notnull\" FROM pragma_table_info('{table}') WHERE name = 'uuid'"
+                ),
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(uuid_not_null, 1, "{table}.uuid must be required");
+        }
+
+        let subscription_has_site_id: bool = conn.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM pragma_table_info('subscription') WHERE name = 'site_id'
+             )",
+            [],
+            |row| row.get(0),
+        )?;
+        assert!(!subscription_has_site_id);
+
+        conn.execute(
+            "INSERT INTO subscription_group (group_id, name, uuid, date_added)
+             VALUES (1, 'Group', 'group-schema-test', '2026-08-14')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO subscription (
+                 subscription_id, name, group_id, uuid, date_added
+             ) VALUES (1, 'Subscription', 1, 'subscription-schema-test', '2026-08-14')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO subscription_query (
+                 query_id, subscription_id, uuid, site_id, query_text
+             ) VALUES (1, 1, 'query-schema-test', 'gelbooru', 'tag:test')",
+            [],
+        )?;
+        conn.execute("DELETE FROM subscription_group WHERE group_id = 1", [])?;
+
+        let group_id: Option<i64> = conn.query_row(
+            "SELECT group_id FROM subscription WHERE subscription_id = 1",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(group_id, None);
+        Ok(())
+    })
+    .expect("verify subscription definition schema");
+}
+
+#[test]
 fn canonical_schema_version_requires_exactly_one_row() {
     for (mutation, expected_count) in [
         ("DELETE FROM schema_version", 0),
@@ -1786,6 +1840,10 @@ fn current_schema_validation_rejects_missing_tables_columns_and_indexes() {
         (
             "DROP INDEX idx_subscription_issue_key",
             "idx_subscription_issue_key",
+        ),
+        (
+            "DROP INDEX idx_subscription_query_uuid",
+            "idx_subscription_query_uuid",
         ),
     ] {
         let tmp = TempDir::new().expect("tempdir");
@@ -1906,13 +1964,13 @@ fn subscription_issue_keys_deduplicate_query_and_global_recurrences() {
     let db = open_test_db();
     db.with_write(|conn| {
         conn.execute(
-            "INSERT INTO subscription (subscription_id, name, site_id, date_added)
-             VALUES (1, 'Test subscription', 'test', '2026-08-05')",
+            "INSERT INTO subscription (subscription_id, name, uuid, date_added)
+             VALUES (1, 'Test subscription', 'subscription-issue-test', '2026-08-05')",
             [],
         )?;
         conn.execute(
-            "INSERT INTO subscription_query (query_id, subscription_id, site_id, query_text)
-             VALUES (10, 1, 'test', 'query')",
+            "INSERT INTO subscription_query (query_id, subscription_id, uuid, site_id, query_text)
+             VALUES (10, 1, 'query-issue-test', 'test', 'query')",
             [],
         )?;
         Ok(())
@@ -2058,13 +2116,13 @@ fn non_issue_failure_kinds_do_not_create_subscription_issues() {
     let db = open_test_db();
     db.with_write(|conn| {
         conn.execute(
-            "INSERT INTO subscription (subscription_id, name, site_id, date_added)
-             VALUES (1, 'Test subscription', 'test', '2026-08-05')",
+            "INSERT INTO subscription (subscription_id, name, uuid, date_added)
+             VALUES (1, 'Test subscription', 'subscription-failure-test', '2026-08-05')",
             [],
         )?;
         conn.execute(
-            "INSERT INTO subscription_query (query_id, subscription_id, site_id, query_text)
-             VALUES (10, 1, 'test', 'query')",
+            "INSERT INTO subscription_query (query_id, subscription_id, uuid, site_id, query_text)
+             VALUES (10, 1, 'query-failure-test', 'test', 'query')",
             [],
         )?;
 

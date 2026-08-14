@@ -59,6 +59,15 @@ pub(crate) fn is_supported_op_type(op_type: &str) -> bool {
             | "collection_members_reordered"
             | "collection_split"
             | "duplicate_decided"
+            | "subscription_group_created"
+            | "subscription_group_updated"
+            | "subscription_group_deleted"
+            | "subscription_created"
+            | "subscription_updated"
+            | "subscription_deleted"
+            | "subscription_query_created"
+            | "subscription_query_updated"
+            | "subscription_query_deleted"
     )
 }
 
@@ -247,6 +256,7 @@ mod tests {
     #[test]
     fn operation_vocabulary_is_explicit() {
         assert!(is_supported_op_type("entity_recreated"));
+        assert!(is_supported_op_type("subscription_query_updated"));
         assert!(!is_supported_op_type("entity_cretaed"));
     }
 }
