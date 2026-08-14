@@ -2,15 +2,69 @@
 //! tables (split from db/mod.rs).
 
 use super::*;
+use std::collections::BTreeSet;
 
 // ── Remote op application ────────────────────────────────────────
 // Materializes ops from peer devices into local truth tables. A missing
 // prerequisite parks the containing segment; it is never treated as applied.
 
 pub(super) enum RemoteOpOutcome {
-    Applied,
+    Applied(RemoteProjectionImpact),
     Ignored,
     Pending(String),
+}
+
+#[derive(Default)]
+pub(super) struct RemoteProjectionImpact {
+    pub deleted_entity_ids: Vec<i64>,
+    pub dirty_tag_ids: Vec<i64>,
+    pub rebuild_status: bool,
+    pub rebuild_tag_derivatives: bool,
+    pub rebuild_all_smart_folders: bool,
+    pub dirty_smart_folder_ids: Vec<i64>,
+    pub rebuild_sidebar: bool,
+    pub rebuild_folder_sizes: bool,
+}
+
+impl RemoteProjectionImpact {
+    pub(super) fn merge(&mut self, other: Self) {
+        self.deleted_entity_ids.extend(other.deleted_entity_ids);
+        self.dirty_tag_ids.extend(other.dirty_tag_ids);
+        self.rebuild_status |= other.rebuild_status;
+        self.rebuild_tag_derivatives |= other.rebuild_tag_derivatives;
+        self.rebuild_all_smart_folders |= other.rebuild_all_smart_folders;
+        self.dirty_smart_folder_ids
+            .extend(other.dirty_smart_folder_ids);
+        self.rebuild_sidebar |= other.rebuild_sidebar;
+        self.rebuild_folder_sizes |= other.rebuild_folder_sizes;
+    }
+
+    pub(super) fn into_compiler_plan(mut self) -> crate::db::projection::compiler::CompilerPlan {
+        let dedup = |values: &mut Vec<i64>| {
+            let deduped = values.iter().copied().collect::<BTreeSet<_>>();
+            *values = deduped.into_iter().collect();
+        };
+        dedup(&mut self.deleted_entity_ids);
+        dedup(&mut self.dirty_tag_ids);
+        dedup(&mut self.dirty_smart_folder_ids);
+        crate::db::projection::compiler::CompilerPlan {
+            rebuild_status: self.rebuild_status,
+            dirty_tag_ids: self.dirty_tag_ids,
+            rebuild_tag_derivatives: self.rebuild_tag_derivatives,
+            rebuild_all_smart_folders: self.rebuild_all_smart_folders,
+            dirty_smart_folder_ids: self.dirty_smart_folder_ids,
+            rebuild_sidebar: self.rebuild_sidebar,
+            rebuild_folder_sizes: self.rebuild_folder_sizes,
+            ..Default::default()
+        }
+    }
+}
+
+#[derive(Default)]
+struct RemoteProjectionSnapshot {
+    entity_ids: Vec<i64>,
+    tag_ids: Vec<i64>,
+    smart_folder_ids: Vec<i64>,
 }
 
 fn entity_id_by_hash(conn: &Connection, hash: &str) -> rusqlite::Result<Option<i64>> {
@@ -98,6 +152,241 @@ fn entity_ids_for_hashes(conn: &Connection, hashes: &[String]) -> rusqlite::Resu
         }
     }
     Ok(ids)
+}
+
+fn entity_scope_ids_for_hashes(conn: &Connection, hashes: &[String]) -> rusqlite::Result<Vec<i64>> {
+    let mut ids = entity_ids_for_hashes(conn, hashes)?;
+    let mut collection_ids = Vec::new();
+    for entity_id in &ids {
+        let kind: Option<String> = conn
+            .query_row(
+                "SELECT entity_kind FROM media_entity WHERE entity_id = ?1",
+                [entity_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if kind.as_deref() == Some("collection") {
+            collection_ids.push(*entity_id);
+        }
+    }
+    for collection_id in collection_ids {
+        let members = conn
+            .prepare_cached(
+                "SELECT entity_id FROM media_entity
+                 WHERE parent_collection_entity_id = ?1",
+            )?
+            .query_map([collection_id], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        ids.extend(members);
+    }
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
+}
+
+fn tag_ids_for_entities(conn: &Connection, entity_ids: &[i64]) -> rusqlite::Result<Vec<i64>> {
+    let mut tag_ids = Vec::new();
+    for entity_id in entity_ids {
+        let ids = conn
+            .prepare_cached("SELECT tag_id FROM entity_tag WHERE entity_id = ?1")?
+            .query_map([entity_id], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        tag_ids.extend(ids);
+    }
+    tag_ids.sort_unstable();
+    tag_ids.dedup();
+    Ok(tag_ids)
+}
+
+fn smart_folder_scope_ids(conn: &Connection, uuid: &str) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = conn.prepare_cached(
+        "WITH RECURSIVE descendants(smart_folder_id) AS (
+             SELECT smart_folder_id FROM smart_folder WHERE uuid = ?1
+             UNION ALL
+             SELECT child.smart_folder_id
+             FROM smart_folder child
+             JOIN descendants parent ON child.parent_id = parent.smart_folder_id
+         )
+         SELECT smart_folder_id FROM descendants",
+    )?;
+    let mut ids = stmt
+        .query_map([uuid], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    ids.sort_unstable();
+    ids.dedup();
+    Ok(ids)
+}
+
+fn projection_snapshot(
+    conn: &Connection,
+    op: &crate::oplog::OpRecord,
+) -> rusqlite::Result<RemoteProjectionSnapshot> {
+    let p = &op.payload;
+    let mut entity_hashes = Vec::new();
+    let mut tag_keys = Vec::new();
+    match op.op_type.as_str() {
+        "entity_created"
+        | "entity_recreated"
+        | "entity_status_changed"
+        | "entity_updated"
+        | "entity_deleted"
+        | "collection_split"
+        | "entity_tags_added"
+        | "entity_tags_removed"
+        | "collection_members_added"
+        | "collection_members_removed"
+        | "collection_members_reordered"
+        | "collection_renamed" => entity_hashes.push(op.entity_key.clone()),
+        _ => {}
+    }
+    match op.op_type.as_str() {
+        "collection_members_added" | "collection_members_removed" => {
+            entity_hashes.extend(payload_strings(p, "members"));
+        }
+        "collection_members_reordered" => entity_hashes.extend(payload_strings(p, "order")),
+        _ => {}
+    }
+    if matches!(
+        op.op_type.as_str(),
+        "tag_renamed" | "tag_merged" | "tag_deleted" | "tag_alias_set" | "tag_implication_set"
+    ) {
+        tag_keys.push(op.entity_key.clone());
+        for field in ["to", "into", "parent"] {
+            if let Some(value) = payload_str(p, field) {
+                tag_keys.push(value.to_owned());
+            }
+        }
+    }
+    let entity_ids = entity_scope_ids_for_hashes(conn, &entity_hashes)?;
+    let mut tag_ids = tag_ids_for_entities(conn, &entity_ids)?;
+    for key in tag_keys {
+        if let Some(tag_id) = tag_id_by_key(conn, &key)? {
+            tag_ids.push(tag_id);
+        }
+    }
+    tag_ids.sort_unstable();
+    tag_ids.dedup();
+    let smart_folder_ids = if op.op_type.starts_with("smart_folder_") {
+        smart_folder_scope_ids(conn, &op.entity_key)?
+    } else {
+        Vec::new()
+    };
+    Ok(RemoteProjectionSnapshot {
+        entity_ids,
+        tag_ids,
+        smart_folder_ids,
+    })
+}
+
+fn applied_impact(
+    conn: &Connection,
+    op: &crate::oplog::OpRecord,
+    before: RemoteProjectionSnapshot,
+) -> rusqlite::Result<RemoteOpOutcome> {
+    let after = projection_snapshot(conn, op)?;
+    let deletes = matches!(
+        op.op_type.as_str(),
+        "entity_deleted" | "entity_recreated" | "collection_split"
+    );
+    let deleted_entity_ids = if deletes {
+        let mut deleted = Vec::new();
+        let mut exists =
+            conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM media_entity WHERE entity_id = ?1)")?;
+        for entity_id in &before.entity_ids {
+            if !exists.query_row([entity_id], |row| row.get::<_, bool>(0))? {
+                deleted.push(*entity_id);
+            }
+        }
+        deleted
+    } else {
+        Vec::new()
+    };
+    let tags_changed = matches!(
+        op.op_type.as_str(),
+        "entity_created"
+            | "entity_recreated"
+            | "entity_deleted"
+            | "entity_tags_added"
+            | "entity_tags_removed"
+            | "tag_renamed"
+            | "tag_merged"
+            | "tag_deleted"
+            | "tag_alias_set"
+            | "tag_implication_set"
+            | "collection_members_added"
+            | "collection_members_removed"
+            | "collection_split"
+    );
+    let mut dirty_tag_ids = if tags_changed {
+        before.tag_ids
+    } else {
+        Vec::new()
+    };
+    if tags_changed {
+        dirty_tag_ids.extend(after.tag_ids);
+        dirty_tag_ids.sort_unstable();
+        dirty_tag_ids.dedup();
+    }
+    let rebuild_status = matches!(
+        op.op_type.as_str(),
+        "entity_created"
+            | "entity_recreated"
+            | "entity_deleted"
+            | "entity_status_changed"
+            | "collection_created"
+            | "collection_split"
+            | "collection_members_added"
+            | "collection_members_removed"
+    );
+    let rebuild_all_smart_folders = matches!(
+        op.op_type.as_str(),
+        "entity_updated"
+            | "entity_tags_added"
+            | "entity_tags_removed"
+            | "tag_renamed"
+            | "tag_merged"
+            | "tag_deleted"
+            | "tag_alias_set"
+            | "tag_implication_set"
+            | "collection_renamed"
+            | "collection_members_reordered"
+    );
+    let rebuild_tag_derivatives = (matches!(
+        op.op_type.as_str(),
+        "entity_created" | "entity_recreated" | "entity_tags_added" | "entity_tags_removed"
+    ) && !payload_strings(&op.payload, "tags").is_empty())
+        || matches!(
+            op.op_type.as_str(),
+            "tag_renamed" | "tag_merged" | "tag_deleted" | "tag_alias_set" | "tag_implication_set"
+        );
+    // Metadata changes can alter smart-folder membership and therefore the
+    // sidebar counts derived from those smart-folder bitmaps.
+    let rebuild_sidebar = true;
+    let rebuild_folder_sizes = matches!(
+        op.op_type.as_str(),
+        "entity_recreated"
+            | "entity_deleted"
+            | "collection_split"
+            | "folder_members_added"
+            | "folder_members_removed"
+            | "collection_members_added"
+            | "collection_members_removed"
+            | "duplicate_decided"
+    );
+    Ok(RemoteOpOutcome::Applied(RemoteProjectionImpact {
+        deleted_entity_ids,
+        dirty_tag_ids,
+        rebuild_status,
+        rebuild_tag_derivatives,
+        rebuild_all_smart_folders,
+        dirty_smart_folder_ids: before
+            .smart_folder_ids
+            .into_iter()
+            .chain(after.smart_folder_ids)
+            .collect(),
+        rebuild_sidebar,
+        rebuild_folder_sizes,
+    }))
 }
 
 fn first_missing_entity(conn: &Connection, hashes: &[String]) -> rusqlite::Result<Option<String>> {
@@ -224,6 +513,7 @@ pub(super) fn apply_remote_op(
     if let Some(reason) = missing_prerequisite(conn, &op)? {
         return Ok(RemoteOpOutcome::Pending(reason));
     }
+    let before = projection_snapshot(conn, &op)?;
     let key = op.entity_key.as_str();
     let p = &op.payload;
     let now = chrono::Utc::now().to_rfc3339();
@@ -231,7 +521,9 @@ pub(super) fn apply_remote_op(
         "entity_created" | "entity_recreated" => {
             let existing_id = entity_id_by_hash(conn, key)?;
             if op.op_type == "entity_created" && existing_id.is_some() {
-                return Ok(RemoteOpOutcome::Applied); // content-addressed: already materialized
+                // Content-addressed: already materialized. The accepted op is
+                // still settled through the same impact path.
+                return applied_impact(conn, &op, before);
             }
             if let Some(entity_id) = existing_id {
                 // A recreate is a new metadata generation for the same content
@@ -348,7 +640,7 @@ pub(super) fn apply_remote_op(
             if let Some(id) = entity_id_by_hash(conn, key)? {
                 let tags = payload_strings(p, "tags");
                 if tags.is_empty() {
-                    return Ok(RemoteOpOutcome::Applied);
+                    return applied_impact(conn, &op, before);
                 }
                 if op.op_type == "entity_tags_added" {
                     write::tags::add_tags(
@@ -451,7 +743,7 @@ pub(super) fn apply_remote_op(
             if let Some(id) = folder_id_by_uuid(conn, key)? {
                 let ids = entity_ids_for_hashes(conn, &payload_strings(p, "entities"))?;
                 if ids.is_empty() {
-                    return Ok(RemoteOpOutcome::Applied);
+                    return applied_impact(conn, &op, before);
                 }
                 if op.op_type == "folder_members_added" {
                     write::folders::add_members(conn, id, &ids, types::ExpansionMode::EntityOnly)?;
@@ -538,7 +830,7 @@ pub(super) fn apply_remote_op(
             if let Some(id) = entity_id_by_hash(conn, key)? {
                 let ids = entity_ids_for_hashes(conn, &payload_strings(p, "members"))?;
                 if ids.is_empty() {
-                    return Ok(RemoteOpOutcome::Applied);
+                    return applied_impact(conn, &op, before);
                 }
                 if op.op_type == "collection_members_added" {
                     write::collections::add_members(conn, id, &ids)?;
@@ -597,14 +889,19 @@ pub(super) fn apply_remote_op(
             )));
         }
     }
-    Ok(RemoteOpOutcome::Applied)
+    applied_impact(conn, &op, before)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::projection::bitmaps::BitmapKey;
+    use crate::db::projection::compiler::CompilerPlan;
+    use crate::db::LibraryDatabase;
     use crate::oplog::OpRecord;
+    use roaring::RoaringBitmap;
     use rusqlite::params;
+    use tempfile::TempDir;
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -664,8 +961,55 @@ mod tests {
     fn consumed(conn: &Connection, op: OpRecord) {
         assert!(matches!(
             apply_remote_op(conn, &op).unwrap(),
-            RemoteOpOutcome::Applied | RemoteOpOutcome::Ignored
+            RemoteOpOutcome::Applied(_) | RemoteOpOutcome::Ignored
         ));
+    }
+
+    fn library_with_entity() -> (TempDir, LibraryDatabase) {
+        let root = TempDir::new().unwrap();
+        let db = LibraryDatabase::open_with_device_id(root.path(), "remote-test".into()).unwrap();
+        db.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO media_file
+                 (file_id, file_hash, mime_type, size_bytes, date_added)
+                 VALUES (1, 'h1', 'image/jpeg', 1, '2026-01-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO media_entity
+                 (entity_id, entity_hash, entity_kind, status, date_created, date_added, date_modified)
+                 VALUES (1, 'h1', 'single', 1, '2026-01-01', '2026-01-01', '2026-01-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tag (tag_id, namespace, subtag) VALUES (1, 'general', 'existing')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO entity_tag (entity_id, tag_id, provenance_mask, source)
+                 VALUES (1, 1, 1, 'local')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO folder (folder_id, name, uuid, date_added, date_modified)
+                 VALUES (1, 'Folder', 'folder-1', '2026-01-01', '2026-01-01')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        db.run_compiler(CompilerPlan {
+            rebuild_status: true,
+            rebuild_all_tags: true,
+            rebuild_all_smart_folders: true,
+            rebuild_sidebar: true,
+            ..Default::default()
+        });
+        (root, db)
     }
 
     #[test]
@@ -696,6 +1040,277 @@ mod tests {
             .unwrap(),
             RemoteOpOutcome::Ignored
         ));
+    }
+
+    #[test]
+    fn remote_metadata_and_folder_updates_preserve_unrelated_tag_projection() {
+        let (_root, db) = library_with_entity();
+        let sentinel = RoaringBitmap::from_iter([99_u32]);
+        db.bitmaps.set(BitmapKey::Tag(1), sentinel.clone());
+        db.bitmaps.set(BitmapKey::Tagged, sentinel.clone());
+        assert_eq!(db.bitmaps.get(&BitmapKey::Tag(1)), sentinel);
+
+        let applied = db
+            .apply_remote_ops(
+                &[
+                    op(
+                        "0000000000001-0000",
+                        "peer",
+                        "entity_updated",
+                        "h1",
+                        serde_json::json!({"rating": 4}),
+                    ),
+                    op(
+                        "0000000000002-0000",
+                        "peer",
+                        "folder_updated",
+                        "folder-1",
+                        serde_json::json!({"name": "Renamed"}),
+                    ),
+                ],
+                &[],
+            )
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(applied, vec![0, 1]);
+        assert_eq!(db.bitmaps.get(&BitmapKey::Tag(1)), sentinel);
+        assert_eq!(db.bitmaps.get(&BitmapKey::Tagged), sentinel);
+    }
+
+    #[test]
+    fn remote_status_settles_status_projection_without_touching_tag_truth() {
+        let (_root, db) = library_with_entity();
+        db.apply_remote_ops(
+            &[op(
+                "0000000000001-0000",
+                "peer",
+                "entity_status_changed",
+                "h1",
+                serde_json::json!({"status": 0}),
+            )],
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(db.bitmaps.get(&BitmapKey::Status(1)), RoaringBitmap::new());
+        assert_eq!(
+            db.bitmaps.get(&BitmapKey::Status(0)),
+            RoaringBitmap::from_iter([1_u32])
+        );
+        assert_eq!(
+            db.bitmaps.get(&BitmapKey::Tag(1)),
+            RoaringBitmap::from_iter([1_u32])
+        );
+    }
+
+    #[test]
+    fn remote_tag_change_rebuilds_tagged_and_direct_tag_bitmaps() {
+        let (_root, db) = library_with_entity();
+        db.apply_remote_ops(
+            &[op(
+                "0000000000001-0000",
+                "peer",
+                "entity_tags_added",
+                "h1",
+                serde_json::json!({"tags": ["general:new"]}),
+            )],
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+
+        let new_tag_id = db
+            .with_read(|conn| tag_id_by_key(conn, "general:new"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            db.bitmaps.get(&BitmapKey::Tag(new_tag_id)),
+            RoaringBitmap::from_iter([1_u32])
+        );
+        assert_eq!(
+            db.bitmaps.get(&BitmapKey::Tagged),
+            RoaringBitmap::from_iter([1_u32])
+        );
+    }
+
+    #[test]
+    fn remote_delete_removes_entity_from_every_relevant_bitmap() {
+        let (_root, db) = library_with_entity();
+        db.apply_remote_ops(
+            &[op(
+                "0000000000001-0000",
+                "peer",
+                "entity_deleted",
+                "h1",
+                serde_json::json!({}),
+            )],
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(db.bitmaps.get(&BitmapKey::Status(1)), RoaringBitmap::new());
+        assert_eq!(db.bitmaps.get(&BitmapKey::Tag(1)), RoaringBitmap::new());
+        assert_eq!(db.bitmaps.get(&BitmapKey::Tagged), RoaringBitmap::new());
+        assert_eq!(db.count_media_files().unwrap(), 0);
+        assert_eq!(
+            db.with_read(|conn| entity_id_by_hash(conn, "h1")).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn remote_collection_split_only_evicts_the_deleted_aggregate() {
+        let (_root, db) = library_with_entity();
+        let collection_id = db
+            .with_write(|conn| {
+                let id =
+                    write::collections::create_collection(conn, "Split", "2026-01-01T00:00:00Z")?;
+                write::collections::add_members(conn, id, &[1])?;
+                Ok(id)
+            })
+            .unwrap();
+        let collection_hash = db.get_collection_hash(collection_id).unwrap().unwrap();
+
+        let outcome = db
+            .with_write(|conn| {
+                apply_remote_op(
+                    conn,
+                    &op(
+                        "0000000000001-0000",
+                        "peer",
+                        "collection_split",
+                        &collection_hash,
+                        serde_json::json!({}),
+                    ),
+                )
+            })
+            .unwrap();
+        let RemoteOpOutcome::Applied(impact) = outcome else {
+            panic!("collection split should apply");
+        };
+
+        assert_eq!(impact.deleted_entity_ids, vec![collection_id]);
+        assert_eq!(
+            db.with_read(|conn| entity_id_by_hash(conn, "h1")).unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            db.with_read(|conn| {
+                conn.query_row(
+                    "SELECT parent_collection_entity_id FROM media_entity WHERE entity_id = 1",
+                    [],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+            })
+            .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn remote_tag_add_refreshes_existing_implications() {
+        let (_root, db) = library_with_entity();
+        db.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO tag (tag_id, namespace, subtag) VALUES
+                 (2, 'general', 'child'), (3, 'general', 'parent')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tag_implication (child_tag_id, parent_tag_id) VALUES (2, 3)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        db.run_compiler(CompilerPlan {
+            rebuild_tag_derivatives: true,
+            ..Default::default()
+        });
+
+        db.apply_remote_ops(
+            &[op(
+                "0000000000001-0000",
+                "peer",
+                "entity_tags_added",
+                "h1",
+                serde_json::json!({"tags": ["general:child"]}),
+            )],
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            db.bitmaps.get(&BitmapKey::EffectiveTag(3)),
+            RoaringBitmap::from_iter([1_u32])
+        );
+        assert_eq!(
+            db.with_read(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM entity_tag_implied
+                     WHERE entity_id = 1 AND tag_id = 3",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap(),
+            1
+        );
+    }
+
+    #[test]
+    fn remote_create_with_tags_refreshes_existing_implications() {
+        let root = TempDir::new().unwrap();
+        let db =
+            LibraryDatabase::open_with_device_id(root.path(), "remote-create-test".into()).unwrap();
+        db.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO tag (tag_id, namespace, subtag) VALUES
+                 (1, 'general', 'child'), (2, 'general', 'parent')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tag_implication (child_tag_id, parent_tag_id) VALUES (1, 2)",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        db.run_compiler(CompilerPlan {
+            rebuild_tag_derivatives: true,
+            ..Default::default()
+        });
+
+        db.apply_remote_ops(
+            &[op(
+                "0000000000001-0000",
+                "peer",
+                "entity_created",
+                "created-with-tags",
+                serde_json::json!({
+                    "mime": "image/jpeg",
+                    "size": 1,
+                    "status": 1,
+                    "tags": ["general:child"]
+                }),
+            )],
+            &[],
+        )
+        .unwrap()
+        .unwrap();
+
+        let entity_id = db
+            .with_read(|conn| entity_id_by_hash(conn, "created-with-tags"))
+            .unwrap()
+            .unwrap();
+        assert!(db
+            .bitmaps
+            .get(&BitmapKey::EffectiveTag(2))
+            .contains(entity_id as u32));
     }
 
     #[test]

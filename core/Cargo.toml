@@ -81,5 +81,8 @@ num_cpus = "1.16"
 # TypeScript type generation from Rust structs (PBI-234)
 ts-rs = { version = "10", features = ["serde-compat", "no-serde-warnings"] }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
 [dev-dependencies]
 tokio-test = "0.4"

@@ -77,16 +77,24 @@ impl ApplicationEngine {
             plan.rebuild_status = true;
             plan.rebuild_sidebar = true;
         }
+        if change.entities_deleted {
+            plan.rebuild_folder_sizes = true;
+        }
         if change.tags_changed || change.tag_structure_changed {
             plan.dirty_tag_ids = change.dirty_tag_ids.clone();
             plan.rebuild_all_smart_folders = true;
             plan.rebuild_sidebar = true;
         }
-        if change.tag_structure_changed {
-            plan.rebuild_tag_graph = true;
+        if change.metadata_changed {
+            plan.rebuild_all_smart_folders = true;
+            plan.rebuild_sidebar = true;
+        }
+        if change.tags_changed || change.tag_structure_changed {
+            plan.rebuild_tag_derivatives = true;
         }
         if !change.dirty_folder_ids.is_empty() {
             plan.rebuild_sidebar = true;
+            plan.rebuild_folder_sizes = true;
         }
 
         let smart_folders_rebuilt = plan.rebuild_status || plan.rebuild_all_smart_folders;
@@ -107,6 +115,9 @@ impl ApplicationEngine {
             impact.tags_changed = Some(true);
             impact = impact.add_domain(Domain::Sidebar);
             impact = impact.add_domain(Domain::SmartFolders);
+        }
+        if change.metadata_changed {
+            impact = impact.all_smart_folder_scopes_changed();
         }
         if change.tag_structure_changed {
             impact.tag_structure_changed = Some(true);

@@ -714,9 +714,13 @@ impl LibraryDatabase {
         let conn = self.write_conn.lock().unwrap();
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let mut applied = Vec::new();
+        let mut projection_impact = remote_ops::RemoteProjectionImpact::default();
         for (index, op) in ops.iter().enumerate() {
             match remote_ops::apply_remote_op(&tx, op).map_err(|e| e.to_string())? {
-                remote_ops::RemoteOpOutcome::Applied => applied.push(index),
+                remote_ops::RemoteOpOutcome::Applied(impact) => {
+                    applied.push(index);
+                    projection_impact.merge(impact);
+                }
                 remote_ops::RemoteOpOutcome::Ignored => {}
                 remote_ops::RemoteOpOutcome::Pending(reason) => {
                     tx.rollback().map_err(|e| e.to_string())?;
@@ -739,10 +743,14 @@ impl LibraryDatabase {
             .map_err(|e| e.to_string())?;
         }
         tx.commit().map_err(|e| e.to_string())?;
+        let deleted_entity_ids = projection_impact.deleted_entity_ids.clone();
+        let plan = projection_impact.into_compiler_plan();
         drop(conn);
-        if !applied.is_empty() {
-            // Projections are derived; rebuild after remote truth changed.
-            self.full_rebuild();
+        if !deleted_entity_ids.is_empty() {
+            self.bitmaps.remove_entities(&deleted_entity_ids);
+        }
+        if !plan.is_empty() {
+            self.run_compiler(plan);
         }
         Ok(Some(applied))
     }

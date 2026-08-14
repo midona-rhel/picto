@@ -14,7 +14,7 @@ use std::path::{Component, Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::backend::SyncBackend;
-use super::backend_fs::FsBackend;
+use super::backend_fs::{sync_directory, FsBackend};
 
 pub const PICTO_DIR: &str = "Picto";
 pub const MANIFEST_KEY: &str = "picto-library.json";
@@ -231,11 +231,24 @@ pub fn create_remote_library(
         ));
     }
     let picto = share_root.join(PICTO_DIR);
-    fs::create_dir_all(&picto)
-        .map_err(|e| format!("Failed to create remote Picto directory: {e}"))?;
+    match fs::create_dir(&picto) {
+        Ok(()) => {
+            sync_directory(share_root)
+                .map_err(|e| format!("Failed to persist remote Picto directory: {e}"))?;
+            sync_directory(&picto)
+                .map_err(|e| format!("Failed to persist remote Picto directory: {e}"))?;
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(format!("Failed to create remote Picto directory: {error}")),
+    }
     dir = checked_remote_library_root(share_root, &manifest.name)?;
     match fs::create_dir(&dir) {
-        Ok(()) => {}
+        Ok(()) => {
+            sync_directory(&picto)
+                .map_err(|e| format!("Failed to persist remote library directory: {e}"))?;
+            sync_directory(&dir)
+                .map_err(|e| format!("Failed to persist remote library directory: {e}"))?;
+        }
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
             return Err(format!(
                 "A library named \"{}\" already exists on this share. Picto never deletes or \

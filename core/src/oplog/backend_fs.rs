@@ -16,14 +16,30 @@ pub struct FsBackend {
 }
 
 #[cfg(unix)]
-fn sync_directory(path: &Path) -> Result<(), BackendError> {
+pub(crate) fn sync_directory(path: &Path) -> Result<(), BackendError> {
     fs::File::open(path)
         .and_then(|directory| directory.sync_all())
         .map_err(|error| BackendError::Io(error.to_string()))
 }
 
-#[cfg(not(unix))]
-fn sync_directory(_path: &Path) -> Result<(), BackendError> {
+#[cfg(windows)]
+pub(crate) fn sync_directory(path: &Path) -> Result<(), BackendError> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FILE_FLAG_BACKUP_SEMANTICS, FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+    };
+
+    fs::OpenOptions::new()
+        .write(true)
+        .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| BackendError::Io(error.to_string()))
+}
+
+#[cfg(not(any(unix, windows)))]
+pub(crate) fn sync_directory(_path: &Path) -> Result<(), BackendError> {
     Ok(())
 }
 
@@ -175,7 +191,11 @@ impl FsBackend {
     /// Return whether a path exists without following any symlink component.
     /// Missing ancestors make the object absent; an existing symlink is never
     /// accepted because it could be replaced or redirected between calls.
-    fn existing_path(&self, path: &Path) -> Result<bool, BackendError> {
+    fn existing_path_with_symlink_policy(
+        &self,
+        path: &Path,
+        reject_symlinks: bool,
+    ) -> Result<bool, BackendError> {
         let relative = path
             .strip_prefix(&self.root)
             .map_err(|_| BackendError::Io("path escaped sync root".to_string()))?;
@@ -190,6 +210,9 @@ impl FsBackend {
                 Err(error) => return Err(BackendError::Io(error.to_string())),
             };
             if metadata.file_type().is_symlink() {
+                if !reject_symlinks {
+                    return Ok(false);
+                }
                 return Err(BackendError::Io(format!(
                     "symlink component is not allowed: {}",
                     current.display()
@@ -204,6 +227,10 @@ impl FsBackend {
         }
 
         Ok(true)
+    }
+
+    fn existing_path(&self, path: &Path) -> Result<bool, BackendError> {
+        self.existing_path_with_symlink_policy(path, true)
     }
 
     fn create_parent_dirs(&self, path: &Path) -> Result<(), BackendError> {
@@ -331,8 +358,17 @@ impl SyncBackend for FsBackend {
     fn list(&self, prefix: &str) -> Result<Vec<String>, BackendError> {
         self.validate_root()?;
         validate_list_prefix(prefix)?;
+        let start = if prefix.is_empty() || !prefix.ends_with('/') {
+            self.root.clone()
+        } else {
+            let directory = self.directory_for_prefix(prefix)?;
+            if !self.existing_path_with_symlink_policy(&directory, false)? {
+                return Ok(Vec::new());
+            }
+            directory
+        };
         let mut keys = Vec::new();
-        let mut stack = vec![self.root.clone()];
+        let mut stack = vec![start];
         while let Some(dir) = stack.pop() {
             let entries =
                 fs::read_dir(&dir).map_err(|error| BackendError::Io(error.to_string()))?;
@@ -446,6 +482,11 @@ mod tests {
             backend.list("oplog/").unwrap(),
             vec!["oplog/dev/0001.seg".to_string()]
         );
+        assert_eq!(
+            backend.list("oplog/dev/").unwrap(),
+            vec!["oplog/dev/0001.seg".to_string()]
+        );
+        assert!(backend.list("oplog/missing/").unwrap().is_empty());
         assert!(backend.get("oplog/dev/0002.seg").unwrap().is_none());
         assert_eq!(
             backend.list_directories("oplog/", 10).unwrap(),

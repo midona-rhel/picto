@@ -91,7 +91,7 @@ pub fn compile_tagged_bitmap(conn: &Connection, bitmaps: &BitmapStore) {
 }
 
 /// Rebuild implied tag bitmaps from the tag_implication graph.
-pub fn compile_implied_tags(conn: &Connection, bitmaps: &BitmapStore) {
+pub fn compile_tag_derivatives(conn: &Connection, bitmaps: &BitmapStore) {
     // Rebuild tag_ancestor closure table
     let _ = conn.execute_batch(
         "DELETE FROM tag_ancestor;

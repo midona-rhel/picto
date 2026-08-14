@@ -111,6 +111,33 @@ fn peer_head(backend: &dyn SyncBackend, device: &str) -> Result<Option<i64>, Str
     Ok(Some(value))
 }
 
+fn has_later_visible_segment(
+    backend: &dyn SyncBackend,
+    device: &str,
+    next_sequence: i64,
+) -> Result<bool, String> {
+    let prefix = format!("oplog/{device}/");
+    for key in backend
+        .list(&prefix)
+        .map_err(|error| format!("cannot inspect segment gap {prefix}: {error}"))?
+    {
+        let Some(name) = key.strip_prefix(&prefix) else {
+            continue;
+        };
+        let Some(sequence) = name.strip_suffix(".seg") else {
+            continue;
+        };
+        if sequence
+            .parse::<i64>()
+            .ok()
+            .is_some_and(|sequence| sequence >= next_sequence)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn entity_blob_key(op: &OpRecord) -> Result<Option<(String, String, usize)>, String> {
     if !matches!(op.op_type.as_str(), "entity_created" | "entity_recreated") {
         return Ok(None);
@@ -215,10 +242,17 @@ fn hydrate_required_blobs(
     let mut downloaded = 0usize;
     let mut pending = 0usize;
     let mut seen = std::collections::HashSet::new();
-    for op in ops {
+    for (index, op) in ops.iter().enumerate() {
         let Some((key, ext, expected_size)) = entity_blob_key(op)? else {
             continue;
         };
+        if !candidate_create_needs_blob(index, ops) {
+            // A later lifecycle operation in this candidate batch makes this
+            // generation unobservable. Do not block the batch on bytes that
+            // will never be materialized.
+            db.clear_sync_missing_blob(&op.entity_key)?;
+            continue;
+        }
         if !db.remote_create_needs_blob(op)? {
             db.clear_sync_missing_blob(&op.entity_key)?;
             continue;
@@ -352,6 +386,20 @@ fn hydrate_required_blobs(
         downloaded += 1;
     }
     Ok((downloaded, pending))
+}
+
+fn candidate_create_needs_blob(index: usize, ops: &[OpRecord]) -> bool {
+    let op = &ops[index];
+    if !matches!(op.op_type.as_str(), "entity_created" | "entity_recreated") {
+        return true;
+    }
+    !ops[index + 1..].iter().any(|later| {
+        later.entity_key == op.entity_key
+            && matches!(
+                later.op_type.as_str(),
+                "entity_deleted" | "entity_recreated"
+            )
+    })
 }
 
 /// One complete synchronization pass. Blobs move first in both directions so
@@ -500,10 +548,12 @@ fn sync_change_impact(
                 .all_smart_folder_scopes_changed(),
             "collection_renamed" => impact
                 .add_domains(&[Domain::Files, Domain::Folders])
-                .media_metadata_changed(),
+                .media_metadata_changed()
+                .all_smart_folder_scopes_changed(),
             "collection_members_reordered" => impact
                 .add_domains(&[Domain::Files, Domain::Folders])
-                .grid_reorder(),
+                .grid_reorder()
+                .all_smart_folder_scopes_changed(),
             "duplicate_decided" => impact.add_domains(&[Domain::Files, Domain::Sidebar]),
             _ => impact,
         };
@@ -535,9 +585,26 @@ fn resolve_scope_impacts(
         let mut impacts = (0..ops.len())
             .map(|_| SyncScopeImpact::default())
             .collect::<Vec<_>>();
-        let mut folder = conn.prepare_cached("SELECT folder_id FROM folder WHERE uuid = ?1")?;
-        let mut smart =
-            conn.prepare_cached("SELECT smart_folder_id FROM smart_folder WHERE uuid = ?1")?;
+        let mut folder = conn.prepare_cached(
+            "WITH RECURSIVE descendants(folder_id) AS (
+                 SELECT folder_id FROM folder WHERE uuid = ?1
+                 UNION ALL
+                 SELECT child.folder_id
+                 FROM folder child
+                 JOIN descendants parent ON child.parent_id = parent.folder_id
+             )
+             SELECT folder_id FROM descendants",
+        )?;
+        let mut smart = conn.prepare_cached(
+            "WITH RECURSIVE descendants(smart_folder_id) AS (
+                 SELECT smart_folder_id FROM smart_folder WHERE uuid = ?1
+                 UNION ALL
+                 SELECT child.smart_folder_id
+                 FROM smart_folder child
+                 JOIN descendants parent ON child.parent_id = parent.smart_folder_id
+             )
+             SELECT smart_folder_id FROM descendants",
+        )?;
         let mut entity = conn.prepare_cached(
             "SELECT entity_id, parent_collection_entity_id, entity_kind
              FROM media_entity WHERE entity_hash = ?1",
@@ -545,17 +612,17 @@ fn resolve_scope_impacts(
         for (index, op) in ops.iter().enumerate() {
             let impact = &mut impacts[index];
             if op.op_type.starts_with("folder_") {
-                if let Some(id) = folder
-                    .query_row([&op.entity_key], |row| row.get::<_, i64>(0))
-                    .optional()?
-                {
+                let ids = folder
+                    .query_map([&op.entity_key], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for id in ids {
                     impact.folder_ids.insert(id);
                 }
             } else if op.op_type.starts_with("smart_folder_") {
-                if let Some(id) = smart
-                    .query_row([&op.entity_key], |row| row.get::<_, i64>(0))
-                    .optional()?
-                {
+                let ids = smart
+                    .query_map([&op.entity_key], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for id in ids {
                     impact.smart_folder_ids.insert(id);
                 }
             } else if let Some((entity_id, parent_id, kind)) = entity
@@ -670,11 +737,16 @@ fn sync_once_inner(
                 .get_limited(&key, MAX_SEGMENT_BYTES)
                 .map_err(|error| format!("cannot read segment {key}: {error}"))?
             else {
-                if peer_heads
+                let head_advertises_gap = peer_heads
                     .get(device)
                     .and_then(|head| *head)
                     .is_some_and(|head| head > *cursor)
-                {
+                    || (!peer_heads
+                        .get(device)
+                        .and_then(|head| *head)
+                        .is_some_and(|head| head >= *cursor + 1)
+                        && has_later_visible_segment(backend, device, *cursor + 1)?);
+                if head_advertises_gap {
                     gap_detected = true;
                 }
                 continue;
@@ -710,6 +782,7 @@ fn sync_once_inner(
         .filter(|(device, cursor)| initial_cursors.get(device).is_some_and(|old| cursor > old))
         .collect::<Vec<_>>();
     report.more_remote_work = advertised_work_remains
+        || gap_detected
         || budget_exhausted
         || candidate_segments == MAX_REMOTE_SEGMENTS_PER_CYCLE;
     if gap_detected {
@@ -735,6 +808,10 @@ fn sync_once_inner(
             op.op_type
         ));
     }
+    // Conflict resolution and remote materialization use this same total
+    // order. Sort before hydration so lifecycle supersession is visible to
+    // both phases, while retaining the per-device head/cursor discovery above.
+    new_ops.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
     if let Some(blob_store) = blob_store {
         let (downloaded, pending) = hydrate_required_blobs(db, &new_ops, blob_store, backend)?;
         report.blobs_downloaded = downloaded;
@@ -745,7 +822,6 @@ fn sync_once_inner(
             return Ok(report);
         }
     }
-    new_ops.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
     let mut before_impacts = resolve_scope_impacts(db, &new_ops)?;
     match db.apply_remote_ops(&new_ops, &cursor_updates)? {
         Some(applied_indexes) => {
@@ -1014,6 +1090,123 @@ mod tests {
     }
 
     #[test]
+    fn visible_later_segment_without_current_head_still_blocks_ingestion() {
+        let backend = MemoryBackend::new();
+        let target = open_device("head-gap-target");
+        let op = remote_op(
+            "0000000000002-0000",
+            "missing-head-peer",
+            "folder_created",
+            "later-folder",
+            serde_json::json!({"name": "Later"}),
+        );
+        backend
+            .put(
+                &crate::oplog::drain::segment_key("missing-head-peer", 2),
+                &crate::oplog::segment::encode_segment(&[op]).unwrap(),
+            )
+            .unwrap();
+
+        let report = sync_once(&target, &backend).unwrap();
+        assert_eq!(report.segments_consumed, 0);
+        assert!(report.waiting_for_prerequisites);
+        assert!(report.more_remote_work);
+        assert_eq!(target.ingest_cursor("missing-head-peer").unwrap(), 0);
+
+        let stale_op = remote_op(
+            "0000000000003-0000",
+            "stale-head-peer",
+            "folder_created",
+            "later-folder-2",
+            serde_json::json!({"name": "Later 2"}),
+        );
+        backend
+            .put(
+                &crate::oplog::drain::segment_key("stale-head-peer", 3),
+                &crate::oplog::segment::encode_segment(&[stale_op]).unwrap(),
+            )
+            .unwrap();
+        backend
+            .put_replace(&crate::oplog::drain::head_key("stale-head-peer"), b"1")
+            .unwrap();
+
+        let report = sync_once(&target, &backend).unwrap();
+        assert_eq!(report.segments_consumed, 0);
+        assert!(report.waiting_for_prerequisites);
+        assert!(report.more_remote_work);
+        assert_eq!(target.ingest_cursor("stale-head-peer").unwrap(), 0);
+    }
+
+    #[test]
+    fn hierarchy_scope_impacts_include_descendants() {
+        let target = open_device("smart-impact-target");
+        target
+            .with_write(|conn| {
+                conn.execute(
+                    "INSERT INTO folder (
+                         folder_id, name, uuid, date_added, date_modified
+                     ) VALUES (1, 'Folder parent', 'folder-parent', '2026-01-01', '2026-01-01')",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO folder (
+                         folder_id, name, parent_id, uuid, date_added, date_modified
+                     ) VALUES (2, 'Folder child', 1, 'folder-child', '2026-01-01', '2026-01-01')",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO smart_folder (
+                         smart_folder_id, name, predicate_json, uuid,
+                         date_added, date_modified
+                     ) VALUES (1, 'Parent', '{\"groups\":[]}', 'smart-parent', '2026-01-01', '2026-01-01')",
+                    [],
+                )?;
+                conn.execute(
+                    "INSERT INTO smart_folder (
+                         smart_folder_id, name, parent_id, predicate_json, uuid,
+                         date_added, date_modified
+                     ) VALUES (2, 'Child', 1, '{\"groups\":[]}', 'smart-child', '2026-01-01', '2026-01-01')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let impacts = resolve_scope_impacts(
+            &target,
+            &[
+                remote_op(
+                    "0000000000001-0000",
+                    "peer",
+                    "smart_folder_updated",
+                    "smart-parent",
+                    serde_json::json!({"name": "Renamed"}),
+                ),
+                remote_op(
+                    "0000000000002-0000",
+                    "peer",
+                    "folder_deleted",
+                    "folder-parent",
+                    serde_json::json!({}),
+                ),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            impacts[0]
+                .smart_folder_ids
+                .iter()
+                .copied()
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            impacts[1].folder_ids.iter().copied().collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
     fn remote_ingestion_is_bounded_and_resumes_from_its_cursor() {
         let backend = MemoryBackend::new();
         let target = open_device("bounded-remote-target");
@@ -1141,6 +1334,54 @@ mod tests {
         assert!(!report.waiting_for_prerequisites);
         assert_eq!(target.sync_missing_blob_counts().unwrap(), (0, 0));
         assert_eq!(target.ingest_cursor("stale-create-peer").unwrap(), 1);
+    }
+
+    #[test]
+    fn same_cycle_create_delete_consumes_without_hydrating_blob() {
+        let backend = MemoryBackend::new();
+        let target_root = TempDir::new().unwrap();
+        let target =
+            LibraryDatabase::open_with_device_id(target_root.path(), "same-cycle-target".into())
+                .unwrap();
+        let blobs = crate::blob_store::BlobStore::open(target_root.path()).unwrap();
+        let hash = "c".repeat(64);
+        let create = remote_op(
+            "0000000000001-0000",
+            "same-cycle-peer",
+            "entity_created",
+            &hash,
+            serde_json::json!({"mime": "image/png", "size": 1, "status": 1}),
+        );
+        let delete = remote_op(
+            "0000000000002-0000",
+            "same-cycle-peer",
+            "entity_deleted",
+            &hash,
+            serde_json::json!({}),
+        );
+        put_ops(&backend, "same-cycle-peer", 1, vec![create]);
+        put_ops(&backend, "same-cycle-peer", 2, vec![delete]);
+
+        let report = sync_cycle(&target, &blobs, &backend).unwrap();
+        assert_eq!(report.segments_consumed, 2);
+        assert_eq!(report.ops_applied, 2);
+        assert_eq!(report.blobs_downloaded, 0);
+        assert_eq!(report.missing_blobs, 0);
+        assert!(!report.waiting_for_prerequisites);
+        assert_eq!(target.ingest_cursor("same-cycle-peer").unwrap(), 2);
+        assert_eq!(target.count_media_files().unwrap(), 0);
+        assert!(
+            target
+                .with_read(|conn| {
+                    conn.query_row(
+                        "SELECT COUNT(*) FROM media_entity WHERE entity_hash = ?1",
+                        [&hash],
+                        |row| row.get::<_, i64>(0),
+                    )
+                })
+                .unwrap()
+                == 0
+        );
     }
 
     #[test]

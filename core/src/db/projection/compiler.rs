@@ -12,10 +12,11 @@ pub struct CompilerPlan {
     pub rebuild_status: bool,
     pub rebuild_all_tags: bool,
     pub dirty_tag_ids: Vec<i64>,
-    pub rebuild_tag_graph: bool,
+    pub rebuild_tag_derivatives: bool,
     pub rebuild_all_smart_folders: bool,
     pub dirty_smart_folder_ids: Vec<i64>,
     pub rebuild_sidebar: bool,
+    pub rebuild_folder_sizes: bool,
     pub rebuild_all: bool,
 }
 
@@ -24,10 +25,11 @@ impl CompilerPlan {
         !self.rebuild_status
             && !self.rebuild_all_tags
             && self.dirty_tag_ids.is_empty()
-            && !self.rebuild_tag_graph
+            && !self.rebuild_tag_derivatives
             && !self.rebuild_all_smart_folders
             && self.dirty_smart_folder_ids.is_empty()
             && !self.rebuild_sidebar
+            && !self.rebuild_folder_sizes
             && !self.rebuild_all
     }
 }
@@ -46,19 +48,23 @@ pub fn execute_plan(conn: &Connection, bitmaps: &BitmapStore, plan: &CompilerPla
         }
     }
 
-    if plan.rebuild_all || plan.rebuild_tag_graph {
-        super::tags::compile_implied_tags(conn, bitmaps);
+    if plan.rebuild_all || plan.rebuild_tag_derivatives {
+        super::tags::compile_tag_derivatives(conn, bitmaps);
     }
 
     if plan.rebuild_all
         || plan.rebuild_all_tags
         || !plan.dirty_tag_ids.is_empty()
-        || plan.rebuild_tag_graph
+        || plan.rebuild_tag_derivatives
     {
         super::tags::compile_effective_tag_bitmaps(conn, bitmaps);
     }
 
-    if plan.rebuild_all || plan.rebuild_all_tags || plan.rebuild_tag_graph {
+    if plan.rebuild_all
+        || plan.rebuild_all_tags
+        || !plan.dirty_tag_ids.is_empty()
+        || plan.rebuild_tag_derivatives
+    {
         super::tags::compile_tagged_bitmap(conn, bitmaps);
     }
 
@@ -70,27 +76,23 @@ pub fn execute_plan(conn: &Connection, bitmaps: &BitmapStore, plan: &CompilerPla
         }
     }
 
+    if plan.rebuild_all || plan.rebuild_folder_sizes {
+        update_cached_folder_sizes(conn);
+    }
+    if plan.rebuild_all
+        || plan.rebuild_status
+        || plan.rebuild_all_smart_folders
+        || !plan.dirty_smart_folder_ids.is_empty()
+    {
+        update_cached_smart_folder_sizes(conn, bitmaps);
+    }
+
     if plan.rebuild_all || plan.rebuild_sidebar {
         super::sidebar::compile_sidebar(conn, bitmaps);
     }
-
-    // Update cached total_size_bytes on folder and smart_folder tables
-    // whenever relevant projections are rebuilt.
-    let needs_size_update = plan.rebuild_all
-        || plan.rebuild_sidebar
-        || plan.rebuild_all_smart_folders
-        || !plan.dirty_smart_folder_ids.is_empty();
-    if needs_size_update {
-        update_cached_scope_sizes(conn, bitmaps);
-    }
 }
 
-/// Update the cached `total_size_bytes` column on `folder` and `smart_folder`
-/// tables. For folders this is a single batch UPDATE using folder_member joins.
-/// For smart folders we read each bitmap and compute the SUM via a temp table
-/// of entity IDs per smart folder.
-fn update_cached_scope_sizes(conn: &Connection, bitmaps: &BitmapStore) {
-    // Folders — single batch statement, no per-folder loop.
+fn update_cached_folder_sizes(conn: &Connection) {
     let folder_result = conn.execute_batch(
         "UPDATE folder SET total_size_bytes = COALESCE((
             SELECT SUM(COALESCE(mf.size_bytes, me.total_size_bytes, 0))
@@ -104,8 +106,9 @@ fn update_cached_scope_sizes(conn: &Connection, bitmaps: &BitmapStore) {
     if let Err(e) = folder_result {
         tracing::warn!(error = %e, "Failed to update folder total_size_bytes");
     }
+}
 
-    // Smart folders — read bitmap entity IDs, insert into temp table, compute SUM.
+fn update_cached_smart_folder_sizes(conn: &Connection, bitmaps: &BitmapStore) {
     let sf_ids: Vec<i64> = conn
         .prepare("SELECT smart_folder_id FROM smart_folder")
         .and_then(|mut stmt| {
@@ -237,6 +240,52 @@ mod tests {
         assert_eq!(
             bitmaps.get(&BitmapKey::Tagged),
             RoaringBitmap::from_iter([99_u32])
+        );
+    }
+
+    #[test]
+    fn dirty_tag_plan_rebuilds_tagged_bitmap() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open database");
+        conn.execute_batch(LIBRARY_DDL).expect("create schema");
+        conn.execute(
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, entity_kind, status,
+                date_created, date_added, date_modified
+            ) VALUES (1, 'entity-1', 'single', 1, '2026-08-04', '2026-08-04', '2026-08-04')",
+            [],
+        )
+        .expect("insert entity");
+        conn.execute(
+            "INSERT INTO tag (tag_id, namespace, subtag) VALUES (1, 'general', 'example')",
+            [],
+        )
+        .expect("insert tag");
+        conn.execute(
+            "INSERT INTO entity_tag (entity_id, tag_id, provenance_mask, source)
+             VALUES (1, 1, 1, 'remote')",
+            [],
+        )
+        .expect("insert entity tag");
+
+        let bitmaps = BitmapStore::new();
+        bitmaps.set(BitmapKey::Tagged, RoaringBitmap::from_iter([99_u32]));
+
+        execute_plan(
+            &conn,
+            &bitmaps,
+            &CompilerPlan {
+                dirty_tag_ids: vec![1],
+                ..Default::default()
+            },
+        );
+
+        assert_eq!(
+            bitmaps.get(&BitmapKey::Tag(1)),
+            RoaringBitmap::from_iter([1_u32])
+        );
+        assert_eq!(
+            bitmaps.get(&BitmapKey::Tagged),
+            RoaringBitmap::from_iter([1_u32])
         );
     }
 }

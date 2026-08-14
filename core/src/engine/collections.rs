@@ -35,6 +35,7 @@ impl ApplicationEngine {
             entity_hashes,
             entity_ids,
             status_changed: true,
+            dirty_folder_ids: folder_ids.clone(),
             extra_grid_scopes: collection_grid_scopes(collection_id, &folder_ids),
             ..Default::default()
         });
@@ -73,6 +74,7 @@ impl ApplicationEngine {
             entity_ids: change.added.clone(),
             entity_hashes: self.db.get_entity_hashes_by_ids(&change.added)?,
             status_changed: true,
+            dirty_folder_ids: folder_ids.clone(),
             extra_grid_scopes: collection_grid_scopes(collection_id, &folder_ids),
             ..Default::default()
         });
@@ -99,6 +101,7 @@ impl ApplicationEngine {
             entity_hashes,
             status_changed: true,
             entities_deleted: change.deleted_collection,
+            dirty_folder_ids: change.folder_ids.clone(),
             extra_grid_scopes: collection_grid_scopes(collection_id, &change.folder_ids),
             ..Default::default()
         });
@@ -140,6 +143,7 @@ impl ApplicationEngine {
             entity_ids: freed_ids.clone(),
             entity_hashes: changed_hashes,
             status_changed: true,
+            dirty_folder_ids: folder_ids.clone(),
             extra_grid_scopes: collection_grid_scopes(collection_id, &folder_ids),
             ..Default::default()
         });
