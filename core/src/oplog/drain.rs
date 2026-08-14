@@ -8,12 +8,16 @@
 use crate::db::LibraryDatabase;
 
 use super::backend::SyncBackend;
-use super::segment::encode_segment;
+use super::segment::{encode_segment, MAX_SEGMENT_BYTES};
 
 pub const DEFAULT_OPS_PER_SEGMENT: usize = 512;
 
 pub fn segment_key(device_id: &str, seq: i64) -> String {
     format!("oplog/{device_id}/{seq:016}.seg")
+}
+
+pub fn head_key(device_id: &str) -> String {
+    format!("oplog/{device_id}/head")
 }
 
 /// Upload all pending outbox ops as one or more segments. Returns the number
@@ -52,9 +56,24 @@ pub fn drain_outbox_batch(
     let ops: Vec<_> = batch.into_iter().map(|(_, op)| op).collect();
     let bytes = encode_segment(&ops).map_err(|e| e.to_string())?;
     let key = segment_key(db.device_id(), seq);
+    match backend.put(&key, &bytes) {
+        Ok(()) => {}
+        Err(super::backend::BackendError::AlreadyExists(_)) => {
+            let existing = backend
+                .get_limited(&key, MAX_SEGMENT_BYTES)
+                .map_err(|error| format!("segment retry read {key}: {error}"))?;
+            if existing.as_deref() != Some(bytes.as_slice()) {
+                return Err(format!(
+                    "segment sequence collision at {key}: existing immutable bytes differ"
+                ));
+            }
+        }
+        Err(error) => return Err(format!("segment upload {key}: {error}")),
+    }
+    let head = head_key(db.device_id());
     backend
-        .put(&key, &bytes)
-        .map_err(|e| format!("segment upload {key}: {e}"))?;
+        .put_replace(&head, seq.to_string().as_bytes())
+        .map_err(|error| format!("segment head update {head}: {error}"))?;
     db.mark_ops_uploaded(&ids, seq)?;
     Ok(1)
 }
@@ -131,14 +150,38 @@ mod tests {
 
         // Simulate a restored-from-backup outbox: pending op, regressed seq.
         db.with_write(|conn| {
+            conn.execute(
+                "UPDATE op_outbox
+                 SET uploaded_seq = NULL, payload_json = '{\"name\":\"Different\"}'",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+        let err = drain_outbox(&db, &backend, 16).unwrap_err();
+        assert!(err.contains("sequence collision"), "got: {err}");
+        // The remote segment is untouched.
+        let state = replay_backend(&backend).unwrap();
+        assert_eq!(state.folders.len(), 1);
+    }
+
+    #[test]
+    fn identical_segment_retry_repairs_local_ack_and_head() {
+        let db = open_db();
+        db.create_folder("A", None, None, None).unwrap();
+        let backend = MemoryBackend::new();
+        drain_outbox(&db, &backend, 16).unwrap();
+        db.with_write(|conn| {
             conn.execute("UPDATE op_outbox SET uploaded_seq = NULL", [])
                 .map(|_| ())
         })
         .unwrap();
-        let err = drain_outbox(&db, &backend, 16).unwrap_err();
-        assert!(err.contains("already exists"), "got: {err}");
-        // The remote segment is untouched.
-        let state = replay_backend(&backend).unwrap();
-        assert_eq!(state.folders.len(), 1);
+
+        assert_eq!(drain_outbox(&db, &backend, 16).unwrap(), 1);
+        assert_eq!(db.pending_op_count().unwrap(), 0);
+        assert_eq!(
+            backend.get(&head_key(db.device_id())).unwrap().unwrap(),
+            b"1"
+        );
     }
 }

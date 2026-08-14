@@ -64,9 +64,9 @@ pub async fn start_workers(
                             match result {
                                 Ok(report)
                                     if !report.waiting_for_prerequisites
-                                        && report.ops_applied == 0
                                         && cycle + 1 < MAX_LOCAL_BATCHES_PER_WAKE
-                                        && sync_db.pending_op_count().unwrap_or(0) > 0 =>
+                                        && (report.more_remote_work
+                                            || sync_db.pending_op_count().unwrap_or(0) > 0) =>
                                 {
                                     tokio::select! {
                                         _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}

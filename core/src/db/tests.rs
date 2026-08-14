@@ -1846,6 +1846,30 @@ fn current_schema_validation_rejects_wrong_required_index_definition() {
 }
 
 #[test]
+fn current_schema_validation_rejects_missing_sync_state_constraint() {
+    let tmp = TempDir::new().expect("tempdir");
+    let db_path = tmp.path().join("library.db");
+    let malformed = LIBRARY_DDL.replace(
+        "status        TEXT NOT NULL CHECK (status IN ('pending', 'failed'))",
+        "status        TEXT NOT NULL",
+    );
+    assert_ne!(malformed, LIBRARY_DDL);
+    let conn = rusqlite::Connection::open(&db_path).expect("open raw database");
+    conn.execute_batch(&malformed)
+        .expect("create malformed schema");
+    drop(conn);
+
+    let error = match LibraryDatabase::open(tmp.path()) {
+        Ok(_) => panic!("schema without sync status constraint must fail"),
+        Err(error) => error,
+    };
+    assert!(
+        error.contains("sync_missing_blob status constraints"),
+        "unexpected error: {error}"
+    );
+}
+
+#[test]
 fn fresh_schema_creates_hot_reverse_indexes() {
     let db = open_test_db();
     db.with_read(|conn| {

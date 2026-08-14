@@ -1,6 +1,6 @@
 //! Handler functions for cloud sync: binding a library to a remote on a
 //! file share, listing/creating/connecting remote libraries, and running
-//! sync cycles. The remote is never deleted or overwritten from here.
+//! sync cycles. Immutable remote library objects are never overwritten here.
 
 use std::path::PathBuf;
 
@@ -53,6 +53,11 @@ pub struct SyncStatus {
     pub library_uuid: Option<String>,
     pub device_id: String,
     pub pending_ops: i64,
+    pub pending_remote_ops: usize,
+    pub more_remote_work: bool,
+    pub waiting_for_prerequisites: bool,
+    pub missing_blobs: i64,
+    pub failed_blobs: i64,
     pub syncing: bool,
     pub last_success_at: Option<String>,
     pub last_error: Option<String>,
@@ -72,10 +77,21 @@ pub async fn sync_get_status(
 ) -> Result<SyncStatus, String> {
     let db = state.engine.db();
     let bound = binding(db)?;
-    let last_report = db
+    let last_report: Option<SyncReport> = db
         .kv_get(KV_LAST_REPORT)?
         .map(|value| serde_json::from_str(&value).map_err(|error| error.to_string()))
         .transpose()?;
+    let (missing_blobs, failed_blobs) = db.sync_missing_blob_counts()?;
+    let pending_remote_ops = last_report
+        .as_ref()
+        .map_or(0, |report| report.pending_remote_ops);
+    let more_remote_work = last_report
+        .as_ref()
+        .is_some_and(|report| report.more_remote_work);
+    let waiting_for_prerequisites = missing_blobs > 0
+        || last_report
+            .as_ref()
+            .is_some_and(|report| report.waiting_for_prerequisites);
     Ok(SyncStatus {
         bound: bound.is_some(),
         share_root: bound.as_ref().map(|(root, _)| root.display().to_string()),
@@ -83,6 +99,11 @@ pub async fn sync_get_status(
         library_uuid: db.kv_get("library_uuid")?,
         device_id: db.device_id().to_string(),
         pending_ops: db.pending_op_count()?,
+        pending_remote_ops,
+        more_remote_work,
+        waiting_for_prerequisites,
+        missing_blobs,
+        failed_blobs,
         syncing: state.sync_cycle_lock.try_lock().is_err(),
         last_success_at: db.kv_get(KV_LAST_SUCCESS_AT)?,
         last_error: db.kv_get(KV_LAST_ERROR)?,

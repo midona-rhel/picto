@@ -11,16 +11,147 @@ use super::backend::{BackendError, SyncBackend};
 
 pub struct FsBackend {
     root: PathBuf,
+    #[cfg(any(unix, windows))]
+    root_identity: (u64, u64),
+}
+
+#[cfg(unix)]
+fn sync_directory(path: &Path) -> Result<(), BackendError> {
+    fs::File::open(path)
+        .and_then(|directory| directory.sync_all())
+        .map_err(|error| BackendError::Io(error.to_string()))
+}
+
+#[cfg(not(unix))]
+fn sync_directory(_path: &Path) -> Result<(), BackendError> {
+    Ok(())
 }
 
 impl FsBackend {
     pub fn open(root: &Path) -> Result<Self, BackendError> {
         fs::create_dir_all(root).map_err(|e| BackendError::Io(e.to_string()))?;
+        let metadata = fs::symlink_metadata(root).map_err(|e| BackendError::Io(e.to_string()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(BackendError::Io(format!(
+                "sync root must be a regular directory: {}",
+                root.display()
+            )));
+        }
         let root = fs::canonicalize(root).map_err(|e| BackendError::Io(e.to_string()))?;
-        Ok(Self { root })
+        Self::from_resolved_root(root)
+    }
+
+    /// Open an existing directory without ever recreating it, rejecting a
+    /// symlinked root and requiring its resolved parent to match `parent`.
+    pub fn open_existing_contained(root: &Path, parent: &Path) -> Result<Self, BackendError> {
+        let metadata =
+            fs::symlink_metadata(root).map_err(|error| BackendError::Io(error.to_string()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(BackendError::Io(format!(
+                "sync root must be an existing regular directory: {}",
+                root.display()
+            )));
+        }
+        let resolved_parent =
+            fs::canonicalize(parent).map_err(|error| BackendError::Io(error.to_string()))?;
+        let resolved_root =
+            fs::canonicalize(root).map_err(|error| BackendError::Io(error.to_string()))?;
+        if resolved_root.parent() != Some(resolved_parent.as_path()) {
+            return Err(BackendError::Io(format!(
+                "sync root is not directly contained by {}",
+                parent.display()
+            )));
+        }
+        let backend = Self::from_resolved_root(resolved_root)?;
+        backend.validate_root()?;
+        Ok(backend)
+    }
+
+    fn from_resolved_root(root: PathBuf) -> Result<Self, BackendError> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            let metadata =
+                fs::metadata(&root).map_err(|error| BackendError::Io(error.to_string()))?;
+            Ok(Self {
+                root,
+                root_identity: (metadata.dev(), metadata.ino()),
+            })
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt as _;
+            let metadata =
+                fs::metadata(&root).map_err(|error| BackendError::Io(error.to_string()))?;
+            let volume = metadata.volume_serial_number().ok_or_else(|| {
+                BackendError::Io(format!(
+                    "sync root has no volume identity: {}",
+                    root.display()
+                ))
+            })?;
+            let index = metadata.file_index().ok_or_else(|| {
+                BackendError::Io(format!(
+                    "sync root has no file identity: {}",
+                    root.display()
+                ))
+            })?;
+            Ok(Self {
+                root,
+                root_identity: (u64::from(volume), index),
+            })
+        }
+        #[cfg(not(any(unix, windows)))]
+        {
+            Ok(Self { root })
+        }
+    }
+
+    fn validate_root(&self) -> Result<(), BackendError> {
+        let metadata = fs::symlink_metadata(&self.root)
+            .map_err(|error| BackendError::Io(error.to_string()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err(BackendError::Io(format!(
+                "sync root was replaced or removed: {}",
+                self.root.display()
+            )));
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt as _;
+            if (metadata.dev(), metadata.ino()) != self.root_identity {
+                return Err(BackendError::Io(format!(
+                    "sync root was replaced after it was opened: {}",
+                    self.root.display()
+                )));
+            }
+        }
+        #[cfg(windows)]
+        {
+            use std::os::windows::fs::MetadataExt as _;
+            let current_identity = metadata
+                .volume_serial_number()
+                .map(u64::from)
+                .zip(metadata.file_index());
+            if current_identity != Some(self.root_identity) {
+                return Err(BackendError::Io(format!(
+                    "sync root was replaced after it was opened: {}",
+                    self.root.display()
+                )));
+            }
+        }
+        let current =
+            fs::canonicalize(&self.root).map_err(|error| BackendError::Io(error.to_string()))?;
+        if current != self.root {
+            return Err(BackendError::Io(format!(
+                "sync root no longer resolves to its opened directory: {}",
+                self.root.display()
+            )));
+        }
+        Ok(())
     }
 
     fn path_for(&self, key: &str) -> Result<PathBuf, BackendError> {
+        self.validate_root()?;
         // Keys are forward-slash object names; reject traversal.
         if key
             .split('/')
@@ -103,6 +234,10 @@ impl FsBackend {
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
                     fs::create_dir(&current)
                         .map_err(|error| BackendError::Io(error.to_string()))?;
+                    if let Some(parent) = current.parent() {
+                        sync_directory(parent)?;
+                    }
+                    sync_directory(&current)?;
                 }
                 Err(error) => return Err(BackendError::Io(error.to_string())),
             }
@@ -138,6 +273,21 @@ impl SyncBackend for FsBackend {
                 BackendError::Io(e.error.to_string())
             }
         })?;
+        sync_directory(path.parent().unwrap_or(&self.root))?;
+        Ok(())
+    }
+
+    fn put_replace(&self, key: &str, bytes: &[u8]) -> Result<(), BackendError> {
+        let path = self.path_for(key)?;
+        self.create_parent_dirs(&path)?;
+        let mut tmp = tempfile::NamedTempFile::new_in(path.parent().unwrap_or(&self.root))
+            .map_err(|error| BackendError::Io(error.to_string()))?;
+        tmp.write_all(bytes)
+            .and_then(|_| tmp.as_file().sync_all())
+            .map_err(|error| BackendError::Io(error.to_string()))?;
+        tmp.persist(&path)
+            .map_err(|error| BackendError::Io(error.error.to_string()))?;
+        sync_directory(path.parent().unwrap_or(&self.root))?;
         Ok(())
     }
 
@@ -158,12 +308,19 @@ impl SyncBackend for FsBackend {
         if !self.existing_path(&path)? {
             return Ok(None);
         }
-        let file = fs::File::open(&path).map_err(|error| BackendError::Io(error.to_string()))?;
+        let mut file =
+            fs::File::open(&path).map_err(|error| BackendError::Io(error.to_string()))?;
         let mut bytes = Vec::new();
-        file.take(max_bytes.saturating_add(1) as u64)
+        std::io::Read::by_ref(&mut file)
+            .take(max_bytes as u64)
             .read_to_end(&mut bytes)
             .map_err(|error| BackendError::Io(error.to_string()))?;
-        if bytes.len() > max_bytes {
+        let mut extra = [0_u8; 1];
+        if file
+            .read(&mut extra)
+            .map_err(|error| BackendError::Io(error.to_string()))?
+            > 0
+        {
             return Err(BackendError::LimitExceeded(format!(
                 "object {key} exceeds {max_bytes} bytes"
             )));
@@ -172,18 +329,19 @@ impl SyncBackend for FsBackend {
     }
 
     fn list(&self, prefix: &str) -> Result<Vec<String>, BackendError> {
+        self.validate_root()?;
         validate_list_prefix(prefix)?;
         let mut keys = Vec::new();
         let mut stack = vec![self.root.clone()];
         while let Some(dir) = stack.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else {
-                continue;
-            };
-            for entry in entries.flatten() {
+            let entries =
+                fs::read_dir(&dir).map_err(|error| BackendError::Io(error.to_string()))?;
+            for entry in entries {
+                let entry = entry.map_err(|error| BackendError::Io(error.to_string()))?;
                 let path = entry.path();
-                let Ok(file_type) = entry.file_type() else {
-                    continue;
-                };
+                let file_type = entry
+                    .file_type()
+                    .map_err(|error| BackendError::Io(error.to_string()))?;
                 if file_type.is_symlink() {
                     continue;
                 }
@@ -213,6 +371,7 @@ impl SyncBackend for FsBackend {
         prefix: &str,
         max_results: usize,
     ) -> Result<Vec<String>, BackendError> {
+        self.validate_root()?;
         let directory = self.directory_for_prefix(prefix)?;
         if !self.existing_path(&directory)? {
             return Ok(Vec::new());
@@ -296,6 +455,9 @@ mod tests {
             backend.get_limited("oplog/dev/0001.seg", 2),
             Err(BackendError::LimitExceeded(_))
         ));
+        backend.put_replace("oplog/dev/head", b"1").unwrap();
+        backend.put_replace("oplog/dev/head", b"2").unwrap();
+        assert_eq!(backend.get("oplog/dev/head").unwrap().unwrap(), b"2");
     }
 
     #[test]
@@ -345,5 +507,38 @@ mod tests {
         assert!(backend.delete("redirect/secret.seg").is_err());
         assert!(backend.list("redirect/").unwrap().is_empty());
         assert_eq!(fs::read(&outside_file).unwrap(), b"secret");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaced_root_cannot_redirect_operations() {
+        use std::os::unix::fs::symlink;
+
+        let parent = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let root = parent.path().join("remote");
+        fs::create_dir(&root).unwrap();
+        let backend = FsBackend::open(&root).unwrap();
+        fs::rename(&root, parent.path().join("original")).unwrap();
+        symlink(outside.path(), &root).unwrap();
+
+        assert!(backend.put("escape.bin", b"no").is_err());
+        assert!(backend.get("escape.bin").is_err());
+        assert!(!outside.path().join("escape.bin").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn replaced_regular_root_is_rejected() {
+        let parent = TempDir::new().unwrap();
+        let root = parent.path().join("remote");
+        fs::create_dir(&root).unwrap();
+        let backend = FsBackend::open(&root).unwrap();
+        fs::rename(&root, parent.path().join("original")).unwrap();
+        fs::create_dir(&root).unwrap();
+
+        assert!(backend.put("unexpected.bin", b"no").is_err());
+        assert!(backend.get("unexpected.bin").is_err());
+        assert!(backend.list("").is_err());
     }
 }

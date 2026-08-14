@@ -194,7 +194,19 @@ impl BlobStore {
             return Ok(());
         }
         // Originals are irreplaceable — fsync before rename.
-        self.write_atomic(&path, data, true)
+        self.write_atomic(&path, data, true, true)
+    }
+
+    /// Atomically replace a corrupt original with bytes already verified
+    /// against `hex_hash` by the sync boundary.
+    pub(crate) fn replace_original(
+        &self,
+        hex_hash: &str,
+        data: &[u8],
+        ext: Option<&str>,
+    ) -> BlobResult<()> {
+        let path = self.original_path_with_ext(hex_hash, ext)?;
+        self.write_atomic(&path, data, true, false)
     }
 
     /// Stage `data` in this instance's staging dir and atomically rename onto
@@ -202,7 +214,13 @@ impl BlobStore {
     /// path. `durable` additionally fsyncs the file (and its directory) so the
     /// blob survives power loss once this returns. The temp file is cleaned
     /// up on every error path (RAII via `NamedTempFile`).
-    fn write_atomic(&self, final_path: &Path, data: &[u8], durable: bool) -> BlobResult<()> {
+    fn write_atomic(
+        &self,
+        final_path: &Path,
+        data: &[u8],
+        durable: bool,
+        existing_is_success: bool,
+    ) -> BlobResult<()> {
         let mut file = tempfile::NamedTempFile::new_in(&self.staging)?;
         file.write_all(data)?;
         if durable {
@@ -215,7 +233,7 @@ impl BlobStore {
         if let Err(err) = file.persist(final_path) {
             // A concurrent writer of the same hash landing first is success:
             // content-addressed, so the bytes are identical.
-            if !final_path.exists() {
+            if !existing_is_success || !final_path.exists() {
                 return Err(err.error.into());
             }
         }
@@ -288,7 +306,7 @@ impl BlobStore {
         }
         let path = self.thumbnail_path_with_ext(hex_hash, ext)?;
         // Thumbnails are regenerable — atomic rename without fsync.
-        self.write_atomic(&path, data, false)
+        self.write_atomic(&path, data, false, true)
     }
 
     /// Read a thumbnail, returning `Ok(None)` if missing.
@@ -518,6 +536,25 @@ mod tests {
         store.write_original(&hash, b"second", Some("png")).unwrap();
         let data = store.read_original(&hash, Some("png")).unwrap();
         assert_eq!(data, b"first");
+    }
+
+    #[test]
+    fn replace_original_atomically_replaces_corrupt_bytes() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let hash = test_hash();
+
+        store
+            .write_original(&hash, b"corrupt", Some("png"))
+            .unwrap();
+        store
+            .replace_original(&hash, b"verified", Some("png"))
+            .unwrap();
+
+        assert_eq!(
+            store.read_original(&hash, Some("png")).unwrap(),
+            b"verified"
+        );
     }
 
     #[test]

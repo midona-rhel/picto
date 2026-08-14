@@ -368,6 +368,12 @@ fn emit_per_entity(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SyncMissingBlobState {
+    pub attempt_count: i64,
+    pub available_at: String,
+}
+
 /// The single typed database boundary. All storage access goes through here.
 /// Code outside `core/src/db/` must not issue SQL or know table names.
 pub struct LibraryDatabase {
@@ -597,6 +603,102 @@ impl LibraryDatabase {
             )
             .optional()
             .map(|v| v.unwrap_or(0))
+        })
+    }
+
+    pub(crate) fn sync_missing_blob_state(
+        &self,
+        entity_hash: &str,
+    ) -> Result<Option<SyncMissingBlobState>, String> {
+        let entity_hash = entity_hash.to_string();
+        self.with_read(move |conn| {
+            conn.query_row(
+                "SELECT attempt_count, available_at
+                 FROM sync_missing_blob WHERE entity_hash = ?1",
+                [&entity_hash],
+                |row| {
+                    Ok(SyncMissingBlobState {
+                        attempt_count: row.get(0)?,
+                        available_at: row.get(1)?,
+                    })
+                },
+            )
+            .optional()
+        })
+    }
+
+    pub(crate) fn record_sync_missing_blob_attempt(
+        &self,
+        entity_hash: &str,
+        object_key: &str,
+        extension: &str,
+        status: &str,
+        available_at: &str,
+        last_error: Option<&str>,
+    ) -> Result<(), String> {
+        let entity_hash = entity_hash.to_string();
+        let object_key = object_key.to_string();
+        let extension = extension.to_string();
+        let status = status.to_string();
+        let available_at = available_at.to_string();
+        let last_error = last_error.map(str::to_string);
+        let now = chrono::Utc::now().to_rfc3339();
+        self.with_write(move |conn| {
+            conn.execute(
+                "INSERT INTO sync_missing_blob (
+                     entity_hash, object_key, extension, status, attempt_count,
+                     available_at, last_error, first_seen_at, updated_at
+                 ) VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6, ?7, ?7)
+                 ON CONFLICT(entity_hash) DO UPDATE SET
+                     object_key = excluded.object_key,
+                     extension = excluded.extension,
+                     status = excluded.status,
+                     attempt_count = sync_missing_blob.attempt_count + 1,
+                     available_at = excluded.available_at,
+                     last_error = excluded.last_error,
+                     updated_at = excluded.updated_at",
+                rusqlite::params![
+                    entity_hash,
+                    object_key,
+                    extension,
+                    status,
+                    available_at,
+                    last_error,
+                    now,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub(crate) fn clear_sync_missing_blob(&self, entity_hash: &str) -> Result<(), String> {
+        let entity_hash = entity_hash.to_string();
+        self.with_write(move |conn| {
+            conn.execute(
+                "DELETE FROM sync_missing_blob WHERE entity_hash = ?1",
+                [&entity_hash],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn sync_missing_blob_counts(&self) -> Result<(i64, i64), String> {
+        self.with_read(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*), COALESCE(SUM(status = 'failed'), 0)
+                 FROM sync_missing_blob",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        })
+    }
+
+    pub(crate) fn remote_create_needs_blob(
+        &self,
+        op: &crate::oplog::OpRecord,
+    ) -> Result<bool, String> {
+        self.with_read(|conn| {
+            crate::oplog::conflict::remote_create_is_blocked(conn, op).map(|blocked| !blocked)
         })
     }
 

@@ -9,7 +9,7 @@
 //! share, or pick another name.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -18,6 +18,7 @@ use super::backend_fs::FsBackend;
 
 pub const PICTO_DIR: &str = "Picto";
 pub const MANIFEST_KEY: &str = "picto-library.json";
+const MAX_MANIFEST_BYTES: usize = 64 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteLibraryManifest {
@@ -37,8 +38,56 @@ pub struct RemoteLibraryInfo {
     pub valid: bool,
 }
 
-pub fn remote_library_root(share_root: &Path, name: &str) -> PathBuf {
-    share_root.join(PICTO_DIR).join(name)
+/// Resolve a remote library directory without allowing the library name to
+/// escape `<share>/Picto`.
+pub fn checked_remote_library_root(share_root: &Path, name: &str) -> Result<PathBuf, String> {
+    validate_name(name)?;
+
+    let picto = share_root.join(PICTO_DIR);
+    validate_picto_directory(&picto)?;
+
+    let root = picto.join(name);
+    debug_assert_eq!(root.parent(), Some(picto.as_path()));
+
+    match fs::symlink_metadata(&root) {
+        Ok(metadata) => {
+            if metadata.file_type().is_symlink() {
+                return Err(format!(
+                    "Remote library directory is a symlink and is not allowed: {}",
+                    root.display()
+                ));
+            }
+            if !metadata.is_dir() {
+                return Err(format!(
+                    "Remote library path is not a directory: {}",
+                    root.display()
+                ));
+            }
+
+            // Check the resolved parent as well as the lexical path. This
+            // keeps an existing directory from escaping through a replaced
+            // or redirected parent.
+            let resolved_picto = fs::canonicalize(&picto)
+                .map_err(|e| format!("Cannot resolve remote Picto directory: {e}"))?;
+            let resolved_root = fs::canonicalize(&root)
+                .map_err(|e| format!("Cannot resolve remote library directory: {e}"))?;
+            if resolved_root.parent() != Some(resolved_picto.as_path()) {
+                return Err(format!(
+                    "Remote library directory must be directly under {}",
+                    picto.display()
+                ));
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(format!(
+                "Cannot inspect remote library directory {}: {error}",
+                root.display()
+            ));
+        }
+    }
+
+    Ok(root)
 }
 
 fn validate_name(name: &str) -> Result<(), String> {
@@ -46,26 +95,63 @@ fn validate_name(name: &str) -> Result<(), String> {
     if trimmed.is_empty() {
         return Err("Library name cannot be empty".into());
     }
-    if trimmed.contains(['/', '\\', ':']) || trimmed.starts_with('.') {
-        return Err("Library name cannot contain path separators or start with a dot".into());
+    if trimmed != name {
+        return Err("Library name cannot begin or end with whitespace".into());
+    }
+    let path = Path::new(name);
+    if path.is_absolute()
+        || name.contains(['/', '\\', ':'])
+        || name.starts_with('.')
+        || name.contains('\0')
+        || !matches!(path.components().next(), Some(Component::Normal(_)))
+        || path.components().count() != 1
+    {
+        return Err(
+            "Library name must be one relative directory name without path separators".into(),
+        );
     }
     Ok(())
+}
+
+fn validate_picto_directory(picto: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(picto) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "Remote Picto directory cannot be a symlink: {}",
+            picto.display()
+        )),
+        Ok(metadata) if !metadata.is_dir() => Err(format!(
+            "Remote Picto path is not a directory: {}",
+            picto.display()
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!(
+            "Cannot inspect remote Picto directory {}: {error}",
+            picto.display()
+        )),
+    }
 }
 
 /// Enumerate libraries under `<share>/Picto/`. A missing `Picto/` directory
 /// is an empty list, not an error.
 pub fn list_remote_libraries(share_root: &Path) -> Result<Vec<RemoteLibraryInfo>, String> {
     let picto = share_root.join(PICTO_DIR);
-    let Ok(entries) = fs::read_dir(&picto) else {
-        return Ok(Vec::new());
+    validate_picto_directory(&picto)?;
+    let entries = match fs::read_dir(&picto) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => return Err(format!("Cannot list remote Picto directory: {error}")),
     };
     let mut libraries = Vec::new();
     for entry in entries.flatten() {
-        if !entry.path().is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() || !file_type.is_dir() {
             continue;
         }
         let name = entry.file_name().to_string_lossy().into_owned();
-        if name.starts_with('.') {
+        if name.starts_with('.') || validate_name(&name).is_err() {
             continue;
         }
         match read_remote_manifest(share_root, &name) {
@@ -91,10 +177,41 @@ pub fn read_remote_manifest(
     share_root: &Path,
     name: &str,
 ) -> Result<RemoteLibraryManifest, String> {
-    let path = remote_library_root(share_root, name).join(MANIFEST_KEY);
-    let json = fs::read_to_string(&path)
-        .map_err(|e| format!("No readable manifest at {}: {e}", path.display()))?;
-    serde_json::from_str(&json).map_err(|e| format!("Invalid library manifest: {e}"))
+    open_remote_library(share_root, name).map(|(manifest, _)| manifest)
+}
+
+pub fn open_remote_library(
+    share_root: &Path,
+    name: &str,
+) -> Result<(RemoteLibraryManifest, FsBackend), String> {
+    let root = checked_remote_library_root(share_root, name)?;
+    let picto = share_root.join(PICTO_DIR);
+    let backend = FsBackend::open_existing_contained(&root, &picto)
+        .map_err(|error| format!("Cannot open remote library: {error}"))?;
+    let bytes = backend
+        .get_limited(MANIFEST_KEY, MAX_MANIFEST_BYTES)
+        .map_err(|error| format!("Cannot read remote library manifest: {error}"))?
+        .ok_or_else(|| "Remote library manifest is missing".to_string())?;
+    let json = std::str::from_utf8(&bytes)
+        .map_err(|e| format!("Remote library manifest is not UTF-8: {e}"))?;
+    let manifest: RemoteLibraryManifest =
+        serde_json::from_str(&json).map_err(|e| format!("Invalid library manifest: {e}"))?;
+    if manifest.format_version != 1 {
+        return Err(format!(
+            "Unsupported remote library format {}; this build requires format 1",
+            manifest.format_version
+        ));
+    }
+    if manifest.name != name {
+        return Err(format!(
+            "Remote library manifest name {:?} does not match directory {:?}",
+            manifest.name, name
+        ));
+    }
+    if manifest.library_uuid.trim().is_empty() {
+        return Err("Remote library manifest has no library identity".into());
+    }
+    Ok((manifest, backend))
 }
 
 /// Create a new remote library directory + manifest. Refuses if the
@@ -104,8 +221,8 @@ pub fn create_remote_library(
     manifest: &RemoteLibraryManifest,
 ) -> Result<(), String> {
     validate_name(&manifest.name)?;
-    let dir = remote_library_root(share_root, &manifest.name);
-    if dir.exists() {
+    let mut dir = checked_remote_library_root(share_root, &manifest.name)?;
+    if fs::symlink_metadata(&dir).is_ok() {
         return Err(format!(
             "A library named \"{}\" already exists on this share. Picto never deletes or \
              overwrites remote libraries — remove it yourself on the share, connect to it \
@@ -113,8 +230,23 @@ pub fn create_remote_library(
             manifest.name
         ));
     }
-    fs::create_dir_all(&dir).map_err(|e| format!("Failed to create library directory: {e}"))?;
-    let backend = FsBackend::open(&dir).map_err(|e| e.to_string())?;
+    let picto = share_root.join(PICTO_DIR);
+    fs::create_dir_all(&picto)
+        .map_err(|e| format!("Failed to create remote Picto directory: {e}"))?;
+    dir = checked_remote_library_root(share_root, &manifest.name)?;
+    match fs::create_dir(&dir) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(format!(
+                "A library named \"{}\" already exists on this share. Picto never deletes or \
+                 overwrites remote libraries — remove it yourself on the share, connect to it \
+                 instead, or choose a different name.",
+                manifest.name
+            ));
+        }
+        Err(error) => return Err(format!("Failed to create library directory: {error}")),
+    }
+    let backend = FsBackend::open_existing_contained(&dir, &picto).map_err(|e| e.to_string())?;
     let json = serde_json::to_vec_pretty(manifest).map_err(|e| e.to_string())?;
     backend
         .put(MANIFEST_KEY, &json)
@@ -289,6 +421,85 @@ mod tests {
         let broken = share.path().join(PICTO_DIR).join("Broken");
         std::fs::create_dir_all(&broken).unwrap();
         std::fs::write(broken.join(MANIFEST_KEY), b"not json").unwrap();
+        let listed = list_remote_libraries(share.path()).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(!listed[0].valid);
+    }
+
+    #[test]
+    fn checked_root_rejects_traversal_and_absolute_names() {
+        let share = TempDir::new().unwrap();
+        for name in ["../outside", "/tmp/outside", "C:\\outside", "..", "."] {
+            assert!(
+                checked_remote_library_root(share.path(), name).is_err(),
+                "name should be rejected: {name}"
+            );
+            assert!(
+                read_remote_manifest(share.path(), name).is_err(),
+                "read should reject name: {name}"
+            );
+            assert!(
+                create_remote_library(share.path(), &manifest(name, "u")).is_err(),
+                "create should reject name: {name}"
+            );
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_library_directories_are_not_listed_or_followed() {
+        use std::os::unix::fs::symlink;
+
+        let share = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        create_remote_library(outside.path(), &manifest("Outside", "outside-uuid")).unwrap();
+
+        let picto = share.path().join(PICTO_DIR);
+        std::fs::create_dir_all(&picto).unwrap();
+        symlink(
+            outside.path().join(PICTO_DIR).join("Outside"),
+            picto.join("Linked"),
+        )
+        .unwrap();
+
+        assert!(list_remote_libraries(share.path()).unwrap().is_empty());
+        assert!(checked_remote_library_root(share.path(), "Linked").is_err());
+        assert!(read_remote_manifest(share.path(), "Linked").is_err());
+        assert!(create_remote_library(share.path(), &manifest("Linked", "new")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_picto_directory_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let share = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        symlink(outside.path(), share.path().join(PICTO_DIR)).unwrap();
+
+        assert!(list_remote_libraries(share.path()).is_err());
+        assert!(checked_remote_library_root(share.path(), "Main").is_err());
+        assert!(create_remote_library(share.path(), &manifest("Main", "u")).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_manifest_is_rejected() {
+        use std::os::unix::fs::symlink;
+
+        let share = TempDir::new().unwrap();
+        let outside = TempDir::new().unwrap();
+        let library = share.path().join(PICTO_DIR).join("Main");
+        std::fs::create_dir_all(&library).unwrap();
+        let external_manifest = outside.path().join("manifest.json");
+        std::fs::write(
+            &external_manifest,
+            serde_json::to_vec(&manifest("Main", "u")).unwrap(),
+        )
+        .unwrap();
+        symlink(&external_manifest, library.join(MANIFEST_KEY)).unwrap();
+
+        assert!(read_remote_manifest(share.path(), "Main").is_err());
         let listed = list_remote_libraries(share.path()).unwrap();
         assert_eq!(listed.len(), 1);
         assert!(!listed[0].valid);

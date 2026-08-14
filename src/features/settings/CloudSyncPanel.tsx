@@ -9,12 +9,16 @@ export function CloudSyncPanel() {
   const [busy, setBusy] = useState<Busy>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
 
   const refreshStatus = useCallback(() => {
     cloudSyncController
       .getStatus()
-      .then(setStatus)
-      .catch((e) => setError(String(e)));
+      .then((nextStatus) => {
+        setStatus(nextStatus);
+        setStatusError(null);
+      })
+      .catch((e) => setStatusError(String(e)));
   }, []);
 
   useEffect(() => {
@@ -37,10 +41,12 @@ export function CloudSyncPanel() {
         setMessage(
           `Synced ${report.blobs_uploaded} up/${report.blobs_downloaded} down media, uploaded ${report.segments_uploaded} change batch(es), and applied ${report.ops_applied} remote change(s).${pending}`,
         );
-        refreshStatus();
       })
       .catch((e) => setError(String(e)))
-      .finally(() => setBusy(null));
+      .finally(() => {
+        setBusy(null);
+        refreshStatus();
+      });
   }, [refreshStatus]);
 
   const handleDisconnect = useCallback(() => {
@@ -51,16 +57,22 @@ export function CloudSyncPanel() {
       .disconnect()
       .then(() => {
         setMessage('Disconnected. The library on the share was left untouched.');
-        refreshStatus();
       })
       .catch((e) => setError(String(e)))
-      .finally(() => setBusy(null));
+      .finally(() => {
+        setBusy(null);
+        refreshStatus();
+      });
   }, [refreshStatus]);
 
   if (!status) {
     return (
       <div className={styles.panel}>
-        <div className={styles.hint}>Loading sync status…</div>
+        {statusError ? (
+          <div className={styles.error}>{statusError}</div>
+        ) : (
+          <div className={styles.hint}>Loading sync status…</div>
+        )}
       </div>
     );
   }
@@ -89,8 +101,21 @@ export function CloudSyncPanel() {
           <span className={styles.statusValue}>{status.library_name}</span>
           <span className={styles.statusLabel}>Location</span>
           <span className={styles.statusValue}>{status.share_root}</span>
-          <span className={styles.statusLabel}>Pending changes</span>
+          <span className={styles.statusLabel}>Local changes to upload</span>
           <span className={styles.statusValue}>{status.pending_ops}</span>
+          <span className={styles.statusLabel}>Remote changes waiting</span>
+          <span className={styles.statusValue}>
+            {status.pending_remote_ops > 0
+              ? status.pending_remote_ops
+              : status.more_remote_work
+                ? 'More queued'
+                : 0}
+          </span>
+          <span className={styles.statusLabel}>Missing media</span>
+          <span className={styles.statusValue}>
+            {status.missing_blobs}
+            {status.failed_blobs > 0 ? ` (${status.failed_blobs} failed)` : ''}
+          </span>
           <span className={styles.statusLabel}>Last successful sync</span>
           <span className={styles.statusValue}>
             {status.last_success_at ? new Date(status.last_success_at).toLocaleString() : 'Never'}
@@ -115,16 +140,17 @@ export function CloudSyncPanel() {
           </button>
         </div>
         {message ? <div className={styles.message}>{message}</div> : null}
-        {error ? <div className={styles.error}>{error}</div> : null}
-        {status.last_error ? <div className={styles.error}>{status.last_error}</div> : null}
-        {!status.last_error && status.last_report?.waiting_for_prerequisites ? (
+        {error || statusError || status.last_error ? (
+          <div className={styles.error}>{error ?? statusError ?? status.last_error}</div>
+        ) : null}
+        {status.waiting_for_prerequisites ? (
           <div className={styles.hint}>
             Waiting for missing media or an earlier remote change. Picto will retry automatically.
           </div>
         ) : null}
         <div className={styles.hint}>
-          Disconnecting only unlinks this device. Nothing on the share is ever deleted or
-          overwritten by Picto.
+          Disconnecting only unlinks this device. It does not delete the remote library or its
+          media.
         </div>
       </div>
     </div>

@@ -14,9 +14,8 @@ use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
 use super::backend::SyncBackend;
-use super::backend_fs::FsBackend;
 use super::drain::{drain_outbox_batch, DEFAULT_OPS_PER_SEGMENT};
-use super::remote_library::remote_library_root;
+use super::remote_library::open_remote_library;
 use super::segment::{decode_segment, MAX_SEGMENT_BYTES};
 use super::{OpRecord, OP_VERSION};
 
@@ -24,6 +23,8 @@ pub const MAX_REMOTE_SEGMENTS_PER_CYCLE: usize = 32;
 pub const MAX_REMOTE_OPS_PER_CYCLE: usize = 4096;
 pub const MAX_REMOTE_BYTES_PER_CYCLE: usize = 64 * 1024 * 1024;
 pub const MAX_REMOTE_DEVICES: usize = 256;
+pub const MAX_IN_MEMORY_SYNC_BLOB_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_HEAD_BYTES: usize = 20;
 
 pub const KV_SHARE_ROOT: &str = "sync_share_root";
 pub const KV_LIBRARY_NAME: &str = "sync_library_name";
@@ -38,6 +39,9 @@ pub struct SyncReport {
     pub ops_applied: usize,
     pub blobs_uploaded: usize,
     pub blobs_downloaded: usize,
+    pub missing_blobs: usize,
+    pub pending_remote_ops: usize,
+    pub more_remote_work: bool,
     pub waiting_for_prerequisites: bool,
     #[serde(skip)]
     applied_op_types: Vec<String>,
@@ -87,7 +91,27 @@ fn verify_content_hash(hash: &str, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-fn entity_blob_key(op: &OpRecord) -> Result<Option<(String, String)>, String> {
+fn peer_head(backend: &dyn SyncBackend, device: &str) -> Result<Option<i64>, String> {
+    let key = super::drain::head_key(device);
+    let Some(bytes) = backend
+        .get_limited(&key, MAX_HEAD_BYTES)
+        .map_err(|error| format!("cannot read segment head {key}: {error}"))?
+    else {
+        return Ok(None);
+    };
+    let value = std::str::from_utf8(&bytes)
+        .map_err(|_| format!("invalid segment head {key}: expected UTF-8 integer"))?
+        .parse::<i64>()
+        .map_err(|_| format!("invalid segment head {key}: expected non-negative integer"))?;
+    if value < 0 {
+        return Err(format!(
+            "invalid segment head {key}: expected non-negative integer"
+        ));
+    }
+    Ok(Some(value))
+}
+
+fn entity_blob_key(op: &OpRecord) -> Result<Option<(String, String, usize)>, String> {
     if !matches!(op.op_type.as_str(), "entity_created" | "entity_recreated") {
         return Ok(None);
     }
@@ -100,9 +124,21 @@ fn entity_blob_key(op: &OpRecord) -> Result<Option<(String, String)>, String> {
         .get("mime")
         .and_then(|value| value.as_str())
         .unwrap_or("application/octet-stream");
+    let expected_size_u64 = op
+        .payload
+        .get("size")
+        .and_then(|value| value.as_u64())
+        .ok_or_else(|| format!("remote entity {hash} has no valid byte size"))?;
+    if expected_size_u64 > MAX_IN_MEMORY_SYNC_BLOB_BYTES {
+        return Err(format!(
+            "remote entity {hash} exceeds the current 512 MiB sync limit"
+        ));
+    }
+    let expected_size = usize::try_from(expected_size_u64)
+        .map_err(|_| format!("remote entity {hash} byte size is unsupported on this device"))?;
     let ext = crate::blob_store::mime_to_extension(mime).to_string();
     let key = format!("blobs/f/{}/{}/{}.{}", &hash[0..2], &hash[2..4], hash, ext);
-    Ok(Some((key, ext)))
+    Ok(Some((key, ext, expected_size)))
 }
 
 fn upload_pending_blobs(
@@ -113,7 +149,7 @@ fn upload_pending_blobs(
     let mut uploaded = 0usize;
     let mut seen = std::collections::HashSet::new();
     for (_, op) in db.pending_ops(DEFAULT_OPS_PER_SEGMENT)? {
-        let Some((key, ext)) = entity_blob_key(&op)? else {
+        let Some((key, ext, expected_size)) = entity_blob_key(&op)? else {
             continue;
         };
         if !seen.insert(op.entity_key.clone()) {
@@ -122,6 +158,14 @@ fn upload_pending_blobs(
         let bytes = blob_store
             .read_original(&op.entity_key, Some(&ext))
             .map_err(|e| e.to_string())?;
+        if bytes.len() != expected_size {
+            return Err(format!(
+                "local blob size mismatch for {}: metadata says {} bytes, original has {}",
+                op.entity_key,
+                expected_size,
+                bytes.len()
+            ));
+        }
         verify_content_hash(&op.entity_key, &bytes)?;
         match backend.put(&key, &bytes) {
             Ok(()) => uploaded += 1,
@@ -132,7 +176,38 @@ fn upload_pending_blobs(
     Ok(uploaded)
 }
 
+fn retry_delay(attempt_count: i64) -> chrono::Duration {
+    let exponent = attempt_count.clamp(0, 6) as u32;
+    chrono::Duration::seconds(5 * (1_i64 << exponent))
+}
+
+fn retry_is_due(available_at: &str, now: chrono::DateTime<chrono::Utc>) -> bool {
+    chrono::DateTime::parse_from_rfc3339(available_at)
+        .map(|available| available <= now)
+        .unwrap_or(true)
+}
+
+fn record_missing_blob_attempt(
+    db: &LibraryDatabase,
+    hash: &str,
+    key: &str,
+    ext: &str,
+    attempt_count: i64,
+    error: Option<&str>,
+) -> Result<(), String> {
+    let available_at = (chrono::Utc::now() + retry_delay(attempt_count)).to_rfc3339();
+    db.record_sync_missing_blob_attempt(
+        hash,
+        key,
+        ext,
+        if error.is_some() { "failed" } else { "pending" },
+        &available_at,
+        error,
+    )
+}
+
 fn hydrate_required_blobs(
+    db: &LibraryDatabase,
     ops: &[OpRecord],
     blob_store: &crate::blob_store::BlobStore,
     backend: &dyn SyncBackend,
@@ -141,31 +216,139 @@ fn hydrate_required_blobs(
     let mut pending = 0usize;
     let mut seen = std::collections::HashSet::new();
     for op in ops {
-        let Some((key, ext)) = entity_blob_key(op)? else {
+        let Some((key, ext, expected_size)) = entity_blob_key(op)? else {
             continue;
         };
+        if !db.remote_create_needs_blob(op)? {
+            db.clear_sync_missing_blob(&op.entity_key)?;
+            continue;
+        }
         if !seen.insert(op.entity_key.clone()) {
             continue;
         }
+        let state = db.sync_missing_blob_state(&op.entity_key)?;
+        let mut replace_existing = false;
+        let mut local_error = None;
         if blob_store
             .find_original(&op.entity_key, Some(&ext))
             .map_err(|e| e.to_string())?
             .is_some()
         {
-            let bytes = blob_store
-                .read_original(&op.entity_key, Some(&ext))
-                .map_err(|e| e.to_string())?;
-            verify_content_hash(&op.entity_key, &bytes)?;
-            continue;
+            match blob_store.read_original(&op.entity_key, Some(&ext)) {
+                Ok(bytes) => match verify_content_hash(&op.entity_key, &bytes) {
+                    Ok(()) if bytes.len() == expected_size => {
+                        db.clear_sync_missing_blob(&op.entity_key)?;
+                        continue;
+                    }
+                    Ok(()) => {
+                        let error = format!(
+                            "remote metadata size mismatch for existing {}: expected {} bytes, original has {}",
+                            op.entity_key,
+                            expected_size,
+                            bytes.len()
+                        );
+                        record_missing_blob_attempt(
+                            db,
+                            &op.entity_key,
+                            &key,
+                            &ext,
+                            state.as_ref().map_or(0, |state| state.attempt_count),
+                            Some(&error),
+                        )?;
+                        return Err(error);
+                    }
+                    Err(error) => {
+                        replace_existing = true;
+                        local_error = Some(format!("local original is corrupt: {error}"));
+                    }
+                },
+                Err(error) => {
+                    replace_existing = true;
+                    local_error = Some(format!("local original cannot be read: {error}"));
+                }
+            }
         }
-        let Some(bytes) = backend.get(&key).map_err(|e| e.to_string())? else {
+        let now = chrono::Utc::now();
+        if state
+            .as_ref()
+            .is_some_and(|state| !retry_is_due(&state.available_at, now))
+        {
             pending += 1;
             continue;
+        }
+        let attempt_count = state.map_or(0, |state| state.attempt_count);
+        let bytes = match backend.get_limited(&key, expected_size) {
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => {
+                let error = local_error.as_deref();
+                record_missing_blob_attempt(db, &op.entity_key, &key, &ext, attempt_count, error)?;
+                if let Some(error) = error {
+                    return Err(format!(
+                        "{error}; verified remote replacement is not available"
+                    ));
+                }
+                pending += 1;
+                continue;
+            }
+            Err(error) => {
+                let error = format!("blob download {key}: {error}");
+                record_missing_blob_attempt(
+                    db,
+                    &op.entity_key,
+                    &key,
+                    &ext,
+                    attempt_count,
+                    Some(&error),
+                )?;
+                return Err(error);
+            }
         };
-        verify_content_hash(&op.entity_key, &bytes)?;
-        blob_store
-            .write_original(&op.entity_key, &bytes, Some(&ext))
-            .map_err(|e| e.to_string())?;
+        if bytes.len() != expected_size {
+            let error = format!(
+                "sync blob size mismatch for {}: expected {} bytes, got {}",
+                op.entity_key,
+                expected_size,
+                bytes.len()
+            );
+            record_missing_blob_attempt(
+                db,
+                &op.entity_key,
+                &key,
+                &ext,
+                attempt_count,
+                Some(&error),
+            )?;
+            return Err(error);
+        }
+        if let Err(error) = verify_content_hash(&op.entity_key, &bytes) {
+            record_missing_blob_attempt(
+                db,
+                &op.entity_key,
+                &key,
+                &ext,
+                attempt_count,
+                Some(&error),
+            )?;
+            return Err(error);
+        }
+        let write_result = if replace_existing {
+            blob_store.replace_original(&op.entity_key, &bytes, Some(&ext))
+        } else {
+            blob_store.write_original(&op.entity_key, &bytes, Some(&ext))
+        };
+        if let Err(error) = write_result {
+            let error = error.to_string();
+            record_missing_blob_attempt(
+                db,
+                &op.entity_key,
+                &key,
+                &ext,
+                attempt_count,
+                Some(&error),
+            )?;
+            return Err(error);
+        }
+        db.clear_sync_missing_blob(&op.entity_key)?;
         downloaded += 1;
     }
     Ok((downloaded, pending))
@@ -186,7 +369,7 @@ pub fn sync_cycle(
 }
 
 /// Run the bound library's canonical cycle and persist its latest observable
-/// result. The remote is never deleted or overwritten here.
+/// result. Immutable remote library objects are never overwritten here.
 pub fn run_bound_sync(
     db: &LibraryDatabase,
     blob_store: &crate::blob_store::BlobStore,
@@ -195,19 +378,28 @@ pub fn run_bound_sync(
         return Err("This library is not connected to a sync folder".to_string());
     };
     let result = (|| {
-        let backend = FsBackend::open(&remote_library_root(&share_root, &name))
-            .map_err(|error| format!("Cannot open sync folder: {error}"))?;
+        let (manifest, backend) = open_remote_library(&share_root, &name)?;
+        if manifest.library_uuid != db.library_uuid()? {
+            return Err(
+                "The connected sync folder belongs to a different library. Disconnect it and select the correct remote library."
+                    .to_string(),
+            );
+        }
         sync_cycle(db, blob_store, &backend)
     })();
 
     match &result {
         Ok(report) => {
-            db.kv_set(KV_LAST_SUCCESS_AT, &chrono::Utc::now().to_rfc3339())?;
-            db.kv_delete(KV_LAST_ERROR)?;
             db.kv_set(
                 KV_LAST_REPORT,
                 &serde_json::to_string(report).map_err(|error| error.to_string())?,
             )?;
+            if !report.waiting_for_prerequisites && !report.more_remote_work {
+                db.kv_set(KV_LAST_SUCCESS_AT, &chrono::Utc::now().to_rfc3339())?;
+            }
+            if db.sync_missing_blob_counts()?.1 == 0 {
+                db.kv_delete(KV_LAST_ERROR)?;
+            }
             if report.ops_applied > 0 {
                 crate::events::emit_state_changed("folder_sync", sync_change_impact(report));
             }
@@ -443,6 +635,10 @@ fn sync_once_inner(
         .list_directories("oplog/", MAX_REMOTE_DEVICES)
         .map_err(|error| error.to_string())?;
     device_order.retain(|device| device != db.device_id());
+    let peer_heads = device_order
+        .iter()
+        .map(|device| Ok((device.clone(), peer_head(backend, device)?)))
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
     let initial_cursors = device_order
         .iter()
         .map(|device| Ok((device.clone(), db.ingest_cursor(device)?)))
@@ -459,6 +655,7 @@ fn sync_once_inner(
     let mut candidate_segments = 0usize;
     let mut candidate_bytes = 0usize;
     let mut budget_exhausted = false;
+    let mut gap_detected = false;
     while candidate_segments < MAX_REMOTE_SEGMENTS_PER_CYCLE && !budget_exhausted {
         let mut progressed = false;
         for device in &device_order {
@@ -473,6 +670,13 @@ fn sync_once_inner(
                 .get_limited(&key, MAX_SEGMENT_BYTES)
                 .map_err(|error| format!("cannot read segment {key}: {error}"))?
             else {
+                if peer_heads
+                    .get(device)
+                    .and_then(|head| *head)
+                    .is_some_and(|head| head > *cursor)
+                {
+                    gap_detected = true;
+                }
                 continue;
             };
             let ops =
@@ -495,10 +699,23 @@ fn sync_once_inner(
             break;
         }
     }
+    let advertised_work_remains = cursors.iter().any(|(device, cursor)| {
+        peer_heads
+            .get(device)
+            .and_then(|head| *head)
+            .is_some_and(|head| head > *cursor)
+    });
     let cursor_updates = cursors
         .into_iter()
         .filter(|(device, cursor)| initial_cursors.get(device).is_some_and(|old| cursor > old))
         .collect::<Vec<_>>();
+    report.more_remote_work = advertised_work_remains
+        || budget_exhausted
+        || candidate_segments == MAX_REMOTE_SEGMENTS_PER_CYCLE;
+    if gap_detected {
+        report.waiting_for_prerequisites = true;
+        report.pending_remote_ops = 1;
+    }
 
     if cursor_updates.is_empty() {
         return Ok(report);
@@ -519,10 +736,12 @@ fn sync_once_inner(
         ));
     }
     if let Some(blob_store) = blob_store {
-        let (downloaded, pending) = hydrate_required_blobs(&new_ops, blob_store, backend)?;
+        let (downloaded, pending) = hydrate_required_blobs(db, &new_ops, blob_store, backend)?;
         report.blobs_downloaded = downloaded;
-        report.waiting_for_prerequisites = pending > 0;
+        report.missing_blobs = db.sync_missing_blob_counts()?.0 as usize;
+        report.waiting_for_prerequisites |= pending > 0;
         if pending > 0 {
+            report.pending_remote_ops = report.pending_remote_ops.max(new_ops.len());
             return Ok(report);
         }
     }
@@ -550,7 +769,10 @@ fn sync_once_inner(
             report.affected_smart_folder_ids = scope_impact.smart_folder_ids.into_iter().collect();
             report.affected_collection_ids = scope_impact.collection_ids.into_iter().collect();
         }
-        None => report.waiting_for_prerequisites = true,
+        None => {
+            report.waiting_for_prerequisites = true;
+            report.pending_remote_ops = report.pending_remote_ops.max(new_ops.len());
+        }
     }
     Ok(report)
 }
@@ -593,6 +815,10 @@ mod tests {
             self.inner.put(key, bytes)?;
             self.writes.lock().unwrap().push(key.to_string());
             Ok(())
+        }
+
+        fn put_replace(&self, key: &str, bytes: &[u8]) -> Result<(), BackendError> {
+            self.inner.put_replace(key, bytes)
         }
 
         fn get(&self, key: &str) -> Result<Option<Vec<u8>>, BackendError> {
@@ -649,6 +875,12 @@ mod tests {
                 &crate::oplog::segment::encode_segment(&ops).unwrap(),
             )
             .unwrap();
+        backend
+            .put_replace(
+                &crate::oplog::drain::head_key(device),
+                seq.to_string().as_bytes(),
+            )
+            .unwrap();
     }
 
     fn remote_op(
@@ -666,6 +898,21 @@ mod tests {
             hlc: hlc.into(),
             device_id: device.into(),
         }
+    }
+
+    fn bind_test_remote(db: &LibraryDatabase, share_root: &Path, name: &str) {
+        super::super::remote_library::create_remote_library(
+            share_root,
+            &super::super::remote_library::RemoteLibraryManifest {
+                format_version: 1,
+                library_uuid: db.library_uuid().unwrap(),
+                name: name.to_string(),
+                created_at: "2026-08-14T00:00:00Z".into(),
+                created_by_device: db.device_id().to_string(),
+            },
+        )
+        .unwrap();
+        set_binding(db, share_root, name).unwrap();
     }
 
     #[test]
@@ -725,18 +972,36 @@ mod tests {
         sync_once(&dev_a, &backend).unwrap();
         dev_a.create_folder("Second", None, None, None).unwrap();
         sync_once(&dev_a, &backend).unwrap();
+        dev_a.create_folder("Third", None, None, None).unwrap();
+        sync_once(&dev_a, &backend).unwrap();
 
-        // Simulate transport lag: segment 1 not yet visible to B.
+        // Simulate transport lag across more than one segment. The durable
+        // head proves work exists without scanning ahead an arbitrary amount.
         let seg1 = crate::oplog::drain::segment_key("gap-a", 1);
+        let seg2 = crate::oplog::drain::segment_key("gap-a", 2);
         let seg1_bytes = backend.get(&seg1).unwrap().unwrap();
+        let seg2_bytes = backend.get(&seg2).unwrap().unwrap();
         backend.delete(&seg1).unwrap();
+        backend.delete(&seg2).unwrap();
 
         let report = sync_once(&dev_b, &backend).unwrap();
         assert_eq!(report.segments_consumed, 0, "must stop at the gap");
+        assert!(report.waiting_for_prerequisites);
+        assert!(report.more_remote_work);
+        assert_eq!(report.pending_remote_ops, 1);
         assert!(folder_names(&dev_b).is_empty());
 
-        // Segment 1 arrives; both segments now apply, in order.
+        // Segment 1 arrives but segment 2 is still missing. Only the exact
+        // contiguous prefix applies and the device remains waiting.
         backend.put(&seg1, &seg1_bytes).unwrap();
+        let report = sync_once(&dev_b, &backend).unwrap();
+        assert_eq!(report.segments_consumed, 1);
+        assert!(report.waiting_for_prerequisites);
+        assert!(report.more_remote_work);
+        assert_eq!(folder_names(&dev_b)[0].0, "First");
+
+        // Once segment 2 arrives, the remaining prefix applies in order.
+        backend.put(&seg2, &seg2_bytes).unwrap();
         let report = sync_once(&dev_b, &backend).unwrap();
         assert_eq!(report.segments_consumed, 2);
         assert_eq!(
@@ -744,7 +1009,7 @@ mod tests {
                 .iter()
                 .map(|f| f.0.as_str())
                 .collect::<Vec<_>>(),
-            vec!["First", "Second"]
+            vec!["First", "Second", "Third"]
         );
     }
 
@@ -762,12 +1027,7 @@ mod tests {
                 hlc: format!("{seq:013x}-0000"),
                 device_id: "bounded-remote-source".into(),
             };
-            backend
-                .put(
-                    &crate::oplog::drain::segment_key("bounded-remote-source", seq as i64),
-                    &crate::oplog::segment::encode_segment(&[op]).unwrap(),
-                )
-                .unwrap();
+            put_ops(&backend, "bounded-remote-source", seq as i64, vec![op]);
         }
         let peer_op = OpRecord {
             op_version: OP_VERSION,
@@ -777,15 +1037,11 @@ mod tests {
             hlc: "0000000000001-0000".into(),
             device_id: "zz-remote-peer".into(),
         };
-        backend
-            .put(
-                &crate::oplog::drain::segment_key("zz-remote-peer", 1),
-                &crate::oplog::segment::encode_segment(&[peer_op]).unwrap(),
-            )
-            .unwrap();
+        put_ops(&backend, "zz-remote-peer", 1, vec![peer_op]);
 
         let first = sync_once(&target, &backend).unwrap();
         assert_eq!(first.segments_consumed, MAX_REMOTE_SEGMENTS_PER_CYCLE);
+        assert!(first.more_remote_work);
         assert_eq!(
             target.ingest_cursor("bounded-remote-source").unwrap(),
             (MAX_REMOTE_SEGMENTS_PER_CYCLE - 1) as i64
@@ -795,6 +1051,7 @@ mod tests {
 
         let second = sync_once(&target, &backend).unwrap();
         assert_eq!(second.segments_consumed, 4);
+        assert!(!second.more_remote_work);
         assert_eq!(folder_names(&target).len(), total_segments + 1);
     }
 
@@ -818,6 +1075,72 @@ mod tests {
         assert!(scopes.contains(&"folder:7".to_string()));
         assert!(scopes.contains(&"collection:11".to_string()));
         assert!(scopes.contains(&"system:active".to_string()));
+    }
+
+    #[test]
+    fn remote_blob_declaration_has_an_absolute_memory_bound() {
+        let hash = "a".repeat(64);
+        let op = remote_op(
+            "0000000000001-0000",
+            "peer",
+            "entity_created",
+            &hash,
+            serde_json::json!({
+                "mime":"video/mp4",
+                "size": MAX_IN_MEMORY_SYNC_BLOB_BYTES + 1
+            }),
+        );
+
+        let error = entity_blob_key(&op).unwrap_err();
+        assert!(error.contains("512 MiB sync limit"));
+    }
+
+    #[test]
+    fn stale_first_create_does_not_wait_for_a_blob_or_cross_a_tombstone() {
+        let backend = MemoryBackend::new();
+        let target_root = TempDir::new().unwrap();
+        let target =
+            LibraryDatabase::open_with_device_id(target_root.path(), "stale-target".into())
+                .unwrap();
+        let blobs = crate::blob_store::BlobStore::open(target_root.path()).unwrap();
+        let hash = "a".repeat(64);
+
+        put_ops(
+            &backend,
+            "delete-peer",
+            1,
+            vec![remote_op(
+                "0000000000001-0000",
+                "delete-peer",
+                "entity_deleted",
+                &hash,
+                serde_json::json!({}),
+            )],
+        );
+        assert_eq!(
+            sync_cycle(&target, &blobs, &backend).unwrap().ops_applied,
+            1
+        );
+
+        put_ops(
+            &backend,
+            "stale-create-peer",
+            1,
+            vec![remote_op(
+                "0000000000002-0000",
+                "stale-create-peer",
+                "entity_created",
+                &hash,
+                serde_json::json!({"mime":"image/png","size":1}),
+            )],
+        );
+        let report = sync_cycle(&target, &blobs, &backend).unwrap();
+
+        assert_eq!(report.segments_consumed, 1);
+        assert_eq!(report.ops_applied, 0);
+        assert!(!report.waiting_for_prerequisites);
+        assert_eq!(target.sync_missing_blob_counts().unwrap(), (0, 0));
+        assert_eq!(target.ingest_cursor("stale-create-peer").unwrap(), 1);
     }
 
     #[test]
@@ -1177,7 +1500,15 @@ mod tests {
 
         assert_eq!(report.segments_uploaded, 1);
         assert_eq!(db.pending_op_count().unwrap(), 1);
-        assert_eq!(backend.list("oplog/bounded-a/").unwrap().len(), 1);
+        assert_eq!(
+            backend
+                .list("oplog/bounded-a/")
+                .unwrap()
+                .into_iter()
+                .filter(|key| key.ends_with(".seg"))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -1187,7 +1518,7 @@ mod tests {
         let db =
             LibraryDatabase::open_with_device_id(library_root.path(), "status-a".into()).unwrap();
         let blob_store = crate::blob_store::BlobStore::open(library_root.path()).unwrap();
-        set_binding(&db, share_root.path(), "Remote").unwrap();
+        bind_test_remote(&db, share_root.path(), "Remote");
         db.kv_set(KV_LAST_ERROR, "old failure").unwrap();
 
         let report = run_bound_sync(&db, &blob_store).unwrap();
@@ -1195,6 +1526,67 @@ mod tests {
         assert_eq!(report, SyncReport::default());
         assert!(db.kv_get(KV_LAST_SUCCESS_AT).unwrap().is_some());
         assert_eq!(db.kv_get(KV_LAST_ERROR).unwrap(), None);
+        let persisted: SyncReport =
+            serde_json::from_str(&db.kv_get(KV_LAST_REPORT).unwrap().unwrap()).unwrap();
+        assert_eq!(persisted, report);
+    }
+
+    #[test]
+    fn bound_sync_never_recreates_a_removed_remote_library() {
+        let library_root = TempDir::new().unwrap();
+        let share_root = TempDir::new().unwrap();
+        let db = LibraryDatabase::open_with_device_id(library_root.path(), "removed-remote".into())
+            .unwrap();
+        let blob_store = crate::blob_store::BlobStore::open(library_root.path()).unwrap();
+        bind_test_remote(&db, share_root.path(), "Remote");
+        let remote_root = share_root.path().join("Picto").join("Remote");
+        std::fs::remove_dir_all(&remote_root).unwrap();
+
+        let error = run_bound_sync(&db, &blob_store).unwrap_err();
+
+        assert!(error.contains("remote library"));
+        assert!(!remote_root.exists());
+        assert!(db.kv_get(KV_LAST_ERROR).unwrap().is_some());
+    }
+
+    #[test]
+    fn waiting_cycle_persists_pending_state_without_claiming_success() {
+        let library_root = TempDir::new().unwrap();
+        let share_root = TempDir::new().unwrap();
+        let db = LibraryDatabase::open_with_device_id(library_root.path(), "waiting-target".into())
+            .unwrap();
+        let blob_store = crate::blob_store::BlobStore::open(library_root.path()).unwrap();
+        bind_test_remote(&db, share_root.path(), "Remote");
+        db.kv_set(KV_LAST_SUCCESS_AT, "previous-success").unwrap();
+
+        let (_, backend) = open_remote_library(share_root.path(), "Remote").unwrap();
+        let hash = "a".repeat(64);
+        let op = remote_op(
+            "0000000000001-0000",
+            "waiting-peer",
+            "entity_created",
+            &hash,
+            serde_json::json!({"mime":"image/png","size":1,"status":1}),
+        );
+        backend
+            .put(
+                &super::super::drain::segment_key("waiting-peer", 1),
+                &super::super::segment::encode_segment(&[op]).unwrap(),
+            )
+            .unwrap();
+        backend
+            .put_replace(&super::super::drain::head_key("waiting-peer"), b"1")
+            .unwrap();
+
+        let report = run_bound_sync(&db, &blob_store).unwrap();
+
+        assert!(report.waiting_for_prerequisites);
+        assert_eq!(report.pending_remote_ops, 1);
+        assert_eq!(report.missing_blobs, 1);
+        assert_eq!(
+            db.kv_get(KV_LAST_SUCCESS_AT).unwrap().as_deref(),
+            Some("previous-success")
+        );
         let persisted: SyncReport =
             serde_json::from_str(&db.kv_get(KV_LAST_REPORT).unwrap().unwrap()).unwrap();
         assert_eq!(persisted, report);
@@ -1240,12 +1632,18 @@ mod tests {
             })
             .unwrap();
         sync_once(&source, &backend).unwrap();
-        backend.put(&key, b"corrupt bytes").unwrap();
+        backend.put(&key, b"corrupt bytes!").unwrap();
 
         let error = sync_cycle(&target, &blob_store, &backend).unwrap_err();
 
         assert!(error.contains("failed hash verification"));
         assert!(blob_store.read_original(&hash, Some("png")).is_err());
+        assert_eq!(target.sync_missing_blob_counts().unwrap(), (1, 1));
+
+        let retry = sync_cycle(&target, &blob_store, &backend).unwrap();
+        assert!(retry.waiting_for_prerequisites);
+        assert_eq!(retry.missing_blobs, 1);
+        assert_eq!(retry.pending_remote_ops, 1);
     }
 
     #[test]
@@ -1266,7 +1664,7 @@ mod tests {
                 &device_id,
                 "entity_created",
                 &hash,
-                &serde_json::json!({"mime": "image/png"}),
+                &serde_json::json!({"mime": "image/png", "size": 13}),
             )
         })
         .unwrap();
@@ -1392,7 +1790,7 @@ mod tests {
     }
 
     #[test]
-    fn entity_segment_waits_for_verified_blob_then_materializes() {
+    fn missing_blob_survives_restart_then_materializes_and_clears() {
         let source_root = TempDir::new().unwrap();
         let target_root = TempDir::new().unwrap();
         let source =
@@ -1423,7 +1821,10 @@ mod tests {
 
         let report = sync_cycle(&target, &target_blobs, &backend).unwrap();
         assert!(report.waiting_for_prerequisites);
+        assert_eq!(report.missing_blobs, 1);
+        assert_eq!(report.pending_remote_ops, 1);
         assert_eq!(target.ingest_cursor("blob-a").unwrap(), 0);
+        assert_eq!(target.sync_missing_blob_counts().unwrap(), (1, 0));
         let entity_count: i64 = target
             .with_read(|conn| {
                 conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))
@@ -1431,13 +1832,33 @@ mod tests {
             .unwrap();
         assert_eq!(entity_count, 0);
 
+        drop(target_blobs);
+        drop(target);
+        let target =
+            LibraryDatabase::open_with_device_id(target_root.path(), "blob-b".into()).unwrap();
+        let target_blobs = crate::blob_store::BlobStore::open(target_root.path()).unwrap();
+        assert_eq!(target.sync_missing_blob_counts().unwrap(), (1, 0));
+
         let blob_key = format!("blobs/f/{}/{}/{}.png", &hash[0..2], &hash[2..4], hash);
+        target_blobs
+            .write_original(&hash, b"corrupt local", Some("png"))
+            .unwrap();
         backend.put(&blob_key, bytes).unwrap();
+        target
+            .with_write(|conn| {
+                conn.execute(
+                    "UPDATE sync_missing_blob SET available_at = '1970-01-01T00:00:00Z'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
         let report = sync_cycle(&target, &target_blobs, &backend).unwrap();
 
         assert_eq!(report.blobs_downloaded, 1);
         assert_eq!(report.ops_applied, 1);
         assert_eq!(target.ingest_cursor("blob-a").unwrap(), 1);
+        assert_eq!(target.sync_missing_blob_counts().unwrap(), (0, 0));
         assert_eq!(
             target_blobs.read_original(&hash, Some("png")).unwrap(),
             bytes

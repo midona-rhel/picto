@@ -19,6 +19,9 @@ pub trait SyncBackend: Send + Sync {
     /// Store an immutable object. Fails with `AlreadyExists` if the key is
     /// taken — remote objects are write-once by contract.
     fn put(&self, key: &str, bytes: &[u8]) -> Result<(), BackendError>;
+    /// Atomically replace device-local coordination metadata. Truth objects
+    /// continue to use create-only `put`.
+    fn put_replace(&self, key: &str, bytes: &[u8]) -> Result<(), BackendError>;
     fn get(&self, key: &str) -> Result<Option<Vec<u8>>, BackendError>;
     /// Read at most `max_bytes`; oversized objects fail without being fully
     /// materialized in memory.
@@ -55,6 +58,14 @@ impl SyncBackend for MemoryBackend {
             return Err(BackendError::AlreadyExists(key.to_string()));
         }
         objects.insert(key.to_string(), bytes.to_vec());
+        Ok(())
+    }
+
+    fn put_replace(&self, key: &str, bytes: &[u8]) -> Result<(), BackendError> {
+        self.objects
+            .lock()
+            .unwrap()
+            .insert(key.to_string(), bytes.to_vec());
         Ok(())
     }
 
@@ -130,6 +141,14 @@ mod tests {
             Err(BackendError::AlreadyExists(_))
         ));
         assert_eq!(backend.get("a/1").unwrap().unwrap(), b"x");
+    }
+
+    #[test]
+    fn coordination_metadata_can_be_replaced() {
+        let backend = MemoryBackend::new();
+        backend.put_replace("oplog/a/head", b"1").unwrap();
+        backend.put_replace("oplog/a/head", b"2").unwrap();
+        assert_eq!(backend.get("oplog/a/head").unwrap().unwrap(), b"2");
     }
 
     #[test]

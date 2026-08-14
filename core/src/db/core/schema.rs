@@ -4,7 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 113;
+pub const CURRENT_SCHEMA_VERSION: i64 = 114;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -540,12 +540,26 @@ CREATE TABLE IF NOT EXISTS sync_ingest_cursor (
     consumed_seq INTEGER NOT NULL DEFAULT 0
 );
 
+-- Remote originals that metadata is waiting for. The ingest cursor does not
+-- advance until these blobs arrive, and this state survives process restart.
+CREATE TABLE IF NOT EXISTS sync_missing_blob (
+    entity_hash   TEXT PRIMARY KEY,
+    object_key    TEXT NOT NULL,
+    extension     TEXT NOT NULL,
+    status        TEXT NOT NULL CHECK (status IN ('pending', 'failed')),
+    attempt_count INTEGER NOT NULL DEFAULT 0,
+    available_at  TEXT NOT NULL,
+    last_error    TEXT,
+    first_seen_at TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
 
 INSERT INTO schema_version (version)
-SELECT 113
+SELECT 114
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -735,6 +749,10 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         (
             "sync_conflict_clock",
             "SELECT target_kind, target_key, field_key, hlc, device_id FROM sync_conflict_clock WHERE 0",
+        ),
+        (
+            "sync_missing_blob",
+            "SELECT entity_hash, object_key, extension, status, attempt_count, available_at, last_error, first_seen_at, updated_at FROM sync_missing_blob WHERE 0",
         ),
     ];
     const REQUIRED_INDEXES: &[(&str, &str, &[(&str, bool)])] = &[
@@ -969,6 +987,23 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
                 "Canonical schema version {CURRENT_SCHEMA_VERSION} has incompatible index {index}: expected columns {expected_columns:?}, found {actual_columns:?}"
             ));
         }
+    }
+    let missing_blob_sql: String = conn
+        .query_row(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'sync_missing_blob'",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Failed to validate sync_missing_blob: {error}"))?;
+    let normalized_sql = missing_blob_sql
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if !normalized_sql.contains("check (status in ('pending', 'failed'))") {
+        return Err(format!(
+            "Canonical schema version {CURRENT_SCHEMA_VERSION} has incompatible sync_missing_blob status constraints"
+        ));
     }
     Ok(())
 }

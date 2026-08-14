@@ -36,6 +36,16 @@ fn is_recreate(op_type: &str) -> bool {
     op_type == "entity_recreated"
 }
 
+fn create_is_blocked(
+    op: &OpRecord,
+    current_create: &Option<(String, String)>,
+    delete: &Option<(String, String)>,
+) -> bool {
+    !newer(&op.hlc, &op.device_id, current_create.clone())
+        || (!is_recreate(&op.op_type) && (current_create.is_some() || delete.is_some()))
+        || (is_recreate(&op.op_type) && !newer(&op.hlc, &op.device_id, delete.clone()))
+}
+
 fn is_delete(op_type: &str) -> bool {
     matches!(
         op_type,
@@ -368,6 +378,28 @@ pub(crate) fn record_local_op(conn: &Connection, op: &OpRecord) -> rusqlite::Res
     put_high_water(conn, op)
 }
 
+/// Read-only preflight used before downloading a create's blob. Returning
+/// true is stable: later clocks can only make the operation more stale.
+pub(crate) fn remote_create_is_blocked(conn: &Connection, op: &OpRecord) -> rusqlite::Result<bool> {
+    if !is_create(&op.op_type) {
+        return Ok(false);
+    }
+    let slots = slots_for(op);
+    let Some(first) = slots.first() else {
+        return Ok(false);
+    };
+    let delete = delete_marker(conn, first)?;
+    let current_create = current_slot(
+        conn,
+        &SlotSpec {
+            target_kind: first.target_kind.clone(),
+            target_key: first.target_key.clone(),
+            field_key: CREATE_FIELD.to_owned(),
+        },
+    )?;
+    Ok(create_is_blocked(op, &current_create, &delete))
+}
+
 /// Return a remote op with stale fields removed, or no op when the complete
 /// op is stale/blocked by a hard-delete tombstone. Clock writes happen before
 /// the normal remote writer and roll back with it if the writer parks/fails.
@@ -403,15 +435,7 @@ pub(crate) fn accept_remote_op(
     }
     if is_create(op.op_type.as_str()) {
         let create_slot = &slots[0];
-        if !newer(&op.hlc, &op.device_id, current_create.clone()) {
-            put_high_water(conn, op)?;
-            return Ok(None);
-        }
-        if !is_recreate(&op.op_type) && (current_create.is_some() || delete.is_some()) {
-            put_high_water(conn, op)?;
-            return Ok(None);
-        }
-        if is_recreate(&op.op_type) && !newer(&op.hlc, &op.device_id, delete) {
+        if create_is_blocked(op, &current_create, &delete) {
             put_high_water(conn, op)?;
             return Ok(None);
         }

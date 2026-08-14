@@ -7,6 +7,11 @@ export interface SyncStatus {
   library_uuid: string | null;
   device_id: string;
   pending_ops: number;
+  pending_remote_ops: number;
+  more_remote_work: boolean;
+  waiting_for_prerequisites: boolean;
+  missing_blobs: number;
+  failed_blobs: number;
   syncing: boolean;
   last_success_at: string | null;
   last_error: string | null;
@@ -26,6 +31,9 @@ export interface SyncReport {
   ops_applied: number;
   blobs_uploaded: number;
   blobs_downloaded: number;
+  missing_blobs: number;
+  pending_remote_ops: number;
+  more_remote_work: boolean;
   waiting_for_prerequisites: boolean;
 }
 

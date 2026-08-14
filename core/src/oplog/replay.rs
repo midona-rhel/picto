@@ -93,7 +93,10 @@ impl TruthState {
         match op.op_type.as_str() {
             "entity_created" | "entity_recreated" => {
                 if op.op_type == "entity_created"
-                    && self.entities.get(key).is_some_and(|entity| entity.created)
+                    && self
+                        .entities
+                        .get(key)
+                        .is_some_and(|entity| entity.created || entity.deleted)
                 {
                     return;
                 }
@@ -373,6 +376,9 @@ pub fn replay_ops(mut ops: Vec<OpRecord>) -> Result<TruthState, ReplayError> {
 pub fn replay_backend(backend: &dyn SyncBackend) -> Result<TruthState, ReplayError> {
     let mut ops = Vec::new();
     for key in backend.list("oplog/")? {
+        if !key.ends_with(".seg") {
+            continue;
+        }
         let Some(bytes) = backend.get(&key)? else {
             continue;
         };
@@ -593,6 +599,30 @@ mod tests {
         assert_eq!(entity.entities["h1"].fields.len(), 1);
         assert!(entity.entities["h1"].tags.is_empty());
         assert!(!entity.entities["h1"].deleted);
+    }
+
+    #[test]
+    fn first_create_cannot_cross_an_existing_tombstone() {
+        let state = replay_ops(vec![
+            op(
+                "001-0000",
+                "a",
+                "entity_deleted",
+                "h1",
+                serde_json::json!({}),
+            ),
+            op(
+                "002-0000",
+                "b",
+                "entity_created",
+                "h1",
+                serde_json::json!({"name":"stale import"}),
+            ),
+        ])
+        .unwrap();
+
+        assert!(state.entities["h1"].deleted);
+        assert!(!state.entities["h1"].created);
     }
 
     #[test]
