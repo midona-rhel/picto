@@ -93,21 +93,7 @@ pub fn rename_tag(
                 merged_into_tag_id: None,
             });
         }
-        conn.execute(
-            "UPDATE tag
-             SET site_mask = (
-                SELECT COALESCE((SELECT site_mask FROM tag WHERE tag_id = ?2), 0) | COALESCE((SELECT site_mask FROM tag WHERE tag_id = ?1), 0)
-             )
-             WHERE tag_id = ?2",
-            params![tag_id, target_id],
-        )?;
-        // Merge into existing tag
-        conn.execute(
-            "UPDATE OR IGNORE entity_tag SET tag_id = ?1 WHERE tag_id = ?2",
-            params![target_id, tag_id],
-        )?;
-        conn.execute("DELETE FROM entity_tag WHERE tag_id = ?1", params![tag_id])?;
-        conn.execute("DELETE FROM tag WHERE tag_id = ?1", params![tag_id])?;
+        merge_tag_rows(conn, tag_id, target_id)?;
         Ok(TagStructureChange {
             entity_ids: affected_entity_ids,
             dirty_tag_ids: vec![tag_id, target_id],
@@ -157,30 +143,80 @@ pub fn merge_tags(
     from_tag_id: i64,
     to_tag_id: i64,
 ) -> rusqlite::Result<TagStructureChange> {
-    let mut stmt = conn.prepare("SELECT entity_id FROM entity_tag WHERE tag_id = ?1")?;
+    if from_tag_id == to_tag_id {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "cannot merge a tag into itself".to_string(),
+        ));
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT entity_id FROM entity_tag WHERE tag_id IN (?1, ?2)
+         UNION
+         SELECT entity_id FROM entity_tag_implied WHERE tag_id IN (?1, ?2)",
+    )?;
     let affected: Vec<i64> = stmt
-        .query_map([from_tag_id], |row| row.get(0))?
+        .query_map(params![from_tag_id, to_tag_id], |row| row.get(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    conn.execute(
-        "UPDATE tag
-         SET site_mask = (
-            SELECT COALESCE((SELECT site_mask FROM tag WHERE tag_id = ?2), 0) | COALESCE((SELECT site_mask FROM tag WHERE tag_id = ?1), 0)
-         )
-         WHERE tag_id = ?2",
-        params![from_tag_id, to_tag_id],
-    )?;
-    conn.execute(
-        "UPDATE OR IGNORE entity_tag SET tag_id = ?1 WHERE tag_id = ?2",
-        params![to_tag_id, from_tag_id],
-    )?;
-    conn.execute("DELETE FROM entity_tag WHERE tag_id = ?1", [from_tag_id])?;
-    conn.execute("DELETE FROM tag WHERE tag_id = ?1", [from_tag_id])?;
+    merge_tag_rows(conn, from_tag_id, to_tag_id)?;
     Ok(TagStructureChange {
         entity_ids: affected,
         dirty_tag_ids: vec![from_tag_id, to_tag_id],
         merged_into_tag_id: Some(to_tag_id),
     })
+}
+
+fn merge_tag_rows(conn: &Connection, from_tag_id: i64, to_tag_id: i64) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO entity_tag (entity_id, tag_id, provenance_mask, source)
+         SELECT entity_id, ?1, provenance_mask, source
+         FROM entity_tag
+         WHERE tag_id = ?2
+         ON CONFLICT(entity_id, tag_id, source)
+         DO UPDATE SET provenance_mask = entity_tag.provenance_mask | excluded.provenance_mask",
+        params![to_tag_id, from_tag_id],
+    )?;
+    conn.execute("DELETE FROM entity_tag WHERE tag_id = ?1", [from_tag_id])?;
+
+    conn.execute(
+        "UPDATE tag_alias
+         SET to_tag_id = ?1
+         WHERE to_tag_id = ?2 AND from_tag_id <> ?1",
+        params![to_tag_id, from_tag_id],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO tag_alias (from_tag_id, to_tag_id, source)
+         SELECT ?1, to_tag_id, source
+         FROM tag_alias
+         WHERE from_tag_id = ?2 AND to_tag_id <> ?1",
+        params![to_tag_id, from_tag_id],
+    )?;
+    conn.execute(
+        "DELETE FROM tag_alias WHERE from_tag_id = ?1 OR to_tag_id = ?1",
+        [from_tag_id],
+    )?;
+
+    conn.execute(
+        "INSERT OR IGNORE INTO tag_implication (child_tag_id, parent_tag_id, source)
+         SELECT child_tag_id, ?1, source
+         FROM tag_implication
+         WHERE parent_tag_id = ?2 AND child_tag_id <> ?1",
+        params![to_tag_id, from_tag_id],
+    )?;
+    conn.execute(
+        "INSERT OR IGNORE INTO tag_implication (child_tag_id, parent_tag_id, source)
+         SELECT ?1, parent_tag_id, source
+         FROM tag_implication
+         WHERE child_tag_id = ?2 AND parent_tag_id <> ?1",
+        params![to_tag_id, from_tag_id],
+    )?;
+    conn.execute(
+        "DELETE FROM tag_implication WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
+        [from_tag_id],
+    )?;
+
+    conn.execute("DELETE FROM tag WHERE tag_id = ?1", [from_tag_id])?;
+    Ok(())
 }
 
 /// Set or remove a tag alias.
@@ -224,15 +260,6 @@ pub fn manage_implication(
     Ok(())
 }
 
-/// Set concept-level site support for a tag.
-pub fn set_tag_site_mask(conn: &Connection, tag_id: i64, site_mask: u64) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE tag SET site_mask = ?1 WHERE tag_id = ?2",
-        params![mask_to_db_bits(site_mask), tag_id],
-    )?;
-    Ok(())
-}
-
 /// Resolve or create a tag by display string.
 pub fn ensure_tag(conn: &Connection, tag_str: &str) -> rusqlite::Result<i64> {
     get_or_create_tag(conn, tag_str)
@@ -250,7 +277,7 @@ fn get_or_create_tag(conn: &Connection, tag_str: &str) -> rusqlite::Result<i64> 
         return Ok(id);
     }
     conn.execute(
-        "INSERT INTO tag (namespace, subtag, site_mask) VALUES (?1, ?2, 0)",
+        "INSERT INTO tag (namespace, subtag) VALUES (?1, ?2)",
         params![ns, st],
     )?;
     Ok(conn.last_insert_rowid())
@@ -277,9 +304,7 @@ use rusqlite::OptionalExtension;
 mod tests {
     use super::*;
     use crate::db::core::schema::LIBRARY_DDL;
-    use crate::db::types::{
-        mask_to_db_bits, TAG_PROVENANCE_AI, TAG_PROVENANCE_MANUAL, TAG_SITE_E621,
-    };
+    use crate::db::types::{mask_to_db_bits, TAG_PROVENANCE_AI, TAG_PROVENANCE_MANUAL};
 
     fn setup_conn() -> Connection {
         let conn = Connection::open_in_memory().expect("open in-memory db");
@@ -329,39 +354,111 @@ mod tests {
     }
 
     #[test]
-    fn removing_entity_tag_does_not_clear_tag_site_mask() {
+    fn merge_combines_provenance_and_rewires_relationships() {
         let conn = setup_conn();
+        let from = ensure_tag(&conn, "from").unwrap();
+        let into = ensure_tag(&conn, "into").unwrap();
+        let alias_in = ensure_tag(&conn, "alias_in").unwrap();
+        let alias_out = ensure_tag(&conn, "alias_out").unwrap();
+        let child = ensure_tag(&conn, "child").unwrap();
+        let parent = ensure_tag(&conn, "parent").unwrap();
 
         add_tags(
             &conn,
             &[1],
-            &["tag_a".to_string()],
+            &["from".to_string()],
+            TAG_PROVENANCE_AI,
+            ExpansionMode::EntityOnly,
+        )
+        .unwrap();
+        add_tags(
+            &conn,
+            &[1],
+            &["into".to_string()],
             TAG_PROVENANCE_MANUAL,
             ExpansionMode::EntityOnly,
         )
-        .expect("add tag");
-        let tag_id: i64 = conn
-            .query_row("SELECT tag_id FROM tag WHERE subtag = 'tag_a'", [], |row| {
-                row.get(0)
-            })
-            .expect("get tag id");
-        set_tag_site_mask(&conn, tag_id, TAG_SITE_E621).expect("set site mask");
+        .unwrap();
+        manage_alias(&conn, alias_in, Some(from)).unwrap();
+        manage_alias(&conn, from, Some(alias_out)).unwrap();
+        manage_implication(&conn, child, from, true).unwrap();
+        manage_implication(&conn, from, parent, true).unwrap();
 
-        remove_tags(
-            &conn,
-            &[1],
-            &["tag_a".to_string()],
-            ExpansionMode::EntityOnly,
-        )
-        .expect("remove tag");
+        merge_tags(&conn, from, into).unwrap();
 
-        let site_mask: i64 = conn
+        let provenance: i64 = conn
             .query_row(
-                "SELECT site_mask FROM tag WHERE tag_id = ?1",
-                [tag_id],
+                "SELECT provenance_mask FROM entity_tag WHERE entity_id = 1 AND tag_id = ?1",
+                [into],
                 |row| row.get(0),
             )
-            .expect("get site mask");
-        assert_eq!(site_mask, mask_to_db_bits(TAG_SITE_E621));
+            .unwrap();
+        assert_eq!(
+            provenance,
+            mask_to_db_bits(TAG_PROVENANCE_MANUAL | TAG_PROVENANCE_AI)
+        );
+        let aliases = conn
+            .prepare("SELECT from_tag_id, to_tag_id FROM tag_alias ORDER BY from_tag_id")
+            .unwrap()
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert!(aliases.contains(&(alias_in, into)), "aliases: {aliases:?}");
+        assert!(aliases.contains(&(into, alias_out)), "aliases: {aliases:?}");
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM tag_implication
+                 WHERE (child_tag_id = ?1 AND parent_tag_id = ?2)
+                    OR (child_tag_id = ?2 AND parent_tag_id = ?3)",
+                params![child, into, parent],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            2
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM tag WHERE tag_id = ?1",
+                [from],
+                |row| { row.get::<_, i64>(0) }
+            )
+            .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn merge_rejects_the_same_tag_without_mutating_it() {
+        let conn = setup_conn();
+        let tag_id = ensure_tag(&conn, "same").unwrap();
+        add_tags(
+            &conn,
+            &[1],
+            &["same".to_string()],
+            TAG_PROVENANCE_MANUAL,
+            ExpansionMode::EntityOnly,
+        )
+        .unwrap();
+
+        assert!(merge_tags(&conn, tag_id, tag_id).is_err());
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM tag WHERE tag_id = ?1",
+                [tag_id],
+                |row| { row.get::<_, i64>(0) }
+            )
+            .unwrap(),
+            1
+        );
+        assert_eq!(
+            conn.query_row(
+                "SELECT COUNT(*) FROM entity_tag WHERE tag_id = ?1",
+                [tag_id],
+                |row| row.get::<_, i64>(0),
+            )
+            .unwrap(),
+            1
+        );
     }
 }

@@ -1,13 +1,11 @@
 //! Canonical tag queries.
 
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine;
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
 
 use crate::db::types::{mask_from_db_bits, NamespaceSummary, TagInfo, TagRecord, TagRelation};
-
-const TAG_SEARCH_ORDER: &str = "CASE
-    WHEN LOWER(t.subtag) = LOWER(?2) THEN 0
-    WHEN LOWER(t.subtag) LIKE LOWER(?3) ESCAPE '\\' THEN 1
-    ELSE 2 END";
 
 fn subtag_search(query: &str) -> (String, String, String) {
     let term = query
@@ -76,31 +74,8 @@ pub(crate) fn effective_tag_exists(entity_id: &str, parameter_index: usize) -> S
     )
 }
 
-fn visible_tag_count_expr(requested_tag_id: &str) -> String {
-    format!(
-        "(SELECT COUNT(*)
-          FROM media_entity me
-          WHERE me.status = 1
-            AND me.parent_collection_entity_id IS NULL
-            AND (
-                {top_level}
-                OR (me.entity_kind = 'collection' AND EXISTS (
-                    SELECT 1
-                    FROM media_entity child
-                    WHERE child.parent_collection_entity_id = me.entity_id
-                      AND {child}
-                ))
-            ))",
-        top_level = effective_tag_id_exists("me.entity_id", requested_tag_id),
-        child = effective_tag_id_exists("child.entity_id", requested_tag_id),
-    )
-}
-
 fn tag_record_columns(alias: &str) -> String {
-    format!(
-        "{alias}.tag_id, {alias}.namespace, {alias}.subtag, {} AS file_count, {alias}.site_mask",
-        visible_tag_count_expr(&format!("{alias}.tag_id"))
-    )
+    format!("{alias}.tag_id, {alias}.namespace, {alias}.subtag, 0 AS file_count")
 }
 
 pub fn find_tag_id(conn: &Connection, tag_str: &str) -> rusqlite::Result<Option<i64>> {
@@ -128,44 +103,6 @@ pub fn get_tag_string(conn: &Connection, tag_id: i64) -> rusqlite::Result<Option
     .optional()
 }
 
-pub fn search_tags(
-    conn: &Connection,
-    query: &str,
-    limit: i64,
-    offset: i64,
-) -> rusqlite::Result<Vec<TagRecord>> {
-    let columns = tag_record_columns("t");
-    if query.is_empty() {
-        let sql = format!(
-            "WITH counted AS (SELECT {columns} FROM tag t)
-             SELECT tag_id, namespace, subtag, file_count, site_mask
-             FROM counted
-             WHERE file_count > 0
-             ORDER BY file_count DESC, subtag ASC, tag_id ASC
-             LIMIT ?1 OFFSET ?2"
-        );
-        let mut stmt = conn.prepare(&sql)?;
-        return stmt
-            .query_map(params![limit, offset], map_tag_record)?
-            .collect();
-    }
-
-    let (term, pattern, prefix) = subtag_search(query);
-    let sql = format!(
-        "SELECT {columns}
-         FROM tag t
-         WHERE t.subtag LIKE ?1 ESCAPE '\\' COLLATE NOCASE
-         ORDER BY {TAG_SEARCH_ORDER}, file_count DESC, t.subtag ASC, t.tag_id ASC
-         LIMIT ?4 OFFSET ?5"
-    );
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(
-        params![pattern, term, prefix, limit, offset],
-        map_tag_record,
-    )?;
-    rows.collect()
-}
-
 pub fn get_all_tag_keys(conn: &Connection) -> rusqlite::Result<Vec<(i64, String, String)>> {
     let mut stmt = conn.prepare("SELECT tag_id, namespace, subtag FROM tag ORDER BY tag_id")?;
     let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
@@ -186,7 +123,7 @@ pub fn get_entity_tags(conn: &Connection, entity_hash: &str) -> rusqlite::Result
     };
 
     let mut stmt = conn.prepare(
-        "SELECT t.tag_id, t.namespace, t.subtag, t.site_mask, et.provenance_mask, et.source
+        "SELECT t.tag_id, t.namespace, t.subtag, et.provenance_mask, et.source
          FROM entity_tag et
          JOIN tag t ON t.tag_id = et.tag_id
          WHERE et.entity_id = ?1
@@ -197,9 +134,8 @@ pub fn get_entity_tags(conn: &Connection, entity_hash: &str) -> rusqlite::Result
             tag_id: row.get(0)?,
             namespace: row.get(1)?,
             subtag: row.get(2)?,
-            site_mask: mask_from_db_bits(row.get::<_, Option<i64>>(3)?.unwrap_or(0)),
-            provenance_mask: mask_from_db_bits(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
-            source: row.get(5)?,
+            provenance_mask: mask_from_db_bits(row.get::<_, Option<i64>>(3)?.unwrap_or(0)),
+            source: row.get(4)?,
         })
     })?;
     rows.collect()
@@ -207,11 +143,11 @@ pub fn get_entity_tags(conn: &Connection, entity_hash: &str) -> rusqlite::Result
 
 pub fn get_aliases_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<TagRelation>> {
     let mut stmt = conn.prepare(
-        "SELECT t.tag_id, t.namespace, t.subtag, 'to' as relation, t.site_mask
+        "SELECT t.tag_id, t.namespace, t.subtag, 'to' as relation
            FROM tag_alias ta JOIN tag t ON ta.to_tag_id = t.tag_id
           WHERE ta.from_tag_id = ?1
          UNION
-         SELECT t.tag_id, t.namespace, t.subtag, 'from' as relation, t.site_mask
+         SELECT t.tag_id, t.namespace, t.subtag, 'from' as relation
            FROM tag_alias ta JOIN tag t ON ta.from_tag_id = t.tag_id
           WHERE ta.to_tag_id = ?1
          ORDER BY namespace, subtag, tag_id",
@@ -225,11 +161,11 @@ pub fn get_implications_for_tag(
     tag_id: i64,
 ) -> rusqlite::Result<Vec<TagRelation>> {
     let mut stmt = conn.prepare(
-        "SELECT t.tag_id, t.namespace, t.subtag, 'parent' as relation, t.site_mask
+        "SELECT t.tag_id, t.namespace, t.subtag, 'parent' as relation
            FROM tag_implication ti JOIN tag t ON ti.parent_tag_id = t.tag_id
           WHERE ti.child_tag_id = ?1
          UNION
-         SELECT t.tag_id, t.namespace, t.subtag, 'child' as relation, t.site_mask
+         SELECT t.tag_id, t.namespace, t.subtag, 'child' as relation
            FROM tag_implication ti JOIN tag t ON ti.child_tag_id = t.tag_id
           WHERE ti.parent_tag_id = ?1
          ORDER BY namespace, subtag, tag_id",
@@ -244,9 +180,12 @@ pub fn get_tags_paginated(
     search: Option<&str>,
     cursor: Option<&str>,
     limit: i64,
-) -> rusqlite::Result<Vec<TagRecord>> {
+) -> rusqlite::Result<crate::db::types::TagPage> {
     let columns = tag_record_columns("t");
-    // Namespace sort priority — matches the Hydrus-compatible ordering used throughout the app
+    let limit = limit.clamp(1, 500);
+    let fetch_limit = limit.saturating_add(1);
+
+    // Namespace priority is part of the cursor key, not just presentation order.
     const NS_ORDER_EXPR: &str = "CASE LOWER(t.namespace)
         WHEN 'creator'   THEN 0
         WHEN 'studio'    THEN 1
@@ -262,143 +201,257 @@ pub fn get_tags_paginated(
         WHEN ''          THEN 10
         ELSE 11 END";
 
-    if let Some(query) = search {
-        if !query.is_empty() {
-            let (term, pattern, prefix) = subtag_search(query);
-            let (sql, use_ns) = match namespace {
-                Some(_) => (
-                    format!(
-                        "SELECT {columns}
-                         FROM tag t
-                         WHERE t.subtag LIKE ?1 ESCAPE '\\' COLLATE NOCASE
-                           AND t.namespace = ?4
-                         ORDER BY {TAG_SEARCH_ORDER}, file_count DESC, t.subtag ASC, t.tag_id ASC
-                         LIMIT ?5"
-                    ),
-                    true,
-                ),
-                None => (
-                    format!(
-                        "SELECT {columns}
-                         FROM tag t
-                         WHERE t.subtag LIKE ?1 ESCAPE '\\' COLLATE NOCASE
-                         ORDER BY {TAG_SEARCH_ORDER}, file_count DESC, {NS_ORDER_EXPR} ASC,
-                                  t.subtag ASC, t.tag_id ASC
-                         LIMIT ?4"
-                    ),
-                    false,
-                ),
-            };
-            let mut stmt = conn.prepare(&sql)?;
-            return if use_ns {
-                stmt.query_map(
-                    params![pattern, term, prefix, namespace.unwrap(), limit],
-                    map_tag_record,
-                )?
-                .collect()
-            } else {
-                stmt.query_map(params![pattern, term, prefix, limit], map_tag_record)?
-                    .collect()
-            };
-        }
-    }
-
-    let (cursor_subtag, cursor_id) = if let Some(c) = cursor {
-        if let Some(sep) = c.find('\0') {
-            let subtag = &c[..sep];
-            let tag_id = c[sep + 1..].parse().unwrap_or(0);
-            (Some(subtag.to_string()), Some(tag_id))
-        } else {
-            (None, None)
-        }
-    } else {
-        (None, None)
-    };
-
-    let has_namespace = namespace.is_some();
-
-    // When a specific namespace is selected, no namespace ordering needed — just subtag ASC.
-    // When showing all, sort by namespace priority, then subtag, then tag_id.
-    // Cursor-based pagination uses (ns_order, subtag, tag_id) tuple comparison.
-    if has_namespace {
-        // Single-namespace view — simple subtag sort, cursor on (subtag, tag_id)
-        let has_cursor = cursor_subtag.is_some();
-        let sql = match has_cursor {
-            false => format!(
-                "SELECT {columns} FROM tag t
-                 WHERE t.namespace = ?1
-                 ORDER BY t.subtag ASC, t.tag_id ASC LIMIT ?2"
+    let mut items = if let Some(query) = search.filter(|query| !query.is_empty()) {
+        let (term, pattern, prefix) = subtag_search(query);
+        let cursor_predicate = match decode_cursor(cursor, CursorKind::Search)? {
+            None => String::new(),
+            Some(CursorValues::Search(cursor)) => format!(
+                "WHERE (search_rank, ns_order, lower_subtag, subtag, tag_id)
+                        > ({}, {}, {}, {}, {})",
+                cursor.rank,
+                cursor.ns_order,
+                sql_quote(&cursor.lower_subtag),
+                sql_quote(&cursor.subtag),
+                cursor.tag_id
             ),
-            true => format!(
-                "SELECT {columns} FROM tag t
-                 WHERE t.namespace = ?1 AND (t.subtag, t.tag_id) > (?2, ?3)
-                 ORDER BY t.subtag ASC, t.tag_id ASC LIMIT ?4"
-            ),
+            Some(CursorValues::Standard(_)) => return Err(invalid_cursor()),
         };
+        let namespace_filter = "AND (:namespace IS NULL OR LOWER(t.namespace) = LOWER(:namespace))";
+        let sql = format!(
+            "WITH tagged AS (
+                 SELECT {columns},
+                        CASE
+                            WHEN LOWER(t.subtag) = LOWER(:term) THEN 0
+                            WHEN t.subtag LIKE :prefix ESCAPE '\\' COLLATE NOCASE THEN 1
+                            ELSE 2
+                        END AS search_rank,
+                        {NS_ORDER_EXPR} AS ns_order,
+                        LOWER(t.subtag) AS lower_subtag
+                 FROM tag t
+                 WHERE t.subtag LIKE :pattern ESCAPE '\\' COLLATE NOCASE
+                   {namespace_filter}
+             )
+             SELECT tag_id, namespace, subtag, file_count
+             FROM tagged
+             {cursor_predicate}
+             ORDER BY search_rank ASC, ns_order ASC,
+                      lower_subtag ASC, subtag ASC, tag_id ASC
+             LIMIT :limit"
+        );
         let mut stmt = conn.prepare(&sql)?;
-        return match has_cursor {
-            false => stmt
-                .query_map(params![namespace.unwrap(), limit], map_tag_record)?
-                .collect(),
-            true => stmt
-                .query_map(
-                    params![
-                        namespace.unwrap(),
-                        cursor_subtag.as_deref().unwrap(),
-                        cursor_id.unwrap(),
-                        limit
-                    ],
-                    map_tag_record,
-                )?
-                .collect(),
-        };
-    }
-
-    // All namespaces — sort by namespace priority, then subtag, then tag_id.
-    // Cursor is (ns_order, subtag, tag_id) for stable pagination.
-    let (cursor_ns_order, cursor_subtag_val, cursor_tid) = if let Some(c) = cursor {
-        // Cursor format: "ns_order\0subtag\0tag_id"
-        let parts: Vec<&str> = c.splitn(3, '\0').collect();
-        if parts.len() == 3 {
-            let ns_ord: i64 = parts[0].parse().unwrap_or(0);
-            let sub = parts[1].to_string();
-            let tid: i64 = parts[2].parse().unwrap_or(0);
-            (Some(ns_ord), Some(sub), Some(tid))
-        } else {
-            (None, None, None)
-        }
-    } else {
-        (None, None, None)
-    };
-    let has_cursor = cursor_ns_order.is_some();
-
-    let sql = if has_cursor {
-        format!(
-            "SELECT {columns} FROM tag t
-             WHERE ({NS_ORDER_EXPR}, t.subtag, t.tag_id) > (?1, ?2, ?3)
-             ORDER BY {NS_ORDER_EXPR} ASC, t.subtag ASC, t.tag_id ASC LIMIT ?4"
-        )
-    } else {
-        format!(
-            "SELECT {columns} FROM tag t
-             ORDER BY {NS_ORDER_EXPR} ASC, t.subtag ASC, t.tag_id ASC LIMIT ?1"
-        )
-    };
-
-    let mut stmt = conn.prepare(&sql)?;
-    if has_cursor {
-        stmt.query_map(
-            params![
-                cursor_ns_order.unwrap(),
-                cursor_subtag_val.as_deref().unwrap(),
-                cursor_tid.unwrap(),
-                limit
-            ],
+        let rows = stmt.query_map(
+            rusqlite::named_params! {
+                ":term": term,
+                ":pattern": pattern,
+                ":prefix": prefix,
+                ":namespace": namespace,
+                ":limit": fetch_limit,
+            },
             map_tag_record,
-        )?
-        .collect()
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
     } else {
-        stmt.query_map(params![limit], map_tag_record)?.collect()
+        let cursor_predicate = match decode_cursor(cursor, CursorKind::Standard)? {
+            None => String::new(),
+            Some(CursorValues::Standard(cursor)) => format!(
+                "WHERE (ns_order, lower_subtag, subtag, tag_id)
+                        > ({}, {}, {}, {})",
+                cursor.ns_order,
+                sql_quote(&cursor.lower_subtag),
+                sql_quote(&cursor.subtag),
+                cursor.tag_id
+            ),
+            Some(CursorValues::Search(_)) => return Err(invalid_cursor()),
+        };
+        let namespace_filter =
+            "WHERE (:namespace IS NULL OR LOWER(t.namespace) = LOWER(:namespace))";
+        let sql = format!(
+            "WITH tagged AS (
+                 SELECT {columns},
+                        {NS_ORDER_EXPR} AS ns_order,
+                        LOWER(t.subtag) AS lower_subtag
+                 FROM tag t
+                 {namespace_filter}
+             )
+             SELECT tag_id, namespace, subtag, file_count
+             FROM tagged
+             {cursor_predicate}
+             ORDER BY ns_order ASC, lower_subtag ASC, subtag ASC, tag_id ASC
+             LIMIT :limit"
+        );
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(
+            rusqlite::named_params! {
+                ":namespace": namespace,
+                ":limit": fetch_limit,
+            },
+            map_tag_record,
+        )?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    let has_more = items.len() as i64 > limit;
+    if has_more {
+        items.truncate(limit as usize);
+    }
+    let next_cursor = if has_more {
+        items.last().map(|item| {
+            if let Some(query) = search.filter(|query| !query.is_empty()) {
+                let (term, _, _) = subtag_search(query);
+                encode_cursor(&TagCursor::Search {
+                    rank: search_rank(&item.subtag, &term),
+                    ns_order: namespace_order(&item.namespace),
+                    lower_subtag: item.subtag.to_ascii_lowercase(),
+                    subtag: item.subtag.clone(),
+                    tag_id: item.tag_id,
+                })
+            } else {
+                encode_cursor(&TagCursor::Standard {
+                    ns_order: namespace_order(&item.namespace),
+                    lower_subtag: item.subtag.to_ascii_lowercase(),
+                    subtag: item.subtag.clone(),
+                    tag_id: item.tag_id,
+                })
+            }
+        })
+    } else {
+        None
+    };
+
+    Ok(crate::db::types::TagPage { items, next_cursor })
+}
+
+#[derive(Debug, Clone, Copy)]
+enum CursorKind {
+    Standard,
+    Search,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum TagCursor {
+    Standard {
+        ns_order: i64,
+        lower_subtag: String,
+        subtag: String,
+        tag_id: i64,
+    },
+    Search {
+        rank: i64,
+        ns_order: i64,
+        lower_subtag: String,
+        subtag: String,
+        tag_id: i64,
+    },
+}
+
+#[derive(Debug)]
+struct StandardCursor {
+    ns_order: i64,
+    lower_subtag: String,
+    subtag: String,
+    tag_id: i64,
+}
+
+#[derive(Debug)]
+struct SearchCursor {
+    rank: i64,
+    ns_order: i64,
+    lower_subtag: String,
+    subtag: String,
+    tag_id: i64,
+}
+
+fn encode_cursor(cursor: &TagCursor) -> String {
+    URL_SAFE_NO_PAD.encode(serde_json::to_vec(cursor).expect("tag cursor serialization"))
+}
+
+fn decode_cursor(
+    cursor: Option<&str>,
+    expected_kind: CursorKind,
+) -> rusqlite::Result<Option<CursorValues>> {
+    let Some(cursor) = cursor else {
+        return Ok(None);
+    };
+    let bytes = URL_SAFE_NO_PAD
+        .decode(cursor)
+        .map_err(|_| invalid_cursor())?;
+    let decoded: TagCursor = serde_json::from_slice(&bytes).map_err(|_| invalid_cursor())?;
+    let values = match (expected_kind, decoded) {
+        (
+            CursorKind::Standard,
+            TagCursor::Standard {
+                ns_order,
+                lower_subtag,
+                subtag,
+                tag_id,
+            },
+        ) => CursorValues::Standard(StandardCursor {
+            ns_order,
+            lower_subtag,
+            subtag,
+            tag_id,
+        }),
+        (
+            CursorKind::Search,
+            TagCursor::Search {
+                rank,
+                ns_order,
+                lower_subtag,
+                subtag,
+                tag_id,
+            },
+        ) => CursorValues::Search(SearchCursor {
+            rank,
+            ns_order,
+            lower_subtag,
+            subtag,
+            tag_id,
+        }),
+        _ => return Err(invalid_cursor()),
+    };
+    Ok(Some(values))
+}
+
+enum CursorValues {
+    Standard(StandardCursor),
+    Search(SearchCursor),
+}
+
+fn invalid_cursor() -> rusqlite::Error {
+    rusqlite::Error::InvalidParameterName("invalid tag cursor".to_string())
+}
+
+fn sql_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "''"))
+}
+
+fn namespace_order(namespace: &str) -> i64 {
+    match namespace.to_ascii_lowercase().as_str() {
+        "creator" => 0,
+        "studio" => 1,
+        "series" => 2,
+        "character" => 3,
+        "person" => 4,
+        "species" => 5,
+        "photoset" => 6,
+        "rating" => 7,
+        "meta" => 8,
+        "system" => 9,
+        "general" | "" => 10,
+        _ => 11,
+    }
+}
+
+fn search_rank(subtag: &str, term: &str) -> i64 {
+    if subtag.eq_ignore_ascii_case(term) {
+        0
+    } else if subtag
+        .to_ascii_lowercase()
+        .starts_with(&term.to_ascii_lowercase())
+    {
+        1
+    } else {
+        2
     }
 }
 
@@ -424,7 +477,6 @@ fn map_tag_record(row: &rusqlite::Row<'_>) -> rusqlite::Result<TagRecord> {
         namespace: row.get(1)?,
         subtag: row.get(2)?,
         file_count: row.get(3)?,
-        site_mask: mask_from_db_bits(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
     })
 }
 
@@ -434,6 +486,5 @@ fn map_tag_relation(row: &rusqlite::Row<'_>) -> rusqlite::Result<TagRelation> {
         namespace: row.get(1)?,
         subtag: row.get(2)?,
         relation: row.get(3)?,
-        site_mask: mask_from_db_bits(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
     })
 }

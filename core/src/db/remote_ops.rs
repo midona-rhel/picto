@@ -265,10 +265,6 @@ pub(super) fn apply_remote_op(
                 write::tags::manage_implication(conn, child, parent, add)?;
             }
         }
-        "tag_site_mask_set" => {
-            let id = get_or_create_tag_by_key(conn, key)?;
-            write::tags::set_tag_site_mask(conn, id, payload_mask(p, "site_mask", 0))?;
-        }
         "folder_created" => {
             if folder_id_by_uuid(conn, key)?.is_none() {
                 let parent_id = match payload_str(p, "parent") {

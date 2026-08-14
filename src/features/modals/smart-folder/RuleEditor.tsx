@@ -48,9 +48,9 @@ function TagAutoInput({ values, onChange }: { values: string[]; onChange: (v: st
     if (timerRef.current) clearTimeout(timerRef.current);
     if (q.length < 1) { setResults([]); setShowDrop(false); return; }
     timerRef.current = setTimeout(() => {
-      void tagsController.search(q, 12).then((res) => {
+      void tagsController.getPaginated({ search: q, limit: 12 }).then(({ items }) => {
         const existing = new Set(values);
-        const filtered = res.filter((r) => !existing.has(formatTag(r)));
+        const filtered = items.filter((r) => !existing.has(formatTag(r)));
         setResults(filtered.slice(0, 8));
         setShowDrop(filtered.length > 0);
         setSelIdx(0);

@@ -101,12 +101,15 @@ Phase gates:
 
 ## Phase 5: PBI-604 Tag Manager
 
-- [ ] Return tag pages as `{ items, next_cursor }`.
-- [ ] Build one direct rebuilt Tag Manager without a manager framework or legacy port.
-- [ ] Support search, namespace filtering, stable pagination, and zero-count tags.
-- [ ] Support rename, merge, delete, aliases, implications, and site masks.
-- [ ] Settle grid, inspector, smart-folder, untagged, and sidebar reads through normal facts.
-- [ ] Test real mutations, remove the placeholder, run the Electron smoke, and archive PBI-604.
+- [x] Return tag pages as `{ items, next_cursor }`.
+- [x] Build one direct rebuilt Tag Manager without a manager framework or legacy port.
+- [x] Support search, namespace filtering, stable pagination, and zero-count tags.
+- [x] Support rename, merge, delete, aliases, and implications.
+- [x] Settle grid, inspector, smart-folder, untagged, and sidebar reads through normal facts.
+- [x] Test real mutations, remove the placeholder, run the Electron smoke, and archive PBI-604.
+
+Accepted 2026-08-14. The behavior is release-complete; visual restyling remains part of the later
+reference application-reference UI pass and must reuse this canonical API rather than introducing another tag path.
 
 ## Phase 6: PBI-605 AI Tagging
 

@@ -118,7 +118,7 @@ pub fn get_entity_details(
         let source_urls =
             source_urls_json.and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok());
         let mut tag_stmt = conn.prepare(
-            "SELECT t.tag_id, t.namespace, t.subtag, t.site_mask, et.provenance_mask, et.source
+            "SELECT t.tag_id, t.namespace, t.subtag, et.provenance_mask, et.source
              FROM entity_tag et
              JOIN tag t ON t.tag_id = et.tag_id
              WHERE et.entity_id = ?1
@@ -130,9 +130,8 @@ pub fn get_entity_details(
                     tag_id: row.get(0)?,
                     namespace: row.get(1)?,
                     subtag: row.get(2)?,
-                    site_mask: mask_from_db_bits(row.get::<_, Option<i64>>(3)?.unwrap_or(0)),
-                    provenance_mask: mask_from_db_bits(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
-                    source: row.get(5)?,
+                    provenance_mask: mask_from_db_bits(row.get::<_, Option<i64>>(3)?.unwrap_or(0)),
+                    source: row.get(4)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;

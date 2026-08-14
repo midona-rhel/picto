@@ -5,22 +5,14 @@ use ts_rs::TS;
 
 use crate::state::AppState;
 
-fn resolve_tag_id_or_create(state: &AppState, tag: &str) -> Result<i64, String> {
-    state.engine.ensure_tag(tag)
+fn resolve_existing_tag_id(state: &AppState, tag: &str) -> Result<i64, String> {
+    state
+        .engine
+        .find_tag_id(tag)?
+        .ok_or_else(|| format!("Tag does not exist: {tag}"))
 }
 
 // ─── Input structs ─────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct SearchTagsInput {
-    #[serde(default)]
-    pub query: Option<String>,
-    #[ts(type = "number | null")]
-    pub limit: Option<usize>,
-    #[ts(type = "number | null")]
-    pub offset: Option<usize>,
-}
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
@@ -87,23 +79,11 @@ pub struct DeleteTagInput {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn search_tags(
-    state: &AppState,
-    input: SearchTagsInput,
-) -> Result<serde_json::Value, String> {
-    let query = input.query.unwrap_or_default();
-    let limit = input.limit.unwrap_or(20) as i64;
-    let offset = input.offset.unwrap_or(0) as i64;
-    let result = state.engine.search_tags(&query, limit, offset)?;
-    serde_json::to_value(&result).map_err(|e| e.to_string())
-}
-
-// Legacy-only: tag management UI not yet in rebuilt frontend.
 pub async fn manage_tag_alias(state: &AppState, input: ManageTagAliasInput) -> Result<(), String> {
-    let from_tag_id = resolve_tag_id_or_create(state, &input.from)?;
+    let from_tag_id = resolve_existing_tag_id(state, &input.from)?;
     let to_tag_id = match input.to.as_deref() {
         Some("") | None => None,
-        Some(to) => Some(resolve_tag_id_or_create(state, to)?),
+        Some(to) => Some(resolve_existing_tag_id(state, to)?),
     };
     state.engine.manage_tag_alias(from_tag_id, to_tag_id)?;
     Ok(())
@@ -119,13 +99,12 @@ pub async fn get_tag_relations(
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-// Legacy-only: tag management UI not yet in rebuilt frontend.
 pub async fn manage_tag_implication(
     state: &AppState,
     input: ManageTagImplicationInput,
 ) -> Result<(), String> {
-    let child_tag_id = resolve_tag_id_or_create(state, &input.child)?;
-    let parent_tag_id = resolve_tag_id_or_create(state, &input.parent)?;
+    let child_tag_id = resolve_existing_tag_id(state, &input.child)?;
+    let parent_tag_id = resolve_existing_tag_id(state, &input.parent)?;
     match input.action.as_str() {
         "add" => state
             .engine
@@ -138,10 +117,9 @@ pub async fn manage_tag_implication(
     Ok(())
 }
 
-// Legacy-only: tag management UI not yet in rebuilt frontend.
 pub async fn merge_tags(state: &AppState, input: MergeTagsInput) -> Result<(), String> {
-    let from_tag_id = resolve_tag_id_or_create(state, &input.from_tag)?;
-    let to_tag_id = resolve_tag_id_or_create(state, &input.to_tag)?;
+    let from_tag_id = resolve_existing_tag_id(state, &input.from_tag)?;
+    let to_tag_id = resolve_existing_tag_id(state, &input.to_tag)?;
     state.engine.merge_tags(from_tag_id, to_tag_id)?;
     Ok(())
 }
@@ -167,7 +145,6 @@ pub async fn get_namespace_summary(
     serde_json::to_value(&data).map_err(|e| e.to_string())
 }
 
-// Legacy-only: tag management UI not yet in rebuilt frontend.
 pub async fn rename_tag(
     state: &AppState,
     input: RenameTagInput,
@@ -179,7 +156,6 @@ pub async fn rename_tag(
     }))
 }
 
-// Legacy-only: tag management UI not yet in rebuilt frontend.
 pub async fn delete_tag(
     state: &AppState,
     input: DeleteTagInput,

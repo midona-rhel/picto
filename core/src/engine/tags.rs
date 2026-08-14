@@ -149,17 +149,6 @@ impl ApplicationEngine {
         Ok(())
     }
 
-    pub fn set_tag_site_mask(&self, tag_id: i64, site_mask: u64) -> Result<(), String> {
-        self.db.set_tag_site_mask(tag_id, site_mask)?;
-        self.commit_write(&WriteChange {
-            origin: "set_tag_site_mask".to_string(),
-            dirty_tag_ids: vec![tag_id],
-            tags_changed: true,
-            ..Default::default()
-        });
-        Ok(())
-    }
-
     pub fn ensure_tag(&self, tag_str: &str) -> Result<i64, String> {
         self.db.ensure_tag(tag_str)
     }
@@ -170,15 +159,6 @@ impl ApplicationEngine {
 
     pub fn get_tag_string(&self, tag_id: i64) -> Result<Option<String>, String> {
         self.db.get_tag_string(tag_id)
-    }
-
-    pub fn search_tags(
-        &self,
-        query: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<TagRecord>, String> {
-        self.db.search_tags(query, limit, offset)
     }
 
     pub fn get_tag_relations(
@@ -199,7 +179,7 @@ impl ApplicationEngine {
         search: Option<String>,
         cursor: Option<String>,
         limit: i64,
-    ) -> Result<Vec<TagRecord>, String> {
+    ) -> Result<TagPage, String> {
         self.db.get_tags_paginated(namespace, search, cursor, limit)
     }
 

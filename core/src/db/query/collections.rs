@@ -46,7 +46,7 @@ pub(crate) fn get_collection_content_metadata(
     collection_id: i64,
 ) -> rusqlite::Result<CollectionContentMetadata> {
     let mut stmt = conn.prepare(
-        "SELECT t.tag_id, t.namespace, t.subtag, t.site_mask, et.provenance_mask
+        "SELECT t.tag_id, t.namespace, t.subtag, et.provenance_mask
          FROM media_entity me
          JOIN entity_tag et ON et.entity_id = me.entity_id
          JOIN tag t ON t.tag_id = et.tag_id
@@ -60,10 +60,9 @@ pub(crate) fn get_collection_content_metadata(
             row.get::<_, String>(1)?,
             row.get::<_, String>(2)?,
             mask_from_db_bits(row.get::<_, Option<i64>>(3)?.unwrap_or(0)),
-            mask_from_db_bits(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
         ))
     })? {
-        let (tag_id, namespace, subtag, site_mask, provenance_mask) = row?;
+        let (tag_id, namespace, subtag, provenance_mask) = row?;
         if let Some(tag) = tags.iter_mut().find(|tag| tag.tag_id == tag_id) {
             tag.provenance_mask |= provenance_mask;
         } else {
@@ -71,7 +70,6 @@ pub(crate) fn get_collection_content_metadata(
                 tag_id,
                 namespace,
                 subtag,
-                site_mask,
                 provenance_mask,
                 source: "aggregate".to_string(),
             });

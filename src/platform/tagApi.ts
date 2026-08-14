@@ -1,17 +1,13 @@
 import { invoke } from './ipc';
-import type { CanonicalNamespaceSummary, CanonicalTagRecord, CanonicalTagRelation } from '../shared/types/canonical';
-
-export function searchTags(query: string, limit = 50): Promise<CanonicalTagRecord[]> {
-  return invoke<CanonicalTagRecord[]>('search_tags', { query, limit });
-}
+import type { CanonicalNamespaceSummary, CanonicalTagRelation, TagPage } from '../shared/types/canonical';
 
 export function getTagsPaginated(params: {
   namespace?: string | null;
   search?: string | null;
   cursor?: string | null;
   limit?: number;
-}): Promise<CanonicalTagRecord[]> {
-  return invoke<CanonicalTagRecord[]>('get_tags_paginated', params as unknown as Record<string, unknown>);
+}): Promise<TagPage> {
+  return invoke<TagPage>('get_tags_paginated', params as unknown as Record<string, unknown>);
 }
 
 export function getNamespaceSummary(): Promise<CanonicalNamespaceSummary[]> {
@@ -47,8 +43,4 @@ export function manageTagImplication(
   action: 'add' | 'remove',
 ): Promise<void> {
   return invoke<void>('manage_tag_implication', { child, parent, action });
-}
-
-export function setTagSiteMask(tagId: number, siteMask: string): Promise<void> {
-  return invoke<void>('set_tag_site_mask', { tag_id: tagId, site_mask: siteMask });
 }

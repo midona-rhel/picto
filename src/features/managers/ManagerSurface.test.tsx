@@ -8,6 +8,9 @@ vi.mock('../duplicates/DuplicatesScreen', () => ({
 vi.mock('../subscriptions/SubscriptionsScreen', () => ({
   SubscriptionsScreen: () => <div>Subscription manager</div>,
 }));
+vi.mock('../tags/TagManagerScreen', () => ({
+  TagManagerScreen: () => <div>Tag manager</div>,
+}));
 
 describe('ManagerSurface', () => {
   it('keeps manager nodes out of grid dispatch and routes them explicitly', () => {
@@ -21,5 +24,8 @@ describe('ManagerSurface', () => {
 
     view.rerender(<ManagerSurface nodeId="system:subscriptions" />);
     expect(screen.getByText('Subscription manager')).toBeInTheDocument();
+
+    view.rerender(<ManagerSurface nodeId="system:tag_manager" />);
+    expect(screen.getByText('Tag manager')).toBeInTheDocument();
   });
 });

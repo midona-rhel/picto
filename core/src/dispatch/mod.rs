@@ -30,12 +30,6 @@ struct ApplyTagsInput {
 }
 
 #[derive(serde::Deserialize)]
-struct SetTagSiteMaskInput {
-    tag_id: i64,
-    site_mask: String,
-}
-
-#[derive(serde::Deserialize)]
 struct FolderMembershipInput {
     target: crate::db::types::EntityTarget,
     folder_id: i64,
@@ -78,7 +72,6 @@ const WRITE_COMMANDS: &[&str] = &[
     "merge_tags",
     "rename_tag",
     "delete_tag",
-    "set_tag_site_mask",
     "scan_duplicates",
     "resolve_duplicate_pair",
     "create_smart_folder",
@@ -209,12 +202,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
             )?;
             return to_json(&result);
         }
-        "set_tag_site_mask" => {
-            let input: SetTagSiteMaskInput = from_args(args)?;
-            let site_mask = crate::db::types::parse_mask_decimal(&input.site_mask)?;
-            state.engine.set_tag_site_mask(input.tag_id, site_mask)?;
-            return ok_null();
-        }
         "update_folder_membership" => {
             let input: FolderMembershipInput = from_args(args)?;
             let result = state.engine.update_folder_membership(
@@ -264,7 +251,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
     // Typed domain commands with transport-specific input DTOs.
     match command {
         // ── Tags ──────────────────────────────────────────────
-        "search_tags" => call!(typed::tags::search_tags, &state, args),
         "manage_tag_alias" => call!(typed::tags::manage_tag_alias, &state, args),
         "get_tag_relations" => call!(typed::tags::get_tag_relations, &state, args),
         "manage_tag_implication" => call!(typed::tags::manage_tag_implication, &state, args),

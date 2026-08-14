@@ -184,15 +184,6 @@ impl TruthState {
                     }
                 }
             }
-            "tag_site_mask_set" => {
-                if let Some(mask) = p.get("site_mask") {
-                    self.tags
-                        .entry(key.to_string())
-                        .or_default()
-                        .fields
-                        .insert("site_mask".into(), mask.clone());
-                }
-            }
             "folder_created"
             | "folder_updated"
             | "folder_moved"

@@ -1,5 +1,6 @@
 import { DuplicatesScreen } from '../duplicates/DuplicatesScreen';
 import { SubscriptionsScreen } from '../subscriptions/SubscriptionsScreen';
+import { TagManagerScreen } from '../tags/TagManagerScreen';
 
 export type ManagerNodeId = 'system:subscriptions' | 'system:duplicates' | 'system:tag_manager';
 
@@ -16,7 +17,7 @@ export function ManagerSurface({ nodeId }: { nodeId: string }) {
     case 'system:duplicates':
       return <DuplicatesScreen />;
     case 'system:tag_manager':
-      return <div>Tag Manager is not available yet.</div>;
+      return <TagManagerScreen />;
     default:
       return <div>This view is not available.</div>;
   }

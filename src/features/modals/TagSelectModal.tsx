@@ -86,36 +86,27 @@ export function TagSelectModal() {
       search: search.trim() || null,
       namespace: ns ?? null,
     }).then((result) => {
-      setTags(result ?? []);
-      setCursor(result?.length === PAGE_SIZE ? 'next' : null);
+      setTags(result.items);
+      setCursor(result.next_cursor);
       setFocusIdx(-1);
     }).catch(() => {});
   }, []);
 
   const loadMore = useCallback(() => {
-    if (!cursor || loadingMore || tags.length === 0) return;
+    if (!cursor || loadingMore) return;
     setLoadingMore(true);
-    const lastTag = tags[tags.length - 1];
     const ns = sidebarMode === 'namespace' ? activeNamespace : null;
-    // Cursor format: for namespace view "subtag\0tag_id", for all view "ns_order\0subtag\0tag_id"
-    const cursorStr = ns != null
-      ? `${lastTag.subtag}\0${lastTag.tag_id}`
-      : `${nsOrder((lastTag.namespace ?? '').toLowerCase())}\0${lastTag.subtag}\0${lastTag.tag_id}`;
     void tagsController.getPaginated({
       limit: PAGE_SIZE,
       search: query.trim() || null,
       namespace: ns,
-      cursor: cursorStr,
+      cursor,
     }).then((result) => {
-      if (result?.length) {
-        setTags((prev) => [...prev, ...result]);
-        setCursor(result.length === PAGE_SIZE ? 'next' : null);
-      } else {
-        setCursor(null);
-      }
+      setTags((prev) => [...prev, ...result.items]);
+      setCursor(result.next_cursor);
       setLoadingMore(false);
     }).catch(() => { setLoadingMore(false); });
-  }, [cursor, loadingMore, tags, query, sidebarMode, activeNamespace]);
+  }, [cursor, loadingMore, query, sidebarMode, activeNamespace]);
 
   useEffect(() => {
     if (!open) return;
@@ -157,7 +148,7 @@ export function TagSelectModal() {
       if (!entityData?.tags) return [];
       return entityData.tags.map((t) => ({
         tag_id: t.tag_id, namespace: t.namespace, subtag: t.subtag,
-        file_count: 0, site_mask: t.site_mask,
+        file_count: 0,
       } as CanonicalTagRecord)).sort((a, b) => {
         const nsA = (a.namespace ?? '').toLowerCase();
         const nsB = (b.namespace ?? '').toLowerCase();

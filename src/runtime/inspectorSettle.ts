@@ -49,6 +49,7 @@ export function startInspectorSettle(): () => void {
 
       const changes = event.payload.changes;
       const relevant = changes.tags_changed
+        || changes.tag_structure_changed
         || changes.status_changed
         || changes.folder_membership_changed
         || changes.media_metadata_changed;
@@ -58,7 +59,9 @@ export function startInspectorSettle(): () => void {
       if (!data) return;
 
       const hashes = changes.entity_hashes as string[] | undefined;
-      if (hashes?.length && !hashes.includes(data.entity_hash)) return;
+      if (!changes.tag_structure_changed
+          && hashes?.length
+          && !hashes.includes(data.entity_hash)) return;
 
       void loadInspectorData(data.entity_hash);
     },

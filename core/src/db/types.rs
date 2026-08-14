@@ -514,9 +514,6 @@ pub struct TagInfo {
     pub tag_id: i64,
     pub namespace: String,
     pub subtag: String,
-    /// Concept-level site support mask. Curated metadata, not derived from assignment rows.
-    #[serde(serialize_with = "serialize_mask_as_decimal")]
-    pub site_mask: u64,
     /// Assignment provenance mask for this entity-tag relation.
     #[serde(serialize_with = "serialize_mask_as_decimal")]
     pub provenance_mask: u64,
@@ -529,8 +526,12 @@ pub struct TagRecord {
     pub namespace: String,
     pub subtag: String,
     pub file_count: i64,
-    #[serde(serialize_with = "serialize_mask_as_decimal")]
-    pub site_mask: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TagPage {
+    pub items: Vec<TagRecord>,
+    pub next_cursor: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -539,8 +540,6 @@ pub struct TagRelation {
     pub namespace: String,
     pub subtag: String,
     pub relation: String,
-    #[serde(serialize_with = "serialize_mask_as_decimal")]
-    pub site_mask: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -561,12 +560,6 @@ pub const TAG_PROVENANCE_MANUAL: u64 = 1_u64 << 0;
 pub const TAG_PROVENANCE_AI: u64 = 1_u64 << 1;
 pub const TAG_PROVENANCE_UNKNOWN: u64 = 1_u64 << 2;
 pub const TAG_PROVENANCE_LOCAL_TOOL: u64 = 1_u64 << 3;
-
-/// High-bit site flags reserved by PBI-598.
-pub const TAG_SITE_E621: u64 = 1_u64 << 63;
-pub const TAG_SITE_GELBOORU: u64 = 1_u64 << 62;
-pub const TAG_SITE_DANBOORU: u64 = 1_u64 << 61;
-pub const TAG_SITE_RULE34: u64 = 1_u64 << 60;
 
 pub fn mask_to_db_bits(mask: u64) -> i64 {
     mask as i64
@@ -590,21 +583,19 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{TagInfo, TAG_PROVENANCE_MANUAL, TAG_SITE_E621};
+    use super::{TagInfo, TAG_PROVENANCE_MANUAL};
 
     #[test]
-    fn tag_info_serializes_masks_as_decimal_strings() {
+    fn tag_info_serializes_provenance_mask_as_decimal_string() {
         let tag = TagInfo {
             tag_id: 1,
             namespace: String::new(),
             subtag: "test".to_string(),
-            site_mask: TAG_SITE_E621,
             provenance_mask: TAG_PROVENANCE_MANUAL,
             source: "local".to_string(),
         };
 
         let json = serde_json::to_value(&tag).expect("serialize tag info");
-        assert_eq!(json["site_mask"], TAG_SITE_E621.to_string());
         assert_eq!(json["provenance_mask"], TAG_PROVENANCE_MANUAL.to_string());
     }
 }

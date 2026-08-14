@@ -85,36 +85,27 @@ export function TagSelectPanel() {
       namespace: ns ?? null,
     };
     void tagsController.getPaginated(params).then((result) => {
-      setTags(result ?? []);
-      // If we got a full page, there might be more
-      setCursor(result?.length === PAGE_SIZE ? 'next' : null);
+      setTags(result.items);
+      setCursor(result.next_cursor);
       setFocusIdx(-1);
     }).catch(() => {});
   }, []);
 
   const loadMore = useCallback(() => {
-    if (!cursor || loadingMore || tags.length === 0) return;
+    if (!cursor || loadingMore) return;
     setLoadingMore(true);
-    const lastTag = tags[tags.length - 1];
     const ns = sidebarMode === 'namespace' ? activeNamespace : null;
-    const cursorStr = ns != null
-      ? `${lastTag.subtag}\0${lastTag.tag_id}`
-      : `${nsOrder((lastTag.namespace ?? '').toLowerCase())}\0${lastTag.subtag}\0${lastTag.tag_id}`;
     void tagsController.getPaginated({
       limit: PAGE_SIZE,
       search: query.trim() || null,
       namespace: ns,
-      cursor: cursorStr,
+      cursor,
     }).then((result) => {
-      if (result?.length) {
-        setTags((prev) => [...prev, ...result]);
-        setCursor(result.length === PAGE_SIZE ? 'next' : null);
-      } else {
-        setCursor(null);
-      }
+      setTags((prev) => [...prev, ...result.items]);
+      setCursor(result.next_cursor);
       setLoadingMore(false);
     }).catch(() => { setLoadingMore(false); });
-  }, [cursor, loadingMore, tags, query, sidebarMode, activeNamespace]);
+  }, [cursor, loadingMore, query, sidebarMode, activeNamespace]);
 
   // Load namespaces on open
   useEffect(() => {
@@ -165,7 +156,6 @@ export function TagSelectPanel() {
         namespace: t.namespace,
         subtag: t.subtag,
         file_count: 0,
-        site_mask: t.site_mask,
       } as CanonicalTagRecord)).sort((a, b) => {
         const nsA = (a.namespace ?? '').toLowerCase();
         const nsB = (b.namespace ?? '').toLowerCase();

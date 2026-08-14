@@ -1166,7 +1166,7 @@ fn tag_counts_match_visible_tag_scopes() {
     let character_one_girl = db.ensure_tag("character:1girl").unwrap();
     db.full_rebuild();
 
-    let records = db.get_tags_paginated(None, None, None, 100).unwrap();
+    let records = db.get_tags_paginated(None, None, None, 100).unwrap().items;
     let count = |tag: &str| {
         let (namespace, subtag) = tag.split_once(':').unwrap();
         records
@@ -1208,22 +1208,15 @@ fn tag_counts_match_visible_tag_scopes() {
         .unwrap()
         .iter()
         .any(|tag| tag.0 == zero_tag_id));
-    assert!(!db
-        .search_tags("", 100, 0)
-        .unwrap()
-        .iter()
-        .any(|tag| tag.tag_id == zero_tag_id));
-
     for query in ["1girl", "general:1girl"] {
         let matches = db
             .get_tags_paginated(None, Some(query.to_string()), None, 100)
-            .unwrap();
+            .unwrap()
+            .items;
         assert_eq!(matches.len(), 2, "picker search for {query}");
         assert!(matches.iter().any(|tag| tag.tag_id == general_one_girl));
         assert!(matches.iter().any(|tag| tag.tag_id == character_one_girl));
     }
-    let autocomplete = db.search_tags("1girl", 100, 0).unwrap();
-    assert_eq!(autocomplete.len(), 2);
     assert!(db
         .get_tags_paginated(
             Some("general".to_string()),
@@ -1232,24 +1225,130 @@ fn tag_counts_match_visible_tag_scopes() {
             100,
         )
         .unwrap()
+        .items
         .iter()
         .all(|tag| tag.namespace == "general"));
     assert!(db
         .get_tags_paginated(None, Some("general".to_string()), None, 100)
         .unwrap()
+        .items
         .is_empty());
 
     db.with_read(|conn| {
-        let has_file_count = conn
+        let columns = conn
             .prepare("PRAGMA table_info(tag)")?
             .query_map([], |row| row.get::<_, String>(1))?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-            .iter()
-            .any(|column| column == "file_count");
-        assert!(!has_file_count, "tag counts must not be stored separately");
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        assert!(
+            !columns.iter().any(|column| column == "file_count"),
+            "tag counts must not be stored separately"
+        );
+        assert!(
+            !columns.iter().any(|column| column == "site_mask"),
+            "source-specific tag masks are not part of the product model"
+        );
         Ok(())
     })
     .unwrap();
+}
+
+#[test]
+fn paginated_tags_have_stable_cursors_and_keep_zero_count_tags_visible() {
+    let db = open_test_db();
+    let expected = [
+        db.ensure_tag("general:alpha").unwrap(),
+        db.ensure_tag("general:alphabet").unwrap(),
+        db.ensure_tag("general:beta").unwrap(),
+        db.ensure_tag("character:alpha").unwrap(),
+        db.ensure_tag("character:beta").unwrap(),
+        db.ensure_tag("zero:alpha").unwrap(),
+    ];
+
+    let mut ids = Vec::new();
+    let mut cursor = None;
+    loop {
+        let page = db
+            .get_tags_paginated(None, None, cursor.clone(), 2)
+            .unwrap();
+        ids.extend(page.items.iter().map(|tag| tag.tag_id));
+        cursor = page.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    assert_eq!(ids.len(), expected.len());
+    assert!(ids
+        .iter()
+        .all(|id| ids.iter().filter(|other| *other == id).count() == 1));
+    assert!(
+        ids.contains(&expected[5]),
+        "zero-count tags must be paginated"
+    );
+
+    let first = db.get_tags_paginated(None, None, None, 2).unwrap();
+    let first_json = serde_json::to_value(&first).unwrap();
+    assert!(first_json.get("items").is_some());
+    assert!(first_json.get("next_cursor").is_some());
+    assert!(first.next_cursor.is_some());
+    let second = db
+        .get_tags_paginated(None, None, first.next_cursor.clone(), 2)
+        .unwrap();
+    assert_eq!(first.items.len(), 2);
+    assert_eq!(second.items.len(), 2);
+    assert!(first
+        .items
+        .iter()
+        .all(|tag| !second.items.iter().any(|other| other.tag_id == tag.tag_id)));
+
+    let minimum_page = db.get_tags_paginated(None, None, None, 0).unwrap();
+    assert_eq!(minimum_page.items.len(), 1);
+    assert!(minimum_page.next_cursor.is_some());
+
+    let character_page = db
+        .get_tags_paginated(Some("character".to_string()), None, None, 1)
+        .unwrap();
+    assert_eq!(character_page.items.len(), 1);
+    assert_eq!(character_page.items[0].namespace, "character");
+    let character_next = db
+        .get_tags_paginated(
+            Some("character".to_string()),
+            None,
+            character_page.next_cursor,
+            1,
+        )
+        .unwrap();
+    assert_eq!(character_next.items.len(), 1);
+    assert_ne!(
+        character_page.items[0].tag_id,
+        character_next.items[0].tag_id
+    );
+
+    let search_page = db
+        .get_tags_paginated(None, Some("character:alpha".to_string()), None, 1)
+        .unwrap();
+    assert_eq!(search_page.items.len(), 1);
+    let search_next = db
+        .get_tags_paginated(
+            None,
+            Some("character:alpha".to_string()),
+            search_page.next_cursor,
+            1,
+        )
+        .unwrap();
+    assert_eq!(search_next.items.len(), 1);
+    assert_ne!(search_page.items[0].tag_id, search_next.items[0].tag_id);
+
+    let filtered_zero = db
+        .get_tags_paginated(
+            Some("zero".to_string()),
+            Some("alpha".to_string()),
+            None,
+            10,
+        )
+        .unwrap();
+    assert_eq!(filtered_zero.items.len(), 1);
+    assert_eq!(filtered_zero.items[0].file_count, 0);
 }
 
 #[test]

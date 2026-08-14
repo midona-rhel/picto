@@ -165,23 +165,6 @@ impl LibraryDatabase {
         })
     }
 
-    pub fn set_tag_site_mask(&self, tag_id: i64, site_mask: u64) -> Result<(), String> {
-        self.with_write(|conn| {
-            write::tags::set_tag_site_mask(conn, tag_id, site_mask)?;
-            if let Some(key) = tag_op_key(conn, tag_id)? {
-                // Masks cross boundaries as decimal strings (PBI-598 rule).
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "tag_site_mask_set",
-                    &key,
-                    &serde_json::json!({ "site_mask": site_mask.to_string() }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
     pub fn ensure_tag(&self, tag_str: &str) -> Result<i64, String> {
         self.with_write(|conn| write::tags::ensure_tag(conn, tag_str))
     }

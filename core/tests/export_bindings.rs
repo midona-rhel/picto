@@ -95,7 +95,6 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::system::SetViewPrefsInput::export().unwrap();
     picto_core::dispatch::typed::system::SetZoomFactorInput::export().unwrap();
 
-    picto_core::dispatch::typed::tags::SearchTagsInput::export().unwrap();
     picto_core::dispatch::typed::tags::ManageTagAliasInput::export().unwrap();
     picto_core::dispatch::typed::tags::ManageTagImplicationInput::export().unwrap();
     picto_core::dispatch::typed::tags::GetTagRelationsInput::export().unwrap();

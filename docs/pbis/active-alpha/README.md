@@ -9,8 +9,6 @@ superseded audits, and site-by-site subscription notes live in `docs/pbis/archiv
    - keep the complete verification lane green and prove release packaging
 2. [PBI-529-frontend-notifications-and-error-feedback.md](PBI-529-frontend-notifications-and-error-feedback.md)
    - finish one shared non-modal path for actionable operation failures
-3. [PBI-604-tag-manager-activation.md](PBI-604-tag-manager-activation.md)
-   - implement the rebuilt tag manager against the canonical tag API
 4. [PBI-605-ai-tagging-activation.md](PBI-605-ai-tagging-activation.md)
    - prove model download, inference, review, apply, and import automation end to end
 5. [PBI-602-multi-device-sync-architecture.md](PBI-602-multi-device-sync-architecture.md)

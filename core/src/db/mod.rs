@@ -1361,15 +1361,6 @@ impl LibraryDatabase {
         self.with_read(query::stats::aggregate_media_type_breakdown)
     }
 
-    pub fn search_tags(
-        &self,
-        query_str: &str,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<types::TagRecord>, String> {
-        self.with_read(|conn| query::tags::search_tags(conn, query_str, limit, offset))
-    }
-
     pub fn get_all_tag_keys(&self) -> Result<Vec<(i64, String, String)>, String> {
         self.with_read(query::tags::get_all_tag_keys)
     }
@@ -1519,8 +1510,8 @@ impl LibraryDatabase {
         search: Option<String>,
         cursor: Option<String>,
         limit: i64,
-    ) -> Result<Vec<types::TagRecord>, String> {
-        self.with_read(|conn| {
+    ) -> Result<types::TagPage, String> {
+        let mut page = self.with_read(|conn| {
             query::tags::get_tags_paginated(
                 conn,
                 namespace.as_deref(),
@@ -1528,7 +1519,15 @@ impl LibraryDatabase {
                 cursor.as_deref(),
                 limit,
             )
-        })
+        })?;
+        let active = self.bitmaps.get(&projection::bitmaps::BitmapKey::Status(1));
+        for tag in &mut page.items {
+            tag.file_count = self
+                .bitmaps
+                .get(&projection::bitmaps::BitmapKey::EffectiveTag(tag.tag_id))
+                .intersection_len(&active) as i64;
+        }
+        Ok(page)
     }
 
     pub fn get_namespace_summary(&self) -> Result<Vec<types::NamespaceSummary>, String> {
