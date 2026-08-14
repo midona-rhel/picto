@@ -28,10 +28,68 @@ pub async fn start_workers(
     blob_store: &Arc<BlobStore>,
     rate_limiter: &RateLimiter,
     running_subscriptions: &RunningSubscriptions,
+    sync_cycle_lock: &Arc<tokio::sync::Mutex<()>>,
     folder_watch_rx: tokio::sync::mpsc::UnboundedReceiver<FolderWatchCommand>,
     cancel: &CancellationToken,
 ) -> Vec<(&'static str, tokio::task::JoinHandle<()>)> {
     let mut handles: Vec<(&'static str, tokio::task::JoinHandle<()>)> = Vec::new();
+
+    // ── Folder sync ─────────────────────────────────────
+    {
+        let sync_db = canonical_db.clone();
+        let sync_blobs = blob_store.clone();
+        let sync_lock = sync_cycle_lock.clone();
+        let sync_cancel = cancel.clone();
+        let handle = tokio::spawn(async move {
+            const MAX_LOCAL_BATCHES_PER_WAKE: usize = 32;
+            let mut tick = tokio::time::interval(std::time::Duration::from_secs(30));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = tick.tick() => {}
+                    _ = sync_cancel.cancelled() => {
+                        tracing::info!("Folder sync worker cancelled");
+                        return;
+                    }
+                }
+                match crate::oplog::sync::binding(&sync_db) {
+                    Ok(Some(_)) => {
+                        for cycle in 0..MAX_LOCAL_BATCHES_PER_WAKE {
+                            let result = crate::oplog::sync::run_serialized_sync(
+                                sync_db.clone(),
+                                sync_blobs.clone(),
+                                sync_lock.clone(),
+                            )
+                            .await;
+                            match result {
+                                Ok(report)
+                                    if !report.waiting_for_prerequisites
+                                        && report.ops_applied == 0
+                                        && cycle + 1 < MAX_LOCAL_BATCHES_PER_WAKE
+                                        && sync_db.pending_op_count().unwrap_or(0) > 0 =>
+                                {
+                                    tokio::select! {
+                                        _ = tokio::time::sleep(std::time::Duration::from_millis(100)) => {}
+                                        _ = sync_cancel.cancelled() => return,
+                                    }
+                                }
+                                Ok(_) => break,
+                                Err(error) => {
+                                    tracing::warn!(error = %error, "Folder sync cycle failed");
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(error = %error, "Folder sync binding could not be read")
+                    }
+                }
+            }
+        });
+        handles.push(("folder_sync", handle));
+    }
 
     // ── Subscription scheduler ─────────────────────────
     {

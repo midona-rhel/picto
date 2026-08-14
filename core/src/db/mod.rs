@@ -161,6 +161,28 @@ fn ingest_entity_created_payload(prepared: &types::IngestPreparedSingle) -> serd
     })
 }
 
+fn insert_deferred_work_rows(
+    conn: &Connection,
+    entity_hash: &str,
+    work_types: &[crate::background_work::DeferredWorkType],
+) -> rusqlite::Result<()> {
+    if work_types.is_empty() {
+        return Ok(());
+    }
+    let now = chrono::Utc::now().to_rfc3339();
+    let mut stmt = conn.prepare(
+        "INSERT INTO deferred_work_item
+             (entity_hash, work_type, status, attempt_count, available_at, queued_at)
+         VALUES
+             (?1, ?2, 'pending', 0, ?3, ?3)
+         ON CONFLICT(entity_hash, work_type) DO NOTHING",
+    )?;
+    for work_type in work_types {
+        stmt.execute(rusqlite::params![entity_hash, work_type.as_db_str(), now])?;
+    }
+    Ok(())
+}
+
 /// Insert one prepared media entity inside the caller's write transaction.
 ///
 /// Collection materialization deliberately passes no deferred work because its
@@ -229,23 +251,7 @@ fn insert_prepared_single(
             types::ExpansionMode::EntityOnly,
         )?;
     }
-    if !deferred_work_types.is_empty() {
-        let now = chrono::Utc::now().to_rfc3339();
-        let mut stmt = conn.prepare(
-            "INSERT INTO deferred_work_item
-                 (entity_hash, work_type, status, attempt_count, available_at, queued_at)
-             VALUES
-                 (?1, ?2, 'pending', 0, ?3, ?3)
-             ON CONFLICT(entity_hash, work_type) DO NOTHING",
-        )?;
-        for work_type in deferred_work_types {
-            stmt.execute(rusqlite::params![
-                prepared.entity_hash,
-                work_type.as_db_str(),
-                now
-            ])?;
-        }
-    }
+    insert_deferred_work_rows(conn, &prepared.entity_hash, deferred_work_types)?;
     crate::oplog::record_op(
         conn,
         device_id,

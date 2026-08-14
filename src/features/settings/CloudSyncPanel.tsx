@@ -19,6 +19,8 @@ export function CloudSyncPanel() {
 
   useEffect(() => {
     refreshStatus();
+    const timer = window.setInterval(refreshStatus, 5_000);
+    return () => window.clearInterval(timer);
   }, [refreshStatus]);
 
   const handleSyncNow = useCallback(() => {
@@ -29,7 +31,7 @@ export function CloudSyncPanel() {
       .syncNow()
       .then(({ report }) => {
         const pending =
-          report.pending_prerequisites > 0
+          report.waiting_for_prerequisites
             ? ' Waiting for missing media or an earlier remote change.'
             : '';
         setMessage(
@@ -89,19 +91,37 @@ export function CloudSyncPanel() {
           <span className={styles.statusValue}>{status.share_root}</span>
           <span className={styles.statusLabel}>Pending changes</span>
           <span className={styles.statusValue}>{status.pending_ops}</span>
+          <span className={styles.statusLabel}>Last successful sync</span>
+          <span className={styles.statusValue}>
+            {status.last_success_at ? new Date(status.last_success_at).toLocaleString() : 'Never'}
+          </span>
           <span className={styles.statusLabel}>This device</span>
           <span className={styles.statusValue}>{status.device_id.slice(0, 12)}…</span>
         </div>
         <div className={styles.actions}>
-          <button className={styles.btnPrimary} onClick={handleSyncNow} disabled={busy !== null}>
-            {busy === 'syncing' ? 'Syncing…' : 'Sync now'}
+          <button
+            className={styles.btnPrimary}
+            onClick={handleSyncNow}
+            disabled={busy !== null || status.syncing}
+          >
+            {busy === 'syncing' || status.syncing ? 'Syncing…' : 'Sync now'}
           </button>
-          <button className={styles.btn} onClick={handleDisconnect} disabled={busy !== null}>
+          <button
+            className={styles.btn}
+            onClick={handleDisconnect}
+            disabled={busy !== null || status.syncing}
+          >
             Disconnect
           </button>
         </div>
         {message ? <div className={styles.message}>{message}</div> : null}
         {error ? <div className={styles.error}>{error}</div> : null}
+        {status.last_error ? <div className={styles.error}>{status.last_error}</div> : null}
+        {!status.last_error && status.last_report?.waiting_for_prerequisites ? (
+          <div className={styles.hint}>
+            Waiting for missing media or an earlier remote change. Picto will retry automatically.
+          </div>
+        ) : null}
         <div className={styles.hint}>
           Disconnecting only unlinks this device. Nothing on the share is ever deleted or
           overwritten by Picto.

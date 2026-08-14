@@ -5,24 +5,66 @@
 //! ingestion for that device at the gap, never skips past it. Application
 //! and cursor advancement commit in one transaction.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use crate::db::LibraryDatabase;
+use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
 use super::backend::SyncBackend;
+use super::backend_fs::FsBackend;
 use super::drain::{drain_outbox_batch, DEFAULT_OPS_PER_SEGMENT};
+use super::remote_library::remote_library_root;
 use super::segment::decode_segment;
 use super::{OpRecord, OP_VERSION};
 
-#[derive(Debug, Default, PartialEq, serde::Serialize)]
+pub const MAX_REMOTE_SEGMENTS_PER_CYCLE: usize = 32;
+
+pub const KV_SHARE_ROOT: &str = "sync_share_root";
+pub const KV_LIBRARY_NAME: &str = "sync_library_name";
+pub const KV_LAST_SUCCESS_AT: &str = "sync_last_success_at";
+pub const KV_LAST_ERROR: &str = "sync_last_error";
+pub const KV_LAST_REPORT: &str = "sync_last_report";
+
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct SyncReport {
     pub segments_uploaded: usize,
     pub segments_consumed: usize,
     pub ops_applied: usize,
     pub blobs_uploaded: usize,
     pub blobs_downloaded: usize,
-    pub pending_prerequisites: usize,
+    pub waiting_for_prerequisites: bool,
+    #[serde(skip)]
+    applied_op_types: Vec<String>,
+    #[serde(skip)]
+    affected_folder_ids: Vec<i64>,
+    #[serde(skip)]
+    affected_smart_folder_ids: Vec<i64>,
+    #[serde(skip)]
+    affected_collection_ids: Vec<i64>,
+}
+
+pub fn binding(db: &LibraryDatabase) -> Result<Option<(PathBuf, String)>, String> {
+    let root = db.kv_get(KV_SHARE_ROOT)?;
+    let name = db.kv_get(KV_LIBRARY_NAME)?;
+    match (root, name) {
+        (Some(root), Some(name)) if !root.is_empty() && !name.is_empty() => {
+            Ok(Some((PathBuf::from(root), name)))
+        }
+        _ => Ok(None),
+    }
+}
+
+pub fn set_binding(db: &LibraryDatabase, share_root: &Path, name: &str) -> Result<(), String> {
+    db.kv_set(KV_SHARE_ROOT, &share_root.display().to_string())?;
+    db.kv_set(KV_LIBRARY_NAME, name)
+}
+
+pub fn clear_binding(db: &LibraryDatabase) -> Result<(), String> {
+    db.kv_delete(KV_SHARE_ROOT)?;
+    db.kv_delete(KV_LIBRARY_NAME)
 }
 
 fn valid_content_hash(hash: &str) -> bool {
@@ -140,6 +182,225 @@ pub fn sync_cycle(
     Ok(report)
 }
 
+/// Run the bound library's canonical cycle and persist its latest observable
+/// result. The remote is never deleted or overwritten here.
+pub fn run_bound_sync(
+    db: &LibraryDatabase,
+    blob_store: &crate::blob_store::BlobStore,
+) -> Result<SyncReport, String> {
+    let Some((share_root, name)) = binding(db)? else {
+        return Err("This library is not connected to a sync folder".to_string());
+    };
+    let result = (|| {
+        let backend = FsBackend::open(&remote_library_root(&share_root, &name))
+            .map_err(|error| format!("Cannot open sync folder: {error}"))?;
+        sync_cycle(db, blob_store, &backend)
+    })();
+
+    match &result {
+        Ok(report) => {
+            db.kv_set(KV_LAST_SUCCESS_AT, &chrono::Utc::now().to_rfc3339())?;
+            db.kv_delete(KV_LAST_ERROR)?;
+            db.kv_set(
+                KV_LAST_REPORT,
+                &serde_json::to_string(report).map_err(|error| error.to_string())?,
+            )?;
+            if report.ops_applied > 0 {
+                crate::events::emit_state_changed("folder_sync", sync_change_impact(report));
+            }
+        }
+        Err(error) => {
+            let _ = db.kv_set(KV_LAST_ERROR, error);
+        }
+    }
+    result
+}
+
+fn sync_change_impact(
+    report: &SyncReport,
+) -> crate::runtime_contract::change_builder::ChangeImpact {
+    use crate::runtime_contract::state_change::Domain;
+
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new();
+    if !report.affected_folder_ids.is_empty() {
+        impact = impact
+            .add_domain(Domain::Folders)
+            .folder_ids(report.affected_folder_ids.clone());
+    }
+    if !report.affected_smart_folder_ids.is_empty() {
+        impact = impact
+            .add_domain(Domain::SmartFolders)
+            .smart_folder_ids(report.affected_smart_folder_ids.clone());
+    }
+    let mut exact_scopes = report
+        .affected_folder_ids
+        .iter()
+        .map(|id| format!("folder:{id}"))
+        .collect::<Vec<_>>();
+    exact_scopes.extend(
+        report
+            .affected_collection_ids
+            .iter()
+            .map(|id| format!("collection:{id}")),
+    );
+    if !exact_scopes.is_empty() {
+        impact = impact.extra_grid_scopes(exact_scopes);
+    }
+    let membership_changed = report.applied_op_types.iter().any(|op_type| {
+        matches!(
+            op_type.as_str(),
+            "folder_members_added"
+                | "folder_members_removed"
+                | "collection_members_added"
+                | "collection_members_removed"
+                | "collection_split"
+        )
+    });
+    if membership_changed && !report.affected_folder_ids.is_empty() {
+        impact = impact.folder_membership_changed(report.affected_folder_ids.clone());
+    }
+    for op_type in &report.applied_op_types {
+        impact = match op_type.as_str() {
+            "entity_created" | "entity_deleted" | "entity_status_changed" => impact
+                .add_domains(&[Domain::Files, Domain::Sidebar])
+                .status_changed()
+                .status_sensitive_grid_scopes_changed(),
+            "entity_updated" => impact
+                .add_domain(Domain::Files)
+                .media_metadata_changed()
+                .all_smart_folder_scopes_changed(),
+            "entity_tags_added" | "entity_tags_removed" => impact
+                .add_domains(&[Domain::Files, Domain::Tags, Domain::Sidebar])
+                .tags_changed()
+                .all_smart_folder_scopes_changed(),
+            "tag_renamed"
+            | "tag_merged"
+            | "tag_deleted"
+            | "tag_alias_set"
+            | "tag_implication_set" => impact
+                .add_domains(&[Domain::Tags, Domain::Sidebar])
+                .tag_structure_changed_fact()
+                .all_smart_folder_scopes_changed(),
+            "folder_created" | "folder_updated" | "folder_moved" | "folder_deleted" => {
+                impact.add_domains(&[Domain::Folders, Domain::Sidebar])
+            }
+            "folder_members_added" | "folder_members_removed" => {
+                impact.add_domains(&[Domain::Files, Domain::Folders, Domain::Sidebar])
+            }
+            "smart_folder_created"
+            | "smart_folder_updated"
+            | "smart_folder_moved"
+            | "smart_folder_deleted" => {
+                impact.add_domains(&[Domain::SmartFolders, Domain::Sidebar])
+            }
+            "collection_created"
+            | "collection_split"
+            | "collection_members_added"
+            | "collection_members_removed" => impact
+                .add_domains(&[Domain::Files, Domain::Folders, Domain::Sidebar])
+                .status_changed()
+                .status_sensitive_grid_scopes_changed()
+                .all_smart_folder_scopes_changed(),
+            "collection_renamed" => impact
+                .add_domains(&[Domain::Files, Domain::Folders])
+                .media_metadata_changed(),
+            "collection_members_reordered" => impact
+                .add_domains(&[Domain::Files, Domain::Folders])
+                .grid_reorder(),
+            "duplicate_decided" => impact.add_domains(&[Domain::Files, Domain::Sidebar]),
+            _ => impact,
+        };
+    }
+    impact.compiler_batch_done = Some(true);
+    impact
+}
+
+#[derive(Default)]
+struct SyncScopeImpact {
+    folder_ids: BTreeSet<i64>,
+    smart_folder_ids: BTreeSet<i64>,
+    collection_ids: BTreeSet<i64>,
+}
+
+impl SyncScopeImpact {
+    fn merge(&mut self, other: Self) {
+        self.folder_ids.extend(other.folder_ids);
+        self.smart_folder_ids.extend(other.smart_folder_ids);
+        self.collection_ids.extend(other.collection_ids);
+    }
+}
+
+fn resolve_scope_impact(db: &LibraryDatabase, ops: &[OpRecord]) -> Result<SyncScopeImpact, String> {
+    db.with_read(|conn| {
+        let mut impact = SyncScopeImpact::default();
+        let mut folder = conn.prepare_cached("SELECT folder_id FROM folder WHERE uuid = ?1")?;
+        let mut smart =
+            conn.prepare_cached("SELECT smart_folder_id FROM smart_folder WHERE uuid = ?1")?;
+        let mut entity = conn.prepare_cached(
+            "SELECT entity_id, parent_collection_entity_id, entity_kind
+             FROM media_entity WHERE entity_hash = ?1",
+        )?;
+        for op in ops {
+            if op.op_type.starts_with("folder_") {
+                if let Some(id) = folder
+                    .query_row([&op.entity_key], |row| row.get::<_, i64>(0))
+                    .optional()?
+                {
+                    impact.folder_ids.insert(id);
+                }
+            } else if op.op_type.starts_with("smart_folder_") {
+                if let Some(id) = smart
+                    .query_row([&op.entity_key], |row| row.get::<_, i64>(0))
+                    .optional()?
+                {
+                    impact.smart_folder_ids.insert(id);
+                }
+            } else if let Some((entity_id, parent_id, kind)) = entity
+                .query_row([&op.entity_key], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })
+                .optional()?
+            {
+                if kind == "collection" {
+                    impact.collection_ids.insert(entity_id);
+                } else if let Some(collection_id) = parent_id {
+                    impact.collection_ids.insert(collection_id);
+                }
+            }
+        }
+        let mut collection_folders = conn.prepare_cached(
+            "SELECT DISTINCT folder_id FROM folder_member
+             WHERE entity_id = ?1 OR entity_id IN (
+                 SELECT entity_id FROM media_entity WHERE parent_collection_entity_id = ?1
+             )",
+        )?;
+        for collection_id in &impact.collection_ids {
+            let rows = collection_folders.query_map([collection_id], |row| row.get::<_, i64>(0))?;
+            for row in rows {
+                impact.folder_ids.insert(row?);
+            }
+        }
+        Ok(impact)
+    })
+}
+
+/// Serialize every trigger (startup, periodic, and manual) through the same
+/// cycle so two callers cannot publish the same segment concurrently.
+pub async fn run_serialized_sync(
+    db: Arc<LibraryDatabase>,
+    blob_store: Arc<crate::blob_store::BlobStore>,
+    cycle_lock: Arc<tokio::sync::Mutex<()>>,
+) -> Result<SyncReport, String> {
+    let _guard = cycle_lock.lock().await;
+    tokio::task::spawn_blocking(move || run_bound_sync(&db, &blob_store))
+        .await
+        .map_err(|error| format!("sync worker failed: {error}"))?
+}
+
 /// Parse `oplog/<device>/<seq>.seg` → `(device, seq)`.
 fn parse_segment_key(key: &str) -> Option<(&str, i64)> {
     let rest = key.strip_prefix("oplog/")?;
@@ -171,26 +432,52 @@ fn sync_once_inner(
         }
     }
 
+    let initial_cursors = per_device
+        .keys()
+        .map(|device| Ok((device.clone(), db.ingest_cursor(device)?)))
+        .collect::<Result<BTreeMap<_, _>, String>>()?;
+    let mut cursors = initial_cursors.clone();
+    let mut device_order = per_device.keys().cloned().collect::<Vec<_>>();
+    if !device_order.is_empty() {
+        let rotation = initial_cursors
+            .values()
+            .fold(0usize, |sum, cursor| sum.wrapping_add(*cursor as usize))
+            % device_order.len();
+        device_order.rotate_left(rotation);
+    }
     let mut new_ops: Vec<OpRecord> = Vec::new();
-    let mut cursor_updates: Vec<(String, i64)> = Vec::new();
     let mut candidate_segments = 0usize;
-    for (device, segments) in &per_device {
-        let mut cursor = db.ingest_cursor(device)?;
-        // Contiguous consumption only: stop at the first missing seq.
-        while let Some(key) = segments.get(&(cursor + 1)) {
-            let Some(bytes) = backend.get(key).map_err(|e| e.to_string())? else {
+    while candidate_segments < MAX_REMOTE_SEGMENTS_PER_CYCLE {
+        let mut progressed = false;
+        for device in &device_order {
+            if candidate_segments >= MAX_REMOTE_SEGMENTS_PER_CYCLE {
                 break;
+            }
+            let segments = &per_device[device];
+            let Some(cursor) = cursors.get_mut(device) else {
+                continue;
+            };
+            let Some(key) = segments.get(&(*cursor + 1)) else {
+                continue;
+            };
+            let Some(bytes) = backend.get(key).map_err(|e| e.to_string())? else {
+                continue;
             };
             let ops =
                 decode_segment(&bytes).map_err(|e| format!("quarantined segment {key}: {e}"))?;
             new_ops.extend(ops);
-            cursor += 1;
+            *cursor += 1;
             candidate_segments += 1;
+            progressed = true;
         }
-        if cursor > db.ingest_cursor(device)? {
-            cursor_updates.push((device.clone(), cursor));
+        if !progressed {
+            break;
         }
     }
+    let cursor_updates = cursors
+        .into_iter()
+        .filter(|(device, cursor)| initial_cursors.get(device).is_some_and(|old| cursor > old))
+        .collect::<Vec<_>>();
 
     if new_ops.is_empty() {
         return Ok(report);
@@ -204,18 +491,24 @@ fn sync_once_inner(
     if let Some(blob_store) = blob_store {
         let (downloaded, pending) = hydrate_required_blobs(&new_ops, blob_store, backend)?;
         report.blobs_downloaded = downloaded;
-        report.pending_prerequisites = pending;
+        report.waiting_for_prerequisites = pending > 0;
         if pending > 0 {
             return Ok(report);
         }
     }
     new_ops.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+    let mut scope_impact = resolve_scope_impact(db, &new_ops)?;
     match db.apply_remote_ops(&new_ops, &cursor_updates)? {
         Some(applied) => {
+            scope_impact.merge(resolve_scope_impact(db, &new_ops)?);
             report.ops_applied = applied;
             report.segments_consumed = candidate_segments;
+            report.applied_op_types = new_ops.iter().map(|op| op.op_type.clone()).collect();
+            report.affected_folder_ids = scope_impact.folder_ids.into_iter().collect();
+            report.affected_smart_folder_ids = scope_impact.smart_folder_ids.into_iter().collect();
+            report.affected_collection_ids = scope_impact.collection_ids.into_iter().collect();
         }
-        None => report.pending_prerequisites = 1,
+        None => report.waiting_for_prerequisites = true,
     }
     Ok(report)
 }
@@ -372,6 +665,78 @@ mod tests {
     }
 
     #[test]
+    fn remote_ingestion_is_bounded_and_resumes_from_its_cursor() {
+        let backend = MemoryBackend::new();
+        let target = open_device("bounded-remote-target");
+        let total_segments = MAX_REMOTE_SEGMENTS_PER_CYCLE + 3;
+        for seq in 1..=total_segments {
+            let op = OpRecord {
+                op_version: OP_VERSION,
+                op_type: "folder_created".into(),
+                entity_key: format!("remote-folder-{seq}"),
+                payload: serde_json::json!({"name": format!("Remote {seq}")}),
+                hlc: format!("{seq:013x}-0000"),
+                device_id: "bounded-remote-source".into(),
+            };
+            backend
+                .put(
+                    &crate::oplog::drain::segment_key("bounded-remote-source", seq as i64),
+                    &crate::oplog::segment::encode_segment(&[op]).unwrap(),
+                )
+                .unwrap();
+        }
+        let peer_op = OpRecord {
+            op_version: OP_VERSION,
+            op_type: "folder_created".into(),
+            entity_key: "other-peer-folder".into(),
+            payload: serde_json::json!({"name": "Other peer"}),
+            hlc: "0000000000001-0000".into(),
+            device_id: "zz-remote-peer".into(),
+        };
+        backend
+            .put(
+                &crate::oplog::drain::segment_key("zz-remote-peer", 1),
+                &crate::oplog::segment::encode_segment(&[peer_op]).unwrap(),
+            )
+            .unwrap();
+
+        let first = sync_once(&target, &backend).unwrap();
+        assert_eq!(first.segments_consumed, MAX_REMOTE_SEGMENTS_PER_CYCLE);
+        assert_eq!(
+            target.ingest_cursor("bounded-remote-source").unwrap(),
+            (MAX_REMOTE_SEGMENTS_PER_CYCLE - 1) as i64
+        );
+        assert_eq!(target.ingest_cursor("zz-remote-peer").unwrap(), 1);
+        assert_eq!(folder_names(&target).len(), MAX_REMOTE_SEGMENTS_PER_CYCLE);
+
+        let second = sync_once(&target, &backend).unwrap();
+        assert_eq!(second.segments_consumed, 4);
+        assert_eq!(folder_names(&target).len(), total_segments + 1);
+    }
+
+    #[test]
+    fn remote_membership_impact_targets_exact_open_grids() {
+        let report = SyncReport {
+            ops_applied: 2,
+            applied_op_types: vec![
+                "folder_members_added".into(),
+                "collection_members_removed".into(),
+            ],
+            affected_folder_ids: vec![7],
+            affected_collection_ids: vec![11],
+            ..Default::default()
+        };
+
+        let impact = sync_change_impact(&report);
+
+        assert_eq!(impact.folder_membership_changed, Some(vec![7]));
+        let scopes = impact.extra_grid_scopes.unwrap();
+        assert!(scopes.contains(&"folder:7".to_string()));
+        assert!(scopes.contains(&"collection:11".to_string()));
+        assert!(scopes.contains(&"system:active".to_string()));
+    }
+
+    #[test]
     fn sync_cycle_publishes_verified_blob_before_metadata_segment() {
         let temp = TempDir::new().unwrap();
         let db = LibraryDatabase::open_with_device_id(temp.path(), "order-a".into()).unwrap();
@@ -430,6 +795,40 @@ mod tests {
         assert_eq!(report.segments_uploaded, 1);
         assert_eq!(db.pending_op_count().unwrap(), 1);
         assert_eq!(backend.list("oplog/bounded-a/").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn bound_sync_persists_success_report_and_clears_previous_error() {
+        let library_root = TempDir::new().unwrap();
+        let share_root = TempDir::new().unwrap();
+        let db =
+            LibraryDatabase::open_with_device_id(library_root.path(), "status-a".into()).unwrap();
+        let blob_store = crate::blob_store::BlobStore::open(library_root.path()).unwrap();
+        set_binding(&db, share_root.path(), "Remote").unwrap();
+        db.kv_set(KV_LAST_ERROR, "old failure").unwrap();
+
+        let report = run_bound_sync(&db, &blob_store).unwrap();
+
+        assert_eq!(report, SyncReport::default());
+        assert!(db.kv_get(KV_LAST_SUCCESS_AT).unwrap().is_some());
+        assert_eq!(db.kv_get(KV_LAST_ERROR).unwrap(), None);
+        let persisted: SyncReport =
+            serde_json::from_str(&db.kv_get(KV_LAST_REPORT).unwrap().unwrap()).unwrap();
+        assert_eq!(persisted, report);
+    }
+
+    #[test]
+    fn unbound_sync_returns_error_without_persisting_a_false_failure() {
+        let library_root = TempDir::new().unwrap();
+        let db =
+            LibraryDatabase::open_with_device_id(library_root.path(), "status-b".into()).unwrap();
+        let blob_store = crate::blob_store::BlobStore::open(library_root.path()).unwrap();
+
+        let error = run_bound_sync(&db, &blob_store).unwrap_err();
+
+        assert!(error.contains("not connected"));
+        assert_eq!(db.kv_get(KV_LAST_SUCCESS_AT).unwrap(), None);
+        assert_eq!(db.kv_get(KV_LAST_ERROR).unwrap(), None);
     }
 
     #[test]
@@ -524,7 +923,7 @@ mod tests {
         sync_once(&dev_a, &backend).unwrap();
 
         let report = sync_once(&dev_b, &backend).unwrap();
-        assert_eq!(report.pending_prerequisites, 1);
+        assert!(report.waiting_for_prerequisites);
         assert_eq!(report.ops_applied, 0);
         assert_eq!(dev_b.ingest_cursor("pending-a").unwrap(), 0);
         assert!(folder_names(&dev_b).is_empty(), "the batch must roll back");
@@ -554,7 +953,7 @@ mod tests {
             .unwrap();
 
         let report = sync_once(&dev_b, &backend).unwrap();
-        assert_eq!(report.pending_prerequisites, 0);
+        assert!(!report.waiting_for_prerequisites);
         assert_eq!(report.ops_applied, 2);
         assert_eq!(dev_b.ingest_cursor("pending-a").unwrap(), 1);
         let membership_count: i64 = dev_b
@@ -622,7 +1021,7 @@ mod tests {
         sync_once(&source, &backend).unwrap();
 
         let report = sync_cycle(&target, &target_blobs, &backend).unwrap();
-        assert_eq!(report.pending_prerequisites, 1);
+        assert!(report.waiting_for_prerequisites);
         assert_eq!(target.ingest_cursor("blob-a").unwrap(), 0);
         let entity_count: i64 = target
             .with_read(|conn| {
@@ -641,6 +1040,25 @@ mod tests {
         assert_eq!(
             target_blobs.read_original(&hash, Some("png")).unwrap(),
             bytes
+        );
+        let queued_work: Vec<String> = target
+            .with_read(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT work_type FROM deferred_work_item WHERE entity_hash = ?1 ORDER BY work_type",
+                )?;
+                let rows = stmt
+                    .query_map([&hash], |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap();
+        assert_eq!(
+            queued_work,
+            vec![
+                "dominant_colors".to_string(),
+                "perceptual_hash".to_string(),
+                "thumbnail".to_string()
+            ]
         );
     }
 }

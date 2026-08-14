@@ -39,6 +39,8 @@ pub struct AppState {
     pub ai_model_downloads: tokio::sync::Mutex<HashMap<String, CancellationToken>>,
     /// Serializes model activation/deletion/loading with inference.
     pub ai_model_lifecycle: tokio::sync::Mutex<()>,
+    /// One sync cycle at a time across startup, periodic, and manual triggers.
+    pub sync_cycle_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 static STATE: OnceLock<RwLock<Option<Arc<AppState>>>> = OnceLock::new();
@@ -94,6 +96,7 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
     let cancel = CancellationToken::new();
+    let sync_cycle_lock = Arc::new(tokio::sync::Mutex::new(()));
     let (folder_watch_commands, folder_watch_rx) = crate::folders::watch::channel();
 
     let new_db = Arc::new(
@@ -181,6 +184,7 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         ai_tag_run: tokio::sync::Mutex::new(None),
         ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
         ai_model_lifecycle: tokio::sync::Mutex::new(()),
+        sync_cycle_lock,
     });
 
     {
@@ -196,6 +200,7 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         &state.blob_store,
         &state.rate_limiter,
         &state.running_subscriptions,
+        &state.sync_cycle_lock,
         folder_watch_rx,
         &state.cancel,
     )

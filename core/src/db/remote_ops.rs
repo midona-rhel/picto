@@ -284,8 +284,12 @@ pub(super) fn apply_remote_op(
                     types::ExpansionMode::EntityOnly,
                 )?;
             }
-            // Derivatives (thumbnail, phash, colors) queue when the blob
-            // lands; the blob itself arrives via blob sync or source refetch.
+            let work_types = crate::media_analysis::derivative_work_types_for_target(
+                payload_str(p, "mime").unwrap_or("application/octet-stream"),
+                p.get("frame_count").and_then(|value| value.as_i64()),
+                true,
+            );
+            insert_deferred_work_rows(conn, key, &work_types)?;
         }
         "entity_status_changed" => {
             if let Some(id) = entity_id_by_hash(conn, key)? {
