@@ -8,6 +8,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IconCheck } from '@tabler/icons-react';
 import {
+  aiTaggerCancelDownload,
   aiTaggerDeleteModel,
   aiTaggerDownloadModel,
   aiTaggerStatus,
@@ -57,6 +58,16 @@ export function AiTaggingPanel() {
   const refresh = useCallback(() => {
     aiTaggerStatus().then(setStatus).catch((e) => setError(String(e)));
   }, []);
+
+  const startDownload = useCallback((slug: string) => {
+    setError(null);
+    void aiTaggerDownloadModel(slug)
+      .catch((e) => {
+        const message = String(e);
+        if (!message.toLowerCase().includes('cancelled')) setError(message);
+      })
+      .finally(refresh);
+  }, [refresh]);
 
   useEffect(() => {
     refresh();
@@ -171,6 +182,15 @@ export function AiTaggingPanel() {
                         done={Number(task?.progress?.done ?? 0)}
                         total={Number(task?.progress?.total ?? 1)}
                       />
+                      <button
+                        className={styles.btnGhost}
+                        type="button"
+                        onClick={() => {
+                          void aiTaggerCancelDownload(m.slug).catch((e) => setError(String(e)));
+                        }}
+                      >
+                        Cancel
+                      </button>
                     </div>
                   ) : m.downloaded ? (
                     <>
@@ -193,23 +213,15 @@ export function AiTaggingPanel() {
                     <button
                       className={styles.btn}
                       type="button"
-                      onClick={() => {
-                        void aiTaggerDownloadModel(m.slug).catch((e) => setError(String(e)));
-                      }}
+                      onClick={() => startDownload(m.slug)}
                     >
                       Download {fmtSize(m.sizeBytes)}
                     </button>
                   )}
-                  {enableKey && (
+                  {enableKey && m.downloaded && (
                     <ToggleSwitch
                       on={enabled}
-                      onChange={() => {
-                        if (!m.downloaded && !enabled) {
-                          // Enabling an absent model kicks off its download too.
-                          void aiTaggerDownloadModel(m.slug).catch((e) => setError(String(e)));
-                        }
-                        patchSettings({ [enableKey]: !enabled });
-                      }}
+                      onChange={() => patchSettings({ [enableKey]: !enabled })}
                     />
                   )}
                 </div>
@@ -217,7 +229,6 @@ export function AiTaggingPanel() {
             );
           })}
         </div>
-        {/* TODO: model download cancellation — backend download task cannot be cancelled yet */}
       </div>
 
       <div className={styles.block}>

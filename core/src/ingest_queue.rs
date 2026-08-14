@@ -1399,15 +1399,6 @@ async fn process_single_queue(
         std::slice::from_ref(&outcome.entity_hash),
     )
     .await;
-    if outcome.disposition.is_imported() {
-        if let Ok(state) = crate::state::get_state() {
-            crate::dispatch::typed::ai_tagger::auto_tag_imported(
-                state.as_ref(),
-                std::slice::from_ref(&outcome.entity_hash),
-            )
-            .await;
-        }
-    }
     Ok(vec![IngestQueueItemCompletion {
         item_id: item.item_id,
         result_kind,
@@ -1690,22 +1681,6 @@ async fn process_collection_queue(
         &derivative_entity_hashes,
     )
     .await;
-    let imported_entity_hashes = unique_entity_hashes(
-        result
-            .resolved_members
-            .iter()
-            .filter(|member| member.disposition.is_imported())
-            .map(|member| member.entity_hash.as_str()),
-    );
-    if !imported_entity_hashes.is_empty() {
-        if let Ok(state) = crate::state::get_state() {
-            crate::dispatch::typed::ai_tagger::auto_tag_imported(
-                state.as_ref(),
-                &imported_entity_hashes,
-            )
-            .await;
-        }
-    }
     Ok(completions)
 }
 

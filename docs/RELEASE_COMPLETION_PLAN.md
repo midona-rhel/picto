@@ -113,13 +113,13 @@ reference application-reference UI pass and must reuse this canonical API rather
 
 ## Phase 6: PBI-605 AI Tagging
 
-- [ ] Download model artifacts into a temporary directory and activate them atomically.
-- [ ] Validate labels and load the ONNX session before reporting ready.
-- [ ] Prove preprocessing, channel order, normalization, thresholds, and output interpretation.
-- [ ] Use one prediction helper for reviewed and automatic tagging.
-- [ ] Move auto-tagging from ingest into durable retryable background work.
-- [ ] Keep reviewed application explicit and preserve AI provenance.
-- [ ] Make cancellation behavior honest and leave no stuck task.
+- [x] Download model artifacts into a temporary directory and activate them atomically.
+- [x] Validate labels and load the ONNX session before reporting ready.
+- [x] Prove preprocessing, channel order, normalization, thresholds, and output interpretation.
+- [x] Use one prediction helper for reviewed and automatic tagging.
+- [x] Move auto-tagging from ingest into durable retryable background work.
+- [x] Keep reviewed application explicit and preserve AI provenance.
+- [x] Make cancellation behavior honest and leave no stuck task.
 - [ ] Run restart and packaged CPU inference smokes and archive PBI-605.
 
 ## Phase 7: PBI-602 Folder Sync

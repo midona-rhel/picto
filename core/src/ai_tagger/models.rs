@@ -5,7 +5,11 @@
 //! integers to Picto tag namespaces.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::io::Read;
 use ts_rs::TS;
+
+pub(crate) const BUNDLE_MARKER: &str = ".bundle-validated";
 
 /// Channel ordering expected by the model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -14,6 +18,19 @@ use ts_rs::TS;
 pub enum ChannelOrder {
     Rgb,
     Bgr,
+}
+
+/// Interpretation of each model output value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputActivation {
+    Probability,
+    Logit,
+}
+
+impl Default for OutputActivation {
+    fn default() -> Self {
+        Self::Probability
+    }
 }
 
 /// A known tagger model that can be downloaded and used for inference.
@@ -26,13 +43,25 @@ pub struct ModelInfo {
     pub label: String,
     /// URL to the ONNX model file on Hugging Face.
     pub onnx_url: String,
+    /// SHA-256 of the registered ONNX artifact.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub onnx_sha256: String,
     /// URL to the `selected_tags.csv` label file.
     pub labels_url: String,
+    /// SHA-256 of the registered label artifact.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub labels_sha256: String,
     /// Model input image size (width = height).
     #[ts(type = "number")]
     pub input_size: u32,
     /// Channel order expected by the model.
     pub channel_order: ChannelOrder,
+    /// Whether inference outputs are probabilities or logits.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub output_activation: OutputActivation,
     /// Approximate download size of the ONNX file in bytes.
     #[ts(type = "number")]
     pub size_bytes: u64,
@@ -54,9 +83,12 @@ pub fn known_models() -> Vec<ModelInfo> {
             slug: "wd14-swinv2-v3".into(),
             label: "WD14 SwinV2 v3".into(),
             onnx_url: "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/model.onnx".into(),
+            onnx_sha256: "e6774bff34d43bd49f75a47db4ef217dce701c9847b546523eb85ff6dbba1db1".into(),
             labels_url: "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv".into(),
+            labels_sha256: "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217".into(),
             input_size: 448,
             channel_order: ChannelOrder::Bgr,
+            output_activation: OutputActivation::Probability,
             size_bytes: 467_000_000,
             dataset: "Danbooru tags".into(),
             heavy: false,
@@ -65,9 +97,13 @@ pub fn known_models() -> Vec<ModelInfo> {
             slug: "z3d-e621-convnext".into(),
             label: "E621 ConvNext (Z3D)".into(),
             onnx_url: "https://huggingface.co/toynya/Z3D-E621-Convnext/resolve/main/model.onnx".into(),
+            onnx_sha256: "672f6c1b987abfdb311c41ecd57efdc0e5b1860944a3722984326316f4655c70".into(),
             labels_url: "https://huggingface.co/toynya/Z3D-E621-Convnext/resolve/main/tags-selected.csv".into(),
+            labels_sha256: "609c75136b90fc0a87cce111961f172d029ab400299cfa8bbf6830918305aa40".into(),
             input_size: 448,
-            channel_order: ChannelOrder::Rgb,
+            // Z3D's reference preprocessing consumes BGR tensors.
+            channel_order: ChannelOrder::Bgr,
+            output_activation: OutputActivation::Probability,
             size_bytes: 390_000_000,
             dataset: "e621 tags".into(),
             heavy: false,
@@ -76,9 +112,12 @@ pub fn known_models() -> Vec<ModelInfo> {
             slug: "wd14-eva02-large-v3".into(),
             label: "WD14 EVA02-Large v3".into(),
             onnx_url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/model.onnx".into(),
+            onnx_sha256: "9e768793060c7939b277ccb382783e8670e8a042d29d77aa736be0c8cc898bfc".into(),
             labels_url: "https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3/resolve/main/selected_tags.csv".into(),
+            labels_sha256: "298633d94d0031d2081c0893f29c82eab7f0df00b08483ba8f29d1e979441217".into(),
             input_size: 448,
             channel_order: ChannelOrder::Bgr,
+            output_activation: OutputActivation::Probability,
             size_bytes: 1_260_000_000,
             dataset: "Danbooru tags, highest accuracy".into(),
             heavy: true,
@@ -91,16 +130,149 @@ pub fn find_model(slug: &str) -> Option<ModelInfo> {
     known_models().into_iter().find(|m| m.slug == slug)
 }
 
-/// Return the on-disk directory for a model's files.
-pub fn model_dir(models_root: &std::path::Path, slug: &str) -> std::path::PathBuf {
-    models_root.join(slug)
+/// Return the on-disk directory for a registry-owned model.
+pub fn model_dir(models_root: &std::path::Path, model: &ModelInfo) -> std::path::PathBuf {
+    models_root.join(&model.slug)
 }
 
-/// Check whether a model's ONNX file and labels CSV both exist on disk.
+/// Check whether a known model has a complete bundle activated by Picto.
 pub fn is_model_downloaded(models_root: &std::path::Path, slug: &str) -> bool {
-    let dir = model_dir(models_root, slug);
-    let has_onnx = dir.join("model.onnx").exists();
-    let has_labels =
-        dir.join("selected_tags.csv").exists() || dir.join("tags-selected.csv").exists();
-    has_onnx && has_labels
+    let Some(model) = find_model(slug) else {
+        return false;
+    };
+    let dir = model_dir(models_root, &model);
+    bundle_is_marked(&dir, &model)
+}
+
+fn bundle_marker_content(model: &ModelInfo) -> String {
+    format!(
+        "picto-ai-model-bundle-v2\nmodel={}\nlabels={}\n",
+        model.onnx_sha256, model.labels_sha256
+    )
+}
+
+pub(crate) fn bundle_is_marked(dir: &std::path::Path, model: &ModelInfo) -> bool {
+    dir.join("model.onnx").is_file()
+        && dir.join("selected_tags.csv").is_file()
+        && std::fs::read_to_string(dir.join(BUNDLE_MARKER))
+            .ok()
+            .as_deref()
+            == Some(bundle_marker_content(model).as_str())
+}
+
+pub(crate) fn mark_bundle_validated(
+    dir: &std::path::Path,
+    model: &ModelInfo,
+) -> Result<(), String> {
+    std::fs::write(dir.join(BUNDLE_MARKER), bundle_marker_content(model))
+        .map_err(|e| format!("Failed to write model validation marker: {e}"))
+}
+
+pub(crate) fn validate_bundle_integrity(
+    dir: &std::path::Path,
+    model: &ModelInfo,
+) -> Result<(), String> {
+    if !bundle_is_marked(dir, model) {
+        return Err(format!("Model bundle '{}' is incomplete", model.slug));
+    }
+    for (path, expected) in [
+        (dir.join("model.onnx"), model.onnx_sha256.as_str()),
+        (dir.join("selected_tags.csv"), model.labels_sha256.as_str()),
+    ] {
+        let mut file = std::fs::File::open(&path)
+            .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 128 * 1024];
+        loop {
+            let read = file
+                .read(&mut buffer)
+                .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+        }
+        let actual = hex::encode(hasher.finalize());
+        if actual != expected {
+            return Err(format!(
+                "Model bundle '{}' failed integrity validation for {}",
+                model.slug,
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn unknown_slugs_are_not_downloaded() {
+        let root = TempDir::new().unwrap();
+        let unknown = "../outside";
+
+        assert!(!is_model_downloaded(root.path(), unknown));
+    }
+
+    #[test]
+    fn bare_files_are_not_reported_as_downloaded() {
+        let root = TempDir::new().unwrap();
+        let model = find_model("wd14-swinv2-v3").unwrap();
+        let dir = model_dir(root.path(), &model);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("model.onnx"), b"not validated").unwrap();
+        std::fs::write(
+            dir.join("selected_tags.csv"),
+            b"tag_id,name,category,count\n0,tag,0,1\n",
+        )
+        .unwrap();
+
+        assert!(!is_model_downloaded(root.path(), "wd14-swinv2-v3"));
+        mark_bundle_validated(&dir, &model).unwrap();
+        assert!(is_model_downloaded(root.path(), "wd14-swinv2-v3"));
+    }
+
+    #[test]
+    fn z3d_uses_bgr_channel_order() {
+        assert_eq!(
+            find_model("z3d-e621-convnext").unwrap().channel_order,
+            ChannelOrder::Bgr
+        );
+    }
+
+    #[test]
+    fn registered_artifact_hashes_are_sha256_values() {
+        for model in known_models() {
+            for checksum in [&model.onnx_sha256, &model.labels_sha256] {
+                assert_eq!(checksum.len(), 64, "{} has an invalid checksum", model.slug);
+                assert!(
+                    checksum.bytes().all(|byte| byte.is_ascii_hexdigit()),
+                    "{} has a non-hex checksum",
+                    model.slug
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bundle_integrity_detects_artifact_corruption() {
+        let root = TempDir::new().unwrap();
+        let mut model = find_model("wd14-swinv2-v3").unwrap();
+        let dir = model_dir(root.path(), &model);
+        std::fs::create_dir_all(&dir).unwrap();
+        let onnx = b"test model";
+        let labels = b"tag_id,name,category,count\n0,tag,0,1\n";
+        model.onnx_sha256 = hex::encode(Sha256::digest(onnx));
+        model.labels_sha256 = hex::encode(Sha256::digest(labels));
+        std::fs::write(dir.join("model.onnx"), onnx).unwrap();
+        std::fs::write(dir.join("selected_tags.csv"), labels).unwrap();
+        mark_bundle_validated(&dir, &model).unwrap();
+
+        validate_bundle_integrity(&dir, &model).unwrap();
+        std::fs::write(dir.join("model.onnx"), b"corrupt").unwrap();
+        assert!(validate_bundle_integrity(&dir, &model).is_err());
+    }
 }

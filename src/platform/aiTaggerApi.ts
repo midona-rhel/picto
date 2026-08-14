@@ -18,6 +18,10 @@ export function aiTaggerDownloadModel(model: string): Promise<void> {
   return invoke<void>('ai_tagger_download_model', { model });
 }
 
+export function aiTaggerCancelDownload(model: string): Promise<void> {
+  return invoke<void>('ai_tagger_cancel_download', { model });
+}
+
 export function aiTaggerDeleteModel(model: string): Promise<void> {
   return invoke<void>('ai_tagger_delete_model', { model });
 }
@@ -33,7 +37,12 @@ export function aiTagCancel(): Promise<void> {
   return invoke<void>('ai_tag_cancel', {});
 }
 
-/** Apply tags to files. Returns the number of (file, tag) writes. */
-export function aiTagApply(hashes: string[], tags: string[]): Promise<number> {
-  return invoke<number>('ai_tag_apply', { hashes, tags });
+export interface AiTagAssignment {
+  hash: string;
+  tags: string[];
+}
+
+/** Apply reviewed per-image tags atomically. */
+export function aiTagApply(assignments: AiTagAssignment[]): Promise<number> {
+  return invoke<number>('ai_tag_apply', { assignments });
 }

@@ -4,7 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 111;
+pub const CURRENT_SCHEMA_VERSION: i64 = 112;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -403,7 +403,7 @@ CREATE TABLE IF NOT EXISTS subscription_post_member (
 CREATE TABLE IF NOT EXISTS deferred_work_item (
     work_id       INTEGER PRIMARY KEY,
     entity_hash   TEXT    NOT NULL,
-    work_type     TEXT    NOT NULL CHECK (work_type IN ('thumbnail', 'dominant_colors', 'perceptual_hash', 'blob_delete')),
+    work_type     TEXT    NOT NULL CHECK (work_type IN ('thumbnail', 'dominant_colors', 'perceptual_hash', 'blob_delete', 'ai_tag')),
     status        TEXT    NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running')),
     attempt_count INTEGER NOT NULL DEFAULT 0,
     available_at  TEXT    NOT NULL,
@@ -525,7 +525,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 111
+SELECT 112
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 

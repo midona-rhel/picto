@@ -118,13 +118,21 @@ pub struct FilePrediction {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AiTagPredictOutput {
     pub predictions: Vec<FilePrediction>,
+    #[ts(type = "Record<string, number>")]
+    pub thresholds: Thresholds,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct AiTagAssignment {
+    pub hash: String,
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AiTagApplyInput {
-    pub hashes: Vec<String>,
-    pub tags: Vec<String>,
+    pub assignments: Vec<AiTagAssignment>,
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
@@ -155,7 +163,10 @@ pub async fn ai_tagger_status(
 
     let gpu_backend = {
         let guard = state.ai_taggers.lock().await;
-        guard.values().next().map(|s| s.gpu_backend())
+        guard
+            .values()
+            .next()
+            .and_then(|session| session.lock().ok().map(|session| session.gpu_backend()))
     };
 
     let hardware = AiTaggerHardware {
@@ -180,14 +191,40 @@ pub async fn ai_tagger_download_model(
     input: AiTaggerDownloadModelInput,
 ) -> Result<(), String> {
     let models_root = models_root_for(state);
-    let slug = input.model.clone();
-
-    tokio::spawn(async move {
-        if let Err(e) = crate::ai_tagger::download::download_model(&slug, &models_root).await {
-            tracing::error!(slug, error = %e, "Model download failed");
+    let model = crate::ai_tagger::models::find_model(&input.model)
+        .ok_or_else(|| format!("Unknown model: {}", input.model))?;
+    let token = state.cancel.child_token();
+    {
+        let mut downloads = state.ai_model_downloads.lock().await;
+        if downloads.contains_key(&model.slug) {
+            return Err(format!("Model '{}' is already downloading", model.slug));
         }
-    });
+        downloads.insert(model.slug.clone(), token.clone());
+    }
 
+    let result = crate::ai_tagger::download::download_model(
+        &model.slug,
+        &models_root,
+        &token,
+        &state.ai_model_lifecycle,
+    )
+    .await;
+    state.ai_model_downloads.lock().await.remove(&model.slug);
+    if result.is_ok() {
+        state.ai_taggers.lock().await.remove(&model.slug);
+    }
+    result
+}
+
+pub async fn ai_tagger_cancel_download(
+    state: &AppState,
+    input: AiTaggerDownloadModelInput,
+) -> Result<(), String> {
+    let model = crate::ai_tagger::models::find_model(&input.model)
+        .ok_or_else(|| format!("Unknown model: {}", input.model))?;
+    if let Some(token) = state.ai_model_downloads.lock().await.get(&model.slug) {
+        token.cancel();
+    }
     Ok(())
 }
 
@@ -196,12 +233,26 @@ pub async fn ai_tagger_delete_model(
     input: AiTaggerDownloadModelInput,
 ) -> Result<(), String> {
     let models_root = models_root_for(state);
-    let model_dir = crate::ai_tagger::models::model_dir(&models_root, &input.model);
+    let model = crate::ai_tagger::models::find_model(&input.model)
+        .ok_or_else(|| format!("Unknown model: {}", input.model))?;
+    if state
+        .ai_model_downloads
+        .lock()
+        .await
+        .contains_key(&model.slug)
+    {
+        return Err(format!(
+            "Model '{}' cannot be deleted while it is downloading",
+            model.slug
+        ));
+    }
+    let _lifecycle = state.ai_model_lifecycle.lock().await;
+    let model_dir = crate::ai_tagger::models::model_dir(&models_root, &model);
 
     // Remove cached session if loaded
     {
         let mut guard = state.ai_taggers.lock().await;
-        guard.remove(&input.model);
+        guard.remove(&model.slug);
     }
 
     // Delete files
@@ -210,7 +261,7 @@ pub async fn ai_tagger_delete_model(
             .map_err(|e| format!("Failed to delete model directory: {e}"))?;
     }
 
-    tracing::info!(slug = input.model, "Model deleted");
+    tracing::info!(slug = model.slug, "Model deleted");
     Ok(())
 }
 
@@ -229,20 +280,34 @@ pub async fn ai_tag_predict(
         return Err("No AI tagger models specified or enabled.".into());
     }
 
-    // One run at a time — the panel drives a single prediction pass.
+    // The latest reviewed run owns the panel. Replacing a run cancels it
+    // immediately without allowing its cleanup to clear the new owner.
+    let run_id = rand::random::<u64>();
     let token = {
         let mut guard = state.ai_tag_run.lock().await;
-        if guard.is_some() {
-            return Err("An auto-tag run is already in progress.".into());
+        if let Some((_, previous)) = guard.take() {
+            previous.cancel();
         }
         let token = CancellationToken::new();
-        *guard = Some(token.clone());
+        *guard = Some((run_id, token.clone()));
         token
     };
 
-    let result = run_predict(state, &input.hashes, &slugs, &token).await;
+    let result = run_predict(
+        state,
+        &input.hashes,
+        &slugs,
+        run_id,
+        &token,
+        thresholds_from_settings(&settings),
+    )
+    .await;
 
-    state.ai_tag_run.lock().await.take();
+    let mut guard = state.ai_tag_run.lock().await;
+    if guard.as_ref().is_some_and(|(id, _)| *id == run_id) {
+        guard.take();
+        crate::runtime_state::remove_task(AUTO_TAG_TASK_ID);
+    }
     result
 }
 
@@ -250,7 +315,9 @@ async fn run_predict(
     state: &AppState,
     hashes: &[String],
     slugs: &[String],
+    run_id: u64,
     token: &CancellationToken,
+    review_thresholds: Thresholds,
 ) -> Result<AiTagPredictOutput, String> {
     let total = hashes.len() as u64;
     tracing::info!(models = ?slugs, hashes = total, "ai_tag_predict: starting");
@@ -263,9 +330,16 @@ async fn run_predict(
 
     // Ensure all requested sessions are loaded
     for slug in slugs {
+        if token.is_cancelled() {
+            return Err("AI tag prediction cancelled".into());
+        }
         if let Err(e) = ensure_session(state, slug).await {
-            emit_autotag_task(TaskStatus::Failed, 0, total, Some(e.clone()));
-            schedule_autotag_task_removal();
+            if token.is_cancelled() {
+                return Err("AI tag prediction cancelled".into());
+            }
+            if is_current_run(state, run_id).await {
+                emit_autotag_task(TaskStatus::Failed, 0, total, Some(e.clone()));
+            }
             return Err(e);
         }
     }
@@ -288,76 +362,44 @@ async fn run_predict(
             break;
         }
 
-        // Read the original file (not thumbnail) for best inference quality
-        let image_bytes = match read_original_image(state, hash).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
+        match predict_entity(state, hash, slugs, &floor, Some(token)).await {
+            Ok(mut tags) => {
+                tags.sort_by(|a, b| {
+                    b.confidence
+                        .partial_cmp(&a.confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                predictions.push(FilePrediction {
+                    hash: hash.clone(),
+                    tags,
+                    error: None,
+                });
+            }
+            Err(_error) if token.is_cancelled() => break,
+            Err(error) => {
                 predictions.push(FilePrediction {
                     hash: hash.clone(),
                     tags: vec![],
-                    error: Some(e),
+                    error: Some(error),
                 });
-                emit_autotag_task(TaskStatus::Running, (idx + 1) as u64, total, None);
-                continue;
-            }
-        };
-
-        // Run each model; per-model attribution is kept (TagPrediction.model)
-        // and merging happens in the panel.
-        let mut all_tags: Vec<TagPrediction> = Vec::new();
-        let mut errors: Vec<String> = Vec::new();
-
-        {
-            let mut guard = state.ai_taggers.lock().await;
-            for slug in slugs {
-                if token.is_cancelled() {
-                    break;
-                }
-                if let Some(session) = guard.get_mut(slug.as_str()) {
-                    let result =
-                        tokio::task::block_in_place(|| session.predict(&image_bytes, &floor));
-                    match result {
-                        Ok(tags) => all_tags.extend(tags),
-                        Err(e) => {
-                            tracing::error!(slug, error = %e, "ai_tag_predict: inference failed");
-                            errors.push(format!("{slug}: {e}"));
-                        }
-                    }
-                } else {
-                    tracing::warn!(slug, "ai_tag_predict: session not found in map");
-                }
             }
         }
 
-        all_tags.sort_by(|a, b| {
-            b.confidence
-                .partial_cmp(&a.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        predictions.push(FilePrediction {
-            hash: hash.clone(),
-            tags: all_tags,
-            error: if errors.is_empty() {
-                None
-            } else {
-                Some(errors.join("; "))
-            },
-        });
-
+        if token.is_cancelled() {
+            break;
+        }
         emit_autotag_task(TaskStatus::Running, (idx + 1) as u64, total, None);
     }
 
-    let status_text = token.is_cancelled().then(|| "Cancelled".to_string());
-    emit_autotag_task(
-        TaskStatus::Finished,
-        predictions.len() as u64,
-        total,
-        status_text,
-    );
-    schedule_autotag_task_removal();
+    if token.is_cancelled() {
+        return Err("AI tag prediction cancelled".into());
+    }
+    emit_autotag_task(TaskStatus::Finished, predictions.len() as u64, total, None);
 
-    Ok(AiTagPredictOutput { predictions })
+    Ok(AiTagPredictOutput {
+        predictions,
+        thresholds: review_thresholds,
+    })
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -368,7 +410,7 @@ pub struct AiTagCancelInput {}
 /// call returns its partial results.
 pub async fn ai_tag_cancel(state: &AppState, _input: AiTagCancelInput) -> Result<(), String> {
     let guard = state.ai_tag_run.lock().await;
-    if let Some(token) = guard.as_ref() {
+    if let Some((_, token)) = guard.as_ref() {
         token.cancel();
         emit_autotag_task(TaskStatus::Cancelling, 0, 0, None);
     }
@@ -376,35 +418,31 @@ pub async fn ai_tag_cancel(state: &AppState, _input: AiTagCancelInput) -> Result
 }
 
 pub async fn ai_tag_apply(state: &AppState, input: AiTagApplyInput) -> Result<usize, String> {
-    if input.hashes.is_empty() || input.tags.is_empty() {
+    if input.assignments.is_empty() {
         return Ok(0);
     }
 
-    let normalized_tags: Vec<String> = input
-        .tags
-        .iter()
-        .filter_map(|tag_str| {
-            crate::tags::normalize::parse_tag(tag_str)
-                .map(|(ns, st)| crate::tags::normalize::combine_tag(&ns, &st))
-        })
-        .collect();
-    if normalized_tags.is_empty() {
-        return Ok(0);
+    let mut assignments = Vec::with_capacity(input.assignments.len());
+    let mut write_count = 0usize;
+    for assignment in input.assignments {
+        if assignment.hash.trim().is_empty() {
+            return Err("AI tag assignment hash cannot be empty".into());
+        }
+        let mut tags = Vec::with_capacity(assignment.tags.len());
+        for tag in assignment.tags {
+            let (namespace, subtag) = crate::tags::normalize::parse_tag(&tag)
+                .ok_or_else(|| format!("Invalid AI tag: {tag}"))?;
+            tags.push(crate::tags::normalize::combine_tag(&namespace, &subtag));
+        }
+        tags.sort();
+        tags.dedup();
+        write_count += tags.len();
+        if !tags.is_empty() {
+            assignments.push((assignment.hash, tags));
+        }
     }
-
-    state.engine.apply_entity_tags(
-        EntityTarget {
-            kind: EntityTargetKind::EntityHashes,
-            entity_hashes: Some(input.hashes.clone()),
-            query: None,
-            excluded_entity_hashes: None,
-        },
-        TagOperation::Add,
-        &normalized_tags,
-        Some(TAG_PROVENANCE_AI),
-    )?;
-
-    Ok(input.hashes.len() * normalized_tags.len())
+    state.engine.apply_ai_tag_assignments(&assignments)?;
+    Ok(write_count)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -428,11 +466,13 @@ fn emit_autotag_task(status: TaskStatus, done: u64, total: u64, status_text: Opt
     });
 }
 
-fn schedule_autotag_task_removal() {
-    tokio::spawn(async {
-        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
-        crate::runtime_state::remove_task(AUTO_TAG_TASK_ID);
-    });
+async fn is_current_run(state: &AppState, run_id: u64) -> bool {
+    state
+        .ai_tag_run
+        .lock()
+        .await
+        .as_ref()
+        .is_some_and(|(id, _)| *id == run_id)
 }
 
 fn detect_cpu_model() -> Option<String> {
@@ -512,6 +552,7 @@ fn models_root_for(state: &AppState) -> std::path::PathBuf {
 }
 
 async fn ensure_session(state: &AppState, slug: &str) -> Result<(), String> {
+    let _lifecycle = state.ai_model_lifecycle.lock().await;
     {
         let guard = state.ai_taggers.lock().await;
         if guard.contains_key(slug) {
@@ -530,10 +571,11 @@ async fn ensure_session(state: &AppState, slug: &str) -> Result<(), String> {
         ));
     }
 
-    let model_dir = crate::ai_tagger::models::model_dir(&models_root, slug);
+    let model_dir = crate::ai_tagger::models::model_dir(&models_root, &model_info);
     let slug_owned = slug.to_string();
     let input_size = model_info.input_size;
     let channel_order = model_info.channel_order;
+    let output_activation = model_info.output_activation;
 
     // Load the model on a blocking thread — ONNX graph optimization is CPU-heavy
     let session = tokio::task::spawn_blocking(move || {
@@ -542,66 +584,88 @@ async fn ensure_session(state: &AppState, slug: &str) -> Result<(), String> {
             &slug_owned,
             input_size,
             channel_order,
+            output_activation,
         )
     })
     .await
     .map_err(|e| format!("Model load task failed: {e}"))??;
 
     let mut guard = state.ai_taggers.lock().await;
-    guard.insert(slug.to_string(), session);
+    guard.insert(
+        slug.to_string(),
+        std::sync::Arc::new(std::sync::Mutex::new(session)),
+    );
     Ok(())
 }
 
-/// Auto-tag a batch of newly imported files if the setting is enabled and
-/// at least one model is downloaded. Called from import dispatch handlers.
-/// Silently skips if disabled, no models enabled, or models not downloaded.
-pub async fn auto_tag_imported(state: &AppState, hashes: &[String]) {
+async fn predict_entity(
+    state: &AppState,
+    hash: &str,
+    slugs: &[String],
+    thresholds: &Thresholds,
+    cancel: Option<&CancellationToken>,
+) -> Result<Vec<TagPrediction>, String> {
+    let _lifecycle = state.ai_model_lifecycle.lock().await;
+    let image_bytes = std::sync::Arc::new(read_original_image(state, hash).await?);
+    let sessions = {
+        let guard = state.ai_taggers.lock().await;
+        slugs
+            .iter()
+            .map(|slug| {
+                guard
+                    .get(slug)
+                    .cloned()
+                    .map(|session| (slug.clone(), session))
+                    .ok_or_else(|| format!("AI model session '{slug}' is not loaded"))
+            })
+            .collect::<Result<Vec<_>, String>>()?
+    };
+
+    let mut predictions = Vec::new();
+    for (slug, session) in sessions {
+        if cancel.is_some_and(CancellationToken::is_cancelled) {
+            return Err("AI tag prediction cancelled".into());
+        }
+        let bytes = image_bytes.clone();
+        let thresholds = thresholds.clone();
+        let tags = tokio::task::spawn_blocking(move || {
+            let mut session = session
+                .lock()
+                .map_err(|_| format!("AI model session '{slug}' lock was poisoned"))?;
+            session.predict(bytes.as_slice(), &thresholds)
+        })
+        .await
+        .map_err(|error| format!("AI inference task failed: {error}"))??;
+        predictions.extend(tags);
+    }
+    Ok(predictions)
+}
+
+/// Process durable automatic-tagging jobs for imported image entities.
+/// Disabled automatic tagging is an intentional no-op; every operational
+/// failure is returned so the queue can retry it.
+pub async fn process_auto_tag_jobs(state: &AppState, hashes: &[String]) -> Result<(), String> {
     if hashes.is_empty() {
-        return;
+        return Ok(());
     }
     let settings = state.settings.get();
     if !settings.ai_tagger_auto_on_import {
-        return;
+        return Ok(());
     }
 
     let slugs = enabled_slugs(&settings);
     if slugs.is_empty() {
-        return;
+        return Err("Automatic tagging is enabled but no models are enabled".into());
     }
 
-    // Ensure sessions are loaded — skip silently if model not downloaded
     for slug in &slugs {
-        if let Err(e) = ensure_session(state, slug).await {
-            tracing::debug!(slug, error = %e, "auto_tag_imported: skipping (session not available)");
-            return;
-        }
+        ensure_session(state, slug).await?;
     }
 
     let thresholds = thresholds_from_settings(&settings);
 
     for hash in hashes {
-        let image_bytes = match read_original_image(state, hash).await {
-            Ok(bytes) => bytes,
-            Err(e) => {
-                tracing::debug!(hash, error = %e, "auto_tag_imported: skipping file");
-                continue;
-            }
-        };
-
-        let mut all_tags: Vec<crate::ai_tagger::inference::TagPrediction> = Vec::new();
-        {
-            let mut guard = state.ai_taggers.lock().await;
-            for slug in &slugs {
-                if let Some(session) = guard.get_mut(slug.as_str()) {
-                    match session.predict(&image_bytes, &thresholds) {
-                        Ok(tags) => all_tags.extend(tags),
-                        Err(e) => {
-                            tracing::warn!(slug, hash, error = %e, "auto_tag_imported: inference failed");
-                        }
-                    }
-                }
-            }
-        }
+        let mut all_tags = predict_entity(state, hash, &slugs, &thresholds, None).await?;
 
         // Deduplicate (keep highest confidence)
         all_tags.sort_by(|a, b| {
@@ -635,21 +699,19 @@ pub async fn auto_tag_imported(state: &AppState, hashes: &[String]) {
                 query: None,
                 excluded_entity_hashes: None,
             };
-            if let Err(e) = state.engine.apply_entity_tags(
+            state.engine.apply_entity_tags(
                 target,
                 TagOperation::Add,
                 &tag_strings,
                 Some(TAG_PROVENANCE_AI),
-            ) {
-                tracing::warn!(hash, error = %e, "auto_tag_imported: tag apply failed");
-                continue;
-            }
+            )?;
         }
 
         if !all_tags.is_empty() {
-            tracing::info!(hash, tags = all_tags.len(), "auto_tag_imported: applied");
+            tracing::info!(hash, tags = all_tags.len(), "automatic AI tags applied");
         }
     }
+    Ok(())
 }
 
 fn thresholds_from_settings(settings: &crate::settings::store::AppSettings) -> Thresholds {

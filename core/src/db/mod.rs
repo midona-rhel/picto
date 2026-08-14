@@ -863,10 +863,12 @@ impl LibraryDatabase {
         existing_member_ids: &[i64],
         existing_collection_id: Option<i64>,
     ) -> Result<(i64, String, Vec<String>), String> {
+        let deferred_work = vec![Vec::new(); new_members.len()];
         let (collection_id, collection_hash, new_hashes, _) = self
             .materialize_ingested_collection_with_blob_leases(
                 name,
                 new_members,
+                &deferred_work,
                 existing_member_ids,
                 existing_collection_id,
                 crate::duplicates::phash::MAX_INDEXED_DISTANCE,
@@ -879,13 +881,18 @@ impl LibraryDatabase {
         &self,
         name: &str,
         new_members: &[types::IngestPreparedSingle],
+        deferred_work_by_member: &[Vec<crate::background_work::DeferredWorkType>],
         existing_member_ids: &[i64],
         existing_collection_id: Option<i64>,
         duplicate_threshold: u32,
         blob_leases: Vec<BlobHashLease>,
     ) -> Result<(i64, String, Vec<String>, bool), String> {
+        if new_members.len() != deferred_work_by_member.len() {
+            return Err("Collection ingest deferred work must match its members".into());
+        }
         let collection_name = name.to_string();
         let prepared = new_members.to_vec();
+        let deferred_work = deferred_work_by_member.to_vec();
         let existing_ids = existing_member_ids.to_vec();
         let blob_leases = blob_leases;
         self.with_write(move |conn| {
@@ -894,7 +901,7 @@ impl LibraryDatabase {
             let mut new_hashes = Vec::with_capacity(prepared.len());
             let mut duplicates_changed = false;
 
-            for member in &prepared {
+            for (member, member_work) in prepared.iter().zip(&deferred_work) {
                 let candidates = member
                     .perceptual_hash
                     .as_deref()
@@ -904,7 +911,7 @@ impl LibraryDatabase {
                     .transpose()?
                     .unwrap_or_default();
                 let (entity_id, file_id) =
-                    insert_prepared_single(conn, &self.device_id, member, &[])?;
+                    insert_prepared_single(conn, &self.device_id, member, member_work)?;
                 record_duplicate_review_candidates_on_conn(conn, file_id, &candidates)?;
                 duplicates_changed |= !candidates.is_empty();
                 member_ids.push(entity_id);

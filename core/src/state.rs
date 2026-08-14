@@ -33,9 +33,12 @@ pub struct AppState {
     pub worker_handles: tokio::sync::Mutex<Vec<(&'static str, tokio::task::JoinHandle<()>)>>,
     /// AI tagger sessions — one per enabled model, lazily initialised.
     pub ai_taggers: crate::ai_tagger::inference::SharedTaggerSessions,
-    /// Cancellation token for the currently running auto-tag prediction,
-    /// if any. One run at a time.
-    pub ai_tag_run: tokio::sync::Mutex<Option<CancellationToken>>,
+    /// Identity and cancellation token for the latest reviewed prediction.
+    pub ai_tag_run: tokio::sync::Mutex<Option<(u64, CancellationToken)>>,
+    /// Active model downloads keyed by registered model slug.
+    pub ai_model_downloads: tokio::sync::Mutex<HashMap<String, CancellationToken>>,
+    /// Serializes model activation/deletion/loading with inference.
+    pub ai_model_lifecycle: tokio::sync::Mutex<()>,
 }
 
 static STATE: OnceLock<RwLock<Option<Arc<AppState>>>> = OnceLock::new();
@@ -74,6 +77,11 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         .map_err(|e| format!("Failed to create library directory: {}", e))?;
 
     let settings = SettingsStore::load(&library_root);
+    let models_root = library_root
+        .parent()
+        .unwrap_or(&library_root)
+        .join("models");
+    crate::ai_tagger::download::recover_registered_bundles(&models_root).await?;
 
     let blob_store: Arc<BlobStore> = Arc::new(
         BlobStore::open(&library_root).map_err(|e| format!("Failed to open blob store: {}", e))?,
@@ -99,16 +107,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         Err(e) => tracing::warn!(error = %e, "Color analysis backfill enqueue failed"),
     }
 
-    let worker_handles = crate::workers::start_workers(
-        &new_db,
-        &library_root,
-        &blob_store,
-        &rate_limiter,
-        &running_subscriptions,
-        folder_watch_rx,
-        &cancel,
-    )
-    .await;
     let engine = Arc::new(crate::engine::ApplicationEngine::new(new_db.clone()));
 
     // Reclaim orphaned blobs in the background — off the open critical path.
@@ -178,9 +176,11 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         library_root,
         cancel,
         folder_watch_commands,
-        worker_handles: tokio::sync::Mutex::new(worker_handles),
+        worker_handles: tokio::sync::Mutex::new(Vec::new()),
         ai_taggers: crate::ai_tagger::inference::new_shared_sessions(),
         ai_tag_run: tokio::sync::Mutex::new(None),
+        ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
+        ai_model_lifecycle: tokio::sync::Mutex::new(()),
     });
 
     {
@@ -189,6 +189,18 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
             .map_err(|_| "State lock poisoned".to_string())?;
         *guard = Some(state.clone());
     }
+
+    let worker_handles = crate::workers::start_workers(
+        &new_db,
+        &state.library_root,
+        &state.blob_store,
+        &state.rate_limiter,
+        &state.running_subscriptions,
+        folder_watch_rx,
+        &state.cancel,
+    )
+    .await;
+    state.worker_handles.lock().await.extend(worker_handles);
 
     Ok(state)
 }

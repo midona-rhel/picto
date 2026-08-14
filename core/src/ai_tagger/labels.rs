@@ -33,28 +33,35 @@ pub fn parse_labels_csv(path: &Path) -> Result<Vec<LabelEntry>, String> {
         std::fs::read_to_string(path).map_err(|e| format!("Failed to read labels CSV: {e}"))?;
 
     let mut labels = Vec::new();
-    let mut lines = content.lines();
+    let mut lines = content.lines().enumerate();
 
     // Skip header line
-    if let Some(header) = lines.next() {
-        // Validate it looks like a header
-        let lower = header.to_lowercase();
-        if !lower.contains("name") && !lower.contains("tag") {
-            // Not a header — treat as data
-            if let Some(entry) = parse_csv_line(header) {
-                labels.push(entry);
-            }
+    if let Some((line_number, header)) = lines.next() {
+        let fields = parse_csv_fields(header)
+            .map_err(|e| format!("Invalid labels CSV on line {}: {e}", line_number + 1))?;
+        let is_header = fields
+            .iter()
+            .any(|field| field.eq_ignore_ascii_case("name"))
+            && fields
+                .iter()
+                .any(|field| field.eq_ignore_ascii_case("category"));
+        if !is_header {
+            labels.push(
+                parse_csv_line(header)
+                    .map_err(|e| format!("Invalid labels CSV on line {}: {e}", line_number + 1))?,
+            );
         }
     }
 
-    for line in lines {
+    for (line_number, line) in lines {
         let line = line.trim();
         if line.is_empty() {
             continue;
         }
-        if let Some(entry) = parse_csv_line(line) {
-            labels.push(entry);
-        }
+        labels.push(
+            parse_csv_line(line)
+                .map_err(|e| format!("Invalid labels CSV on line {}: {e}", line_number + 1))?,
+        );
     }
 
     if labels.is_empty() {
@@ -64,18 +71,52 @@ pub fn parse_labels_csv(path: &Path) -> Result<Vec<LabelEntry>, String> {
     Ok(labels)
 }
 
-fn parse_csv_line(line: &str) -> Option<LabelEntry> {
+fn parse_csv_line(line: &str) -> Result<LabelEntry, String> {
     // Format: tag_id,name,category,count
-    let parts: Vec<&str> = line.splitn(4, ',').collect();
+    let parts = parse_csv_fields(line)?;
     if parts.len() < 3 {
-        return None;
+        return Err("expected at least tag_id, name, and category columns".into());
     }
 
     let name = parts[1].trim().to_string();
-    let category: u32 = parts[2].trim().parse().ok()?;
+    if name.is_empty() {
+        return Err("tag name is empty".into());
+    }
+    let category: u32 = parts[2]
+        .trim()
+        .parse()
+        .map_err(|_| "category is not an unsigned integer".to_string())?;
     let namespace = category_to_namespace(category).to_string();
 
-    Some(LabelEntry { name, namespace })
+    Ok(LabelEntry { name, namespace })
+}
+
+fn parse_csv_fields(line: &str) -> Result<Vec<String>, String> {
+    let mut fields = Vec::new();
+    let mut field = String::new();
+    let mut chars = line.chars().peekable();
+    let mut quoted = false;
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' if quoted && chars.peek() == Some(&'"') => {
+                field.push('"');
+                chars.next();
+            }
+            '"' if field.is_empty() && !quoted => quoted = true,
+            '"' if quoted => quoted = false,
+            ',' if !quoted => {
+                fields.push(std::mem::take(&mut field));
+            }
+            _ => field.push(ch),
+        }
+    }
+
+    if quoted {
+        return Err("unterminated quoted field".into());
+    }
+    fields.push(field);
+    Ok(fields)
 }
 
 /// Map WD14/E621 CSV category integers to Picto tag namespaces.
@@ -119,5 +160,22 @@ mod tests {
         let entry = parse_csv_line("200,rating:general,9,100").unwrap();
         assert_eq!(entry.name, "rating:general");
         assert_eq!(entry.namespace, "rating");
+    }
+
+    #[test]
+    fn parse_labels_csv_accepts_quoted_names_and_rejects_bad_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("labels.csv");
+        std::fs::write(
+            &path,
+            "tag_id,name,category,count\n0,\"tag,with comma\",0,1\n",
+        )
+        .unwrap();
+
+        let labels = parse_labels_csv(&path).unwrap();
+        assert_eq!(labels[0].name, "tag,with comma");
+
+        std::fs::write(&path, "tag_id,name,category,count\n0,broken,nope,1\n").unwrap();
+        assert!(parse_labels_csv(&path).is_err());
     }
 }

@@ -44,7 +44,14 @@ function nsColor(ns: string): string {
 
 type ViewMode = 'suggested' | 'below';
 
-const DEFAULT_CUTOFF_PCT = 35;
+const DEFAULT_THRESHOLDS: Record<string, number> = {
+  general: 0.35,
+  character: 0.35,
+  copyright: 0.35,
+  artist: 0.35,
+  species: 0.35,
+  rating: 0.35,
+};
 
 interface AggregatedTag {
   /** Canonical tag string, e.g. `character:hatsune_miku`. */
@@ -95,8 +102,9 @@ export function AiTaggerPanel() {
   const [runModels, setRunModels] = useState<Set<string>>(new Set());
   const [predictions, setPredictions] = useState<FilePrediction[]>([]);
   const [running, setRunning] = useState(false);
+  const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [cutoffPct, setCutoffPct] = useState(DEFAULT_CUTOFF_PCT);
+  const [thresholds, setThresholds] = useState<Record<string, number>>(DEFAULT_THRESHOLDS);
   const [viewMode, setViewMode] = useState<ViewMode>('suggested');
   // User overrides on top of the default check state, keyed by tag.
   const [overrides, setOverrides] = useState<Map<string, boolean>>(new Map());
@@ -104,33 +112,45 @@ export function AiTaggerPanel() {
   const searchRef = useRef<HTMLInputElement>(null);
   const ranModelsRef = useRef<Set<string>>(new Set());
   const runningRef = useRef(false);
+  const runGenerationRef = useRef(0);
 
   const hashes = useMemo(
     () => (target?.kind === 'entity_hashes' ? target.entity_hashes ?? [] : []),
     [target],
   );
   const multi = hashes.length > 1;
+  const hashFingerprint = hashes.join('\n');
 
   const closePortal = useCallback(() => {
+    runGenerationRef.current += 1;
     if (runningRef.current) void aiTagCancel().catch(() => {});
+    runningRef.current = false;
     setPortalState({ open: false });
   }, [setPortalState]);
 
   const runPredict = useCallback((slugs: Set<string>, fileHashes: string[]) => {
     if (runningRef.current || slugs.size === 0 || fileHashes.length === 0) return;
+    const generation = ++runGenerationRef.current;
     runningRef.current = true;
     setRunning(true);
     setError(null);
     aiTagPredict(fileHashes, [...slugs])
       .then((out) => {
+        if (generation !== runGenerationRef.current) return;
         ranModelsRef.current = new Set([...ranModelsRef.current, ...slugs]);
         setPredictions(out.predictions);
-        const allFailed =
-          out.predictions.length > 0 && out.predictions.every((p) => p.error && p.tags.length === 0);
-        if (allFailed) setError(out.predictions[0].error ?? 'Prediction failed');
+        setThresholds(out.thresholds);
+        const failures = out.predictions.filter((prediction) => prediction.error);
+        if (failures.length > 0) {
+          const first = failures[0].error ?? 'Prediction failed';
+          setError(`${failures.length} of ${out.predictions.length} images could not be tagged. ${first}`);
+        }
       })
-      .catch((e) => setError(String(e)))
+      .catch((e) => {
+        if (generation === runGenerationRef.current) setError(String(e));
+      })
       .finally(() => {
+        if (generation !== runGenerationRef.current) return;
         runningRef.current = false;
         setRunning(false);
       });
@@ -144,6 +164,7 @@ export function AiTaggerPanel() {
     setOverrides(new Map());
     setViewMode('suggested');
     setError(null);
+    setApplying(false);
     ranModelsRef.current = new Set();
     void aiTaggerStatus()
       .then((status) => {
@@ -155,7 +176,12 @@ export function AiTaggerPanel() {
       })
       .catch((e) => setError(String(e)));
     setTimeout(() => searchRef.current?.focus(), 50);
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+    return () => {
+      runGenerationRef.current += 1;
+      if (runningRef.current) void aiTagCancel().catch(() => {});
+      runningRef.current = false;
+    };
+  }, [open, hashFingerprint]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const toggleModel = useCallback(
     (slug: string) => {
@@ -166,7 +192,7 @@ export function AiTaggerPanel() {
         } else {
           next.add(slug);
           // Newly ticked model hasn't run yet — re-run with the full set.
-          if (!ranModelsRef.current.has(slug)) runPredict(next, hashes);
+          if (!runningRef.current && !ranModelsRef.current.has(slug)) runPredict(next, hashes);
         }
         return next;
       });
@@ -174,36 +200,50 @@ export function AiTaggerPanel() {
     [hashes, runPredict],
   );
 
-  const cutoff = cutoffPct / 100;
   const aggregated = useMemo(() => aggregate(predictions, runModels), [predictions, runModels]);
-  const suggested = useMemo(() => aggregated.filter((a) => a.maxConf >= cutoff), [aggregated, cutoff]);
-  const below = useMemo(() => aggregated.filter((a) => a.maxConf < cutoff), [aggregated, cutoff]);
+  const thresholdFor = useCallback(
+    (namespace: string) => thresholds[namespace] ?? thresholds.general ?? 0.35,
+    [thresholds],
+  );
+  const suggested = useMemo(
+    () => aggregated.filter((a) => a.maxConf >= thresholdFor(a.namespace)),
+    [aggregated, thresholdFor],
+  );
+  const below = useMemo(
+    () => aggregated.filter((a) => a.maxConf < thresholdFor(a.namespace)),
+    [aggregated, thresholdFor],
+  );
 
   const isChecked = useCallback(
     (agg: AggregatedTag) =>
-      overrides.get(agg.key) ?? (agg.maxConf >= cutoff && agg.namespace !== 'rating'),
-    [overrides, cutoff],
+      overrides.get(agg.key) ?? (agg.maxConf >= thresholdFor(agg.namespace) && agg.namespace !== 'rating'),
+    [overrides, thresholdFor],
   );
 
   const toggleTag = useCallback(
     (agg: AggregatedTag) => {
       setOverrides((prev) => {
         const next = new Map(prev);
-        next.set(agg.key, !(next.get(agg.key) ?? (agg.maxConf >= cutoff && agg.namespace !== 'rating')));
+        next.set(
+          agg.key,
+          !(next.get(agg.key) ??
+            (agg.maxConf >= thresholdFor(agg.namespace) && agg.namespace !== 'rating')),
+        );
         return next;
       });
     },
-    [cutoff],
+    [thresholdFor],
   );
 
   const checkedTags = useMemo(() => aggregated.filter(isChecked), [aggregated, isChecked]);
 
-  const applyChecked = useCallback(() => {
+  const applyChecked = useCallback(async () => {
     if (checkedTags.length === 0 || hashes.length === 0) return;
     // Each tag is written only to the files that cleared the cutoff for it;
     // manually rescued below-cutoff tags go to every file that predicted them.
     const tagsByFile = new Map<string, string[]>();
     for (const agg of checkedTags) {
+      const cutoff = thresholdFor(agg.namespace);
       const eligible = [...agg.perFile.entries()]
         .filter(([, conf]) => (agg.maxConf >= cutoff ? conf >= cutoff : true))
         .map(([hash]) => hash);
@@ -213,20 +253,19 @@ export function AiTaggerPanel() {
         else tagsByFile.set(hash, [agg.key]);
       }
     }
-    // Group files sharing an identical tag list into one apply call.
-    const groups = new Map<string, { hashes: string[]; tags: string[] }>();
-    for (const [hash, tags] of tagsByFile) {
-      const sig = [...tags].sort().join('\n');
-      const group = groups.get(sig);
-      if (group) group.hashes.push(hash);
-      else groups.set(sig, { hashes: [hash], tags });
+    const assignments = [...tagsByFile].map(([hash, tags]) => ({ hash, tags }));
+    setApplying(true);
+    setError(null);
+    try {
+      await aiTagApply(assignments);
+      setOverrides(new Map());
+      if (!pinned) setPortalState({ open: false });
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setApplying(false);
     }
-    void Promise.all([...groups.values()].map((g) => aiTagApply(g.hashes, g.tags))).catch((e) =>
-      setError(String(e)),
-    );
-    if (!pinned) setPortalState({ open: false });
-    setOverrides(new Map());
-  }, [checkedTags, hashes, cutoff, pinned, setPortalState]);
+  }, [checkedTags, hashes, thresholdFor, pinned, setPortalState]);
 
   const visibleTags = useMemo(() => {
     const source = viewMode === 'suggested' ? suggested : below;
@@ -294,28 +333,19 @@ export function AiTaggerPanel() {
       }
       footer={
         <>
-          <div className={styles.cutoff}>
-            Cutoff
-            <input
-              className={styles.cutoffSlider}
-              type="range"
-              min={10}
-              max={95}
-              step={1}
-              value={cutoffPct}
-              onChange={(e) => setCutoffPct(Number(e.target.value))}
-            />
-            <span className={styles.cutoffValue}>{cutoffPct}%</span>
-          </div>
+          <div className={styles.cutoff}>Using Settings thresholds</div>
           <div className={btnStyles.btnGroup}>
             <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
             {checkedTags.length > 0 && (
               <button
                 className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
-                onClick={applyChecked}
+                onClick={() => void applyChecked()}
+                disabled={applying}
                 type="button"
               >
-                Apply {checkedTags.length} {checkedTags.length === 1 ? 'tag' : 'tags'}
+                {applying
+                  ? 'Applying…'
+                  : `Apply ${checkedTags.length} ${checkedTags.length === 1 ? 'tag' : 'tags'}`}
               </button>
             )}
           </div>
@@ -355,7 +385,7 @@ export function AiTaggerPanel() {
                 key={m.slug}
                 className={`${styles.sidebarItem} ${!m.downloaded ? styles.sidebarItemDisabled : ''}`}
                 title={m.downloaded ? m.dataset : `${m.label} is not downloaded — get it in Settings`}
-                onClick={m.downloaded ? () => toggleModel(m.slug) : undefined}
+                onClick={m.downloaded && !running ? () => toggleModel(m.slug) : undefined}
               >
                 <div className={`${shellStyles.checkBox} ${active ? shellStyles.checkBoxChecked : ''}`}>
                   {active && <IconCheck size={10} />}
@@ -371,6 +401,9 @@ export function AiTaggerPanel() {
 
         {/* Content */}
         <div className={styles.content}>
+          {error && visibleTags.length > 0 && (
+            <div className={styles.partialError}>{error}</div>
+          )}
           <div className={styles.tagListScroller}>
             {error && visibleTags.length === 0 ? (
               <div className={styles.emptyState}>
@@ -392,6 +425,7 @@ export function AiTaggerPanel() {
               visibleTags.map((agg) => {
                 const checked = isChecked(agg);
                 const showNs = agg.namespace !== '' && agg.namespace !== 'general';
+                const cutoff = thresholdFor(agg.namespace);
                 const matched = multi
                   ? [...agg.perFile.values()].filter((c) => c >= cutoff).length
                   : 0;

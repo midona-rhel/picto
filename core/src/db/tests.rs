@@ -32,7 +32,7 @@ fn supported_phash(bytes: [u8; 32]) -> String {
 }
 
 #[test]
-fn collection_materialization_persists_prepared_perceptual_hashes() {
+fn collection_materialization_persists_phash_and_deferred_work_atomically() {
     let db = open_test_db();
     let member = |entity_hash: &str, perceptual_hash: Option<&str>| IngestPreparedSingle {
         entity_hash: entity_hash.to_string(),
@@ -56,14 +56,18 @@ fn collection_materialization_persists_prepared_perceptual_hashes() {
         perceptual_hash: perceptual_hash.map(str::to_string),
     };
 
-    db.materialize_ingested_collection(
+    let members = [
+        member("collection_member_one", Some("phash-one")),
+        member("collection_member_two", None),
+    ];
+    db.materialize_ingested_collection_with_blob_leases(
         "Set",
-        &[
-            member("collection_member_one", Some("phash-one")),
-            member("collection_member_two", None),
-        ],
+        &members,
+        &[vec![DeferredWorkType::AiTag], Vec::new()],
         &[],
         None,
+        crate::duplicates::phash::MAX_INDEXED_DISTANCE,
+        Vec::new(),
     )
     .expect("materialize collection");
 
@@ -82,6 +86,14 @@ fn collection_materialization_persists_prepared_perceptual_hashes() {
         .expect("read stored perceptual hash");
 
     assert_eq!(stored_phash.as_deref(), Some("phash-one"));
+    let queued = db
+        .list_deferred_work_items(DeferredWorkFilter {
+            entity_hash: Some("collection_member_one".to_string()),
+            ..Default::default()
+        })
+        .expect("read deferred work");
+    assert_eq!(queued.len(), 1);
+    assert_eq!(queued[0].work_type, DeferredWorkType::AiTag);
 }
 
 #[test]

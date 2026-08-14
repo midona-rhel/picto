@@ -29,6 +29,53 @@ impl LibraryDatabase {
         })
     }
 
+    /// Apply per-entity AI tag assignments in one write transaction.
+    pub fn add_ai_tag_assignments(
+        &self,
+        assignments: &[(String, Vec<String>)],
+    ) -> Result<TagChange, String> {
+        self.with_write(|conn| {
+            let mut combined = TagChange::default();
+            for (entity_hash, tags) in assignments {
+                let entity_id: i64 = conn.query_row(
+                    "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",
+                    [entity_hash],
+                    |row| row.get(0),
+                )?;
+                let change = write::tags::add_tags(
+                    conn,
+                    &[entity_id],
+                    tags,
+                    TAG_PROVENANCE_AI,
+                    ExpansionMode::SinglesAndCollectionMembers,
+                )?;
+                if !change.tags_added.is_empty() {
+                    let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
+                    emit_per_entity(
+                        conn,
+                        &self.device_id,
+                        "entity_tags_added",
+                        &hashes,
+                        &serde_json::json!({
+                            "tags": change.tags_added,
+                            "provenance": TAG_PROVENANCE_AI.to_string()
+                        }),
+                    )?;
+                }
+                combined.entity_ids.extend(change.entity_ids);
+                combined.tag_ids.extend(change.tag_ids);
+                combined.tags_added.extend(change.tags_added);
+            }
+            combined.entity_ids.sort_unstable();
+            combined.entity_ids.dedup();
+            combined.tag_ids.sort_unstable();
+            combined.tag_ids.dedup();
+            combined.tags_added.sort();
+            combined.tags_added.dedup();
+            Ok(combined)
+        })
+    }
+
     pub fn remove_tags(
         &self,
         entity_ids: &[i64],
@@ -167,5 +214,40 @@ impl LibraryDatabase {
 
     pub fn ensure_tag(&self, tag_str: &str) -> Result<i64, String> {
         self.with_write(|conn| write::tags::ensure_tag(conn, tag_str))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ai_tag_assignments_are_atomic() {
+        let root = tempfile::tempdir().unwrap();
+        let db = LibraryDatabase::open(root.path()).unwrap();
+        db.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO media_entity
+                 (entity_id, entity_hash, entity_kind, status, date_created, date_added, date_modified)
+                 VALUES (1, 'image-1', 'single', 1, '2026-01-01', '2026-01-01', '2026-01-01')",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+
+        let error = db
+            .add_ai_tag_assignments(&[
+                ("image-1".into(), vec!["general:first".into()]),
+                ("missing".into(), vec!["general:second".into()]),
+            ])
+            .expect_err("missing entity must roll back the batch");
+        assert!(!error.is_empty());
+        let count: i64 = db
+            .with_read(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM entity_tag", [], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(count, 0);
     }
 }

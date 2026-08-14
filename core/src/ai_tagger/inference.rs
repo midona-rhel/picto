@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::labels::LabelEntry;
-use super::models::ChannelOrder;
+use super::models::{ChannelOrder, OutputActivation};
 
 /// A single tag prediction from inference.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -27,7 +27,7 @@ pub struct TagPrediction {
 }
 
 /// Per-category confidence thresholds.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Thresholds {
     pub general: f32,
     pub character: f32,
@@ -57,6 +57,7 @@ pub struct TaggerSession {
     labels: Vec<LabelEntry>,
     input_size: u32,
     channel_order: ChannelOrder,
+    output_activation: OutputActivation,
     slug: String,
 }
 
@@ -67,6 +68,7 @@ impl TaggerSession {
         slug: &str,
         input_size: u32,
         channel_order: ChannelOrder,
+        output_activation: OutputActivation,
     ) -> Result<Self, String> {
         let model_path = model_dir.join("model.onnx");
         // Labels CSV may be named differently per model
@@ -82,6 +84,7 @@ impl TaggerSession {
 
         let labels = super::labels::parse_labels_csv(&labels_path)?;
         let session = create_session(&model_path)?;
+        validate_session_contract(&session, input_size, labels.len())?;
 
         tracing::info!(slug, labels = labels.len(), "AI tagger session loaded");
 
@@ -90,6 +93,7 @@ impl TaggerSession {
             labels,
             input_size,
             channel_order,
+            output_activation,
             slug: slug.to_string(),
         })
     }
@@ -124,6 +128,9 @@ impl TaggerSession {
             .session
             .run(ort::inputs![input_value])
             .map_err(|e| format!("Inference failed: {e}"))?;
+        if outputs.len() == 0 {
+            return Err("Model produced no output tensors".into());
+        }
 
         // Model outputs a single tensor of shape [1, num_labels]
         let (_, logits) = outputs[0]
@@ -137,40 +144,17 @@ impl TaggerSession {
             "Inference complete, processing output"
         );
 
-        // Log a few sample values to diagnose sigmoid vs raw probability
-        if logits.len() >= 5 {
-            let sample: Vec<f32> = logits.iter().take(5).copied().collect();
-            let sample_sigmoid: Vec<f32> = sample.iter().map(|&v| sigmoid(v)).collect();
-            tracing::debug!(
-                ?sample,
-                ?sample_sigmoid,
-                "First 5 raw outputs and their sigmoid values"
-            );
+        if logits.len() != self.labels.len() {
+            return Err(format!(
+                "Model output count {} does not match label count {}",
+                logits.len(),
+                self.labels.len()
+            ));
         }
-
-        // Check if outputs are already probabilities (0-1 range) or logits (need sigmoid)
-        let max_val = logits.iter().copied().fold(f32::NEG_INFINITY, f32::max);
-        let min_val = logits.iter().copied().fold(f32::INFINITY, f32::min);
-        let outputs_are_probabilities = min_val >= 0.0 && max_val <= 1.0;
-
-        tracing::info!(
-            min_val,
-            max_val,
-            outputs_are_probabilities,
-            "Output value range"
-        );
 
         let mut predictions = Vec::new();
         for (i, &logit) in logits.iter().enumerate() {
-            if i >= self.labels.len() {
-                break;
-            }
-            // Use sigmoid only if outputs are logits; skip if already probabilities
-            let confidence = if outputs_are_probabilities {
-                logit
-            } else {
-                sigmoid(logit)
-            };
+            let confidence = interpret_output(logit, self.output_activation)?;
             let label = &self.labels[i];
             let threshold = thresholds.for_namespace(&label.namespace);
 
@@ -206,13 +190,57 @@ fn create_session(model_path: &Path) -> Result<ort::session::Session, String> {
         .map_err(|e| format!("Failed to load ONNX model: {e}"))
 }
 
+fn validate_session_contract(
+    session: &ort::session::Session,
+    input_size: u32,
+    label_count: usize,
+) -> Result<(), String> {
+    use ort::value::{TensorElementType, ValueType};
+
+    if session.inputs().len() != 1 || session.outputs().len() != 1 {
+        return Err(format!(
+            "Tagger model must have one input and one output; found {} inputs and {} outputs",
+            session.inputs().len(),
+            session.outputs().len()
+        ));
+    }
+    let expected_size = i64::from(input_size);
+    match session.inputs()[0].dtype() {
+        ValueType::Tensor { ty, shape, .. }
+            if *ty == TensorElementType::Float32
+                && shape.len() == 4
+                && matches!(shape[0], -1 | 1)
+                && shape[1] == expected_size
+                && shape[2] == expected_size
+                && shape[3] == 3 => {}
+        other => {
+            return Err(format!(
+                "Tagger model input must be float32 NHWC [1,{input_size},{input_size},3], found {other}"
+            ))
+        }
+    }
+    match session.outputs()[0].dtype() {
+        ValueType::Tensor { ty, shape, .. }
+            if *ty == TensorElementType::Float32
+                && shape.len() == 2
+                && matches!(shape[0], -1 | 1)
+                && shape[1] == label_count as i64 => {}
+        other => {
+            return Err(format!(
+                "Tagger model output must be float32 [1,{label_count}], found {other}"
+            ))
+        }
+    }
+    Ok(())
+}
+
 /// Preprocess raw image bytes into a float32 tensor of shape [1, H, W, 3] (NHWC).
 ///
 /// Steps:
 /// 1. Decode image
 /// 2. Pad to square with white background (preserving aspect ratio)
 /// 3. Resize to model input size
-/// 4. Convert to float, normalize to [-1, 1] via `pixel / 127.5 - 1.0`
+/// 4. Convert byte channels directly to float values in `[0, 255]`
 /// 5. Reorder channels if model expects BGR
 fn preprocess_image(
     image_bytes: &[u8],
@@ -242,7 +270,7 @@ fn preprocess_image(
 
     let size = input_size as usize;
 
-    // NHWC: [batch, height, width, channels], normalized to [-1, 1]
+    // NHWC: [batch, height, width, channels], raw float values in [0, 255].
     let mut tensor = ndarray::Array4::<f32>::zeros((1, size, size, 3));
     for y in 0..size {
         for x in 0..size {
@@ -265,11 +293,61 @@ fn sigmoid(x: f32) -> f32 {
     1.0 / (1.0 + (-x).exp())
 }
 
+fn interpret_output(value: f32, activation: OutputActivation) -> Result<f32, String> {
+    let confidence = match activation {
+        OutputActivation::Probability => value,
+        OutputActivation::Logit => sigmoid(value),
+    };
+    if !confidence.is_finite() || !(0.0..=1.0).contains(&confidence) {
+        return Err(format!(
+            "Model produced invalid confidence value {confidence}"
+        ));
+    }
+    Ok(confidence)
+}
+
 /// Map of model slug → loaded TaggerSession, behind an async mutex.
-pub type SharedTaggerSessions =
-    Arc<tokio::sync::Mutex<std::collections::HashMap<String, TaggerSession>>>;
+pub type SharedTaggerSessions = Arc<
+    tokio::sync::Mutex<std::collections::HashMap<String, Arc<std::sync::Mutex<TaggerSession>>>>,
+>;
 
 /// Create a new empty sessions map.
 pub fn new_shared_sessions() -> SharedTaggerSessions {
     Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb};
+    use std::io::Cursor;
+
+    fn png(pixel: Rgb<u8>) -> Vec<u8> {
+        let image = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(1, 1, pixel));
+        let mut bytes = Vec::new();
+        image
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn preprocessing_is_nhwc_raw_bgr() {
+        let tensor = preprocess_image(&png(Rgb([10, 20, 30])), 1, ChannelOrder::Bgr).unwrap();
+        assert_eq!(tensor.shape(), &[1, 1, 1, 3]);
+        assert_eq!(tensor[[0, 0, 0, 0]], 30.0);
+        assert_eq!(tensor[[0, 0, 0, 1]], 20.0);
+        assert_eq!(tensor[[0, 0, 0, 2]], 10.0);
+    }
+
+    #[test]
+    fn output_activation_is_explicit_and_validated() {
+        assert_eq!(
+            interpret_output(0.25, OutputActivation::Probability).unwrap(),
+            0.25
+        );
+        assert_eq!(interpret_output(0.0, OutputActivation::Logit).unwrap(), 0.5);
+        assert!(interpret_output(1.1, OutputActivation::Probability).is_err());
+        assert!(interpret_output(f32::NAN, OutputActivation::Probability).is_err());
+    }
 }

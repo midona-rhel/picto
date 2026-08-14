@@ -87,6 +87,7 @@ fn build_context(
         DeferredWorkType::DominantColors => caps.can_dominant_colors,
         DeferredWorkType::PerceptualHash => caps.can_perceptual_hash,
         DeferredWorkType::BlobDelete => false,
+        DeferredWorkType::AiTag => false,
     });
     if !wants_any {
         return Ok(None);

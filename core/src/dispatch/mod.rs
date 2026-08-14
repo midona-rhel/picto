@@ -134,6 +134,7 @@ const WRITE_COMMANDS: &[&str] = &[
     "regenerate_thumbnails_batch",
     "ai_tag_apply",
     "ai_tagger_download_model",
+    "ai_tagger_cancel_download",
 ];
 
 /// Dispatch a command by name with JSON arguments. Returns JSON result.
@@ -476,6 +477,9 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "ai_tagger_status" => call!(typed::ai_tagger::ai_tagger_status, &state, args),
         "ai_tagger_download_model" => {
             call!(typed::ai_tagger::ai_tagger_download_model, &state, args)
+        }
+        "ai_tagger_cancel_download" => {
+            call!(typed::ai_tagger::ai_tagger_cancel_download, &state, args)
         }
         "ai_tagger_delete_model" => call!(typed::ai_tagger::ai_tagger_delete_model, &state, args),
         "ai_tag_predict" => call!(typed::ai_tagger::ai_tag_predict, &state, args),

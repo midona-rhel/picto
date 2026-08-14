@@ -17,6 +17,7 @@ pub enum DeferredWorkType {
     DominantColors,
     PerceptualHash,
     BlobDelete,
+    AiTag,
 }
 
 impl DeferredWorkType {
@@ -26,6 +27,7 @@ impl DeferredWorkType {
             Self::DominantColors => "dominant_colors",
             Self::PerceptualHash => "perceptual_hash",
             Self::BlobDelete => "blob_delete",
+            Self::AiTag => "ai_tag",
         }
     }
 
@@ -35,6 +37,7 @@ impl DeferredWorkType {
             "dominant_colors" => Some(Self::DominantColors),
             "perceptual_hash" => Some(Self::PerceptualHash),
             "blob_delete" => Some(Self::BlobDelete),
+            "ai_tag" => Some(Self::AiTag),
             _ => None,
         }
     }
@@ -119,7 +122,15 @@ async fn drain_next_entity(
         .collect();
     let derivative_jobs: Vec<_> = jobs
         .iter()
-        .filter(|job| job.work_type != DeferredWorkType::BlobDelete.as_db_str())
+        .filter(|job| {
+            job.work_type != DeferredWorkType::BlobDelete.as_db_str()
+                && job.work_type != DeferredWorkType::AiTag.as_db_str()
+        })
+        .collect();
+    let ai_jobs: Vec<_> = jobs
+        .iter()
+        .filter(|job| job.work_type == DeferredWorkType::AiTag.as_db_str())
+        .cloned()
         .collect();
 
     let mut deleted_hashes = HashSet::new();
@@ -145,13 +156,61 @@ async fn drain_next_entity(
         }
     }
 
+    let mut processing_errors = Vec::new();
+
     if !derivative_jobs.is_empty() {
         let derivative_jobs: Vec<_> = derivative_jobs
             .into_iter()
             .filter(|job| !deleted_hashes.contains(&job.entity_hash))
             .cloned()
             .collect();
-        crate::media_analysis::process_deferred_batch(db, blob_store, &derivative_jobs).await?;
+        if let Err(error) =
+            crate::media_analysis::process_deferred_batch(db, blob_store, &derivative_jobs).await
+        {
+            processing_errors.push(error);
+        }
+    }
+
+    if !ai_jobs.is_empty() {
+        let mut hashes = Vec::new();
+        let mut seen = HashSet::new();
+        for job in &ai_jobs {
+            if !deleted_hashes.contains(&job.entity_hash) && seen.insert(job.entity_hash.as_str()) {
+                hashes.push(job.entity_hash.clone());
+            }
+        }
+
+        if hashes.is_empty() {
+            db.complete_deferred_work_batch(&ai_jobs)?;
+        } else {
+            let state = crate::state::get_state().map_err(|error| {
+                format!("AI tagging worker cannot access application state: {error}")
+            });
+            match state {
+                Ok(state) => {
+                    match crate::dispatch::typed::ai_tagger::process_auto_tag_jobs(
+                        state.as_ref(),
+                        &hashes,
+                    )
+                    .await
+                    {
+                        Ok(()) => db.complete_deferred_work_batch(&ai_jobs)?,
+                        Err(error) => {
+                            db.retry_deferred_work_batch(&ai_jobs, &error)?;
+                            processing_errors.push(error);
+                        }
+                    }
+                }
+                Err(error) => {
+                    db.retry_deferred_work_batch(&ai_jobs, &error)?;
+                    processing_errors.push(error);
+                }
+            }
+        }
+    }
+
+    if !processing_errors.is_empty() {
+        return Err(processing_errors.join("; "));
     }
     Ok(processed)
 }
@@ -207,19 +266,20 @@ mod tests {
                 DeferredWorkType::Thumbnail,
                 DeferredWorkType::DominantColors,
                 DeferredWorkType::PerceptualHash,
+                DeferredWorkType::AiTag,
             ],
         )
         .unwrap();
 
         let jobs = db.claim_next_deferred_work_items().unwrap();
-        assert_eq!(jobs.len(), 3);
+        assert_eq!(jobs.len(), 4);
 
         db.retry_deferred_work_batch(&jobs, "simulated processing failure")
             .unwrap();
         let retried = db
             .list_deferred_work_items(DeferredWorkFilter::default())
             .unwrap();
-        assert_eq!(retried.len(), 3);
+        assert_eq!(retried.len(), 4);
         assert!(retried.iter().all(|job| {
             job.status == crate::background_work::DeferredWorkStatus::Pending
                 && job.attempt_count == 1

@@ -299,13 +299,23 @@ fn work_types_for_new_ingest(
     frame_count: Option<i64>,
     needs_thumbnail: bool,
     has_perceptual_hash: bool,
+    auto_tag_on_import: bool,
 ) -> Vec<DeferredWorkType> {
     let mut work_types =
         media_analysis::derivative_work_types_for_target(mime_type, frame_count, needs_thumbnail);
     if has_perceptual_hash {
         work_types.retain(|work| *work != DeferredWorkType::PerceptualHash);
     }
+    if auto_tag_on_import && mime_type.starts_with("image/") {
+        work_types.push(DeferredWorkType::AiTag);
+    }
     work_types
+}
+
+fn auto_tag_on_import_enabled() -> bool {
+    crate::state::get_state()
+        .map(|state| state.settings.get().ai_tagger_auto_on_import)
+        .unwrap_or(false)
 }
 
 pub fn apply_compiler_plan(db: &LibraryDatabase, flags: &IngestFlags, folder_ids: &[i64]) {
@@ -505,11 +515,13 @@ pub async fn ingest_single_path(
     prepared_single.perceptual_hash = imported_phash.clone();
 
     let threshold = duplicate_review_distance_threshold();
+    let auto_tag_on_import = auto_tag_on_import_enabled();
     let work_types = work_types_for_new_ingest(
         &prepared_single.mime_type,
         prepared_single.frame_count,
         !prepared_blob.has_thumbnail && !request.skip_thumbnail,
         prepared_single.perceptual_hash.is_some(),
+        auto_tag_on_import,
     );
     let (entity_id, duplicates_changed) = match canonical_db.insert_ingested_single_with_blob_lease(
         &prepared_single,
@@ -580,6 +592,7 @@ pub async fn materialize_collection(
     let mut imported_hashes = Vec::new();
     let mut flags = IngestFlags::default();
     let mut scheduled_work = 0usize;
+    let auto_tag_on_import = auto_tag_on_import_enabled();
 
     let mut prepared_collection_members = Vec::with_capacity(members.len());
     for (member_index, member) in members.iter().enumerate() {
@@ -663,6 +676,7 @@ pub async fn materialize_collection(
             prepared_single.frame_count,
             !prepared_blob.has_thumbnail && !member.request.skip_thumbnail,
             prepared_single.perceptual_hash.is_some(),
+            auto_tag_on_import,
         )
         .len();
         new_members.push((
@@ -697,34 +711,30 @@ pub async fn materialize_collection(
         .into_iter()
         .map(|(_, member_index, identity)| (member_index, identity))
         .collect();
+    let deferred_work_by_member: Vec<Vec<DeferredWorkType>> = prepared_members
+        .iter()
+        .map(|member| {
+            work_types_for_new_ingest(
+                &member.mime_type,
+                member.frame_count,
+                !member.has_thumbnail && !member.skip_thumbnail,
+                member.perceptual_hash.is_some(),
+                auto_tag_on_import,
+            )
+        })
+        .collect();
     let threshold = duplicate_review_distance_threshold();
     let (collection_id, collection_hash, new_hashes, duplicates_changed) = canonical_db
         .materialize_ingested_collection_with_blob_leases(
             preferred_name,
             &prepared_members,
+            &deferred_work_by_member,
             &existing_member_ids,
             existing_collection_id,
             threshold,
             blob_leases,
         )?;
     flags.duplicates_changed |= duplicates_changed;
-
-    let batch: Vec<(String, Vec<DeferredWorkType>)> = prepared_members
-        .iter()
-        .map(|member| {
-            let work_types = work_types_for_new_ingest(
-                &member.mime_type,
-                member.frame_count,
-                !member.has_thumbnail && !member.skip_thumbnail,
-                member.perceptual_hash.is_some(),
-            );
-            (member.entity_hash.clone(), work_types)
-        })
-        .filter(|(_, work_types)| !work_types.is_empty())
-        .collect();
-    if !batch.is_empty() {
-        canonical_db.ensure_deferred_jobs_present_batch(batch)?;
-    }
 
     imported_hashes.extend(new_hashes);
     for (member_index, member) in new_member_results {
@@ -771,9 +781,10 @@ pub async fn materialize_collection(
 mod tests {
     use super::{
         acquire_collection_blob_leases, attach_current_sidebar_counts, ingest_single_path,
-        materialize_collection, normalize_subscription_tags, CollectionIngestMember,
-        IngestSourceKind, SingleIngestDisposition, SingleIngestRequest,
+        materialize_collection, normalize_subscription_tags, work_types_for_new_ingest,
+        CollectionIngestMember, IngestSourceKind, SingleIngestDisposition, SingleIngestRequest,
     };
+    use crate::background_work::DeferredWorkType;
     use crate::blob_store::BlobStore;
     use crate::db::types::{ExpansionMode, MediaEntityPatch};
     use crate::db::LibraryDatabase;
@@ -788,6 +799,18 @@ mod tests {
     use std::sync::Arc;
     use std::time::Duration;
     use tempfile::TempDir;
+
+    #[test]
+    fn automatic_tag_work_is_only_queued_for_enabled_image_imports() {
+        let enabled_image = work_types_for_new_ingest("image/png", None, false, true, true);
+        assert!(enabled_image.contains(&DeferredWorkType::AiTag));
+
+        let disabled_image = work_types_for_new_ingest("image/png", None, false, true, false);
+        assert!(!disabled_image.contains(&DeferredWorkType::AiTag));
+
+        let video = work_types_for_new_ingest("video/mp4", None, false, false, true);
+        assert!(!video.contains(&DeferredWorkType::AiTag));
+    }
 
     #[test]
     fn normalize_subscription_tags_preserves_literal_colons() {

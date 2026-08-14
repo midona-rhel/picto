@@ -48,7 +48,14 @@ impl ApplicationEngine {
                 }
             },
         };
-        let mut write = WriteChange::from_tag(&change);
+        let write = self.tag_write_change(&change, "apply_entity_tags")?;
+        self.commit_write(&write);
+        Ok(change)
+    }
+
+    fn tag_write_change(&self, change: &TagChange, origin: &str) -> Result<WriteChange, String> {
+        let mut write = WriteChange::from_tag(change);
+        write.origin = origin.to_string();
         write.entity_hashes = self.resolve_entity_hashes(&change.entity_ids);
         let collection_ids = self
             .db
@@ -71,6 +78,15 @@ impl ApplicationEngine {
             write.extra_grid_scopes.sort();
             write.extra_grid_scopes.dedup();
         }
+        Ok(write)
+    }
+
+    pub fn apply_ai_tag_assignments(
+        &self,
+        assignments: &[(String, Vec<String>)],
+    ) -> Result<TagChange, String> {
+        let change = self.db.add_ai_tag_assignments(assignments)?;
+        let write = self.tag_write_change(&change, "apply_ai_tag_assignments")?;
         self.commit_write(&write);
         Ok(change)
     }

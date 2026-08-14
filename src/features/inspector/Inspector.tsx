@@ -20,7 +20,7 @@ import { InspectorSection } from '../../shared/ui/InspectorSection/InspectorSect
 import { StarRating } from '../../shared/ui/StarRating/StarRating';
 import { InspectorField, InspectorSourceField } from '../../shared/ui/InspectorField/InspectorField';
 import { TagChip } from '../../shared/ui/TagChip/TagChip';
-import type { SelectionSummary } from '../../shared/types/canonical';
+import type { EntityTarget, SelectionSummary } from '../../shared/types/canonical';
 import {
   displayedInspectorEntityDataAtom,
   displayedInspectorTargetAtom,
@@ -87,6 +87,19 @@ function hexToRgb(hex: string | null | undefined): [number, number, number] {
 function parseTag(t: string) {
   const i = t.indexOf(':');
   return i > 0 ? { ns: t.slice(0, i), sub: t.slice(i + 1), raw: t } : { ns: '', sub: t, raw: t };
+}
+
+function selectionSupportsAiTagging(
+  target: EntityTarget | null | undefined,
+  summary: SelectionSummary | null,
+): boolean {
+  if (target?.kind !== 'entity_hashes' || !summary || summary.pending) return false;
+  const mimeCounts = summary.stats.mime_counts;
+  if (!mimeCounts) return false;
+  const imageCount = Object.entries(mimeCounts)
+    .filter(([mime]) => mime.startsWith('image/'))
+    .reduce((count, [, value]) => count + value, 0);
+  return imageCount === summary.selected_count;
 }
 
 // ── Portal opener ───────────────────────────────────────────────
@@ -219,7 +232,7 @@ export function Inspector() {
     const palette = (d.dominant_colors ?? []).map((c) => c.hex).filter((h): h is string => !!h && h.length > 0);
 
     return (
-      <Shell footer={<InspectorActionBar count={1} />}>
+      <Shell footer={<InspectorActionBar count={1} enabled={!isCollection && d.mime_type.startsWith('image/')} />}>
         <Preview hashes={[d.thumbnail_hash]} type="single" />
         <ColorPalette colors={palette.length > 0 ? palette : d.dominant_color_hex ? [d.dominant_color_hex] : []} />
 
@@ -282,7 +295,7 @@ export function Inspector() {
     const previewHashes = summary?.sample_hashes ?? [...selectedHashes].slice(0, 3);
 
     return (
-      <Shell footer={<InspectorActionBar count={count} />}>
+      <Shell footer={<InspectorActionBar count={count} enabled={selectionSupportsAiTagging(selTarget, summary)} />}>
         <Preview hashes={previewHashes} type="stacked" />
         <ColorPalette colors={[]} />
 
@@ -379,27 +392,24 @@ function Shell({ children, footer }: { children: React.ReactNode; footer?: React
   );
 }
 
-/** Pinned action bar at the bottom of the inspector: Auto Tag + Export
- * (export is a reserved slot, not available yet). */
-function InspectorActionBar({ count }: { count: number }) {
+/** Pinned action bar at the bottom of the inspector. */
+function InspectorActionBar({ count, enabled }: { count: number; enabled: boolean }) {
   const autoTagDef = getShortcut('organize.autoTag');
   return (
     <div className={styles.actionBar}>
       <KbdTooltip
-        label="Suggest tags with AI"
+        label={enabled ? 'Suggest tags with AI' : 'AI tagging requires an explicit image selection'}
         shortcut={autoTagDef ? formatKeysDisplay(autoTagDef.keys) : undefined}
       >
         <button
           className={styles.actionBtnPrimary}
           onClick={(e) => openPortal(e, aiTaggerPortalAtom)}
+          disabled={!enabled}
           type="button"
         >
           {count > 1 ? `Auto Tag ${count.toLocaleString()} Images` : 'Auto Tag'}
         </button>
       </KbdTooltip>
-      <button className={styles.actionBtn} type="button" disabled>
-        Export
-      </button>
     </div>
   );
 }
