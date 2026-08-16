@@ -67,6 +67,17 @@ the standalone executable from the official releases is used.
 gallery-dl is invoked as a subprocess.
 
 
+Roboto
+------
+Version: 51
+Source: https://fonts.google.com/specimen/Roboto
+License: Apache-2.0
+
+The Picto sidebar and titlebar bundle Roboto Regular (400), Medium (500),
+and Bold (700) from the Google Fonts project. The full Apache-2.0 license is
+included at src/shared/assets/fonts/LICENSE-Roboto.txt.
+
+
 ================================================================================
 RUST DEPENDENCIES
 ================================================================================

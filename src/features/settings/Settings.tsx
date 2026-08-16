@@ -35,16 +35,42 @@ interface PanelDef {
   id: string;
   label: string;
   icon: typeof IconSettings2;
+  /** Terms covered by this category, used by the single settings search path. */
+  keywords: string;
+  description: string;
   /** If set, renders a custom component instead of rows */
   custom?: (onDirty: () => void) => ReactNode;
 }
 
 const PANELS: PanelDef[] = [
-  { id: 'general', label: 'General', icon: IconSettings2 },
-  { id: 'appearance', label: 'Appearance', icon: IconPalette },
-  { id: 'shortcuts', label: 'Shortcuts', icon: IconCommand, custom: () => <ShortcutsPanel /> },
-  { id: 'aitagging', label: 'AI Tagging', icon: IconSparkles, custom: () => <AiTaggingPanel /> },
-  { id: 'cloudsync', label: 'Cloud Sync', icon: IconCloud, custom: () => <CloudSyncPanel /> },
+  {
+    id: 'general', label: 'General', icon: IconSettings2,
+    keywords: 'general keyboard layout qwerty qwertz azerty eu us european preset',
+    description: 'Keyboard layout and regional shortcut alternatives.',
+  },
+  {
+    id: 'appearance', label: 'Appearance', icon: IconPalette,
+    keywords: 'appearance theme color light dark gray blue purple vibrancy liquid glass mica acrylic language zoom grid thumbnails sort',
+    description: 'Theme, language, zoom, and default grid presentation.',
+  },
+  {
+    id: 'shortcuts', label: 'Shortcuts', icon: IconCommand,
+    keywords: 'shortcuts keyboard shortcut keybind hotkey binding command key',
+    description: 'Find and edit keyboard shortcut bindings.',
+    custom: () => <ShortcutsPanel />,
+  },
+  {
+    id: 'aitagging', label: 'AI Tagging', icon: IconSparkles,
+    keywords: 'ai tagging tagger models model download threshold confidence auto tag rating',
+    description: 'Local models, confidence thresholds, and auto-tag behavior.',
+    custom: () => <AiTaggingPanel />,
+  },
+  {
+    id: 'cloudsync', label: 'Cloud Sync', icon: IconCloud,
+    keywords: 'cloud sync remote library upload download device disconnect',
+    description: 'Cloud library status and synchronization actions.',
+    custom: () => <CloudSyncPanel />,
+  },
 ];
 
 // ── Individual setting rows (for General + future panels) ──
@@ -52,24 +78,27 @@ const PANELS: PanelDef[] = [
 function KeyboardPresetRow({ onDirty }: { onDirty: () => void }) {
   const [preset, setPreset] = useState<KeyboardPreset>(getKeyboardPreset());
   return (
-    <div className={styles.settingRow}>
-      <label className={styles.settingLabel}>Keyboard Layout</label>
-      <div className={styles.settingControl}>
-        <select
-          className={styles.select}
-          value={preset}
-          onChange={(e) => {
-            const v = e.target.value as KeyboardPreset;
-            setPreset(v);
-            setKeyboardPreset(v);
-            onDirty();
-          }}
-        >
-          <option value="us">US (QWERTY)</option>
-          <option value="eu">EU (QWERTZ / AZERTY / Nordic)</option>
-        </select>
+    <div className={styles.settingsBlock}>
+      <div className={styles.blockTitle}>Keyboard</div>
+      <div className={styles.blockContent}>
+        <Row label="Keyboard layout">
+          <select
+            className={styles.select}
+            aria-label="Keyboard layout"
+            value={preset}
+            onChange={(e) => {
+              const v = e.target.value as KeyboardPreset;
+              setPreset(v);
+              setKeyboardPreset(v);
+              onDirty();
+            }}
+          >
+            <option value="us">US (QWERTY)</option>
+            <option value="eu">EU (QWERTZ / AZERTY / Nordic)</option>
+          </select>
+        </Row>
         <p className={styles.settingHint}>
-          EU mode swaps shortcuts that use backtick, backslash, and brackets for alternatives accessible on European keyboards.
+          EU mode adds alternatives for shortcuts that use backtick, backslash, and brackets.
         </p>
       </div>
     </div>
@@ -88,7 +117,7 @@ function Row({ label, sep, children }: { label: string; sep?: boolean; children:
     <>
       {sep && <div className={styles.rowSep} />}
       <div className={styles.settingRow}>
-        <label className={styles.settingLabel}>{label}</label>
+        <span className={styles.settingLabel}>{label}</span>
         <div className={styles.settingControl}>{children}</div>
       </div>
     </>
@@ -384,42 +413,33 @@ export function Settings() {
   const markDirty = useCallback(() => setIsDirty(true), []);
 
   const activePanel = PANELS.find((p) => p.id === selected) ?? PANELS[0];
-  const isSearching = search.trim().length > 2;
+  const searchQuery = search.trim().toLowerCase();
+  const isSearching = searchQuery.length > 0;
 
   // Filter settings by search query
   const searchResults = useMemo(() => {
     if (!isSearching) return [];
-    const q = search.toLowerCase();
+    const q = searchQuery;
     return ALL_SETTINGS.filter((s) =>
       s.label.toLowerCase().includes(q) || s.keywords.toLowerCase().includes(q),
     );
-  }, [search, isSearching]);
+  }, [searchQuery, isSearching]);
 
-  // Group search results by panel
-  const groupedResults = useMemo(() => {
-    const map = new Map<string, SettingRow[]>();
-    for (const row of searchResults) {
-      let list = map.get(row.panel);
-      if (!list) { list = []; map.set(row.panel, list); }
-      list.push(row);
-    }
-    // Also include shortcut panel if query matches
-    const q = search.toLowerCase();
-    if ('keyboard shortcut keybind hotkey binding'.includes(q) || 'shortcuts'.includes(q)) {
-      if (!map.has('shortcuts')) map.set('shortcuts', []);
-    }
-    return map;
-  }, [searchResults, search]);
+  // Categories own the search vocabulary, so custom panels and registry rows share one path.
+  const matchedPanels = useMemo(() => {
+    if (!isSearching) return [];
+    return PANELS.filter((panel) =>
+      panel.label.toLowerCase().includes(searchQuery) ||
+      panel.keywords.includes(searchQuery) ||
+      searchResults.some((setting) => setting.panel === panel.id),
+    );
+  }, [isSearching, searchQuery, searchResults]);
 
   // Filter sidebar nav
   const filteredPanels = useMemo(() => {
     if (!isSearching) return PANELS;
-    const q = search.toLowerCase();
-    return PANELS.filter((p) =>
-      p.label.toLowerCase().includes(q) ||
-      ALL_SETTINGS.some((s) => s.panel === p.id && (s.label.toLowerCase().includes(q) || s.keywords.toLowerCase().includes(q))),
-    );
-  }, [search, isSearching]);
+    return matchedPanels;
+  }, [isSearching, matchedPanels]);
 
   // Revert unsaved changes when window closes (native close button, Cmd+W, etc.)
   useEffect(() => {
@@ -478,6 +498,7 @@ export function Settings() {
             className={styles.sidebarSearch}
             type="search"
             placeholder="Search settings..."
+            aria-label="Search settings"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
@@ -504,26 +525,36 @@ export function Settings() {
       <div className={styles.content}>
         <div className={styles.contentHeader}>
           <span className={styles.contentTitle}>
-            {isSearching ? `Results for "${search}"` : activePanel.label}
+            {isSearching ? `Search results for "${search}"` : activePanel.label}
           </span>
           <button className={styles.closeBtn} onClick={handleClose}><IconX size={14} /></button>
         </div>
 
         <div className={styles.contentBody}>
           {isSearching ? (
-            // Dynamic search view — matching rows grouped by panel
-            groupedResults.size === 0 ? (
+            matchedPanels.length === 0 ? (
               <div className={styles.emptySearch}>No settings match "{search}"</div>
             ) : (
-              Array.from(groupedResults.entries()).map(([panelId, rows]) => {
-                const panel = PANELS.find((p) => p.id === panelId);
-                return (
-                  <div key={panelId} className={styles.searchGroup}>
-                    <div className={styles.searchGroupTitle}>{panel?.label ?? panelId}</div>
-                    {rows.map((row) => <div key={row.id}>{row.render(markDirty)}</div>)}
-                  </div>
-                );
-              })
+              <div className={styles.searchGroup}>
+                <div className={styles.searchGroupTitle}>Categories</div>
+                {matchedPanels.map((panel) => {
+                  const Icon = panel.icon;
+                  return (
+                    <button
+                      key={panel.id}
+                      type="button"
+                      className={styles.searchResult}
+                      onClick={() => { setSelected(panel.id); setSearch(''); }}
+                    >
+                      <Icon size={18} />
+                      <span className={styles.searchResultCopy}>
+                        <span className={styles.searchResultTitle}>{panel.label}</span>
+                        <span className={styles.searchResultDescription}>{panel.description}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
             )
           ) : activePanel.id === 'appearance' ? (
             <AppearancePanel

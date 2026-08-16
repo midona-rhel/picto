@@ -19,10 +19,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .resolve_for_run(subscription_id, Some(query_id), site_id, url)
             .await;
 
-        if resolved.auth_supported
-            && resolved.auth_required_for_full_access
-            && !resolved.has_credential()
-        {
+        if resolved.auth_required_for_full_access && !resolved.has_credential() {
             self.emit_progress(
                 subscription_id_str,
                 progress,

@@ -53,12 +53,12 @@ export function LibrarySwitcherButton() {
           }
         >
           <span className={styles.icon} style={meta.color ? { color: meta.color } : undefined}>
-          {meta.icon ? (
-            <DynamicIcon name={meta.icon} size={16} color={meta.color} />
-          ) : (
-            <IconBooks size={16} />
-          )}
-        </span>
+            {meta.icon ? (
+              <DynamicIcon name={meta.icon} size={16} color={meta.color} />
+            ) : (
+              <IconBooks size={16} />
+            )}
+          </span>
           <span className={styles.name}>{name}</span>
           <span className={styles.chevron}><IconSelector size={14} /></span>
         </button>

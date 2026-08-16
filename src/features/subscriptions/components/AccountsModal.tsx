@@ -3,7 +3,7 @@ import { AuthWorkspace } from '../../auth/AuthWorkspace';
 
 /**
  * Site accounts manager in a modal — wraps the existing auth workspace
- * (per-site browser login, OAuth, manual credentials) so credentials are
+ * (per-site browser login and OAuth) so credentials are
  * reachable without leaving the subscriptions screen.
  */
 export function AccountsModal({

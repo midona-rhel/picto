@@ -1,4 +1,4 @@
-export type CredentialType = 'oauth_token' | 'api_key' | 'cookies' | 'username_password';
+export type CredentialType = 'oauth_token' | 'api_key' | 'cookies';
 
 export interface SubscriptionSiteInfo {
   id: string;
@@ -8,11 +8,10 @@ export interface SubscriptionSiteInfo {
   example_query: string;
   supports_query: boolean;
   supports_account: boolean;
-  auth_supported: boolean;
   auth_required_for_full_access: boolean;
   /** Site is unusable without credentials — runs are blocked, not just warned. */
   auth_strictly_required: boolean;
-  manual_credential_types: string[];
+  credential_types: CredentialType[];
 }
 
 export interface SubscriptionQueryInfo {
@@ -199,6 +198,7 @@ export interface AuthSessionCredentialPayload {
   username?: string | null;
   password?: string | null;
   cookies?: Record<string, string> | null;
+  oauth_token?: string | null;
   oauth_code?: string | null;
   phpsessid?: string | null;
 }

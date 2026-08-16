@@ -1,4 +1,3 @@
-import { useEffect, useState } from 'react';
 import type { AuthSessionState } from '../../../shared/types/subscriptions';
 import type { AuthSiteSnapshot } from '../../../shared/types/subscriptionsWorkspace';
 import { authStatusLabel, authTone, formatRelativeTime } from '../authUtils';
@@ -22,7 +21,6 @@ export function AuthSiteDetail({
   onStartLogin,
   onCancelLogin,
   onRemoveCredential,
-  onSaveUsernamePassword,
 }: {
   entry: AuthSiteSnapshot | null;
   session: AuthSessionState;
@@ -31,16 +29,7 @@ export function AuthSiteDetail({
   onStartLogin: () => Promise<void>;
   onCancelLogin: () => Promise<void>;
   onRemoveCredential: () => Promise<void>;
-  onSaveUsernamePassword: (username: string, password: string) => Promise<void>;
 }) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-
-  useEffect(() => {
-    setUsername('');
-    setPassword('');
-  }, [entry?.site.id]);
-
   if (!entry) {
     return (
       <main className={styles.content}>
@@ -59,7 +48,6 @@ export function AuthSiteDetail({
   const hasEmbeddedSession = session.site_category === entry.site.credential_owner_site_id && (
     session.status === 'starting' || session.status === 'active' || session.status === 'loading' || session.status === 'error'
   );
-  const usesUsernamePassword = entry.site.manual_credential_types.includes('username_password');
 
   return (
     <main className={styles.content}>
@@ -81,19 +69,15 @@ export function AuthSiteDetail({
         </div>
 
         <div className={styles.muted}>
-          {usesUsernamePassword
-            ? 'Store this account in the system credential store. Picto passes it only to gallery-dl for this source.'
-            : entry.site.auth_required_for_full_access
+          {entry.site.auth_required_for_full_access
             ? 'This site commonly requires authentication for full access or stable subscription runs.'
             : 'Authentication is optional for this site, but storing it here keeps subscriptions predictable.'}
         </div>
 
         <div className={styles.inlineActions}>
-          {!usesUsernamePassword && (
-            <button type="button" className={styles.button} disabled={busy} onClick={() => { void onStartLogin(); }}>
-              {sessionActive ? 'Logging in…' : entry.credential ? 'Refresh Login' : 'Log In'}
-            </button>
-          )}
+          <button type="button" className={styles.button} disabled={busy} onClick={() => { void onStartLogin(); }}>
+            {sessionActive ? 'Logging in…' : entry.credential ? 'Refresh Login' : 'Log In'}
+          </button>
           {sessionActive && (
             <button type="button" className={styles.buttonSecondary} disabled={busy} onClick={() => { void onCancelLogin(); }}>
               Cancel
@@ -113,69 +97,26 @@ export function AuthSiteDetail({
           <div className={styles.sectionHeader}>
             <div className={styles.sectionTitle}>Site Login</div>
           </div>
-          {usesUsernamePassword ? (
-            <form
-              className={styles.fieldCard}
-              onSubmit={(event) => {
-                event.preventDefault();
-                void onSaveUsernamePassword(username, password).then(() => setPassword(''));
-              }}
-            >
-              <div className={styles.fieldGrid}>
-                <label className={styles.label}>
-                  Username
-                  <input
-                    className={styles.field}
-                    autoComplete="username"
-                    value={username}
-                    onChange={(event) => setUsername(event.target.value)}
-                  />
-                </label>
-                <label className={styles.label}>
-                  Password
-                  <input
-                    className={styles.field}
-                    type="password"
-                    autoComplete="current-password"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
-                  />
-                </label>
-              </div>
-              <div className={styles.inlineActions}>
-                <button
-                  type="submit"
-                  className={styles.button}
-                  disabled={busy || !username.trim() || !password}
-                >
-                  {entry.credential ? 'Replace Credential' : 'Save Credential'}
-                </button>
-              </div>
-            </form>
-          ) : (
-            <>
-              <div className={styles.muted}>
-                {entry.site.id === 'pixiv'
-                  ? 'Sign in in the login window and Picto will capture the Pixiv OAuth code automatically.'
-                  : entry.site.manual_credential_types.includes('cookies')
-                    ? `Sign in in the login window and Picto will save only the ${entry.site.name} session cookies required by gallery-dl.`
-                    : `Sign in in the login window and Picto will save the ${entry.site.name} user_id and api_key from account settings.`}
-              </div>
-              <div className={styles.emptyState}>
-                <div className={styles.sectionTitle}>{hasEmbeddedSession ? 'Login in progress' : 'No active login'}</div>
-                <div className={styles.muted}>
-                  {hasEmbeddedSession
-                    ? 'A separate login window is open. Complete authentication there and Picto will save the credential here.'
-                    : 'Start login to open the site in a separate window.'}
-                </div>
-              </div>
-              <div className={styles.muted}>
-                {hasEmbeddedSession
-                  ? session.message ?? session.current_url ?? 'Waiting for the site session…'
-                  : 'The login flow opens in a separate window, not inside this pane.'}
-              </div>
-            </>
-          )}
+          <div className={styles.muted}>
+            {entry.site.id === 'pixiv'
+              ? 'Sign in on Pixiv and Picto will capture the OAuth session automatically.'
+              : entry.site.credential_types.includes('api_key')
+                ? `Sign in on ${entry.site.name}; Picto will retrieve the account API credential automatically.`
+                : `Sign in on ${entry.site.name}; Picto will retain the resulting session for gallery-dl.`}
+          </div>
+          <div className={styles.emptyState}>
+            <div className={styles.sectionTitle}>{hasEmbeddedSession ? 'Login in progress' : 'No active login'}</div>
+            <div className={styles.muted}>
+              {hasEmbeddedSession
+                ? 'Complete authentication in the site window. Picto will save the resulting session automatically.'
+                : 'Start login to open the real site in a separate window.'}
+            </div>
+          </div>
+          <div className={styles.muted}>
+            {hasEmbeddedSession
+              ? session.message ?? session.current_url ?? 'Waiting for the site session…'
+              : 'The login flow opens in a separate window, not inside this pane.'}
+          </div>
       </section>
 
       <section className={styles.panel}>

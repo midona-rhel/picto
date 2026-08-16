@@ -1,26 +1,40 @@
 .button {
   display: flex;
   align-items: center;
-  gap: 8px;
-  width: calc(100% - 16px);
-  margin: 8px 8px 4px;
-  padding: 7px 10px;
+  gap: 0;
+  width: calc(100% - var(--sidebar-list-anchor) - var(--sidebar-content-inset));
+  height: 26px;
+  margin: 0 var(--sidebar-content-inset) 12px var(--sidebar-list-anchor);
+  padding: 0 2px 0 0;
   border: none;
-  border-radius: 8px;
+  border-radius: 6px;
   background: transparent;
-  color: var(--color-text-primary);
+  color: var(--sidebar-text-primary, var(--color-text-primary));
   cursor: pointer;
   text-align: left;
+  transition: background var(--duration-fast) var(--ease-default);
+  font-family: var(--font-family-ui, var(--font-family));
 }
 
 .button:hover {
-  background: var(--color-surface-hover);
+  background: var(--sidebar-item-hover-bg, var(--color-surface-hover));
+}
+
+.button:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 1px var(--color-border-focus);
 }
 
 .icon {
   display: flex;
   align-items: center;
-  color: var(--color-text-secondary);
+  justify-content: center;
+  width: var(--sidebar-glyph-column);
+  min-width: var(--sidebar-glyph-column);
+  height: var(--sidebar-row-height);
+  margin-right: 0;
+  border-radius: 4px;
+  color: var(--sidebar-icon-color, var(--color-text-primary));
   flex-shrink: 0;
 }
 
@@ -28,7 +42,8 @@
   flex: 1;
   min-width: 0;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
+  line-height: 24px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -37,6 +52,8 @@
 .chevron {
   display: flex;
   align-items: center;
-  color: var(--color-text-tertiary);
+  margin-left: 2px;
+  color: var(--sidebar-count-color, var(--color-text-tertiary));
   flex-shrink: 0;
+  opacity: 0.7;
 }

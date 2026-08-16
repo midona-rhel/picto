@@ -1,7 +1,10 @@
+import { createHmac, randomUUID } from 'node:crypto';
+
 /**
- * Embedded auth sessions for Pixiv OAuth, booru API keys, and allowlisted
- * gallery-dl browser cookies. All window primitives arrive injected so this
- * module stays electron-import-free.
+ * Embedded auth sessions for direct source-site login. Credential capture is
+ * explicit because the backend owns the accepted credential formats; sources
+ * without one still get a real-site browser session instead of being rejected.
+ * All window primitives arrive injected so this module stays electron-import-free.
  */
 
 const BOORU_AUTH_SITES = Object.freeze({
@@ -19,6 +22,30 @@ const BOORU_AUTH_SITES = Object.freeze({
   }),
 });
 
+const IDOL_COMPLEX_LOGIN_URL = 'https://login.idol.sankakucomplex.com/oidc/auth?response_type=code&scope=openid&client_id=idol-web-app&redirect_uri=https%3A%2F%2Fwww.idolcomplex.com%2Fsso%2Fcallback&state=return_uri%3Dhttps%3A%2F%2Fwww.idolcomplex.com%2Fen%2Flogin&theme=black&route=login&lang=en';
+const SANKAKU_LOGIN_URL = 'https://login.sankakucomplex.com/oidc/auth?response_type=code&scope=openid&client_id=sankaku-web-app&redirect_uri=https%3A%2F%2Fsankaku.app%2Fsso%2Fcallback&state=return_uri%3Dhttps%3A%2F%2Fsankaku.app%2F&theme=black&route=login&lang=en';
+const OAUTH_CALLBACK_URL = 'https://picto.app/oauth/callback';
+const OAUTH_AUTH_SITES = Object.freeze({
+  baraag: Object.freeze({
+    id: 'baraag',
+    label: 'Baraag',
+    loginUrl: 'https://baraag.net/auth/sign_in',
+    registerUrl: 'https://baraag.net/api/v1/apps',
+    authorizeUrl: 'https://baraag.net/oauth/authorize',
+    tokenUrl: 'https://baraag.net/oauth/token',
+  }),
+  tumblr: Object.freeze({
+    id: 'tumblr',
+    label: 'Tumblr',
+    loginUrl: 'https://www.tumblr.com/login',
+    requestTokenUrl: 'https://www.tumblr.com/oauth/request_token',
+    authorizeUrl: 'https://www.tumblr.com/oauth/authorize',
+    tokenUrl: 'https://www.tumblr.com/oauth/access_token',
+    consumerKey: 'O3hU2tMi5e4Qs5t3vezEi6L0qRORJ5y9oUpSGsrWu8iA3UCc3B',
+    consumerSecret: 'sFdsK3PDdP2QpYMRAoq0oDnw0sFS24XigXmdfnaeNZpJpqAn03',
+  }),
+});
+
 const COOKIE_AUTH_SITES = Object.freeze({
   hentaifoundry: Object.freeze({
     id: 'hentaifoundry',
@@ -26,7 +53,6 @@ const COOKIE_AUTH_SITES = Object.freeze({
     loginUrl: 'https://www.hentai-foundry.com/site/index',
     cookieUrl: 'https://www.hentai-foundry.com',
     cookieNames: Object.freeze(['PHPSESSID']),
-    requireLogoutLink: true,
   }),
   furaffinity: Object.freeze({
     id: 'furaffinity',
@@ -34,17 +60,122 @@ const COOKIE_AUTH_SITES = Object.freeze({
     loginUrl: 'https://www.furaffinity.net/login/',
     cookieUrl: 'https://www.furaffinity.net',
     cookieNames: Object.freeze(['a', 'b']),
+    authenticatedCookieNames: Object.freeze(['a', 'b']),
   }),
+  danbooru: Object.freeze({
+    id: 'danbooru',
+    label: 'Danbooru',
+    loginUrl: 'https://danbooru.donmai.us/session/new',
+    cookieUrl: 'https://danbooru.donmai.us',
+  }),
+  webtoons: Object.freeze({
+    id: 'webtoons',
+    label: 'Webtoons',
+    loginUrl: 'https://www.webtoons.com/member/login',
+    cookieUrl: 'https://www.webtoons.com',
+    unauthenticatedUrlPattern: /\/(?:member\/(?:login|join)|(?:[a-z]{2}\/)?age-gate)(?:[/?#]|$)/i,
+  }),
+  deviantart: Object.freeze({
+    id: 'deviantart',
+    label: 'DeviantArt',
+    loginUrl: 'https://www.deviantart.com/users/login',
+    cookieUrl: 'https://www.deviantart.com',
+    unauthenticatedUrlPattern: /\/(?:users\/login|join)(?:[/?#]|$)/i,
+  }),
+  idolcomplex: Object.freeze({
+    id: 'idolcomplex',
+    label: 'Idol Complex',
+    loginUrl: IDOL_COMPLEX_LOGIN_URL,
+    cookieUrl: 'https://www.idolcomplex.com',
+    cookieNames: Object.freeze(['accessToken', 'refreshToken', 'ssoLoginValid']),
+    authenticatedCookieNames: Object.freeze(['accessToken', 'refreshToken', 'ssoLoginValid']),
+  }),
+  sankaku: Object.freeze({
+    id: 'sankaku',
+    label: 'Sankaku',
+    loginUrl: SANKAKU_LOGIN_URL,
+    cookieUrl: 'https://sankaku.app',
+    cookieNames: Object.freeze(['accessToken', 'refreshToken', 'ssoLoginValid']),
+    authenticatedCookieNames: Object.freeze(['accessToken', 'refreshToken', 'ssoLoginValid']),
+  }),
+  yandere: Object.freeze({ id: 'yandere', label: 'Yande.re', loginUrl: 'https://yande.re/user/login', cookieUrl: 'https://yande.re' }),
+  konachan: Object.freeze({ id: 'konachan', label: 'Konachan', loginUrl: 'https://konachan.com/user/login', cookieUrl: 'https://konachan.com' }),
+  safebooru: Object.freeze({ id: 'safebooru', label: 'Safebooru', loginUrl: 'https://safebooru.org/index.php?page=account&s=login&code=00', cookieUrl: 'https://safebooru.org' }),
+  e621: Object.freeze({ id: 'e621', label: 'e621', loginUrl: 'https://e621.net/session/new', cookieUrl: 'https://e621.net' }),
 });
 
 const SUPPORTED_AUTH_SITES = new Set([
   'pixiv',
   'pixivuser',
   ...Object.keys(BOORU_AUTH_SITES),
+  ...Object.keys(OAUTH_AUTH_SITES),
   ...Object.keys(COOKIE_AUTH_SITES),
 ]);
 
-export function createAuthSessions({ BrowserWindow, getMainWindow }) {
+export function getStaticAuthLoginRoutes() {
+  return Object.values({ ...BOORU_AUTH_SITES, ...OAUTH_AUTH_SITES, ...COOKIE_AUTH_SITES }).map(({ id, loginUrl }) => ({
+    site: id,
+    loginUrl,
+  }));
+}
+
+function formBody(values) {
+  return new URLSearchParams(values).toString();
+}
+
+function oauthEncode(value) {
+  return encodeURIComponent(String(value))
+    .replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+}
+
+function oauth1AuthorizationHeader({ method, url, params, consumerKey, consumerSecret, token, tokenSecret }) {
+  const oauthParams = {
+    oauth_consumer_key: consumerKey,
+    oauth_nonce: randomUUID().replaceAll('-', ''),
+    oauth_signature_method: 'HMAC-SHA1',
+    oauth_timestamp: String(Math.floor(Date.now() / 1000)),
+    oauth_version: '1.0',
+    ...(token ? { oauth_token: token } : {}),
+  };
+  const signatureParams = Object.entries({ ...params, ...oauthParams })
+    .map(([key, value]) => [oauthEncode(key), oauthEncode(value)])
+    .sort(([leftKey, leftValue], [rightKey, rightValue]) => leftKey.localeCompare(rightKey) || leftValue.localeCompare(rightValue))
+    .map(([key, value]) => `${key}=${value}`)
+    .join('&');
+  const baseString = [method.toUpperCase(), url, signatureParams]
+    .map(oauthEncode)
+    .join('&');
+  const signingKey = `${oauthEncode(consumerSecret)}&${oauthEncode(tokenSecret || '')}`;
+  const signature = createHmac('sha1', signingKey).update(baseString).digest('base64');
+  const headerParams = { ...oauthParams, oauth_signature: signature };
+  return `OAuth ${Object.entries(headerParams)
+    .map(([key, value]) => `${oauthEncode(key)}="${oauthEncode(value)}"`)
+    .join(', ')}`;
+}
+
+async function responseJson(response, operation) {
+  let body;
+  try {
+    body = await response.json();
+  } catch {
+    body = { error: await response.text().catch(() => '') };
+  }
+  if (!response.ok) {
+    const detail = body?.error_description || body?.error || response.status;
+    throw new Error(`${operation} failed: ${detail}`);
+  }
+  return body;
+}
+
+async function responseForm(response, operation) {
+  const body = await response.text();
+  if (!response.ok) throw new Error(`${operation} failed: HTTP ${response.status}`);
+  const values = Object.fromEntries(new URLSearchParams(body));
+  if (values.error) throw new Error(`${operation} failed: ${values.error}`);
+  return values;
+}
+
+export function createAuthSessions({ BrowserWindow, getMainWindow, fetchImpl = fetch }) {
   let authSession = {
     popup: null,
     partition: null,
@@ -109,7 +240,16 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
         partition,
       },
     });
-    popup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    popup.webContents.setWindowOpenHandler(({ url }) => {
+      // Keep target=_blank signup/OAuth links inside Picto's isolated auth
+      // profile instead of discarding them or opening the system browser.
+      if (/^https:\/\//i.test(url)) {
+        queueMicrotask(() => {
+          if (!popup.isDestroyed()) void popup.webContents.loadURL(url);
+        });
+      }
+      return { action: 'deny' };
+    });
     popup.once('ready-to-show', () => {
       if (!popup.isDestroyed()) popup.show();
     });
@@ -391,24 +531,71 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
     if (!popup || popup.isDestroyed()) throw new Error('Auth popup is unavailable.');
     const authContents = popup.webContents;
     let completed = false;
+    let inspectionTimer = null;
+
+    const hasAuthenticatedDomSignal = async () => authContents.executeJavaScript(`
+      (() => {
+        const normalize = (value) => (value || '').replace(/\\s+/g, ' ').trim().toLowerCase();
+        const labelFor = (element) => normalize([
+          element.textContent,
+          element.getAttribute('aria-label'),
+          element.getAttribute('title'),
+          element.value,
+        ].filter(Boolean).join(' '));
+        const isConsentOrTracking = (label) => /(?:cookie|privacy|tracking|consent|personal data)/i.test(label)
+          && /(?:accept|agree|allow|reject|decline|settings|preferences|manage|continue|essential)/i.test(label);
+        const authPattern = /\\b(?:log ?out|sign ?out|my account|account home|account settings|profile|dashboard)\\b/i;
+        const hasLoginForm = Boolean(document.querySelector(
+          'input[type="password"], input[name*="password" i], input[id*="password" i]'
+        ));
+        const controls = Array.from(document.querySelectorAll(
+          'a, button, [role="button"], [role="link"], [role="menu"], [role="menuitem"], input[type="button"], input[type="submit"]'
+        ));
+        const hasAuthenticatedControl = controls.some((element) => {
+          const label = labelFor(element);
+          if (!label || isConsentOrTracking(label)) return false;
+          const href = normalize(element.getAttribute('href'));
+          return authPattern.test(label)
+            || /\\/(?:logout|sign_out|profile|account|dashboard)(?:[/?#]|$)/i.test(href);
+        });
+        const bodyText = normalize(document.body?.innerText);
+        const hasAuthenticatedText = !hasLoginForm && authPattern.test(bodyText);
+        return hasAuthenticatedControl || hasAuthenticatedText;
+      })()
+    `, true);
 
     const inspectCookies = async () => {
       if (completed || authSession.popup !== popup || authContents.isDestroyed()) return;
       try {
-        if (site.requireLogoutLink) {
-          let hasLogoutLink = false;
+        if (site.unauthenticatedUrlPattern?.test(authContents.getURL())) {
+          emitAuthSessionState({
+            status: 'active',
+            current_url: authContents.getURL(),
+            message: `Log in with ${site.label} to continue.`,
+          });
+          return;
+        }
+        const stored = await authContents.session.cookies.get({ url: site.cookieUrl });
+        const values = new Map(stored.map((cookie) => [cookie.name, cookie.value]));
+        const authenticatedCookieNames = site.authenticatedCookieNames ?? [];
+        const missingAuthenticatedCookies = authenticatedCookieNames.filter((name) => !(values.get(name) || '').trim());
+        if (authenticatedCookieNames.length > 0 && missingAuthenticatedCookies.length > 0) {
+          emitAuthSessionState({
+            status: 'active',
+            current_url: authContents.getURL(),
+            message: `Log in with ${site.label} to continue.`,
+          });
+          return;
+        }
+
+        if (authenticatedCookieNames.length === 0) {
+          let hasAuthenticatedSignal = false;
           try {
-            hasLogoutLink = await authContents.executeJavaScript(`
-              Array.from(document.querySelectorAll('a')).some((anchor) => {
-                const label = (anchor.textContent || '').trim().toLowerCase();
-                const href = (anchor.getAttribute('href') || '').toLowerCase();
-                return label === 'logout' || href.includes('/logout');
-              })
-            `, true);
+            hasAuthenticatedSignal = await hasAuthenticatedDomSignal();
           } catch {
             return;
           }
-          if (!hasLogoutLink) {
+          if (!hasAuthenticatedSignal) {
             emitAuthSessionState({
               status: 'active',
               current_url: authContents.getURL(),
@@ -418,15 +605,14 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
           }
         }
 
-        const stored = await authContents.session.cookies.get({ url: site.cookieUrl });
-        const values = new Map(stored.map((cookie) => [cookie.name, cookie.value]));
+        const cookieNames = site.cookieNames ?? [...values.keys()];
         const cookies = Object.fromEntries(
-          site.cookieNames
+          cookieNames
             .map((name) => [name, (values.get(name) || '').trim()])
             .filter(([, value]) => value),
         );
-        const missing = site.cookieNames.filter((name) => !cookies[name]);
-        if (missing.length > 0) {
+        const missing = (site.cookieNames ?? []).filter((name) => !cookies[name]);
+        if (missing.length > 0 || Object.keys(cookies).length === 0) {
           emitAuthSessionState({
             status: 'active',
             current_url: authContents.getURL(),
@@ -451,6 +637,11 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
       }
     };
 
+    popup.on('closed', () => {
+      if (inspectionTimer != null) clearInterval(inspectionTimer);
+      inspectionTimer = null;
+    });
+
     authContents.on('page-title-updated', (_event, title) => {
       emitAuthSessionState({ title });
     });
@@ -466,12 +657,203 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
       emitAuthSessionState({ status: 'active', current_url: authContents.getURL() });
       void inspectCookies();
     });
+    authContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      if (isMainFrame === false || errorCode === -3) return;
+      try {
+        if (!popup.isDestroyed()) popup.show();
+      } catch {}
+      emitAuthSessionState({
+        status: 'error',
+        current_url: validatedUrl || authContents.getURL(),
+        message: `${site.label} could not load in the login window (${errorDescription || `error ${errorCode}`}). Retry login; if the site shows a browser check, complete it in this window.`,
+        credential: null,
+      });
+    });
 
     await authContents.loadURL(site.loginUrl);
+    inspectionTimer = setInterval(() => { void inspectCookies(); }, 750);
     emitAuthSessionState({
       status: 'active',
       current_url: site.loginUrl,
       message: `Log in with ${site.label} in the popup window. Picto stores only the session cookies gallery-dl requires.`,
+    });
+    popup.focus();
+    return authSession.state;
+  }
+
+  async function startOAuthSession(site) {
+    const popup = authSession.popup;
+    if (!popup || popup.isDestroyed()) throw new Error('Auth popup is unavailable.');
+    const authContents = popup.webContents;
+    const state = randomUUID();
+    let authorizationUrl;
+    let requestToken;
+    let requestTokenSecret;
+    let completed = false;
+    let exchanging = false;
+
+    if (site.id === 'baraag') {
+      const registrationResponse = await fetchImpl(site.registerUrl, {
+        method: 'POST',
+        headers: { accept: 'application/json', 'content-type': 'application/json' },
+        body: JSON.stringify({
+          client_name: 'Picto',
+          redirect_uris: OAUTH_CALLBACK_URL,
+          scopes: 'read',
+        }),
+      });
+      const registration = await responseJson(registrationResponse, 'Baraag application registration');
+      if (!registration.client_id || !registration.client_secret) {
+        throw new Error('Baraag application registration returned no client credentials.');
+      }
+      const params = new URLSearchParams({
+        client_id: registration.client_id,
+        redirect_uri: OAUTH_CALLBACK_URL,
+        response_type: 'code',
+        scope: 'read',
+        state,
+      });
+      authorizationUrl = `${site.authorizeUrl}?${params}`;
+      site = { ...site, clientId: registration.client_id, clientSecret: registration.client_secret };
+    } else {
+      const requestParams = { oauth_callback: OAUTH_CALLBACK_URL };
+      const requestTokenResponse = await fetchImpl(site.requestTokenUrl, {
+        method: 'POST',
+        headers: {
+          accept: 'application/x-www-form-urlencoded',
+          Authorization: oauth1AuthorizationHeader({
+            method: 'POST',
+            url: site.requestTokenUrl,
+            params: requestParams,
+            consumerKey: site.consumerKey,
+            consumerSecret: site.consumerSecret,
+          }),
+          'content-type': 'application/x-www-form-urlencoded',
+        },
+        body: formBody(requestParams),
+      });
+      const requestTokenData = await responseForm(requestTokenResponse, 'Tumblr request token');
+      requestToken = requestTokenData.oauth_token;
+      requestTokenSecret = requestTokenData.oauth_token_secret;
+      if (!requestToken || !requestTokenSecret) {
+        throw new Error('Tumblr request token response was incomplete.');
+      }
+      authorizationUrl = `${site.authorizeUrl}?${formBody({ oauth_token: requestToken, perms: 'read' })}`;
+    }
+
+    const callbackUrl = new URL(OAUTH_CALLBACK_URL);
+    const isCallback = (url) => {
+      try {
+        const parsed = new URL(url);
+        return parsed.origin === callbackUrl.origin && parsed.pathname === callbackUrl.pathname;
+      } catch {
+        return false;
+      }
+    };
+
+    const handleCallback = async (url) => {
+      if (completed || exchanging) return;
+      exchanging = true;
+      try {
+        const params = new URL(url).searchParams;
+        if (site.id === 'baraag') {
+          if (params.get('state') !== state) throw new Error('Baraag OAuth state did not match.');
+          const code = params.get('code');
+          if (!code) throw new Error('No code in Baraag OAuth callback.');
+          emitAuthSessionState({ status: 'loading', current_url: url, message: 'Completing Baraag authorization…' });
+          const tokenResponse = await fetchImpl(site.tokenUrl, {
+            method: 'POST',
+            headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
+            body: formBody({
+              client_id: site.clientId,
+              client_secret: site.clientSecret,
+              grant_type: 'authorization_code',
+              code,
+              redirect_uri: OAUTH_CALLBACK_URL,
+            }),
+          });
+          const token = await responseJson(tokenResponse, 'Baraag token exchange');
+          if (!token.access_token) throw new Error('Baraag token response was incomplete.');
+          completed = true;
+          await completeAuthSession({
+            site_category: 'baraag',
+            credential_type: 'oauth_token',
+            oauth_token: token.access_token,
+          }, 'Baraag authorization completed.');
+        } else {
+          if (params.get('oauth_token') !== requestToken) throw new Error('Tumblr OAuth token did not match.');
+          const verifier = params.get('oauth_verifier');
+          if (!verifier) throw new Error('No verifier in Tumblr OAuth callback.');
+          emitAuthSessionState({ status: 'loading', current_url: url, message: 'Completing Tumblr authorization…' });
+          const exchangeParams = { oauth_token: requestToken, oauth_verifier: verifier };
+          const tokenResponse = await fetchImpl(site.tokenUrl, {
+            method: 'POST',
+            headers: {
+              accept: 'application/x-www-form-urlencoded',
+              Authorization: oauth1AuthorizationHeader({
+                method: 'POST',
+                url: site.tokenUrl,
+                params: exchangeParams,
+                consumerKey: site.consumerKey,
+                consumerSecret: site.consumerSecret,
+                token: requestToken,
+                tokenSecret: requestTokenSecret,
+              }),
+              'content-type': 'application/x-www-form-urlencoded',
+            },
+            body: formBody(exchangeParams),
+          });
+          const token = await responseForm(tokenResponse, 'Tumblr access token exchange');
+          if (!token.oauth_token || !token.oauth_token_secret) {
+            throw new Error('Tumblr access token response was incomplete.');
+          }
+          completed = true;
+          await completeAuthSession({
+            site_category: 'tumblr',
+            credential_type: 'oauth_token',
+            oauth_token: token.oauth_token,
+            password: token.oauth_token_secret,
+          }, 'Tumblr authorization completed.');
+        }
+      } catch (err) {
+        exchanging = false;
+        try {
+          if (!popup.isDestroyed()) popup.show();
+        } catch {}
+        emitAuthSessionState({
+          status: 'error',
+          current_url: url,
+          message: err instanceof Error ? err.message : 'OAuth authorization failed.',
+          credential: null,
+        });
+      }
+    };
+
+    const interceptCallback = (event, url) => {
+      if (!isCallback(url)) return;
+      event.preventDefault();
+      void handleCallback(url);
+    };
+    authContents.on('will-redirect', interceptCallback);
+    authContents.on('will-navigate', interceptCallback);
+    authContents.on('page-title-updated', (_event, title) => {
+      emitAuthSessionState({ title });
+    });
+    authContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      if (isMainFrame === false || errorCode === -3) return;
+      emitAuthSessionState({
+        status: 'error',
+        current_url: validatedUrl || authContents.getURL(),
+        message: `${site.label} could not load in the login window (${errorDescription || `error ${errorCode}`}).`,
+        credential: null,
+      });
+    });
+
+    await authContents.loadURL(authorizationUrl);
+    emitAuthSessionState({
+      status: 'active',
+      current_url: authorizationUrl,
+      message: `Authorize Picto with ${site.label} in the popup window.`,
     });
     popup.focus();
     return authSession.state;
@@ -488,9 +870,10 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
     // Pixiv search and user queries share one credential owner and one OAuth flow.
     const site = requestedSite === 'pixivuser' ? 'pixiv' : requestedSite;
 
+    const siteConfig = BOORU_AUTH_SITES[site] ?? OAUTH_AUTH_SITES[site] ?? COOKIE_AUTH_SITES[site];
     const title = site === 'pixiv'
       ? 'Pixiv Login'
-      : `Login: ${BOORU_AUTH_SITES[site]?.label ?? COOKIE_AUTH_SITES[site]?.label ?? site}`;
+      : `Login: ${siteConfig?.label ?? site}`;
     const popup = createAuthSessionWindow(site, title);
     const authContents = popup.webContents;
     emitAuthSessionState({
@@ -500,9 +883,11 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
       current_url: startUrl,
       message: BOORU_AUTH_SITES[site]
         ? `Log in in the popup window, then Picto will read the ${BOORU_AUTH_SITES[site].label} account options page for user_id and api_key.`
+        : OAUTH_AUTH_SITES[site]
+          ? `Authorize Picto with ${OAUTH_AUTH_SITES[site].label} in the popup window.`
         : COOKIE_AUTH_SITES[site]
           ? `Log in in the popup window. Picto will capture only the cookies required by ${COOKIE_AUTH_SITES[site].label}.`
-        : 'Waiting for login…',
+          : 'Waiting for login…',
       credential: null,
     });
 
@@ -563,6 +948,20 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
       return startBooruSession(BOORU_AUTH_SITES[site]);
     }
 
+    if (OAUTH_AUTH_SITES[site]) {
+      try {
+        return await startOAuthSession(OAUTH_AUTH_SITES[site]);
+      } catch (err) {
+        emitAuthSessionState({
+          status: 'error',
+          current_url: authContents.getURL(),
+          message: err instanceof Error ? err.message : `${siteConfig.label} OAuth setup failed.`,
+          credential: null,
+        });
+        return authSession.state;
+      }
+    }
+
     if (COOKIE_AUTH_SITES[site]) {
       return startCookieSession(COOKIE_AUTH_SITES[site]);
     }
@@ -583,8 +982,13 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
     return null;
   }
 
+  function getAuthSessionState() {
+    return authSession.state;
+  }
+
   return {
     startAuthSession,
     cancelAuthSession,
+    getAuthSessionState,
   };
 }

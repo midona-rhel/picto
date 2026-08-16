@@ -39,6 +39,8 @@ import { settingsController } from '../controllers/settingsController';
 import { isEditableTarget } from './editableTarget';
 import styles from './AppShell.module.css';
 
+const isMacPlatform = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+
 function InspectorTitlebarActions() {
   const isPinned = useAtomValue(inspectorPinnedAtom);
   const setPinned = useSetAtom(inspectorPinnedAtom);
@@ -167,6 +169,9 @@ export function AppShell() {
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
   const toggleBothPanels = () => { toggleSidebar(); toggleInspector(); };
   const isSubscriptionsWorkspace = activeNodeId === 'system:subscriptions';
+  const titlebarLeftClass = sidebarCollapsed
+    ? (isMacPlatform ? styles.titlebarLeftPanelHiddenMac : styles.titlebarLeftPanelHidden)
+    : styles.titlebarLeft;
 
 
   // ── Inspector resize drag ──
@@ -367,7 +372,7 @@ export function AppShell() {
   return (
     <div className={styles.shell}>
       <div className={styles.titlebar}>
-        <div className={sidebarCollapsed ? styles.titlebarLeftCollapsed : styles.titlebarLeft}>
+        <div className={titlebarLeftClass}>
           <div className={styles.titlebarActions}>
             <KbdTooltip label="Settings" shortcut="Mod+,">
               <button className={styles.toggleBtn} onClick={openSettings}>

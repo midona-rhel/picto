@@ -24,10 +24,12 @@ This ticket closes integration debt only. It must not introduce another architec
 1. Resolve every unmerged path and remove all conflict markers.
 2. Port tests that still assert live behavior to current APIs.
 3. Delete tests that only exercise quarantined legacy code.
-4. Give current frontend tests one explicit browser-like test environment.
-5. Convert canonical schema changes after version 100 into ordered migrations.
-6. Remove the corresponding open-time compatibility checks after migration coverage exists.
-7. Delete dead duplicate persistence modules and other code proven to have no caller.
+4. Delete or demote tests that only pass preconfigured values through mocked layers; they may remain
+   focused unit coverage, but cannot be cited as evidence that a user workflow works.
+5. Give current frontend tests one explicit browser-like test environment.
+6. Convert canonical schema changes after version 100 into ordered migrations.
+7. Remove the corresponding open-time compatibility checks after migration coverage exists.
+8. Delete dead duplicate persistence modules and other code proven to have no caller.
 8. Run the packaged app smoke scenarios after the automated gate is green.
 
 ## Acceptance criteria

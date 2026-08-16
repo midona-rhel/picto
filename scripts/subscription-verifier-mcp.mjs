@@ -94,6 +94,7 @@ export function summarizeCertificationReport(report) {
     siteId: report.site_id,
     query: report.query,
     requestedFirstFetchSourcePosts: report.requested_first_fetch_source_posts,
+    authentication: report.authentication,
     firstFetch: {
       sourcePostsProcessed: report.first_fetch?.source_posts_processed,
       materializedPostCount: report.first_fetch?.materialized_post_count,

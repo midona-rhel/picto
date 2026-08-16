@@ -5,6 +5,7 @@ import type {
   SubscriptionSiteInfo,
 } from '../../shared/types/subscriptions';
 import {
+  getQueryAuthState,
   isQueryUpToDate,
   isSubscriptionUpToDate,
 } from './subscriptionUtils';
@@ -84,5 +85,39 @@ describe('subscription account routing', () => {
 
   it('preserves unknown sources', () => {
     expect(getCredentialOwnerSiteId('future-source', sites)).toBe('future-source');
+  });
+});
+
+describe('subscription auth state', () => {
+  const authSite = (overrides: Partial<SubscriptionSiteInfo> = {}): SubscriptionSiteInfo => ({
+    id: 'source',
+    name: 'Source',
+    domain: 'source.example',
+    credential_owner_site_id: 'source',
+    example_query: 'artist',
+    supports_query: true,
+    supports_account: false,
+    auth_required_for_full_access: false,
+    auth_strictly_required: false,
+    credential_types: ['cookies'],
+    ...overrides,
+  });
+
+  it('allows anonymous runs when login only improves coverage', () => {
+    expect(getQueryAuthState({
+      query: query({ site_id: 'source' }),
+      sites: [authSite({ auth_required_for_full_access: true })],
+      credentials: [],
+      credentialHealth: [],
+    })).toEqual({ tone: 'attention', label: 'Auth recommended', blocking: false });
+  });
+
+  it('blocks only strictly gated sources or known-bad saved credentials', () => {
+    expect(getQueryAuthState({
+      query: query({ site_id: 'source' }),
+      sites: [authSite({ auth_required_for_full_access: true, auth_strictly_required: true })],
+      credentials: [],
+      credentialHealth: [],
+    }).blocking).toBe(true);
   });
 });

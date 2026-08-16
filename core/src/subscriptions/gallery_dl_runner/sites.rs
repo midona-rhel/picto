@@ -17,24 +17,20 @@ pub struct SiteEntry {
     pub supports_query: bool,
     /// Whether account/profile style queries are supported.
     pub supports_account: bool,
-    /// Whether we support storing auth material for this source.
-    pub auth_supported: bool,
     /// Whether auth is commonly required/recommended for full access.
     pub auth_required_for_full_access: bool,
     /// Whether the site is unusable without credentials — runs are blocked
     /// (not just warned) when no credential is stored.
     pub auth_strictly_required: bool,
-    /// Allowed manual credential types for this site.
-    pub manual_credential_types: &'static [&'static str],
+    /// Credential payloads Picto may capture from this site's login flow.
+    pub credential_types: &'static [&'static str],
     /// OAuth provider identifier when the site uses a dedicated OAuth flow.
     pub oauth_provider: Option<&'static str>,
 }
 
-const NO_MANUAL_CREDENTIAL_TYPES: &[&str] = &[];
-const API_KEY_MANUAL_CREDENTIAL_TYPES: &[&str] = &["api_key"];
-const COOKIE_MANUAL_CREDENTIAL_TYPES: &[&str] = &["cookies"];
-const OAUTH_MANUAL_CREDENTIAL_TYPES: &[&str] = &["oauth_token"];
-const USERNAME_PASSWORD_MANUAL_CREDENTIAL_TYPES: &[&str] = &["username_password"];
+const API_KEY_CREDENTIAL_TYPES: &[&str] = &["api_key"];
+const COOKIE_CREDENTIAL_TYPES: &[&str] = &["cookies"];
+const OAUTH_CREDENTIAL_TYPES: &[&str] = &["oauth_token"];
 
 /// Sole production registry for supported subscription sources.
 pub static SITES: &[SiteEntry] = &[
@@ -46,10 +42,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "風景",
         supports_query: true,
         supports_account: false,
-        auth_supported: true,
         auth_required_for_full_access: true,
         auth_strictly_required: true,
-        manual_credential_types: OAUTH_MANUAL_CREDENTIAL_TYPES,
+        credential_types: OAUTH_CREDENTIAL_TYPES,
         oauth_provider: Some("pixiv"),
     },
     SiteEntry {
@@ -60,10 +55,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "12345",
         supports_query: false,
         supports_account: true,
-        auth_supported: true,
         auth_required_for_full_access: true,
         auth_strictly_required: true,
-        manual_credential_types: OAUTH_MANUAL_CREDENTIAL_TYPES,
+        credential_types: OAUTH_CREDENTIAL_TYPES,
         oauth_provider: Some("pixiv"),
     },
     SiteEntry {
@@ -74,10 +68,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "1girl solo",
         supports_query: true,
         supports_account: false,
-        auth_supported: true,
         auth_required_for_full_access: true,
         auth_strictly_required: true,
-        manual_credential_types: API_KEY_MANUAL_CREDENTIAL_TYPES,
+        credential_types: API_KEY_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -88,10 +81,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "1girl solo",
         supports_query: true,
         supports_account: false,
-        auth_supported: true,
         auth_required_for_full_access: true,
         auth_strictly_required: true,
-        manual_credential_types: API_KEY_MANUAL_CREDENTIAL_TYPES,
+        credential_types: API_KEY_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -103,24 +95,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "1girl solo",
         supports_query: true,
         supports_account: false,
-        auth_supported: false,
         auth_required_for_full_access: false,
         auth_strictly_required: false,
-        manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
-        oauth_provider: None,
-    },
-    SiteEntry {
-        id: "artstation",
-        domain: "artstation.com",
-        credential_owner_site_id: "artstation",
-        name: "ArtStation",
-        example_query: "username",
-        supports_query: false,
-        supports_account: true,
-        auth_supported: false,
-        auth_required_for_full_access: false,
-        auth_strictly_required: false,
-        manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -131,10 +108,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "https://www.webtoons.com/en/fantasy/title/list?title_no=123",
         supports_query: false,
         supports_account: true,
-        auth_supported: false,
         auth_required_for_full_access: false,
         auth_strictly_required: false,
-        manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -145,10 +121,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "username",
         supports_query: false,
         supports_account: true,
-        auth_supported: true,
         auth_required_for_full_access: true,
         auth_strictly_required: false,
-        manual_credential_types: COOKIE_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -159,11 +134,10 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "username",
         supports_query: false,
         supports_account: true,
-        auth_supported: false,
         auth_required_for_full_access: false,
         auth_strictly_required: false,
-        manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
-        oauth_provider: None,
+        credential_types: OAUTH_CREDENTIAL_TYPES,
+        oauth_provider: Some("mastodon"),
     },
     SiteEntry {
         id: "deviantart",
@@ -173,10 +147,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "username",
         supports_query: false,
         supports_account: true,
-        auth_supported: false,
         auth_required_for_full_access: false,
         auth_strictly_required: false,
-        manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -187,11 +160,10 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "nasa",
         supports_query: false,
         supports_account: true,
-        auth_supported: false,
         auth_required_for_full_access: false,
         auth_strictly_required: false,
-        manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
-        oauth_provider: None,
+        credential_types: OAUTH_CREDENTIAL_TYPES,
+        oauth_provider: Some("tumblr"),
     },
     SiteEntry {
         id: "furaffinity",
@@ -201,10 +173,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "username",
         supports_query: false,
         supports_account: true,
-        auth_supported: true,
         auth_required_for_full_access: true,
         auth_strictly_required: false,
-        manual_credential_types: COOKIE_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -215,10 +186,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "solo",
         supports_query: true,
         supports_account: false,
-        auth_supported: true,
         auth_required_for_full_access: true,
         auth_strictly_required: false,
-        manual_credential_types: USERNAME_PASSWORD_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -229,10 +199,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "solo rating:safe",
         supports_query: true,
         supports_account: false,
-        auth_supported: true,
         auth_required_for_full_access: true,
         auth_strictly_required: false,
-        manual_credential_types: USERNAME_PASSWORD_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -243,10 +212,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "landscape",
         supports_query: true,
         supports_account: false,
-        auth_supported: false,
         auth_required_for_full_access: false,
         auth_strictly_required: false,
-        manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -257,10 +225,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "landscape",
         supports_query: true,
         supports_account: false,
-        auth_supported: false,
         auth_required_for_full_access: false,
         auth_strictly_required: false,
-        manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -271,10 +238,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "1girl solo",
         supports_query: true,
         supports_account: false,
-        auth_supported: false,
         auth_required_for_full_access: false,
         auth_strictly_required: false,
-        manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
     SiteEntry {
@@ -285,10 +251,9 @@ pub static SITES: &[SiteEntry] = &[
         example_query: "canine solo",
         supports_query: true,
         supports_account: false,
-        auth_supported: false,
         auth_required_for_full_access: false,
         auth_strictly_required: false,
-        manual_credential_types: NO_MANUAL_CREDENTIAL_TYPES,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
 ];
@@ -752,7 +717,6 @@ mod tests {
                 "gelbooru",
                 "rule34",
                 "danbooru",
-                "artstation",
                 "webtoons",
                 "hentaifoundry",
                 "baraag",
@@ -767,7 +731,7 @@ mod tests {
                 "e621",
             ])
         );
-        assert_eq!(SITES.len(), 18);
+        assert_eq!(SITES.len(), 17);
     }
 
     #[test]
@@ -785,23 +749,26 @@ mod tests {
                 source.credential_owner_site_id
             );
 
-            if source.auth_supported {
-                assert!(
-                    !source.manual_credential_types.is_empty() || source.oauth_provider.is_some(),
-                    "authenticated source {} has no login path",
-                    source.id
-                );
-            } else {
-                assert!(source.manual_credential_types.is_empty());
-                assert!(source.oauth_provider.is_none());
-                assert!(!source.auth_required_for_full_access);
-                assert!(!source.auth_strictly_required);
-            }
+            assert!(
+                !source.credential_types.is_empty(),
+                "source {} has no captured credential type",
+                source.id
+            );
             if source.auth_strictly_required {
-                assert!(source.auth_supported);
                 assert!(source.auth_required_for_full_access);
             }
         }
+    }
+
+    #[test]
+    fn baraag_and_tumblr_use_their_gallery_dl_oauth_contracts() {
+        let baraag = site_by_id("baraag").unwrap();
+        assert_eq!(baraag.credential_types, OAUTH_CREDENTIAL_TYPES);
+        assert_eq!(baraag.oauth_provider, Some("mastodon"));
+
+        let tumblr = site_by_id("tumblr").unwrap();
+        assert_eq!(tumblr.credential_types, OAUTH_CREDENTIAL_TYPES);
+        assert_eq!(tumblr.oauth_provider, Some("tumblr"));
     }
 
     #[test]

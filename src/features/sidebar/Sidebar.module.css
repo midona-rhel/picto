@@ -5,8 +5,10 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
+  font-family: var(--font-family-ui, var(--font-family));
   font-size: var(--font-size-md);
-  background: var(--color-surface-1);
+  color: var(--sidebar-text-primary, var(--color-text-primary));
+  background: var(--sidebar-surface, var(--color-surface-1));
 }
 
 .scroll {
@@ -14,8 +16,120 @@
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  /* Keep both columns stable: left inset equals gutter + right inner padding. */
   scrollbar-gutter: stable;
-  padding: var(--space-2) 7px var(--space-6) 16px;
+  padding: 0 var(--sidebar-list-right-padding) 16px 0;
+}
+
+@supports not (scrollbar-gutter: stable) {
+  .scroll {
+    /* Classic scrollbars reserve their track; transparent styling keeps it unobtrusive. */
+    overflow-y: scroll;
+  }
+}
+
+.treeFilter {
+  --tree-filter-footer-scrim-height: 10px;
+  position: relative;
+  z-index: 1;
+  isolation: isolate;
+  flex-shrink: 0;
+  height: 38px;
+  margin: 0;
+  padding: 0 10px 10px;
+  color: var(--sidebar-count-color, var(--color-text-tertiary));
+}
+
+/* reference application's footer visually masks the final scroll rows before the 28px filter field. */
+.treeFilter::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  top: calc(-1 * var(--tree-filter-footer-scrim-height));
+  right: 0;
+  bottom: 0;
+  left: 0;
+  background: var(--sidebar-surface, var(--color-surface-1));
+  pointer-events: none;
+}
+
+.treeFilterField {
+  position: relative;
+  z-index: 1;
+  display: block;
+  width: 100%;
+  height: 28px;
+  padding: 0;
+  background: var(--color-black-20);
+  border: 1px solid var(--sidebar-border-color, var(--color-border-secondary));
+  border-radius: 6px;
+}
+
+.treeFilterIcon {
+  position: absolute;
+  top: 50%;
+  left: 8px;
+  width: 16px;
+  height: 16px;
+  transform: translateY(-50%);
+  color: rgb(247, 248, 248);
+  opacity: 1;
+  pointer-events: none;
+}
+
+.treeFilterInput {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: transparent;
+  color: var(--sidebar-text-primary, var(--color-text-primary));
+  font: 400 12px/28px var(--font-family-ui, var(--font-family));
+  outline: none;
+  padding: 0 10px 0 30px;
+}
+
+.treeFilterInputWithClear {
+  padding-right: 26px;
+}
+
+.treeFilterInput:focus-visible {
+  outline: none;
+}
+
+.treeFilterField:focus-within {
+  border-color: var(--color-border-focus);
+}
+
+.clearTreeFilter {
+  position: absolute;
+  top: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--sidebar-count-color, var(--color-text-tertiary));
+  opacity: 0.8;
+  cursor: pointer;
+}
+
+.clearTreeFilter:hover,
+.clearTreeFilter:focus-visible {
+  color: var(--sidebar-text-primary, var(--color-text-primary));
+  background: transparent;
+  opacity: 1;
+  outline: none;
+}
+
+.noFilterResults {
+  margin: 6px 0 0 var(--sidebar-list-anchor);
+  color: var(--sidebar-section-text, var(--color-text-tertiary));
+  font-size: 12px;
 }
 
 
@@ -30,20 +144,22 @@
   z-index: var(--layer-sidebar-rename);
   flex: 1;
   min-width: 0;
+  box-sizing: border-box;
   height: 20px;
-  padding: 0 4px;
-  margin: 0 4px;
+  /* Offset the border so editable text starts at the static label origin. */
+  padding: 0;
+  margin: 0 0 0 -1px;
   border: 1px solid var(--color-primary);
   border-radius: 3px;
   background: var(--color-bg-app);
   color: var(--color-text-primary);
-  font-size: var(--font-size-md);
-  font-family: var(--font-family);
+  font: inherit;
   outline: none;
 }
 
 .loadingMessage {
-  padding: var(--space-4);
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
+  margin: 6px 0 0 var(--sidebar-list-anchor);
+  padding: 0;
+  color: var(--sidebar-section-text, var(--color-text-tertiary));
+  font-size: 12px;
 }

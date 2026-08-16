@@ -2,6 +2,7 @@ import {
   cancelAuthSession,
   deleteCredential,
   getSubscriptionSites,
+  getAuthSessionState,
   getSubscriptions,
   listCredentialHealth,
   listCredentials,
@@ -63,9 +64,7 @@ export const authController = {
       listCredentialHealth(),
     ]);
 
-    const authSites = sites.filter(
-      (site) => site.auth_supported && site.id === site.credential_owner_site_id,
-    );
+    const authSites = sites.filter((site) => site.id === site.credential_owner_site_id);
     const issuesBySite = new Map<string, SubscriptionIssueRecord[]>();
 
     await Promise.all(
@@ -128,6 +127,10 @@ export const authController = {
 
   cancelSession(): Promise<void> {
     return cancelAuthSession();
+  },
+
+  getSessionState(): Promise<AuthSessionState> {
+    return getAuthSessionState();
   },
 
   subscribeSessionState(onState: (session: AuthSessionState) => void): Promise<() => void> {

@@ -54,7 +54,6 @@ pub enum CredentialPreflight {
 pub struct ResolvedRunCredential {
     pub canonical_site_category: String,
     pub matched_lookup_key: Option<String>,
-    pub auth_supported: bool,
     pub auth_required_for_full_access: bool,
     pub gallery_dl_auth: Option<GalleryDlAuthConfig>,
 }
@@ -65,7 +64,7 @@ impl ResolvedRunCredential {
     }
 }
 
-pub struct SetManualCredentialRequest {
+pub struct SetCapturedCredentialRequest {
     pub site_category: String,
     pub credential_type: String,
     pub username: Option<String>,
@@ -167,15 +166,15 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         self.list_credential_health_raw().await
     }
 
-    pub async fn set_manual_credential(
+    pub async fn store_captured_credential(
         &self,
-        request: SetManualCredentialRequest,
+        request: SetCapturedCredentialRequest,
     ) -> Result<String, String> {
         let owner = credential_owner_site(&request.site_category)
             .ok_or_else(|| format!("Unsupported authentication site: {}", request.site_category))?;
         let site_category = owner.id;
         if !owner
-            .manual_credential_types
+            .credential_types
             .contains(&request.credential_type.as_str())
         {
             return Err(format!(
@@ -187,6 +186,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             .ok_or_else(|| format!("Invalid credential_type: {}", request.credential_type))?;
         validate_credential_fields(
             credential_type,
+            &site_category,
             request.username.as_deref(),
             request.password.as_deref(),
             request.cookies.as_ref(),
@@ -228,7 +228,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
                 map
             });
 
-        self.set_manual_credential(SetManualCredentialRequest {
+        self.store_captured_credential(SetCapturedCredentialRequest {
             site_category: "pixiv".to_string(),
             credential_type: "oauth_token".to_string(),
             username: None,
@@ -272,9 +272,6 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             return CredentialPreflight::Ready;
         }
 
-        if !resolved.auth_supported {
-            return CredentialPreflight::Ready;
-        }
         if strictly_required {
             return CredentialPreflight::MissingRequired;
         }
@@ -312,7 +309,6 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         let source = site_by_id(site_id.trim());
         let owner = source.and_then(|site| credential_owner_site(site.id));
         let canonical_site_category = owner.map_or(site_id.trim(), |site| site.id).to_string();
-        let auth_supported = source.is_some_and(|site| site.auth_supported);
         let auth_required = source.is_some_and(|site| site.auth_required_for_full_access);
         let mut matched_lookup_key = None;
         let mut gallery_dl_auth = None;
@@ -332,7 +328,6 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
                 return ResolvedRunCredential {
                     canonical_site_category,
                     matched_lookup_key,
-                    auth_supported,
                     auth_required_for_full_access: auth_required,
                     gallery_dl_auth,
                 };
@@ -355,7 +350,6 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         ResolvedRunCredential {
             canonical_site_category,
             matched_lookup_key,
-            auth_supported,
             auth_required_for_full_access: auth_required,
             gallery_dl_auth,
         }
@@ -370,11 +364,10 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
     ) -> ResolvedRunCredential {
         let resolved = self.resolve_credential(site_id, url).await;
         let canonical_site_category = resolved.canonical_site_category.clone();
-        let auth_supported = resolved.auth_supported;
         let auth_required = resolved.auth_required_for_full_access;
         let gallery_dl_auth = &resolved.gallery_dl_auth;
 
-        if auth_supported && gallery_dl_auth.is_none() && auth_required {
+        if gallery_dl_auth.is_none() && auth_required {
             self.set_health(
                 &canonical_site_category,
                 CredentialHealthStatus::Missing,
@@ -632,10 +625,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
 
 fn credential_owner_site(site_id: &str) -> Option<&'static SiteEntry> {
     let source = site_by_id(site_id.trim())?;
-    source
-        .auth_supported
-        .then(|| site_by_id(source.credential_owner_site_id))
-        .flatten()
+    site_by_id(source.credential_owner_site_id)
 }
 
 fn credential_owner_site_category(site_id: &str) -> Option<&'static str> {
@@ -644,6 +634,7 @@ fn credential_owner_site_category(site_id: &str) -> Option<&'static str> {
 
 fn validate_credential_fields(
     credential_type: CredentialType,
+    site_category: &str,
     username: Option<&str>,
     password: Option<&str>,
     cookies: Option<&HashMap<String, String>>,
@@ -665,7 +656,12 @@ fn validate_credential_fields(
             Err("API-key credentials contain an invalid user_id or api_key".to_string())
         }
         CredentialType::OAuthToken if !present(oauth_token) => {
-            Err("Pixiv credentials require an OAuth refresh token".to_string())
+            Err("OAuth credentials require an access or refresh token".to_string())
+        }
+        CredentialType::OAuthToken
+            if site_category == "tumblr" && !present(password) =>
+        {
+            Err("Tumblr OAuth credentials require an access token secret".to_string())
         }
         CredentialType::Cookies
             if !cookies.is_some_and(|cookies| {
@@ -676,9 +672,6 @@ fn validate_credential_fields(
             }) =>
         {
             Err("Cookie credentials require captured session cookies".to_string())
-        }
-        CredentialType::UsernamePassword if !present(username) || !present(password) => {
-            Err("Username/password credentials require both fields".to_string())
         }
         _ => Ok(()),
     }
@@ -789,13 +782,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tumblr_oauth_requires_and_resolves_the_access_token_secret() {
+        let db = test_db().await;
+        let service = SubscriptionCredentialService::with_store(
+            db.as_ref(),
+            InMemoryCredentialStore::default(),
+        );
+
+        let missing_secret = service
+            .store_captured_credential(SetCapturedCredentialRequest {
+                site_category: "tumblr".to_string(),
+                credential_type: "oauth_token".to_string(),
+                username: None,
+                password: None,
+                cookies: None,
+                oauth_token: Some("access-token".to_string()),
+                display_name: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(missing_secret.contains("access token secret"));
+
+        service
+            .store_captured_credential(SetCapturedCredentialRequest {
+                site_category: "tumblr".to_string(),
+                credential_type: "oauth_token".to_string(),
+                username: None,
+                password: Some("access-secret".to_string()),
+                cookies: None,
+                oauth_token: Some("access-token".to_string()),
+                display_name: Some("Tumblr".to_string()),
+            })
+            .await
+            .unwrap();
+        let auth = service
+            .resolve_credential("tumblr", "https://www.tumblr.com/nasa")
+            .await
+            .gallery_dl_auth
+            .unwrap()
+            .fragment;
+        assert_eq!(auth["access-token"], "access-token");
+        assert_eq!(auth["access-token-secret"], "access-secret");
+    }
+
+    #[tokio::test]
     async fn gelbooru_resolves_user_id_and_api_key() {
         let db = test_db().await;
         let store = InMemoryCredentialStore::default();
         let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
 
         service
-            .set_manual_credential(SetManualCredentialRequest {
+            .store_captured_credential(SetCapturedCredentialRequest {
                 site_category: "gelbooru".to_string(),
                 credential_type: "api_key".to_string(),
                 username: Some("123".to_string()),
@@ -817,7 +854,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn manual_credentials_are_validated_against_the_source_contract() {
+    async fn captured_credentials_are_validated_against_the_source_contract() {
         let db = test_db().await;
         let service = SubscriptionCredentialService::with_store(
             db.as_ref(),
@@ -825,7 +862,7 @@ mod tests {
         );
 
         let wrong_type = service
-            .set_manual_credential(SetManualCredentialRequest {
+            .store_captured_credential(SetCapturedCredentialRequest {
                 site_category: "gelbooru".to_string(),
                 credential_type: "oauth_token".to_string(),
                 username: None,
@@ -839,7 +876,7 @@ mod tests {
         assert!(wrong_type.contains("not supported for Gelbooru"));
 
         let incomplete = service
-            .set_manual_credential(SetManualCredentialRequest {
+            .store_captured_credential(SetCapturedCredentialRequest {
                 site_category: "gelbooru".to_string(),
                 credential_type: "api_key".to_string(),
                 username: Some("123".to_string()),
@@ -853,7 +890,7 @@ mod tests {
         assert!(incomplete.contains("user_id and api_key"));
 
         let malformed = service
-            .set_manual_credential(SetManualCredentialRequest {
+            .store_captured_credential(SetCapturedCredentialRequest {
                 site_category: "rule34".to_string(),
                 credential_type: "api_key".to_string(),
                 username: Some("456".to_string()),
@@ -874,7 +911,7 @@ mod tests {
         let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
 
         service
-            .set_manual_credential(SetManualCredentialRequest {
+            .store_captured_credential(SetCapturedCredentialRequest {
                 site_category: "rule34".to_string(),
                 credential_type: "api_key".to_string(),
                 username: Some("456".to_string()),
@@ -905,7 +942,7 @@ mod tests {
         let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
 
         service
-            .set_manual_credential(SetManualCredentialRequest {
+            .store_captured_credential(SetCapturedCredentialRequest {
                 site_category: "furaffinity".to_string(),
                 credential_type: "cookies".to_string(),
                 username: None,
@@ -930,18 +967,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn idolcomplex_resolves_username_and_password() {
+    async fn idolcomplex_resolves_captured_browser_cookies() {
         let db = test_db().await;
         let store = InMemoryCredentialStore::default();
         let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
 
         service
-            .set_manual_credential(SetManualCredentialRequest {
+            .store_captured_credential(SetCapturedCredentialRequest {
                 site_category: "idolcomplex".to_string(),
-                credential_type: "username_password".to_string(),
-                username: Some("artist".to_string()),
-                password: Some("secret".to_string()),
-                cookies: None,
+                credential_type: "cookies".to_string(),
+                username: None,
+                password: None,
+                cookies: Some(HashMap::from([(
+                    "session".to_string(),
+                    "captured".to_string(),
+                )])),
                 oauth_token: None,
                 display_name: Some("Idol Complex".to_string()),
             })
@@ -955,13 +995,12 @@ mod tests {
             )
             .await;
         let auth = resolved.gallery_dl_auth.unwrap().fragment;
-        assert_eq!(auth["username"], "artist");
-        assert_eq!(auth["password"], "secret");
+        assert_eq!(auth["cookies"]["session"], "captured");
         assert!(store.contains("idolcomplex"));
     }
 
     #[tokio::test]
-    async fn danbooru_is_anonymous_and_never_reads_credential_store() {
+    async fn danbooru_without_a_saved_login_never_reads_credential_store() {
         let db = test_db().await;
         let service = SubscriptionCredentialService::with_store(db.as_ref(), RejectCredentialReads);
 
@@ -969,15 +1008,11 @@ mod tests {
             .resolve_credential("danbooru", "https://danbooru.donmai.us/posts?tags=test")
             .await;
         assert_eq!(resolved.canonical_site_category, "danbooru");
-        assert!(!resolved.auth_supported);
         assert!(!resolved.has_credential());
         assert_eq!(
             service.preflight_for_run("danbooru", "").await,
             CredentialPreflight::Ready
         );
-        service
-            .note_run_auth_failure(0, None, "danbooru", FailureKind::Unauthorized, None)
-            .await;
     }
 
     #[tokio::test]
@@ -1011,7 +1046,6 @@ mod tests {
             )
             .await;
 
-        assert!(resolved.auth_supported);
         assert!(resolved.auth_required_for_full_access);
         assert!(!resolved.has_credential());
     }

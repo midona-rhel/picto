@@ -7,6 +7,7 @@
   "ts_only": [
     "open_settings_window",
     "auth_session_start",
+    "auth_session_state",
     "auth_session_cancel",
     "open_in_new_window"
   ]

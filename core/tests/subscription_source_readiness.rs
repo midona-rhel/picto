@@ -82,6 +82,20 @@ async fn certify_selected_source() -> Result<(), String> {
     validate_query_kind(&site_id, query_kind)?;
     let source_url = build_url(&site_id, &query_text)
         .ok_or_else(|| format!("site '{site_id}' could not build a source URL"))?;
+    let credential_file = std::env::var_os("PICTO_LIVE_SUBSCRIPTION_CREDENTIAL_FILE")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from);
+    let allow_keychain = std::env::var("PICTO_LIVE_SUBSCRIPTION_ALLOW_KEYCHAIN")
+        .ok()
+        .as_deref()
+        == Some("1");
+    let authentication_mode = if credential_file.is_some() {
+        "fixture"
+    } else if allow_keychain {
+        "keychain"
+    } else {
+        "anonymous"
+    };
 
     let temp = tempfile::tempdir().map_err(|error| error.to_string())?;
     let root = temp.path();
@@ -95,34 +109,24 @@ async fn certify_selected_source() -> Result<(), String> {
         let db = LibraryDatabase::open(root)?;
         let runtime = SubscriptionRuntimeService::new(&db, root);
 
-        if site.auth_supported {
-            let credential_file = std::env::var_os("PICTO_LIVE_SUBSCRIPTION_CREDENTIAL_FILE")
-                .filter(|value| !value.is_empty())
-                .map(PathBuf::from);
-            let credential_file_configured = credential_file.is_some();
-            let allow_keychain = std::env::var("PICTO_LIVE_SUBSCRIPTION_ALLOW_KEYCHAIN")
-                .ok()
-                .as_deref()
-                == Some("1");
-            if site.auth_strictly_required && credential_file.is_none() && !allow_keychain {
-                return Err(format!(
-                    "site '{site_id}' requires credentials; pass a verifier-only --credential-file or explicitly allow an attended --allow-keychain run"
-                ));
-            }
+        if site.auth_strictly_required && credential_file.is_none() && !allow_keychain {
+            return Err(format!(
+                "site '{site_id}' requires credentials; pass a verifier-only --credential-file or explicitly allow an attended --allow-keychain run"
+            ));
+        }
 
-            if let Some(path) = credential_file.as_deref() {
-                install_mock_credential(path, site.credential_owner_site_id)?;
-            }
-            if allow_keychain || credential_file_configured {
-                attach_existing_credential(root, site.credential_owner_site_id)?;
-                let credential = SubscriptionCredentialService::new(&db)
-                    .resolve_credential(&site_id, &source_url)
-                    .await;
-                if site.auth_strictly_required && !credential.has_credential() {
-                    return Err(format!(
-                        "site '{site_id}' requires a real credential; missing credentials are not a skip"
-                    ));
-                }
+        if let Some(path) = credential_file.as_deref() {
+            install_mock_credential(path, site.credential_owner_site_id)?;
+        }
+        if allow_keychain || credential_file.is_some() {
+            attach_existing_credential(root, site.credential_owner_site_id)?;
+            let credential = SubscriptionCredentialService::new(&db)
+                .resolve_credential(&site_id, &source_url)
+                .await;
+            if !credential.has_credential() {
+                return Err(format!(
+                    "authentication was requested for '{site_id}', but its stored credential did not resolve"
+                ));
             }
         }
 
@@ -248,6 +252,7 @@ async fn certify_selected_source() -> Result<(), String> {
         &query_text,
         post_limit,
         first_run.posts_processed as u32,
+        authentication_mode,
         &first_evidence,
         &replay_evidence,
     )?;
@@ -840,6 +845,7 @@ fn write_certification_report(
     query_text: &str,
     requested_posts: u32,
     source_posts_processed: u32,
+    authentication_mode: &str,
     first_fetch: &LibraryEvidence,
     final_evidence: &LibraryEvidence,
 ) -> Result<(), String> {
@@ -871,6 +877,10 @@ fn write_certification_report(
         "site_id": site_id,
         "query": query_text,
         "requested_first_fetch_source_posts": requested_posts,
+        "authentication": {
+            "mode": authentication_mode,
+            "credential_resolved": authentication_mode != "anonymous",
+        },
         "first_fetch": {
             "source_posts_processed": source_posts_processed,
             "materialized_post_count": first_fetch.post_order.len(),

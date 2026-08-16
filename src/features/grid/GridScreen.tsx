@@ -74,12 +74,28 @@ import { filesController, manualImportParamsForScope } from '../../controllers/f
 import { viewerController } from '../../controllers/viewerController';
 import { nodeIdToGridScope } from '../../shared/lib/gridScope';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
+import { ApplicationMenuButton } from '../../shared/ui/ApplicationMenuButton/ApplicationMenuButton';
 import styles from './GridScreen.module.css';
 
 const store = getDefaultStore();
 const SCOPE_TRANSITION_MS = 170;
 const STATUS_ACTIVE = 1;
 const STATUS_TRASH = 2;
+
+function supportsExplicitImageAutoTagging(
+  querySelectionActive: boolean,
+  hashes: Set<string>,
+  items: Array<{ entity_hash: string; mime_type: string }>,
+): boolean {
+  if (querySelectionActive || hashes.size === 0) {
+    return false;
+  }
+  const selectedItems = items.filter((item) => hashes.has(item.entity_hash));
+  return (
+    selectedItems.length === hashes.size &&
+    selectedItems.every((item) => item.mime_type.startsWith('image/'))
+  );
+}
 
 export function GridScreen() {
   const activeNodeId = useAtomValue(activeNodeIdAtom);
@@ -528,6 +544,8 @@ export function GridScreen() {
   selectedHashesRef.current = selectedHashes;
   const itemsRef = useRef(items);
   itemsRef.current = items;
+  const querySelectionActiveRef = useRef(querySelectionActive);
+  querySelectionActiveRef.current = querySelectionActive;
   const viewerSessionRef = useRef(viewerSession);
   viewerSessionRef.current = viewerSession;
   const quickLookSessionRef = useRef(quickLookSession);
@@ -579,6 +597,11 @@ export function GridScreen() {
       const scope = gridScopeRef.current;
       const isTrash = scope.kind === 'system' && scope.key === 'trash';
       const singleHash = count === 1 ? [...hashes][0] : null;
+      const canAutoTag = supportsExplicitImageAutoTagging(
+        querySelectionActiveRef.current,
+        hashes,
+        curItems,
+      );
 
       if (matchesShortcutDef(e, defs.selectAll)) { e.preventDefault(); selectAllResults(); return; }
       if (matchesShortcutDef(e, defs.deselectAll) && count > 0) { clearSelection(); return; }
@@ -641,7 +664,7 @@ export function GridScreen() {
       if (matchesShortcutDef(e, defs.addToFolders) && count > 0) {
         e.preventDefault(); setFolderPickerModalRef.current({ open: true }); return;
       }
-      if (matchesShortcutDef(e, defs.autoTag) && count > 0) {
+      if (matchesShortcutDef(e, defs.autoTag) && canAutoTag) {
         e.preventDefault(); setAiTaggerPortalRef.current({ open: true, anchor: inspectorAnchor() }); return;
       }
 
@@ -888,6 +911,9 @@ export function GridScreen() {
           const selCount = effectiveSelectionCount;
           const selectedItems = items.filter((it) => effectiveHashes.has(it.entity_hash));
           const singleItem = effectiveSelectionMode === 'explicit' && selCount === 1 ? selectedItems[0] : null;
+          const canAutoTag = effectiveSelectionMode === 'explicit'
+            && selectedItems.length === effectiveHashes.size
+            && selectedItems.every((selected) => selected.mime_type.startsWith('image/'));
           const scopeKind = gridScope.kind === 'system' ? 'system'
             : gridScope.kind === 'folder' ? 'folder'
             : gridScope.kind === 'smart_folder' ? 'smart_folder'
@@ -899,6 +925,7 @@ export function GridScreen() {
           const entries = buildTileContextMenu({
             selectionCount: selCount,
             querySelectionActive: effectiveQuerySelectionActive,
+            aiTagEnabled: canAutoTag,
             singleSelected: effectiveSelectionMode === 'explicit' && selCount === 1,
             singleHash: singleItem?.entity_hash ?? null,
             scopeKind,
@@ -996,7 +1023,9 @@ export function GridScreen() {
             },
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
             onOpenTagSelect: () => { setTagSelectModal({ open: true }); },
-            onOpenAiTagger: () => { setAiTaggerPortal({ open: true, anchor: inspectorAnchor() }); },
+            onOpenAiTagger: canAutoTag
+              ? () => { setAiTaggerPortal({ open: true, anchor: inspectorAnchor() }); }
+              : undefined,
             onMoveToTrash: () => { void setSelectionStatus(STATUS_TRASH); },
             onRestore: () => { void setSelectionStatus(STATUS_ACTIVE); },
             onPermanentDelete: () => { void permanentlyDeleteSelection(); },
@@ -1027,6 +1056,7 @@ export function GridScreen() {
 
   return (
     <div className={styles.root}>
+      <ApplicationMenuButton />
       <div
         className={`${styles.surface} ${
           incomingHidden

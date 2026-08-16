@@ -239,6 +239,10 @@ export function cancelAuthSession(): Promise<void> {
   return invoke<void>('auth_session_cancel');
 }
 
+export function getAuthSessionState(): Promise<AuthSessionState> {
+  return invoke<AuthSessionState>('auth_session_state');
+}
+
 export function pixivOAuthExchange(
   code: string,
   codeVerifier: string,

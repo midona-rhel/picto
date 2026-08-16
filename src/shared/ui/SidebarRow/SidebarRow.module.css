@@ -6,35 +6,55 @@
   align-items: center;
   height: var(--sidebar-row-height);
   line-height: var(--sidebar-row-height);
-  padding: 0;
+  padding: 0 2px 0 calc(var(--sidebar-list-anchor) + var(--sidebar-row-indent, 0px));
   cursor: default;
   user-select: none;
-  color: var(--color-text-primary);
+  color: var(--sidebar-text-primary, var(--color-text-primary));
   font-size: var(--font-size-md);
+  border-radius: var(--sidebar-row-radius, 7px);
+  outline: none;
 }
 
-/* Background highlight via ::before — left edge follows indent via --row-inset */
-.row::before {
+.row::before,
+.sectionTitleRow::before {
   content: "";
   position: absolute;
   z-index: 0;
-  top: 0;
-  right: 0;
-  bottom: 1px;
-  left: var(--row-inset, 1px);
-  border-radius: 5px;
+  top: var(--sidebar-list-highlight-top);
+  right: var(--sidebar-list-highlight-right-inset);
+  bottom: var(--sidebar-list-highlight-bottom);
+  border-radius: var(--sidebar-list-highlight-radius);
   opacity: 0;
-  transition: opacity var(--duration-fast) var(--ease-default);
+  transition: var(--sidebar-list-highlight-transition);
   pointer-events: none;
 }
 
+.row::before {
+  left: calc(var(--sidebar-list-anchor) + var(--sidebar-row-indent, 0px));
+}
+
+.rowContent {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  height: 100%;
+}
+
+.rowContentWithCount {
+  display: flex;
+  width: 100%;
+}
+
 .row:hover::before {
-  background: var(--color-surface-hover);
+  background: var(--sidebar-list-highlight-hover-bg);
   opacity: 1;
 }
 
 .active::before {
-  background: var(--color-surface-active) !important;
+  background: var(--sidebar-list-highlight-active-bg) !important;
   opacity: 1 !important;
 }
 
@@ -45,14 +65,24 @@
 }
 
 .selected::before {
-  background: var(--color-surface-active, rgba(248, 249, 251, 0.08));
+  background: var(--sidebar-list-highlight-selected-bg);
   opacity: 1;
 }
 
 .contextHighlight::before {
-  background: var(--sidebar-item-hover-bg, rgba(248, 249, 251, 0.05));
+  background: var(--sidebar-list-highlight-hover-bg);
   border: 1px solid var(--color-border-primary);
   opacity: 1;
+}
+
+.rowInteractive {
+  cursor: pointer;
+}
+
+.rowInteractive:focus-visible::before {
+  background: var(--sidebar-list-highlight-hover-bg);
+  opacity: 1;
+  box-shadow: inset 0 0 0 1px var(--color-border-focus);
 }
 
 /* Drag reorder drop indicators */
@@ -61,7 +91,7 @@
   content: '';
   position: absolute;
   top: -1px;
-  left: var(--row-inset, 1px);
+  left: calc(var(--sidebar-list-anchor) + var(--sidebar-row-indent, 0px));
   right: 0;
   height: 2px;
   background: var(--color-primary);
@@ -81,7 +111,7 @@
   content: '';
   position: absolute;
   bottom: -1px;
-  left: var(--row-inset, 1px);
+  left: calc(var(--sidebar-list-anchor) + var(--sidebar-row-indent, 0px));
   right: 0;
   height: 2px;
   background: var(--color-primary);
@@ -98,10 +128,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: var(--sidebar-row-height);
+  width: var(--sidebar-glyph-column);
   height: var(--sidebar-row-height);
-  margin-left: 2px;
-  opacity: 0.85;
+  margin-left: 0;
+  color: var(--sidebar-icon-color, var(--color-text-primary));
+  opacity: 0.8;
 }
 
 .row:hover .icon,
@@ -122,80 +153,127 @@
   line-height: var(--sidebar-row-height);
 }
 
+.rowContent .label {
+  flex: 0 1 auto;
+}
+
+.rowContentWithCount .label {
+  flex: 1;
+}
+
+/* Folder glyphs are centered in the shared 26px column; preserve a small visual gap. */
 /* Count badge */
 .count {
   position: relative;
   z-index: 1;
   flex-shrink: 0;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
+  min-width: 36px;
+  font-size: 11px;
+  color: var(--sidebar-count-color, var(--color-text-tertiary));
   font-variant-numeric: tabular-nums slashed-zero;
-  font-family: var(--font-family-mono);
-  padding: 0 4px 0 4px;
+  font-family: 'Roboto Mono', 'Monaco', 'Consolas', monospace;
+  padding: 0 5px;
   text-align: right;
   line-height: var(--sidebar-row-height);
   display: inline-flex;
   align-items: center;
+  justify-content: flex-end;
 }
 
 
 /* Section header */
 .section {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
   height: 24px;
-  padding: 0 0 0 0;
-  margin: 4px 0 1px;
+  padding: 0;
+  margin: 8px 0 2px;
   cursor: pointer;
   user-select: none;
+  outline: none;
 }
 
 .sectionTitleRow {
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
+  gap: 4px;
   height: 24px;
-  padding: 0 4px;
-  margin-left: 1px;
-  border-radius: 4px;
+  padding: 0 var(--sidebar-section-control-inset);
+  margin-left: calc(var(--sidebar-list-anchor) + var(--sidebar-folder-glyph-inset) - var(--sidebar-section-control-inset) + var(--sidebar-section-text-nudge));
+  border-radius: 5px;
   transition: all var(--duration-normal) var(--ease-default);
 }
 
-.section:hover .sectionTitleRow {
-  background: var(--color-surface-hover);
+.sectionTitleRow::before {
+  right: 0;
+  left: 0;
+}
+
+.section:hover .sectionTitleRow::before,
+.section:focus-visible .sectionTitleRow::before {
+  background: var(--sidebar-list-highlight-hover-bg);
+  opacity: 1;
+}
+
+.sectionMeta {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0;
+  min-width: 0;
 }
 
 .sectionTitle {
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: var(--font-weight-regular);
+  color: var(--sidebar-section-text, var(--color-text-tertiary));
   white-space: pre;
   line-height: 24px;
 }
 
-.section:hover .sectionTitle {
-  color: var(--color-text-primary);
+.section:hover .sectionTitle,
+.section:focus-visible .sectionTitle {
+  color: var(--sidebar-text-primary, var(--color-text-primary));
+}
+
+.sectionCount {
+  font-size: 12px;
+  color: var(--sidebar-section-text, var(--color-text-tertiary));
 }
 
 .sectionArrow {
+  position: relative;
+  z-index: 1;
   display: inline-flex;
   align-items: center;
-  margin-left: 3px;
+  margin-left: 1px;
   opacity: 0;
   transition: opacity var(--duration-normal) var(--ease-default);
-  color: var(--color-text-secondary);
+  color: var(--sidebar-section-text, var(--color-text-tertiary));
 }
 
-.section:hover .sectionArrow {
-  opacity: 0.9;
+.section:hover .sectionArrow,
+.section:focus-visible .sectionArrow {
+  opacity: 0.7;
 }
 
 .sectionArrowExpanded {
   transform: rotate(90deg);
 }
 
+.sectionArrowStatic {
+  opacity: 0;
+}
+
 /* Section add button */
 .sectionAddBtn {
+  position: relative;
+  z-index: 1;
   appearance: none;
   border: none;
   background: none;
@@ -203,11 +281,11 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 24px;
-  height: 24px;
-  margin-right: -4px;
-  border-radius: 0;
-  color: var(--color-text-secondary);
+  width: 20px;
+  height: 20px;
+  margin-right: 0;
+  border-radius: 5px;
+  color: var(--sidebar-count-color, var(--color-text-secondary));
   opacity: 0;
   cursor: pointer;
   transition: opacity var(--duration-normal) var(--ease-default);
@@ -219,21 +297,20 @@
 
 .sectionAddBtn:hover {
   opacity: 1 !important;
-  color: var(--color-text-primary);
+  color: var(--sidebar-text-primary, var(--color-text-primary));
+  background: var(--sidebar-item-hover-bg, var(--color-surface-hover));
 }
 
 /* Folder expand/collapse triangle */
 .expandArrow {
-  position: relative;
+  position: absolute;
   z-index: 2;
-  width: 16px;
+  left: calc(var(--sidebar-list-anchor) + var(--sidebar-row-indent, 0px) - var(--sidebar-disclosure-column));
+  width: var(--sidebar-disclosure-column);
   height: var(--sidebar-row-height);
-  margin-left: -20px;
-  margin-right: 4px;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-  flex-shrink: 0;
+  justify-content: center;
   cursor: pointer;
 }
 
@@ -246,9 +323,8 @@
   height: 0;
   border-left: 3.5px solid transparent;
   border-right: 3.5px solid transparent;
-  border-top: 5px solid var(--color-text-primary);
+  border-top: 5px solid var(--sidebar-count-color, var(--color-text-secondary));
   transition: transform var(--duration-normal) var(--ease-default), opacity var(--duration-normal) var(--ease-default);
-  margin-right: -2px;
   opacity: 0.7;
 }
 
@@ -286,4 +362,3 @@
   pointer-events: none;
   z-index: 0;
 }
-

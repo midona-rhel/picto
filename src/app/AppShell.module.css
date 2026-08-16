@@ -15,6 +15,7 @@
   display: flex;
   margin-right: var(--inspector-width, 0px);
   -webkit-app-region: drag;
+  font-family: var(--font-family-ui, var(--font-family));
 }
 
 .titlebarLeft {
@@ -24,18 +25,23 @@
   align-items: center;
   padding-left: 74px; /* macOS traffic light offset */
   padding-right: 8px;
-  background: var(--color-surface-1);
-  border-right: 1px solid var(--color-border-primary);
+  background: var(--sidebar-surface, var(--color-surface-1));
+  /* The sidebar owns this continuous boundary, including in the titlebar. */
+  border-right: 1px solid var(--sidebar-border-color, var(--color-border-secondary));
 }
 
-.titlebarLeftCollapsed {
+.titlebarLeftPanelHidden {
   width: auto;
-  padding-left: 74px;
   padding-right: 8px;
   display: flex;
   align-items: center;
-  background: var(--color-surface-1);
-  box-shadow: 0 1px 0 0 var(--color-border-secondary);
+  background: var(--color-bg-app);
+}
+
+/* Native macOS traffic lights remain clear of the shared titlebar actions. */
+.titlebarLeftPanelHiddenMac {
+  composes: titlebarLeftPanelHidden;
+  padding-left: 74px;
 }
 
 .titlebarCenter {
@@ -46,7 +52,6 @@
   align-items: center;
   padding: 0 8px;
   background: var(--color-bg-app);
-  box-shadow: 0 1px 0 0 var(--color-border-secondary);
 }
 
 /* ── Titlebar icon button — composes from shared iconButton ── */
@@ -101,7 +106,7 @@
   flex-shrink: 0;
   width: var(--sidebar-width);
   height: 100%;
-  border-right: 1px solid var(--color-border-primary);
+  border-right: 1px solid var(--color-border-secondary);
 }
 
 .main {

@@ -13,6 +13,7 @@ import {
   IconCopy, IconUpload, IconDownload,
   IconPhoto, IconInbox, IconTrash,
   IconClock, IconBookmark, IconPin, IconPinnedOff,
+  IconFilter, IconX,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
@@ -43,6 +44,7 @@ import { DynamicIcon } from '../../shared/ui/DynamicIcon';
 import { useInlineRename } from '../../shared/hooks/useInlineRename';
 import { usePersistedSet } from '../../shared/hooks/usePersistedSet';
 import type { SidebarNodeDto, SmartFolderCommandPayload, SmartFolderPredicate } from '../../shared/types/canonical';
+import { filterSidebarTree } from './treeFilter';
 import styles from './Sidebar.module.css';
 
 const IC = 19;
@@ -79,6 +81,8 @@ const LABEL_OVERRIDES: Record<string, string> = {
   'system:active': 'All',
 };
 
+const EXPAND_FILTERED_TREE = new Set<string>();
+
 export function Sidebar() {
   const nodes = useAtomValue(sidebarNodesAtom);
   const systemNodes = useAtomValue(systemNodesAtom);
@@ -90,6 +94,7 @@ export function Sidebar() {
   const setSmartFolderModal = useSetAtom(smartFolderModalAtom);
 
   const [collapsed, toggleCollapse] = usePersistedSet('picto-sidebar-collapsed');
+  const [treeFilter, setTreeFilter] = useState('');
   const contextMenu = useContextMenu();
 
   // ── Multi-select state ──
@@ -417,13 +422,23 @@ export function Sidebar() {
     }
     return result;
   }, [systemNodes]);
+  const treeFilterActive = treeFilter.trim().length > 0;
+  const visibleFolderNodes = useMemo(
+    () => filterSidebarTree(folderNodes, treeFilter),
+    [folderNodes, treeFilter],
+  );
+  const visibleSmartFolderNodes = useMemo(
+    () => filterSidebarTree(smartFolderNodes, treeFilter),
+    [smartFolderNodes, treeFilter],
+  );
+  const treeCollapsed = treeFilterActive ? EXPAND_FILTERED_TREE : collapsed;
   const folderList = useMemo(
-    () => buildTreeRenderList(folderNodes, 'section:folders', collapsed),
-    [folderNodes, collapsed],
+    () => buildTreeRenderList(visibleFolderNodes, 'section:folders', treeCollapsed),
+    [visibleFolderNodes, treeCollapsed],
   );
   const smartList = useMemo(
-    () => buildTreeRenderList(smartFolderNodes, 'section:smart_folders', collapsed),
-    [smartFolderNodes, collapsed],
+    () => buildTreeRenderList(visibleSmartFolderNodes, 'section:smart_folders', treeCollapsed),
+    [visibleSmartFolderNodes, treeCollapsed],
   );
 
   /** Multi-select-aware click handler for folder / smart folder rows. */
@@ -779,7 +794,9 @@ export function Sidebar() {
         {pinnedNodes.length > 0 && (
           <>
             <SidebarRow
-              variant="section" label="Pinned"
+              variant="section"
+              label="Quick Access"
+              count={pinnedNodes.length}
               expanded={!collapsed.has('pinned')}
               onToggle={() => toggleCollapse('pinned')}
             />
@@ -817,26 +834,28 @@ export function Sidebar() {
 
         {/* Folders */}
         <SidebarRow
-          variant="section" label="Folders"
-          expanded={!collapsed.has('folders')}
-          onToggle={() => toggleCollapse('folders')}
+          variant="section"
+          label="Folders"
+          count={folderNodes.length}
+          expanded={treeFilterActive || !collapsed.has('folders')}
+          onToggle={() => { if (!treeFilterActive) toggleCollapse('folders'); }}
           onAdd={() => { void createFolderAndRename(); }}
           addTooltip="New Folder" addShortcut="Mod+Shift+N"
         />
-        {!collapsed.has('folders') && folderList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
+        {(treeFilterActive || !collapsed.has('folders')) && folderList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
             key={node.id} variant="folder"
-            icon={<NodeIcon node={node} expanded={!collapsed.has(node.id) && hasChildren} />}
+            icon={<NodeIcon node={node} expanded={(treeFilterActive || !collapsed.has(node.id)) && hasChildren} />}
             label={folderRename.renamingId === node.id ? undefined : node.name}
-            count={folderRename.renamingId === node.id ? undefined : node.count}
+            count={node.count}
 
             active={activeNodeId === node.id} indent={indent}
             selected={sidebarSelection.has(node.id)}
-            hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
+            hasChildren={hasChildren} expanded={treeFilterActive || !collapsed.has(node.id)}
             treeLines={treeLines} isLastChild={isLastChild}
             contextHighlight={contextMenuNodeId === node.id}
             dropPosition={!folderDragState?.isPinnedReorder && folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
-            onToggleExpand={() => toggleCollapse(node.id)}
+            onToggleExpand={treeFilterActive ? undefined : () => toggleCollapse(node.id)}
             onClick={(e) => handleRowClick(node.id, e)}
             onContextMenu={(e) => handleFolderContextMenu(e, node)}
             onPointerDown={(e) => {
@@ -861,26 +880,28 @@ export function Sidebar() {
 
         {/* Smart Folders */}
         <SidebarRow
-          variant="section" label="Smart Folders"
-          expanded={!collapsed.has('smart_folders')}
-          onToggle={() => toggleCollapse('smart_folders')}
+          variant="section"
+          label="Smart Folders"
+          count={smartFolderNodes.length}
+          expanded={treeFilterActive || !collapsed.has('smart_folders')}
+          onToggle={() => { if (!treeFilterActive) toggleCollapse('smart_folders'); }}
           onAdd={() => openSmartFolderModal('create', { name: 'New Smart Folder', predicate: { groups: [] } })}
           addTooltip="New Smart Folder"
         />
-        {!collapsed.has('smart_folders') && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
+        {(treeFilterActive || !collapsed.has('smart_folders')) && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
             key={node.id} variant="smart_folder"
-            icon={<NodeIcon node={node} expanded={!collapsed.has(node.id) && hasChildren} />}
+            icon={<NodeIcon node={node} expanded={(treeFilterActive || !collapsed.has(node.id)) && hasChildren} />}
             label={folderRename.renamingId === node.id ? undefined : node.name}
-            count={folderRename.renamingId === node.id ? undefined : node.count}
+            count={node.count}
 
             active={activeNodeId === node.id} indent={indent}
             selected={sidebarSelection.has(node.id)}
-            hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
+            hasChildren={hasChildren} expanded={treeFilterActive || !collapsed.has(node.id)}
             treeLines={treeLines} isLastChild={isLastChild}
             contextHighlight={contextMenuNodeId === node.id}
             dropPosition={!folderDragState?.isPinnedReorder && folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
-            onToggleExpand={() => toggleCollapse(node.id)}
+            onToggleExpand={treeFilterActive ? undefined : () => toggleCollapse(node.id)}
             onClick={(e) => handleRowClick(node.id, e)}
             onContextMenu={(e) => handleSmartFolderContextMenu(e, node)}
             onPointerDown={(e) => {
@@ -903,6 +924,33 @@ export function Sidebar() {
           </SidebarRow>
         ))}
 
+        {treeFilterActive && folderList.length === 0 && smartList.length === 0 && (
+          <div className={styles.noFilterResults}>No matching folders</div>
+        )}
+      </div>
+
+      <div className={styles.treeFilter}>
+        <div className={styles.treeFilterField}>
+          <IconFilter className={styles.treeFilterIcon} size={16} aria-hidden="true" />
+          <input
+            className={`${styles.treeFilterInput}${treeFilter ? ` ${styles.treeFilterInputWithClear}` : ''}`}
+            value={treeFilter}
+            onChange={(event) => setTreeFilter(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && treeFilter) {
+                event.preventDefault();
+                setTreeFilter('');
+              }
+            }}
+            placeholder="Filter"
+            aria-label="Filter folders and smart folders"
+          />
+          {treeFilter && (
+            <button className={styles.clearTreeFilter} type="button" onClick={() => setTreeFilter('')} aria-label="Clear folder filter">
+              <IconX size={12} />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Context menu portal */}

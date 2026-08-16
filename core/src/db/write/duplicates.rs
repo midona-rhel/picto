@@ -146,12 +146,19 @@ fn choose_winner(
     action: &str,
     left: &DuplicateSingleRef,
     right: &DuplicateSingleRef,
+    distance: Option<u32>,
 ) -> rusqlite::Result<Option<(DuplicateSingleRef, DuplicateSingleRef)>> {
     match action {
         "keep_left" => Ok(Some((left.clone(), right.clone()))),
         "keep_right" => Ok(Some((right.clone(), left.clone()))),
         "smart_merge" => {
-            let decision = crate::duplicates::quality::compare_static_image_quality(
+            // This is normally prevented by the unique media_file hash
+            // invariant, but keep exact physical content deterministic if a
+            // repaired/imported database ever presents it as a pair.
+            if left.file_hash == right.file_hash {
+                return Ok(Some((left.clone(), right.clone())));
+            }
+            let decision = crate::duplicates::quality::compare_static_image_quality_with_distance(
                 &crate::duplicates::quality::ComparableImageCandidate {
                     mime_type: &left.mime_type,
                     size_bytes: left.size_bytes,
@@ -166,6 +173,7 @@ fn choose_winner(
                     pixel_height: right.pixel_height,
                     frame_count: right.frame_count,
                 },
+                distance,
             );
             Ok(match decision {
                 crate::duplicates::quality::ImageQualityDecision::LeftBetter => {
@@ -203,16 +211,16 @@ pub fn resolve_duplicate_pair(
         ));
     }
 
-    let status: Option<String> = conn
+    let pair: Option<(String, i64)> = conn
         .query_row(
-            "SELECT status FROM duplicate
+            "SELECT status, distance FROM duplicate
              WHERE (file_id_a = ?1 AND file_id_b = ?2)
                 OR (file_id_a = ?2 AND file_id_b = ?1)",
             params![left.file_id, right.file_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    if status.as_deref() != Some("detected") {
+    if pair.as_ref().map(|(status, _)| status.as_str()) != Some("detected") {
         return Err(rusqlite::Error::InvalidParameterName(
             "duplicate pair is not awaiting review".to_string(),
         ));
@@ -264,7 +272,8 @@ pub fn resolve_duplicate_pair(
         });
     }
 
-    let Some((winner, loser)) = choose_winner(action, &left, &right)? else {
+    let distance = pair.and_then(|(_, distance)| u32::try_from(distance).ok());
+    let Some((winner, loser)) = choose_winner(action, &left, &right, distance)? else {
         return Ok(DuplicateResolutionResult {
             status: DuplicateResolveStatus::QualityAmbiguous,
             winner_hash: None,

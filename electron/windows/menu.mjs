@@ -92,7 +92,9 @@ export function createMenuManager({
           }]
         : []),
       {
-        label: 'File',
+        // Libraries are a distinct concern from importing and exporting media.
+        // This mirrors the way media-library apps group library switching first.
+        label: 'Library',
         submenu: [
           {
             label: 'Library Manager…',
@@ -132,6 +134,16 @@ export function createMenuManager({
           { type: 'separator' },
           ...(recentItems.length > 0 ? [{ label: 'Recent Libraries', submenu: recentItems }, { type: 'separator' }] : []),
           {
+            label: 'Subscriptions…',
+            accelerator: 'Shift+CmdOrCtrl+S',
+            click: () => sendToMainWindow('menu:navigate', 'subscriptions'),
+          },
+        ],
+      },
+      {
+        label: 'File',
+        submenu: [
+          {
             label: 'Import Files…',
             accelerator: 'CmdOrCtrl+I',
             click: () => sendToFocusedWindow('menu:import-files'),
@@ -152,17 +164,14 @@ export function createMenuManager({
             accelerator: 'Shift+CmdOrCtrl+E',
             click: () => sendToMainWindow('menu:export-advanced'),
           },
-          { type: 'separator' },
-          {
-            label: 'Subscriptions…',
-            accelerator: 'Shift+CmdOrCtrl+S',
-            click: () => sendToMainWindow('menu:navigate', 'subscriptions'),
-          },
-          ...(!isMac ? [{
-            label: 'Settings…',
-            accelerator: 'CmdOrCtrl+,',
-            click: () => openSettingsWindow(),
-          }] : []),
+          ...(!isMac ? [
+            { type: 'separator' },
+            {
+              label: 'Settings…',
+              accelerator: 'CmdOrCtrl+,',
+              click: () => openSettingsWindow(),
+            },
+          ] : []),
           { type: 'separator' },
           isMac ? { role: 'close' } : { role: 'quit' },
         ],
@@ -185,14 +194,15 @@ export function createMenuManager({
           { role: 'copy' },
           { role: 'paste' },
           { role: 'selectAll' },
-          ...(!isMac ? [
-            { type: 'separator' },
-            {
-              label: 'Preferences…',
-              accelerator: 'CmdOrCtrl+,',
-              click: () => openSettingsWindow(),
-            },
-          ] : []),
+        ],
+      },
+      {
+        label: 'Organize',
+        submenu: [
+          {
+            label: 'Tag Manager',
+            click: () => sendToFocusedWindow('menu:navigate', 'tags'),
+          },
         ],
       },
       {
@@ -222,10 +232,6 @@ export function createMenuManager({
           {
             label: 'Duplicates',
             click: () => sendToFocusedWindow('menu:navigate', 'duplicates'),
-          },
-          {
-            label: 'Tag Manager',
-            click: () => sendToFocusedWindow('menu:navigate', 'tags'),
           },
           { type: 'separator' },
           ...(isDev ? [

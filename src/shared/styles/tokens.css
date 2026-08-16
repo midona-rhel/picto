@@ -3,6 +3,31 @@
  * Derived from the reference application-matched design system (legacy globals.css).
  */
 
+/* Bundled so the sidebar and titlebar do not vary with host font installs. */
+@font-face {
+  font-family: 'Picto Roboto';
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url('../assets/fonts/Roboto-Regular.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Picto Roboto';
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url('../assets/fonts/Roboto-Medium.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Picto Roboto';
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url('../assets/fonts/Roboto-Bold.ttf') format('truetype');
+}
+
 :root {
   /* ── Colors ─────────────────────────────────────────────── */
   --color-primary: #3297FF;
@@ -38,6 +63,7 @@
 
   /* ── Typography ──────────────────────────────────────────── */
   --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-family-ui: 'Picto Roboto', 'SF Pro Text', -apple-system, 'Roboto', system-ui, 'Segoe UI', 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
   --font-family-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
@@ -109,10 +135,50 @@
   --titlebar-height: 48px;
 
   /* ── Sidebar-specific (reference application-matched) ────────────────────── */
-  --sidebar-width: 280px;
-  --sidebar-row-height: 26px;
+  --sidebar-width: 300px;
+  --sidebar-row-height: 27px;
   --sidebar-indent: 20px;
+  --sidebar-scrollbar-gutter: 8px;
+  --sidebar-list-right-padding: 8px;
+  /* The list's left inset equals its reserved scrollbar space plus right padding. */
+  --sidebar-content-inset: calc(var(--sidebar-scrollbar-gutter) + var(--sidebar-list-right-padding));
+  /* Section labels and folder icons share this exact x-coordinate. */
+  --sidebar-list-anchor: var(--sidebar-content-inset);
+  --sidebar-glyph-column: 26px;
+  /* The 19px folder SVG is centered inside the shared 26px icon column. */
+  --sidebar-folder-glyph-inset: 3.5px;
+  --sidebar-disclosure-column: 14px;
   --sidebar-icon-size: 16px;
+  --sidebar-row-radius: 6px;
+  /* Trailing inset for hover and active row fills. */
+  --sidebar-row-highlight-inset: 4px;
+  /* Align the header text's rendered edge to the folder glyph, not its box. */
+  --sidebar-section-text-nudge: 1px;
+  /* Header controls extend around text aligned with the rendered folder glyph. */
+  --sidebar-section-control-inset: 5px;
+  /* reference application's --color-dark-3 over the dark base captures as rgb(31 32 35). */
+  --sidebar-surface: rgb(31, 32, 35);
+  --sidebar-surface-top: var(--sidebar-surface);
+  --sidebar-surface-elevated: color-mix(in srgb, var(--color-surface-2) 88%, transparent);
+  --sidebar-border-color: var(--color-border-secondary);
+  --sidebar-text-primary: rgb(248, 249, 251);
+  --sidebar-section-text: var(--color-text-tertiary);
+  --sidebar-count-color: var(--color-text-tertiary);
+  --sidebar-icon-color: rgb(248, 249, 251);
+  --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
+  --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
+  --sidebar-item-selected-bg: rgba(248, 249, 251, 0.05);
+  /* Shared by section, system, and folder list-item highlights. */
+  --sidebar-list-highlight-top: 0px;
+  --sidebar-list-highlight-right-inset: 2px;
+  --sidebar-list-highlight-bottom: 1px;
+  --sidebar-list-highlight-radius: 6px;
+  --sidebar-list-highlight-transition: opacity var(--duration-fast) var(--ease-default);
+  --sidebar-list-highlight-hover-bg: var(--sidebar-item-hover-bg);
+  --sidebar-list-highlight-active-bg: var(--sidebar-item-active-bg);
+  --sidebar-list-highlight-selected-bg: var(--sidebar-item-selected-bg);
+  /* reference application's normal tree connectors: rgba(189, 190, 192, 25%). */
+  --sidebar-tree-guide-color: rgba(189, 190, 192, 0.25);
 }
 
 /* ── Blue theme ──────────────────────────────────────────────── */
@@ -177,6 +243,12 @@
   --color-border-primary: rgba(0, 0, 0, 0.12);
   --color-border-secondary: rgba(0, 0, 0, 0.06);
 
+  --sidebar-surface: rgba(44, 47, 50, 0.03);
+  --sidebar-surface-top: var(--sidebar-surface);
+  --sidebar-border-color: var(--color-border-secondary);
+  --sidebar-item-hover-bg: rgba(44, 47, 50, 0.05);
+  --sidebar-item-active-bg: rgba(44, 47, 50, 0.10);
+  --sidebar-item-selected-bg: rgba(44, 47, 50, 0.05);
   --sidebar-item-hover-bg: rgba(44, 47, 50, 0.05);
   --sidebar-item-active-bg: rgba(44, 47, 50, 0.10);
 

@@ -23,7 +23,6 @@ pub struct SiteAdapterDescriptor {
     pub site_id: String,
     pub runner_key: String,
     pub display_name: String,
-    pub auth_supported: bool,
     pub auth_required_for_full_access: bool,
     pub query_kinds: Vec<SiteQueryKind>,
 }
@@ -229,7 +228,6 @@ pub fn describe_site(site_id: &str) -> Option<SiteAdapterDescriptor> {
         site_id: site.id.to_string(),
         runner_key: runner_key_for_site(site.id),
         display_name: site.name.to_string(),
-        auth_supported: site.auth_supported,
         auth_required_for_full_access: site.auth_required_for_full_access,
         query_kinds: query_kinds_for_site(site),
     })

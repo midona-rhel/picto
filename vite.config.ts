@@ -35,5 +35,10 @@ export default defineConfig(async ({ command }) => ({
   server: {
     port: 8080,
     strictPort: true,
+    watch: {
+      // Generated verification artifacts are not renderer source. Watching them
+      // reloads Picto and cancels active login/download workflows.
+      ignored: ["**/output/**", "**/artifacts/**"],
+    },
   },
 }));

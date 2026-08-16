@@ -18,19 +18,47 @@ import styles from './SidebarRow.module.css';
 interface SectionProps {
   variant: 'section';
   label: string;
+  count?: number | null;
   expanded: boolean;
   onToggle: () => void;
   onAdd?: () => void;
   addTooltip?: string;
   addShortcut?: string;
+  collapsible?: boolean;
 }
 
-function SectionRow({ label, expanded, onToggle, onAdd, addTooltip, addShortcut }: SectionProps) {
+function SectionRow({
+  label,
+  count,
+  expanded,
+  onToggle,
+  onAdd,
+  addTooltip,
+  addShortcut,
+  collapsible = true,
+}: SectionProps) {
   return (
-    <div className={styles.section} onClick={onToggle}>
+    <div
+      className={styles.section}
+      onClick={onToggle}
+      role="button"
+      tabIndex={0}
+      aria-expanded={expanded}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onToggle();
+        }
+      }}
+    >
       <div className={styles.sectionTitleRow}>
-        <span className={styles.sectionTitle}>{label}</span>
-        <span className={`${styles.sectionArrow} ${expanded ? styles.sectionArrowExpanded : ''}`}>
+        <span className={styles.sectionMeta}>
+          <span className={styles.sectionTitle}>{label}</span>
+          {count != null && count > 0 && <span className={styles.sectionCount}> ({count.toLocaleString()})</span>}
+        </span>
+        <span
+          className={`${styles.sectionArrow} ${expanded ? styles.sectionArrowExpanded : ''} ${!collapsible ? styles.sectionArrowStatic : ''}`}
+        >
           <IconChevronRight size={11} />
         </span>
       </div>
@@ -81,6 +109,7 @@ interface RowProps {
 const INDENT_PX = 20;
 
 function StandardRow({
+  variant = 'system',
   icon,
   label,
   count,
@@ -101,8 +130,11 @@ function StandardRow({
   dropPosition,
   children,
 }: RowProps) {
+  const interactive = !!onClick;
   const cls = [
     styles.row,
+    variant === 'system' ? styles.systemRow : '',
+    interactive ? styles.rowInteractive : '',
     active ? styles.active : '',
     selected && !active ? styles.selected : '',
     dropTarget ? styles.dropTarget : '',
@@ -113,10 +145,12 @@ function StandardRow({
   ].filter(Boolean).join(' ');
 
   const showGuides = useAtomValue(showTreeGuidesAtom);
+  const hasVisibleCount = count != null && count > 0;
 
-  const rowStyle: React.CSSProperties | undefined = indent > 0
-    ? { paddingLeft: indent * INDENT_PX, '--row-inset': `${(indent * INDENT_PX) + 1}px` } as React.CSSProperties
-    : undefined;
+  const rowIndent = indent * INDENT_PX;
+  const rowStyle = {
+    '--sidebar-row-indent': `${rowIndent}px`,
+  } as React.CSSProperties;
 
   // T-shape if not last child of parent, L-shape if last child
   const useLShape = indent > 0 && (isLastChild ?? true);
@@ -126,6 +160,16 @@ function StandardRow({
       className={cls}
       style={rowStyle}
       onClick={onClick}
+      role={interactive ? 'button' : undefined}
+      tabIndex={interactive ? 0 : undefined}
+      aria-current={active ? 'page' : undefined}
+      aria-expanded={hasChildren ? expanded : undefined}
+      onKeyDown={interactive ? (event) => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault();
+          onClick?.(event as unknown as React.MouseEvent);
+        }
+      } : undefined}
       onContextMenu={onContextMenu}
       onPointerDown={onPointerDown}
       {...(dropDataAttr ? { [`data-${dropDataAttr.key}`]: dropDataAttr.value } : {})}
@@ -136,19 +180,19 @@ function StandardRow({
         <svg
           key={d}
           className={styles.treeLine}
-          style={{ left: (d - 1) * INDENT_PX + INDENT_PX / 2 + 1 }}
+          style={{ left: `calc(var(--sidebar-content-inset) + ${(d - 1) * INDENT_PX + INDENT_PX / 2}px)` }}
           viewBox="0 0 10 26"
           preserveAspectRatio="none"
           fill="none"
         >
-          <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+          <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
         </svg>
       ) : null)}
       {/* Branch connector — T (not last) or L (last child). With arrow cutout when hasChildren. */}
       {showGuides && indent > 0 && (
         <svg
           className={styles.treeBranch}
-          style={{ left: (indent - 1) * INDENT_PX + INDENT_PX / 2 + 1 }}
+          style={{ left: `calc(var(--sidebar-content-inset) + ${(indent - 1) * INDENT_PX + INDENT_PX / 2}px)` }}
           viewBox="0 0 10 26"
           preserveAspectRatio="none"
           fill="none"
@@ -158,25 +202,25 @@ function StandardRow({
             useLShape ? (
               /* L with cutout: top segment to Y=9, horizontal arm X=8..15 at Y=13 */
               <>
-                <line x1="3.5" y1="0" x2="3.5" y2="9" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                <line x1="8" y1="13" x2="15" y2="13" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="3.5" y1="0" x2="3.5" y2="9" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="8" y1="13" x2="15" y2="13" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
               </>
             ) : (
               /* T with cutout: top to Y=9, bottom from Y=17, horizontal arm X=8..15 */
               <>
-                <line x1="3.5" y1="0" x2="3.5" y2="9" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                <line x1="3.5" y1="17" x2="3.5" y2="26" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                <line x1="8" y1="13" x2="15" y2="13" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="3.5" y1="0" x2="3.5" y2="9" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="3.5" y1="17" x2="3.5" y2="26" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="8" y1="13" x2="15" y2="13" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
               </>
             )
           ) : (
             /* No arrow — standard L/T shapes */
             useLShape ? (
-              <path d="M3.5 0 V9.5 A3.5 3.5 0 0 0 7 13 H15" stroke="var(--color-text-tertiary)" strokeWidth="1" fill="none" vectorEffect="non-scaling-stroke" />
+              <path d="M3.5 0 V9.5 A3.5 3.5 0 0 0 7 13 H15" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" fill="none" vectorEffect="non-scaling-stroke" />
             ) : (
               <>
-                <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-                <line x1="4" y1="13" x2="15" y2="13" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="4" y1="13" x2="15" y2="13" stroke="var(--sidebar-tree-guide-color)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
               </>
             )
           )}
@@ -190,13 +234,15 @@ function StandardRow({
           <span className={`${styles.triangle} ${expanded ? styles.expanded : styles.collapsed}`} />
         </div>
       )}
-      {icon && <span className={styles.icon}>{icon}</span>}
-      {children ?? (label != null && <span className={styles.label}>{label}</span>)}
-      {count != null && (
-        <span className={styles.count}>
-          {count.toLocaleString()}
-        </span>
-      )}
+      <div className={`${styles.rowContent} ${hasVisibleCount ? styles.rowContentWithCount : ''}`}>
+        {icon && <span className={styles.icon}>{icon}</span>}
+        {children ?? (label != null && <span className={styles.label}>{label}</span>)}
+        {hasVisibleCount && (
+          <span className={styles.count}>
+            {count.toLocaleString()}
+          </span>
+        )}
+      </div>
     </div>
   );
 }

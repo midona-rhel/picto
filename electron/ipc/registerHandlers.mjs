@@ -188,6 +188,9 @@ export function registerIpcHandlers({
     if (command === 'auth_session_cancel') {
       return windowManager.cancelAuthSession();
     }
+    if (command === 'auth_session_state') {
+      return windowManager.getAuthSessionState();
+    }
     if (command === 'open_subscriptions_window') {
       windowManager.openSubscriptionsWindow();
       return null;

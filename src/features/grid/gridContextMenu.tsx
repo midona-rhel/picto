@@ -14,7 +14,7 @@ import {
   IconRefresh, IconTrash, IconArrowBackUp,
   IconSelectAll, IconDeselect,
   IconSearch,
-  IconFolder, IconStar, IconUpload,
+  IconFileExport, IconFolder, IconStar,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
@@ -32,6 +32,7 @@ function kbd(id: string): string | undefined {
 interface GridMenuContext {
   selectionCount: number;
   querySelectionActive: boolean;
+  aiTagEnabled?: boolean;
   singleSelected: boolean;
   singleHash: string | null;
   hasFolders?: boolean;
@@ -100,6 +101,7 @@ function item(
 export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const { selectionCount, singleSelected, singleHash, statusFilter, scopeKind } = ctx;
   const hasSelection = selectionCount > 0;
+  const aiTagEnabled = ctx.aiTagEnabled ?? !!ctx.onOpenAiTagger;
   const entries: MenuEntry[] = [];
 
   // ── Mixed selection (folders + entities) or folders-only: limited menu ──
@@ -108,7 +110,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(item('Deselect All', { action: ctx.onDeselectAll }));
     if (ctx.onMoveToTrash) {
       entries.push(sep());
-      entries.push(item('Move to Trash', { icon: <IconTrash size={15} />, danger: true, action: ctx.onMoveToTrash }));
+      entries.push(item('Move to Trash', { icon: <IconTrash size={15} />, action: ctx.onMoveToTrash }));
     }
     return entries;
   }
@@ -211,7 +213,12 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   // ── Tags ──
   if (hasSelection) {
     entries.push(item('Add Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('organize.addTag'), action: ctx.onOpenTagSelect }));
-    entries.push(item(selectionCount > 1 ? `Auto Tag ${selectionCount} Images` : 'Auto Tag', { icon: <IconBookmarks size={15} />, shortcut: kbd('organize.autoTag'), action: ctx.onOpenAiTagger }));
+    entries.push(item(selectionCount > 1 ? `Auto Tag ${selectionCount} Images` : 'Auto Tag', {
+      icon: <IconBookmarks size={15} />,
+      shortcut: kbd('organize.autoTag'),
+      action: ctx.onOpenAiTagger,
+      disabled: !aiTagEnabled,
+    }));
     entries.push(item('Copy Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags }));
     entries.push(item('Paste Tags', { icon: <IconBookmarks size={15} style={{ transform: 'scaleX(-1)' }} />, shortcut: kbd('edit.pasteTags'), action: ctx.onPasteTags, disabled: !ctx.hasClipboardTags }));
     entries.push(sep());
@@ -232,7 +239,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 
   // ── Export ──
   if (hasSelection && ctx.onExport) {
-    entries.push(item('Export...', { icon: <IconUpload size={15} />, action: ctx.onExport }));
+    entries.push(item('Export...', { icon: <IconFileExport size={15} />, action: ctx.onExport }));
     entries.push(sep());
   }
 

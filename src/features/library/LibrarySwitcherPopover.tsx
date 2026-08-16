@@ -88,6 +88,7 @@ export function LibrarySwitcherPopover({
       style={{ top, left, width: rect.width }}
     >
       <div className={styles.header}>
+        <div className={styles.headerTitle}>Libraries</div>
         <input
           className={styles.search}
           placeholder="Search libraries…"

@@ -19,6 +19,7 @@ test('certification summaries omit per-post evidence', () => {
     site_id: 'gelbooru',
     query: 'artist',
     requested_first_fetch_source_posts: 100,
+    authentication: { mode: 'keychain', credential_resolved: true },
     first_fetch: {
       source_posts_processed: 100,
       materialized_post_count: 100,
@@ -32,6 +33,7 @@ test('certification summaries omit per-post evidence', () => {
     checks: { restart_is_stable: true },
   });
   assert.equal(summary.firstFetch.firstMaterializedPostId, '200');
+  assert.deepEqual(summary.authentication, { mode: 'keychain', credential_resolved: true });
   assert.equal(summary.firstFetch.post100Id, '101');
   assert.equal(summary.firstFetch.lastMaterializedPostId, '101');
   assert.equal('posts' in summary.firstFetch, false);

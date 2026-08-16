@@ -783,8 +783,8 @@ pub async fn set_credential(state: &AppState, input: SetCredentialInput) -> Resu
         crate::subscriptions::credential_service::SubscriptionCredentialService::new(
             state.engine.db(),
         )
-        .set_manual_credential(
-            crate::subscriptions::credential_service::SetManualCredentialRequest {
+        .store_captured_credential(
+            crate::subscriptions::credential_service::SetCapturedCredentialRequest {
                 site_category: input.site_category,
                 credential_type: input.credential_type,
                 username: input.username,

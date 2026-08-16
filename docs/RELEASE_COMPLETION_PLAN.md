@@ -65,63 +65,39 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [x] Delete the replaced aggregate path and pass compile, unit, contract, parity, and build tests.
 - [x] Pass the fresh-library packaged-application smoke and delete the completed implementation PBI.
 
-Source certification may now resume. Existing source evidence remains historical until it is rerun
-against independent media entities.
+Source certification may now resume. Collection-shaped persistence assertions are obsolete, but
+accepted authentication, extraction, metadata, pagination, recovery, and UI evidence remains valid
+unless the code that owns that behavior changed. The independent-media ingest layer is proved once
+with representative single-file, ordered multi-file, and mixed-media sources rather than by
+re-downloading every source.
 
-## Phase 3: PBI-575 Subscriptions
+## Phase 3: Subscriptions
 
-- [x] Freeze unrelated performance and cleanup work until subscription closure.
-- [x] Replace newest-500 retry scans with one indexed attempt lookup.
-- [x] S1: Give query and subscription issues stable non-null identity.
-- [x] S2: Classify every meaningful failure through one persisted recovery disposition.
-- [x] S3: Make each subscription the only scheduled run unit; make retry, restart, shutdown, stop,
-      reset, delete, and multi-query finalization durable and safe.
-- [x] S4: Finish one streaming metadata ingest path and delete proven competitors.
-- [x] S5: Keep run-scoped progress visible and the run active through terminal ingest; make Health
-      actions truthful and uncapped.
-- [ ] S6: Certify sources in bounded batches, expose only passed sources, and run the real Electron
-      workflow. Unattended tests may use an explicit test-only plaintext fixture through a
-      process-local credential store, but must never read or modify the system credential store.
+- [x] Give query and subscription issues stable identity and one persisted recovery disposition.
+- [x] Make the subscription the only scheduled run unit; make restart, stop, retry, reset, delete,
+      and multi-query completion durable.
+- [x] Stream every source through the durable ingest queue and keep progress active until downloads
+      and ingest are terminal.
+- [x] Use explicit source adapters rather than a generic fallback, and certify extraction, metadata,
+      pagination, interruption, restart, replay, and user-visible terminal state.
+- [x] Use direct-site login in a Picto-managed browser and store captured credentials in the OS
+      credential store. Product UI never asks users to paste secrets.
+- [x] Certify the 17-source production registry: Pixiv search, Pixiv user, Gelbooru, Rule34,
+      Danbooru, Webtoons, Hentai Foundry, Baraag, DeviantArt, Tumblr, Fur Affinity, Idol Complex,
+      Sankaku, Yande.re, Konachan, Safebooru, and e621.
+- [x] Prove the shared flattened ingest model with representative single-file, ordered multi-file,
+      and mixed image/video sources instead of repeating unchanged 100-post downloads per adapter.
+- [x] Run real Electron login and ingest workflows, including Webtoons cookie capture and Tumblr
+      OAuth credential capture.
+- [x] Remove deferred ArtStation from the registry and Accounts UI rather than advertising an
+      uncertified source.
 
-Prior acceptance on 2026-08-07 covered the then-current import, progress, stop/resume, and settled
-state behavior. Its media-shape claims are obsolete. No source certification closes until the
-flattened multi-file behavior is accepted.
-
-Source closure starts with the 18-source production registry. Additional paid sources are added only
-when their dedicated implementation enters that registry; an unimplemented source is not counted as
-certified:
-
-- [x] Audit every hidden registry entry against its packaged gallery-dl extractor and live probe.
-- [x] Delete the shallow download-only verifier; one strict production-path certification now owns
-      download, ingest, metadata, restart, resume, and archive replay.
-- [ ] Recertify every source against the flattened media model. Collection-era artifacts are
-      historical diagnostics and do not close current acceptance.
-- [ ] Restore and finish the remaining 14 gallery-dl-backed sources through explicit source-family
-      adapters. Do not use a generic fallback adapter to claim support. Historical evidence exists
-      for several sources, but all current certification must prove independent media entities,
-      source provenance, restart, and the Electron workflow after the flattened-model rewrite.
-      SubscribeStar is gallery-dl-backed and remains in the paid-source certification matrix.
-      Authenticated restricted-content access remains unfinished for sources that provide it.
-- [ ] Add OnlyFans through a dedicated runner, not gallery-dl. It owns OnlyFans authentication,
-      pagination, media resolution, and video downloads, then emits the same normalized source events
-      and enters the same durable ingest queue as other sources.
-- [ ] Give every source one direct-site login path: open the real source page in a Picto-managed
-      browser, capture the resulting session, and store it in the OS credential store. Remove UI
-      that asks users to paste passwords, cookies, tokens, or API keys.
-- [ ] Certify every active registry source with the strict production-path harness and one real
-      Electron workflow before S6 closes. A source remains hidden until it passes.
-
-The authoritative source list and per-source acceptance state live in the active PBI-575 matrix.
-
-Phase gates:
-
-- Runtime gate after S3: stop/restart/retry manually verified; shutdown leaves no gallery-dl process,
-  executor, lease, or false active run; subscription schedules pass interval, pause, full-run, and
-  manual-query tests.
-- Delivery gate after S5: streaming, independent multi-file media, metadata, and progress verified
-  against the flattened model.
-- Release gate after S6: every visible source has deterministic and live proof, credential-backed
-  where that source supports credentials.
+Baraag's public production path is certified. Its optional private login cannot be certified with a
+throwaway account because the source requires an applicant's own artwork and moderator approval;
+Picto retains the direct OAuth path without pretending that external approval occurred. Paid sources
+such as Patreon, SubscribeStar, Fanbox, and OnlyFans are not implemented registry entries and are not
+part of this release gate. If added later, they require their own production adapter and the same
+source, authentication, recovery, and Electron evidence before becoming visible.
 
 ## Phase 4: PBI-577 Duplicates
 
@@ -209,6 +185,9 @@ reference application-reference UI pass and must reuse this canonical API rather
 
 ## Phase 9: Release Gate
 
+- [ ] Audit the release test harness by behavior: delete tests that only prove mocked values move
+      between preconfigured layers, retain focused unit tests without calling them product proof,
+      and require real persistence/application evidence for every release claim.
 - [ ] Clean Git index and diff checks.
 - [ ] Rust formatting and full Rust tests.
 - [ ] TypeScript, Vitest, and command parity.

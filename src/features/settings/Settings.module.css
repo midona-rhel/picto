@@ -192,7 +192,7 @@
 .select:focus { border-color: var(--color-primary-60, #3297FF); }
 
 .settingHint {
-  margin: 6px 0 0;
+  margin: 8px 0 0;
   font-size: 12px;
   color: var(--color-text-tertiary, #666);
   line-height: 1.4;
@@ -369,6 +369,29 @@
 .searchGroupLink:hover { text-decoration: underline; }
 
 .searchGroupHint { font-size: 13px; color: var(--color-text-tertiary, #666); padding: 8px 0; }
+
+.searchResult {
+  width: 100%;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-secondary, rgba(255,255,255,0.06));
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.1);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.searchResult + .searchResult { margin-top: 8px; }
+.searchResult:hover { background: var(--color-surface-hover, rgba(255,255,255,0.04)); }
+.searchResult:focus-visible { outline: 1px solid var(--color-primary-60, #3297FF); outline-offset: 2px; }
+
+.searchResultCopy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.searchResultTitle { font-size: 13px; font-weight: 600; }
+.searchResultDescription { font-size: 12px; color: var(--color-text-secondary, #999); line-height: 1.4; }
 
 .emptySearch { text-align: center; padding: 32px; color: var(--color-text-tertiary, #666); font-size: 13px; }
 

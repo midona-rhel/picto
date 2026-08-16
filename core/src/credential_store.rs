@@ -7,6 +7,8 @@ use serde::{Deserialize, Serialize};
 const SERVICE_NAME: &str = "picto";
 #[cfg(target_os = "macos")]
 const ERR_SEC_ITEM_NOT_FOUND: i32 = -25300;
+#[cfg(target_os = "macos")]
+const ERR_SEC_DUPLICATE_ITEM: i32 = -25299;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -14,7 +16,6 @@ pub enum CredentialType {
     ApiKey,
     Cookies,
     OAuthToken,
-    UsernamePassword,
 }
 
 impl CredentialType {
@@ -23,7 +24,6 @@ impl CredentialType {
             Self::ApiKey => "api_key",
             Self::Cookies => "cookies",
             Self::OAuthToken => "oauth_token",
-            Self::UsernamePassword => "username_password",
         }
     }
 
@@ -32,7 +32,6 @@ impl CredentialType {
             "api_key" => Some(Self::ApiKey),
             "cookies" => Some(Self::Cookies),
             "oauth_token" => Some(Self::OAuthToken),
-            "username_password" => Some(Self::UsernamePassword),
             _ => None,
         }
     }
@@ -66,15 +65,32 @@ fn set_platform_credential(site_category: &str, json: &str) -> Result<(), String
     use security_framework::os::macos::keychain::SecKeychain;
     use security_framework::os::macos::passwords::find_generic_password;
 
-    match find_generic_password(None, SERVICE_NAME, site_category) {
-        Ok((_password, mut item)) => item
-            .set_password(json.as_bytes())
-            .map_err(|error| format!("Keyring set error: {error}")),
-        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => SecKeychain::default()
+    let add = || {
+        SecKeychain::default()
             .and_then(|keychain| {
                 keychain.add_generic_password(SERVICE_NAME, site_category, json.as_bytes())
             })
-            .map_err(|error| format!("Keyring set error: {error}")),
+            .map_err(|error| format!("Keyring set error: {error}"))
+    };
+
+    match find_generic_password(None, SERVICE_NAME, site_category) {
+        Ok((_password, mut item)) => match item.set_password(json.as_bytes()) {
+            Ok(()) => Ok(()),
+            Err(error) if error.code() == ERR_SEC_DUPLICATE_ITEM => {
+                // Old builds could leave duplicate generic-password entries.
+                // Collapse them before writing the single canonical credential.
+                for _ in 0..32 {
+                    match find_generic_password(None, SERVICE_NAME, site_category) {
+                        Ok((_password, item)) => item.delete(),
+                        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => return add(),
+                        Err(error) => return Err(format!("Keyring delete error: {error}")),
+                    }
+                }
+                Err("Keyring delete error: too many matching credentials".to_string())
+            }
+            Err(error) => Err(format!("Keyring set error: {error}")),
+        },
+        Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => add(),
         Err(error) => Err(format!("Keyring set error: {error}")),
     }
 }
@@ -191,10 +207,20 @@ pub fn build_extractor_auth(cred: &SiteCredential) -> serde_json::Value {
         }
         CredentialType::OAuthToken => {
             if let Some(ref token) = cred.oauth_token {
-                obj.insert(
-                    "refresh-token".into(),
-                    serde_json::Value::String(token.clone()),
-                );
+                let token_key = match cred.site_category.as_str() {
+                    "baraag" => "access-token",
+                    "tumblr" => "access-token",
+                    _ => "refresh-token",
+                };
+                obj.insert(token_key.into(), serde_json::Value::String(token.clone()));
+            }
+            if cred.site_category == "tumblr" {
+                if let Some(ref secret) = cred.password {
+                    obj.insert(
+                        "access-token-secret".into(),
+                        serde_json::Value::String(secret.clone()),
+                    );
+                }
             }
             if let Some(ref cookies) = cred.cookies {
                 let cookie_obj: serde_json::Map<String, serde_json::Value> = cookies
@@ -202,20 +228,6 @@ pub fn build_extractor_auth(cred: &SiteCredential) -> serde_json::Value {
                     .map(|(key, value)| (key.clone(), serde_json::Value::String(value.clone())))
                     .collect();
                 obj.insert("cookies".into(), serde_json::Value::Object(cookie_obj));
-            }
-        }
-        CredentialType::UsernamePassword => {
-            if let Some(ref username) = cred.username {
-                obj.insert(
-                    "username".into(),
-                    serde_json::Value::String(username.clone()),
-                );
-            }
-            if let Some(ref password) = cred.password {
-                obj.insert(
-                    "password".into(),
-                    serde_json::Value::String(password.clone()),
-                );
             }
         }
     }
@@ -265,6 +277,37 @@ mod tests {
     }
 
     #[test]
+    fn build_extractor_auth_for_baraag_oauth() {
+        let credential = SiteCredential {
+            site_category: "baraag".to_string(),
+            credential_type: CredentialType::OAuthToken,
+            username: None,
+            password: None,
+            cookies: None,
+            oauth_token: Some("baraag-access-token".to_string()),
+        };
+        let auth = build_extractor_auth(&credential);
+        assert_eq!(auth["access-token"], "baraag-access-token");
+        assert!(auth.get("refresh-token").is_none());
+    }
+
+    #[test]
+    fn build_extractor_auth_for_tumblr_oauth() {
+        let credential = SiteCredential {
+            site_category: "tumblr".to_string(),
+            credential_type: CredentialType::OAuthToken,
+            username: None,
+            password: Some("tumblr-access-token-secret".to_string()),
+            cookies: None,
+            oauth_token: Some("tumblr-access-token".to_string()),
+        };
+        let auth = build_extractor_auth(&credential);
+        assert_eq!(auth["access-token"], "tumblr-access-token");
+        assert_eq!(auth["access-token-secret"], "tumblr-access-token-secret");
+        assert!(auth.get("refresh-token").is_none());
+    }
+
+    #[test]
     fn cookie_auth_maps_only_the_captured_cookie_values() {
         let credential = SiteCredential {
             site_category: "furaffinity".to_string(),
@@ -281,20 +324,5 @@ mod tests {
         assert_eq!(auth["cookies"]["a"], "session-a");
         assert_eq!(auth["cookies"]["b"], "session-b");
         assert_eq!(auth.as_object().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn username_password_auth_maps_to_gallery_dl_fields() {
-        let credential = SiteCredential {
-            site_category: "idolcomplex".to_string(),
-            credential_type: CredentialType::UsernamePassword,
-            username: Some("artist".to_string()),
-            password: Some("secret".to_string()),
-            cookies: None,
-            oauth_token: None,
-        };
-        let auth = build_extractor_auth(&credential);
-        assert_eq!(auth["username"], "artist");
-        assert_eq!(auth["password"], "secret");
     }
 }

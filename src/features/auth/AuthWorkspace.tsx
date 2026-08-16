@@ -74,6 +74,9 @@ export function AuthWorkspace({
         return;
       }
       unlisten = dispose;
+      return authController.getSessionState().then((payload) => {
+        if (!cancelled) setSession(payload);
+      });
     }).catch((err) => {
       console.error('Failed to subscribe to auth session state', err);
     });
@@ -81,7 +84,8 @@ export function AuthWorkspace({
     return () => {
       cancelled = true;
       if (unlisten) unlisten();
-      void authController.cancelSession();
+      // Authentication belongs to Electron, not this React mount. HMR and
+      // closing the Accounts view must not cancel a login already in progress.
     };
   }, []);
 
@@ -99,6 +103,7 @@ export function AuthWorkspace({
         credential.phpsessid ?? null,
       ).then(async () => {
         await refresh();
+        await authController.cancelSession();
         setMessage('Pixiv login completed.');
       }).catch((err) => {
         setMessage(err instanceof Error ? err.message : String(err));
@@ -111,6 +116,37 @@ export function AuthWorkspace({
     }
 
     const selectedCredentialOwner = selectedEntry?.site.credential_owner_site_id;
+    const oauthToken = credential.oauth_token?.trim();
+    const oauthTokenSecret = credential.password?.trim();
+    const isApprovedOAuthPayload = Boolean(
+      selectedCredentialOwner
+      && credential.site_category === selectedCredentialOwner
+      && (credential.site_category === 'baraag' || credential.site_category === 'tumblr')
+      && credential.credential_type === 'oauth_token'
+      && oauthToken
+      && (credential.site_category !== 'tumblr' || oauthTokenSecret),
+    );
+    if (isApprovedOAuthPayload) {
+      setBusy(true);
+      void authController.setCredential({
+        site_category: credential.site_category,
+        credential_type: 'oauth_token',
+        display_name: selectedEntry?.site.name ?? credential.site_category,
+        oauth_token: oauthToken,
+        password: credential.site_category === 'tumblr' ? oauthTokenSecret : undefined,
+      }).then(async () => {
+        await refresh();
+        await authController.cancelSession();
+        setMessage('OAuth credential saved in the system credential store.');
+      }).catch((err) => {
+        setMessage(err instanceof Error ? err.message : String(err));
+      }).finally(() => {
+        setBusy(false);
+        setSession(IDLE_SESSION);
+      });
+      return;
+    }
+
     const cookies = credential.cookies ?? null;
     const isApprovedCookiePayload = Boolean(
       selectedCredentialOwner
@@ -128,6 +164,7 @@ export function AuthWorkspace({
         cookies,
       }).then(async () => {
         await refresh();
+        await authController.cancelSession();
         setMessage('Login session saved in the system credential store.');
       }).catch((err) => {
         setMessage(err instanceof Error ? err.message : String(err));
@@ -156,6 +193,7 @@ export function AuthWorkspace({
         password,
       }).then(async () => {
         await refresh();
+        await authController.cancelSession();
         setMessage('Credential saved from the login window.');
       }).catch((err) => {
         setMessage(err instanceof Error ? err.message : String(err));
@@ -208,28 +246,6 @@ export function AuthWorkspace({
     }
   }
 
-  async function saveUsernamePassword(username: string, password: string) {
-    if (!selectedEntry) return;
-    setBusy(true);
-    setMessage(null);
-    try {
-      await authController.setCredential({
-        site_category: selectedEntry.site.credential_owner_site_id,
-        credential_type: 'username_password',
-        display_name: selectedEntry.site.name,
-        username,
-        password,
-      });
-      await refresh();
-      setMessage('Credential saved in the system credential store.');
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err));
-      throw err;
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const handleSelectSite = (siteId: string) => {
     if (session.status !== 'idle' && session.site_category && session.site_category !== siteId) {
       void authController.cancelSession();
@@ -256,7 +272,6 @@ export function AuthWorkspace({
         onStartLogin={startLogin}
         onCancelLogin={cancelLogin}
         onRemoveCredential={removeCredential}
-        onSaveUsernamePassword={saveUsernamePassword}
       />
     </div>
   );

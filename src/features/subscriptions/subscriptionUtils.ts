@@ -103,7 +103,7 @@ export function getQueryAuthState(input: {
   blocking: boolean;
 } {
   const site = input.sites.find((entry) => entry.id === input.query.site_id) ?? null;
-  if (!site || !site.auth_supported) {
+  if (!site) {
     return { tone: 'idle', label: 'No auth', blocking: false };
   }
 
@@ -116,7 +116,7 @@ export function getQueryAuthState(input: {
   const healthStatus = (health?.health_status ?? '').toLowerCase();
   const missing = !credential;
   const broken = healthStatus === 'unauthorized' || healthStatus === 'expired' || healthStatus === 'error' || healthStatus === 'missing';
-  const blocking = site.auth_required_for_full_access && (missing || broken);
+  const blocking = broken || (site.auth_strictly_required && missing);
 
   if (blocking) {
     return { tone: 'attention', label: missing ? 'Auth needed' : 'Auth broken', blocking: true };

@@ -63,6 +63,10 @@ const MAIN_WINDOW_MIN_WIDTH = 700;
 const MAIN_WINDOW_MIN_HEIGHT = 500;
 const WINDOW_STATE_SAVE_DEBOUNCE_MS = 180;
 
+// The 2x reference requires a 26px horizontal and 34px vertical rendered
+// inset. Account for the native frame's 2px/4px physical offsets.
+const MAC_TRAFFIC_LIGHT_POSITION = { x: 12, y: 15 };
+
 function rectsIntersect(a, b) {
   return (
     a.x < b.x + b.width &&
@@ -231,6 +235,7 @@ export function createWindowManager({
                   ? {
                       frame: true,
                       titleBarStyle: 'hiddenInset',
+                      trafficLightPosition: MAC_TRAFFIC_LIGHT_POSITION,
                       transparent: useTransparent,
                       backgroundColor: themeBg,
                     }
@@ -516,6 +521,7 @@ export function createWindowManager({
   return {
     calcDetailWindowSize: (imgW, imgH) => calcDetailWindowSize(screen, imgW, imgH),
     cancelAuthSession: authSessions.cancelAuthSession,
+    getAuthSessionState: authSessions.getAuthSessionState,
     createWindow,
     getAllWindows,
     getWindow,
