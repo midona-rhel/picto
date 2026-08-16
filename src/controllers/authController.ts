@@ -8,13 +8,11 @@ import {
   listSubscriptionIssues,
   pixivOAuthExchange,
   pixivOAuthStart,
-  setAuthSessionBounds,
   setCredential,
   startAuthSession,
 } from '../platform/subscriptionApi';
 import { listen } from '../platform/ipc';
 import type {
-  AuthSessionBounds,
   AuthSessionState,
   SubscriptionIssueRecord,
   SubscriptionSiteInfo,
@@ -27,7 +25,6 @@ const AUTH_ISSUE_KINDS = new Set([
   'credential_missing',
   'credential_blocked',
 ]);
-
 function credentialOwnerForSite(siteId: string, sites: SubscriptionSiteInfo[]): string {
   return sites.find((site) => site.id === siteId)?.credential_owner_site_id ?? siteId;
 }
@@ -98,9 +95,9 @@ export const authController = {
         const queryCount = matchingSubscriptions.reduce(
           (count, subscription) =>
             count
-            + subscription.queries.filter(
-              (query) => credentialOwnerForSite(query.site_id, sites) === siteKey,
-            ).length,
+              + subscription.queries.filter(
+                (query) => credentialOwnerForSite(query.site_id, sites) === siteKey,
+              ).length,
           0,
         );
         return {
@@ -127,10 +124,6 @@ export const authController = {
 
   startSession(siteCategory: string, startUrl?: string | null): Promise<AuthSessionState> {
     return startAuthSession(siteCategory, startUrl);
-  },
-
-  setSessionBounds(bounds: AuthSessionBounds): Promise<void> {
-    return setAuthSessionBounds(bounds);
   },
 
   cancelSession(): Promise<void> {

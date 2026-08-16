@@ -6,6 +6,10 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import {
+  evaluateResult as evaluateGalleryDlBridge,
+  runSidecar as runGalleryDlBridge,
+} from './gallery-dl-bridge-smoke.mjs';
 
 const SMOKE_PREFIX = '[picto-packaged-smoke] ';
 const REQUIRED_EVENTS = new Set([
@@ -90,6 +94,18 @@ export async function findUnpackedExecutable({ distDir, platform, productName = 
     return left.file < right.file ? -1 : left.file > right.file ? 1 : 0;
   });
   return ranked[0].file;
+}
+
+export function findPackagedGalleryDlBridge(executable, platform) {
+  const normalizedPlatform = normalizePlatform(platform);
+  const executableDir = path.dirname(executable);
+  const resourcesRoot = normalizedPlatform === 'darwin'
+    ? path.dirname(executableDir)
+    : executableDir;
+  const binaryName = normalizedPlatform === 'win32'
+    ? 'picto-gallery-dl-bridge.exe'
+    : 'picto-gallery-dl-bridge';
+  return path.join(resourcesRoot, 'gallery-dl', binaryName);
 }
 
 export function createSmokeReportParser() {
@@ -202,10 +218,18 @@ async function main() {
   let temporaryRootCreated = false;
   let cleanupSucceeded = true;
   let executable = null;
+  let galleryDlBridge = null;
+  let galleryDlBridgeRun = null;
   let setupError = null;
 
   try {
     executable = await findUnpackedExecutable({ distDir, platform });
+    galleryDlBridge = findPackagedGalleryDlBridge(executable, platform);
+    galleryDlBridgeRun = await runGalleryDlBridge(galleryDlBridge, 30_000);
+    const galleryDlFailures = evaluateGalleryDlBridge(galleryDlBridgeRun);
+    if (galleryDlFailures.length > 0) {
+      throw new Error(`packaged gallery-dl bridge failed: ${galleryDlFailures.join('; ')}`);
+    }
     temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-packaged-smoke-'));
     temporaryRootCreated = true;
     const deviceAHome = path.join(temporaryRoot, 'device-a-home');
@@ -305,6 +329,10 @@ async function main() {
   const report = {
     platform,
     executable,
+    gallery_dl_bridge: galleryDlBridge,
+    gallery_dl_bridge_passed: galleryDlBridgeRun
+      ? evaluateGalleryDlBridge(galleryDlBridgeRun).length === 0
+      : false,
     started_at: startedAt,
     finished_at: new Date().toISOString(),
     passed: reasons.length === 0,

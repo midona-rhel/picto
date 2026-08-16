@@ -10,11 +10,9 @@ impl LibraryDatabase {
         entity_ids: &[i64],
         tag_strings: &[String],
         provenance_mask: u64,
-        expansion: ExpansionMode,
     ) -> Result<TagChange, String> {
         self.with_write(|conn| {
-            let change =
-                write::tags::add_tags(conn, entity_ids, tag_strings, provenance_mask, expansion)?;
+            let change = write::tags::add_tags(conn, entity_ids, tag_strings, provenance_mask)?;
             if !change.tags_added.is_empty() {
                 let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
                 emit_per_entity(
@@ -47,7 +45,6 @@ impl LibraryDatabase {
                     &[entity_id],
                     tags,
                     TAG_PROVENANCE_AI,
-                    ExpansionMode::SinglesAndCollectionMembers,
                 )?;
                 if !change.tags_added.is_empty() {
                     let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
@@ -80,10 +77,9 @@ impl LibraryDatabase {
         &self,
         entity_ids: &[i64],
         tag_strings: &[String],
-        expansion: ExpansionMode,
     ) -> Result<TagChange, String> {
         self.with_write(|conn| {
-            let change = write::tags::remove_tags(conn, entity_ids, tag_strings, expansion)?;
+            let change = write::tags::remove_tags(conn, entity_ids, tag_strings)?;
             if !change.tags_removed.is_empty() {
                 let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
                 emit_per_entity(
@@ -227,9 +223,15 @@ mod tests {
         let db = LibraryDatabase::open(root.path()).unwrap();
         db.with_write(|conn| {
             conn.execute(
+                "INSERT INTO media_file
+                 (file_id, file_hash, mime_type, size_bytes, date_added)
+                 VALUES (1, 'image-1', 'image/png', 1, '2026-01-01')",
+                [],
+            )?;
+            conn.execute(
                 "INSERT INTO media_entity
-                 (entity_id, entity_hash, entity_kind, status, date_created, date_added, date_modified)
-                 VALUES (1, 'image-1', 'single', 1, '2026-01-01', '2026-01-01', '2026-01-01')",
+                 (entity_id, entity_hash, file_id, status, date_created, date_added, date_modified)
+                 VALUES (1, 'image-1', 1, 1, '2026-01-01', '2026-01-01', '2026-01-01')",
                 [],
             )?;
             Ok(())

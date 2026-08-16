@@ -1,4 +1,3 @@
-import { reorderCollectionMembers } from '../platform/collectionApi';
 import { setEntityStatus } from '../platform/entityApi';
 import { reorderFolderMembers, updateFolderMembership } from '../platform/folderApi';
 import type { EntityTarget } from '../shared/types/canonical';
@@ -35,8 +34,5 @@ export const dragController = {
       return;
     }
 
-    if (sourceScope?.kind === 'collection' && sourceScope.id != null && target.orderedHashes) {
-      await reorderCollectionMembers(sourceScope.id, target.orderedHashes);
-    }
   },
 };

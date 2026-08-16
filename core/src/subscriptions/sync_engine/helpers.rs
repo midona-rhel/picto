@@ -74,8 +74,26 @@ pub(super) fn compute_committed_cursor(
     range_start: u32,
     posts_this_run: usize,
     all_post_ids: &HashSet<String>,
+    source_cursor: Option<&str>,
 ) -> Option<String> {
-    if !completed_cleanly || posts_this_run == 0 {
+    if !completed_cleanly {
+        return None;
+    }
+    if resume_strategy == Some("source_cursor") {
+        return source_cursor
+            .map(str::trim)
+            .filter(|cursor| !cursor.is_empty())
+            .map(str::to_string);
+    }
+    if resume_strategy == Some("range_offset") {
+        if let Some(cursor) = source_cursor
+            .map(str::trim)
+            .filter(|cursor| !cursor.is_empty())
+        {
+            return Some(cursor.to_string());
+        }
+    }
+    if posts_this_run == 0 {
         return None;
     }
     match resume_strategy {
@@ -103,20 +121,35 @@ mod tests {
         let post_ids = HashSet::from(["105".to_string(), "104".to_string()]);
 
         assert_eq!(
-            compute_committed_cursor(false, Some("range_offset"), 1, 1, &post_ids),
+            compute_committed_cursor(false, Some("range_offset"), 1, 1, &post_ids, None),
             None
         );
         assert_eq!(
-            compute_committed_cursor(false, Some("tag_id_lt"), 1, 1, &post_ids),
+            compute_committed_cursor(false, Some("tag_id_lt"), 1, 1, &post_ids, None),
             None
         );
         assert_eq!(
-            compute_committed_cursor(true, Some("range_offset"), 1, 2, &post_ids),
+            compute_committed_cursor(true, Some("range_offset"), 1, 2, &post_ids, None),
             Some("2".to_string())
         );
         assert_eq!(
-            compute_committed_cursor(true, Some("tag_id_lt"), 1, 2, &post_ids),
+            compute_committed_cursor(true, Some("range_offset"), 1, 92, &post_ids, Some("100"),),
+            Some("100".to_string())
+        );
+        assert_eq!(
+            compute_committed_cursor(true, Some("tag_id_lt"), 1, 2, &post_ids, None),
             Some("104".to_string())
+        );
+        assert_eq!(
+            compute_committed_cursor(
+                true,
+                Some("source_cursor"),
+                1,
+                0,
+                &HashSet::new(),
+                Some("opaque-next"),
+            ),
+            Some("opaque-next".to_string())
         );
     }
 

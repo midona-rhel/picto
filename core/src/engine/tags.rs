@@ -13,8 +13,7 @@ pub enum TagOperation {
 }
 
 impl ApplicationEngine {
-    /// Add or remove tags from entities.
-    /// Collection tag edits apply to member singles; collection rows never own tags.
+    /// Add or remove tags from exactly the targeted entities.
     pub fn apply_entity_tags(
         &self,
         target: EntityTarget,
@@ -23,13 +22,12 @@ impl ApplicationEngine {
         provenance_mask: Option<u64>,
     ) -> Result<TagChange, String> {
         let resolved = target::resolve(&self.db, &target)?;
-        let expansion = ExpansionMode::SinglesAndCollectionMembers;
         let provenance_mask = provenance_mask.unwrap_or(TAG_PROVENANCE_MANUAL);
 
         let change = match resolved {
             target::ResolvedTarget::Ids(ids) => match operation {
-                TagOperation::Add => self.db.add_tags(&ids, tags, provenance_mask, expansion)?,
-                TagOperation::Remove => self.db.remove_tags(&ids, tags, expansion)?,
+                TagOperation::Add => self.db.add_tags(&ids, tags, provenance_mask)?,
+                TagOperation::Remove => self.db.remove_tags(&ids, tags)?,
             },
             target::ResolvedTarget::Query {
                 view_query,
@@ -40,11 +38,9 @@ impl ApplicationEngine {
                     &exclusions,
                     tags,
                     provenance_mask,
-                    expansion,
                 )?,
                 TagOperation::Remove => {
-                    self.db
-                        .remove_tags_bulk(&view_query, &exclusions, tags, expansion)?
+                    self.db.remove_tags_bulk(&view_query, &exclusions, tags)?
                 }
             },
         };
@@ -57,27 +53,6 @@ impl ApplicationEngine {
         let mut write = WriteChange::from_tag(change);
         write.origin = origin.to_string();
         write.entity_hashes = self.resolve_entity_hashes(&change.entity_ids);
-        let collection_ids = self
-            .db
-            .get_parent_collection_ids_for_entities(&change.entity_ids)?;
-        if !collection_ids.is_empty() {
-            write
-                .entity_hashes
-                .extend(self.db.get_entity_hashes_by_ids(&collection_ids)?);
-            write.extra_grid_scopes.push("system:active".to_string());
-            for collection_id in collection_ids {
-                write
-                    .extra_grid_scopes
-                    .push(format!("collection:{collection_id}"));
-                for folder_id in self.db.get_collection_folder_ids(collection_id)? {
-                    write.extra_grid_scopes.push(format!("folder:{folder_id}"));
-                }
-            }
-            write.entity_hashes.sort();
-            write.entity_hashes.dedup();
-            write.extra_grid_scopes.sort();
-            write.extra_grid_scopes.dedup();
-        }
         Ok(write)
     }
 

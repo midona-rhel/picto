@@ -185,15 +185,8 @@ export function registerIpcHandlers({
     if (command === 'auth_session_start') {
       return windowManager.startAuthSession(args?.site_category, args?.start_url ?? null);
     }
-    if (command === 'auth_session_set_bounds') {
-      return windowManager.setAuthSessionBounds(args);
-    }
     if (command === 'auth_session_cancel') {
       return windowManager.cancelAuthSession();
-    }
-    if (command === 'pixiv_oauth_popup') {
-      const result = await windowManager.openPixivOAuthPopup(args?.login_url);
-      return result; // { code, phpsessid }
     }
     if (command === 'open_subscriptions_window') {
       windowManager.openSubscriptionsWindow();

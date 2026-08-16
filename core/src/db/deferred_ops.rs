@@ -504,8 +504,7 @@ impl LibraryDatabase {
             let file_id: i64 = conn.query_row(
                 "SELECT mf.file_id
                  FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
+                 JOIN media_file mf ON mf.file_id = me.file_id
                  WHERE me.entity_hash = ?1",
                 [&hash],
                 |row| row.get(0),
@@ -537,8 +536,7 @@ impl LibraryDatabase {
             let file_id: i64 = conn.query_row(
                 "SELECT mf.file_id
                  FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
+                 JOIN media_file mf ON mf.file_id = me.file_id
                  WHERE me.entity_hash = ?1",
                 [&hash],
                 |row| row.get(0),
@@ -587,8 +585,7 @@ impl LibraryDatabase {
                 .query_row(
                     "SELECT mf.file_id, mf.dominant_palette_blob
                      FROM media_entity me
-                     JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                     JOIN media_file mf ON mf.file_id = sme.file_id
+                     JOIN media_file mf ON mf.file_id = me.file_id
                      WHERE me.entity_hash = ?1",
                     [&hash],
                     |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<Vec<u8>>>(1)?)),
@@ -639,8 +636,7 @@ impl LibraryDatabase {
             let mut stmt = conn.prepare(
                 "SELECT me.entity_hash, mf.mime_type, mf.frame_count
                  FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
+                 JOIN media_file mf ON mf.file_id = me.file_id
                  WHERE mf.color_analysis_version < ?1
                     OR (mf.color_analysis_version >= ?1 AND mf.dominant_palette_blob IS NULL)",
             )?;
@@ -675,21 +671,5 @@ impl LibraryDatabase {
             self.ensure_deferred_jobs_present_batch(items)?;
         }
         Ok(count)
-    }
-
-    /// Get the entity_hash of a collection's primary member (first by ordinal).
-    pub fn get_primary_member_hash(&self, collection_hash: &str) -> Result<Option<String>, String> {
-        let h = collection_hash.to_string();
-        self.with_read(|conn| {
-            use rusqlite::OptionalExtension;
-            conn.query_row(
-                "SELECT pm.entity_hash FROM media_entity me
-                 JOIN media_entity pm ON pm.entity_id = me.primary_member_entity_id
-                 WHERE me.entity_hash = ?1 AND me.entity_kind = 'collection'",
-                [&h],
-                |row| row.get(0),
-            )
-            .optional()
-        })
     }
 }

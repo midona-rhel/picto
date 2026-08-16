@@ -3,14 +3,13 @@ import type { CanonicalEntityGridItem, SidebarNodeDto } from '../../../shared/ty
 export interface CanvasRenderItem {
   hash: string;
   thumbnailHash: string;
-  kind: 'single' | 'collection' | 'folder';
+  kind: 'single' | 'folder';
   name: string | null;
   mime: string;
   width: number | null;
   height: number | null;
   rating: number | null;
   durationMs: number | null;
-  memberCount: number | null;
   dominantColor: string | null;
   aspectRatio: number | null;
   numFrames: number | null;
@@ -36,15 +35,14 @@ export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
 
   return {
     hash: item.entity_hash,
-    thumbnailHash: item.thumbnail_hash,
-    kind: item.entity_kind,
+    thumbnailHash: item.entity_hash,
+    kind: 'single',
     name: item.name,
     mime: item.mime_type,
     width: item.pixel_width,
     height: item.pixel_height,
     rating: item.rating,
     durationMs: item.duration_ms,
-    memberCount: item.member_count,
     dominantColor: item.dominant_color_hex,
     aspectRatio,
     numFrames: item.frame_count,
@@ -63,7 +61,6 @@ export function adaptFolderItem(folder: SidebarNodeDto, coverHash: string | null
     height: null,
     rating: null,
     durationMs: null,
-    memberCount: null,
     dominantColor: null,
     aspectRatio: 4 / 3,
     numFrames: null,

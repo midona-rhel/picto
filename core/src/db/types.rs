@@ -2,39 +2,6 @@
 
 use serde::{Serialize, Serializer};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EntityKind {
-    Single,
-    Collection,
-}
-
-impl EntityKind {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            EntityKind::Single => "single",
-            EntityKind::Collection => "collection",
-        }
-    }
-
-    pub fn from_str(s: &str) -> Result<Self, String> {
-        match s {
-            "single" => Ok(EntityKind::Single),
-            "collection" => Ok(EntityKind::Collection),
-            other => Err(format!("Invalid entity_kind: {other}")),
-        }
-    }
-}
-
-/// How a command expands entity targets to include collection members.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ExpansionMode {
-    EntityOnly,
-    /// Keep single targets, but replace collection targets with their member singles.
-    SinglesAndCollectionMembers,
-    EntityAndDescendants,
-}
-
 #[derive(Debug, Default, Serialize)]
 pub struct EntityChange {
     pub entity_ids: Vec<i64>,
@@ -99,19 +66,6 @@ pub struct FolderMembership {
     pub folder_name: String,
 }
 
-#[derive(Debug, Default, Serialize)]
-pub struct CollectionMembershipChange {
-    pub collection_id: i64,
-    pub added: Vec<i64>,
-    pub removed: Vec<i64>,
-    /// Captured before a final-member removal deletes the collection row.
-    pub collection_hash: Option<String>,
-    pub deleted_collection: bool,
-    /// Captured before membership changes so a deleted collection still
-    /// invalidates every affected folder scope.
-    pub folder_ids: Vec<i64>,
-}
-
 #[derive(Debug, Clone, Serialize)]
 pub struct DuplicatePairRecord {
     pub hash_a: String,
@@ -172,16 +126,7 @@ pub struct DuplicatePairPage {
 #[serde(rename_all = "snake_case")]
 pub enum DuplicateResolveStatus {
     Resolved,
-    Conflict,
     QualityAmbiguous,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DuplicateCollectionConflict {
-    pub winner_hash: String,
-    pub loser_hash: String,
-    pub winner_collection_id: Option<i64>,
-    pub loser_collection_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -195,52 +140,13 @@ pub struct DuplicateResolutionResult {
     pub cleanup_error: Option<String>,
     pub action: String,
     pub affected_folder_ids: Vec<i64>,
-    pub affected_collection_ids: Vec<i64>,
     pub tags_merged: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub conflict: Option<DuplicateCollectionConflict>,
 }
 
 #[derive(Debug, Clone)]
 pub struct PerceptualHashCandidate {
     pub file_id: i64,
     pub distance: u32,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CollectionRecord {
-    pub id: i64,
-    pub name: String,
-    pub tags: Vec<String>,
-    pub image_count: i64,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
-    pub thumbnail_url: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CollectionMimeCount {
-    pub mime: String,
-    pub count: i64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct CollectionSummary {
-    pub id: i64,
-    pub name: String,
-    pub tags: Vec<String>,
-    pub image_count: i64,
-    pub total_size_bytes: i64,
-    pub mime_breakdown: Vec<CollectionMimeCount>,
-    pub source_urls: Vec<String>,
-    pub rating: Option<i64>,
-    #[serde(rename = "date_created")]
-    pub created_at: Option<String>,
-    #[serde(rename = "date_modified")]
-    pub updated_at: Option<String>,
-    #[serde(rename = "date_added")]
-    pub imported_at: Option<String>,
-    pub notes: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -296,10 +202,6 @@ pub struct FolderPatch {
 pub struct EntityGridItem {
     pub entity_id: i64,
     pub entity_hash: String,
-    /// Hash used to load the thumbnail. A collection's identity is
-    /// `entity_hash`; its thumbnail is supplied by its primary member.
-    pub thumbnail_hash: String,
-    pub entity_kind: EntityKind,
     pub name: Option<String>,
     pub mime_type: String,
     pub pixel_width: Option<i64>,
@@ -310,7 +212,6 @@ pub struct EntityGridItem {
     pub date_created: String,
     pub date_modified: String,
     pub has_thumbnail: bool,
-    pub member_count: Option<i64>,
     pub duration_ms: Option<i64>,
     pub frame_count: Option<i64>,
     pub has_audio: bool,
@@ -334,7 +235,6 @@ pub enum ScopeKind {
     System,
     Folder,
     SmartFolder,
-    Collection,
     Search,
     Tag,
 }
@@ -365,7 +265,7 @@ pub struct QueryFilters {
     pub rating: Option<RatingFilter>,
     pub colors: Option<Vec<String>>,
     pub mime_types: Option<Vec<String>>,
-    pub entity_types: Option<Vec<String>>, // "image", "video", "audio", "collection"
+    pub entity_types: Option<Vec<String>>, // "image", "video", "audio"
     pub tags: Option<Vec<TagFilter>>,
     pub date_created: Option<DateRange>,
     pub date_added: Option<DateRange>,
@@ -483,8 +383,6 @@ pub enum EntityTargetKind {
 #[derive(Debug, Clone, Serialize)]
 pub struct EntityDetails {
     pub entity_hash: String,
-    pub thumbnail_hash: String,
-    pub entity_kind: EntityKind,
     pub name: Option<String>,
     pub mime_type: String,
     pub size_bytes: i64,
@@ -505,8 +403,6 @@ pub struct EntityDetails {
     pub perceptual_hash: Option<String>,
     pub tags: Vec<TagInfo>,
     pub folders: Vec<FolderInfo>,
-    pub member_count: Option<i64>,
-    pub total_size_bytes: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]

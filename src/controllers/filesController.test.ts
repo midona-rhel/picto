@@ -13,7 +13,7 @@ describe('manual import destination', () => {
     });
   });
 
-  it('imports from All into the active collection', () => {
+  it('imports from All into the accepted library', () => {
     expect(manualImportParamsForScope({ kind: 'system', key: 'all' })).toEqual({
       initial_status: MEDIA_STATUS_ACTIVE,
     });

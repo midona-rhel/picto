@@ -2,8 +2,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::types::{
     SubscriptionDownloadAttemptRecord, SubscriptionDownloadAttemptUpsert, SubscriptionIssueRecord,
-    SubscriptionPostMemberRecord, SubscriptionPostMemberUpsert, SubscriptionQueryJob,
-    SubscriptionQueryRunCompletion, SubscriptionQueryRunRecord, SubscriptionRunRecord,
+    SubscriptionPostMemberUpsert, SubscriptionQueryJob, SubscriptionQueryRunCompletion,
+    SubscriptionQueryRunRecord, SubscriptionRunRecord,
 };
 use crate::subscriptions::gallery_dl_runner::FailureKind;
 
@@ -106,24 +106,6 @@ fn map_subscription_download_attempt_row(
         created_at: row.get(16)?,
         updated_at: row.get(17)?,
         resolved_at: row.get(18)?,
-    })
-}
-
-fn map_subscription_post_member_row(
-    row: &rusqlite::Row,
-) -> rusqlite::Result<SubscriptionPostMemberRecord> {
-    Ok(SubscriptionPostMemberRecord {
-        subscription_id: row.get(0)?,
-        site_id: row.get(1)?,
-        post_id: row.get(2)?,
-        item_key: row.get(3)?,
-        page_num: row.get(4)?,
-        canonical_post_url: row.get(5)?,
-        media_url: row.get(6)?,
-        entity_hash: row.get(7)?,
-        status: row.get(8)?,
-        created_at: row.get(9)?,
-        updated_at: row.get(10)?,
     })
 }
 
@@ -361,16 +343,24 @@ pub fn finalize_subscription_run_if_terminal(
         ),
         None => ("succeeded", None, None),
     };
-    let (files_downloaded, files_skipped): (i64, i64) = conn.query_row(
-        "SELECT COUNT(i.item_id),
-                COALESCE(SUM(CASE WHEN i.result_kind = 'reused' THEN 1 ELSE 0 END), 0)
+    let (files_downloaded, source_skipped): (i64, i64) = conn.query_row(
+        "SELECT COALESCE(SUM(files_downloaded), 0),
+                COALESCE(SUM(files_skipped), 0)
+         FROM subscription_query_run
+         WHERE run_id = ?1",
+        [run_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let reused: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(CASE WHEN i.result_kind = 'reused' THEN 1 ELSE 0 END), 0)
          FROM ingest_queue q
          JOIN subscription_query_run qr ON qr.query_run_id = q.query_run_id
          JOIN ingest_queue_item i ON i.queue_id = q.queue_id
          WHERE qr.run_id = ?1",
         [run_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| row.get(0),
     )?;
+    let files_skipped = source_skipped + reused;
     let (metadata_validated, metadata_invalid): (i64, i64) = conn.query_row(
         "SELECT COALESCE(SUM(metadata_validated), 0),
                 COALESCE(SUM(metadata_invalid), 0)
@@ -458,6 +448,43 @@ pub fn create_subscription_query_run(
     Ok(conn.last_insert_rowid())
 }
 
+pub(crate) fn checkpoint_subscription_query_progress(
+    conn: &Connection,
+    query_run_id: i64,
+    files_downloaded: i64,
+    posts_processed: i64,
+    metadata_validated: i64,
+) -> rusqlite::Result<()> {
+    let query_id: i64 = conn.query_row(
+        "SELECT query_id
+         FROM subscription_query_run
+         WHERE query_run_id = ?1 AND status = 'running'",
+        [query_run_id],
+        |row| row.get(0),
+    )?;
+    conn.execute(
+        "UPDATE subscription_query_run
+         SET files_downloaded = files_downloaded + ?1,
+             posts_processed = posts_processed + ?2,
+             metadata_validated = metadata_validated + ?3
+         WHERE query_run_id = ?4 AND status = 'running'",
+        params![
+            files_downloaded,
+            posts_processed,
+            metadata_validated,
+            query_run_id
+        ],
+    )?;
+    conn.execute(
+        "UPDATE subscription_query
+         SET files_found = files_found + ?1,
+             posts_found = posts_found + ?2
+         WHERE query_id = ?3",
+        params![files_downloaded, posts_processed, query_id],
+    )?;
+    Ok(())
+}
+
 pub fn record_subscription_query_source_completion(
     conn: &Connection,
     query_run_id: i64,
@@ -468,11 +495,11 @@ pub fn record_subscription_query_source_completion(
          SET status = ?1,
              failure_kind = ?2,
              error_message = ?3,
-             posts_processed = ?4,
-             files_downloaded = ?5,
-             files_skipped = ?6,
-             metadata_validated = ?7,
-             metadata_invalid = ?8
+             posts_processed = MAX(posts_processed, ?4),
+             files_downloaded = MAX(files_downloaded, ?5),
+             files_skipped = MAX(files_skipped, ?6),
+             metadata_validated = MAX(metadata_validated, ?7),
+             metadata_invalid = MAX(metadata_invalid, ?8)
          WHERE query_run_id = ?9 AND status = 'running'",
         params![
             format!("settling_{}", completion.status),
@@ -931,7 +958,7 @@ pub fn reset_subscription_query_state(
 pub fn reset_subscription_state(
     conn: &Connection,
     subscription_id: i64,
-) -> rusqlite::Result<(usize, usize, usize)> {
+) -> rusqlite::Result<(usize, usize)> {
     let queries_reset = conn.execute(
         "UPDATE subscription_query
          SET files_found = 0,
@@ -981,12 +1008,7 @@ pub fn reset_subscription_state(
         [subscription_id],
     )?;
 
-    let post_maps_deleted = conn.execute(
-        "DELETE FROM subscription_post_collection WHERE subscription_id = ?1",
-        [subscription_id],
-    )?;
-
-    Ok((queries_reset, entities_deleted, post_maps_deleted))
+    Ok((queries_reset, entities_deleted))
 }
 
 pub fn set_query_resume_state(
@@ -1792,13 +1814,13 @@ pub fn upsert_subscription_post_member(
     conn.execute(
         "INSERT INTO subscription_post_member (
              subscription_id, site_id, post_id, item_key, page_num,
-             canonical_post_url, media_url, entity_hash, status, created_at, updated_at
+             canonical_post_url, media_url, entity_id, status, created_at, updated_at
          ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?10)
          ON CONFLICT(subscription_id, site_id, post_id, item_key)
          DO UPDATE SET page_num = excluded.page_num,
                        canonical_post_url = excluded.canonical_post_url,
                        media_url = excluded.media_url,
-                       entity_hash = excluded.entity_hash,
+                       entity_id = excluded.entity_id,
                        status = excluded.status,
                        updated_at = excluded.updated_at",
         params![
@@ -1809,7 +1831,7 @@ pub fn upsert_subscription_post_member(
             input.page_num,
             input.canonical_post_url,
             input.media_url,
-            input.entity_hash,
+            input.entity_id,
             input.status,
             now,
         ],
@@ -1827,62 +1849,4 @@ pub fn add_subscription_entity(
         params![subscription_id, entity_id],
     )?;
     Ok(changed > 0)
-}
-
-pub fn upsert_subscription_post_collection(
-    conn: &Connection,
-    subscription_id: i64,
-    site_id: &str,
-    post_id: &str,
-    collection_entity_id: i64,
-) -> rusqlite::Result<()> {
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "INSERT INTO subscription_post_collection (
-             subscription_id, site_id, post_id, collection_entity_id, date_added, date_modified
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)
-         ON CONFLICT(subscription_id, site_id, post_id)
-         DO UPDATE SET collection_entity_id = excluded.collection_entity_id,
-                       date_modified = excluded.date_modified",
-        params![subscription_id, site_id, post_id, collection_entity_id, now],
-    )?;
-    Ok(())
-}
-
-pub fn get_subscription_post_collection(
-    conn: &Connection,
-    subscription_id: i64,
-    site_id: &str,
-    post_id: &str,
-) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT collection_entity_id
-         FROM subscription_post_collection
-         WHERE subscription_id = ?1 AND site_id = ?2 AND post_id = ?3",
-        params![subscription_id, site_id, post_id],
-        |row| row.get(0),
-    )
-    .optional()
-}
-
-pub fn list_subscription_post_members(
-    conn: &Connection,
-    subscription_id: i64,
-    site_id: &str,
-    post_id: &str,
-) -> rusqlite::Result<Vec<SubscriptionPostMemberRecord>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT subscription_id, site_id, post_id, item_key, page_num,
-                canonical_post_url, media_url, entity_hash, status, created_at, updated_at
-         FROM subscription_post_member
-         WHERE subscription_id = ?1
-           AND site_id = ?2
-           AND post_id = ?3
-         ORDER BY COALESCE(page_num, 9223372036854775807) ASC, item_key ASC",
-    )?;
-    let rows = stmt.query_map(
-        params![subscription_id, site_id, post_id],
-        map_subscription_post_member_row,
-    )?;
-    rows.collect()
 }

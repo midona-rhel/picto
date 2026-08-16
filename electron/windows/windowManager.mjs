@@ -110,6 +110,7 @@ export function createWindowManager({
   onWindowEvent = () => {},
 }) {
   const windowsByLabel = new Map();
+  const shouldOpenDevTools = isDev && process.env.PICTO_OPEN_DEVTOOLS === '1';
   const authSessions = createAuthSessions({ BrowserWindow, getMainWindow });
   function getMainWindow() {
     const win = windowsByLabel.get('main');
@@ -400,7 +401,9 @@ export function createWindowManager({
       void win.loadURL(url).catch((err) => {
         console.error(`[main] window '${label}' loadURL failed`, err);
       });
-      win.webContents.openDevTools({ mode: 'detach', activate: false });
+      if (shouldOpenDevTools) {
+        win.webContents.openDevTools({ mode: 'detach', activate: false });
+      }
     } else {
       const htmlMap = {
         settings: 'settings.html',
@@ -501,7 +504,9 @@ export function createWindowManager({
 
     if (isDev) {
       void win.loadURL(`${DEV_URL}/library-manager.html`);
-      win.webContents.openDevTools({ mode: 'detach' });
+      if (shouldOpenDevTools) {
+        win.webContents.openDevTools({ mode: 'detach', activate: false });
+      }
     } else {
       void win.loadFile(path.join(__dirname, '..', 'dist', 'library-manager.html'));
     }
@@ -515,10 +520,8 @@ export function createWindowManager({
     getAllWindows,
     getWindow,
     openLibraryManager,
-    openPixivOAuthPopup: authSessions.openPixivOAuthPopup,
     openSettingsWindow,
     openSubscriptionsWindow,
-    setAuthSessionBounds: authSessions.setAuthSessionBounds,
     startAuthSession: authSessions.startAuthSession,
     getMainWindow,
     sendToAllWindows,

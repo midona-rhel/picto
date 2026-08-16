@@ -2,20 +2,16 @@
  * Navigation history — back/forward stack for scope navigation.
  *
  * Tracks visited sidebar node IDs. Supports browser-like back/forward.
- * Validates collection scopes before navigating (skips deleted collections).
  */
 
 import { atom, getDefaultStore } from 'jotai';
-import { collectionsController } from '../controllers/collectionsController';
-import { activeNodeIdAtom, parentNodeIdAtom, collectionNameAtom } from './navigation';
+import { activeNodeIdAtom } from './navigation';
 import { subscriptionsSelectionAtom, type SubscriptionsSelection } from './subscriptionsWorkspace';
 
 const SUBSCRIPTIONS_NODE_ID = 'system:subscriptions';
 
 interface HistoryEntry {
   nodeId: string;
-  parentNodeId: string | null;
-  collectionName: string | null;
   /** Subject selection inside the subscriptions workspace (null = home). */
   subsSelection?: SubscriptionsSelection;
 }
@@ -30,7 +26,7 @@ interface HistoryState {
 }
 
 const historyAtom = atom<HistoryState>({
-  stack: [{ nodeId: 'system:active', parentNodeId: null, collectionName: null }],
+  stack: [{ nodeId: 'system:active' }],
   cursor: 0,
 });
 
@@ -67,17 +63,9 @@ export function removeHistoryEntries(nodeIds: Iterable<string>) {
     .filter((entry) => !removed.has(entry.nodeId)).length;
   const nextStack = stack.length > 0
     ? stack
-    : [{ nodeId: 'system:active', parentNodeId: null, collectionName: null }];
+    : [{ nodeId: 'system:active' }];
   const cursor = Math.min(Math.max(retainedThroughCursor - 1, 0), nextStack.length - 1);
   store.set(historyAtom, { stack: nextStack, cursor });
-}
-
-/** Check if a nodeId points to a scope that still exists. */
-async function isValidNodeId(nodeId: string): Promise<boolean> {
-  if (!nodeId.startsWith('collection:')) return true;
-  const id = parseInt(nodeId.slice(11), 10);
-  if (isNaN(id)) return false;
-  return collectionsController.exists(id);
 }
 
 /** Push a new node onto the history stack (called on direct scope navigation, NOT back/forward). */
@@ -94,12 +82,7 @@ export function pushHistory(nodeId: string) {
   if (last?.nodeId === nodeId && (nodeId !== SUBSCRIPTIONS_NODE_ID || last.subsSelection == null)) {
     return;
   }
-  // Capture current collection context
-  const entry: HistoryEntry = {
-    nodeId,
-    parentNodeId: store.get(parentNodeIdAtom),
-    collectionName: store.get(collectionNameAtom),
-  };
+  const entry: HistoryEntry = { nodeId };
   stack.push(entry);
   // Cap at 100 entries
   if (stack.length > 100) stack.shift();
@@ -122,8 +105,6 @@ export function pushSubscriptionsHistory(selection: SubscriptionsSelection) {
   }
   stack.push({
     nodeId: SUBSCRIPTIONS_NODE_ID,
-    parentNodeId: store.get(parentNodeIdAtom),
-    collectionName: store.get(collectionNameAtom),
     subsSelection: selection ?? undefined,
   });
   if (stack.length > 100) stack.shift();
@@ -131,35 +112,23 @@ export function pushSubscriptionsHistory(selection: SubscriptionsSelection) {
 }
 
 function applyHistoryEntry(entry: HistoryEntry) {
-  store.set(parentNodeIdAtom, entry.parentNodeId);
-  store.set(collectionNameAtom, entry.collectionName);
   store.set(activeNodeIdAtom, entry.nodeId);
   if (entry.nodeId === SUBSCRIPTIONS_NODE_ID) {
     store.set(subscriptionsSelectionAtom, entry.subsSelection ?? null);
   }
 }
 
-/** Go back in history, skipping invalid entries (e.g. deleted collections). */
-export async function goBack() {
+export function goBack() {
   const h = store.get(historyAtom);
-  let next = h.cursor - 1;
-  while (next >= 0) {
-    if (await isValidNodeId(h.stack[next].nodeId)) break;
-    next--;
-  }
+  const next = h.cursor - 1;
   if (next < 0) return;
   store.set(historyAtom, { ...h, cursor: next });
   applyHistoryEntry(h.stack[next]);
 }
 
-/** Go forward in history, skipping invalid entries (e.g. deleted collections). */
-export async function goForward() {
+export function goForward() {
   const h = store.get(historyAtom);
-  let next = h.cursor + 1;
-  while (next < h.stack.length) {
-    if (await isValidNodeId(h.stack[next].nodeId)) break;
-    next++;
-  }
+  const next = h.cursor + 1;
   if (next >= h.stack.length) return;
   store.set(historyAtom, { ...h, cursor: next });
   applyHistoryEntry(h.stack[next]);

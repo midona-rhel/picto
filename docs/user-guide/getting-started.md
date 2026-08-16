@@ -14,7 +14,7 @@ Picto bundles FFmpeg and gallery-dl automatically — no extra dependencies need
 
 ## First Launch
 
-When you launch Picto for the first time, you'll need a **library** — a folder where Picto stores your collection database, thumbnails, and settings.
+When you launch Picto for the first time, you'll need a **library** — a folder where Picto stores your database, thumbnails, and settings.
 
 1. Click **Create New Library**
 2. Choose a name and a location on disk

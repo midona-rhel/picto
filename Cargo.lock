@@ -2395,6 +2395,7 @@ dependencies = [
  "roaring",
  "roxmltree",
  "rusqlite",
+ "security-framework 3.7.0",
  "serde",
  "serde_json",
  "sha2",

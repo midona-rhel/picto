@@ -37,7 +37,7 @@ export function QuickLook({
   const currentMime = currentItem?.mime_type ?? '';
   const isVideo = currentMime.startsWith('video/');
   const total = totalCount ?? items.length;
-  const thumbHash = currentItem?.thumbnail_hash ?? currentItem?.entity_hash ?? '';
+  const thumbHash = currentItem?.entity_hash ?? '';
 
   // Fade-in
   const [isOpen, setIsOpen] = useState(false);
@@ -57,14 +57,14 @@ export function QuickLook({
     const r: string[] = [];
     const prev = items[currentIndex - 1];
     const next = items[currentIndex + 1];
-    if (prev) r.push(prev.thumbnail_hash ?? prev.entity_hash);
-    if (next) r.push(next.thumbnail_hash ?? next.entity_hash);
+    if (prev) r.push(prev.entity_hash);
+    if (next) r.push(next.entity_hash);
     return r;
   }, [items, currentIndex]);
 
   const pipeline = useMediaImagePipeline({
     hash: currentHash || null,
-    thumbnailHash: currentItem?.thumbnail_hash ?? null,
+    thumbnailHash: currentItem?.entity_hash ?? null,
     mime: currentMime,
     isVideo,
     imgRef: fullImgRef,

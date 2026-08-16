@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use chrono::Utc;
 use tokio_util::sync::CancellationToken;
@@ -6,23 +6,19 @@ use tracing::{info, warn};
 
 use crate::subscriptions::archive::subscription_query_archive_prefix;
 use crate::subscriptions::gallery_dl_runner::{FailureKind, RunOptions};
-use crate::subscriptions::import_policy::{
-    collection_group_parts, individual_import_metadata, validate_metadata_for_site,
-};
+use crate::subscriptions::import_policy::{individual_import_metadata, validate_metadata_for_site};
 use crate::subscriptions::policy::{
     apply_resume_to_query, default_resume_strategy_for_site, effective_inbox_limit,
     range_start_from_cursor, resolve_query_name,
 };
 use crate::subscriptions::source_adapter::{
-    DownloadedItem, GalleryDlSourceAdapter, ParsedMetadata, SubscriptionSourceAdapter,
+    DownloadedItem, GalleryDlSourceAdapter, SubscriptionSourceAdapter,
 };
 
 use super::helpers::{
     cleanup_subscription_temp_root, compute_committed_cursor, initial_history_has_more,
 };
-use super::{
-    incomplete_post_detail, PendingCollection, PendingMember, SubscriptionSyncEngine, SyncProgress,
-};
+use super::{SubscriptionSyncEngine, SyncProgress};
 
 impl<'a> SubscriptionSyncEngine<'a> {
     pub async fn sync_query(
@@ -140,8 +136,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let mut _domain_run_guard = None;
         if let Some(rate_limiter) = &self.rate_limiter {
             if let Some(domain) = adapter.extract_domain(&url) {
-                _domain_run_guard = Some(rate_limiter.acquire_domain_run(&domain).await);
-                rate_limiter.wait_for_slot(&domain).await;
+                _domain_run_guard = Some(rate_limiter.acquire_paced_run(&domain).await);
             }
         }
 
@@ -199,6 +194,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
             url: url.clone(),
             post_limit,
             range_start,
+            source_cursor: resume_strategy
+                .as_deref()
+                .filter(|strategy| *strategy == "source_cursor")
+                .and_then(|_| resume_cursor.map(str::to_string)),
             abort_threshold,
             auth: credential.gallery_dl_auth.clone(),
             archive_path,
@@ -210,13 +209,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         let runner_handle = tokio::spawn(async move { adapter.run(&opts, item_tx).await });
 
-        let mut pending_collections: HashMap<String, PendingCollection> = HashMap::new();
         let mut all_post_ids: HashSet<String> = HashSet::new();
         let mut committed_post_ids: HashSet<String> = HashSet::new();
         let mut posts_to_unarchive: HashSet<String> = HashSet::new();
         let mut total_items: usize = 0;
         let mut posts_processed_this_run: usize = 0;
-        let mut committed_files_this_run: usize = 0;
 
         info!(query_id, "sync_query: waiting for gallery-dl items...");
 
@@ -262,167 +259,75 @@ impl<'a> SubscriptionSyncEngine<'a> {
             total_items += 1;
             progress.files_downloaded += 1;
 
-            let collection_parts = collection_group_parts(site_id, &item.metadata);
-            let is_collection_member = self.auto_collections && collection_parts.is_some();
-
             let post_id_display = item.metadata.post_id.as_deref().unwrap_or("unknown");
 
-            info!(
-                post_id = post_id_display,
-                auto_collections = self.auto_collections,
-                has_collection_parts = collection_parts.is_some(),
-                is_collection_member,
-                "sync_engine: routing item"
+            progress.current_post_id = Some(
+                item.metadata
+                    .post_id
+                    .clone()
+                    .unwrap_or_else(|| "unknown".to_string()),
+            );
+            progress.current_post_items += 1;
+            self.set_phase("queueing");
+            self.emit_progress(
+                &sub_id_str,
+                &progress,
+                &format!("Queueing {post_id_display}..."),
             );
 
-            if is_collection_member {
-                let (category, post_id, preferred_name) = collection_parts.unwrap();
-                let key = format!("{category}:{post_id}");
+            let import_metadata = individual_import_metadata(&item.metadata);
+            let committed_post_id = item.metadata.post_id.clone();
+            let first_item_for_post = committed_post_id
+                .as_ref()
+                .is_none_or(|post_id| !committed_post_ids.contains(post_id));
 
-                let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
-
-                let (buffered_items, ready) = {
-                    let pending = pending_collections.entry(key.clone()).or_insert_with(|| {
-                        PendingCollection {
-                            category,
-                            post_id: post_id.clone(),
-                            preferred_name,
-                            expected_count: None,
-                            members: Vec::new(),
-                        }
-                    });
-                    pending.push_member(PendingMember {
-                        file_path: item.file_path,
-                        metadata: item.metadata,
-                        page_num,
-                    })
-                };
-                progress.current_post_id = Some(post_id.clone());
-                progress.current_post_items = buffered_items;
-                let short_id = if post_id.len() > 4 {
-                    &post_id[post_id.len() - 4..]
-                } else {
-                    &post_id
-                };
-                self.set_phase("stashing");
-                self.emit_progress(
-                    &sub_id_str,
-                    &progress,
-                    &format!("Stashing post ..{short_id} ({buffered_items})"),
-                );
-                if ready {
-                    let pending_post_id = pending_collections
-                        .get(&key)
-                        .map(|collection| collection.post_id.clone());
-                    match self
-                        .flush_pending_collection(
-                            &key,
-                            &mut pending_collections,
-                            subscription_id,
-                            query_id,
-                            query_run_id,
-                            &sub_id_str,
+            match self
+                .enqueue_single_subscription_item(
+                    subscription_id,
+                    query_id,
+                    query_run_id,
+                    i64::from(first_item_for_post),
+                    &item.file_path,
+                    import_metadata,
+                )
+                .await
+            {
+                Ok(_) => {
+                    if let Some(post_id) = committed_post_id {
+                        committed_post_ids.insert(post_id);
+                    }
+                    progress.queued_for_ingest += 1;
+                    self.emit_progress(
+                        &sub_id_str,
+                        &progress,
+                        &format!("Queued {} files for ingest", progress.queued_for_ingest),
+                    );
+                    if first_item_for_post {
+                        self.finalize_current_post_progress(
                             &mut progress,
-                        )
-                        .await
-                    {
-                        Ok(Some((post_id, file_count))) => {
-                            committed_files_this_run += file_count;
-                            if committed_post_ids.insert(post_id) {
-                                self.finalize_current_post_progress(
-                                    &mut progress,
-                                    &mut posts_processed_this_run,
-                                );
-                            }
-                        }
-                        Ok(None) => {}
-                        Err(error) => {
-                            posts_to_unarchive.extend(pending_post_id);
-                            progress.failure_kind =
-                                Some(FailureKind::IngestQueueFailure.as_str().to_string());
-                            progress
-                                .errors
-                                .push(format!("Failed to queue collection for ingest: {error}"));
-                            self.record_issue(
-                                subscription_id,
-                                Some(query_id),
-                                FailureKind::IngestQueueFailure,
-                                "Failed to queue subscription collection for ingest",
-                                Some(&error),
-                            )
-                            .await;
-                        }
+                            &mut posts_processed_this_run,
+                        );
                     }
                 }
-            } else {
-                progress.current_post_id = Some(
-                    item.metadata
-                        .post_id
-                        .clone()
-                        .unwrap_or_else(|| "unknown".to_string()),
-                );
-                progress.current_post_items = 1;
-
-                self.set_phase("queueing");
-                self.emit_progress(
-                    &sub_id_str,
-                    &progress,
-                    &format!("Queueing {post_id_display}..."),
-                );
-
-                let import_metadata =
-                    individual_import_metadata(&item.metadata, self.auto_collections);
-
-                match self
-                    .enqueue_single_subscription_item(
+                Err(error) => {
+                    if let Some(post_id) = item.metadata.post_id.clone() {
+                        posts_to_unarchive.insert(post_id);
+                    }
+                    progress.failure_kind =
+                        Some(FailureKind::IngestQueueFailure.as_str().to_string());
+                    progress.errors.push(format!(
+                        "Failed to queue subscription item for ingest: {error}"
+                    ));
+                    self.record_issue(
                         subscription_id,
-                        query_id,
-                        query_run_id,
-                        &item.file_path,
-                        import_metadata.as_ref(),
+                        Some(query_id),
+                        FailureKind::IngestQueueFailure,
+                        "Failed to queue subscription item for ingest",
+                        Some(&error),
                     )
-                    .await
-                {
-                    Ok(_) => {
-                        committed_files_this_run += 1;
-                        let first_item_for_post = item
-                            .metadata
-                            .post_id
-                            .clone()
-                            .is_none_or(|post_id| committed_post_ids.insert(post_id));
-                        progress.queued_for_ingest += 1;
-                        self.emit_progress(
-                            &sub_id_str,
-                            &progress,
-                            &format!("Queued {} files for ingest", progress.queued_for_ingest),
-                        );
-                        if first_item_for_post {
-                            self.finalize_current_post_progress(
-                                &mut progress,
-                                &mut posts_processed_this_run,
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        if let Some(post_id) = item.metadata.post_id.clone() {
-                            posts_to_unarchive.insert(post_id);
-                        }
-                        progress.failure_kind =
-                            Some(FailureKind::IngestQueueFailure.as_str().to_string());
-                        progress.errors.push(format!(
-                            "Failed to queue subscription item for ingest: {error}"
-                        ));
-                        self.record_issue(
-                            subscription_id,
-                            Some(query_id),
-                            FailureKind::IngestQueueFailure,
-                            "Failed to queue subscription item for ingest",
-                            Some(&error),
-                        )
-                        .await;
-                        progress.current_post_id = None;
-                        progress.current_post_items = 0;
-                    }
+                    .await;
+                    progress.current_post_id = None;
+                    progress.current_post_items = 0;
                 }
             }
         }
@@ -484,7 +389,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         if cancel.is_cancelled() {
             progress.cancelled = true;
         }
-        let mut failed_post_members: HashMap<String, Vec<ParsedMetadata>> = HashMap::new();
+        progress.files_skipped += run_summary.skipped_archive_items;
         if run_summary.had_download_errors {
             progress.failure_kind = Some(FailureKind::DownloadFailure.as_str().to_string());
             progress
@@ -498,15 +403,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     failed,
                 )
                 .await;
-                if let Some((category, post_id, _)) =
-                    collection_group_parts(site_id, &failed.metadata)
-                {
-                    let key = format!("{category}:{post_id}");
-                    failed_post_members
-                        .entry(key)
-                        .or_default()
-                        .push(failed.metadata.clone());
-                }
             }
             self.record_issue(
                 subscription_id,
@@ -598,100 +494,27 @@ impl<'a> SubscriptionSyncEngine<'a> {
         info!(
             query_id,
             total_items,
-            pending_collections = pending_collections.len(),
             downloaded = progress.files_downloaded,
             skipped = progress.files_skipped,
             errors = progress.errors.len(),
             cancelled = progress.cancelled,
-            "sync_query: finalizing pending collections"
+            "sync_query: finalized independent media items"
         );
-        // Complete posts queue immediately above. Anything left here either
-        // has no advertised size and can close at normal EOF, or is incomplete
-        // and must be fetched again as a whole post.
-        let pending_keys: Vec<String> = pending_collections.keys().cloned().collect();
-        for key in pending_keys {
-            let complete = pending_collections
-                .get(&key)
-                .is_some_and(|post| post.is_complete(!progress.cancelled));
-            if complete {
-                let pending_post_id = pending_collections
-                    .get(&key)
-                    .map(|collection| collection.post_id.clone());
-                match self
-                    .flush_pending_collection(
-                        &key,
-                        &mut pending_collections,
-                        subscription_id,
-                        query_id,
-                        query_run_id,
-                        &sub_id_str,
-                        &mut progress,
-                    )
-                    .await
-                {
-                    Ok(Some((post_id, file_count))) => {
-                        committed_files_this_run += file_count;
-                        if committed_post_ids.insert(post_id) {
-                            self.finalize_current_post_progress(
-                                &mut progress,
-                                &mut posts_processed_this_run,
-                            );
-                        }
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        posts_to_unarchive.extend(pending_post_id);
-                        progress.failure_kind =
-                            Some(FailureKind::IngestQueueFailure.as_str().to_string());
-                        progress
-                            .errors
-                            .push(format!("Failed to queue collection for ingest: {error}"));
-                        self.record_issue(
-                            subscription_id,
-                            Some(query_id),
-                            FailureKind::IngestQueueFailure,
-                            "Failed to queue subscription collection for ingest",
-                            Some(&error),
-                        )
-                        .await;
-                    }
-                }
-            } else if let Some(post) = pending_collections.remove(&key) {
-                let detail = incomplete_post_detail(&post);
-                info!(
-                    query_id,
-                    post_id = %post.post_id,
-                    members = post.members.len(),
-                    expected = ?post.expected_count,
-                    cancelled = progress.cancelled,
-                    "sync_query: dropping incomplete post and clearing its archive entries"
-                );
-                posts_to_unarchive.insert(post.post_id);
-                if !progress.cancelled {
-                    progress.failure_kind = Some(FailureKind::DownloadFailure.as_str().to_string());
-                    progress.errors.push(detail.clone());
-                    self.record_issue(
-                        subscription_id,
-                        Some(query_id),
-                        FailureKind::DownloadFailure,
-                        "A subscription post did not download completely",
-                        Some(&detail),
-                    )
-                    .await;
-                }
-            }
-        }
 
         if !progress.cancelled {
-            let bridge_discovered_without_downloads = !completed_initial_run
-                && !progress.cancelled
-                && run_summary.exit_code == 0
-                && run_summary.discovered_items > 0
-                && total_items == 0;
+            let bridge_discovered_without_downloads = has_unexplained_discovery(
+                completed_initial_run,
+                run_summary.exit_code,
+                run_summary.discovered_items,
+                run_summary.skipped_archive_items,
+                total_items,
+            );
             if bridge_discovered_without_downloads {
+                let unexplained = run_summary
+                    .discovered_items
+                    .saturating_sub(run_summary.skipped_archive_items);
                 let detail = format!(
-                    "gallery-dl discovered {} items across {} posts but produced no downloadable files",
-                    run_summary.discovered_items,
+                    "gallery-dl discovered {unexplained} unaccounted items across {} posts but produced no downloadable files",
                     run_summary.discovered_post_ids.len(),
                 );
                 warn!(
@@ -711,18 +534,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     Some(&detail),
                 )
                 .await;
-            }
-            for failed_members in failed_post_members.into_values() {
-                for failed in failed_members {
-                    self.persist_post_member_state(
+            } else if run_summary.exit_code == 0 {
+                let _ = self
+                    .runtime_service()
+                    .resolve_subscription_issues(
                         subscription_id,
-                        site_id,
-                        &failed,
-                        None,
-                        "failed",
+                        Some(query_id),
+                        FailureKind::BridgeNoDownloads,
                     )
                     .await;
-                }
             }
         }
 
@@ -758,14 +578,24 @@ impl<'a> SubscriptionSyncEngine<'a> {
             range_start,
             posts_processed_this_run,
             &all_post_ids,
+            run_summary.source_cursor.as_deref(),
         );
         progress.resume_cursor = next_resume_cursor.clone();
         let unique_post_count = all_post_ids.len();
+        let pagination_item_count = if run_summary.source_page_items > 0 {
+            run_summary.source_page_items
+        } else {
+            unique_post_count
+        };
+        // A source page can include posts without supported media. Those posts
+        // were still checked and count toward source pagination, while file
+        // counters continue to report only actual media.
+        progress.posts_processed = progress.posts_processed.max(pagination_item_count);
         let initial_history_has_more = initial_history_has_more(
             completed_initial_run,
             completed_cleanly,
             post_limit,
-            unique_post_count,
+            pagination_item_count,
             next_resume_cursor.as_deref(),
         );
 
@@ -785,16 +615,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .await;
         }
 
-        if completed_cleanly || committed_files_this_run > 0 || progress.posts_processed > 0 {
-            let last_check_time = completed_cleanly.then(|| Utc::now().to_rfc3339());
+        if completed_cleanly {
             let _ = self
                 .runtime_service()
-                .add_query_progress(
-                    query_id,
-                    last_check_time,
-                    committed_files_this_run as i64,
-                    progress.posts_processed as i64,
-                )
+                .add_query_progress(query_id, Some(Utc::now().to_rfc3339()), 0, 0)
                 .await;
         }
 
@@ -854,5 +678,41 @@ impl<'a> SubscriptionSyncEngine<'a> {
         }
 
         progress
+    }
+}
+
+fn has_unexplained_discovery(
+    completed_initial_run: bool,
+    exit_code: i32,
+    discovered_items: usize,
+    skipped_archive_items: usize,
+    downloaded_items: usize,
+) -> bool {
+    !completed_initial_run
+        && exit_code == 0
+        && downloaded_items == 0
+        && discovered_items.saturating_sub(skipped_archive_items) > 0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::has_unexplained_discovery;
+
+    #[test]
+    fn archive_only_rerun_is_not_a_missing_download() {
+        assert!(!has_unexplained_discovery(false, 0, 3, 3, 0));
+    }
+
+    #[test]
+    fn unexplained_initial_discovery_is_a_missing_download() {
+        assert!(has_unexplained_discovery(false, 0, 3, 2, 0));
+        assert!(has_unexplained_discovery(false, 0, 1, 0, 0));
+    }
+
+    #[test]
+    fn downloads_and_terminal_history_do_not_trigger_the_guard() {
+        assert!(!has_unexplained_discovery(false, 0, 3, 0, 1));
+        assert!(!has_unexplained_discovery(true, 0, 1, 0, 0));
+        assert!(!has_unexplained_discovery(false, 4, 1, 0, 0));
     }
 }

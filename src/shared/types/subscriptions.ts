@@ -1,11 +1,10 @@
-export type CredentialType = 'username_password' | 'oauth_token' | 'cookies' | 'api_key';
+export type CredentialType = 'oauth_token' | 'api_key' | 'cookies' | 'username_password';
 
 export interface SubscriptionSiteInfo {
   id: string;
   name: string;
   domain: string;
   credential_owner_site_id: string;
-  url_template: string;
   example_query: string;
   supports_query: boolean;
   supports_account: boolean;
@@ -13,6 +12,7 @@ export interface SubscriptionSiteInfo {
   auth_required_for_full_access: boolean;
   /** Site is unusable without credentials — runs are blocked, not just warned. */
   auth_strictly_required: boolean;
+  manual_credential_types: string[];
 }
 
 export interface SubscriptionQueryInfo {
@@ -40,10 +40,8 @@ export interface SubscriptionInfo {
   name: string;
   schedule: SubscriptionSchedule | string;
   paused: boolean;
-  group_id: string | null;
   initial_post_limit: number;
   periodic_post_limit: number;
-  auto_collections: boolean;
   created_at: string;
   total_files: number;
   queries: SubscriptionQueryInfo[];
@@ -51,19 +49,10 @@ export interface SubscriptionInfo {
 
 export type SubscriptionSchedule = 'manual' | 'daily' | 'weekly' | 'monthly';
 
-export interface SubscriptionGroupInfo {
-  id: string;
-  name: string;
-  created_at: string;
-  total_files: number;
-  subscriptions: SubscriptionInfo[];
-}
-
 export interface SubscriptionProgressEvent {
   subscription_id: string;
   subscription_name: string;
   mode: string;
-  group_name?: string | null;
   query_id?: string | null;
   query_name?: string | null;
   files_downloaded: number;
@@ -181,7 +170,6 @@ export interface CredentialDomain {
   credential_type: CredentialType | string;
   display_name: string | null;
   created_at: string;
-  expires_at: string | null;
 }
 
 export interface CredentialHealth {
@@ -205,13 +193,6 @@ export interface PixivOAuthExchangeResult {
   ok: boolean;
 }
 
-export interface AuthSessionBounds {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}
-
 export interface AuthSessionCredentialPayload {
   site_category: string;
   credential_type: CredentialType | string;
@@ -220,7 +201,6 @@ export interface AuthSessionCredentialPayload {
   cookies?: Record<string, string> | null;
   oauth_code?: string | null;
   phpsessid?: string | null;
-  expires_at?: string | null;
 }
 
 export interface AuthSessionState {

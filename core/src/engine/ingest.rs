@@ -9,24 +9,8 @@ impl ApplicationEngine {
         initial_status: i64,
         parent_folder_id: Option<i64>,
         preserve_structure: bool,
-        collection_name: Option<String>,
         library_root: Option<&std::path::Path>,
     ) -> Result<(), String> {
-        if let Some(collection_name) = collection_name {
-            return crate::ingest_queue::enqueue_manual_collection(
-                self.db(),
-                paths,
-                collection_name,
-                tag_strings,
-                source_urls,
-                initial_status,
-                parent_folder_id,
-                library_root,
-            )
-            .await
-            .map(|_| ());
-        }
-
         if preserve_structure {
             let [path] = paths.as_slice() else {
                 return Err(

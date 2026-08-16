@@ -87,11 +87,6 @@ const WRITE_COMMANDS: &[&str] = &[
     "reorder_folder_members",
     "set_folder_watch_config",
     "clear_folder_watch_config",
-    "create_collection",
-    "split_collection",
-    "add_collection_members",
-    "remove_collection_members",
-    "reorder_collection_members",
     "save_settings",
     "sync_create_remote_library",
     "sync_connect_remote_library",
@@ -103,12 +98,7 @@ const WRITE_COMMANDS: &[&str] = &[
     "reorder_pinned_items",
     "set_view_prefs",
     "set_zoom_factor",
-    "create_group",
-    "delete_group",
-    "rename_group",
     "set_subscription_schedule",
-    "run_group",
-    "stop_group",
     "create_subscription",
     "delete_subscription",
     "pause_subscription",
@@ -116,7 +106,6 @@ const WRITE_COMMANDS: &[&str] = &[
     "delete_subscription_query",
     "edit_subscription_query",
     "pause_subscription_query",
-    "set_subscription_auto_collections",
     "run_subscription",
     "stop_subscription",
     "reset_subscription",
@@ -320,26 +309,12 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         }
         "delete_folder" => call!(typed::folders::delete_folder, &state, args),
         "remove_entities_from_folder" => {
-            call!(typed::folders::remove_files_from_folder, &state, args)
+            let input = serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
+            typed::folders::remove_files_from_folder(&state, input).await?;
+            ok_null()
         }
         "reorder_folder_items" => call!(typed::folders::reorder_folder_items, &state, args),
         "reorder_folder_members" => call!(typed::folders::reorder_folder_members, &state, args),
-
-        // ── Collections ──────────────────────────────────────
-        "get_collection_summary" => {
-            call!(typed::collections::get_collection_summary, &state, args)
-        }
-        "create_collection" => call!(typed::collections::create_collection, &state, args),
-        "reorder_collection_members" => {
-            call!(typed::collections::reorder_collection_members, &state, args)
-        }
-        "add_collection_members" => {
-            call!(typed::collections::add_collection_members, &state, args)
-        }
-        "remove_collection_members" => {
-            call!(typed::collections::remove_collection_members, &state, args)
-        }
-        "split_collection" => call!(typed::collections::split_collection, &state, args),
 
         // ── Media I/O ─────────────────────────────────────────
         "resolve_file_path" => call!(typed::media_io::resolve_file_path, &state, args),
@@ -347,7 +322,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
             call!(typed::media_io::resolve_file_paths_batch, &state, args)
         }
         "export_media" => call!(typed::media_io::export_media, &state, args),
-        "open_in_new_window" => call!(typed::media_io::open_in_new_window, &state, args),
         "ensure_thumbnail" => call!(typed::media_io::ensure_thumbnail, &state, args),
         "regenerate_thumbnails_batch" => {
             call!(typed::media_io::regenerate_thumbnails_batch, &state, args)
@@ -356,10 +330,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "add_media" => call!(typed::media_lifecycle::add_media, &state, args),
 
         // ── Subscriptions ─────────────────────────────────────
-        "get_groups" => call!(typed::subscriptions::get_groups, &state, args),
-        "create_group" => call!(typed::subscriptions::create_group, &state, args),
-        "delete_group" => call!(typed::subscriptions::delete_group, &state, args),
-        "rename_group" => call!(typed::subscriptions::rename_group, &state, args),
         "set_subscription_schedule" => {
             call!(
                 typed::subscriptions::set_subscription_schedule,
@@ -367,34 +337,10 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
                 args
             )
         }
-        "run_group" => call!(typed::subscriptions::run_group, &state, args),
-        "stop_group" => call!(typed::subscriptions::stop_group, &state, args),
         "get_sites" => call!(typed::subscriptions::get_sites, &state, args),
-        "verify_subscription_site" => {
-            call!(typed::subscriptions::verify_subscription_site, &state, args)
-        }
         "suggest_site_tags" => call!(typed::subscriptions::suggest_site_tags, &state, args),
-        "set_subscription_group" => {
-            call!(typed::subscriptions::set_subscription_group, &state, args)
-        }
         "get_subscription_covers" => {
             call!(typed::subscriptions::get_subscription_covers, &state, args)
-        }
-        "sweep_orphaned_blobs" => {
-            call!(typed::media_lifecycle::sweep_orphaned_blobs, &state, args)
-        }
-        "list_subscription_collections" => {
-            call!(
-                typed::subscriptions::list_subscription_collections,
-                &state,
-                args
-            )
-        }
-        "get_site_metadata_schema" => {
-            call!(typed::subscriptions::get_site_metadata_schema, &state, args)
-        }
-        "validate_site_metadata" => {
-            call!(typed::subscriptions::validate_site_metadata, &state, args)
         }
         "get_subscriptions" => call!(typed::subscriptions::get_subscriptions, &state, args),
         "create_subscription" => call!(typed::subscriptions::create_subscription, &state, args),
@@ -414,11 +360,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "pause_subscription_query" => {
             call!(typed::subscriptions::pause_subscription_query, &state, args)
         }
-        "set_subscription_auto_collections" => call!(
-            typed::subscriptions::set_subscription_auto_collections,
-            &state,
-            args
-        ),
         "run_subscription" => call!(typed::subscriptions::run_subscription, &state, args),
         "stop_subscription" => call!(typed::subscriptions::stop_subscription, &state, args),
         "reset_subscription" => call!(typed::subscriptions::reset_subscription, &state, args),
@@ -458,13 +399,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         }
         "list_subscription_runs" => {
             call!(typed::subscriptions::list_subscription_runs, &state, args)
-        }
-        "list_subscription_query_runs" => {
-            call!(
-                typed::subscriptions::list_subscription_query_runs,
-                &state,
-                args
-            )
         }
         "list_subscription_issues" => {
             call!(typed::subscriptions::list_subscription_issues, &state, args)

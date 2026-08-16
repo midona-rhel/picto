@@ -22,7 +22,6 @@ export interface MediaImportParams {
   initial_status?: number;
   parent_folder_id?: number | null;
   preserve_structure?: boolean;
-  collection_name?: string | null;
 }
 
 /** Resolve the destination for a manual import from the currently open grid. */

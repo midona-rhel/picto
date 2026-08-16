@@ -12,7 +12,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         subscription_id: i64,
         site_id: &str,
         metadata: &ParsedMetadata,
-        entity_hash: Option<&str>,
+        entity_id: Option<i64>,
         status: &str,
     ) {
         let Some(post_id) = metadata
@@ -43,7 +43,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     page_num: metadata.page_num.map(i64::from),
                     canonical_post_url: metadata.canonical_post_url.clone(),
                     media_url: metadata.media_url.clone(),
-                    entity_hash: entity_hash.map(ToOwned::to_owned),
+                    entity_id,
                     status: status.to_string(),
                 },
             )

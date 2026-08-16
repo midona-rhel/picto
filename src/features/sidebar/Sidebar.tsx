@@ -530,7 +530,6 @@ export function Sidebar() {
         <ColorPicker value={node.color ?? null} onChange={(hex) => foldersController.applyColor(folderId, hex)} />
       ) },
       { separator: true },
-      { label: 'Duplicate', icon: <IconCopy size={14} />, disabled: true, action: () => {} },
       { label: 'Export...', icon: <IconUpload size={14} />, action: () => {
         store.set(exportModalAtom, {
           open: true, fileCount: node.count ?? 0,
@@ -594,7 +593,6 @@ export function Sidebar() {
         }} />
       ) },
       { separator: true },
-      { label: 'Duplicate', icon: <IconCopy size={14} />, disabled: true, action: () => {} },
       { label: 'Export...', icon: <IconUpload size={14} />, action: () => {
         if (sfIdNum != null) {
           store.set(exportModalAtom, {

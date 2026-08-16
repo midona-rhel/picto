@@ -31,8 +31,17 @@ impl RateLimiter {
         }
     }
 
-    /// Wait until it's safe to make a request to the given domain.
-    pub async fn wait_for_slot(&self, domain: &str) {
+    /// Acquire exclusive access to a domain and wait for its next request slot.
+    ///
+    /// Keeping locking and pacing together prevents callers from accidentally
+    /// running an unpaced or concurrent network job.
+    pub async fn acquire_paced_run(&self, domain: &str) -> DomainRunGuard {
+        let guard = self.acquire_domain_run(domain).await;
+        self.wait_for_slot(domain).await;
+        guard
+    }
+
+    async fn wait_for_slot(&self, domain: &str) {
         let delay = {
             let mut inner = crate::poison::mutex_or_recover(&self.inner, "rate_limiter");
             let interval = Duration::from_secs(1);
@@ -61,7 +70,7 @@ impl RateLimiter {
         }
     }
 
-    pub async fn acquire_domain_run(&self, domain: &str) -> DomainRunGuard {
+    async fn acquire_domain_run(&self, domain: &str) -> DomainRunGuard {
         let domain_lock = {
             let mut locks = self.run_locks.lock().await;
             locks
@@ -86,17 +95,17 @@ mod tests {
     #[tokio::test]
     async fn same_domain_runs_are_serial() {
         let limiter = RateLimiter::new();
-        let first = limiter.acquire_domain_run("example.com").await;
+        let first = limiter.acquire_paced_run("example.com").await;
         let waiting_limiter = limiter.clone();
         let second = tokio::spawn(async move {
-            let _guard = waiting_limiter.acquire_domain_run("example.com").await;
+            let _guard = waiting_limiter.acquire_paced_run("example.com").await;
         });
 
         tokio::task::yield_now().await;
         assert!(!second.is_finished());
 
         drop(first);
-        tokio::time::timeout(Duration::from_secs(1), second)
+        tokio::time::timeout(Duration::from_secs(2), second)
             .await
             .expect("second run should start after the first finishes")
             .expect("second run task should complete");

@@ -168,7 +168,6 @@ fn state_changed_event_contract() {
             media_derivatives_changed: None,
             derivative_fields_changed: None,
             extra_grid_scopes: None,
-            group_ids: None,
             subscription_ids: None,
             query_ids: None,
             credential_categories: None,
@@ -319,57 +318,6 @@ async fn metadata_fields_that_drive_smart_folders_emit_smart_scope_changes() {
 }
 
 #[tokio::test]
-async fn collection_membership_preset_refreshes_collection_and_system_scopes() {
-    let harness = EventHarness::new();
-    harness.drain_events();
-
-    let impact = ChangeImpact::collection_membership_change(42, &[]);
-    events::emit_state_changed("test_collection_membership", impact);
-
-    let evts = harness.find_events("runtime/state_changed");
-    assert!(!evts.is_empty());
-    let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
-
-    let scopes: Vec<String> = payload["changes"]["extra_grid_scopes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap().to_string())
-        .collect();
-    assert!(scopes.contains(&"collection:42".to_string()));
-}
-
-#[tokio::test]
-async fn collection_delete_preset_marks_affected_folder_membership() {
-    let harness = EventHarness::new();
-    harness.drain_events();
-
-    let impact = ChangeImpact::collection_delete(42, vec![5, 9]);
-    events::emit_state_changed("test_collection_delete", impact);
-
-    let evts = harness.find_events("runtime/state_changed");
-    assert!(!evts.is_empty());
-    let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
-
-    let folder_ids: Vec<i64> = payload["changes"]["folder_membership_changed"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_i64().unwrap())
-        .collect();
-    assert_eq!(folder_ids, vec![5, 9]);
-
-    let scopes: Vec<String> = payload["changes"]["extra_grid_scopes"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap().to_string())
-        .collect();
-    assert!(scopes.contains(&"collection:42".to_string()));
-    assert!(scopes.contains(&"system:active".to_string()));
-}
-
-#[tokio::test]
 async fn merged_change_impact_emits_one_combined_delta() {
     let harness = EventHarness::new();
     harness.drain_events();
@@ -377,11 +325,7 @@ async fn merged_change_impact_emits_one_combined_delta() {
     let impact = ChangeImpact::file_lifecycle()
         .sidebar_counts(test_sidebar_counts())
         .entity_hashes(vec!["hash_a".into()])
-        .merge(
-            ChangeImpact::folder_file_change(9)
-                .entity_hashes(vec!["hash_b".into()])
-                .extra_grid_scopes(vec!["collection:4".into()]),
-        )
+        .merge(ChangeImpact::folder_file_change(9).entity_hashes(vec!["hash_b".into()]))
         .merge(
             ChangeImpact::new()
                 .tags_added(vec!["artist:test".into()])
@@ -416,7 +360,6 @@ async fn merged_change_impact_emits_one_combined_delta() {
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    assert!(scopes.contains(&"collection:4".to_string()));
     assert!(scopes.contains(&"smart:all".to_string()));
 
     let added_tags: Vec<String> = payload["changes"]["tag_changes"]["added"]
@@ -487,17 +430,13 @@ async fn folder_watch_style_delta_includes_both_file_and_membership_changes() {
 }
 
 #[tokio::test]
-async fn subscription_batch_delta_merges_collection_and_file_changes() {
+async fn subscription_batch_delta_refreshes_inbox_and_counts() {
     let harness = EventHarness::new();
     harness.drain_events();
 
-    let impact = ChangeImpact::collection_membership_change(42, &[])
-        .extra_grid_scopes(vec!["system:inbox".into()])
-        .merge(
-            ChangeImpact::file_lifecycle()
-                .sidebar_counts(test_sidebar_counts())
-                .extra_grid_scopes(vec!["system:inbox".into()]),
-        );
+    let impact = ChangeImpact::file_lifecycle()
+        .sidebar_counts(test_sidebar_counts())
+        .extra_grid_scopes(vec!["system:inbox".into()]);
     events::emit_state_changed("subscription_import", impact);
 
     let evts = harness.find_events("runtime/state_changed");
@@ -519,7 +458,6 @@ async fn subscription_batch_delta_merges_collection_and_file_changes() {
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    assert!(scopes.contains(&"collection:42".to_string()));
     assert!(scopes.contains(&"system:inbox".to_string()));
 }
 

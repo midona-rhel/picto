@@ -23,8 +23,6 @@ function buildGridItem(entityHash: string): CanonicalEntityGridItem {
   return {
     entity_id: 1,
     entity_hash: entityHash,
-    thumbnail_hash: entityHash,
-    entity_kind: 'single',
     name: 'Item',
     mime_type: 'image/jpeg',
     pixel_width: 100,
@@ -35,7 +33,6 @@ function buildGridItem(entityHash: string): CanonicalEntityGridItem {
     date_created: '2026-01-01T00:00:00Z',
     date_modified: '2026-01-01T00:00:00Z',
     has_thumbnail: true,
-    member_count: null,
     duration_ms: null,
     frame_count: null,
     has_audio: false,

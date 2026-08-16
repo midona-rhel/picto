@@ -2,14 +2,13 @@
 //!
 //! `ApplicationEngine` sits above `LibraryDatabase` and owns:
 //! - target resolution (EntityTarget → concrete ids or DB-backed bulk target)
-//! - expansion rules (collection tags apply to member singles; status/folders include collections)
+//! - target resolution and direct entity mutation semantics
 //! - projection rebuilding after writes
 //! - state-change emission after projections settle
 //!
 //! Transport adapters call engine methods. They do not own behavior.
 //! The engine calls LibraryDatabase. It does not access storage directly.
 
-pub mod collections;
 pub mod duplicates;
 pub mod folders;
 pub mod ingest;
@@ -205,14 +204,6 @@ mod tests {
         let db = Arc::new(LibraryDatabase::open(temp.path()).expect("open test library"));
         db.with_write(|conn| {
             conn.execute(
-                "INSERT INTO media_entity
-                    (entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified)
-                 VALUES
-                    (1, 'inbox-entity', 'single', 0, 'Inbox', '2026-08-14', '2026-08-14', '2026-08-14'),
-                    (2, 'active-entity', 'single', 1, 'Active', '2026-08-14', '2026-08-14', '2026-08-14')",
-                [],
-            )?;
-            conn.execute(
                 "INSERT INTO media_file
                     (file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, frame_count,
                      has_audio, perceptual_hash, date_added)
@@ -222,7 +213,11 @@ mod tests {
                 [],
             )?;
             conn.execute(
-                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
+                "INSERT INTO media_entity
+                    (entity_id, entity_hash, file_id, status, name, date_created, date_added, date_modified)
+                 VALUES
+                    (1, 'inbox-entity', 1, 0, 'Inbox', '2026-08-14', '2026-08-14', '2026-08-14'),
+                    (2, 'active-entity', 2, 1, 'Active', '2026-08-14', '2026-08-14', '2026-08-14')",
                 [],
             )?;
             conn.execute(
@@ -258,7 +253,7 @@ mod tests {
             .set_entity_status(target(), 0)
             .expect("restore duplicate candidate to inbox");
         engine
-            .resolve_duplicate_pair("keep_both", "inbox-entity", "active-entity", None)
+            .resolve_duplicate_pair("keep_both", "inbox-entity", "active-entity")
             .expect("resolve duplicate pair");
 
         let events = events.lock().unwrap();

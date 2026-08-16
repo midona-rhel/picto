@@ -17,7 +17,7 @@ import {
   updateFolder,
 } from '../platform/folderApi';
 import type { SidebarNodeDto } from '../shared/types/canonical';
-import { activeNodeIdAtom, collectionNameAtom, parentNodeIdAtom } from '../state/navigation';
+import { activeNodeIdAtom } from '../state/navigation';
 import { removeHistoryEntries, pushHistory } from '../state/navigationHistory';
 import { patchFolderNodeAtom, removeFolderNodesAtom, sidebarNodesAtom } from '../state/sidebar';
 
@@ -92,8 +92,6 @@ export function settleFolderDeletion(plan: FolderDeletionPlan) {
   removeHistoryEntries(plan.deletedNodeIds);
 
   if (fallbackNodeId) {
-    store.set(parentNodeIdAtom, null);
-    store.set(collectionNameAtom, null);
     store.set(activeNodeIdAtom, fallbackNodeId);
     pushHistory(fallbackNodeId);
   }

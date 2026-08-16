@@ -1,26 +1,22 @@
 //! Tag write operations — add, remove, rename, delete, merge, alias, implication.
-//! Tags are stored on single entities only. Collection commands expand to members.
+//! Tags are stored directly on media entities.
 
 use rusqlite::{params, Connection};
 
-use crate::db::types::{mask_to_db_bits, ExpansionMode, TagChange, TagStructureChange};
+use crate::db::types::{mask_to_db_bits, TagChange, TagStructureChange};
 
-use super::entities::expand_ids;
-
-/// Add tags to entities. Expansion determines whether collection members are included.
+/// Add tags to entities.
 pub fn add_tags(
     conn: &Connection,
     entity_ids: &[i64],
     tag_strings: &[String],
     provenance_mask: u64,
-    expansion: ExpansionMode,
 ) -> rusqlite::Result<TagChange> {
-    let expanded = expand_ids(conn, entity_ids, expansion)?;
     let mut change = TagChange::default();
 
     for tag_str in tag_strings {
         let tag_id = get_or_create_tag(conn, tag_str)?;
-        for eid in &expanded {
+        for eid in entity_ids {
             conn.execute(
                 "INSERT INTO entity_tag (entity_id, tag_id, provenance_mask, source)
                  VALUES (?1, ?2, ?3, 'local')
@@ -32,7 +28,7 @@ pub fn add_tags(
         change.tag_ids.push(tag_id);
         change.tags_added.push(tag_str.clone());
     }
-    change.entity_ids = expanded;
+    change.entity_ids = entity_ids.to_vec();
 
     Ok(change)
 }
@@ -42,14 +38,12 @@ pub fn remove_tags(
     conn: &Connection,
     entity_ids: &[i64],
     tag_strings: &[String],
-    expansion: ExpansionMode,
 ) -> rusqlite::Result<TagChange> {
-    let expanded = expand_ids(conn, entity_ids, expansion)?;
     let mut change = TagChange::default();
 
     for tag_str in tag_strings {
         if let Some(tag_id) = find_tag(conn, tag_str)? {
-            for eid in &expanded {
+            for eid in entity_ids {
                 conn.execute(
                     "DELETE FROM entity_tag WHERE entity_id = ?1 AND tag_id = ?2",
                     params![eid, tag_id],
@@ -59,7 +53,7 @@ pub fn remove_tags(
             change.tags_removed.push(tag_str.clone());
         }
     }
-    change.entity_ids = expanded;
+    change.entity_ids = entity_ids.to_vec();
 
     Ok(change)
 }
@@ -310,9 +304,16 @@ mod tests {
         let conn = Connection::open_in_memory().expect("open in-memory db");
         conn.execute_batch(LIBRARY_DDL).expect("create schema");
         conn.execute(
+            "INSERT INTO media_file
+             (file_id, file_hash, mime_type, size_bytes, date_added)
+             VALUES (1, 'hash_1', 'image/png', 1, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("insert file");
+        conn.execute(
             "INSERT INTO media_entity
-             (entity_id, entity_hash, entity_kind, status, date_created, date_added, date_modified)
-             VALUES (1, 'hash_1', 'single', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
+             (entity_id, entity_hash, file_id, status, date_created, date_added, date_modified)
+             VALUES (1, 'hash_1', 1, 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')",
             [],
         )
         .expect("insert entity");
@@ -328,7 +329,6 @@ mod tests {
             &[1],
             &["tag_a".to_string()],
             TAG_PROVENANCE_MANUAL,
-            ExpansionMode::EntityOnly,
         )
         .expect("add manual tag");
         add_tags(
@@ -336,7 +336,6 @@ mod tests {
             &[1],
             &["tag_a".to_string()],
             TAG_PROVENANCE_AI,
-            ExpansionMode::EntityOnly,
         )
         .expect("add ai provenance");
 
@@ -368,7 +367,6 @@ mod tests {
             &[1],
             &["from".to_string()],
             TAG_PROVENANCE_AI,
-            ExpansionMode::EntityOnly,
         )
         .unwrap();
         add_tags(
@@ -376,7 +374,6 @@ mod tests {
             &[1],
             &["into".to_string()],
             TAG_PROVENANCE_MANUAL,
-            ExpansionMode::EntityOnly,
         )
         .unwrap();
         manage_alias(&conn, alias_in, Some(from)).unwrap();
@@ -437,7 +434,6 @@ mod tests {
             &[1],
             &["same".to_string()],
             TAG_PROVENANCE_MANUAL,
-            ExpansionMode::EntityOnly,
         )
         .unwrap();
 

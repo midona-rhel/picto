@@ -18,7 +18,6 @@ import {
   resolveDuplicatePair,
   scanDuplicates,
   type DuplicateAction,
-  type DuplicateCollectionConflict,
   type DuplicatePair,
 } from '../../platform/duplicateApi';
 import type { CanonicalEntityDetails } from '../../shared/types/canonical';
@@ -27,7 +26,6 @@ import { showErrorNotification, showInfoNotification, showWarningNotification } 
 import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import btnStyles from '../../shared/styles/actionButton.module.css';
 import iconStyles from '../../shared/styles/iconButton.module.css';
-import { GlassModal } from '../../shared/ui/GlassModal';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { ProgressBar } from '../../shared/ui/ProgressBar';
@@ -67,12 +65,6 @@ function dimensions(details: CanonicalEntityDetails): string {
   return `${details.pixel_width} x ${details.pixel_height}`;
 }
 
-interface ConflictChoice {
-  pair: DuplicatePair;
-  action: DuplicateAction;
-  conflict: DuplicateCollectionConflict;
-}
-
 interface MediaCardProps {
   side: 'left' | 'right';
   previewRef: React.RefObject<HTMLDivElement>;
@@ -97,8 +89,8 @@ function DifferenceComposite({
   const aspectRatio = images.left.pixel_width && images.left.pixel_height
     ? images.left.pixel_width / images.left.pixel_height
     : 1;
-  const imageUrl = (details: CanonicalEntityDetails) => mediaFileUrl(details.thumbnail_hash, details.mime_type);
-  const fallback = (details: CanonicalEntityDetails) => mediaThumbnailUrl(details.thumbnail_hash);
+  const imageUrl = (details: CanonicalEntityDetails) => mediaFileUrl(details.entity_hash, details.mime_type);
+  const fallback = (details: CanonicalEntityDetails) => mediaThumbnailUrl(details.entity_hash);
   return (
     <div
       className={`${styles.previewLayers} ${styles.differenceComposite}`}
@@ -127,12 +119,12 @@ function MediaCard({ side, previewRef, zoom, differenceActive, differenceImages,
   const fullImgRef = useRef<HTMLImageElement>(null);
   const pipeline = useMediaImagePipeline({
     hash: details?.entity_hash ?? null,
-    thumbnailHash: details?.thumbnail_hash ?? null,
+    thumbnailHash: details?.entity_hash ?? null,
     mime: details?.mime_type ?? '',
     isVideo: false,
     imgRef: fullImgRef,
   });
-  const thumbnailUrl = details ? mediaThumbnailUrl(details.thumbnail_hash) : '';
+  const thumbnailUrl = details ? mediaThumbnailUrl(details.entity_hash) : '';
   return (
     <article className={styles.mediaCard}>
       <header className={styles.cardHeader}>
@@ -214,7 +206,6 @@ export function DuplicatesScreen() {
   const [left, setLeft] = useState<CanonicalEntityDetails | null>(null);
   const [right, setRight] = useState<CanonicalEntityDetails | null>(null);
   const [metadataLoading, setMetadataLoading] = useState(false);
-  const [conflict, setConflict] = useState<ConflictChoice | null>(null);
   const [differenceHovered, setDifferenceHovered] = useState(false);
   const [differenceFocused, setDifferenceFocused] = useState(false);
   const requestIdRef = useRef(0);
@@ -326,7 +317,6 @@ export function DuplicatesScreen() {
   const finishResolution = useCallback(async (
     pair: DuplicatePair,
     action: DuplicateAction,
-    preferredCollectionId?: number,
   ) => {
     setResolving(true);
     setError(null);
@@ -335,12 +325,7 @@ export function DuplicatesScreen() {
         action,
         pair.hash_a,
         pair.hash_b,
-        preferredCollectionId,
       );
-      if (result.status === 'conflict' && result.conflict) {
-        setConflict({ pair, action, conflict: result.conflict });
-        return;
-      }
       if (result.status === 'quality_ambiguous') {
         showWarningNotification({
           title: 'Smart merge needs a choice',
@@ -354,7 +339,6 @@ export function DuplicatesScreen() {
           message: result.cleanup_error?.trim() || 'Blob cleanup will retry automatically.',
         });
       }
-      setConflict(null);
       await loadPairs({ showLoading: false, resetProgress: false });
     } catch (cause) {
       reportFailure(cause, 'Unable to resolve duplicate pair');
@@ -396,7 +380,7 @@ export function DuplicatesScreen() {
       if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
       if (event.key === 'ArrowLeft') goPrevious();
       if (event.key === 'ArrowRight') goNext();
-      if (!currentPair || resolving || metadataLoading || conflict) return;
+      if (!currentPair || resolving || metadataLoading) return;
       const shortcuts: Partial<Record<string, DuplicateAction>> = {
         l: 'keep_left',
         r: 'keep_right',
@@ -408,7 +392,7 @@ export function DuplicatesScreen() {
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [conflict, currentPair, finishResolution, goNext, goPrevious, metadataLoading, resolving]);
+  }, [currentPair, finishResolution, goNext, goPrevious, metadataLoading, resolving]);
 
   if (loading) {
     return (
@@ -527,31 +511,6 @@ export function DuplicatesScreen() {
         </div>
       </footer>
 
-      <GlassModal
-        open={conflict != null}
-        onClose={() => setConflict(null)}
-        title="Choose the surviving collection"
-        size="sm"
-        footer={conflict && (
-          <>
-            <button className={btnStyles.btn} onClick={() => setConflict(null)} disabled={resolving}>Cancel</button>
-            {conflict.conflict.winner_collection_id != null && (
-              <button className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={() => void finishResolution(conflict.pair, conflict.action, conflict.conflict.winner_collection_id!)} disabled={resolving}>
-                Collection {conflict.conflict.winner_collection_id}
-              </button>
-            )}
-            {conflict.conflict.loser_collection_id != null && (
-              <button className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={() => void finishResolution(conflict.pair, conflict.action, conflict.conflict.loser_collection_id!)} disabled={resolving}>
-                Collection {conflict.conflict.loser_collection_id}
-              </button>
-            )}
-          </>
-        )}
-      >
-        <p className={styles.conflictText}>
-          Both files belong to different collections. Choose which collection keeps the surviving media entity.
-        </p>
-      </GlassModal>
     </section>
   );
 }

@@ -6,8 +6,6 @@ pub struct SubscriptionProgressEvent {
     pub subscription_name: String,
     pub mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub group_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub query_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query_name: Option<String>,

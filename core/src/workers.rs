@@ -95,8 +95,6 @@ pub async fn start_workers(
     {
         let sched_db = canonical_db.clone();
         let sched_root = library_root.to_path_buf();
-        let sched_blob = blob_store.clone();
-        let sched_rl = rate_limiter.clone();
         let sched_running = running_subscriptions.clone();
         let sched_cancel = cancel.clone();
         let handle = tokio::spawn(async move {
@@ -117,17 +115,12 @@ pub async fn start_workers(
                         return;
                     }
                 }
-                if let Ok(state) = crate::state::get_state() {
-                    crate::scheduler::check_scheduled_subscriptions(
-                        &sched_db,
-                        &sched_root,
-                        &sched_blob,
-                        &sched_rl,
-                        &sched_running,
-                        &state.settings,
-                    )
-                    .await;
-                }
+                crate::scheduler::check_scheduled_subscriptions(
+                    &sched_db,
+                    &sched_root,
+                    &sched_running,
+                )
+                .await;
             }
         });
         handles.push(("subscription_scheduler", handle));

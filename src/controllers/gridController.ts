@@ -50,7 +50,6 @@ function scopeToKey(scope: BaseScope): string {
     case 'system': return `system:${scope.key === 'all' ? 'active' : scope.key}`;
     case 'folder': return scope.id != null ? `folder:${scope.id}` : '';
     case 'smart_folder': return scope.id != null ? `smart:${scope.id}` : '';
-    case 'collection': return scope.id != null ? `collection:${scope.id}` : '';
     default: return '';
   }
 }

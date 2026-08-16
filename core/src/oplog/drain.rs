@@ -110,7 +110,7 @@ mod tests {
             )
             .unwrap();
         let entity_id = db
-            .insert_single(
+            .insert_entity(
                 "hash_r",
                 file_id,
                 Some("img"),
@@ -119,12 +119,7 @@ mod tests {
                 "2026-01-01",
             )
             .unwrap();
-        db.add_folder_members(
-            folder_id,
-            &[entity_id],
-            crate::db::types::ExpansionMode::EntityOnly,
-        )
-        .unwrap();
+        db.add_folder_members(folder_id, &[entity_id]).unwrap();
 
         let backend = MemoryBackend::new();
         let segments = drain_outbox(&db, &backend, 2).unwrap();

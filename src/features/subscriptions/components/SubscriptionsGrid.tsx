@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconPlus, IconShieldLock } from '@tabler/icons-react';
 import type {
-  SubscriptionGroupInfo,
   SubscriptionInfo,
   SubscriptionProgressEvent,
 } from '../../../shared/types/subscriptions';
@@ -23,14 +22,6 @@ interface CardModel {
   paused: boolean;
   attention: boolean;
   upToDate: boolean;
-}
-
-/** Pick the newest member's cover as the group cover. */
-function groupCover(group: SubscriptionGroupInfo, covers: Map<string, string>): string | null {
-  const withCover = group.subscriptions
-    .filter((sub) => covers.has(sub.id))
-    .sort((a, b) => Number(b.id) - Number(a.id));
-  return withCover.length > 0 ? covers.get(withCover[0].id) ?? null : null;
 }
 
 function FollowCard({
@@ -96,16 +87,14 @@ function FollowCard({
 }
 
 /**
- * Subscription home — a card grid of subscriptions and groups (groups as
- * subjects, plus ungrouped subscriptions). Covers come from the newest
- * downloaded file.
+ * Subscription home — a card grid of subscriptions. Covers come from the
+ * newest downloaded file.
  *
  * Interaction matches the main grid: click selects, double-click (or Enter)
  * opens, Cmd/Ctrl toggles, Shift range-selects, right-click opens the context
  * menu for the clicked card (or the whole selection when it's part of one).
  */
 export function SubscriptionsGrid({
-  groups,
   subscriptions,
   listMetrics,
   covers,
@@ -115,10 +104,8 @@ export function SubscriptionsGrid({
   onAdd,
   onOpenAccounts,
   onSubscriptionMenu,
-  onGroupMenu,
   onMultiMenu,
 }: {
-  groups: SubscriptionGroupInfo[];
   subscriptions: SubscriptionInfo[];
   listMetrics: Record<string, SubscriptionListMetrics>;
   covers: Map<string, string>;
@@ -128,40 +115,14 @@ export function SubscriptionsGrid({
   onAdd: () => void;
   onOpenAccounts: () => void;
   onSubscriptionMenu: (position: { x: number; y: number }, id: string) => void;
-  onGroupMenu: (position: { x: number; y: number }, id: string) => void;
-  onMultiMenu: (
-    position: { x: number; y: number },
-    subscriptionIds: string[],
-    groupIds: string[],
-  ) => void;
+  onMultiMenu: (position: { x: number; y: number }, subscriptionIds: string[]) => void;
 }) {
-  const grouped = new Set(groups.flatMap((group) => group.subscriptions.map((sub) => sub.id)));
   const running = new Set(runningSubscriptionIds);
   const hasAttention = (id: string) =>
     ((listMetrics[id]?.failedPostCount ?? 0) + (listMetrics[id]?.openIssueCount ?? 0)) > 0;
 
   const cards: CardModel[] = [
-    ...groups.map((group): CardModel => ({
-      selection: { kind: 'group', id: group.id },
-      key: `group:${group.id}`,
-      name: group.name,
-      files: group.total_files,
-      sources: group.subscriptions.reduce((sum, sub) => sum + Math.max(sub.queries.length, 1), 0),
-      coverHash: groupCover(group, covers),
-      running: group.subscriptions.some((sub) => running.has(sub.id) || progressBySubscriptionId.has(sub.id)),
-      paused: group.subscriptions.length > 0 && group.subscriptions.every((sub) => sub.paused),
-      attention: group.subscriptions.some((sub) => hasAttention(sub.id)),
-      upToDate: group.subscriptions.length > 0
-        && !group.subscriptions.some((sub) => running.has(sub.id) || progressBySubscriptionId.has(sub.id))
-        && group.subscriptions.every((sub) =>
-          isSubscriptionUpToDate(
-            sub,
-            listMetrics[sub.id]?.failedPostCount ?? 0,
-            listMetrics[sub.id]?.openIssueCount ?? 0,
-          )),
-    })),
     ...subscriptions
-      .filter((sub) => !grouped.has(sub.id))
       .map((sub): CardModel => ({
         selection: { kind: 'subscription', id: sub.id },
         key: `sub:${sub.id}`,
@@ -231,18 +192,10 @@ export function SubscriptionsGrid({
     }
     const position = { x: e.clientX, y: e.clientY };
     if (menuSelection.size > 1) {
-      const subscriptionIds: string[] = [];
-      const groupIds: string[] = [];
-      for (const key of menuSelection) {
-        const [kind, id] = key.split(':');
-        if (kind === 'group') groupIds.push(id);
-        else subscriptionIds.push(id);
-      }
-      onMultiMenu(position, subscriptionIds, groupIds);
+      onMultiMenu(position, [...menuSelection].map((key) => key.slice('sub:'.length)));
       return;
     }
-    if (card.selection?.kind === 'group') onGroupMenu(position, card.selection.id);
-    else if (card.selection?.kind === 'subscription') onSubscriptionMenu(position, card.selection.id);
+    if (card.selection?.kind === 'subscription') onSubscriptionMenu(position, card.selection.id);
   };
 
   return (

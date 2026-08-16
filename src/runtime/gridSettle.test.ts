@@ -37,6 +37,14 @@ describe('grid runtime settling', () => {
     )).toBe('reconcile_membership');
   });
 
+  it('reloads the canonical query after tag structure changes', () => {
+    expect(classifyGridAction(
+      { tag_structure_changed: true },
+      { kind: 'smart_folder', id: 7 },
+      [],
+    )).toBe('reconcile_membership');
+  });
+
   it('settles an affected smart folder even when extra scopes omit it', () => {
     expect(classifyGridAction(
       {

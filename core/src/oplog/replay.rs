@@ -34,8 +34,6 @@ pub struct EntityState {
     pub deleted: bool,
     pub fields: BTreeMap<String, serde_json::Value>,
     pub tags: BTreeSet<String>,
-    /// Collection member order (collections only).
-    pub members: Vec<String>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq)]
@@ -63,7 +61,6 @@ pub struct TruthState {
     pub tags: BTreeMap<String, TagState>,
     pub folders: BTreeMap<String, ContainerState>,
     pub smart_folders: BTreeMap<String, ContainerState>,
-    pub subscription_groups: BTreeMap<String, ContainerState>,
     pub subscriptions: BTreeMap<String, ContainerState>,
     pub subscription_queries: BTreeMap<String, ContainerState>,
     pub duplicate_decisions: BTreeMap<String, serde_json::Value>,
@@ -221,62 +218,11 @@ impl TruthState {
             | "smart_folder_deleted" => {
                 apply_container_op(&mut self.smart_folders, "smart_folder", op);
             }
-            "subscription_group_created" | "subscription_group_updated" => {
-                apply_definition_op(
-                    &mut self.subscription_groups,
-                    "subscription_group",
-                    op,
-                    None,
-                    false,
-                );
-            }
-            "subscription_group_deleted" => {
-                apply_definition_op(
-                    &mut self.subscription_groups,
-                    "subscription_group",
-                    op,
-                    None,
-                    false,
-                );
-                if self
-                    .subscription_groups
-                    .get(key)
-                    .is_some_and(|group| group.deleted)
-                {
-                    for subscription in self.subscriptions.values_mut() {
-                        if subscription.parent.as_deref() == Some(key) {
-                            subscription.parent = None;
-                        }
-                    }
-                }
-            }
             "subscription_created" | "subscription_updated" => {
-                apply_definition_op(
-                    &mut self.subscriptions,
-                    "subscription",
-                    op,
-                    Some("group_uuid"),
-                    false,
-                );
-                if let Some(subscription) = self.subscriptions.get_mut(key) {
-                    if subscription
-                        .parent
-                        .as_deref()
-                        .and_then(|group_key| self.subscription_groups.get(group_key))
-                        .is_some_and(|group| group.deleted)
-                    {
-                        subscription.parent = None;
-                    }
-                }
+                apply_definition_op(&mut self.subscriptions, "subscription", op, None, false);
             }
             "subscription_deleted" => {
-                apply_definition_op(
-                    &mut self.subscriptions,
-                    "subscription",
-                    op,
-                    Some("group_uuid"),
-                    false,
-                );
+                apply_definition_op(&mut self.subscriptions, "subscription", op, None, false);
                 if self
                     .subscriptions
                     .get(key)
@@ -321,62 +267,6 @@ impl TruthState {
                     Some("subscription_uuid"),
                     false,
                 );
-            }
-            "collection_created" => {
-                if self.entities.get(key).is_some_and(|entity| entity.created) {
-                    return;
-                }
-                let entity = self.entity(key);
-                *entity = EntityState::default();
-                entity.created = true;
-                entity.deleted = false;
-                entity.kind = "collection".into();
-                if let Some(name) = p.get("name") {
-                    entity.fields.insert("name".into(), name.clone());
-                }
-            }
-            "collection_renamed" => {
-                let entity = self.entity(key);
-                if entity.deleted {
-                    return;
-                }
-                if let Some(name) = p.get("name") {
-                    entity.fields.insert("name".into(), name.clone());
-                }
-            }
-            "collection_split" => {
-                self.entity(key).deleted = true;
-            }
-            "collection_members_added" | "collection_members_removed" => {
-                let add = op.op_type == "collection_members_added";
-                let entity = self.entity(key);
-                if entity.deleted {
-                    return;
-                }
-                entity.kind = "collection".into();
-                if let Some(members) = p.get("members").and_then(|v| v.as_array()) {
-                    for member in members.iter().filter_map(|m| m.as_str()) {
-                        if add {
-                            if !entity.members.iter().any(|m| m == member) {
-                                entity.members.push(member.to_string());
-                            }
-                        } else {
-                            entity.members.retain(|m| m != member);
-                        }
-                    }
-                }
-            }
-            "collection_members_reordered" => {
-                let entity = self.entity(key);
-                if entity.deleted {
-                    return;
-                }
-                if let Some(order) = p.get("order").and_then(|v| v.as_array()) {
-                    entity.members = order
-                        .iter()
-                        .filter_map(|m| m.as_str().map(|s| s.to_string()))
-                        .collect();
-                }
             }
             "duplicate_decided" => {
                 self.duplicate_decisions
@@ -563,9 +453,8 @@ mod tests {
         }
     }
 
-    // The integration owner enables these operation names in mod.rs. These
-    // reducer tests intentionally bypass that vocabulary gate so this slice
-    // can prove the deterministic definition state independently.
+    // These reducer tests intentionally bypass the vocabulary gate so they can
+    // prove deterministic definition state independently.
     fn replay_unvalidated(mut ops: Vec<OpRecord>) -> TruthState {
         ops.sort_by(|left, right| left.sort_key().cmp(&right.sort_key()));
         let mut state = TruthState::default();
@@ -791,44 +680,6 @@ mod tests {
     }
 
     #[test]
-    fn collection_create_is_idempotent_after_split() {
-        let collection = replay_ops(vec![
-            op(
-                "001-0000",
-                "a",
-                "collection_created",
-                "c1",
-                serde_json::json!({"name":"old"}),
-            ),
-            op(
-                "002-0000",
-                "a",
-                "collection_members_added",
-                "c1",
-                serde_json::json!({"members":["h1"]}),
-            ),
-            op(
-                "003-0000",
-                "a",
-                "collection_split",
-                "c1",
-                serde_json::json!({}),
-            ),
-            op(
-                "004-0000",
-                "a",
-                "collection_created",
-                "c1",
-                serde_json::json!({"name":"new"}),
-            ),
-        ])
-        .unwrap();
-        assert!(collection.entities["c1"].deleted);
-        assert_eq!(collection.entities["c1"].members, vec!["h1"]);
-        assert_eq!(collection.entities["c1"].fields["name"], "old");
-    }
-
-    #[test]
     fn duplicate_create_is_idempotent_and_does_not_reset_metadata() {
         let state = replay_ops(vec![
             op(
@@ -929,31 +780,38 @@ mod tests {
     }
 
     #[test]
+    fn removed_operation_is_unknown() {
+        assert!(matches!(
+            replay_ops(vec![op(
+                "001-0000",
+                "dev_a",
+                "removed_operation",
+                "removed-entity",
+                serde_json::json!({}),
+            )]),
+            Err(ReplayError::UnknownOpType(op_type)) if op_type == "removed_operation"
+        ));
+    }
+
+    #[test]
     fn subscription_definitions_converge_under_shuffled_arrival() {
         let ops = vec![
             op(
                 "010-0000",
                 "a",
-                "subscription_group_created",
-                "group-1",
-                serde_json::json!({"name":"Artists"}),
+                "subscription_created",
+                "subscription-1",
+                serde_json::json!({"name":"Pixiv"}),
             ),
             op(
                 "011-0000",
-                "a",
-                "subscription_created",
-                "subscription-1",
-                serde_json::json!({"name":"Pixiv","group_uuid":"group-1"}),
-            ),
-            op(
-                "012-0000",
                 "b",
                 "subscription_query_created",
                 "query-1",
                 serde_json::json!({"subscription_uuid":"subscription-1","query_text":"artist"}),
             ),
             op(
-                "013-0000",
+                "012-0000",
                 "b",
                 "subscription_updated",
                 "subscription-1",
@@ -979,7 +837,7 @@ mod tests {
                 "a",
                 "subscription_created",
                 "subscription-1",
-                serde_json::json!({"name":"initial","group_uuid":null}),
+                serde_json::json!({"name":"initial"}),
             ),
             op(
                 "011-0000",
@@ -1000,59 +858,6 @@ mod tests {
         assert_eq!(subscription.fields["name"], "renamed");
         assert_eq!(subscription.fields["schedule"], "weekly");
         assert_eq!(subscription.fields["paused"], true);
-    }
-
-    #[test]
-    fn deleting_a_group_ungroups_live_subscriptions() {
-        let state = replay_unvalidated(vec![
-            op(
-                "010-0000",
-                "a",
-                "subscription_group_created",
-                "group-1",
-                serde_json::json!({"name":"Artists"}),
-            ),
-            op(
-                "011-0000",
-                "a",
-                "subscription_created",
-                "subscription-1",
-                serde_json::json!({"name":"Pixiv","group_uuid":"group-1"}),
-            ),
-            op(
-                "012-0000",
-                "b",
-                "subscription_group_deleted",
-                "group-1",
-                serde_json::json!({}),
-            ),
-        ]);
-        assert!(state.subscription_groups["group-1"].deleted);
-        assert_eq!(state.subscriptions["subscription-1"].parent, None);
-    }
-
-    #[test]
-    fn subscription_referencing_deleted_group_stays_live_and_ungrouped() {
-        let state = replay_unvalidated(vec![
-            op(
-                "010-0000",
-                "a",
-                "subscription_group_deleted",
-                "group-1",
-                serde_json::json!({}),
-            ),
-            op(
-                "011-0000",
-                "b",
-                "subscription_created",
-                "subscription-1",
-                serde_json::json!({"name":"Pixiv","group_uuid":"group-1"}),
-            ),
-        ]);
-        let subscription = &state.subscriptions["subscription-1"];
-        assert!(subscription.created);
-        assert!(!subscription.deleted);
-        assert_eq!(subscription.parent, None);
     }
 
     #[test]

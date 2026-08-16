@@ -5,7 +5,7 @@ use tracing::warn;
 
 use crate::credential_store::{CredentialType, SiteCredential};
 use crate::db::LibraryDatabase;
-use crate::subscriptions::gallery_dl_runner::{self, FailureKind};
+use crate::subscriptions::gallery_dl_runner::{site_by_id, FailureKind, SiteEntry};
 use crate::subscriptions::types::{CredentialDomain, CredentialHealth};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,8 +73,6 @@ pub struct SetManualCredentialRequest {
     pub cookies: Option<HashMap<String, String>>,
     pub oauth_token: Option<String>,
     pub display_name: Option<String>,
-    /// RFC3339 timestamp when the captured session/cookies expire, if known.
-    pub expires_at: Option<String>,
 }
 
 pub trait CredentialStoreBackend: Clone + Send + Sync + 'static {
@@ -127,8 +125,9 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
     pub async fn list_credentials(&self) -> Result<Vec<CredentialDomain>, String> {
         self.db.with_read(|conn| {
             let mut stmt = conn.prepare_cached(
-                "SELECT site_category, credential_type, display_name, date_added, expires_at
-                 FROM credential_domain ORDER BY site_category",
+                "SELECT site_category, credential_type, display_name, date_added
+                 FROM credential_domain
+                 ORDER BY site_category",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok(CredentialDomain {
@@ -136,7 +135,6 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
                     credential_type: row.get(1)?,
                     display_name: row.get(2)?,
                     created_at: row.get(3)?,
-                    expires_at: row.get(4)?,
                 })
             })?;
             rows.collect()
@@ -144,13 +142,14 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
     }
 
     /// Recorded health exactly as written by run observations. Run gating
-    /// (preflight) must use THIS view — a timestamp-based cookie expiry is a
-    /// warning, not a reason to refuse runs.
+    /// (preflight) must use THIS view so only run-observed auth failures block
+    /// a supported source.
     pub async fn list_credential_health_raw(&self) -> Result<Vec<CredentialHealth>, String> {
         self.db.with_read(|conn| {
             let mut stmt = conn.prepare_cached(
                 "SELECT site_category, health_status, last_checked_at, last_error
-                 FROM credential_health ORDER BY site_category",
+                 FROM credential_health
+                 ORDER BY site_category",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok(CredentialHealth {
@@ -164,62 +163,38 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         })
     }
 
-    /// Display view: a stored cookie expiry in the past overrides recorded
-    /// health so the UI can warn "log in again" before any run fails. Runs
-    /// still proceed — only run-observed auth failures block (see
-    /// `preflight_for_run`, which reads the raw view).
     pub async fn list_credential_health(&self) -> Result<Vec<CredentialHealth>, String> {
-        self.db.with_read(|conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT h.site_category, h.health_status, h.last_checked_at, h.last_error,
-                        d.expires_at
-                 FROM credential_health h
-                 LEFT JOIN credential_domain d ON d.site_category = h.site_category
-                 ORDER BY h.site_category",
-            )?;
-            let now = chrono::Utc::now();
-            let rows = stmt.query_map([], move |row| {
-                let status: String = row.get(1)?;
-                let last_error: Option<String> = row.get(3)?;
-                let expires_at: Option<String> = row.get(4)?;
-                let cookie_expired = expires_at
-                    .as_deref()
-                    .and_then(|exp| chrono::DateTime::parse_from_rfc3339(exp).ok())
-                    .is_some_and(|exp| exp.with_timezone(&chrono::Utc) < now)
-                    && status != "missing";
-                Ok(CredentialHealth {
-                    site_category: row.get(0)?,
-                    health_status: if cookie_expired {
-                        "expired".to_string()
-                    } else {
-                        status
-                    },
-                    last_checked_at: row.get(2)?,
-                    last_error: if cookie_expired {
-                        Some("Saved session cookies may have expired — log in again.".to_string())
-                    } else {
-                        last_error
-                    },
-                })
-            })?;
-            rows.collect()
-        })
+        self.list_credential_health_raw().await
     }
 
     pub async fn set_manual_credential(
         &self,
         request: SetManualCredentialRequest,
     ) -> Result<String, String> {
-        let canonical_site_category = canonical_credential_site_category(&request.site_category);
-        let site = gallery_dl_runner::site_by_id(&canonical_site_category)
-            .ok_or_else(|| format!("Unknown site: {}", request.site_category))?;
+        let owner = credential_owner_site(&request.site_category)
+            .ok_or_else(|| format!("Unsupported authentication site: {}", request.site_category))?;
+        let site_category = owner.id;
+        if !owner
+            .manual_credential_types
+            .contains(&request.credential_type.as_str())
+        {
+            return Err(format!(
+                "Credential type '{}' is not supported for {}",
+                request.credential_type, owner.name
+            ));
+        }
         let credential_type = CredentialType::from_str(&request.credential_type)
             .ok_or_else(|| format!("Invalid credential_type: {}", request.credential_type))?;
-
-        validate_manual_credential(site, credential_type, &request.username, &request.password)?;
+        validate_credential_fields(
+            credential_type,
+            request.username.as_deref(),
+            request.password.as_deref(),
+            request.cookies.as_ref(),
+            request.oauth_token.as_deref(),
+        )?;
 
         let cred = SiteCredential {
-            site_category: canonical_site_category.clone(),
+            site_category: site_category.to_string(),
             credential_type,
             username: request.username,
             password: request.password,
@@ -229,20 +204,15 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
 
         self.store.set_credential(&cred)?;
         self.upsert_credential_domain(
-            &canonical_site_category,
+            site_category,
             &request.credential_type,
             request.display_name.as_deref(),
-            request.expires_at.as_deref(),
         )
         .await?;
-        self.set_health(
-            &canonical_site_category,
-            CredentialHealthStatus::Unknown,
-            None,
-        )
-        .await;
+        self.set_health(site_category, CredentialHealthStatus::Unknown, None)
+            .await;
 
-        Ok(canonical_site_category)
+        Ok(site_category.to_string())
     }
 
     pub async fn store_pixiv_oauth_credential(
@@ -266,34 +236,29 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             cookies,
             oauth_token: Some(refresh_token),
             display_name: Some("Pixiv".to_string()),
-            expires_at: None,
         })
         .await
     }
 
     pub async fn delete_credential(&self, site_category: &str) -> Result<String, String> {
-        let canonical_site_category = canonical_credential_site_category(site_category);
-        for category in credential_delete_categories(site_category) {
-            let _ = self.store.delete_credential(&category);
-            let _ = self.delete_credential_domain(&category).await;
-            let _ = self.delete_credential_health(&category).await;
-        }
-        Ok(canonical_site_category)
+        let owner = credential_owner_site_category(site_category)
+            .ok_or_else(|| format!("Unsupported authentication site: {site_category}"))?;
+        let _ = self.store.delete_credential(owner);
+        let _ = self.delete_credential_domain(owner).await;
+        let _ = self.delete_credential_health(owner).await;
+        Ok(owner.to_string())
     }
 
     /// Pre-run credential gate. Blocks runs that would predictably fail:
     /// a strictly-auth-gated site with no credential, or a stored credential
     /// already known to be expired/unauthorized. Read-only.
     pub async fn preflight_for_run(&self, site_id: &str, url: &str) -> CredentialPreflight {
-        let resolved = self.resolve_credential(site_id, url);
-        let strictly_required =
-            gallery_dl_runner::site_by_id(site_id).is_some_and(|site| site.auth_strictly_required);
+        let resolved = self.resolve_credential(site_id, url).await;
+        let strictly_required = site_by_id(site_id).is_some_and(|site| site.auth_strictly_required);
 
         if resolved.gallery_dl_auth.is_some() {
             // Credential present — block only on run-observed auth failures.
-            // The raw view deliberately ignores timestamp-based cookie expiry:
-            // that is a display warning, and a wrongly-computed expiry must
-            // never silently kill all runs for a site.
+            // Only run-observed auth failures block a stored credential.
             let category = resolved.canonical_site_category.clone();
             if let Ok(rows) = self.list_credential_health_raw().await {
                 if let Some(row) = rows.iter().find(|h| h.site_category == category) {
@@ -342,31 +307,47 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
     /// Credential lookup only — no health writes, no issue upserts.
     /// Used by the run path (via `resolve_for_run`) and by read-only callers
     /// like site verification that must not mutate subscription state.
-    pub fn resolve_credential(&self, site_id: &str, url: &str) -> ResolvedRunCredential {
-        let canonical_site_category = canonical_credential_site_category(site_id);
-        let site_entry = gallery_dl_runner::site_by_id(&canonical_site_category)
-            .or_else(|| gallery_dl_runner::site_by_id(site_id));
-        let auth_supported = site_entry.is_some_and(|site| site.auth_supported);
-        let auth_required = site_entry.is_some_and(|site| site.auth_required_for_full_access);
-
+    pub async fn resolve_credential(&self, site_id: &str, url: &str) -> ResolvedRunCredential {
+        let _ = url;
+        let source = site_by_id(site_id.trim());
+        let owner = source.and_then(|site| credential_owner_site(site.id));
+        let canonical_site_category = owner.map_or(site_id.trim(), |site| site.id).to_string();
+        let auth_supported = source.is_some_and(|site| site.auth_supported);
+        let auth_required = source.is_some_and(|site| site.auth_required_for_full_access);
         let mut matched_lookup_key = None;
         let mut gallery_dl_auth = None;
 
-        if auth_supported {
-            for category in credential_lookup_categories(site_id, url) {
-                match self.store.get_credential(&category) {
-                    Ok(Some(cred)) => {
-                        matched_lookup_key = Some(category);
-                        gallery_dl_auth = Some(GalleryDlAuthConfig {
-                            site_category: canonical_site_category.clone(),
-                            fragment: self.store.build_extractor_auth(&cred),
-                        });
-                        break;
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        warn!(site = %category, error = %error, "Failed to load credential");
-                    }
+        let credential_is_enabled = match self.list_credentials().await {
+            Ok(credentials) => credentials
+                .iter()
+                .any(|credential| credential.site_category == canonical_site_category),
+            Err(error) => {
+                warn!(site = %canonical_site_category, error = %error, "Failed to inspect configured credentials");
+                false
+            }
+        };
+
+        if credential_is_enabled {
+            let Some(owner) = owner else {
+                return ResolvedRunCredential {
+                    canonical_site_category,
+                    matched_lookup_key,
+                    auth_supported,
+                    auth_required_for_full_access: auth_required,
+                    gallery_dl_auth,
+                };
+            };
+            match self.store.get_credential(owner.id) {
+                Ok(Some(cred)) => {
+                    matched_lookup_key = Some(owner.id.to_string());
+                    gallery_dl_auth = Some(GalleryDlAuthConfig {
+                        site_category: canonical_site_category.clone(),
+                        fragment: self.store.build_extractor_auth(&cred),
+                    });
+                }
+                Ok(None) => {}
+                Err(error) => {
+                    warn!(site = owner.id, error = %error, "Failed to load credential");
                 }
             }
         }
@@ -387,7 +368,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         site_id: &str,
         url: &str,
     ) -> ResolvedRunCredential {
-        let resolved = self.resolve_credential(site_id, url);
+        let resolved = self.resolve_credential(site_id, url).await;
         let canonical_site_category = resolved.canonical_site_category.clone();
         let auth_supported = resolved.auth_supported;
         let auth_required = resolved.auth_required_for_full_access;
@@ -424,7 +405,9 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         failure_kind: FailureKind,
         detail: Option<&str>,
     ) {
-        let canonical_site_category = canonical_credential_site_category(site_id);
+        let Some(canonical_site_category) = credential_owner_site_category(site_id) else {
+            return;
+        };
         let status = match failure_kind {
             FailureKind::Unauthorized => CredentialHealthStatus::Unauthorized,
             FailureKind::Expired => CredentialHealthStatus::Expired,
@@ -445,12 +428,12 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         // problem, and marking health would block every future run.
         let has_credential = self
             .store
-            .get_credential(&canonical_site_category)
+            .get_credential(canonical_site_category)
             .ok()
             .flatten()
             .is_some();
         if has_credential {
-            self.set_health(&canonical_site_category, status, detail)
+            self.set_health(canonical_site_category, status, detail)
                 .await;
             self.upsert_issue(
                 subscription_id,
@@ -482,7 +465,9 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         if !used_credential {
             return;
         }
-        let canonical_site_category = canonical_credential_site_category(site_id);
+        let Some(canonical_site_category) = credential_owner_site_category(site_id) else {
+            return;
+        };
         self.set_health(
             &canonical_site_category,
             CredentialHealthStatus::Valid,
@@ -543,22 +528,19 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         site_category: &str,
         credential_type: &str,
         display_name: Option<&str>,
-        expires_at: Option<&str>,
     ) -> Result<(), String> {
         self.db.with_write(|conn| {
             conn.execute(
-                "INSERT INTO credential_domain (site_category, credential_type, display_name, date_added, expires_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5)
+                "INSERT INTO credential_domain (site_category, credential_type, display_name, date_added)
+                 VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(site_category) DO UPDATE
                  SET credential_type = excluded.credential_type,
-                     display_name = excluded.display_name,
-                     expires_at = excluded.expires_at",
+                     display_name = excluded.display_name",
                 rusqlite::params![
                     site_category,
                     credential_type,
                     display_name,
-                    chrono::Utc::now().to_rfc3339(),
-                    expires_at
+                    chrono::Utc::now().to_rfc3339()
                 ],
             )?;
             Ok(())
@@ -648,120 +630,58 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
     }
 }
 
-pub fn canonical_credential_site_category(site_category: &str) -> String {
-    let canonical = gallery_dl_runner::canonical_site_id(site_category);
-    gallery_dl_runner::site_by_id(canonical)
-        .map(|site| site.credential_owner_site_id.to_string())
-        .unwrap_or_else(|| canonical.to_string())
+fn credential_owner_site(site_id: &str) -> Option<&'static SiteEntry> {
+    let source = site_by_id(site_id.trim())?;
+    source
+        .auth_supported
+        .then(|| site_by_id(source.credential_owner_site_id))
+        .flatten()
 }
 
-pub fn credential_lookup_categories(site_id: &str, url: &str) -> Vec<String> {
-    let mut categories = Vec::new();
-    let canonical_site_id = gallery_dl_runner::canonical_site_id(site_id);
-    let canonical_credential_site = canonical_credential_site_category(site_id);
-
-    categories.push(canonical_credential_site.clone());
-    categories.push(canonical_site_id.to_string());
-    categories.push(site_id.trim().to_string());
-
-    if let Some(site) = gallery_dl_runner::site_by_id(site_id) {
-        categories.push(site.domain.to_string());
-        categories.push(site.domain.trim_start_matches("www.").to_string());
-    }
-    if let Some(owner_site) = gallery_dl_runner::site_by_id(&canonical_credential_site) {
-        categories.push(owner_site.domain.to_string());
-        categories.push(owner_site.domain.trim_start_matches("www.").to_string());
-    }
-    if let Some(domain) = gallery_dl_runner::extract_domain(url) {
-        categories.push(domain.clone());
-        categories.push(domain.trim_start_matches("www.").to_string());
-    }
-    categories.extend(
-        gallery_dl_runner::credential_site_aliases(canonical_site_id)
-            .iter()
-            .map(|alias| (*alias).to_string()),
-    );
-
-    categories.sort();
-    categories.dedup();
-    categories.retain(|value| !value.trim().is_empty());
-    categories
+fn credential_owner_site_category(site_id: &str) -> Option<&'static str> {
+    credential_owner_site(site_id).map(|site| site.id)
 }
 
-pub fn credential_delete_categories(site_id: &str) -> Vec<String> {
-    let canonical_site_id = gallery_dl_runner::canonical_site_id(site_id);
-    let canonical_credential_site = canonical_credential_site_category(site_id);
-    let mut categories = vec![
-        site_id.trim().to_string(),
-        canonical_site_id.to_string(),
-        canonical_credential_site.clone(),
-    ];
-
-    categories.extend(
-        gallery_dl_runner::credential_site_aliases(canonical_site_id)
-            .iter()
-            .map(|alias| (*alias).to_string()),
-    );
-    if let Some(site) = gallery_dl_runner::site_by_id(canonical_site_id) {
-        categories.push(site.domain.to_string());
-        categories.push(site.domain.trim_start_matches("www.").to_string());
-    }
-    if let Some(owner_site) = gallery_dl_runner::site_by_id(&canonical_credential_site) {
-        categories.push(owner_site.domain.to_string());
-        categories.push(owner_site.domain.trim_start_matches("www.").to_string());
-    }
-
-    categories.sort();
-    categories.dedup();
-    categories.retain(|value| !value.trim().is_empty());
-    categories
-}
-
-fn validate_manual_credential(
-    site: &gallery_dl_runner::SiteEntry,
+fn validate_credential_fields(
     credential_type: CredentialType,
-    username: &Option<String>,
-    password: &Option<String>,
+    username: Option<&str>,
+    password: Option<&str>,
+    cookies: Option<&HashMap<String, String>>,
+    oauth_token: Option<&str>,
 ) -> Result<(), String> {
-    if !site.auth_supported {
-        return Err(format!("{} does not support stored credentials", site.name));
-    }
-
-    let credential_type_str = match credential_type {
-        CredentialType::UsernamePassword => "username_password",
-        CredentialType::Cookies => "cookies",
-        CredentialType::ApiKey => "api_key",
-        CredentialType::OAuthToken => "oauth_token",
-    };
-    if !site
-        .manual_credential_types
-        .iter()
-        .any(|allowed| *allowed == credential_type_str)
-    {
-        return Err(format!(
-            "{} does not accept `{}` credentials",
-            site.name, credential_type_str
-        ));
-    }
-
-    if site.id == "rule34" {
-        let user_id_ok = username
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty());
-        let api_key_ok = password
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|value| !value.is_empty());
-        if !user_id_ok || !api_key_ok {
-            return Err(
-                "rule34.xxx requires both `user-id` and `api-key` (use username=user-id, password=api-key)"
-                    .to_string(),
-            );
+    let present = |value: Option<&str>| value.is_some_and(|value| !value.trim().is_empty());
+    match credential_type {
+        CredentialType::ApiKey if !present(username) || !present(password) => {
+            Err("API-key credentials require both user_id and api_key".to_string())
         }
+        CredentialType::ApiKey
+            if !username
+                .is_some_and(|value| value.trim().bytes().all(|byte| byte.is_ascii_digit()))
+                || !password.is_some_and(|value| {
+                    let value = value.trim();
+                    value.len() >= 16 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+                }) =>
+        {
+            Err("API-key credentials contain an invalid user_id or api_key".to_string())
+        }
+        CredentialType::OAuthToken if !present(oauth_token) => {
+            Err("Pixiv credentials require an OAuth refresh token".to_string())
+        }
+        CredentialType::Cookies
+            if !cookies.is_some_and(|cookies| {
+                !cookies.is_empty()
+                    && cookies
+                        .iter()
+                        .all(|(name, value)| !name.trim().is_empty() && !value.trim().is_empty())
+            }) =>
+        {
+            Err("Cookie credentials require captured session cookies".to_string())
+        }
+        CredentialType::UsernamePassword if !present(username) || !present(password) => {
+            Err("Username/password credentials require both fields".to_string())
+        }
+        _ => Ok(()),
     }
-
-    Ok(())
 }
 
 #[cfg(test)]
@@ -777,24 +697,24 @@ mod tests {
     }
 
     impl InMemoryCredentialStore {
+        fn contains(&self, site_category: &str) -> bool {
+            self.entries.lock().unwrap().contains_key(site_category)
+        }
+
         fn insert(&self, credential: SiteCredential) {
             self.entries
                 .lock()
                 .unwrap()
                 .insert(credential.site_category.clone(), credential);
         }
-
-        fn contains(&self, site_category: &str) -> bool {
-            self.entries.lock().unwrap().contains_key(site_category)
-        }
     }
 
     impl CredentialStoreBackend for InMemoryCredentialStore {
-        fn set_credential(&self, cred: &SiteCredential) -> Result<(), String> {
+        fn set_credential(&self, credential: &SiteCredential) -> Result<(), String> {
             self.entries
                 .lock()
                 .unwrap()
-                .insert(cred.site_category.clone(), cred.clone());
+                .insert(credential.site_category.clone(), credential.clone());
             Ok(())
         }
 
@@ -807,8 +727,29 @@ mod tests {
             Ok(())
         }
 
-        fn build_extractor_auth(&self, cred: &SiteCredential) -> Value {
-            crate::credential_store::build_extractor_auth(cred)
+        fn build_extractor_auth(&self, credential: &SiteCredential) -> Value {
+            crate::credential_store::build_extractor_auth(credential)
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    struct RejectCredentialReads;
+
+    impl CredentialStoreBackend for RejectCredentialReads {
+        fn set_credential(&self, _credential: &SiteCredential) -> Result<(), String> {
+            panic!("anonymous source attempted to write the credential store")
+        }
+
+        fn get_credential(&self, site_category: &str) -> Result<Option<SiteCredential>, String> {
+            panic!("anonymous source attempted to read credential '{site_category}'")
+        }
+
+        fn delete_credential(&self, site_category: &str) -> Result<(), String> {
+            panic!("anonymous source attempted to delete credential '{site_category}'")
+        }
+
+        fn build_extractor_auth(&self, _credential: &SiteCredential) -> Value {
+            panic!("anonymous source attempted to build credential configuration")
         }
     }
 
@@ -817,151 +758,8 @@ mod tests {
         std::sync::Arc::new(LibraryDatabase::open(dir.path()).unwrap())
     }
 
-    async fn create_subscription_query(db: &LibraryDatabase, site_id: &str) -> (i64, i64) {
-        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
-            db,
-            std::path::Path::new("/tmp"),
-        );
-        let subscription = runtime
-            .create_subscription("Test".to_string(), None, None, None)
-            .await
-            .unwrap();
-        let query = runtime
-            .add_subscription_query(
-                subscription.id.clone(),
-                site_id.to_string(),
-                None,
-                "query".to_string(),
-                None,
-            )
-            .await
-            .unwrap();
-        (subscription.id.parse().unwrap(), query.id.parse().unwrap())
-    }
-
     #[tokio::test]
-    async fn set_manual_credential_for_alias_site_stores_under_owner_category() {
-        let db = test_db().await;
-        let store = InMemoryCredentialStore::default();
-        let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
-
-        let canonical = service
-            .set_manual_credential(SetManualCredentialRequest {
-                site_category: "pixivuser".to_string(),
-                credential_type: "oauth_token".to_string(),
-                username: None,
-                password: None,
-                cookies: None,
-                oauth_token: Some("refresh".to_string()),
-                display_name: Some("Pixiv".to_string()),
-                expires_at: None,
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(canonical, "pixiv");
-        assert!(store.contains("pixiv"));
-
-        let credentials = service.list_credentials().await.unwrap();
-        assert_eq!(credentials.len(), 1);
-        assert_eq!(credentials[0].site_category, "pixiv");
-    }
-
-    #[tokio::test]
-    async fn past_cookie_expiry_overrides_health_to_expired() {
-        let db = test_db().await;
-        let store = InMemoryCredentialStore::default();
-        let service = SubscriptionCredentialService::with_store(db.as_ref(), store);
-
-        let mut cookies = HashMap::new();
-        cookies.insert("auth_token".to_string(), "x".to_string());
-        cookies.insert("ct0".to_string(), "y".to_string());
-        service
-            .set_manual_credential(SetManualCredentialRequest {
-                site_category: "twitter".to_string(),
-                credential_type: "cookies".to_string(),
-                username: None,
-                password: None,
-                cookies: Some(cookies),
-                oauth_token: None,
-                display_name: None,
-                expires_at: Some("2000-01-01T00:00:00+00:00".to_string()),
-            })
-            .await
-            .unwrap();
-
-        let health = service.list_credential_health().await.unwrap();
-        let row = health
-            .iter()
-            .find(|h| h.site_category == "twitter")
-            .expect("twitter health row");
-        assert_eq!(row.health_status, "expired");
-        assert!(row.last_error.as_deref().unwrap_or("").contains("expired"));
-
-        let credentials = service.list_credentials().await.unwrap();
-        assert_eq!(
-            credentials[0].expires_at.as_deref(),
-            Some("2000-01-01T00:00:00+00:00")
-        );
-    }
-
-    #[tokio::test]
-    async fn delete_credential_removes_alias_visible_records_through_service() {
-        let db = test_db().await;
-        let store = InMemoryCredentialStore::default();
-        store.insert(SiteCredential {
-            site_category: "rule34".to_string(),
-            credential_type: CredentialType::ApiKey,
-            username: Some("123".to_string()),
-            password: Some("secret".to_string()),
-            cookies: None,
-            oauth_token: None,
-        });
-        store.insert(SiteCredential {
-            site_category: "rule34.xxx".to_string(),
-            credential_type: CredentialType::ApiKey,
-            username: Some("123".to_string()),
-            password: Some("secret".to_string()),
-            cookies: None,
-            oauth_token: None,
-        });
-        db.with_write(|conn| {
-            conn.execute(
-                "INSERT INTO credential_domain (site_category, credential_type, display_name, date_added)
-                 VALUES ('rule34', 'api_key', 'Rule34', ?1)",
-                [chrono::Utc::now().to_rfc3339()],
-            )?;
-            conn.execute(
-                "INSERT INTO credential_domain (site_category, credential_type, display_name, date_added)
-                 VALUES ('rule34.xxx', 'api_key', 'Rule34', ?1)",
-                [chrono::Utc::now().to_rfc3339()],
-            )?;
-            conn.execute(
-                "INSERT INTO credential_health (site_category, health_status, last_checked_at, last_error)
-                 VALUES ('rule34', 'unknown', ?1, NULL)",
-                [chrono::Utc::now().to_rfc3339()],
-            )?;
-            conn.execute(
-                "INSERT INTO credential_health (site_category, health_status, last_checked_at, last_error)
-                 VALUES ('rule34.xxx', 'unknown', ?1, NULL)",
-                [chrono::Utc::now().to_rfc3339()],
-            )?;
-            Ok::<_, rusqlite::Error>(())
-        })
-        .unwrap();
-
-        let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
-        let canonical = service.delete_credential("rule34.xxx").await.unwrap();
-
-        assert_eq!(canonical, "rule34");
-        assert!(!store.contains("rule34"));
-        assert!(!store.contains("rule34.xxx"));
-        assert!(service.list_credentials().await.unwrap().is_empty());
-        assert!(service.list_credential_health().await.unwrap().is_empty());
-    }
-
-    #[tokio::test]
-    async fn pixivuser_run_resolves_stored_pixiv_credential() {
+    async fn pixivuser_resolves_the_shared_pixiv_credential() {
         let db = test_db().await;
         let store = InMemoryCredentialStore::default();
         store.insert(SiteCredential {
@@ -973,169 +771,213 @@ mod tests {
             oauth_token: Some("refresh".to_string()),
         });
         let service = SubscriptionCredentialService::with_store(db.as_ref(), store);
-        let (subscription_id, query_id) = create_subscription_query(&db, "pixivuser").await;
 
+        service
+            .upsert_credential_domain("pixiv", "oauth_token", Some("Pixiv"))
+            .await
+            .unwrap();
         let resolved = service
-            .resolve_for_run(
-                subscription_id,
-                Some(query_id),
-                "pixivuser",
-                "https://www.pixiv.net/en/users/12345",
-            )
+            .resolve_credential("pixivuser", "https://www.pixiv.net/en/users/12345")
             .await;
 
         assert_eq!(resolved.canonical_site_category, "pixiv");
         assert_eq!(resolved.matched_lookup_key.as_deref(), Some("pixiv"));
-        assert!(resolved.has_credential());
+        assert_eq!(
+            resolved.gallery_dl_auth.unwrap().fragment["refresh-token"],
+            "refresh"
+        );
     }
 
     #[tokio::test]
-    async fn pixivuser_requires_the_shared_pixiv_credential() {
+    async fn gelbooru_resolves_user_id_and_api_key() {
         let db = test_db().await;
-        let service = SubscriptionCredentialService::with_store(
-            db.as_ref(),
-            InMemoryCredentialStore::default(),
-        );
-
-        let preflight = service
-            .preflight_for_run("pixivuser", "https://www.pixiv.net/en/users/12345")
-            .await;
-
-        assert!(matches!(preflight, CredentialPreflight::MissingRequired));
-    }
-
-    #[tokio::test]
-    async fn missing_credential_marks_health_and_creates_issue() {
-        let db = test_db().await;
-        let service = SubscriptionCredentialService::with_store(
-            db.as_ref(),
-            InMemoryCredentialStore::default(),
-        );
-        let (subscription_id, query_id) = create_subscription_query(&db, "gelbooru").await;
-
-        let resolved = service
-            .resolve_for_run(
-                subscription_id,
-                Some(query_id),
-                "gelbooru",
-                "https://gelbooru.com/index.php?page=post&s=list&tags=test",
-            )
-            .await;
-
-        assert!(!resolved.has_credential());
-        let health = service.list_credential_health().await.unwrap();
-        assert_eq!(health[0].site_category, "gelbooru");
-        assert_eq!(health[0].health_status, "missing");
-
-        let issues = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
-            db.as_ref(),
-            std::path::Path::new("/tmp"),
-        )
-        .list_subscription_issues(subscription_id, Some(query_id), 10)
-        .await
-        .unwrap();
-        assert!(issues
-            .iter()
-            .any(|issue| issue.issue_kind == "credential_missing"));
-    }
-
-    #[tokio::test]
-    async fn auth_failure_without_credential_never_touches_health() {
-        let db = test_db().await;
-        let service = SubscriptionCredentialService::with_store(
-            db.as_ref(),
-            InMemoryCredentialStore::default(),
-        );
-        let (subscription_id, query_id) = create_subscription_query(&db, "gelbooru").await;
-
-        // No stored credential: an auth-shaped failure (e.g. a CDN 403) must
-        // not indict a credential that does not exist.
-        service
-            .note_run_auth_failure(
-                subscription_id,
-                Some(query_id),
-                "gelbooru",
-                FailureKind::Unauthorized,
-                Some("401 Unauthorized"),
-            )
-            .await;
-
-        let health = service.list_credential_health().await.unwrap();
-        assert!(health.is_empty());
-        let issues = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
-            db.as_ref(),
-            std::path::Path::new("/tmp"),
-        )
-        .list_subscription_issues(subscription_id, Some(query_id), 10)
-        .await
-        .unwrap();
-        assert!(issues
-            .iter()
-            .any(|issue| issue.issue_kind == "credential_blocked"));
-    }
-
-    #[tokio::test]
-    async fn auth_failure_marks_blocked_and_success_clears_matching_issues() {
-        let db = test_db().await;
-        let service = SubscriptionCredentialService::with_store(
-            db.as_ref(),
-            InMemoryCredentialStore::default(),
-        );
-        let (subscription_id, query_id) = create_subscription_query(&db, "gelbooru").await;
+        let store = InMemoryCredentialStore::default();
+        let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
 
         service
             .set_manual_credential(SetManualCredentialRequest {
                 site_category: "gelbooru".to_string(),
                 credential_type: "api_key".to_string(),
                 username: Some("123".to_string()),
-                password: Some("key".to_string()),
+                password: Some("0123456789abcdef".to_string()),
                 cookies: None,
                 oauth_token: None,
-                display_name: None,
-                expires_at: None,
+                display_name: Some("Gelbooru".to_string()),
             })
             .await
             .unwrap();
 
+        let resolved = service
+            .resolve_credential("gelbooru", "https://gelbooru.com/index.php?page=post")
+            .await;
+        let auth = resolved.gallery_dl_auth.unwrap().fragment;
+        assert_eq!(auth["user-id"], "123");
+        assert_eq!(auth["api-key"], "0123456789abcdef");
+        assert!(store.contains("gelbooru"));
+    }
+
+    #[tokio::test]
+    async fn manual_credentials_are_validated_against_the_source_contract() {
+        let db = test_db().await;
+        let service = SubscriptionCredentialService::with_store(
+            db.as_ref(),
+            InMemoryCredentialStore::default(),
+        );
+
+        let wrong_type = service
+            .set_manual_credential(SetManualCredentialRequest {
+                site_category: "gelbooru".to_string(),
+                credential_type: "oauth_token".to_string(),
+                username: None,
+                password: None,
+                cookies: None,
+                oauth_token: Some("token".to_string()),
+                display_name: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(wrong_type.contains("not supported for Gelbooru"));
+
+        let incomplete = service
+            .set_manual_credential(SetManualCredentialRequest {
+                site_category: "gelbooru".to_string(),
+                credential_type: "api_key".to_string(),
+                username: Some("123".to_string()),
+                password: None,
+                cookies: None,
+                oauth_token: None,
+                display_name: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(incomplete.contains("user_id and api_key"));
+
+        let malformed = service
+            .set_manual_credential(SetManualCredentialRequest {
+                site_category: "rule34".to_string(),
+                credential_type: "api_key".to_string(),
+                username: Some("456".to_string()),
+                password: Some("No".to_string()),
+                cookies: None,
+                oauth_token: None,
+                display_name: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(malformed.contains("invalid user_id or api_key"));
+    }
+
+    #[tokio::test]
+    async fn rule34_resolves_its_own_user_id_and_api_key() {
+        let db = test_db().await;
+        let store = InMemoryCredentialStore::default();
+        let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
+
         service
-            .note_run_auth_failure(
-                subscription_id,
-                Some(query_id),
-                "gelbooru",
-                FailureKind::Unauthorized,
-                Some("401 Unauthorized"),
+            .set_manual_credential(SetManualCredentialRequest {
+                site_category: "rule34".to_string(),
+                credential_type: "api_key".to_string(),
+                username: Some("456".to_string()),
+                password: Some("fedcba9876543210".to_string()),
+                cookies: None,
+                oauth_token: None,
+                display_name: Some("Rule34.xxx".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let resolved = service
+            .resolve_credential(
+                "rule34",
+                "https://rule34.xxx/index.php?page=post&s=list&tags=test",
             )
             .await;
+        let auth = resolved.gallery_dl_auth.unwrap().fragment;
+        assert_eq!(auth["user-id"], "456");
+        assert_eq!(auth["api-key"], "fedcba9876543210");
+        assert!(store.contains("rule34"));
+    }
 
-        let health = service.list_credential_health().await.unwrap();
-        assert_eq!(health[0].health_status, "unauthorized");
-        let issues = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
-            db.as_ref(),
-            std::path::Path::new("/tmp"),
-        )
-        .list_subscription_issues(subscription_id, Some(query_id), 10)
-        .await
-        .unwrap();
-        assert!(issues
-            .iter()
-            .any(|issue| issue.issue_kind == "credential_blocked"));
+    #[tokio::test]
+    async fn furaffinity_resolves_captured_browser_cookies() {
+        let db = test_db().await;
+        let store = InMemoryCredentialStore::default();
+        let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
 
         service
-            .note_run_success(subscription_id, Some(query_id), "gelbooru", true)
-            .await;
+            .set_manual_credential(SetManualCredentialRequest {
+                site_category: "furaffinity".to_string(),
+                credential_type: "cookies".to_string(),
+                username: None,
+                password: None,
+                cookies: Some(HashMap::from([
+                    ("a".to_string(), "session-a".to_string()),
+                    ("b".to_string(), "session-b".to_string()),
+                ])),
+                oauth_token: None,
+                display_name: Some("Fur Affinity".to_string()),
+            })
+            .await
+            .unwrap();
 
-        let health = service.list_credential_health().await.unwrap();
-        assert_eq!(health[0].health_status, "valid");
-        let issues = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
-            db.as_ref(),
-            std::path::Path::new("/tmp"),
-        )
-        .list_subscription_issues(subscription_id, Some(query_id), 10)
-        .await
-        .unwrap();
-        assert!(issues
-            .iter()
-            .any(|issue| issue.issue_kind == "credential_blocked" && issue.status == "resolved"));
+        let resolved = service
+            .resolve_credential("furaffinity", "https://www.furaffinity.net/gallery/artist")
+            .await;
+        let auth = resolved.gallery_dl_auth.unwrap().fragment;
+        assert_eq!(auth["cookies"]["a"], "session-a");
+        assert_eq!(auth["cookies"]["b"], "session-b");
+        assert!(store.contains("furaffinity"));
+    }
+
+    #[tokio::test]
+    async fn idolcomplex_resolves_username_and_password() {
+        let db = test_db().await;
+        let store = InMemoryCredentialStore::default();
+        let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
+
+        service
+            .set_manual_credential(SetManualCredentialRequest {
+                site_category: "idolcomplex".to_string(),
+                credential_type: "username_password".to_string(),
+                username: Some("artist".to_string()),
+                password: Some("secret".to_string()),
+                cookies: None,
+                oauth_token: None,
+                display_name: Some("Idol Complex".to_string()),
+            })
+            .await
+            .unwrap();
+
+        let resolved = service
+            .resolve_credential(
+                "idolcomplex",
+                "https://www.idolcomplex.com/en/posts?tags=solo",
+            )
+            .await;
+        let auth = resolved.gallery_dl_auth.unwrap().fragment;
+        assert_eq!(auth["username"], "artist");
+        assert_eq!(auth["password"], "secret");
+        assert!(store.contains("idolcomplex"));
+    }
+
+    #[tokio::test]
+    async fn danbooru_is_anonymous_and_never_reads_credential_store() {
+        let db = test_db().await;
+        let service = SubscriptionCredentialService::with_store(db.as_ref(), RejectCredentialReads);
+
+        let resolved = service
+            .resolve_credential("danbooru", "https://danbooru.donmai.us/posts?tags=test")
+            .await;
+        assert_eq!(resolved.canonical_site_category, "danbooru");
+        assert!(!resolved.auth_supported);
+        assert!(!resolved.has_credential());
+        assert_eq!(
+            service.preflight_for_run("danbooru", "").await,
+            CredentialPreflight::Ready
+        );
+        service
+            .note_run_auth_failure(0, None, "danbooru", FailureKind::Unauthorized, None)
+            .await;
     }
 
     #[tokio::test]
@@ -1144,27 +986,33 @@ mod tests {
         let store = InMemoryCredentialStore::default();
         let service = SubscriptionCredentialService::with_store(db.as_ref(), store.clone());
 
-        let canonical = service
+        let site = service
             .store_pixiv_oauth_credential("refresh".to_string(), Some("phpsessid".to_string()))
             .await
             .unwrap();
 
-        assert_eq!(canonical, "pixiv");
-        let credentials = service.list_credentials().await.unwrap();
-        assert_eq!(credentials[0].site_category, "pixiv");
-        assert_eq!(credentials[0].credential_type, "oauth_token");
-        let health = service.list_credential_health().await.unwrap();
-        assert_eq!(health[0].health_status, "unknown");
-
+        assert_eq!(site, "pixiv");
+        assert!(store.contains("pixiv"));
         let resolved = service
-            .resolve_for_run(
-                1,
-                None,
-                "pixiv",
-                "https://www.pixiv.net/en/tags/test/artworks",
-            )
+            .resolve_credential("pixiv", "https://www.pixiv.net/en/tags/test")
             .await;
         assert!(resolved.has_credential());
-        assert!(store.contains("pixiv"));
+    }
+
+    #[tokio::test]
+    async fn optional_auth_without_library_configuration_never_reads_credential_store() {
+        let db = test_db().await;
+        let service = SubscriptionCredentialService::with_store(db.as_ref(), RejectCredentialReads);
+
+        let resolved = service
+            .resolve_credential(
+                "idolcomplex",
+                "https://www.idolcomplex.com/en/posts?tags=solo",
+            )
+            .await;
+
+        assert!(resolved.auth_supported);
+        assert!(resolved.auth_required_for_full_access);
+        assert!(!resolved.has_credential());
     }
 }

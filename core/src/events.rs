@@ -92,7 +92,6 @@ pub fn emit_state_changed(origin: &str, impact: ChangeImpact) {
         media_derivatives_changed: impact.media_derivatives_changed,
         derivative_fields_changed: impact.derivative_fields_changed,
         extra_grid_scopes: impact.extra_grid_scopes,
-        group_ids: impact.group_ids,
         subscription_ids: impact.subscription_ids,
         query_ids: impact.query_ids,
         credential_categories: impact.credential_categories,
@@ -122,14 +121,6 @@ pub mod event_names {
     pub const RUNTIME_TASK_UPSERTED: &str = "runtime/task_upserted";
     pub const RUNTIME_TASK_REMOVED: &str = "runtime/task_removed";
 
-    // --- Non-task events ---
-    pub const LIBRARY_CLOSED: &str = "library-closed";
-    pub const ZOOM_FACTOR_CHANGED: &str = "zoom-factor-changed";
-    pub const FILE_IMPORTED: &str = "file-imported";
-    pub const MANUAL_IMPORT_PROGRESS: &str = "manual-import-progress";
-    pub const MEDIA_EXPORT_PROGRESS: &str = "media-export-progress";
-    pub const OPEN_DETAIL_WINDOW: &str = "open-detail-window";
-    pub const DUPLICATE_AUTO_MERGE_FINISHED: &str = "duplicate-auto-merge-finished";
     pub const LOG: &str = "log";
 }
 
@@ -228,48 +219,4 @@ impl tracing::field::Visit for MessageVisitor {
         self.message
             .push_str(&format!("{}={}", field.name(), value));
     }
-}
-
-// --- System / misc
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ZoomFactorChangedEvent {
-    pub factor: f64,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct OpenDetailWindowEvent {
-    pub hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub width: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub height: Option<u32>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct DuplicateAutoMergeFinishedEvent {
-    pub winner_hash: String,
-    pub loser_hash: String,
-    pub distance: u32,
-    pub tags_merged: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct ManualImportProgressEvent {
-    pub done: usize,
-    pub total: usize,
-    pub current_file: String,
-    pub imported: usize,
-    pub skipped: usize,
-    pub errors: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct MediaExportProgressEvent {
-    pub done: usize,
-    pub total: usize,
-    pub current_file: String,
-    pub exported: usize,
-    pub skipped: usize,
-    pub errors: usize,
 }

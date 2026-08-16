@@ -220,10 +220,9 @@ impl LibraryDatabase {
         &self,
         folder_id: i64,
         entity_ids: &[i64],
-        expansion: ExpansionMode,
     ) -> Result<FolderMembershipChange, String> {
         self.with_write(|conn| {
-            let change = write::folders::add_members(conn, folder_id, entity_ids, expansion)?;
+            let change = write::folders::add_members(conn, folder_id, entity_ids)?;
             emit_folder_membership_op(
                 conn,
                 &self.device_id,
@@ -239,10 +238,9 @@ impl LibraryDatabase {
         &self,
         folder_id: i64,
         entity_ids: &[i64],
-        expansion: ExpansionMode,
     ) -> Result<FolderMembershipChange, String> {
         self.with_write(|conn| {
-            let change = write::folders::remove_members(conn, folder_id, entity_ids, expansion)?;
+            let change = write::folders::remove_members(conn, folder_id, entity_ids)?;
             emit_folder_membership_op(
                 conn,
                 &self.device_id,

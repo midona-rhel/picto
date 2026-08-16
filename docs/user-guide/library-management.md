@@ -2,7 +2,7 @@
 
 [← User Guide](README.md)
 
-A library is a self-contained collection — a folder on disk that holds your database, thumbnails, settings, and imported files. You can have multiple libraries and switch between them.
+A library is a self-contained workspace — a folder on disk that holds your database, thumbnails, settings, and imported files. You can have multiple libraries and switch between them.
 
 ## What's in a Library Folder
 

@@ -1,74 +1,109 @@
-//! Resolves the path to the bundled `gallery-dl` CLI binary.
+//! Resolves the executable used by the gallery-dl bridge runner.
 //!
-//! Resolution order:
-//! 1. `PICTO_GALLERY_DL_DIR` environment variable (set by Electron for packaged app)
-//! 2. `vendor/gallery-dl/` relative to the workspace root (local development)
-//! 3. System PATH fallback
+//! Packaged builds must contain the self-contained Picto bridge sidecar. Local
+//! debug builds use the source bridge and vendored wheel so bridge edits take
+//! effect immediately instead of silently running a stale compiled sidecar.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 static GALLERY_DL: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
 #[cfg(target_os = "windows")]
-const GALLERY_DL_BIN: &str = "gallery-dl.exe";
+const BRIDGE_BIN: &str = "picto-gallery-dl-bridge.exe";
 #[cfg(not(target_os = "windows"))]
-const GALLERY_DL_BIN: &str = "gallery-dl";
+const BRIDGE_BIN: &str = "picto-gallery-dl-bridge";
 
-/// Resolve the path to the `gallery-dl` binary.
+#[cfg(target_os = "windows")]
+const DEV_FALLBACK_BIN: &str = "gallery-dl.exe";
+#[cfg(not(target_os = "windows"))]
+const DEV_FALLBACK_BIN: &str = "gallery-dl";
+
+/// Resolve the Picto gallery-dl bridge runtime.
 pub fn gallery_dl_path() -> Result<&'static PathBuf, String> {
     GALLERY_DL
-        .get_or_init(|| resolve(GALLERY_DL_BIN))
+        .get_or_init(resolve)
         .as_ref()
-        .map_err(|e| e.clone())
+        .map_err(Clone::clone)
 }
 
-fn resolve(bin_name: &str) -> Result<PathBuf, String> {
-    // 1. PICTO_GALLERY_DL_DIR env var (packaged Electron app)
-    if let Ok(dir) = std::env::var("PICTO_GALLERY_DL_DIR") {
-        let p = PathBuf::from(&dir).join(bin_name);
-        if p.is_file() {
-            tracing::info!("Using bundled {bin_name}: {}", p.display());
-            return Ok(p);
+fn resolve() -> Result<PathBuf, String> {
+    let packaged_dir = std::env::var_os("PICTO_GALLERY_DL_DIR").map(PathBuf::from);
+    resolve_from(
+        packaged_dir.as_deref(),
+        &candidate_roots(),
+        cfg!(debug_assertions),
+    )
+}
+
+fn resolve_from(
+    packaged_dir: Option<&Path>,
+    roots: &[PathBuf],
+    allow_dev_fallback: bool,
+) -> Result<PathBuf, String> {
+    if let Some(dir) = packaged_dir {
+        let sidecar = dir.join(BRIDGE_BIN);
+        if sidecar.is_file() {
+            tracing::info!(path = %sidecar.display(), "Using packaged Picto gallery-dl bridge");
+            return Ok(sidecar);
+        }
+
+        return Err(format!(
+            "Packaged Picto gallery-dl bridge is missing: {}",
+            sidecar.display()
+        ));
+    }
+
+    if allow_dev_fallback {
+        for root in roots {
+            let fallback = root
+                .join("vendor")
+                .join("gallery-dl")
+                .join(DEV_FALLBACK_BIN);
+            if has_python_fallback_runtime(&fallback) {
+                tracing::warn!(
+                    path = %fallback.display(),
+                    "Using development Python gallery-dl bridge fallback"
+                );
+                return Ok(fallback);
+            }
         }
     }
 
-    // 2. vendor/gallery-dl/ relative to the workspace root.
-    for base in candidate_roots() {
-        let p = base.join("vendor").join("gallery-dl").join(bin_name);
-        if p.is_file() {
-            tracing::info!("Using vendor {bin_name}: {}", p.display());
-            return Ok(p);
+    for root in roots {
+        let sidecar = root.join("vendor").join("gallery-dl").join(BRIDGE_BIN);
+        if sidecar.is_file() {
+            tracing::info!(path = %sidecar.display(), "Using vendor Picto gallery-dl bridge");
+            return Ok(sidecar);
         }
-    }
-
-    // 3. System PATH fallback
-    if let Ok(p) = which(bin_name) {
-        tracing::info!("Using system {bin_name}: {}", p.display());
-        return Ok(p);
     }
 
     Err(format!(
-        "Could not find `{bin_name}`. Run `bash scripts/download-gallery-dl.sh` or install gallery-dl."
+        "Could not find `{BRIDGE_BIN}`. Build or install the self-contained Picto gallery-dl bridge."
     ))
 }
 
-/// Candidate root directories (workspace root) to search for vendor/gallery-dl/.
+fn has_python_fallback_runtime(binary: &Path) -> bool {
+    binary.is_file()
+        && binary
+            .parent()
+            .map(|parent| parent.join("wheel").join("gallery_dl").is_dir())
+            .unwrap_or(false)
+}
+
+/// Candidate root directories to search for the development vendor runtime.
 fn candidate_roots() -> Vec<PathBuf> {
     let mut roots = Vec::new();
 
-    // Current working directory (often the workspace root during dev)
     if let Ok(cwd) = std::env::current_dir() {
         roots.push(cwd);
     }
 
-    // Walk up from the executable
     if let Ok(exe) = std::env::current_exe() {
-        let mut dir = exe.parent().map(|p| p.to_path_buf());
-        while let Some(d) = dir {
-            roots.push(d.clone());
-            dir = d.parent().map(|p| p.to_path_buf());
-            // Don't walk above 5 levels
+        let mut dir = exe.parent().map(Path::to_path_buf);
+        while let Some(current) = dir {
+            roots.push(current.clone());
+            dir = current.parent().map(Path::to_path_buf);
             if roots.len() > 8 {
                 break;
             }
@@ -78,19 +113,73 @@ fn candidate_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// Simple which(1) implementation — search PATH for a binary.
-fn which(bin_name: &str) -> Result<PathBuf, ()> {
-    let path_var = std::env::var("PATH").map_err(|_| ())?;
-    #[cfg(target_os = "windows")]
-    let sep = ';';
-    #[cfg(not(target_os = "windows"))]
-    let sep = ':';
+#[cfg(test)]
+mod tests {
+    use super::{has_python_fallback_runtime, resolve_from, BRIDGE_BIN, DEV_FALLBACK_BIN};
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
-    for dir in path_var.split(sep) {
-        let candidate = PathBuf::from(dir).join(bin_name);
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
+    fn test_root() -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "picto-gallery-dl-path-test-{}-{nanos}",
+            std::process::id()
+        ))
     }
-    Err(())
+
+    #[test]
+    fn packaged_runtime_name_is_the_picto_bridge() {
+        assert!(BRIDGE_BIN.starts_with("picto-gallery-dl-bridge"));
+        assert!(!BRIDGE_BIN.starts_with("gallery-dl"));
+    }
+
+    #[test]
+    fn development_fallback_requires_the_vendored_wheel() {
+        let root = test_root();
+        let vendor = root.join("vendor").join("gallery-dl");
+        fs::create_dir_all(vendor.join("wheel").join("gallery_dl")).unwrap();
+        let fallback = vendor.join(DEV_FALLBACK_BIN);
+        fs::write(&fallback, b"dev fallback").unwrap();
+
+        assert!(has_python_fallback_runtime(&fallback));
+        assert!(!has_python_fallback_runtime(Path::new(
+            "/definitely/not/a/gallery-dl-runtime"
+        )));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn packaged_directory_never_falls_back_to_development_runtime() {
+        let root = test_root();
+        let packaged = root.join("packaged");
+        let vendor = root.join("vendor").join("gallery-dl");
+        fs::create_dir_all(vendor.join("wheel").join("gallery_dl")).unwrap();
+        let fallback = vendor.join(DEV_FALLBACK_BIN);
+        fs::write(&fallback, b"dev fallback").unwrap();
+
+        let error = resolve_from(Some(&packaged), std::slice::from_ref(&root), true).unwrap_err();
+        assert!(error.contains("Packaged Picto gallery-dl bridge is missing"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn development_source_bridge_wins_over_stale_sidecar() {
+        let root = test_root();
+        let vendor = root.join("vendor").join("gallery-dl");
+        fs::create_dir_all(vendor.join("wheel").join("gallery_dl")).unwrap();
+        let fallback = vendor.join(DEV_FALLBACK_BIN);
+        fs::write(&fallback, b"dev fallback").unwrap();
+        let sidecar = vendor.join(BRIDGE_BIN);
+        fs::write(&sidecar, b"sidecar").unwrap();
+
+        let resolved = resolve_from(None, std::slice::from_ref(&root), true).unwrap();
+        assert_eq!(resolved, fallback);
+
+        fs::remove_dir_all(root).unwrap();
+    }
 }

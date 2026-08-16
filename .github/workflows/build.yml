@@ -40,6 +40,10 @@ jobs:
         with:
           node-version: 20
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
@@ -78,8 +82,8 @@ jobs:
       - name: Download FFmpeg binaries
         run: bash scripts/download-ffmpeg.sh
 
-      - name: Download gallery-dl
-        run: bash scripts/download-gallery-dl.sh
+      - name: Build gallery-dl bridge
+        run: python scripts/build-gallery-dl-bridge.py
 
       # ── Build ───────────────────────────────────────────────────────
       - name: Install root dependencies

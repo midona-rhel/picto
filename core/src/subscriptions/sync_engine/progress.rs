@@ -41,7 +41,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             subscription_id,
             &self.subscription_name,
             &self.progress_mode,
-            self.group_name.as_deref(),
             self.current_query_id.map(|id| id.to_string()),
             self.current_query_name.clone(),
             progress,

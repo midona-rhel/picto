@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-/// System scope counts (top-level entities only, excludes collection members).
+/// Counts for the system scopes over independent media entities.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScopeCounts {
     pub active: i64,
@@ -12,11 +12,11 @@ pub struct ScopeCounts {
     pub untagged: i64,
 }
 
-/// Get system scope counts. Excludes collection members from all counts.
+/// Get system scope counts.
 pub fn get_scope_counts(conn: &Connection) -> rusqlite::Result<ScopeCounts> {
     let count = |status: i64| -> rusqlite::Result<i64> {
         conn.query_row(
-            "SELECT COUNT(*) FROM media_entity WHERE status = ?1 AND parent_collection_entity_id IS NULL",
+            "SELECT COUNT(*) FROM media_entity WHERE status = ?1",
             [status],
             |row| row.get(0),
         )
@@ -29,13 +29,7 @@ pub fn get_scope_counts(conn: &Connection) -> rusqlite::Result<ScopeCounts> {
     let uncategorized: i64 = conn.query_row(
         "SELECT COUNT(*) FROM media_entity me
          WHERE me.status = 1
-           AND me.parent_collection_entity_id IS NULL
-           AND NOT EXISTS (SELECT 1 FROM folder_member fm WHERE fm.entity_id = me.entity_id)
-           AND NOT EXISTS (
-               SELECT 1 FROM media_entity child
-               WHERE child.parent_collection_entity_id = me.entity_id
-                 AND EXISTS (SELECT 1 FROM folder_member fm WHERE fm.entity_id = child.entity_id)
-           )",
+           AND NOT EXISTS (SELECT 1 FROM folder_member fm WHERE fm.entity_id = me.entity_id)",
         [],
         |row| row.get(0),
     )?;
@@ -43,13 +37,7 @@ pub fn get_scope_counts(conn: &Connection) -> rusqlite::Result<ScopeCounts> {
     let untagged: i64 = conn.query_row(
         "SELECT COUNT(*) FROM media_entity me
          WHERE me.status = 1
-           AND me.parent_collection_entity_id IS NULL
-           AND NOT EXISTS (SELECT 1 FROM entity_tag et WHERE et.entity_id = me.entity_id)
-           AND NOT EXISTS (
-               SELECT 1 FROM media_entity child
-               WHERE child.parent_collection_entity_id = me.entity_id
-                 AND EXISTS (SELECT 1 FROM entity_tag et WHERE et.entity_id = child.entity_id)
-           )",
+           AND NOT EXISTS (SELECT 1 FROM entity_tag et WHERE et.entity_id = me.entity_id)",
         [],
         |row| row.get(0),
     )?;
@@ -63,13 +51,9 @@ pub fn get_scope_counts(conn: &Connection) -> rusqlite::Result<ScopeCounts> {
     })
 }
 
-/// Count total entities (top-level only).
+/// Count all media entities.
 pub fn count_total(conn: &Connection) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM media_entity WHERE parent_collection_entity_id IS NULL",
-        [],
-        |row| row.get(0),
-    )
+    conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))
 }
 
 pub fn count_media_files(conn: &Connection) -> rusqlite::Result<i64> {
@@ -85,8 +69,7 @@ pub fn aggregate_file_stats(conn: &Connection) -> rusqlite::Result<crate::db::ty
     let mut stmt = conn.prepare(
         "SELECT me.status, COUNT(*), COALESCE(SUM(mf.size_bytes), 0)
          FROM media_entity me
-         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-         JOIN media_file mf ON mf.file_id = sme.file_id
+         JOIN media_file mf ON mf.file_id = me.file_id
          GROUP BY me.status",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -136,8 +119,7 @@ pub fn aggregate_media_type_breakdown(
             COUNT(*),
             COALESCE(SUM(mf.size_bytes), 0)
          FROM media_entity me
-         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-         JOIN media_file mf ON mf.file_id = sme.file_id
+         JOIN media_file mf ON mf.file_id = me.file_id
          WHERE me.status IN (0, 1)
          GROUP BY category",
     )?;

@@ -144,25 +144,23 @@ const EU_SWAP_IDS = new Set([
   'video.rateDecrease',  // [ → Shift+,
 ]);
 
+const DEFAULT_KEY_BINDINGS = new Map(
+  SHORTCUT_DEFS
+    .filter((def) => EU_SWAP_IDS.has(def.id) && def.keys2)
+    .map((def) => [def.id, { keys: def.keys, keys2: def.keys2! }]),
+);
+
 export function getKeyboardPreset(): KeyboardPreset { return activePreset; }
 
 export function setKeyboardPreset(preset: KeyboardPreset): void {
   activePreset = preset;
   localStorage.setItem(STORAGE_KEY, preset);
-  // Swap keys/keys2 in-place for EU shortcuts
+  // Always derive from the immutable US defaults so switching back is reliable.
   for (const def of SHORTCUT_DEFS) {
-    if (!EU_SWAP_IDS.has(def.id) || !def.keys2) continue;
-    if (preset === 'eu') {
-      // Put EU-friendly key first
-      if (!def.keys.includes('Shift+') || def.keys.includes('\\') || def.keys.includes('[') || def.keys.includes(']') || def.keys.includes('`')) {
-        const tmp = def.keys;
-        def.keys = def.keys2;
-        def.keys2 = tmp;
-      }
-    } else {
-      // Restore US defaults — the original SHORTCUT_DEFS array has US keys as primary
-      // This is a no-op on fresh load since defaults are US
-    }
+    const defaults = DEFAULT_KEY_BINDINGS.get(def.id);
+    if (!defaults) continue;
+    def.keys = preset === 'eu' ? defaults.keys2 : defaults.keys;
+    def.keys2 = preset === 'eu' ? defaults.keys : defaults.keys2;
   }
 }
 

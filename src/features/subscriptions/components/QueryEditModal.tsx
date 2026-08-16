@@ -83,11 +83,6 @@ export function QueryEditModal({
           onChange={setQueryText}
           placeholder={site?.example_query ?? ''}
         />
-        {site && queryText.trim() && (
-          <span className={styles.urlPreview}>
-            {site.url_template.replace('{query}', queryText.trim())}
-          </span>
-        )}
       </div>
       <div className={styles.formField}>
         <span className={styles.label}>Display name (optional)</span>

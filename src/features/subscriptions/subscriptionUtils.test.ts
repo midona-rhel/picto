@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import type { SubscriptionInfo, SubscriptionQueryInfo } from '../../shared/types/subscriptions';
-import { isQueryUpToDate, isSubscriptionUpToDate } from './subscriptionUtils';
+import type {
+  SubscriptionInfo,
+  SubscriptionQueryInfo,
+  SubscriptionSiteInfo,
+} from '../../shared/types/subscriptions';
+import {
+  isQueryUpToDate,
+  isSubscriptionUpToDate,
+} from './subscriptionUtils';
+import { getCredentialOwnerSiteId } from '../../shared/lib/subscriptionHelpers';
 
 function query(overrides: Partial<SubscriptionQueryInfo> = {}): SubscriptionQueryInfo {
   return {
@@ -31,10 +39,8 @@ function subscription(queries: SubscriptionQueryInfo[]): SubscriptionInfo {
     name: 'Huffslove',
     schedule: 'daily',
     paused: false,
-    group_id: null,
     initial_post_limit: 100,
     periodic_post_limit: 50,
-    auto_collections: true,
     created_at: '2026-08-05T19:08:25Z',
     total_files: 198,
     queries,
@@ -60,5 +66,23 @@ describe('subscription freshness', () => {
     expect(isSubscriptionUpToDate(current, 0, 1)).toBe(false);
     expect(isSubscriptionUpToDate(subscription([]))).toBe(false);
     expect(isSubscriptionUpToDate(subscription([query({ completed_initial_run: false })]))).toBe(false);
+  });
+});
+
+describe('subscription account routing', () => {
+  const sites = [
+    { id: 'pixiv', credential_owner_site_id: 'pixiv' },
+    { id: 'pixivuser', credential_owner_site_id: 'pixiv' },
+    { id: 'gelbooru', credential_owner_site_id: 'gelbooru' },
+  ] as SubscriptionSiteInfo[];
+
+  it('routes source variants to their canonical credential owner', () => {
+    expect(getCredentialOwnerSiteId('pixivuser', sites)).toBe('pixiv');
+    expect(getCredentialOwnerSiteId('pixiv', sites)).toBe('pixiv');
+    expect(getCredentialOwnerSiteId('gelbooru', sites)).toBe('gelbooru');
+  });
+
+  it('preserves unknown sources', () => {
+    expect(getCredentialOwnerSiteId('future-source', sites)).toBe('future-source');
   });
 });

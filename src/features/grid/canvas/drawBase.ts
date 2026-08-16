@@ -21,7 +21,6 @@ import {
   mimeToExt,
   truncateText,
   formatDuration,
-  drawCountChip,
 } from './primitives';
 
 
@@ -221,7 +220,7 @@ export function drawCanvasBaseLayer({
     ctx.stroke();
   }
 
-  // ── Pass 3: Badges (extension, duration, collection count) ──
+  // ── Pass 3: Badges (extension, duration) ──
   const isContain = effectiveFit === 'contain';
   for (const i of activeTiles) {
     const pos = positions[i];
@@ -234,7 +233,7 @@ export function drawCanvasBaseLayer({
     let bx = pos.x;
     let by = drawY;
     let bw = pos.w;
-    if (isContain && item.kind !== 'collection' && item.aspectRatio) {
+    if (isContain && item.aspectRatio) {
       const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imgH);
       bx = rect.x;
       by = rect.y;
@@ -244,8 +243,7 @@ export function drawCanvasBaseLayer({
     const ext = mimeToExt(item.mime);
     const isVideo = item.mime.startsWith('video/');
     const isAnimated = item.mime === 'image/gif' && (item.numFrames ?? 0) > 1;
-    const isCollection = item.kind === 'collection';
-    const showBadge = !isCollection && showExtensionLabel && ext && !isHiddenBadgeType(ext);
+    const showBadge = showExtensionLabel && ext && !isHiddenBadgeType(ext);
 
     // Extension badge — top-left
     if (showBadge) {
@@ -260,12 +258,6 @@ export function drawCanvasBaseLayer({
       drawBadge(ctx, durText, bx + bw - durW - 5, by + 5);
     }
 
-    // Collection count chip — top-right (no collision: collections never
-    // carry the video/animated duration badge)
-    if (isCollection) {
-      const itemCount = Math.max(0, item.memberCount ?? 0);
-      drawCountChip(ctx, itemCount, bx + bw - 5, by + 5);
-    }
   }
 
   // ── Pass 4: Name and resolution text ──

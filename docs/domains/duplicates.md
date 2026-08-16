@@ -18,7 +18,7 @@ from physical files; review decisions address the owning media entities.
 
 ## What Happens to the Loser
 
-### Free entity (not in a collection)
+### Media entity
 
 The intended result is that the loser's `media_entity`, file record, and unreferenced blob are
 removed. Before deletion:
@@ -28,13 +28,10 @@ removed. Before deletion:
 - Timestamps are consolidated (earliest `imported_at` and `created_at` are kept)
 - Folder memberships and subscription associations transfer to the winner
 
-### Collection member
-
-One physical file has one single media entity, so duplicate resolution never keeps a second entity
-that points at the winner's file. Metadata and external references move to the winner, the loser
-entity/file are deleted, and the winner occupies at most one collection membership. If both sides
-belong to different collections, resolution requires the user to choose the surviving collection;
-Picto does not silently keep both owners. Affected collection aggregates are rebuilt afterward.
+One physical file has one image or video media entity, so duplicate resolution never keeps a second
+entity that points at the winner's file. Metadata and external references move to the winner, and the
+loser entity/file are deleted. Source-post metadata and folder memberships remain explicit properties
+of the surviving entity; duplicate resolution never creates or chooses a hidden group.
 
 Blob reclamation and reference repointing are release evidence, not assumptions. A duplicate
 resolution is not certified until the smoke/test path proves both the database state and physical
@@ -42,9 +39,7 @@ original/thumbnail cleanup.
 
 ### Edge cases
 
-- **Loser was the collection cover**: The aggregate cover is recalculated from its surviving members
-- **Collection becomes empty**: The empty collection aggregate is removed
-- **Single-member collection after merge**: Preserved (not auto-collapsed)
+- **Source-post metadata**: Preserved on the surviving media entity
 
 ## Auto-Merge During Subscription Import
 
@@ -53,7 +48,7 @@ the ingest duplicate path. Exact perceptual hash matches may auto-resolve only f
 static images when the quality decision is unambiguous. Near matches are imported and create
 review work; they are not silently rejected or merged.
 
-`All` is the accepted active main collection. Inbox and Trash are separate lifecycle scopes and
+`All` is the accepted active library. Inbox and Trash are separate lifecycle scopes and
 must not inflate `All`, folder, smart-folder, or main-search counts. Duplicate review deliberately
 spans Active and Inbox so newly imported media can be reviewed before acceptance; Trash is excluded
 from duplicate candidates and duplicate-related sidebar counts.

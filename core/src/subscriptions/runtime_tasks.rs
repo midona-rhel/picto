@@ -31,25 +31,6 @@ fn make_subscription_task(
     }
 }
 
-fn make_group_task(
-    group_id: &str,
-    status: TaskStatus,
-    progress: Option<TaskProgress>,
-) -> RuntimeTask {
-    let now = chrono::Utc::now().to_rfc3339();
-    RuntimeTask {
-        task_id: format!("group:{group_id}"),
-        kind: crate::runtime_contract::task::TaskKind::SubscriptionGroup,
-        status,
-        label: format!("Group {group_id}"),
-        parent_task_id: None,
-        progress,
-        detail: None,
-        started_at: now.clone(),
-        updated_at: now,
-    }
-}
-
 pub fn schedule_progress_snapshot_clear(
     running_subs: RunningSubscriptions,
     subscription_id: String,
@@ -94,7 +75,6 @@ pub fn publish_start(
         subscription_id: subscription_id.to_string(),
         subscription_name: subscription_name.to_string(),
         mode: mode.to_string(),
-        group_name: None,
         query_id,
         query_name,
         files_downloaded: 0,
@@ -133,7 +113,6 @@ pub fn publish_running_progress(
     subscription_id: &str,
     subscription_name: &str,
     mode: &str,
-    group_name: Option<&str>,
     query_id: Option<String>,
     query_name: Option<String>,
     progress: &crate::subscriptions::sync_engine::SyncProgress,
@@ -144,7 +123,6 @@ pub fn publish_running_progress(
         subscription_id: subscription_id.to_string(),
         subscription_name: subscription_name.to_string(),
         mode: mode.to_string(),
-        group_name: group_name.map(|s| s.to_string()),
         query_id,
         query_name,
         files_downloaded: progress.files_downloaded,
@@ -187,7 +165,6 @@ pub fn publish_cancelling(subscription_id: &str, subscription_name: &str) {
         subscription_id: subscription_id.to_string(),
         subscription_name: subscription_name.to_string(),
         mode: "subscription".to_string(),
-        group_name: None,
         query_id: None,
         query_name: None,
         files_downloaded: 0,
@@ -248,7 +225,6 @@ pub fn publish_finished(
         subscription_id: subscription_id.to_string(),
         subscription_name: subscription_name.to_string(),
         mode: mode.to_string(),
-        group_name: None,
         query_id,
         query_name,
         files_downloaded: downloaded,
@@ -299,7 +275,6 @@ pub fn publish_panic(
         subscription_id: subscription_id.to_string(),
         subscription_name: subscription_name.to_string(),
         mode: mode.to_string(),
-        group_name: None,
         query_id,
         query_name,
         files_downloaded: 0,
@@ -331,40 +306,4 @@ pub fn publish_panic(
         None,
         &event,
     );
-}
-
-pub fn publish_group_start(group_id: &str) {
-    crate::runtime_state::upsert_task(make_group_task(group_id, TaskStatus::Running, None));
-}
-
-pub fn publish_group_progress(group_id: &str, done: u64, total: u64) {
-    crate::runtime_state::upsert_task(make_group_task(
-        group_id,
-        TaskStatus::Running,
-        Some(TaskProgress {
-            done,
-            total,
-            status_text: None,
-        }),
-    ));
-}
-
-pub fn publish_group_finished(group_id: &str, failed: bool, done: u64, total: u64) {
-    crate::runtime_state::upsert_task(make_group_task(
-        group_id,
-        if failed {
-            TaskStatus::Failed
-        } else {
-            TaskStatus::Finished
-        },
-        Some(TaskProgress {
-            done,
-            total,
-            status_text: None,
-        }),
-    ));
-}
-
-pub fn publish_group_failed(group_id: &str) {
-    crate::runtime_state::upsert_task(make_group_task(group_id, TaskStatus::Failed, None));
 }

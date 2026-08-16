@@ -28,10 +28,6 @@ export function nodeIdToGridScope(nodeId: string): BaseScope | null {
     const id = parseInt(nodeId.slice(6), 10);
     return { kind: 'smart_folder', id: isNaN(id) ? 0 : id };
   }
-  if (nodeId.startsWith('collection:')) {
-    const id = parseInt(nodeId.slice(11), 10);
-    return { kind: 'collection', id: isNaN(id) ? 0 : id };
-  }
   if (NON_GRID_NODES.has(nodeId)) return null;
   const scopeKey = GRID_SYSTEM_SCOPES[nodeId];
   if (scopeKey) return { kind: 'system', key: scopeKey };
@@ -46,8 +42,6 @@ export function scopeToGridNodeId(scope: BaseScope): string | null {
       return scope.id != null ? `folder:${scope.id}` : null;
     case 'smart_folder':
       return scope.id != null ? `smart:${scope.id}` : null;
-    case 'collection':
-      return scope.id != null ? `collection:${scope.id}` : null;
     default:
       return null;
   }

@@ -1,11 +1,12 @@
 # Picto User Guide
 
-Picto is a desktop media library manager for organizing, tagging, and managing large image and video collections. It runs on Windows, macOS, and Linux.
+Picto is a desktop media library manager for organizing, tagging, and managing large image and video
+libraries. It runs on Windows, macOS, and Linux.
 
 ## Quick Start
 
 1. **Install** Picto from the [latest release](https://github.com/midona-rhel/picto/releases)
-2. **Create a library** — on first launch, choose a folder to store your collection
+2. **Create a library** — on first launch, choose a folder to store your library
 3. **Import files** — drag images onto the window, or press `Ctrl+I` (`Cmd+I` on Mac)
 
 That's it. Your files are now in Picto. Read on for the full feature set.
@@ -29,7 +30,6 @@ That's it. Your files are now in Picto. Read on for the full feature set.
 - [Tags](tags.md) — Creating, applying, namespaces, relations, and hierarchy
 - [Folders](folders.md) — Creating, nesting, drag-and-drop, watched folders
 - [Smart Folders](smart-folders.md) — Dynamic folders with tag-based rules
-- [Collections](collections.md) — Curated albums with custom ordering
 - [Inbox Workflow](inbox-workflow.md) — The inbox staging area and review process
 
 ### Advanced Features

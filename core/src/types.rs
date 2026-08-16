@@ -51,11 +51,7 @@ pub struct DominantColorDto {
 #[derive(Debug, Serialize)]
 pub struct EntityDetails {
     pub entity_id: i64,
-    pub kind: String,
     pub hash: String,
-    pub thumbnail_hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub member_count: Option<i64>,
     pub name: Option<String>,
     pub size: i64,
     pub mime: String,
@@ -88,13 +84,7 @@ pub struct EntityDetails {
 #[derive(Debug, Serialize)]
 pub struct EntityGridItem {
     pub entity_id: i64,
-    pub kind: String,
     pub hash: String,
-    /// Hash for thumbnail/media asset URLs. Collection identity remains its own hash;
-    /// its thumbnail may be provided by the selected member image.
-    pub thumbnail_hash: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub member_count: Option<i64>,
     pub name: Option<String>,
     pub size: i64,
     pub mime: String,
@@ -117,10 +107,7 @@ impl From<crate::db::types::EntityGridItem> for EntityGridItem {
     fn from(item: crate::db::types::EntityGridItem) -> Self {
         Self {
             entity_id: item.entity_id,
-            kind: item.entity_kind.as_str().to_string(),
             hash: item.entity_hash,
-            thumbnail_hash: item.thumbnail_hash,
-            member_count: item.member_count,
             name: item.name,
             size: item.size_bytes,
             mime: item.mime_type,
@@ -145,7 +132,6 @@ impl From<crate::db::types::EntityGridItem> for EntityGridItem {
 pub enum GridScopeKind {
     System,
     Folder,
-    Collection,
     Smart,
 }
 
@@ -169,9 +155,6 @@ pub struct GridScopeSpec {
     #[serde(alias = "folderId")]
     #[ts(type = "number | null")]
     pub folder_id: Option<i64>,
-    #[serde(alias = "collectionEntityId")]
-    #[ts(type = "number | null")]
-    pub collection_entity_id: Option<i64>,
     #[serde(alias = "smartFolderPredicate")]
     pub smart_folder_predicate: Option<SmartFolderPredicate>,
 }
@@ -211,8 +194,6 @@ pub struct GridFilterSpec {
     pub color_accuracy: Option<f64>,
     #[serde(alias = "searchText")]
     pub search_text: Option<String>,
-    #[serde(alias = "collectionsOnly")]
-    pub collections_only: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
@@ -388,24 +369,13 @@ pub struct SmartMergeResult {
 }
 
 #[derive(Debug, Serialize)]
-pub struct SubscriptionGroupInfo {
-    pub id: String,
-    pub name: String,
-    pub created_at: String,
-    pub total_files: u64,
-    pub subscriptions: Vec<SubscriptionInfo>,
-}
-
-#[derive(Debug, Serialize)]
 pub struct SubscriptionInfo {
     pub id: String,
     pub name: String,
     pub schedule: String,
     pub paused: bool,
-    pub group_id: Option<String>,
     pub initial_post_limit: u32,
     pub periodic_post_limit: u32,
-    pub auto_collections: bool,
     pub created_at: String,
     pub total_files: u64,
     pub queries: Vec<SubscriptionQueryInfo>,

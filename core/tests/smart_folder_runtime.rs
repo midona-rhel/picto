@@ -2,7 +2,7 @@ mod common_canonical;
 
 use std::sync::{Arc, Mutex};
 
-use picto_core::db::types::{EntityTarget, EntityTargetKind, ExpansionMode};
+use picto_core::db::types::{EntityTarget, EntityTargetKind};
 use picto_core::engine::ApplicationEngine;
 use picto_core::events;
 
@@ -30,7 +30,7 @@ async fn lifecycle_event_contains_post_compile_smart_folder_count() {
         .expect("create folder");
     harness
         .db
-        .add_folder_members(folder_id, &[entity_id], ExpansionMode::EntityOnly)
+        .add_folder_members(folder_id, &[entity_id])
         .expect("add folder member");
     let smart_folder_id = engine
         .create_smart_folder(

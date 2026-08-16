@@ -10,7 +10,7 @@ The sidebar on the left provides navigation to all major views and organizationa
 
 ### System Views
 
-- **All Active** — All images with active status (your main collection)
+- **All Active** — All accepted images and videos with active status (your library)
 - **Inbox** — Newly imported files awaiting review (see [Inbox Workflow](inbox-workflow.md))
 - **Uncategorized** — Active files not assigned to any folder
 - **Untagged** — Active files with no tags

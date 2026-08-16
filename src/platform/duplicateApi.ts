@@ -33,22 +33,13 @@ export interface DuplicateScanSummary {
   closest_distance: number | null;
 }
 
-export interface DuplicateCollectionConflict {
-  winner_hash: string;
-  loser_hash: string;
-  winner_collection_id: number | null;
-  loser_collection_id: number | null;
-}
-
 export interface DuplicateResolutionResult {
-  status: 'resolved' | 'conflict' | 'quality_ambiguous';
+  status: 'resolved' | 'quality_ambiguous';
   winner_hash: string | null;
   loser_hash: string | null;
   action: string;
   affected_folder_ids: number[];
-  affected_collection_ids: number[];
   tags_merged: number;
-  conflict: DuplicateCollectionConflict | null;
   blob_cleanup_pending: boolean;
   cleanup_error: string | null;
 }
@@ -73,12 +64,10 @@ export function resolveDuplicatePair(
   action: DuplicateAction,
   hashA: string,
   hashB: string,
-  preferredCollectionId?: number | null,
 ): Promise<DuplicateResolutionResult> {
   return invoke<DuplicateResolutionResult>('resolve_duplicate_pair', {
     action,
     hash_a: hashA,
     hash_b: hashB,
-    preferred_collection_id: preferredCollectionId ?? null,
   });
 }

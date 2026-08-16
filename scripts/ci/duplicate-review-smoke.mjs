@@ -374,7 +374,6 @@ async function runScenario({ cdp, sourceRoot, libraryRoot, timeoutMs }) {
       initial_status: 1,
       preserve_structure: false,
       parent_folder_id: null,
-      collection_name: null,
     }));
     await waitFor('active/inbox counts', getSidebar, (tree) => (
       sidebarNode(tree, 'system:active')?.count === 2
@@ -384,7 +383,6 @@ async function runScenario({ cdp, sourceRoot, libraryRoot, timeoutMs }) {
       initial_status: 0,
       preserve_structure: false,
       parent_folder_id: null,
-      collection_name: null,
     }));
     const tree = await waitFor('inbox count', getSidebar, (value) => (
       sidebarNode(value, 'system:active')?.count === 2
@@ -480,7 +478,6 @@ async function main() {
     steps: [],
     gaps: [
       'This harness asserts accessible rendered controls and state through CDP DOM evaluation, not pixel-level visual fidelity.',
-    'Collection ownership conflict resolution and loser blob reclamation are covered by backend-focused fixtures, not this rendered smoke.',
     ],
     executable: null,
     scan_evidence: null,

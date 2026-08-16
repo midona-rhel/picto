@@ -28,7 +28,6 @@ pub struct ChangeImpact {
     pub media_derivatives_changed: Option<bool>,
     pub derivative_fields_changed: Option<Vec<MediaDerivativeField>>,
     pub extra_grid_scopes: Option<Vec<String>>,
-    pub group_ids: Option<Vec<i64>>,
     pub subscription_ids: Option<Vec<i64>>,
     pub query_ids: Option<Vec<i64>>,
     pub credential_categories: Option<Vec<String>>,
@@ -93,11 +92,6 @@ impl ChangeImpact {
 
     pub fn smart_folder_ids(mut self, ids: Vec<i64>) -> Self {
         merge_dedup(&mut self.smart_folder_ids, ids);
-        self
-    }
-
-    pub fn group_ids(mut self, ids: Vec<i64>) -> Self {
-        merge_dedup(&mut self.group_ids, ids);
         self
     }
 
@@ -221,9 +215,6 @@ impl ChangeImpact {
             self = self.extra_grid_scopes(scopes);
         }
 
-        if let Some(ids) = other.group_ids {
-            self = self.group_ids(ids);
-        }
         if let Some(ids) = other.subscription_ids {
             self = self.subscription_ids(ids);
         }
@@ -455,42 +446,6 @@ impl ChangeImpact {
             .folder_membership_changed(vec![folder_id])
             .extra_grid_scopes(vec![format!("folder:{folder_id}")])
             .grid_reorder()
-    }
-
-    pub fn collection_item_reorder(collection_id: i64) -> Self {
-        Self::new()
-            .extra_grid_scopes(vec![format!("collection:{collection_id}")])
-            .grid_reorder()
-    }
-
-    pub fn collection_update(collection_id: i64) -> Self {
-        Self::new().extra_grid_scopes(vec![
-            format!("collection:{collection_id}"),
-            "system:active".into(),
-        ])
-    }
-
-    /// Scopes: `collection:{id}` + exact parent `folder:{id}` scopes.
-    /// System scopes (e.g. `system:active`) are the caller's responsibility.
-    pub fn collection_membership_change(collection_id: i64, folder_ids: &[i64]) -> Self {
-        let mut scopes = vec![format!("collection:{collection_id}")];
-        for fid in folder_ids {
-            scopes.push(format!("folder:{fid}"));
-        }
-        Self::new()
-            .folder_membership_changed(folder_ids.to_vec())
-            .extra_grid_scopes(scopes)
-    }
-
-    pub fn collection_delete(collection_id: i64, folder_ids: Vec<i64>) -> Self {
-        let mut impact = Self::new().extra_grid_scopes(vec![
-            format!("collection:{collection_id}"),
-            "system:active".into(),
-        ]);
-        if !folder_ids.is_empty() {
-            impact = impact.folder_membership_changed(folder_ids);
-        }
-        impact
     }
 
     pub fn selection_metadata() -> Self {

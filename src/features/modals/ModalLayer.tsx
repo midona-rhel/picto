@@ -9,19 +9,16 @@ import {
   smartFolderModalAtom,
   folderWatchModalAtom,
   exportModalAtom,
-  createGroupModalAtom,
   folderImportModalAtom,
 } from '../../state/modals';
 import { ConfirmModal } from './ConfirmModal';
 import { SmartFolderModal } from './SmartFolderModal';
 import { FolderWatchModal } from './FolderWatchModal';
 import { ExportModal } from './ExportModal';
-import { CreateGroupModal } from './CreateGroupModal';
 import { TagSelectModal } from './TagSelectModal';
 import { FolderPickerModal } from './FolderPickerModal';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { foldersController } from '../../controllers/foldersController';
-import { subscriptionsController } from '../../controllers/subscriptionsController';
 import { filesController } from '../../controllers/filesController';
 
 export function ModalLayer() {
@@ -36,9 +33,6 @@ export function ModalLayer() {
 
   const exportState = useAtomValue(exportModalAtom);
   const setExport = useSetAtom(exportModalAtom);
-
-  const createGroup = useAtomValue(createGroupModalAtom);
-  const setCreateGroup = useSetAtom(createGroupModalAtom);
 
   const folderImport = useAtomValue(folderImportModalAtom);
   const setFolderImport = useSetAtom(folderImportModalAtom);
@@ -108,15 +102,6 @@ export function ModalLayer() {
           setExport({ open: false, fileCount: 0 });
         }}
         fileCount={exportState.fileCount}
-      />
-
-      <CreateGroupModal
-        open={createGroup.open}
-        onClose={() => setCreateGroup({ open: false })}
-        onCreate={(name) => {
-          void subscriptionsController.createGroup(name);
-          setCreateGroup({ open: false });
-        }}
       />
 
       <ConfirmModal

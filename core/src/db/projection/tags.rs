@@ -1,6 +1,5 @@
 //! Tag and status bitmap compilation.
-//! Rebuilds Status, Tag, ImpliedTag, EffectiveTag, Tagged, and
-//! CollectionMember bitmaps from authoritative tables.
+//! Rebuilds status and tag bitmaps from authoritative tables.
 
 use std::collections::HashMap;
 
@@ -10,16 +9,12 @@ use rusqlite::Connection;
 use super::bitmaps::{BitmapKey, BitmapStore};
 
 /// Rebuild all status bitmaps from authoritative tables.
-/// Excludes collection members from status bitmaps (they are not
-/// top-level entities visible in system scopes).
 pub fn compile_status_bitmaps(conn: &Connection, bitmaps: &BitmapStore) {
     for status in 0..=2i64 {
         let mut bitmap = RoaringBitmap::new();
-        if let Ok(mut stmt) = conn.prepare_cached(
-            "SELECT entity_id FROM media_entity
-             WHERE status = ?1
-               AND (entity_kind = 'collection' OR parent_collection_entity_id IS NULL)",
-        ) {
+        if let Ok(mut stmt) =
+            conn.prepare_cached("SELECT entity_id FROM media_entity WHERE status = ?1")
+        {
             if let Ok(rows) = stmt.query_map([status], |row| row.get::<_, i64>(0)) {
                 for row in rows.flatten() {
                     bitmap.insert(row as u32);
@@ -28,19 +23,6 @@ pub fn compile_status_bitmaps(conn: &Connection, bitmaps: &BitmapStore) {
         }
         bitmaps.set(BitmapKey::Status(status), bitmap);
     }
-
-    // CollectionMember bitmap
-    let mut members = RoaringBitmap::new();
-    if let Ok(mut stmt) = conn.prepare_cached(
-        "SELECT entity_id FROM media_entity WHERE parent_collection_entity_id IS NOT NULL",
-    ) {
-        if let Ok(rows) = stmt.query_map([], |row| row.get::<_, i64>(0)) {
-            for row in rows.flatten() {
-                members.insert(row as u32);
-            }
-        }
-    }
-    bitmaps.set(BitmapKey::CollectionMember, members);
 }
 
 /// Rebuild a single tag bitmap.
@@ -149,7 +131,7 @@ pub fn compile_tag_derivatives(conn: &Connection, bitmaps: &BitmapStore) {
     }
 }
 
-/// Rebuild effective tag membership for entities and their visible collection aggregates.
+/// Rebuild effective tag membership for independent media entities.
 pub fn compile_effective_tag_bitmaps(conn: &Connection, bitmaps: &BitmapStore) {
     let sql = "WITH membership(entity_id, tag_id) AS (
                    SELECT entity_id, tag_id FROM entity_tag
@@ -172,9 +154,7 @@ pub fn compile_effective_tag_bitmaps(conn: &Connection, bitmaps: &BitmapStore) {
                    JOIN tag_alias requested_alias
                      ON requested_alias.to_tag_id = member_alias.to_tag_id
                )
-               SELECT equivalent.requested_tag_id,
-                      equivalent.entity_id,
-                      me.parent_collection_entity_id
+               SELECT equivalent.requested_tag_id, equivalent.entity_id
                FROM equivalent
                JOIN media_entity me ON me.entity_id = equivalent.entity_id";
 
@@ -188,19 +168,12 @@ pub fn compile_effective_tag_bitmaps(conn: &Connection, bitmaps: &BitmapStore) {
 
         let mut stmt = conn.prepare(sql)?;
         let rows = stmt.query_map([], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, Option<i64>>(2)?,
-            ))
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?, 0_i64))
         })?;
         for row in rows {
-            let (tag_id, entity_id, parent_id) = row?;
+            let (tag_id, entity_id, _) = row?;
             let bitmap = effective.entry(tag_id).or_default();
             bitmap.insert(entity_id as u32);
-            if let Some(parent_id) = parent_id {
-                bitmap.insert(parent_id as u32);
-            }
         }
         Ok(effective)
     })();

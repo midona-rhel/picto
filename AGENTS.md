@@ -3,17 +3,23 @@
 Picto is an Electron media library backed by SQLite. Roaring bitmap projections make
 media-entity lookup and scope filtering fast; SQLite remains the source of truth.
 
-Media entities are images, videos, or image collections. Collections contain images only and
-are aggregates over their children rather than second owners of child metadata.
+Media entities are images or videos only. A source post with multiple files creates independent
+media entities; shared source-post metadata and file order are properties of those entities. Source
+posts do not create aggregate entities, hidden groups, or automatic folders.
 
-`All` means the accepted main collection, not every stored media entity. Only active media belongs
-to it. Inbox media is still awaiting acceptance into the main collection; Trash media is leaving
-the main collection and awaiting deletion or restoration. Inbox and Trash media must not appear in
-`All`, folders, smart folders, main-collection search results, or any of their counts.
+`All` means the accepted library, not every stored media entity. Only active media belongs to it.
+Inbox media is still awaiting acceptance into the library; Trash media is leaving the library and
+awaiting deletion or restoration. Inbox and Trash media must not appear in `All`, folders, smart
+folders, library search results, or any of their counts.
 
 The product must support imports, subscriptions, duplicate review, automatic tagging, tag
 management, folders, smart folders, search, untagged and uncategorized scopes, recently viewed
 media, and cloud sync.
+
+Every subscription source uses one direct-site authentication flow. Picto opens the source's real
+login page in a Picto-managed browser, captures the resulting session, and stores it in the OS
+credential store. Product UI must not ask users to paste passwords, cookies, tokens, or API keys.
+Sources that support anonymous access may still run without logging in.
 
 Cloud sync writes library metadata changes and media blobs into a user-owned folder already
 synced by a desktop provider such as Google Drive or Dropbox. The provider transports files;
@@ -37,8 +43,8 @@ may take seconds, but must be measured on representative data and keep the UI re
 - Production code must not retain TODO/FIXME placeholders. Implement the behavior, remove it, or
   identify it as a concrete release blocker.
 - Tests prove user-visible behavior and persistence boundaries, not internal architecture.
-- PBIs describe observed unfinished behavior with a finite acceptance test. Archive them when the
-  behavior works; do not create PBIs to postpone cleanup.
+- PBIs describe observed unfinished behavior with a finite acceptance test. Delete them when the
+  behavior works; Git history is the archive. Do not create PBIs to postpone cleanup.
 
 # Release Completion
 

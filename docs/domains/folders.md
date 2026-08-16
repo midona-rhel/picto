@@ -2,13 +2,15 @@
 
 ## Purpose
 
-Folders are user-created containers for organizing files. Unlike tags (which are metadata), folders represent explicit file grouping with manual ordering support. Collections are a folder subtype that support manual member ordering via gap-based ranking.
+Folders are user-created containers for organizing files. Unlike tags (which are metadata), folders
+represent explicit file grouping with manual ordering support. Folders are never created implicitly
+for a source post or multi-file import.
 
 ## Lifecycle
 
 1. **Create** — user creates folder, sidebar node inserted immediately for fast UI feedback.
 2. **Add files** — files are added to folders via `add_entity_to_folder`. Compiler updates the `Folder(id)` bitmap.
-3. **Ordering** — collections support manual ordering via gap-based ranking (float sort values with gaps for insertion).
+3. **Ordering** — folders support manual ordering via gap-based ranking (float sort values with gaps for insertion).
 4. **Delete** — folder deletion removes the folder row and all `folder_entity` membership rows.
 
 ## Sidebar Projection
@@ -16,13 +18,15 @@ Folders are user-created containers for organizing files. Unlike tags (which are
 Folders appear in the sidebar tree under `section:folders`. Each folder node includes:
 - `node_id`: `folder:{id}`
 - `count`: number of files in the folder
-- `meta_json`: contains `folder_id`, `auto_tags`, `is_collection`, `parent_id`
+- `meta_json`: contains `folder_id`, `auto_tags`, and `parent_id`
 
 Sidebar nodes are rebuilt by the compiler when folder membership or structure changes.
 
 ## Gap-Based Ranking
 
-Collections use float-valued sort keys with large gaps (e.g., 1000.0, 2000.0) between items. Inserting between two items picks the midpoint. When gaps become too small, a full rebalance redistributes sort values evenly.
+Folders use float-valued sort keys with large gaps (e.g., 1000.0, 2000.0) between items. Inserting
+between two items picks the midpoint. When gaps become too small, a full rebalance redistributes
+sort values evenly.
 
 ## Key Invariants
 

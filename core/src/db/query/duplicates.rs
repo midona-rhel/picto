@@ -31,12 +31,12 @@ pub struct DuplicateSingleRef {
     pub pixel_width: Option<i64>,
     pub pixel_height: Option<i64>,
     pub frame_count: Option<i64>,
+    pub name: Option<String>,
     pub notes: Option<String>,
     pub source_urls_json: Option<String>,
     pub rating: Option<i64>,
     pub date_created: String,
-    pub parent_collection_entity_id: Option<i64>,
-    pub collection_ordinal: Option<i64>,
+    pub date_added: String,
 }
 
 pub fn list_perceptual_hash_sources(
@@ -45,8 +45,7 @@ pub fn list_perceptual_hash_sources(
     let mut stmt = conn.prepare(
         "SELECT mf.file_id, mf.mime_type, mf.frame_count, mf.perceptual_hash
          FROM media_entity me
-         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-         JOIN media_file mf ON mf.file_id = sme.file_id
+         JOIN media_file mf ON mf.file_id = me.file_id
          WHERE mf.perceptual_hash IS NOT NULL
            AND me.status IN (0, 1)",
     )?;
@@ -68,8 +67,7 @@ pub fn list_indexed_perceptual_hash_sources(
              mf.perceptual_hash
          FROM media_file_phash_index idx
          JOIN media_file mf ON mf.file_id = idx.file_id
-         JOIN single_media_entity sme ON sme.file_id = mf.file_id
-         JOIN media_entity me ON me.entity_id = sme.entity_id
+         JOIN media_entity me ON me.file_id = mf.file_id
          WHERE me.status IN (0, 1)
            AND (
                 idx.partition_0 = ?1 OR idx.partition_1 = ?2
@@ -109,8 +107,7 @@ pub fn list_duplicate_scan_sources(
     let mut stmt = conn.prepare(
         "SELECT mf.file_id, me.entity_hash, mf.perceptual_hash, mf.mime_type, mf.frame_count
          FROM media_entity me
-         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-         JOIN media_file mf ON mf.file_id = sme.file_id
+         JOIN media_file mf ON mf.file_id = me.file_id
          WHERE mf.perceptual_hash IS NOT NULL
            AND me.status IN (0, 1)",
     )?;
@@ -130,10 +127,8 @@ pub fn count_duplicate_pairs(conn: &Connection, status: &str) -> rusqlite::Resul
     conn.query_row(
         "SELECT COUNT(*)
          FROM duplicate d
-         JOIN single_media_entity sme_a ON sme_a.file_id = d.file_id_a
-         JOIN media_entity me_a ON me_a.entity_id = sme_a.entity_id
-         JOIN single_media_entity sme_b ON sme_b.file_id = d.file_id_b
-         JOIN media_entity me_b ON me_b.entity_id = sme_b.entity_id
+         JOIN media_entity me_a ON me_a.file_id = d.file_id_a
+         JOIN media_entity me_b ON me_b.file_id = d.file_id_b
          WHERE d.status = ?1
            AND me_a.status IN (0, 1)
            AND me_b.status IN (0, 1)",
@@ -150,10 +145,8 @@ pub fn count_duplicate_pairs_with_max_distance(
     conn.query_row(
         "SELECT COUNT(*)
          FROM duplicate d
-         JOIN single_media_entity sme_a ON sme_a.file_id = d.file_id_a
-         JOIN media_entity me_a ON me_a.entity_id = sme_a.entity_id
-         JOIN single_media_entity sme_b ON sme_b.file_id = d.file_id_b
-         JOIN media_entity me_b ON me_b.entity_id = sme_b.entity_id
+         JOIN media_entity me_a ON me_a.file_id = d.file_id_a
+         JOIN media_entity me_b ON me_b.file_id = d.file_id_b
          WHERE d.status = ?1
            AND d.distance <= ?2
            AND me_a.status IN (0, 1)
@@ -217,10 +210,8 @@ pub fn get_duplicate_pairs_paginated(
              d.file_id_a,
              d.file_id_b
          FROM duplicate d
-         JOIN single_media_entity sme_a ON sme_a.file_id = d.file_id_a
-         JOIN media_entity me_a ON me_a.entity_id = sme_a.entity_id
-         JOIN single_media_entity sme_b ON sme_b.file_id = d.file_id_b
-         JOIN media_entity me_b ON me_b.entity_id = sme_b.entity_id
+         JOIN media_entity me_a ON me_a.file_id = d.file_id_a
+         JOIN media_entity me_b ON me_b.file_id = d.file_id_b
          WHERE d.status = ?1
            AND me_a.status IN (0, 1)
            AND me_b.status IN (0, 1){cursor_clause}{distance_clause}
@@ -266,7 +257,7 @@ pub fn get_duplicate_single_ref_by_hash(
     conn.query_row(
         "SELECT
              me.entity_id,
-             sme.file_id,
+             me.file_id,
              me.entity_hash,
              mf.file_hash,
              me.status,
@@ -275,15 +266,14 @@ pub fn get_duplicate_single_ref_by_hash(
              mf.pixel_width,
              mf.pixel_height,
              mf.frame_count,
+             me.name,
              me.notes,
              me.source_urls_json,
              me.rating,
              me.date_created,
-             me.parent_collection_entity_id,
-             me.collection_ordinal
+             me.date_added
          FROM media_entity me
-         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-         JOIN media_file mf ON mf.file_id = sme.file_id
+         JOIN media_file mf ON mf.file_id = me.file_id
          WHERE me.entity_hash = ?1",
         [entity_hash],
         |row| {
@@ -298,12 +288,12 @@ pub fn get_duplicate_single_ref_by_hash(
                 pixel_width: row.get(7)?,
                 pixel_height: row.get(8)?,
                 frame_count: row.get(9)?,
-                notes: row.get(10)?,
-                source_urls_json: row.get(11)?,
-                rating: row.get(12)?,
-                date_created: row.get(13)?,
-                parent_collection_entity_id: row.get(14)?,
-                collection_ordinal: row.get(15)?,
+                name: row.get(10)?,
+                notes: row.get(11)?,
+                source_urls_json: row.get(12)?,
+                rating: row.get(13)?,
+                date_created: row.get(14)?,
+                date_added: row.get(15)?,
             })
         },
     )

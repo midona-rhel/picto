@@ -72,4 +72,4 @@ Performance diagnostics for development:
 
 Destructive operations:
 
-- **Wipe Image Data** — Removes all images, tags, collections, and review items from the library. Subscription groups are preserved. **This is irreversible.** A confirmation dialog is required.
+- **Wipe Image Data** — Removes all images, videos, tags, and review items from the library. Subscription definitions are preserved. **This is irreversible.** A confirmation dialog is required.

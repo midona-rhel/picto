@@ -7,7 +7,7 @@ import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { IconPhoto, IconUpload, IconFolderPlus } from '@tabler/icons-react';
 import * as entityMutations from '../../controllers/entityMutations';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
-import { activeNodeIdAtom, parentNodeIdAtom, collectionNameAtom, skipFadeOutAtom } from '../../state/navigation';
+import { activeNodeIdAtom, skipFadeOutAtom } from '../../state/navigation';
 import {
   gridItemsAtom,
   gridLoadingAtom,
@@ -71,38 +71,10 @@ import { useGridArrowNav } from './hooks/useGridArrowNav';
 import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
 import { filesController, manualImportParamsForScope } from '../../controllers/filesController';
-import { collectionsController } from '../../controllers/collectionsController';
 import { viewerController } from '../../controllers/viewerController';
 import { nodeIdToGridScope } from '../../shared/lib/gridScope';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import styles from './GridScreen.module.css';
-
-// ── Smart collection naming (ported from legacy) ──
-
-const GENERATED_NAME_RE = /^(?:[a-f0-9]{24,}|image[_-]?\d+|img[_-]?\d+|file[_-]?\d+)$/i;
-
-function normalizeNameBase(name: string): string {
-  return name.trim()
-    .replace(/\.[a-z0-9]{2,5}$/i, '')
-    .replace(/(?:[\s._-]|\s*\(\s*)\d+\s*\)?$/g, '')
-    .trim()
-    .toLowerCase();
-}
-
-function inferCollectionName(memberNames: string[]): string {
-  const now = new Date();
-  const fallback = `Collection ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
-  const names = memberNames.map((n) => n.trim()).filter(Boolean);
-  if (names.length === 0) return fallback;
-  const allGenerated = names.every((n) => GENERATED_NAME_RE.test(n));
-  const bases = names.map(normalizeNameBase).filter(Boolean);
-  const uniqueBases = new Set(bases);
-  if (uniqueBases.size === 1 && bases.length > 0) {
-    return names.find((n) => normalizeNameBase(n) === bases[0]) ?? fallback;
-  }
-  if (!allGenerated) return names[0];
-  return fallback;
-}
 
 const store = getDefaultStore();
 const SCOPE_TRANSITION_MS = 170;
@@ -112,9 +84,6 @@ const STATUS_TRASH = 2;
 export function GridScreen() {
   const activeNodeId = useAtomValue(activeNodeIdAtom);
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
-  const parentNodeId = useAtomValue(parentNodeIdAtom);
-  const setParentNodeId = useSetAtom(parentNodeIdAtom);
-  const setCollectionName = useSetAtom(collectionNameAtom);
   const items = useAtomValue(gridItemsAtom);
   const loading = useAtomValue(gridLoadingAtom);
   const error = useAtomValue(gridErrorAtom);
@@ -348,7 +317,7 @@ export function GridScreen() {
     if (previousScope) {
       saveScrollPosition(previousNodeIdRef.current, lastScrollTopRef.current);
 
-      // Skip fade-out when requested (e.g. after manual fade-out for collection creation)
+          // Skip fade-out when a caller already performed the transition.
       const skip = store.get(skipFadeOutAtom);
       if (skip) {
         store.set(skipFadeOutAtom, false);
@@ -504,7 +473,7 @@ export function GridScreen() {
     store.set(confirmModalAtom, {
       open: true,
       title: 'Delete Permanently',
-      message: `This will permanently delete ${selectionCount} item${selectionCount !== 1 ? 's' : ''}. If this includes a collection, every child image and underlying file will also be deleted. This cannot be undone.`,
+      message: `This will permanently delete ${selectionCount} item${selectionCount !== 1 ? 's' : ''}. This cannot be undone.`,
       confirmLabel: 'Delete',
       danger: true,
       onConfirm: () => {
@@ -796,7 +765,6 @@ export function GridScreen() {
         totalImageCount={items.length}
         selectedNodeIds={selectedSubfolderNodeIds}
         onOpenFolder={(nodeId) => {
-          setParentNodeId(activeNodeId);
           pushHistory(nodeId);
           setActiveNodeId(nodeId);
         }}
@@ -823,8 +791,6 @@ export function GridScreen() {
             querySelectionActive: false,
             singleSelected: true,
             singleHash: nodeId,
-            singleKind: 'folder',
-            hasCollections: false,
             hasFolders: true,
             isMixed: false,
             isFoldersOnly: true,
@@ -834,7 +800,6 @@ export function GridScreen() {
             onSelectAll: () => selectAllResults(),
             onDeselectAll: () => clearSelection(),
             onOpen: () => {
-              setParentNodeId(activeNodeId);
               pushHistory(nodeId);
               setActiveNodeId(nodeId);
             },
@@ -900,7 +865,6 @@ export function GridScreen() {
           }
         }}
         onTileDoubleClick={(_index, item) => {
-          // Both singles and collections open in MediaView (collections show StripView)
           setViewerSession(createViewerSession(items, item.entity_hash));
         }}
         onEmptyClick={() => clearSelection()}
@@ -927,7 +891,6 @@ export function GridScreen() {
           const scopeKind = gridScope.kind === 'system' ? 'system'
             : gridScope.kind === 'folder' ? 'folder'
             : gridScope.kind === 'smart_folder' ? 'smart_folder'
-            : gridScope.kind === 'collection' ? 'collection'
             : null;
           const statusFilter = gridScope.kind === 'system'
             ? (gridScope.key === 'inbox' ? 'inbox' : gridScope.key === 'trash' ? 'trash' : gridScope.key === 'all' ? 'active' : null)
@@ -938,10 +901,7 @@ export function GridScreen() {
             querySelectionActive: effectiveQuerySelectionActive,
             singleSelected: effectiveSelectionMode === 'explicit' && selCount === 1,
             singleHash: singleItem?.entity_hash ?? null,
-            singleKind: singleItem?.entity_kind ?? null,
-            hasCollections: selectedItems.some((it) => it.entity_kind === 'collection'),
             scopeKind,
-            collectionId: gridScope.kind === 'collection' ? gridScope.id : null,
             statusFilter,
             loadedCount: items.length,
             onSelectAll: () => selectAllResults(),
@@ -1009,26 +969,6 @@ export function GridScreen() {
                 }
               })();
             } : undefined,
-            onMergeIntoCollection: (() => {
-              // Show "Merge into Collection" when selection has exactly 1 collection + other items
-              if (selCount < 2) return undefined;
-              const collections = selectedItems.filter((i) => i.entity_kind === 'collection');
-              const nonCollections = selectedItems.filter((i) => i.entity_kind !== 'collection');
-              if (
-                collections.length !== 1
-                || nonCollections.length === 0
-                || nonCollections.some((item) => !item.mime_type.startsWith('image/'))
-              ) return undefined;
-              const collId = collections[0].entity_id;
-              return () => {
-                void (async () => {
-                  await collectionsController.addMembers(collId, nonCollections.map((i) => i.entity_hash));
-                  // Merged items are now inside the collection — remove from grid, refresh collection tile
-                  gridController.removeItems(nonCollections.map((i) => i.entity_hash));
-                  void gridController.reconcile(false);
-                })();
-              };
-            })(),
             onSearchByImage: (engine, hash) => {
               const urls: Record<string, string> = {
                 tineye: `https://tineye.com/search/?url=`,
@@ -1057,67 +997,6 @@ export function GridScreen() {
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
             onOpenTagSelect: () => { setTagSelectModal({ open: true }); },
             onOpenAiTagger: () => { setAiTaggerPortal({ open: true, anchor: inspectorAnchor() }); },
-            onCreateCollection: selectedItems.every((item) => item.mime_type.startsWith('image/')) ? () => {
-              const hashes = [...effectiveHashes];
-              const selectedItems = items.filter((i) => effectiveHashes.has(i.entity_hash));
-              const name = inferCollectionName(selectedItems.map((i) => i.name ?? ''));
-              setTransitionPhase('fading_out');
-              // Do backend work + navigate after fade-out completes
-              const backendWork = collectionsController.create(name, hashes).then(
-                (id) => ({ id, error: null }),
-                (error) => ({ id: null, error }),
-              );
-              setTimeout(async () => {
-                const { id, error } = await backendWork;
-                if (id == null) {
-                  console.error('Failed to create collection', error);
-                  setTransitionPhase('fading_in');
-                  return;
-                }
-                const collNodeId = `collection:${id}`;
-                setParentNodeId(activeNodeId);
-                setCollectionName(name);
-                pushHistory(collNodeId);
-                store.set(skipFadeOutAtom, true);
-                setActiveNodeId(collNodeId);
-              }, SCOPE_TRANSITION_MS);
-            } : undefined,
-            onRemoveFromCollection: gridScope.kind === 'collection' && gridScope.id != null
-              ? () => { void collectionsController.removeMembers(gridScope.id!, [...effectiveHashes]); }
-              : undefined,
-            onEditCollection: singleItem?.entity_kind === 'collection' ? () => {
-              const collNodeId = `collection:${singleItem.entity_id}`;
-              setParentNodeId(activeNodeId);
-              setCollectionName(singleItem.name);
-              pushHistory(collNodeId);
-              setActiveNodeId(collNodeId);
-            } : undefined,
-            onSplitCollection: (() => {
-              // Inside collection view — split and navigate back instantly
-              if (gridScope.kind === 'collection' && gridScope.id != null) {
-                return () => {
-                  void (async () => {
-                    const memberHashes = await collectionsController.split(gridScope.id!);
-                    const target = parentNodeId ?? 'system:active';
-                    setParentNodeId(null);
-                    setCollectionName(null);
-                    store.set(skipFadeOutAtom, true);
-                    setActiveNodeId(target);
-                    setTimeout(() => setSelectedHashes(new Set(memberHashes)), 100);
-                  })();
-                };
-              }
-              // Single collection tile selected in normal grid — split and select freed members
-              if (singleItem?.entity_kind === 'collection') {
-                return () => {
-                  void (async () => {
-                    const memberHashes = await collectionsController.split(singleItem.entity_id);
-                    setTimeout(() => setSelectedHashes(new Set(memberHashes)), 100);
-                  })();
-                };
-              }
-              return undefined;
-            })(),
             onMoveToTrash: () => { void setSelectionStatus(STATUS_TRASH); },
             onRestore: () => { void setSelectionStatus(STATUS_ACTIVE); },
             onPermanentDelete: () => { void permanentlyDeleteSelection(); },
@@ -1133,8 +1012,6 @@ export function GridScreen() {
             querySelectionActive,
             singleSelected: selectionCount === 1,
             singleHash: selectionCount === 1 ? [...selectedHashes][0] ?? null : null,
-            singleKind: null,
-            hasCollections: false,
             scopeKind: null,
             statusFilter: null,
             loadedCount: items.length,

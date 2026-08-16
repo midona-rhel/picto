@@ -30,6 +30,7 @@ interface StateChanges {
   compiler_batch_done?: boolean;
   status_changed?: boolean;
   tags_changed?: boolean;
+  tag_structure_changed?: boolean;
   folder_membership_changed?: number[];
   media_metadata_changed?: boolean;
   media_derivatives_changed?: boolean;
@@ -54,6 +55,10 @@ export function classifyGridAction(
   scope: BaseScope,
   visibleEntityHashes: string[],
 ): GridAction {
+  if (changes.tag_structure_changed) {
+    return 'reconcile_membership';
+  }
+
   if (changes.status_changed) {
     return 'reconcile_membership';
   }

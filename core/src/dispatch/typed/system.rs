@@ -184,12 +184,6 @@ pub async fn set_zoom_factor(state: &AppState, input: SetZoomFactorInput) -> Res
     let mut s = state.settings.get();
     s.zoom_factor = Some(input.factor);
     state.settings.update(s);
-    crate::events::emit(
-        crate::events::event_names::ZOOM_FACTOR_CHANGED,
-        &crate::events::ZoomFactorChangedEvent {
-            factor: input.factor,
-        },
-    );
     Ok(())
 }
 

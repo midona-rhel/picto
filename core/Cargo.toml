@@ -45,6 +45,9 @@ ndarray = "0.17"
 # OS keychain credential storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+security-framework = "3.7"
+
 # Hashing & checksums
 sha2 = "0.10"
 img_hash = "3.2"

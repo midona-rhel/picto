@@ -1,13 +1,9 @@
 //! Folder write operations — CRUD, membership, reorder.
-//! Folder membership stores the entity IDs selected by the caller's expansion mode.
+//! Folder membership stores exactly the entity IDs selected by the caller.
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::db::types::{
-    DeletedFolder, ExpansionMode, FolderDeleteResult, FolderMembershipChange, FolderPatch,
-};
-
-use super::entities::expand_ids;
+use crate::db::types::{DeletedFolder, FolderDeleteResult, FolderMembershipChange, FolderPatch};
 
 pub fn create_folder(
     conn: &Connection,
@@ -130,16 +126,13 @@ fn collect_deleted_folders(
     Ok(folders)
 }
 
-/// Add entities to a folder using the caller's explicit expansion mode.
+/// Add entities to a folder.
 pub fn add_members(
     conn: &Connection,
     folder_id: i64,
     entity_ids: &[i64],
-    expansion: ExpansionMode,
 ) -> rusqlite::Result<FolderMembershipChange> {
-    let expanded = expand_ids(conn, entity_ids, expansion)?;
-
-    for eid in &expanded {
+    for eid in entity_ids {
         conn.execute(
             "INSERT OR IGNORE INTO folder_member (folder_id, entity_id) VALUES (?1, ?2)",
             params![folder_id, eid],
@@ -148,7 +141,7 @@ pub fn add_members(
 
     Ok(FolderMembershipChange {
         folder_id,
-        entity_ids: expanded,
+        entity_ids: entity_ids.to_vec(),
     })
 }
 
@@ -157,11 +150,8 @@ pub fn remove_members(
     conn: &Connection,
     folder_id: i64,
     entity_ids: &[i64],
-    expansion: ExpansionMode,
 ) -> rusqlite::Result<FolderMembershipChange> {
-    let expanded = expand_ids(conn, entity_ids, expansion)?;
-
-    for eid in &expanded {
+    for eid in entity_ids {
         conn.execute(
             "DELETE FROM folder_member WHERE folder_id = ?1 AND entity_id = ?2",
             params![folder_id, eid],
@@ -170,7 +160,7 @@ pub fn remove_members(
 
     Ok(FolderMembershipChange {
         folder_id,
-        entity_ids: expanded,
+        entity_ids: entity_ids.to_vec(),
     })
 }
 

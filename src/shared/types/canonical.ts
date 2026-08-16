@@ -7,14 +7,9 @@
 
 // ── Entity types ─────────────────────────────────────────────────
 
-export type EntityKind = 'single' | 'collection';
-
 export interface CanonicalEntityGridItem {
   entity_id: number;
   entity_hash: string;
-  /** Hash used to load display media. entity_hash is the logical entity identity. */
-  thumbnail_hash: string;
-  entity_kind: EntityKind;
   name: string | null;
   mime_type: string;
   pixel_width: number | null;
@@ -25,7 +20,6 @@ export interface CanonicalEntityGridItem {
   date_created: string;
   date_modified: string;
   has_thumbnail: boolean;
-  member_count: number | null;
   duration_ms: number | null;
   frame_count: number | null;
   has_audio: boolean;
@@ -85,8 +79,6 @@ export interface CanonicalDominantColor {
 
 export interface CanonicalEntityDetails {
   entity_hash: string;
-  thumbnail_hash: string;
-  entity_kind: EntityKind;
   name: string | null;
   mime_type: string;
   size_bytes: number;
@@ -107,8 +99,6 @@ export interface CanonicalEntityDetails {
   perceptual_hash: string | null;
   tags: CanonicalTagInfo[];
   folders: CanonicalFolderInfo[];
-  member_count: number | null;
-  total_size_bytes: number | null;
 }
 
 // ── Query types ──────────────────────────────────────────────────
@@ -117,7 +107,6 @@ export type ScopeKind =
   | 'system'
   | 'folder'
   | 'smart_folder'
-  | 'collection'
   | 'search'
   | 'tag';
 

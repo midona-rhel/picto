@@ -11,7 +11,6 @@ import {
   IconShieldLock,
 } from '@tabler/icons-react';
 import type {
-  SubscriptionGroupInfo,
   SubscriptionInfo,
   SubscriptionProgressEvent,
   SubscriptionQueryInfo,
@@ -52,9 +51,7 @@ export interface DetailController {
   reset: (id: string) => void;
   delete: (id: string) => void;
   rename: (id: string, currentName: string) => void;
-  setAutoCollections: (id: string, on: boolean) => void;
   setSchedule: (id: string, schedule: string) => void;
-  setGroup: (id: string, groupId: number | null) => void;
   runQuery: (subscriptionId: string, queryId: string) => void;
   stopQuery: (subscriptionId: string, queryId: string) => void;
   pauseQuery: (queryId: string, paused: boolean) => void;
@@ -102,7 +99,6 @@ function OverflowMenuButton({ onOpen }: { onOpen: (position: { x: number; y: num
 export function SubscriptionDetail({
   subscription,
   snapshot,
-  groups,
   progress,
   detail,
   coverHash = null,
@@ -114,7 +110,6 @@ export function SubscriptionDetail({
 }: {
   subscription: SubscriptionInfo;
   snapshot: SubscriptionWorkspaceSnapshot;
-  groups: SubscriptionGroupInfo[];
   progress: SubscriptionProgressEvent | null;
   detail: SubscriptionDetailState;
   /** Newest downloaded file — hero image; null falls back to an initial. */
@@ -140,7 +135,6 @@ export function SubscriptionDetail({
     failedPostCount: metrics?.failedPostCount ?? 0,
     openIssueCount: metrics?.openIssueCount ?? 0,
   });
-  const groupName = groups.find((group) => group.id === subscription.group_id)?.name ?? null;
   const openIssueCount = detail.issueTotalCount;
   const healthy = detail.failedPostTotalCount === 0 && openIssueCount === 0;
   const upToDate = !running && isSubscriptionUpToDate(
@@ -319,7 +313,6 @@ export function SubscriptionDetail({
                 label={upToDate ? 'Up to date' : state === 'running' ? 'Running' : state === 'paused' ? 'Paused' : state === 'attention' ? 'Needs attention' : 'Idle'}
               />
               <span className={styles.muted}>{subscription.total_files.toLocaleString()} files</span>
-              {groupName && <span className={styles.muted}>in {groupName}</span>}
             </span>
           </div>
           </div>

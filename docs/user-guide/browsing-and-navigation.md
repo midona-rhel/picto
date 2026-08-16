@@ -8,7 +8,7 @@ The sidebar provides built-in views that filter your library by status or organi
 
 | View | Description | Shortcut |
 |------|-------------|----------|
-| All Active | Your main collection (status = active) | `Ctrl+1` |
+| All Active | Your accepted library (status = active) | `Ctrl+1` |
 | Inbox | Newly imported files awaiting review | `Ctrl+2` |
 | Untagged | Active files with no tags | `Ctrl+3` |
 | Trash | Deleted files | `Ctrl+4` |

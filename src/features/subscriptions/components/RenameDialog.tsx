@@ -5,12 +5,12 @@ import { ActionButton } from './ActionButton';
 import styles from '../SubscriptionsScreen.module.css';
 
 export interface RenameTarget {
-  kind: 'subscription' | 'group';
+  kind: 'subscription';
   id: string;
   currentName: string;
 }
 
-/** Rename a subscription or group. Enter commits, Escape closes. */
+/** Rename a subscription. Enter commits, Escape closes. */
 export function RenameDialog({
   target,
   busy,
@@ -50,7 +50,7 @@ export function RenameDialog({
     <GlassModal
       open={target != null}
       onClose={onClose}
-      title={target?.kind === 'group' ? 'Rename Group' : 'Rename Subscription'}
+      title="Rename Subscription"
       size="sm"
       footer={
         <div className={styles.inlineActions}>

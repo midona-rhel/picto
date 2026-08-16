@@ -38,7 +38,7 @@ async fn open_query_fixture(name: &str) -> (tempfile::TempDir, LibraryDatabase, 
     let (dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
     let subscription = runtime
-        .create_subscription(name.to_string(), None, None, None)
+        .create_subscription(name.to_string(), None, None)
         .await
         .unwrap();
     let subscription_id = subscription.id.parse::<i64>().unwrap();
@@ -125,12 +125,12 @@ async fn bulk_failed_post_retry_queues_every_distinct_retryable_post_once() {
 }
 
 #[tokio::test]
-async fn add_subscription_query_infers_query_kind_from_legacy_site() {
+async fn add_subscription_query_infers_the_source_query_kind() {
     let (_dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
 
     let subscription = runtime
-        .create_subscription("Test".to_string(), None, None, None)
+        .create_subscription("Test".to_string(), None, None)
         .await
         .unwrap();
     assert_eq!(subscription.schedule, "daily");
@@ -149,12 +149,91 @@ async fn add_subscription_query_infers_query_kind_from_legacy_site() {
 }
 
 #[tokio::test]
+async fn changing_query_meaning_resets_progress_and_archive() {
+    let (dir, db) = open_db();
+    let runtime = SubscriptionRuntimeService::new(&db, dir.path());
+    let subscription = runtime
+        .create_subscription("Editable".to_string(), None, None)
+        .await
+        .unwrap();
+    let query = runtime
+        .add_subscription_query(
+            subscription.id.clone(),
+            "gelbooru".to_string(),
+            Some("search".to_string()),
+            "1girl".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    let query_id = query.id.parse::<i64>().unwrap();
+    let conn = raw_conn(&dir);
+    conn.execute(
+        "UPDATE subscription_query
+         SET files_found = 12, posts_found = 10, completed_initial_run = 1,
+             resume_cursor = '123', resume_strategy = 'tag_id_lt',
+             last_success_at = '2026-01-01'
+         WHERE query_id = ?1",
+        [query_id],
+    )
+    .unwrap();
+    drop(conn);
+
+    let archive_path = dir.path().join("gdl-archive.sqlite3");
+    let archive = rusqlite::Connection::open(&archive_path).unwrap();
+    archive
+        .execute("CREATE TABLE archive (entry TEXT PRIMARY KEY)", [])
+        .unwrap();
+    archive
+        .execute(
+            "INSERT INTO archive (entry) VALUES (?1)",
+            [format!("picto_s1_q{query_id}_old")],
+        )
+        .unwrap();
+    drop(archive);
+
+    runtime
+        .edit_subscription_query(
+            query_id,
+            "gelbooru".to_string(),
+            Some("search".to_string()),
+            "2girls".to_string(),
+            Some("Two girls".to_string()),
+            None,
+        )
+        .await
+        .unwrap();
+
+    let query = runtime
+        .get_subscription_query(query_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(query.query_text, "2girls");
+    assert_eq!(query.files_found, 0);
+    assert_eq!(query.posts_found, 0);
+    assert!(!query.completed_initial_run);
+    assert!(query.resume_cursor.is_none());
+    assert!(query.resume_strategy.is_none());
+    assert!(query.last_success_at.is_none());
+
+    let archive = rusqlite::Connection::open(archive_path).unwrap();
+    assert_eq!(
+        archive
+            .query_row("SELECT COUNT(*) FROM archive", [], |row| row
+                .get::<_, i64>(0))
+            .unwrap(),
+        0
+    );
+}
+
+#[tokio::test]
 async fn subscription_query_jobs_queue_lease_and_finish() {
     let (_dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
 
     let subscription = runtime
-        .create_subscription("Queue Test".to_string(), None, None, None)
+        .create_subscription("Queue Test".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id: i64 = subscription.id.parse().unwrap();
@@ -268,7 +347,7 @@ async fn automatic_retry_reuses_the_same_durable_job_after_backoff() {
     let (_dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
     let subscription = runtime
-        .create_subscription("Retry Test".to_string(), None, None, None)
+        .create_subscription("Retry Test".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id = subscription.id.parse::<i64>().unwrap();
@@ -360,7 +439,7 @@ async fn full_run_finalizes_only_after_its_own_jobs_are_terminal() {
     let (_dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
     let subscription = runtime
-        .create_subscription("Finalization Test".to_string(), None, None, None)
+        .create_subscription("Finalization Test".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id = subscription.id.parse::<i64>().unwrap();
@@ -432,7 +511,7 @@ async fn full_run_derives_its_snapshot_from_durable_work() {
     let (dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
     let subscription = runtime
-        .create_subscription("Ingest Finalization Test".to_string(), None, None, None)
+        .create_subscription("Ingest Finalization Test".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id = subscription.id.parse::<i64>().unwrap();
@@ -471,9 +550,9 @@ async fn full_run_derives_its_snapshot_from_durable_work() {
         let conn = raw_conn(&dir);
         conn.execute(
             "INSERT INTO ingest_queue (
-                 queue_kind, source_kind, subscription_id, query_id, query_run_id,
+                 source_kind, subscription_id, query_id, query_run_id,
                  status, created_at, updated_at
-             ) VALUES ('single', 'subscription', ?1, ?2, ?3, 'pending', 'now', 'now')",
+             ) VALUES ('subscription', ?1, ?2, ?3, 'pending', 'now', 'now')",
             rusqlite::params![subscription_id, query_id, query_run_id],
         )
         .unwrap();
@@ -593,13 +672,13 @@ async fn current_ingest_counts_exclude_previous_runs() {
     let (dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
     let subscription = runtime
-        .create_subscription("Current Counts".to_string(), None, None, None)
+        .create_subscription("Current Counts".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id = subscription.id.parse::<i64>().unwrap();
     let query = runtime
         .add_subscription_query(
-            subscription.id,
+            subscription.id.clone(),
             "gelbooru".to_string(),
             Some("search".to_string()),
             "1girl".to_string(),
@@ -608,6 +687,17 @@ async fn current_ingest_counts_exclude_previous_runs() {
         .await
         .unwrap();
     let query_id = query.id.parse::<i64>().unwrap();
+    let sibling_query = runtime
+        .add_subscription_query(
+            subscription.id,
+            "gelbooru".to_string(),
+            Some("search".to_string()),
+            "2girls".to_string(),
+            None,
+        )
+        .await
+        .unwrap();
+    let sibling_query_id = sibling_query.id.parse::<i64>().unwrap();
     let old_run = runtime
         .create_subscription_run(subscription_id)
         .await
@@ -624,19 +714,42 @@ async fn current_ingest_counts_exclude_previous_runs() {
         .create_subscription_query_run(Some(current_run), subscription_id, query_id)
         .await
         .unwrap();
+    let sibling_query_run = runtime
+        .create_subscription_query_run(Some(current_run), subscription_id, sibling_query_id)
+        .await
+        .unwrap();
 
     let conn = raw_conn(&dir);
-    for (query_run_id, queue_status, item_status, result_kind) in [
-        (old_query_run, "complete", "complete", Some("imported")),
-        (current_query_run, "running", "pending", None),
-        (current_query_run, "running", "complete", Some("reused")),
+    for (queue_query_id, query_run_id, queue_status, item_status, result_kind) in [
+        (
+            query_id,
+            old_query_run,
+            "complete",
+            "complete",
+            Some("imported"),
+        ),
+        (query_id, current_query_run, "running", "pending", None),
+        (
+            query_id,
+            current_query_run,
+            "running",
+            "complete",
+            Some("reused"),
+        ),
+        (
+            sibling_query_id,
+            sibling_query_run,
+            "complete",
+            "complete",
+            Some("imported"),
+        ),
     ] {
         conn.execute(
             "INSERT INTO ingest_queue (
-                 queue_kind, source_kind, subscription_id, query_id, query_run_id,
+                 source_kind, subscription_id, query_id, query_run_id,
                  status, created_at, updated_at
-             ) VALUES ('single', 'subscription', ?1, ?2, ?3, ?4, 'now', 'now')",
-            rusqlite::params![subscription_id, query_id, query_run_id, queue_status],
+             ) VALUES ('subscription', ?1, ?2, ?3, ?4, 'now', 'now')",
+            rusqlite::params![subscription_id, queue_query_id, query_run_id, queue_status],
         )
         .unwrap();
         let queue_id = conn.last_insert_rowid();
@@ -656,6 +769,115 @@ async fn current_ingest_counts_exclude_previous_runs() {
     assert_eq!(counts.ingested, 0);
     assert_eq!(counts.reused, 1);
     assert_eq!(counts.failed, 0);
+
+    let conn = raw_conn(&dir);
+    conn.execute(
+        "UPDATE subscription_query_run SET files_downloaded = 2 WHERE query_run_id = ?1",
+        [current_query_run],
+    )
+    .unwrap();
+    conn.execute(
+        "UPDATE subscription_query_run SET files_downloaded = 99 WHERE query_run_id = ?1",
+        [sibling_query_run],
+    )
+    .unwrap();
+    drop(conn);
+    assert_eq!(
+        runtime
+            .count_current_query_run_progress(query_id)
+            .await
+            .unwrap()
+            .files_downloaded,
+        2
+    );
+}
+
+#[tokio::test]
+async fn restarted_manual_job_aggregates_progress_across_attempts() {
+    let (dir, db, subscription_id, query_id) = open_query_fixture("Restarted Progress").await;
+    let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
+    let (job_id, _) = runtime
+        .enqueue_subscription_query_job(
+            None,
+            subscription_id,
+            query_id,
+            "gelbooru",
+            "query_sync",
+            "query",
+            None,
+        )
+        .await
+        .unwrap();
+    runtime.lease_subscription_query_job(job_id).await.unwrap();
+    let interrupted_attempt = runtime
+        .create_subscription_query_run(None, subscription_id, query_id)
+        .await
+        .unwrap();
+    raw_conn(&dir)
+        .execute(
+            "UPDATE subscription_query_run
+             SET posts_processed = 12, files_downloaded = 15, files_skipped = 2,
+                 metadata_validated = 15
+             WHERE query_run_id = ?1",
+            [interrupted_attempt],
+        )
+        .unwrap();
+
+    let report = runtime
+        .reconcile_subscription_runtime_state()
+        .await
+        .unwrap();
+    assert_eq!(report.jobs_requeued, 1);
+    assert_eq!(report.query_runs_finalized, 1);
+    runtime.lease_subscription_query_job(job_id).await.unwrap();
+    let resumed_attempt = runtime
+        .create_subscription_query_run(None, subscription_id, query_id)
+        .await
+        .unwrap();
+    raw_conn(&dir)
+        .execute(
+            "UPDATE subscription_query_run
+             SET posts_processed = 30, files_downloaded = 35, files_skipped = 3,
+                 metadata_validated = 34, metadata_invalid = 1
+             WHERE query_run_id = ?1",
+            [resumed_attempt],
+        )
+        .unwrap();
+
+    let progress = runtime
+        .count_current_query_run_progress(query_id)
+        .await
+        .unwrap();
+    assert_eq!(progress.posts_processed, 42);
+    assert_eq!(progress.files_downloaded, 50);
+    assert_eq!(progress.files_skipped, 5);
+    assert_eq!(progress.metadata_validated, 49);
+    assert_eq!(progress.metadata_invalid, 1);
+    assert_eq!(progress.current_posts_processed, 30);
+    assert_eq!(progress.current_files_downloaded, 35);
+    assert_eq!(progress.current_files_skipped, 3);
+    assert_eq!(progress.current_metadata_validated, 34);
+    assert_eq!(progress.current_metadata_invalid, 1);
+
+    let conn = raw_conn(&dir);
+    assert_eq!(
+        conn.query_row(
+            "SELECT COUNT(*) FROM subscription_query_run WHERE query_id = ?1",
+            [query_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .unwrap(),
+        2
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT status FROM subscription_query_run WHERE query_run_id = ?1",
+            [interrupted_attempt],
+            |row| row.get::<_, String>(0),
+        )
+        .unwrap(),
+        "cancelled"
+    );
 }
 
 #[tokio::test]
@@ -663,7 +885,7 @@ async fn failed_ingest_fails_an_otherwise_successful_run() {
     let (dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
     let subscription = runtime
-        .create_subscription("Failed Ingest Test".to_string(), None, None, None)
+        .create_subscription("Failed Ingest Test".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id = subscription.id.parse::<i64>().unwrap();
@@ -701,9 +923,9 @@ async fn failed_ingest_fails_an_otherwise_successful_run() {
     let conn = raw_conn(&dir);
     conn.execute(
         "INSERT INTO ingest_queue (
-             queue_kind, source_kind, subscription_id, query_id, query_run_id,
+             source_kind, subscription_id, query_id, query_run_id,
              status, last_error, created_at, updated_at
-         ) VALUES ('single', 'subscription', ?1, ?2, ?3,
+         ) VALUES ('subscription', ?1, ?2, ?3,
                    'failed', 'queued source disappeared', 'now', 'now')",
         rusqlite::params![subscription_id, query_id, query_run_id],
     )
@@ -762,9 +984,9 @@ async fn failed_ingest_fails_an_otherwise_successful_run() {
     raw_conn(&dir)
         .execute(
             "INSERT INTO ingest_queue (
-                 queue_kind, source_kind, subscription_id, query_id, query_run_id,
+                 source_kind, subscription_id, query_id, query_run_id,
                  status, last_error, created_at, updated_at
-             ) VALUES ('single', 'subscription', ?1, ?2, ?3,
+             ) VALUES ('subscription', ?1, ?2, ?3,
                        'failed', 'secondary ingest failure', 'now', 'now')",
             rusqlite::params![subscription_id, query_id, source_failed_query_run],
         )
@@ -794,7 +1016,7 @@ async fn query_only_jobs_do_not_create_full_subscription_runs() {
     let (_dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
     let subscription = runtime
-        .create_subscription("Query Test".to_string(), None, None, None)
+        .create_subscription("Query Test".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id = subscription.id.parse::<i64>().unwrap();
@@ -838,9 +1060,9 @@ async fn query_run_stays_running_across_restart_until_its_ingest_is_terminal() {
     raw_conn(&dir)
         .execute(
             "INSERT INTO ingest_queue (
-                 queue_kind, source_kind, subscription_id, query_id, query_run_id,
+                 source_kind, subscription_id, query_id, query_run_id,
                  status, created_at, updated_at
-             ) VALUES ('single', 'subscription', ?1, ?2, ?3, 'pending', 'now', 'now')",
+             ) VALUES ('subscription', ?1, ?2, ?3, 'pending', 'now', 'now')",
             rusqlite::params![subscription_id, query_id, query_run_id],
         )
         .unwrap();
@@ -899,18 +1121,12 @@ async fn query_run_stays_running_across_restart_until_its_ingest_is_terminal() {
 async fn recurring_schedule_belongs_to_an_enabled_subscription() {
     let (_dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
-    let group = runtime.create_group("Artists".to_string()).await.unwrap();
     let subscription = runtime
-        .create_subscription(
-            "Scheduled".to_string(),
-            Some(group.id.parse().unwrap()),
-            None,
-            None,
-        )
+        .create_subscription("Scheduled".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id = subscription.id.parse::<i64>().unwrap();
-    runtime
+    let query = runtime
         .add_subscription_query(
             subscription.id.clone(),
             "gelbooru".to_string(),
@@ -929,14 +1145,102 @@ async fn recurring_schedule_belongs_to_an_enabled_subscription() {
     assert_eq!(scheduled.len(), 1);
     assert_eq!(scheduled[0].subscription_id, subscription_id);
     assert_eq!(scheduled[0].schedule, "daily");
-    assert!(scheduled[0].last_full_run_at.is_none());
+    assert!(scheduled[0].last_scheduled_success_at.is_none());
 
-    runtime
+    let query_id = query.id.parse::<i64>().unwrap();
+
+    let manual_run = runtime
         .create_subscription_run(subscription_id)
         .await
         .unwrap();
+    let (manual_job, _) = runtime
+        .enqueue_subscription_query_job(
+            Some(manual_run),
+            subscription_id,
+            query_id,
+            "gelbooru",
+            "query_sync",
+            "manual",
+            None,
+        )
+        .await
+        .unwrap();
+    runtime
+        .finish_subscription_query_job(manual_job, "succeeded", None, None)
+        .await
+        .unwrap();
+    runtime
+        .finalize_subscription_run_status(manual_run, "succeeded", None, None)
+        .await
+        .unwrap();
     assert!(runtime.list_scheduled_subscriptions().await.unwrap()[0]
-        .last_full_run_at
+        .last_scheduled_success_at
+        .is_none());
+
+    let failed_run = runtime
+        .create_subscription_run(subscription_id)
+        .await
+        .unwrap();
+    let (failed_job, _) = runtime
+        .enqueue_subscription_query_job(
+            Some(failed_run),
+            subscription_id,
+            query_id,
+            "gelbooru",
+            "query_sync",
+            "scheduled",
+            None,
+        )
+        .await
+        .unwrap();
+    runtime
+        .finish_subscription_query_job(
+            failed_job,
+            "failed",
+            Some("network".to_string()),
+            Some("network failed".to_string()),
+        )
+        .await
+        .unwrap();
+    runtime
+        .finalize_subscription_run_status(
+            failed_run,
+            "failed",
+            Some("network".to_string()),
+            Some("network failed".to_string()),
+        )
+        .await
+        .unwrap();
+    assert!(runtime.list_scheduled_subscriptions().await.unwrap()[0]
+        .last_scheduled_success_at
+        .is_none());
+
+    let scheduled_run = runtime
+        .create_subscription_run(subscription_id)
+        .await
+        .unwrap();
+    let (scheduled_job, _) = runtime
+        .enqueue_subscription_query_job(
+            Some(scheduled_run),
+            subscription_id,
+            query_id,
+            "gelbooru",
+            "query_sync",
+            "scheduled",
+            None,
+        )
+        .await
+        .unwrap();
+    runtime
+        .finish_subscription_query_job(scheduled_job, "succeeded", None, None)
+        .await
+        .unwrap();
+    runtime
+        .finalize_subscription_run_status(scheduled_run, "succeeded", None, None)
+        .await
+        .unwrap();
+    assert!(runtime.list_scheduled_subscriptions().await.unwrap()[0]
+        .last_scheduled_success_at
         .is_some());
 
     runtime
@@ -951,34 +1255,11 @@ async fn recurring_schedule_belongs_to_an_enabled_subscription() {
 }
 
 #[tokio::test]
-async fn deleting_a_group_ungroups_its_subscriptions() {
-    let (_dir, db) = open_db();
-    let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
-    let group = runtime.create_group("Artists".to_string()).await.unwrap();
-    let subscription = runtime
-        .create_subscription(
-            "Kept".to_string(),
-            Some(group.id.parse().unwrap()),
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-    runtime.delete_group(group.id).await.unwrap();
-    let kept = runtime
-        .get_subscription(subscription.id.parse().unwrap())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(kept.group_id, None);
-}
-
-#[tokio::test]
 async fn reset_and_delete_remove_tracking_but_keep_imported_media() {
     let (dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
     let subscription = runtime
-        .create_subscription("Cleanup Test".to_string(), None, None, None)
+        .create_subscription("Cleanup Test".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id = subscription.id.parse::<i64>().unwrap();
@@ -1021,9 +1302,16 @@ async fn reset_and_delete_remove_tracking_but_keep_imported_media() {
         .unwrap();
     let conn = raw_conn(&dir);
     conn.execute(
+        "INSERT INTO media_file (
+             file_id, file_hash, mime_type, size_bytes, has_audio, date_added
+         ) VALUES (1, 'kept-media', 'image/png', 1, 0, '2026-01-01')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
         "INSERT INTO media_entity (
-             entity_id, entity_hash, entity_kind, status, date_created, date_added, date_modified
-         ) VALUES (1, 'kept-media', 'single', 1, '2026-01-01', '2026-01-01', '2026-01-01')",
+             entity_id, entity_hash, file_id, status, date_created, date_added, date_modified
+         ) VALUES (1, 'kept-media', 1, 1, '2026-01-01', '2026-01-01', '2026-01-01')",
         [],
     )
     .unwrap();
@@ -1084,7 +1372,7 @@ async fn stop_is_idempotent_and_settles_queued_work() {
     let (_dir, db) = open_db();
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
     let subscription = runtime
-        .create_subscription("Stop Test".to_string(), None, None, None)
+        .create_subscription("Stop Test".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id = subscription.id.parse::<i64>().unwrap();
@@ -1160,7 +1448,7 @@ async fn startup_reconcile_requeues_interrupted_jobs_in_the_same_run() {
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
 
     let subscription = runtime
-        .create_subscription("Orphan Test".to_string(), None, None, None)
+        .create_subscription("Orphan Test".to_string(), None, None)
         .await
         .unwrap();
     let subscription_id: i64 = subscription.id.parse().unwrap();
@@ -1302,15 +1590,15 @@ async fn startup_reconcile_repairs_invalid_query_kind() {
     let runtime = SubscriptionRuntimeService::new(&db, std::path::Path::new("/tmp"));
 
     let subscription = runtime
-        .create_subscription("Kind Repair".to_string(), None, None, None)
+        .create_subscription("Kind Repair".to_string(), None, None)
         .await
         .unwrap();
     let query = runtime
         .add_subscription_query(
             subscription.id.clone(),
-            "coomer".to_string(),
+            "pixivuser".to_string(),
             None,
-            "fansly/user/123".to_string(),
+            "12345".to_string(),
             None,
         )
         .await

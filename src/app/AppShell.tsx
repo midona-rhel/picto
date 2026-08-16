@@ -19,7 +19,7 @@ import {
   inspectorCollapsedAtom, toggleInspectorAtom,
   inspectorWidthAtom, setInspectorWidthAtom,
   INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH,
-  activeNodeIdAtom, parentNodeIdAtom,
+  activeNodeIdAtom,
   showTreeGuidesAtom,
 } from '../state/navigation';
 import { sidebarNodesAtom } from '../state/sidebar';
@@ -76,14 +76,13 @@ function buildBreadcrumbPath(
   return path;
 }
 
-/** Scope title — shows full breadcrumb path for folders, smart folders, and collections. */
+/** Scope title — shows the full breadcrumb path for folders and smart folders. */
 function ScopeTitle() {
   const gridActive = useAtomValue(gridActiveAtom);
   const frozenLabel = useAtomValue(displayedScopeLabelAtom);
   const liveLabel = useAtomValue(gridScopeLabelAtom);
   const label = gridActive ? (frozenLabel || liveLabel) : liveLabel;
   const snapshot = useAtomValue(displayedGridSnapshotAtom);
-  const parentNodeId = useAtomValue(parentNodeIdAtom);
   const nodes = useAtomValue(sidebarNodesAtom);
   const activeNodeId = useAtomValue(activeNodeIdAtom);
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
@@ -95,22 +94,13 @@ function ScopeTitle() {
     pushHistory(nodeId);
   };
 
-  // Subscription breadcrumb: Subscriptions [/ Group] [/ Subscription].
+  // Subscription breadcrumb: Subscriptions [/ Subscription].
   if (activeNodeId === 'system:subscriptions') {
     const selectedSub =
       subsSelection?.kind === 'subscription'
         ? subsSnapshot?.subscriptions.find((sub) => sub.id === subsSelection.id) ?? null
         : null;
-    const groupId =
-      subsSelection?.kind === 'group'
-        ? subsSelection.id
-        : selectedSub?.group_id != null
-          ? String(selectedSub.group_id)
-          : null;
-    const groupName = groupId != null
-      ? subsSnapshot?.groups.find((group) => group.id === groupId)?.name ?? null
-      : null;
-    const leafName = selectedSub?.name ?? (subsSelection?.kind === 'group' ? groupName : null);
+    const leafName = selectedSub?.name ?? null;
     if (!leafName) return <span className={styles.scopeTitle}>Subscriptions</span>;
 
     const crumbSeparator = <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>;
@@ -126,21 +116,6 @@ function ScopeTitle() {
         >
           Subscriptions
         </button>
-        {selectedSub && groupName && groupId != null && (
-          <>
-            {crumbSeparator}
-            <button
-              type="button"
-              className={styles.scopeCrumbLink}
-              onClick={() => {
-                setSubsSelection({ kind: 'group', id: groupId });
-                pushSubscriptionsHistory({ kind: 'group', id: groupId });
-              }}
-            >
-              {groupName}
-            </button>
-          </>
-        )}
         {crumbSeparator}
         {leafName}
       </span>
@@ -150,31 +125,6 @@ function ScopeTitle() {
   if (!label) return null;
 
   const displayedNodeId = snapshot?.nodeId ?? '';
-
-  // Collection breadcrumb: "Parent Scope / Collection Name"
-  if (displayedNodeId.startsWith('collection:') && parentNodeId) {
-    const parentPath = displayedNodeId.startsWith('collection:') && (parentNodeId.startsWith('folder:') || parentNodeId.startsWith('smart:'))
-      ? buildBreadcrumbPath(parentNodeId, nodes)
-      : [{
-          id: parentNodeId,
-          name: parentNodeId === 'system:active' ? 'All' : parentNodeId === 'system:inbox' ? 'Inbox' : parentNodeId === 'system:trash' ? 'Trash' : parentNodeId,
-        }];
-
-    return (
-      <span className={styles.scopeTitle}>
-        {parentPath.map((seg, i) => (
-          <span key={seg.id}>
-            {i > 0 && <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>}
-            <button type="button" className={styles.scopeCrumbLink} onClick={() => navigateToNode(seg.id)}>
-              {seg.name}
-            </button>
-          </span>
-        ))}
-        <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>
-        {label}
-      </span>
-    );
-  }
 
   // Folder / smart folder breadcrumb: full ancestor path
   if (displayedNodeId.startsWith('folder:') || displayedNodeId.startsWith('smart:')) {

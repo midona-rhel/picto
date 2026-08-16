@@ -95,11 +95,10 @@ pub fn execute_plan(conn: &Connection, bitmaps: &BitmapStore, plan: &CompilerPla
 fn update_cached_folder_sizes(conn: &Connection) {
     let folder_result = conn.execute_batch(
         "UPDATE folder SET total_size_bytes = COALESCE((
-            SELECT SUM(COALESCE(mf.size_bytes, me.total_size_bytes, 0))
+            SELECT SUM(COALESCE(mf.size_bytes, 0))
             FROM folder_member fm
             JOIN media_entity me ON me.entity_id = fm.entity_id
-            LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-            LEFT JOIN media_file mf ON mf.file_id = sme.file_id
+            JOIN media_file mf ON mf.file_id = me.file_id
             WHERE fm.folder_id = folder.folder_id
         ), 0)",
     );
@@ -146,11 +145,10 @@ fn update_cached_smart_folder_sizes(conn: &Connection, bitmaps: &BitmapStore) {
 
     let sf_update_result = conn.execute_batch(
         "UPDATE smart_folder SET total_size_bytes = COALESCE((
-            SELECT SUM(COALESCE(mf.size_bytes, me.total_size_bytes, 0))
+            SELECT SUM(COALESCE(mf.size_bytes, 0))
             FROM temp._sf_entity sfe
             JOIN media_entity me ON me.entity_id = sfe.entity_id
-            LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-            LEFT JOIN media_file mf ON mf.file_id = sme.file_id
+            JOIN media_file mf ON mf.file_id = me.file_id
             WHERE sfe.sf_id = smart_folder.smart_folder_id
         ), 0)",
     );
@@ -186,10 +184,16 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().expect("open database");
         conn.execute_batch(LIBRARY_DDL).expect("create schema");
         conn.execute(
+            "INSERT INTO media_file (file_id, file_hash, mime_type, size_bytes, date_added)
+             VALUES (1, 'file-1', 'image/png', 1, '2026-08-04')",
+            [],
+        )
+        .expect("insert file");
+        conn.execute(
             "INSERT INTO media_entity (
-                entity_id, entity_hash, entity_kind, status,
+                entity_id, entity_hash, file_id, status,
                 date_created, date_added, date_modified
-            ) VALUES (1, 'entity-1', 'single', 2, '2026-08-04', '2026-08-04', '2026-08-04')",
+            ) VALUES (1, 'entity-1', 1, 2, '2026-08-04', '2026-08-04', '2026-08-04')",
             [],
         )
         .expect("insert entity");
@@ -248,10 +252,16 @@ mod tests {
         let conn = rusqlite::Connection::open_in_memory().expect("open database");
         conn.execute_batch(LIBRARY_DDL).expect("create schema");
         conn.execute(
+            "INSERT INTO media_file (file_id, file_hash, mime_type, size_bytes, date_added)
+             VALUES (1, 'file-1', 'image/png', 1, '2026-08-04')",
+            [],
+        )
+        .expect("insert file");
+        conn.execute(
             "INSERT INTO media_entity (
-                entity_id, entity_hash, entity_kind, status,
+                entity_id, entity_hash, file_id, status,
                 date_created, date_added, date_modified
-            ) VALUES (1, 'entity-1', 'single', 1, '2026-08-04', '2026-08-04', '2026-08-04')",
+            ) VALUES (1, 'entity-1', 1, 1, '2026-08-04', '2026-08-04', '2026-08-04')",
             [],
         )
         .expect("insert entity");

@@ -1,4 +1,4 @@
-//! Handler functions for subscription and group operations.
+//! Handler functions for subscription operations.
 //!
 //! ## State-change classification (PBI-566 audit)
 //!
@@ -8,16 +8,12 @@
 //! - **read-only**: returns data, no state mutation
 //!
 //! ### state-changed handlers (emit entity IDs)
-//! - `create_group` → group_ids
-//! - `delete_group` → group_ids
-//! - `rename_group` → group_ids
 //! - `set_subscription_schedule` → subscription_ids
 //! - `create_subscription` → subscription_ids
 //! - `delete_subscription` → subscription_ids
 //! - `pause_subscription` → subscription_ids
 //! - `rename_subscription` → subscription_ids
 //! - `reset_subscription` → subscription_ids
-//! - `set_subscription_auto_collections` → subscription_ids
 //! - `add_subscription_query` → query_ids
 //! - `delete_subscription_query` → query_ids
 //! - `edit_subscription_query` → query_ids
@@ -28,8 +24,6 @@
 //! - `pixiv_oauth_exchange` → credential_categories
 //!
 //! ### task-only handlers (no state_changed emit — sync engine owns lifecycle)
-//! - `run_group`
-//! - `stop_group`
 //! - `run_subscription`
 //! - `stop_subscription`
 //! - `run_subscription_query`
@@ -37,19 +31,15 @@
 //!
 //! ### read-only handlers
 //! - `get_sites`
-//! - `get_site_metadata_schema`
-//! - `validate_site_metadata`
 //! - `get_subscriptions`
 //! - `get_running_subscriptions`
 //! - `get_running_subscription_progress`
 //! - `list_subscription_runs`
-//! - `list_subscription_query_runs`
 //! - `list_subscription_issues`
 //! - `list_subscription_download_attempts`
 //! - `list_credentials`
 //! - `list_credential_health`
 //! - `pixiv_oauth_start`
-//! - `pixiv_oauth_popup`
 
 use serde::Deserialize;
 use ts_rs::TS;
@@ -69,50 +59,10 @@ fn runtime_service(
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct VerifySubscriptionSiteInput {
-    pub site_id: String,
-    pub query: Option<String>,
-    pub post_limit: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SuggestSiteTagsInput {
     pub site_id: String,
     pub prefix: String,
     pub limit: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetSubscriptionGroupInput {
-    pub subscription_id: String,
-    pub group_id: Option<i64>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ListSubscriptionCollectionsInput {
-    pub subscription_id: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct CreateGroupInput {
-    pub name: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct DeleteGroupInput {
-    pub id: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct RenameGroupInput {
-    pub id: String,
-    pub name: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -124,38 +74,8 @@ pub struct SetSubscriptionScheduleInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct RunGroupInput {
-    pub id: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct StopGroupInput {
-    pub id: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetSiteMetadataSchemaInput {
-    pub site_id: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ValidateSiteMetadataInput {
-    pub site_id: String,
-    #[serde(default)]
-    pub sample_url: Option<String>,
-    #[ts(type = "Record<string, unknown> | null")]
-    pub sample_metadata_json: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateSubscriptionInput {
     pub name: String,
-    #[ts(type = "number | null")]
-    pub group_id: Option<i64>,
     #[ts(type = "number | null")]
     pub initial_post_limit: Option<u32>,
     #[ts(type = "number | null")]
@@ -266,13 +186,6 @@ pub struct ListSubscriptionRunsInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ListSubscriptionQueryRunsInput {
-    pub query_id: String,
-    pub limit: Option<i64>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ListSubscriptionIssuesInput {
     pub subscription_id: String,
     pub query_id: Option<String>,
@@ -299,7 +212,6 @@ pub struct SetCredentialInput {
     pub password: Option<String>,
     pub cookies: Option<std::collections::HashMap<String, String>>,
     pub oauth_token: Option<String>,
-    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -309,64 +221,6 @@ pub struct DeleteCredentialInput {
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
-
-pub async fn get_groups(
-    state: &AppState,
-    _input: serde_json::Value,
-) -> Result<serde_json::Value, String> {
-    let result = runtime_service(state).get_groups().await?;
-    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
-}
-
-pub async fn create_group(
-    state: &AppState,
-    input: CreateGroupInput,
-) -> Result<serde_json::Value, String> {
-    let group = runtime_service(state).create_group(input.name).await?;
-    let gid: i64 = group.id.parse().unwrap_or(0);
-    crate::events::emit_state_changed(
-        "create_group",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[
-                crate::runtime_contract::state_change::Domain::Subscriptions,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-            ])
-            .group_ids(vec![gid]),
-    );
-    Ok(serde_json::to_value(&group).map_err(|e| e.to_string())?)
-}
-
-pub async fn delete_group(state: &AppState, input: DeleteGroupInput) -> Result<(), String> {
-    let gid: i64 = input.id.parse().unwrap_or(0);
-    runtime_service(state).delete_group(input.id).await?;
-    crate::events::emit_state_changed(
-        "delete_group",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[
-                crate::runtime_contract::state_change::Domain::Subscriptions,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-            ])
-            .group_ids(vec![gid]),
-    );
-    Ok(())
-}
-
-pub async fn rename_group(state: &AppState, input: RenameGroupInput) -> Result<(), String> {
-    let gid: i64 = input.id.parse().unwrap_or(0);
-    runtime_service(state)
-        .rename_group(input.id, input.name)
-        .await?;
-    crate::events::emit_state_changed(
-        "rename_group",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[
-                crate::runtime_contract::state_change::Domain::Subscriptions,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-            ])
-            .group_ids(vec![gid]),
-    );
-    Ok(())
-}
 
 pub async fn set_subscription_schedule(
     state: &AppState,
@@ -385,87 +239,21 @@ pub async fn set_subscription_schedule(
     Ok(())
 }
 
-/// Task-only: spawns async group run (all child subscriptions).
-/// State changes emitted per-subscription by the sync engine.
-pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), String> {
-    crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::run_group(
-        &state.engine.db_arc(),
-        &state.library_root,
-        &state.blob_store,
-        &state.rate_limiter,
-        &state.running_subscriptions,
-        input.id,
-        &state.settings,
-    )
-    .await?;
-    Ok(())
-}
-
-/// Task-only: cancels all running subscriptions in a group.
-pub async fn stop_group(state: &AppState, input: StopGroupInput) -> Result<(), String> {
-    crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::stop_group(
-        state.engine.db(),
-        &state.library_root,
-        &state.running_subscriptions,
-        input.id,
-    )
-    .await?;
-    Ok(())
-}
-
 pub async fn get_sites(
     _state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let sites: Vec<_> = crate::subscriptions::gallery_dl_runner::advertised_sites().collect();
+    let sites: Vec<_> = crate::subscriptions::gallery_dl_runner::SITES
+        .iter()
+        .collect();
     serde_json::to_value(sites).map_err(|e| e.to_string())
 }
 
-/// State-changed: moves a subscription into/out of a group → subscription_ids + group_ids.
-pub async fn set_subscription_group(
-    state: &AppState,
-    input: SetSubscriptionGroupInput,
-) -> Result<(), String> {
-    let sid: i64 = input
-        .subscription_id
-        .parse()
-        .map_err(|_| format!("Invalid subscription id: {}", input.subscription_id))?;
-    runtime_service(state)
-        .set_subscription_group(sid, input.group_id)
-        .await?;
-    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
-        .add_domains(&[
-            crate::runtime_contract::state_change::Domain::Subscriptions,
-            crate::runtime_contract::state_change::Domain::Sidebar,
-        ])
-        .subscription_ids(vec![sid]);
-    if let Some(gid) = input.group_id {
-        impact = impact.group_ids(vec![gid]);
-    }
-    crate::events::emit_state_changed("set_subscription_group", impact);
-    Ok(())
-}
-
-/// Read-only: collections this subscription created from multi-image posts.
 pub async fn get_subscription_covers(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let result = runtime_service(state).get_subscription_covers().await?;
-    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
-}
-
-pub async fn list_subscription_collections(
-    state: &AppState,
-    input: ListSubscriptionCollectionsInput,
-) -> Result<serde_json::Value, String> {
-    let sid: i64 = input
-        .subscription_id
-        .parse()
-        .map_err(|_| format!("Invalid subscription id: {}", input.subscription_id))?;
-    let result = runtime_service(state)
-        .list_subscription_collections(sid)
-        .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -484,44 +272,6 @@ pub async fn suggest_site_tags(
     Ok(serde_json::to_value(&suggestions).map_err(|e| e.to_string())?)
 }
 
-/// Read-only: live end-to-end probe of one site (downloads 1-3 posts to a
-/// temp dir, never ingests, never writes credential health or issues).
-pub async fn verify_subscription_site(
-    state: &AppState,
-    input: VerifySubscriptionSiteInput,
-) -> Result<serde_json::Value, String> {
-    let report = crate::subscriptions::site_verification::verify_site(
-        state,
-        &input.site_id,
-        input.query.as_deref(),
-        input.post_limit,
-    )
-    .await?;
-    Ok(serde_json::to_value(&report).map_err(|e| e.to_string())?)
-}
-
-pub async fn get_site_metadata_schema(
-    _state: &AppState,
-    input: GetSiteMetadataSchemaInput,
-) -> Result<serde_json::Value, String> {
-    let schema = crate::subscriptions::gallery_dl_runner::get_site_metadata_schema(&input.site_id)
-        .ok_or_else(|| format!("Unsupported site for metadata schema: {}", input.site_id))?;
-    Ok(serde_json::to_value(&schema).map_err(|e| e.to_string())?)
-}
-
-pub async fn validate_site_metadata(
-    _state: &AppState,
-    input: ValidateSiteMetadataInput,
-) -> Result<serde_json::Value, String> {
-    let sample_url = input.sample_url.unwrap_or_default();
-    let result = crate::subscriptions::gallery_dl_runner::validate_site_metadata(
-        &input.site_id,
-        &sample_url,
-        input.sample_metadata_json.as_ref(),
-    );
-    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
-}
-
 pub async fn get_subscriptions(
     state: &AppState,
     _input: serde_json::Value,
@@ -537,7 +287,6 @@ pub async fn create_subscription(
     let sub = runtime_service(state)
         .create_subscription(
             input.name,
-            input.group_id,
             input.initial_post_limit,
             input.periodic_post_limit,
         )
@@ -644,9 +393,7 @@ pub async fn delete_subscription_query(
         .await?;
     crate::events::emit_state_changed(
         "delete_subscription_query",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
-            .query_ids(vec![qid]),
+        crate::runtime_contract::change_builder::ChangeImpact::new().query_ids(vec![qid]),
     );
     Ok(())
 }
@@ -685,33 +432,6 @@ pub async fn edit_subscription_query(
     Ok(())
 }
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetSubscriptionAutoCollectionsInput {
-    pub id: String,
-    pub auto_collections: bool,
-}
-
-pub async fn set_subscription_auto_collections(
-    state: &AppState,
-    input: SetSubscriptionAutoCollectionsInput,
-) -> Result<(), String> {
-    let sub_id: i64 = input
-        .id
-        .parse()
-        .map_err(|_| format!("Invalid subscription id: {}", input.id))?;
-    runtime_service(state)
-        .set_subscription_auto_collections(sub_id, input.auto_collections)
-        .await?;
-    crate::events::emit_state_changed(
-        "set_subscription_auto_collections",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
-            .subscription_ids(vec![sub_id]),
-    );
-    Ok(())
-}
-
 pub async fn pause_subscription_query(
     state: &AppState,
     input: PauseSubscriptionQueryInput,
@@ -736,11 +456,8 @@ pub async fn run_subscription(state: &AppState, input: RunSubscriptionInput) -> 
     crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::run_subscription(
         &state.engine.db_arc(),
         &state.library_root,
-        &state.blob_store,
-        &state.rate_limiter,
         &state.running_subscriptions,
         input.id,
-        &state.settings,
     )
     .await?;
     Ok(())
@@ -832,6 +549,36 @@ pub async fn get_running_subscription_progress(
     let mut result = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::get_running_subscription_progress();
     for event in &mut result {
         if let Some(Ok(query_id)) = event.query_id.as_deref().map(str::parse::<i64>) {
+            if let Ok(progress) = runtime_service(state)
+                .count_current_query_run_progress(query_id)
+                .await
+            {
+                event.files_downloaded = merge_current_attempt_progress(
+                    progress.files_downloaded,
+                    progress.current_files_downloaded,
+                    event.files_downloaded,
+                );
+                event.files_skipped = merge_current_attempt_progress(
+                    progress.files_skipped,
+                    progress.current_files_skipped,
+                    event.files_skipped,
+                );
+                event.posts_processed = merge_current_attempt_progress(
+                    progress.posts_processed,
+                    progress.current_posts_processed,
+                    event.posts_processed,
+                );
+                event.metadata_validated = merge_current_attempt_progress(
+                    progress.metadata_validated,
+                    progress.current_metadata_validated,
+                    event.metadata_validated,
+                );
+                event.metadata_invalid = merge_current_attempt_progress(
+                    progress.metadata_invalid,
+                    progress.current_metadata_invalid,
+                    event.metadata_invalid,
+                );
+            }
             if let Ok(counts) = runtime_service(state)
                 .count_current_ingest_queue(query_id)
                 .await
@@ -847,6 +594,22 @@ pub async fn get_running_subscription_progress(
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
+fn merge_current_attempt_progress(total: usize, current: usize, live: usize) -> usize {
+    total.saturating_sub(current) + current.max(live)
+}
+
+#[cfg(test)]
+mod progress_tests {
+    use super::merge_current_attempt_progress;
+
+    #[test]
+    fn live_progress_extends_prior_attempts_without_double_counting() {
+        assert_eq!(merge_current_attempt_progress(50, 35, 36), 51);
+        assert_eq!(merge_current_attempt_progress(50, 35, 35), 50);
+        assert_eq!(merge_current_attempt_progress(50, 35, 34), 50);
+    }
+}
+
 pub async fn list_subscription_runs(
     state: &AppState,
     input: ListSubscriptionRunsInput,
@@ -857,20 +620,6 @@ pub async fn list_subscription_runs(
         .map_err(|_| format!("Invalid subscription id: {}", input.subscription_id))?;
     let result = runtime_service(state)
         .list_subscription_runs(subscription_id, input.limit.unwrap_or(20).max(1))
-        .await?;
-    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
-}
-
-pub async fn list_subscription_query_runs(
-    state: &AppState,
-    input: ListSubscriptionQueryRunsInput,
-) -> Result<serde_json::Value, String> {
-    let query_id: i64 = input
-        .query_id
-        .parse()
-        .map_err(|_| format!("Invalid query id: {}", input.query_id))?;
-    let result = runtime_service(state)
-        .list_subscription_query_runs(query_id, input.limit.unwrap_or(20).max(1))
         .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
@@ -951,12 +700,9 @@ pub async fn run_subscription_query(
     crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::run_subscription_query(
         &state.engine.db_arc(),
         &state.library_root,
-        &state.blob_store,
-        &state.rate_limiter,
         &state.running_subscriptions,
         input.subscription_id,
         input.query_id,
-        &state.settings,
     )
     .await?;
     Ok(())
@@ -984,13 +730,10 @@ pub async fn retry_subscription_failed_post(
     crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::retry_failed_post(
         &state.engine.db_arc(),
         &state.library_root,
-        &state.blob_store,
-        &state.rate_limiter,
         &state.running_subscriptions,
         input.subscription_id,
         input.query_id,
         input.post_id,
-        &state.settings,
     )
     .await?;
     Ok(())
@@ -1049,7 +792,6 @@ pub async fn set_credential(state: &AppState, input: SetCredentialInput) -> Resu
                 cookies: input.cookies,
                 oauth_token: input.oauth_token,
                 display_name: input.display_name,
-                expires_at: input.expires_at,
             },
         )
         .await?;

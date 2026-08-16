@@ -1,7 +1,6 @@
 import type {
   CredentialDomain,
   CredentialHealth,
-  SubscriptionGroupInfo,
   SubscriptionInfo,
   SubscriptionIssueRecord,
   SubscriptionProgressEvent,
@@ -29,7 +28,6 @@ export interface SubscriptionListMetrics {
 
 export interface SubscriptionWorkspaceSnapshot {
   subscriptions: SubscriptionInfo[];
-  groups: SubscriptionGroupInfo[];
   sites: SubscriptionSiteInfo[];
   credentials: CredentialDomain[];
   credentialHealth: CredentialHealth[];

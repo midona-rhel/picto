@@ -102,16 +102,6 @@ pub fn capabilities_for_stored_media(
     mime_type: &str,
     frame_count: Option<i64>,
 ) -> MediaCapabilities {
-    if mime_type == "application/x-collection" {
-        return MediaCapabilities {
-            ingest_supported: false,
-            thumbnail_backend: None,
-            can_preview_image: false,
-            can_dominant_colors: false,
-            can_perceptual_hash: false,
-        };
-    }
-
     if mime_type.starts_with("video/") {
         return MediaCapabilities {
             ingest_supported: true,

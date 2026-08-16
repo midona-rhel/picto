@@ -4,14 +4,14 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 115;
+pub const CURRENT_SCHEMA_VERSION: i64 = 117;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
 CREATE TABLE IF NOT EXISTS media_entity (
     entity_id                    INTEGER PRIMARY KEY,
     entity_hash                  TEXT    NOT NULL UNIQUE,
-    entity_kind                  TEXT    NOT NULL CHECK (entity_kind IN ('single', 'collection')),
+    file_id                      INTEGER NOT NULL UNIQUE REFERENCES media_file(file_id) ON DELETE RESTRICT,
     status                       INTEGER NOT NULL DEFAULT 0,
     name                         TEXT,
     notes                        TEXT,
@@ -19,17 +19,10 @@ CREATE TABLE IF NOT EXISTS media_entity (
     source_urls_json             TEXT,
     date_created                 TEXT    NOT NULL,
     date_added                   TEXT    NOT NULL,
-    date_modified                TEXT    NOT NULL,
-    member_count                 INTEGER,
-    total_size_bytes             INTEGER,
-    primary_member_entity_id     INTEGER REFERENCES media_entity(entity_id) ON DELETE SET NULL,
-    parent_collection_entity_id  INTEGER REFERENCES media_entity(entity_id) ON DELETE SET NULL,
-    collection_ordinal           INTEGER
+    date_modified                TEXT    NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_me_status ON media_entity(status);
-CREATE INDEX IF NOT EXISTS idx_me_kind ON media_entity(entity_kind);
-CREATE INDEX IF NOT EXISTS idx_me_parent ON media_entity(parent_collection_entity_id);
 CREATE INDEX IF NOT EXISTS idx_me_date_added ON media_entity(date_added);
 CREATE INDEX IF NOT EXISTS idx_me_rating ON media_entity(rating);
 
@@ -77,11 +70,6 @@ CREATE INDEX IF NOT EXISTS idx_mf_phash_p4 ON media_file_phash_index(partition_4
 CREATE INDEX IF NOT EXISTS idx_mf_phash_p5 ON media_file_phash_index(partition_5);
 CREATE INDEX IF NOT EXISTS idx_mf_phash_p6 ON media_file_phash_index(partition_6);
 CREATE INDEX IF NOT EXISTS idx_mf_phash_p7 ON media_file_phash_index(partition_7);
-
-CREATE TABLE IF NOT EXISTS single_media_entity (
-    entity_id  INTEGER PRIMARY KEY REFERENCES media_entity(entity_id) ON DELETE CASCADE,
-    file_id    INTEGER NOT NULL UNIQUE REFERENCES media_file(file_id) ON DELETE CASCADE
-);
 
 CREATE TABLE IF NOT EXISTS tag (
     tag_id     INTEGER PRIMARY KEY,
@@ -183,23 +171,13 @@ CREATE TABLE IF NOT EXISTS smart_folder (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_smart_folder_uuid ON smart_folder(uuid) WHERE uuid IS NOT NULL;
 
-CREATE TABLE IF NOT EXISTS subscription_group (
-    group_id   INTEGER PRIMARY KEY,
-    name       TEXT    NOT NULL,
-    uuid       TEXT    NOT NULL,
-    date_added TEXT    NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_group_uuid ON subscription_group(uuid);
-
 CREATE TABLE IF NOT EXISTS subscription (
     subscription_id    INTEGER PRIMARY KEY,
     name               TEXT    NOT NULL,
     schedule           TEXT    NOT NULL DEFAULT 'manual',
     paused             INTEGER NOT NULL DEFAULT 0,
-    group_id           INTEGER REFERENCES subscription_group(group_id) ON DELETE SET NULL,
     initial_post_limit INTEGER DEFAULT 100,
     periodic_post_limit INTEGER DEFAULT 100,
-    auto_collections   INTEGER NOT NULL DEFAULT 1,
     uuid               TEXT    NOT NULL,
     date_added         TEXT    NOT NULL
 );
@@ -234,19 +212,8 @@ CREATE TABLE IF NOT EXISTS subscription_entity (
     PRIMARY KEY (subscription_id, entity_id)
 );
 
-CREATE TABLE IF NOT EXISTS subscription_post_collection (
-    subscription_id       INTEGER NOT NULL,
-    site_id               TEXT    NOT NULL,
-    post_id               TEXT    NOT NULL,
-    collection_entity_id  INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,
-    date_added            TEXT    NOT NULL,
-    date_modified         TEXT    NOT NULL,
-    PRIMARY KEY (subscription_id, site_id, post_id)
-);
-
 CREATE TABLE IF NOT EXISTS ingest_queue (
     queue_id        INTEGER PRIMARY KEY,
-    queue_kind      TEXT    NOT NULL,
     source_kind     TEXT    NOT NULL,
     subscription_id INTEGER REFERENCES subscription(subscription_id) ON DELETE CASCADE,
     query_id        INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
@@ -254,8 +221,6 @@ CREATE TABLE IF NOT EXISTS ingest_queue (
     cleanup_root    TEXT,
     post_id         TEXT,
     category        TEXT,
-    preferred_name  TEXT,
-    expected_count  INTEGER,
     status          TEXT    NOT NULL DEFAULT 'pending',
     last_error      TEXT,
     created_at      TEXT    NOT NULL,
@@ -394,7 +359,7 @@ CREATE TABLE IF NOT EXISTS subscription_post_member (
     page_num             INTEGER,
     canonical_post_url   TEXT,
     media_url            TEXT,
-    entity_hash          TEXT,
+    entity_id            INTEGER REFERENCES media_entity(entity_id) ON DELETE SET NULL,
     status               TEXT    NOT NULL,
     created_at           TEXT    NOT NULL,
     updated_at           TEXT    NOT NULL,
@@ -420,8 +385,7 @@ CREATE TABLE IF NOT EXISTS credential_domain (
     site_category   TEXT PRIMARY KEY,
     credential_type TEXT NOT NULL,
     display_name    TEXT,
-    date_added      TEXT NOT NULL,
-    expires_at      TEXT
+    date_added      TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS credential_health (
@@ -560,7 +524,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 115
+SELECT 117
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
@@ -632,10 +596,6 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
             "media_file",
             "SELECT file_id, color_analysis_version FROM media_file WHERE 0",
         ),
-        (
-            "single_media_entity",
-            "SELECT entity_id FROM single_media_entity WHERE 0",
-        ),
         ("tag", "SELECT tag_id FROM tag WHERE 0"),
         (
             "entity_tag",
@@ -665,10 +625,6 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
             "SELECT smart_folder_id, notes, total_size_bytes, pinned, pin_order, uuid FROM smart_folder WHERE 0",
         ),
         (
-            "subscription_group",
-            "SELECT group_id, uuid FROM subscription_group WHERE 0",
-        ),
-        (
             "subscription",
             "SELECT subscription_id, schedule, uuid FROM subscription WHERE 0",
         ),
@@ -681,12 +637,8 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
             "SELECT subscription_id FROM subscription_entity WHERE 0",
         ),
         (
-            "subscription_post_collection",
-            "SELECT subscription_id FROM subscription_post_collection WHERE 0",
-        ),
-        (
             "ingest_queue",
-            "SELECT queue_id, queue_kind, source_kind, subscription_id, query_id, query_run_id, cleanup_root, post_id, category, preferred_name, expected_count, status, last_error, created_at, updated_at FROM ingest_queue WHERE 0",
+            "SELECT queue_id, source_kind, subscription_id, query_id, query_run_id, cleanup_root, post_id, category, status, last_error, created_at, updated_at FROM ingest_queue WHERE 0",
         ),
         (
             "ingest_queue_item",
@@ -714,7 +666,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         ),
         (
             "subscription_post_member",
-            "SELECT subscription_id, site_id, post_id, item_key, page_num, canonical_post_url, media_url, entity_hash, status, created_at, updated_at FROM subscription_post_member WHERE 0",
+            "SELECT subscription_id, site_id, post_id, item_key, page_num, canonical_post_url, media_url, entity_id, status, created_at, updated_at FROM subscription_post_member WHERE 0",
         ),
         (
             "deferred_work_item",
@@ -722,7 +674,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         ),
         (
             "credential_domain",
-            "SELECT site_category, expires_at FROM credential_domain WHERE 0",
+            "SELECT site_category, credential_type FROM credential_domain WHERE 0",
         ),
         (
             "credential_health",
@@ -758,12 +710,6 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
     ];
     const REQUIRED_INDEXES: &[(&str, &str, &[(&str, bool)])] = &[
         ("idx_me_status", "media_entity", &[("status", false)]),
-        ("idx_me_kind", "media_entity", &[("entity_kind", false)]),
-        (
-            "idx_me_parent",
-            "media_entity",
-            &[("parent_collection_entity_id", false)],
-        ),
         (
             "idx_me_date_added",
             "media_entity",
@@ -832,11 +778,6 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         ),
         ("idx_folder_uuid", "folder", &[("uuid", false)]),
         ("idx_smart_folder_uuid", "smart_folder", &[("uuid", false)]),
-        (
-            "idx_subscription_group_uuid",
-            "subscription_group",
-            &[("uuid", false)],
-        ),
         ("idx_subscription_uuid", "subscription", &[("uuid", false)]),
         (
             "idx_subscription_query_uuid",
@@ -911,7 +852,6 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
     const UNIQUE_INDEXES: &[&str] = &[
         "idx_folder_uuid",
         "idx_smart_folder_uuid",
-        "idx_subscription_group_uuid",
         "idx_subscription_uuid",
         "idx_subscription_query_uuid",
         "idx_subscription_issue_key",
@@ -1015,7 +955,7 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
 }
 
 fn validate_subscription_definition_columns(conn: &Connection) -> Result<(), String> {
-    for table in ["subscription_group", "subscription", "subscription_query"] {
+    for table in ["subscription", "subscription_query"] {
         let mut statement = conn
             .prepare(&format!("PRAGMA table_info({table})"))
             .map_err(|error| format!("Failed to inspect canonical columns for {table}: {error}"))?;
@@ -1043,29 +983,6 @@ fn validate_subscription_definition_columns(conn: &Connection) -> Result<(), Str
         }
     }
 
-    let mut statement = conn
-        .prepare("PRAGMA foreign_key_list(subscription)")
-        .map_err(|error| format!("Failed to inspect subscription foreign keys: {error}"))?;
-    let group_delete_action = statement
-        .query_map([], |row| {
-            Ok((
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(6)?,
-            ))
-        })
-        .map_err(|error| format!("Failed to inspect subscription foreign keys: {error}"))?
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(|error| format!("Failed to inspect subscription foreign keys: {error}"))?
-        .into_iter()
-        .find_map(|(table, from, on_delete)| {
-            (table == "subscription_group" && from == "group_id").then_some(on_delete)
-        });
-    if group_delete_action.as_deref() != Some("SET NULL") {
-        return Err(format!(
-            "Canonical schema version {CURRENT_SCHEMA_VERSION} requires subscription.group_id to use ON DELETE SET NULL"
-        ));
-    }
     Ok(())
 }
 

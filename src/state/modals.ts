@@ -65,9 +65,6 @@ export interface ExportModalState {
 }
 export const exportModalAtom = atom<ExportModalState>({ open: false, fileCount: 0 });
 
-// ── Create subscription group modal ──
-export const createGroupModalAtom = atom({ open: false });
-
 // ── Folder import modal (shown when dropping a folder into the app) ──
 export interface FolderImportModalState {
   open: boolean;

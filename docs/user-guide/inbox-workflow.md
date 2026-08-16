@@ -2,7 +2,7 @@
 
 [← User Guide](README.md)
 
-The inbox is a staging area for newly imported files. It gives you a chance to review, tag, and organize files before they become part of your active collection.
+The inbox is a staging area for newly imported files. It gives you a chance to review, tag, and organize files before they become part of your accepted library.
 
 ## How It Works
 
@@ -13,7 +13,7 @@ The three file statuses are:
 | Status | Meaning | Visible in |
 |--------|---------|------------|
 | Inbox (0) | Awaiting review | Inbox view only |
-| Active (1) | Part of your collection | All Active, folders, smart folders, tags |
+| Active (1) | Part of your accepted library | All Active, folders, smart folders, tags |
 | Trash (2) | Marked for deletion | Trash view only |
 
 ## Reviewing the Inbox

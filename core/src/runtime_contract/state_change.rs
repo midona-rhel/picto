@@ -101,15 +101,11 @@ pub struct StateChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub derivative_fields_changed: Option<Vec<MediaDerivativeField>>,
-    /// Grid scopes not derivable from other fact fields (e.g. `collection:{id}`).
+    /// Grid scopes not derivable from other fact fields (e.g. `folder:{id}`).
     /// The frontend includes these when deriving stale grid resources.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub extra_grid_scopes: Option<Vec<String>>,
-    /// Subscription group IDs that changed.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[ts(optional, type = "Array<number>")]
-    pub group_ids: Option<Vec<i64>>,
     /// Subscription IDs that changed.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "Array<number>")]

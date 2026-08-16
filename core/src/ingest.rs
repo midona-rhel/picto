@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -95,52 +95,6 @@ pub struct IngestBatchSummary {
     pub folder_ids: Vec<i64>,
     pub flags: IngestFlags,
     pub scheduled_work: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct CollectionIngestMember {
-    pub request: SingleIngestRequest,
-    pub metadata: Option<ParsedMetadata>,
-}
-
-#[derive(Debug, Clone)]
-pub struct CollectionIngestOutcome {
-    pub collection_id: Option<i64>,
-    pub collection_hash: Option<String>,
-    pub imported_hashes: Vec<String>,
-    pub resolved_members: Vec<ResolvedCollectionMember>,
-    pub flags: IngestFlags,
-    pub scheduled_work: usize,
-}
-
-#[derive(Debug, Clone)]
-pub struct ResolvedCollectionMember {
-    pub metadata: Option<ParsedMetadata>,
-    pub entity_hash: String,
-    pub file_hash: String,
-    pub disposition: SingleIngestDisposition,
-}
-
-struct PreparedCollectionMember {
-    member_index: usize,
-    request: SingleIngestRequest,
-    metadata: Option<ParsedMetadata>,
-    blob: crate::import::pipeline::PreparedBlobImport,
-}
-
-async fn acquire_collection_blob_leases(
-    blob_store: &BlobStore,
-    hashes: impl IntoIterator<Item = String>,
-) -> Vec<crate::blob_store::BlobHashLease> {
-    let mut hashes: Vec<String> = hashes.into_iter().collect();
-    hashes.sort();
-    hashes.dedup();
-
-    let mut leases = Vec::with_capacity(hashes.len());
-    for hash in hashes {
-        leases.push(blob_store.acquire_hash_lease(&hash).await);
-    }
-    leases
 }
 
 pub fn dedupe_urls(mut urls: Vec<String>) -> Vec<String> {
@@ -422,7 +376,6 @@ async fn merge_existing_import_target(
             &[existing.entity_id],
             &missing_tags,
             request.tag_provenance_mask,
-            crate::db::types::ExpansionMode::EntityOnly,
         )?;
         flags.tags_changed = true;
     }
@@ -569,224 +522,15 @@ pub async fn ingest_single_path(
     })
 }
 
-pub async fn materialize_collection(
-    canonical_db: &LibraryDatabase,
-    blob_store: &BlobStore,
-    preferred_name: &str,
-    members: &[CollectionIngestMember],
-    existing_collection_id: Option<i64>,
-    prior_member_hashes: &[String],
-) -> Result<CollectionIngestOutcome, String> {
-    let mut existing_member_ids = Vec::new();
-    let mut existing_member_id_set = HashSet::new();
-    // Members materialized by an earlier partial queue join this collection
-    // during a later queue attempt.
-    for hash in prior_member_hashes {
-        if let Some(existing) = canonical_db.get_existing_import_target_by_entity_hash(hash)? {
-            if existing_member_id_set.insert(existing.entity_id) {
-                existing_member_ids.push(existing.entity_id);
-            }
-        }
-    }
-    let mut resolved_members = vec![None; members.len()];
-    let mut imported_hashes = Vec::new();
-    let mut flags = IngestFlags::default();
-    let mut scheduled_work = 0usize;
-    let auto_tag_on_import = auto_tag_on_import_enabled();
-
-    let mut prepared_collection_members = Vec::with_capacity(members.len());
-    for (member_index, member) in members.iter().enumerate() {
-        let options = build_import_options(&member.request);
-        let prepared_blob = ImportPipeline::prepare_blob_import(&member.request.path, &options)
-            .await
-            .map_err(|err| err.to_string())?;
-        // Preparation is deliberately complete before any hash lease is
-        // acquired, so decode and thumbnail work never holds the DB boundary.
-        prepared_collection_members.push(PreparedCollectionMember {
-            member_index,
-            request: member.request.clone(),
-            metadata: member.metadata.clone(),
-            blob: prepared_blob,
-        });
-    }
-
-    let collection_hashes: BTreeSet<String> = prepared_collection_members
-        .iter()
-        .map(|member| member.blob.hex_hash.clone())
-        .collect();
-
-    // Acquire every distinct hash in canonical order before publishing any
-    // blob. This prevents reversed collection order from deadlocking, while
-    // deduplication prevents a collection from reacquiring its own permit.
-    let blob_leases =
-        acquire_collection_blob_leases(blob_store, collection_hashes.iter().cloned()).await;
-    let mut persisted_hashes = HashSet::new();
-    for member in &prepared_collection_members {
-        if persisted_hashes.insert(member.blob.hex_hash.clone()) {
-            ImportPipeline::persist_blob_import(blob_store, &member.blob)
-                .map_err(|err| err.to_string())?;
-        }
-    }
-
-    let mut existing_by_hash = HashMap::new();
-    for hash in collection_hashes {
-        if let Some(existing) = canonical_db.get_existing_import_target_by_file_hash_write(&hash)? {
-            existing_by_hash.insert(hash, existing);
-        }
-    }
-
-    let mut new_members = Vec::<(IngestPreparedSingle, usize, ResolvedCollectionMember)>::new();
-    let mut duplicate_new_member_indices = Vec::<(usize, String)>::new();
-    let mut new_hashes_seen = HashSet::new();
-
-    for member in &prepared_collection_members {
-        let hash = &member.blob.hex_hash;
-        if let Some(existing) = existing_by_hash.get(hash).cloned() {
-            if existing_member_id_set.insert(existing.entity_id) {
-                existing_member_ids.push(existing.entity_id);
-            }
-            let merge =
-                merge_existing_import_target(canonical_db, &existing, &member.request).await?;
-            flags.merge(&merge.flags);
-            resolved_members[member.member_index] = Some(ResolvedCollectionMember {
-                metadata: member.metadata.clone(),
-                entity_hash: existing.entity_hash.clone(),
-                file_hash: existing.file_hash.clone(),
-                disposition: SingleIngestDisposition::Reused,
-            });
-            continue;
-        }
-
-        if !new_hashes_seen.insert(hash.clone()) {
-            duplicate_new_member_indices.push((member.member_index, hash.clone()));
-            continue;
-        }
-
-        let prepared_blob = &member.blob;
-        let mut prepared_single = prepared_from_blob_import(prepared_blob, &member.request);
-        let imported_phash = compute_comparable_image_phash(
-            &prepared_blob.file_bytes,
-            &prepared_blob.mime,
-            prepared_blob.num_frames,
-        )?;
-        prepared_single.perceptual_hash = imported_phash.clone();
-
-        scheduled_work += work_types_for_new_ingest(
-            &prepared_single.mime_type,
-            prepared_single.frame_count,
-            !prepared_blob.has_thumbnail && !member.request.skip_thumbnail,
-            prepared_single.perceptual_hash.is_some(),
-            auto_tag_on_import,
-        )
-        .len();
-        new_members.push((
-            prepared_single.clone(),
-            member.member_index,
-            ResolvedCollectionMember {
-                metadata: member.metadata.clone(),
-                entity_hash: prepared_single.entity_hash.clone(),
-                file_hash: prepared_single.entity_hash.clone(),
-                disposition: SingleIngestDisposition::Imported,
-            },
-        ));
-    }
-
-    let total_member_count = new_members.len() + existing_member_ids.len();
-    if total_member_count == 0 {
-        return Ok(CollectionIngestOutcome {
-            collection_id: None,
-            collection_hash: None,
-            imported_hashes,
-            resolved_members: resolved_members.into_iter().flatten().collect(),
-            flags,
-            scheduled_work,
-        });
-    }
-
-    let prepared_members: Vec<IngestPreparedSingle> = new_members
-        .iter()
-        .map(|(member, _, _)| member.clone())
-        .collect();
-    let new_member_results: Vec<(usize, ResolvedCollectionMember)> = new_members
-        .into_iter()
-        .map(|(_, member_index, identity)| (member_index, identity))
-        .collect();
-    let deferred_work_by_member: Vec<Vec<DeferredWorkType>> = prepared_members
-        .iter()
-        .map(|member| {
-            work_types_for_new_ingest(
-                &member.mime_type,
-                member.frame_count,
-                !member.has_thumbnail && !member.skip_thumbnail,
-                member.perceptual_hash.is_some(),
-                auto_tag_on_import,
-            )
-        })
-        .collect();
-    let threshold = duplicate_review_distance_threshold();
-    let (collection_id, collection_hash, new_hashes, duplicates_changed) = canonical_db
-        .materialize_ingested_collection_with_blob_leases(
-            preferred_name,
-            &prepared_members,
-            &deferred_work_by_member,
-            &existing_member_ids,
-            existing_collection_id,
-            threshold,
-            blob_leases,
-        )?;
-    flags.duplicates_changed |= duplicates_changed;
-
-    imported_hashes.extend(new_hashes);
-    for (member_index, member) in new_member_results {
-        resolved_members[member_index] = Some(member);
-    }
-    for (member_index, hash) in duplicate_new_member_indices {
-        let existing = canonical_db
-            .get_existing_import_target_by_file_hash_write(&hash)?
-            .ok_or_else(|| format!("deduplicated collection member {hash} was not inserted"))?;
-        let merge =
-            merge_existing_import_target(canonical_db, &existing, &members[member_index].request)
-                .await?;
-        flags.merge(&merge.flags);
-        resolved_members[member_index] = Some(ResolvedCollectionMember {
-            metadata: members[member_index].metadata.clone(),
-            entity_hash: existing.entity_hash,
-            file_hash: existing.file_hash,
-            disposition: SingleIngestDisposition::Reused,
-        });
-    }
-    let resolved_members: Vec<ResolvedCollectionMember> = resolved_members
-        .into_iter()
-        .collect::<Option<Vec<_>>>()
-        .ok_or_else(|| "collection materialization lost a member result".to_string())?;
-    flags.status_changed = true;
-    let _ = crate::background_work::ensure_missing_color_analysis_jobs(
-        canonical_db,
-        &resolved_members
-            .iter()
-            .map(|member| member.entity_hash.clone())
-            .collect::<Vec<_>>(),
-    );
-    Ok(CollectionIngestOutcome {
-        collection_id: Some(collection_id),
-        collection_hash: Some(collection_hash),
-        imported_hashes,
-        resolved_members,
-        flags,
-        scheduled_work,
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
-        acquire_collection_blob_leases, attach_current_sidebar_counts, ingest_single_path,
-        materialize_collection, normalize_subscription_tags, work_types_for_new_ingest,
-        CollectionIngestMember, IngestSourceKind, SingleIngestDisposition, SingleIngestRequest,
+        attach_current_sidebar_counts, ingest_single_path, normalize_subscription_tags,
+        work_types_for_new_ingest, IngestSourceKind, SingleIngestDisposition, SingleIngestRequest,
     };
     use crate::background_work::DeferredWorkType;
     use crate::blob_store::BlobStore;
-    use crate::db::types::{ExpansionMode, MediaEntityPatch};
+    use crate::db::types::MediaEntityPatch;
     use crate::db::LibraryDatabase;
     use crate::duplicates::phash::DEFAULT_DISTANCE_THRESHOLD;
     use crate::media_processing::compute_phash_base64;
@@ -797,7 +541,6 @@ mod tests {
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
-    use std::time::Duration;
     use tempfile::TempDir;
 
     #[test]
@@ -894,6 +637,36 @@ mod tests {
 
     fn write_image(path: &Path, image: &DynamicImage, format: ImageFormat) {
         fs::write(path, encode_image(image, format)).expect("write image");
+    }
+
+    fn write_video(path: &Path) {
+        let ffmpeg = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("vendor/ffmpeg/ffmpeg");
+        let ffmpeg = if ffmpeg.exists() {
+            ffmpeg
+        } else {
+            PathBuf::from("ffmpeg")
+        };
+        let status = std::process::Command::new(ffmpeg)
+            .args([
+                "-v",
+                "quiet",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc=duration=0.2:size=32x32:rate=5",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+            ])
+            .arg(path)
+            .status()
+            .expect("run ffmpeg fixture generator");
+        assert!(status.success(), "generate video fixture");
     }
 
     fn solid_image(width: u32, height: u32, value: u8) -> DynamicImage {
@@ -1014,6 +787,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn image_and_video_import_as_two_direct_media_entities() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+        let image_path = source_root.join("image.png");
+        let video_path = source_root.join("video.mp4");
+        write_image(&image_path, &solid_image(32, 32, 96), ImageFormat::Png);
+        write_video(&video_path);
+
+        let image = ingest_single_path(&db, &blob_store, &request_for_path(&image_path))
+            .await
+            .expect("ingest image");
+        let video = ingest_single_path(&db, &blob_store, &request_for_path(&video_path))
+            .await
+            .expect("ingest video");
+
+        assert!(image.disposition.is_imported());
+        assert!(video.disposition.is_imported());
+        assert!(image.mime.starts_with("image/"));
+        assert!(video.mime.starts_with("video/"));
+        assert_ne!(image.entity_hash, video.entity_hash);
+
+        db.with_read(|conn| {
+            let identities: Vec<(String, String)> = conn
+                .prepare(
+                    "SELECT me.entity_hash, mf.mime_type
+                       FROM media_entity me
+                       JOIN media_file mf ON mf.file_id = me.file_id
+                      ORDER BY mf.mime_type",
+                )?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<_>>()?;
+            assert_eq!(identities.len(), 2);
+            assert!(identities
+                .iter()
+                .any(|(_, mime)| mime.starts_with("image/")));
+            assert!(identities
+                .iter()
+                .any(|(_, mime)| mime.starts_with("video/")));
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row
+                    .get::<_, i64>(0))?,
+                2
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| row
+                    .get::<_, i64>(0))?,
+                2
+            );
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[tokio::test]
     async fn ingest_single_reuses_existing_entity_for_exact_file_hash() {
         let (_tmp, db, blob_store, source_root) = open_test_library();
         let source_path = source_root.join("exact.png");
@@ -1092,7 +918,7 @@ mod tests {
             },
         )
         .expect("seed existing metadata");
-        db.set_entity_status(&[entity_id], 2, ExpansionMode::EntityOnly)
+        db.set_entity_status(&[entity_id], 2)
             .expect("seed existing status");
         db.set_entity_date_created(&first.entity_hash, "2001-02-03T04:05:06Z")
             .expect("seed existing creation date");
@@ -1336,234 +1162,5 @@ mod tests {
             .disposition
             .is_imported());
         assert_eq!(db.get_duplicate_count().expect("duplicate count"), 1);
-    }
-
-    fn collection_member(path: &Path, page_num: u32) -> CollectionIngestMember {
-        CollectionIngestMember {
-            request: SingleIngestRequest {
-                source_kind: IngestSourceKind::Subscription,
-                path: path.to_path_buf(),
-                tag_strings: Vec::new(),
-                source_urls: Vec::new(),
-                name: None,
-                notes: None,
-                created_at: None,
-                initial_status: 0,
-                skip_thumbnail: true,
-                tag_provenance_mask: 0,
-                subscription_id: Some(1),
-            },
-            metadata: Some(ParsedMetadata {
-                post_id: Some("777".to_string()),
-                category: Some("danbooru".to_string()),
-                page_num: Some(page_num),
-                page_count: Some(3),
-                ..Default::default()
-            }),
-        }
-    }
-
-    fn read_member_count(db: &LibraryDatabase, collection_id: i64) -> i64 {
-        db.with_read(move |conn| {
-            conn.query_row(
-                "SELECT member_count FROM media_entity WHERE entity_id = ?1",
-                [collection_id],
-                |row| row.get(0),
-            )
-        })
-        .expect("read member_count")
-    }
-
-    #[tokio::test]
-    async fn collection_hash_leases_do_not_deadlock_in_reversed_order() {
-        let (_tmp, _db, blob_store, _source_root) = open_test_library();
-        let first = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        let second = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-        let result = tokio::time::timeout(Duration::from_secs(1), async {
-            tokio::join!(
-                async {
-                    let leases = acquire_collection_blob_leases(
-                        &blob_store,
-                        vec![first.to_string(), second.to_string()],
-                    )
-                    .await;
-                    drop(leases);
-                },
-                async {
-                    let leases = acquire_collection_blob_leases(
-                        &blob_store,
-                        vec![second.to_string(), first.to_string()],
-                    )
-                    .await;
-                    drop(leases);
-                },
-            )
-        })
-        .await;
-        assert!(result.is_ok(), "reversed collection lease order deadlocked");
-    }
-
-    #[tokio::test]
-    async fn collection_duplicate_hash_members_create_one_membership() {
-        let (_tmp, db, blob_store, source_root) = open_test_library();
-        let path = source_root.join("duplicate.png");
-        write_image(&path, &solid_image(96, 96, 120), ImageFormat::Png);
-
-        let outcome = tokio::time::timeout(
-            Duration::from_secs(2),
-            materialize_collection(
-                &db,
-                &blob_store,
-                "duplicate members",
-                &[collection_member(&path, 0), collection_member(&path, 1)],
-                None,
-                &[],
-            ),
-        )
-        .await
-        .expect("duplicate collection members deadlocked")
-        .expect("duplicate collection members failed");
-
-        let collection_id = outcome.collection_id.expect("collection created");
-        assert_eq!(read_member_count(&db, collection_id), 1);
-        assert_eq!(outcome.imported_hashes.len(), 1);
-        assert_eq!(outcome.resolved_members.len(), 2);
-        assert_eq!(
-            outcome.resolved_members[0].entity_hash,
-            outcome.resolved_members[1].entity_hash
-        );
-        assert!(outcome.resolved_members[0].disposition.is_imported());
-        assert!(matches!(
-            outcome.resolved_members[1].disposition,
-            SingleIngestDisposition::Reused
-        ));
-    }
-
-    #[tokio::test]
-    async fn existing_collection_member_republishes_a_missing_original() {
-        let (_tmp, db, blob_store, source_root) = open_test_library();
-        let path = source_root.join("collection-repair.png");
-        write_image(&path, &solid_image(96, 96, 145), ImageFormat::Png);
-
-        let first = materialize_collection(
-            &db,
-            &blob_store,
-            "repair collection",
-            &[collection_member(&path, 0)],
-            None,
-            &[],
-        )
-        .await
-        .expect("initial collection materialization");
-        let collection_id = first.collection_id.expect("collection created");
-        let file_hash = first.resolved_members[0].file_hash.clone();
-        let original_path = blob_store
-            .find_original(&file_hash, Some("png"))
-            .expect("find original")
-            .expect("original exists")
-            .0;
-        fs::remove_file(original_path).expect("remove original for repair test");
-
-        let repaired = materialize_collection(
-            &db,
-            &blob_store,
-            "repair collection",
-            &[collection_member(&path, 0)],
-            Some(collection_id),
-            &[],
-        )
-        .await
-        .expect("repair collection materialization");
-
-        assert_eq!(repaired.collection_id, Some(collection_id));
-        assert_eq!(read_member_count(&db, collection_id), 1);
-        assert!(blob_store.read_original(&file_hash, Some("png")).is_ok());
-    }
-
-    #[tokio::test]
-    async fn collection_materialization_preserves_input_order_for_mixed_results() {
-        let (_tmp, db, blob_store, source_root) = open_test_library();
-        let existing_path = source_root.join("existing.png");
-        let new_path = source_root.join("new.png");
-        write_image(&existing_path, &solid_image(96, 96, 40), ImageFormat::Png);
-        write_image(&new_path, &solid_image(96, 96, 220), ImageFormat::Png);
-
-        let existing = ingest_single_path(&db, &blob_store, &request_for_path(&existing_path))
-            .await
-            .expect("seed existing media");
-        let outcome = materialize_collection(
-            &db,
-            &blob_store,
-            "mixed collection",
-            &[
-                collection_member(&new_path, 0),
-                collection_member(&existing_path, 1),
-            ],
-            None,
-            &[],
-        )
-        .await
-        .expect("materialize mixed collection");
-
-        assert_eq!(outcome.resolved_members.len(), 2);
-        assert!(outcome.resolved_members[0].disposition.is_imported());
-        assert_eq!(
-            outcome.resolved_members[1].entity_hash,
-            existing.entity_hash
-        );
-        assert!(matches!(
-            outcome.resolved_members[1].disposition,
-            SingleIngestDisposition::Reused
-        ));
-        assert_eq!(outcome.imported_hashes.len(), 1);
-        assert_eq!(
-            outcome.imported_hashes[0],
-            outcome.resolved_members[0].entity_hash
-        );
-    }
-
-    #[tokio::test]
-    async fn collection_materialization_creates_one_member_and_appends_incrementally() {
-        let (_tmp, db, blob_store, source_root) = open_test_library();
-
-        let first_path = source_root.join("p0.png");
-        let second_path = source_root.join("p1.png");
-        let third_path = source_root.join("p2.png");
-        write_image(&first_path, &patterned_image(96, 96), ImageFormat::Png);
-        write_image(&second_path, &solid_image(96, 96, 30), ImageFormat::Png);
-        write_image(&third_path, &solid_image(96, 96, 200), ImageFormat::Png);
-
-        let outcome = materialize_collection(
-            &db,
-            &blob_store,
-            "post 777",
-            &[collection_member(&first_path, 0)],
-            None,
-            &[],
-        )
-        .await
-        .expect("materialize initial collection");
-
-        let collection_id = outcome.collection_id.expect("collection created");
-        assert_eq!(read_member_count(&db, collection_id), 1);
-
-        // A later run discovers one more page of the same post — the member
-        // appends to the existing collection and the count follows.
-        let outcome2 = materialize_collection(
-            &db,
-            &blob_store,
-            "post 777",
-            &[
-                collection_member(&second_path, 1),
-                collection_member(&third_path, 2),
-            ],
-            Some(collection_id),
-            &[],
-        )
-        .await
-        .expect("append to existing collection");
-
-        assert_eq!(outcome2.collection_id, Some(collection_id));
-        assert_eq!(read_member_count(&db, collection_id), 3);
     }
 }

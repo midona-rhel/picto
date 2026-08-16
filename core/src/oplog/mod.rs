@@ -52,16 +52,7 @@ pub(crate) fn is_supported_op_type(op_type: &str) -> bool {
             | "smart_folder_updated"
             | "smart_folder_moved"
             | "smart_folder_deleted"
-            | "collection_created"
-            | "collection_renamed"
-            | "collection_members_added"
-            | "collection_members_removed"
-            | "collection_members_reordered"
-            | "collection_split"
             | "duplicate_decided"
-            | "subscription_group_created"
-            | "subscription_group_updated"
-            | "subscription_group_deleted"
             | "subscription_created"
             | "subscription_updated"
             | "subscription_deleted"
@@ -144,8 +135,6 @@ pub fn next_hlc() -> String {
 ///
 /// Stored outside any library root (a synced library must never carry a
 /// device id), under `~/.picto/device-id`; created on first use.
-/// TODO: resolve from the Electron app-data directory once the host passes
-/// one through `initialize`.
 pub fn device_id() -> String {
     static ID: OnceLock<String> = OnceLock::new();
     ID.get_or_init(|| {
@@ -257,6 +246,7 @@ mod tests {
     fn operation_vocabulary_is_explicit() {
         assert!(is_supported_op_type("entity_recreated"));
         assert!(is_supported_op_type("subscription_query_updated"));
+        assert!(!is_supported_op_type("removed_operation"));
         assert!(!is_supported_op_type("entity_cretaed"));
     }
 }

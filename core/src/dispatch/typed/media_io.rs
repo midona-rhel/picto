@@ -22,14 +22,6 @@ pub struct ResolveFilePathsBatchInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct OpenInNewWindowInput {
-    pub hash: String,
-    pub width: Option<u32>,
-    pub height: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct EnsureThumbnailInput {
     pub hash: String,
 }
@@ -114,21 +106,6 @@ pub async fn export_media(
         )
         .await?;
     serde_json::to_value(result).map_err(|e| e.to_string())
-}
-
-pub async fn open_in_new_window(
-    _state: &AppState,
-    input: OpenInNewWindowInput,
-) -> Result<(), String> {
-    crate::events::emit(
-        crate::events::event_names::OPEN_DETAIL_WINDOW,
-        &crate::events::OpenDetailWindowEvent {
-            hash: input.hash,
-            width: input.width,
-            height: input.height,
-        },
-    );
-    Ok(())
 }
 
 pub async fn ensure_thumbnail(

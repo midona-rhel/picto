@@ -1,8 +1,14 @@
+mod artstation;
+mod baraag;
 mod danbooru;
+mod deviantart;
 mod e621;
-mod fallback;
+mod furaffinity;
+mod hentaifoundry;
 mod pixiv;
-mod twitter;
+mod sankaku;
+mod tumblr;
+mod webtoons;
 
 use serde_json::Value;
 
@@ -38,7 +44,7 @@ pub(super) fn append_tag_values(tags: &mut Vec<(String, String)>, namespace: &st
 }
 
 /// Select the adapter for raw gallery-dl metadata by its `category` field.
-pub(super) fn adapter_for_json(json: &Value) -> &'static dyn SiteAdapter {
+pub(super) fn adapter_for_json(json: &Value) -> Option<&'static dyn SiteAdapter> {
     let cat = json
         .get("category")
         .and_then(|v| v.as_str())
@@ -47,11 +53,19 @@ pub(super) fn adapter_for_json(json: &Value) -> &'static dyn SiteAdapter {
         .unwrap_or("");
 
     match cat {
-        "danbooru" | "gelbooru" | "rule34" | "sankaku" | "idolcomplex" | "safebooru"
-        | "yandere" | "konachan" => &danbooru::ADAPTER,
-        "e621" | "e926" => &e621::ADAPTER,
-        "twitter" => &twitter::ADAPTER,
-        "pixiv" | "pixivuser" => &pixiv::ADAPTER,
-        _ => &fallback::ADAPTER,
+        "artstation" => Some(&artstation::ADAPTER),
+        "baraag" => Some(&baraag::ADAPTER),
+        "danbooru" | "gelbooru" | "rule34" | "yandere" | "konachan" | "safebooru" => {
+            Some(&danbooru::ADAPTER)
+        }
+        "deviantart" => Some(&deviantart::ADAPTER),
+        "e621" => Some(&e621::ADAPTER),
+        "furaffinity" => Some(&furaffinity::ADAPTER),
+        "hentaifoundry" => Some(&hentaifoundry::ADAPTER),
+        "idolcomplex" | "sankaku" => Some(&sankaku::ADAPTER),
+        "pixiv" => Some(&pixiv::ADAPTER),
+        "tumblr" => Some(&tumblr::ADAPTER),
+        "webtoons" => Some(&webtoons::ADAPTER),
+        _ => None,
     }
 }

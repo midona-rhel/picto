@@ -53,9 +53,6 @@ export function refreshSubscriptionsWorkspace(): Promise<void> {
         if (current?.kind === 'subscription' && snapshot.subscriptions.some((sub) => sub.id === current.id)) {
           return current;
         }
-        if (current?.kind === 'group' && snapshot.groups.some((group) => group.id === current.id)) {
-          return current;
-        }
         return null;
       });
     } catch (error) {
@@ -134,8 +131,7 @@ export function startSubscriptionsSettle(): () => void {
     },
   );
 
-  const isSubscriptionTask = (task?: { kind?: string }) =>
-    task?.kind === 'subscription' || task?.kind === 'subscription_group';
+  const isSubscriptionTask = (task?: { kind?: string }) => task?.kind === 'subscription';
 
   const unlistenUpsertPromise = listen<{ task?: { kind?: string } }>(
     'runtime/task_upserted',
@@ -144,13 +140,13 @@ export function startSubscriptionsSettle(): () => void {
       triggerProgressThrottled();
     },
   );
-  // task_removed carries only task_id — subscription tasks are "sub:<id>" / "group:<id>".
+  // task_removed carries only task_id. Subscription tasks use the "sub:<id>" prefix.
   const unlistenRemovePromise = listen<{ task_id?: string }>(
     'runtime/task_removed',
     ({ payload }) => {
       if (cancelled) return;
       const id = payload.task_id ?? '';
-      if (!id.startsWith('sub:') && !id.startsWith('group:')) return;
+      if (!id.startsWith('sub:')) return;
       triggerProgressThrottled();
     },
   );

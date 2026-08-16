@@ -10,8 +10,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
-use crate::events::{self, ManualImportProgressEvent};
-
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(700);
 const WATCH_SWEEP_INTERVAL: Duration = Duration::from_millis(250);
 const FILE_STABLE_WAIT: Duration = Duration::from_millis(250);
@@ -102,7 +100,7 @@ pub async fn import_existing_for_folder_watch(
         return Ok(());
     }
 
-    for (index, path) in file_paths.iter().enumerate() {
+    for path in &file_paths {
         process_import_path(
             canonical_db,
             blob_store,
@@ -113,15 +111,6 @@ pub async fn import_existing_for_folder_watch(
             path,
         )
         .await?;
-
-        emit_progress(
-            index + 1,
-            file_paths.len(),
-            path.strip_prefix(&root_path)
-                .unwrap_or(path)
-                .display()
-                .to_string(),
-        );
     }
 
     Ok(())
@@ -406,18 +395,4 @@ async fn process_import_path(
     .await?;
 
     Ok(())
-}
-
-fn emit_progress(done: usize, total: usize, current_file: String) {
-    events::emit(
-        events::event_names::MANUAL_IMPORT_PROGRESS,
-        &ManualImportProgressEvent {
-            done,
-            total,
-            current_file,
-            imported: done,
-            skipped: 0,
-            errors: 0,
-        },
-    );
 }

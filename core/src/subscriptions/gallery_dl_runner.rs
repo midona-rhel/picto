@@ -1,6 +1,6 @@
-//! Gallery-dl Python bridge runner.
+//! Gallery-dl bridge runner.
 //!
-//! Manages gallery-dl invocations through the owned Python bridge:
+//! Manages gallery-dl invocations through the owned Picto bridge:
 //! generates temp config files, spawns the bridge, and consumes NDJSON item
 //! events without relying on sidecar JSON as the live contract.
 //!
@@ -10,18 +10,16 @@
 //! - `gallery_dl/job.py` — DownloadJob, skip/abort logic (lines 621-632)
 //! - `gallery_dl/archive.py` — SQLite download archive
 //! - `gallery_dl/extractor/danbooru.py` — tag_string_* fields
-//! - `gallery_dl/extractor/e621.py` — nested tags dict
 
 mod adapters;
 mod config;
 mod failure;
 mod filesystem;
 mod metadata;
-mod metadata_validation;
 mod sites;
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use serde::Deserialize;
@@ -37,13 +35,9 @@ use self::config::build_config;
 pub use failure::{classify_failure, error_tail, final_error_line, FailureKind, RecoveryAction};
 pub use filesystem::cleanup_temp_dir;
 pub use metadata::{extract_creator_identifier, parse_metadata, parse_tags};
-pub use metadata_validation::{
-    get_site_metadata_schema, validate_site_metadata, SiteMetadataSchema,
-    SiteMetadataValidationResult,
-};
 pub use sites::{
-    advertised_sites, build_url, canonical_site_id, credential_site_aliases, extract_domain,
-    site_by_id, substitute_query, SiteEntry, ADVERTISED_SITE_IDS, SITES,
+    build_url, extract_domain, normalize_baraag_username, normalize_furaffinity_username,
+    normalize_tumblr_blog, normalize_webtoons_url, site_by_id, SiteEntry, SITES,
 };
 
 pub struct RunOptions {
@@ -53,12 +47,15 @@ pub struct RunOptions {
     pub query_id: Option<i64>,
     /// Site identifier used to derive the gallery-dl config.
     pub site_id: String,
-    /// Full URL to download from (after query substitution).
+    /// Full source URL built by the subscription source adapter.
     pub url: String,
-    /// Max files to download (maps to `--post-range`). None = unlimited.
+    /// Maximum source posts to process. None = unlimited.
     pub post_limit: Option<u32>,
-    /// Starting post index for `--post-range` (1-based). Used by range_offset pagination.
+    /// Starting source-post index (1-based). Used by range-offset pagination.
     pub range_start: u32,
+    /// Opaque source-owned continuation token. Only used by sources whose
+    /// gallery-dl extractor exposes stable keyset pagination.
+    pub source_cursor: Option<String>,
     /// Abort after N consecutive skipped files (maps to `-A N`).
     /// None = no abort (first run / initial sync).
     pub abort_threshold: Option<u32>,
@@ -82,6 +79,8 @@ pub struct RunSummary {
     pub discovered_items: usize,
     pub discovered_post_ids: Vec<String>,
     pub skipped_archive_items: usize,
+    pub source_cursor: Option<String>,
+    pub source_page_items: usize,
 }
 
 #[derive(Debug, Deserialize)]
@@ -93,6 +92,10 @@ struct BridgeEvent {
     metadata: Option<serde_json::Value>,
     #[serde(default)]
     item_url: Option<String>,
+    #[serde(default)]
+    cursor: Option<String>,
+    #[serde(default)]
+    item_count: Option<usize>,
 }
 
 #[derive(Default)]
@@ -101,6 +104,36 @@ struct BridgeOutputStats {
     discovered_items: usize,
     discovered_post_ids: BTreeSet<String>,
     skipped_archive_items: usize,
+    source_cursor: Option<String>,
+    source_page_items: usize,
+}
+
+enum BridgeLaunch {
+    Sidecar(PathBuf),
+    #[cfg(debug_assertions)]
+    DevelopmentPython {
+        python: String,
+        script: PathBuf,
+        module_dir: PathBuf,
+    },
+}
+
+impl BridgeLaunch {
+    fn module_dir(&self) -> Option<&Path> {
+        match self {
+            Self::Sidecar(_) => None,
+            #[cfg(debug_assertions)]
+            Self::DevelopmentPython { module_dir, .. } => Some(module_dir),
+        }
+    }
+
+    fn description(&self) -> &'static str {
+        match self {
+            Self::Sidecar(_) => "self-contained sidecar",
+            #[cfg(debug_assertions)]
+            Self::DevelopmentPython { .. } => "development Python fallback",
+        }
+    }
 }
 
 fn config_bool_at<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<bool> {
@@ -109,6 +142,41 @@ fn config_bool_at<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<boo
         current = current.get(*key)?;
     }
     current.as_bool()
+}
+
+fn bridge_ranges(start: u32, limit: Option<u32>) -> (Option<String>, Option<String>) {
+    let range = limit.map(|limit| {
+        let start = start.max(1);
+        let end = start.saturating_add(limit).saturating_sub(1);
+        format!("{start}-{end}")
+    });
+
+    (range, None)
+}
+
+fn bridge_ranges_for_site(
+    site_id: &str,
+    start: u32,
+    limit: Option<u32>,
+) -> (Option<String>, Option<String>) {
+    if site_id == "artstation" {
+        return (None, None);
+    }
+    if site_id == "tumblr" {
+        return (None, None);
+    }
+    if matches!(site_id, "idolcomplex" | "sankaku") {
+        return bridge_ranges(1, limit);
+    }
+    if matches!(site_id, "deviantart" | "webtoons") {
+        let child_range = limit.map(|limit| {
+            let start = start.max(1);
+            let end = start.saturating_add(limit).saturating_sub(1);
+            format!("{start}-{end}")
+        });
+        return (None, child_range);
+    }
+    bridge_ranges(start, limit)
 }
 
 fn metadata_has_raw_key(metadata: &ParsedMetadata, key: &str) -> bool {
@@ -161,10 +229,10 @@ impl GalleryDlRunner {
         item_tx: tokio::sync::mpsc::Sender<DownloadedItem>,
     ) -> Result<RunSummary, String> {
         let run_start = std::time::Instant::now();
-        self.ensure_runtime_dependencies().await?;
+        let launch = self.launch_spec()?;
         info!(
-            elapsed_ms = run_start.elapsed().as_millis(),
-            "gallery-dl: deps checked"
+            runtime = launch.description(),
+            "gallery-dl bridge runtime selected"
         );
 
         // 1. Create temp download directory
@@ -194,17 +262,18 @@ impl GalleryDlRunner {
             .await
             .map_err(|e| format!("Config write error: {e}"))?;
 
+        let (post_range, child_range) =
+            bridge_ranges_for_site(&opts.site_id, opts.range_start, opts.post_limit);
         let bridge_request = serde_json::json!({
             "url": opts.url,
+            "site_id": opts.site_id,
             "subscription_id": opts.subscription_id,
             "query_id": opts.query_id,
             "config_path": config_path.display().to_string(),
-            "gallery_dl_module_dir": self.gallery_dl_module_dir().map(|path| path.display().to_string()),
-            "post_range": opts.post_limit.map(|limit| {
-                let start = opts.range_start.max(1);
-                let end = start.saturating_add(limit).saturating_sub(1);
-                format!("{start}-{end}")
-            }),
+            "gallery_dl_module_dir": launch.module_dir().map(|path| path.display().to_string()),
+            "post_range": post_range,
+            "child_range": child_range,
+            "source_cursor": opts.source_cursor,
             "abort_threshold": opts.abort_threshold,
             "archive_path": (!opts.archive_path.as_os_str().is_empty()).then(|| opts.archive_path.display().to_string()),
             "archive_prefix": opts.archive_prefix,
@@ -218,9 +287,6 @@ impl GalleryDlRunner {
         .await
         .map_err(|e| format!("Bridge request write error: {e}"))?;
 
-        let bridge_path = self.bridge_script_path()?;
-        let python = self.python_executable();
-
         info!(
             url = %opts.url,
             post_limit = ?opts.post_limit,
@@ -229,27 +295,44 @@ impl GalleryDlRunner {
             elapsed_ms = run_start.elapsed().as_millis(),
             "Spawning gallery-dl bridge"
         );
-        info!(python = %python, bridge = %bridge_path.display(), "gallery-dl bridge command");
+        match &launch {
+            BridgeLaunch::Sidecar(path) => {
+                info!(bridge = %path.display(), "gallery-dl bridge command");
+            }
+            #[cfg(debug_assertions)]
+            BridgeLaunch::DevelopmentPython { python, script, .. } => {
+                info!(python = %python, bridge = %script.display(), "gallery-dl bridge command");
+            }
+        }
 
         // 4. Spawn subprocess
-        let mut cmd = tokio::process::Command::new(&python);
-        cmd.arg(&bridge_path)
-            .arg("--request")
+        let mut cmd = match &launch {
+            BridgeLaunch::Sidecar(path) => tokio::process::Command::new(path),
+            #[cfg(debug_assertions)]
+            BridgeLaunch::DevelopmentPython {
+                python,
+                script,
+                module_dir,
+            } => {
+                let mut cmd = tokio::process::Command::new(python);
+                cmd.arg(script);
+
+                let mut python_paths = vec![module_dir.clone()];
+                if let Some(existing) = std::env::var_os("PYTHONPATH") {
+                    python_paths.extend(std::env::split_paths(&existing));
+                }
+                let python_path = std::env::join_paths(python_paths)
+                    .map_err(|_| "Failed to construct development PYTHONPATH".to_string())?;
+                cmd.env("PYTHONPATH", python_path);
+                cmd
+            }
+        };
+        cmd.arg("--request")
             .arg(&request_path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
-
-        if let Some(module_dir) = self.gallery_dl_module_dir() {
-            let merged = match std::env::var("PYTHONPATH") {
-                Ok(existing) if !existing.is_empty() => {
-                    format!("{}:{}", module_dir.display(), existing)
-                }
-                _ => module_dir.display().to_string(),
-            };
-            cmd.env("PYTHONPATH", merged);
-        }
 
         // On Windows: suppress console window and ensure clean process creation.
         #[cfg(target_os = "windows")]
@@ -300,10 +383,6 @@ impl GalleryDlRunner {
                                 continue;
                             };
                             log_bridge_item_intake(&metadata);
-                            stats.discovered_items += 1;
-                            if let Some(post_id) = metadata.post_id.clone() {
-                                stats.discovered_post_ids.insert(post_id);
-                            }
                             if item_tx
                                 .send(DownloadedItem {
                                     file_path: PathBuf::from(file_path),
@@ -334,6 +413,10 @@ impl GalleryDlRunner {
                                     error_message: "gallery-dl exhausted item retries".to_string(),
                                 });
                             }
+                        }
+                        "source_cursor" => {
+                            stats.source_cursor = event.cursor.filter(|cursor| !cursor.is_empty());
+                            stats.source_page_items = event.item_count.unwrap_or_default();
                         }
                         _ => {}
                     }
@@ -373,7 +456,7 @@ impl GalleryDlRunner {
             _ = opts.cancel.cancelled() => {
                 info!(pid = ?child_pid, "Gallery-dl cancelled by user, killing subprocess");
                 // On Windows, child.kill() only terminates the direct process, not
-                // the tree (gallery-dl may run through a Python wrapper). Use
+                // the tree (the development fallback may run through Python). Use
                 // taskkill /F /T to kill the full process tree.
                 #[cfg(target_os = "windows")]
                 {
@@ -461,9 +544,46 @@ impl GalleryDlRunner {
             discovered_items: bridge_stats.discovered_items,
             discovered_post_ids: bridge_stats.discovered_post_ids.into_iter().collect(),
             skipped_archive_items: bridge_stats.skipped_archive_items,
+            source_cursor: bridge_stats.source_cursor,
+            source_page_items: bridge_stats.source_page_items,
         })
     }
 
+    fn launch_spec(&self) -> Result<BridgeLaunch, String> {
+        if is_sidecar_path(&self.binary_path) {
+            return Ok(BridgeLaunch::Sidecar(self.binary_path.clone()));
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            if !is_development_fallback_path(&self.binary_path) {
+                return Err(format!(
+                    "Unsupported gallery-dl runtime `{}`; expected the Picto bridge sidecar",
+                    self.binary_path.display()
+                ));
+            }
+
+            let module_dir = self.gallery_dl_module_dir().ok_or_else(|| {
+                "Development gallery-dl fallback is missing its vendored Python wheel".to_string()
+            })?;
+            let script = self.bridge_script_path()?;
+            return Ok(BridgeLaunch::DevelopmentPython {
+                python: self.python_executable(),
+                script,
+                module_dir,
+            });
+        }
+
+        #[cfg(not(debug_assertions))]
+        {
+            Err(format!(
+                "Unsupported gallery-dl runtime `{}`; packaged builds require the Picto bridge sidecar",
+                self.binary_path.display()
+            ))
+        }
+    }
+
+    #[cfg(debug_assertions)]
     fn python_executable(&self) -> String {
         #[cfg(target_os = "windows")]
         {
@@ -475,6 +595,7 @@ impl GalleryDlRunner {
         }
     }
 
+    #[cfg(debug_assertions)]
     fn gallery_dl_module_dir(&self) -> Option<PathBuf> {
         let parent = self.binary_path.parent()?;
         let wheel = parent.join("wheel");
@@ -484,6 +605,7 @@ impl GalleryDlRunner {
         None
     }
 
+    #[cfg(debug_assertions)]
     fn bridge_script_path(&self) -> Result<PathBuf, String> {
         let mut roots = Vec::new();
         if let Ok(cwd) = std::env::current_dir() {
@@ -507,92 +629,121 @@ impl GalleryDlRunner {
         }
         Err("Unable to locate scripts/gallery_dl_bridge.py".to_string())
     }
+}
 
-    async fn ensure_runtime_dependencies(&self) -> Result<(), String> {
-        static DEPS_CHECKED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
-        if DEPS_CHECKED.get().is_some() {
-            return Ok(());
+#[cfg(target_os = "windows")]
+const BRIDGE_BIN: &str = "picto-gallery-dl-bridge.exe";
+#[cfg(not(target_os = "windows"))]
+const BRIDGE_BIN: &str = "picto-gallery-dl-bridge";
+
+#[cfg(all(debug_assertions, target_os = "windows"))]
+const DEV_FALLBACK_BIN: &str = "gallery-dl.exe";
+#[cfg(all(debug_assertions, not(target_os = "windows")))]
+const DEV_FALLBACK_BIN: &str = "gallery-dl";
+
+fn is_sidecar_path(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some(BRIDGE_BIN)
+}
+
+#[cfg(debug_assertions)]
+fn is_development_fallback_path(path: &Path) -> bool {
+    path.file_name().and_then(|name| name.to_str()) == Some(DEV_FALLBACK_BIN)
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some("gallery-dl")
+        && path
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            == Some("vendor")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        bridge_ranges, bridge_ranges_for_site, is_sidecar_path, BridgeLaunch, GalleryDlRunner,
+    };
+
+    #[test]
+    fn runner_uses_direct_sidecar_launch() {
+        #[cfg(target_os = "windows")]
+        let path = std::path::PathBuf::from("vendor/gallery-dl/picto-gallery-dl-bridge.exe");
+        #[cfg(not(target_os = "windows"))]
+        let path = std::path::PathBuf::from("vendor/gallery-dl/picto-gallery-dl-bridge");
+
+        let runner = GalleryDlRunner::new(path.clone());
+        match runner.launch_spec().unwrap() {
+            BridgeLaunch::Sidecar(selected) => assert_eq!(selected, path),
+            #[cfg(debug_assertions)]
+            BridgeLaunch::DevelopmentPython { .. } => panic!("sidecar selected Python fallback"),
         }
+    }
 
-        #[cfg(target_os = "macos")]
-        {
-            let vendor_marker = format!(
-                "{}vendor{}gallery-dl{}gallery-dl",
-                std::path::MAIN_SEPARATOR,
-                std::path::MAIN_SEPARATOR,
-                std::path::MAIN_SEPARATOR
-            );
-            let bin = self.binary_path.to_string_lossy();
-            if !bin.contains(&vendor_marker) {
-                return Ok(());
-            }
+    #[test]
+    fn picto_bridge_path_is_selected_as_a_sidecar() {
+        #[cfg(target_os = "windows")]
+        let path = std::path::Path::new("vendor/gallery-dl/picto-gallery-dl-bridge.exe");
+        #[cfg(not(target_os = "windows"))]
+        let path = std::path::Path::new("vendor/gallery-dl/picto-gallery-dl-bridge");
 
-            let vendor_dir = self
-                .binary_path
-                .parent()
-                .ok_or_else(|| "Invalid gallery-dl vendor path".to_string())?;
-            let wheel_dir = vendor_dir.join("wheel");
-            let existing_py = std::env::var("PYTHONPATH").unwrap_or_default();
-            let merged_py = if existing_py.is_empty() {
-                wheel_dir.display().to_string()
-            } else {
-                format!("{}:{}", wheel_dir.display(), existing_py)
-            };
+        assert!(is_sidecar_path(path));
+        assert!(!is_sidecar_path(std::path::Path::new(
+            "vendor/gallery-dl/gallery-dl"
+        )));
+    }
 
-            let check_status = tokio::process::Command::new("python3")
-                .arg("-c")
-                .arg("import requests")
-                .env("PYTHONPATH", &merged_py)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await
-                .map_err(|e| format!("Failed to validate gallery-dl python deps: {e}"))?;
-            if check_status.success() {
-                DEPS_CHECKED.set(()).ok();
-                return Ok(());
-            }
+    #[test]
+    fn post_limit_maps_to_one_gallery_dl_post_range() {
+        assert_eq!(
+            bridge_ranges(101, Some(50)),
+            (Some("101-150".to_string()), None)
+        );
+    }
 
-            warn!("gallery-dl dependency bootstrap: installing missing Python package 'requests'");
-            let install_status = tokio::process::Command::new("python3")
-                .args([
-                    "-m",
-                    "pip",
-                    "install",
-                    "--disable-pip-version-check",
-                    "--quiet",
-                    "--target",
-                ])
-                .arg(&wheel_dir)
-                .arg("requests")
-                .status()
-                .await
-                .map_err(|e| format!("Failed to run pip for gallery-dl dependencies: {e}"))?;
-            if !install_status.success() {
-                return Err(
-                    "gallery-dl is missing Python dependency 'requests' and auto-install failed. Run `bash scripts/download-gallery-dl.sh`."
-                        .to_string(),
-                );
-            }
+    #[test]
+    fn artstation_uses_native_project_limit_instead_of_asset_range() {
+        assert_eq!(
+            bridge_ranges_for_site("artstation", 5, Some(2)),
+            (None, None)
+        );
+        assert_eq!(
+            bridge_ranges_for_site("danbooru", 5, Some(2)),
+            (Some("5-6".to_string()), None)
+        );
+        assert_eq!(
+            bridge_ranges_for_site("idolcomplex", 5, Some(2)),
+            (Some("1-2".to_string()), None)
+        );
+        assert_eq!(
+            bridge_ranges_for_site("sankaku", 5, Some(2)),
+            (Some("1-2".to_string()), None)
+        );
+    }
 
-            let recheck_status = tokio::process::Command::new("python3")
-                .arg("-c")
-                .arg("import requests")
-                .env("PYTHONPATH", &merged_py)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .status()
-                .await
-                .map_err(|e| format!("Failed to re-validate gallery-dl python deps: {e}"))?;
-            if !recheck_status.success() {
-                return Err(
-                    "gallery-dl dependency check still failing after install. Run `bash scripts/download-gallery-dl.sh`."
-                        .to_string(),
-                );
-            }
-        }
+    #[test]
+    fn webtoons_uses_child_range_without_splitting_episode_images() {
+        assert_eq!(
+            bridge_ranges_for_site("webtoons", 5, Some(2)),
+            (None, Some("5-6".to_string()))
+        );
+        assert_eq!(bridge_ranges_for_site("webtoons", 1, None), (None, None));
+    }
 
-        DEPS_CHECKED.set(()).ok();
-        Ok(())
+    #[test]
+    fn deviantart_uses_child_range_without_splitting_deviation_images() {
+        assert_eq!(
+            bridge_ranges_for_site("deviantart", 5, Some(2)),
+            (None, Some("5-6".to_string()))
+        );
+        assert_eq!(bridge_ranges_for_site("deviantart", 1, None), (None, None));
+    }
+
+    #[test]
+    fn tumblr_uses_native_whole_post_limits() {
+        assert_eq!(bridge_ranges_for_site("tumblr", 5, Some(2)), (None, None));
+        assert_eq!(bridge_ranges_for_site("tumblr", 1, None), (None, None));
     }
 }

@@ -1,16 +1,13 @@
 {
-  "_comment": "Intentional transport asymmetries only. resolve_file_paths_batch and ensure_thumbnail are called by Electron host code; the remaining Rust-only commands are subscription diagnostics/history. ts_only commands terminate in Electron and never reach Rust dispatch.",
+  "_comment": "Intentional transport asymmetries only. Electron host and release scripts call rust_only commands directly; ts_only commands terminate in Electron and never reach Rust dispatch.",
   "rust_only": [
     "ensure_thumbnail",
-    "get_site_metadata_schema",
-    "list_subscription_query_runs",
-    "resolve_file_paths_batch",
-    "validate_site_metadata"
+    "resolve_file_paths_batch"
   ],
   "ts_only": [
     "open_settings_window",
     "auth_session_start",
-    "auth_session_set_bounds",
-    "auth_session_cancel"
+    "auth_session_cancel",
+    "open_in_new_window"
   ]
 }

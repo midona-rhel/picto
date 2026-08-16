@@ -13,7 +13,7 @@ import {
   IconCopy, IconClipboardCopy, IconLink, IconBookmark, IconBookmarks,
   IconRefresh, IconTrash, IconArrowBackUp,
   IconSelectAll, IconDeselect,
-  IconStack2, IconStackPop, IconSearch,
+  IconSearch,
   IconFolder, IconStar, IconUpload,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
@@ -34,13 +34,10 @@ interface GridMenuContext {
   querySelectionActive: boolean;
   singleSelected: boolean;
   singleHash: string | null;
-  singleKind: string | null;
-  hasCollections: boolean;
   hasFolders?: boolean;
   isMixed?: boolean;
   isFoldersOnly?: boolean;
-  scopeKind: 'system' | 'folder' | 'smart_folder' | 'collection' | null;
-  collectionId?: number | null;
+  scopeKind: 'system' | 'folder' | 'smart_folder' | null;
   statusFilter: string | null;
   loadedCount: number;
   onSelectAll: () => void;
@@ -57,10 +54,6 @@ interface GridMenuContext {
   onOpenNewWindow?: (hash: string) => void;
   onAddToFolder?: () => void;
   onRemoveFromFolder?: () => void;
-  onCreateCollection?: () => void;
-  onRemoveFromCollection?: () => void;
-  onSplitCollection?: () => void;
-  onEditCollection?: () => void;
   onOpenTagSelect?: () => void;
   onOpenAiTagger?: () => void;
   onAccept?: () => void;
@@ -74,7 +67,6 @@ interface GridMenuContext {
   singleMime?: string | null;
   onCopyLink?: (hash: string, mime: string) => void;
   onNewFolderWithSelection?: () => void;
-  onMergeIntoCollection?: () => void;
   onSearchByImage?: (engine: string, hash: string) => void;
   onSetRating?: (rating: number) => void;
   onExport?: () => void;
@@ -178,41 +170,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
         action: ctx.onNewFolderWithSelection,
       }));
     }
-    if (selectionCount > 1 && ctx.scopeKind !== 'collection') {
-      if (ctx.hasCollections && ctx.onMergeIntoCollection) {
-        // Selection includes a collection — offer merge instead of create
-        entries.push(item('Merge into Collection', {
-          icon: <IconStack2 size={15} />,
-          action: ctx.onMergeIntoCollection,
-        }));
-      } else {
-        entries.push(item('Create Collection', {
-          icon: <IconStack2 size={15} />,
-          action: ctx.onCreateCollection,
-        }));
-      }
-    }
-    if (ctx.scopeKind === 'collection') {
-      const removeLabel = selectionCount > 1 ? `Remove ${selectionCount} from Collection` : 'Remove from Collection';
-      entries.push(item(removeLabel, {
-        icon: <IconStackPop size={15} />,
-        action: ctx.onRemoveFromCollection,
-      }));
-    }
-    entries.push(sep());
-  }
-  // ── Collection actions ──
-  if (ctx.hasCollections || ctx.scopeKind === 'collection') {
-    entries.push(item('Edit Collection', {
-      icon: <IconStack2 size={15} />,
-      action: ctx.onEditCollection,
-    }));
-  }
-  if (ctx.scopeKind === 'collection' || (singleSelected && ctx.singleKind === 'collection')) {
-    entries.push(item('Split Collection', {
-      icon: <IconStackPop size={15} />,
-      action: ctx.onSplitCollection,
-    }));
     entries.push(sep());
   }
 

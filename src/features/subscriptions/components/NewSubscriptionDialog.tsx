@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { IconChevronRight } from '@tabler/icons-react';
 import { GlassModal } from '../../../shared/ui/GlassModal/GlassModal';
-import { ToggleSwitch } from '../../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { ActionButton } from './ActionButton';
 import styles from './NewSubscriptionDialog.module.css';
 
@@ -9,12 +8,11 @@ export interface CreateSubscriptionInput {
   name: string;
   initialPostLimit: number;
   periodicPostLimit: number;
-  autoCollections: boolean;
 }
 
 /**
  * Compact single-form dialog for adding one subscription.
- * Sync limits and collection behaviour live under Advanced.
+ * Sync limits live under Advanced.
  */
 export function NewSubscriptionDialog({
   open,
@@ -30,7 +28,6 @@ export function NewSubscriptionDialog({
   const [name, setName] = useState('');
   const [initialLimit, setInitialLimit] = useState('100');
   const [periodicLimit, setPeriodicLimit] = useState('50');
-  const [autoCollections, setAutoCollections] = useState(true);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const canCreate = name.trim() !== '' && !busy;
@@ -39,7 +36,6 @@ export function NewSubscriptionDialog({
     setName('');
     setInitialLimit('100');
     setPeriodicLimit('50');
-    setAutoCollections(true);
     setShowAdvanced(false);
   };
 
@@ -55,7 +51,6 @@ export function NewSubscriptionDialog({
       name: name.trim(),
       initialPostLimit: Number.isFinite(parsedInitial) && parsedInitial > 0 ? parsedInitial : 100,
       periodicPostLimit: Number.isFinite(parsedPeriodic) && parsedPeriodic > 0 ? parsedPeriodic : 50,
-      autoCollections,
     });
     reset();
   };
@@ -126,13 +121,6 @@ export function NewSubscriptionDialog({
                   onChange={(e) => setPeriodicLimit(e.target.value)}
                 />
                 <span className={styles.helper}>new posts per check</span>
-              </div>
-            </div>
-            <div className={styles.row}>
-              <span className={styles.rowLabel}>Collections</span>
-              <div className={styles.rowControl}>
-                <ToggleSwitch on={autoCollections} onChange={() => setAutoCollections((v) => !v)} />
-                <span className={styles.helper}>group multi-image posts into one collection</span>
               </div>
             </div>
           </div>

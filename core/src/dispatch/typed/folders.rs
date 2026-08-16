@@ -315,8 +315,7 @@ fn sort_folder_items_canonical(
                 "SELECT fm.entity_id
                  FROM folder_member fm
                  JOIN media_entity me ON me.entity_id = fm.entity_id
-                 LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 LEFT JOIN media_file mf ON mf.file_id = sme.file_id
+                 JOIN media_file mf ON mf.file_id = me.file_id
                  WHERE fm.folder_id = ?1 AND fm.entity_id IN ({placeholders})
                  ORDER BY {sort_column} {direction_sql}"
             );
@@ -342,8 +341,7 @@ fn sort_folder_items_canonical(
             "SELECT fm.entity_id
              FROM folder_member fm
              JOIN media_entity me ON me.entity_id = fm.entity_id
-             LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-             LEFT JOIN media_file mf ON mf.file_id = sme.file_id
+             JOIN media_file mf ON mf.file_id = me.file_id
              WHERE fm.folder_id = ?1
              ORDER BY {sort_column} {direction_sql}"
         );

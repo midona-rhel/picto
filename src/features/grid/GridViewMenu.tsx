@@ -60,7 +60,6 @@ function ViewPanel() {
   const setSoftAction = useSetAtom(gridSoftTransitionActionAtom);
   const scope = useAtomValue(gridScopeAtom);
   const hasFixedOrder = scope.kind === 'folder'
-    || scope.kind === 'collection'
     || (scope.kind === 'system' && scope.key === 'recent_viewed');
 
   const setSort = (f: SortField, d: SortDirection) => { void gridController.setSort(f, d); };

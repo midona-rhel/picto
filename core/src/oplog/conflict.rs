@@ -28,8 +28,6 @@ fn is_create(op_type: &str) -> bool {
             | "entity_recreated"
             | "folder_created"
             | "smart_folder_created"
-            | "collection_created"
-            | "subscription_group_created"
             | "subscription_created"
             | "subscription_query_created"
     )
@@ -55,8 +53,6 @@ fn is_delete(op_type: &str) -> bool {
         "entity_deleted"
             | "folder_deleted"
             | "smart_folder_deleted"
-            | "collection_split"
-            | "subscription_group_deleted"
             | "subscription_deleted"
             | "subscription_query_deleted"
     )
@@ -81,15 +77,6 @@ fn target_kind(op_type: &str) -> Option<&'static str> {
         | "smart_folder_updated"
         | "smart_folder_moved"
         | "smart_folder_deleted" => Some("smart_folder"),
-        "collection_created"
-        | "collection_renamed"
-        | "collection_members_added"
-        | "collection_members_removed"
-        | "collection_members_reordered"
-        | "collection_split" => Some("collection"),
-        "subscription_group_created"
-        | "subscription_group_updated"
-        | "subscription_group_deleted" => Some("subscription_group"),
         "subscription_created" | "subscription_updated" | "subscription_deleted" => {
             Some("subscription")
         }
@@ -151,11 +138,9 @@ fn slots_for(op: &OpRecord) -> Vec<SlotSpec> {
     }
 
     let fields = match op.op_type.as_str() {
-        "entity_updated"
-        | "folder_updated"
-        | "smart_folder_updated"
-        | "subscription_group_updated"
-        | "subscription_updated" => object_fields(&op.payload, &[]),
+        "entity_updated" | "folder_updated" | "smart_folder_updated" | "subscription_updated" => {
+            object_fields(&op.payload, &[])
+        }
         "entity_status_changed" => vec!["status".to_owned()],
         "entity_tags_added" | "entity_tags_removed" => array_strings(&op.payload, "tags")
             .into_iter()
@@ -172,15 +157,6 @@ fn slots_for(op: &OpRecord) -> Vec<SlotSpec> {
             .into_iter()
             .map(|entity| format!("member:{entity}"))
             .collect(),
-        "collection_renamed" => vec!["name".to_owned()],
-        "collection_created" => vec!["name".to_owned()],
-        "collection_members_added" | "collection_members_removed" => {
-            array_strings(&op.payload, "members")
-                .into_iter()
-                .map(|member| format!("member:{member}"))
-                .collect()
-        }
-        "collection_members_reordered" => vec!["order".to_owned()],
         "duplicate_decided" => vec!["decision".to_owned()],
         "entity_created" | "entity_recreated" => {
             let mut fields = object_fields(&op.payload, &["kind", "tags"]);
@@ -192,9 +168,7 @@ fn slots_for(op: &OpRecord) -> Vec<SlotSpec> {
             fields
         }
         "subscription_query_updated" => object_fields(&op.payload, &["subscription_uuid"]),
-        "subscription_group_created" | "subscription_created" | "subscription_query_created" => {
-            object_fields(&op.payload, &[])
-        }
+        "subscription_created" | "subscription_query_created" => object_fields(&op.payload, &[]),
         _ => Vec::new(),
     };
     for field in fields {
@@ -290,7 +264,6 @@ fn filter_payload(op: &OpRecord, accepted: &[SlotSpec]) -> serde_json::Value {
         "entity_updated"
         | "folder_updated"
         | "smart_folder_updated"
-        | "subscription_group_updated"
         | "subscription_updated"
         | "subscription_query_updated" => {
             if let Some(object) = payload.as_object_mut() {
@@ -322,15 +295,6 @@ fn filter_payload(op: &OpRecord, accepted: &[SlotSpec]) -> serde_json::Value {
                 .collect();
             if let Some(object) = payload.as_object_mut() {
                 object.insert("entities".to_owned(), serde_json::json!(entities));
-            }
-        }
-        "collection_members_added" | "collection_members_removed" => {
-            let members: Vec<_> = array_strings(&payload, "members")
-                .into_iter()
-                .filter(|member| accepted.contains(format!("member:{member}").as_str()))
-                .collect();
-            if let Some(object) = payload.as_object_mut() {
-                object.insert("members".to_owned(), serde_json::json!(members));
             }
         }
         _ => {}

@@ -15,14 +15,13 @@ mod progress;
 mod query;
 mod retry;
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::db::LibraryDatabase;
+use crate::ingest_queue::SubscriptionIngestCheckpoint;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::AppSettings;
 use crate::subscriptions::gallery_dl_runner::{FailureKind, GalleryDlRunner};
-use crate::subscriptions::import_policy::preferred_import_name;
 use crate::subscriptions::source_adapter::ParsedMetadata;
 
 #[derive(Debug, Clone, Default)]
@@ -67,7 +66,6 @@ pub struct SubscriptionSyncEngine<'a> {
     settings: AppSettings,
     subscription_name: String,
     progress_mode: String,
-    group_name: Option<String>,
     current_query_id: Option<i64>,
     current_query_name: Option<String>,
     current_phase: String,
@@ -75,53 +73,6 @@ pub struct SubscriptionSyncEngine<'a> {
     auto_merge_enabled: bool,
     auto_merge_distance: u32,
     auto_merge_require_matching_dimensions: bool,
-    auto_collections: bool,
-}
-
-pub(super) struct PendingMember {
-    pub file_path: PathBuf,
-    pub metadata: ParsedMetadata,
-    pub page_num: u32,
-}
-
-pub(super) struct PendingCollection {
-    pub category: String,
-    pub post_id: String,
-    pub preferred_name: String,
-    pub expected_count: Option<u32>,
-    pub members: Vec<PendingMember>,
-}
-
-impl PendingCollection {
-    fn push_member(&mut self, member: PendingMember) -> (usize, bool) {
-        let advertised_count = member.metadata.page_count.unwrap_or(0);
-        self.expected_count =
-            Some(self.expected_count.unwrap_or(0).max(advertised_count)).filter(|count| *count > 0);
-        self.members.push(member);
-        (self.members.len(), self.is_complete(false))
-    }
-
-    fn is_complete(&self, source_finished: bool) -> bool {
-        match self.expected_count {
-            Some(expected) => self.members.len() >= expected as usize,
-            None => source_finished && !self.members.is_empty(),
-        }
-    }
-}
-
-fn incomplete_post_detail(post: &PendingCollection) -> String {
-    match post.expected_count {
-        Some(expected) => format!(
-            "Post {} downloaded {} of {expected} expected files",
-            post.post_id,
-            post.members.len(),
-        ),
-        None => format!(
-            "Post {} ended before its file count was known; downloaded {} files",
-            post.post_id,
-            post.members.len(),
-        ),
-    }
 }
 
 impl<'a> SubscriptionSyncEngine<'a> {
@@ -141,7 +92,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             settings: settings.clone(),
             subscription_name: String::new(),
             progress_mode: "subscription".to_string(),
-            group_name: None,
             current_query_id: None,
             current_query_name: None,
             current_phase: "starting".to_string(),
@@ -149,7 +99,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             auto_merge_enabled: false,
             auto_merge_distance: crate::duplicates::phash::DEFAULT_DISTANCE_THRESHOLD,
             auto_merge_require_matching_dimensions: false,
-            auto_collections: true,
         })
     }
 
@@ -169,16 +118,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
     pub fn with_progress_mode(mut self, mode: &str) -> Self {
         self.progress_mode = mode.to_string();
-        self
-    }
-
-    pub fn with_group_name(mut self, group_name: Option<String>) -> Self {
-        self.group_name = group_name;
-        self
-    }
-
-    pub fn with_auto_collections(mut self, auto_collections: bool) -> Self {
-        self.auto_collections = auto_collections;
         self
     }
 
@@ -211,107 +150,12 @@ impl<'a> SubscriptionSyncEngine<'a> {
         progress.current_post_items = 0;
     }
 
-    async fn flush_pending_collection(
-        &mut self,
-        pending_key: &str,
-        pending_collections: &mut HashMap<String, PendingCollection>,
-        subscription_id: i64,
-        query_id: i64,
-        query_run_id: Option<i64>,
-        sub_id_str: &str,
-        progress: &mut SyncProgress,
-    ) -> Result<Option<(String, usize)>, String> {
-        let Some(pc) = pending_collections.remove(pending_key) else {
-            return Ok(None);
-        };
-        let post_id = pc.post_id.clone();
-        let file_count = pc.members.len();
-        self.enqueue_pending_collection(pc, subscription_id, query_id, query_run_id)
-            .await?;
-        progress.queued_for_ingest += 1;
-        self.set_phase("queueing");
-        self.emit_progress_force(sub_id_str, progress, "Queued post for ingest");
-        Ok(Some((post_id, file_count)))
-    }
-
-    async fn enqueue_pending_collection(
-        &self,
-        pc: PendingCollection,
-        subscription_id: i64,
-        query_id: i64,
-        query_run_id: Option<i64>,
-    ) -> Result<i64, String> {
-        let source_paths = pc
-            .members
-            .iter()
-            .map(|member| member.file_path.clone())
-            .collect::<Vec<_>>();
-        let staged =
-            crate::ingest_queue::stage_ingest_sources(&self.library_root, &source_paths).await?;
-        let items: Vec<(
-            PathBuf,
-            Option<i64>,
-            crate::ingest_queue::IngestQueueItemPayload,
-            bool,
-        )> = pc
-            .members
-            .into_iter()
-            .zip(staged.paths.iter().cloned())
-            .map(|(member, staged_path)| {
-                let request = helpers::build_subscription_ingest_request(
-                    subscription_id,
-                    &staged_path,
-                    &member.metadata,
-                    false,
-                    0,
-                );
-                helpers::log_subscription_ingest_request_shape(
-                    query_id,
-                    subscription_id,
-                    &member.metadata,
-                    &request.tag_strings,
-                );
-                (
-                    staged_path,
-                    Some(member.page_num as i64),
-                    crate::ingest_queue::IngestQueueItemPayload {
-                        request,
-                        subscription_metadata: Some(member.metadata),
-                        target_folder_id: None,
-                    },
-                    true,
-                )
-            })
-            .collect();
-        let result = self
-            .db
-            .enqueue_ingest_queue(
-                crate::ingest_queue::IngestQueueKind::Collection,
-                "subscription",
-                Some(subscription_id),
-                Some(query_id),
-                query_run_id,
-                Some(&staged.root),
-                Some(&pc.post_id),
-                Some(&pc.category),
-                Some(&pc.preferred_name),
-                pc.expected_count.map(i64::from),
-                items,
-            )
-            .await;
-        if result.is_ok() {
-            helpers::release_producer_sources(&source_paths).await;
-        } else {
-            let _ = tokio::fs::remove_dir_all(&staged.root).await;
-        }
-        result
-    }
-
     async fn enqueue_single_subscription_item(
         &self,
         subscription_id: i64,
         query_id: i64,
         query_run_id: Option<i64>,
+        posts_processed: i64,
         file_path: &std::path::Path,
         metadata: &ParsedMetadata,
     ) -> Result<i64, String> {
@@ -337,7 +181,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let result = self
             .db
             .enqueue_ingest_queue(
-                crate::ingest_queue::IngestQueueKind::Single,
                 "subscription",
                 Some(subscription_id),
                 Some(query_id),
@@ -345,8 +188,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 Some(&staged.root),
                 metadata.post_id.as_deref(),
                 metadata.category.as_deref(),
-                preferred_import_name(metadata).as_deref(),
-                metadata.page_count.map(i64::from),
                 vec![(
                     staged_path,
                     metadata.page_num.map(i64::from),
@@ -357,6 +198,12 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     },
                     true,
                 )],
+                query_run_id.map(|query_run_id| SubscriptionIngestCheckpoint {
+                    query_run_id,
+                    files_downloaded: 1,
+                    posts_processed,
+                    metadata_validated: 1,
+                }),
             )
             .await;
         if result.is_ok() {
@@ -379,59 +226,5 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .runtime_service()
             .upsert_subscription_issue(subscription_id, query_id, failure_kind, message, detail)
             .await;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{PendingCollection, PendingMember};
-    use crate::subscriptions::source_adapter::ParsedMetadata;
-    use std::path::PathBuf;
-
-    fn member(page_num: u32, page_count: Option<u32>) -> PendingMember {
-        PendingMember {
-            file_path: PathBuf::from(format!("{page_num}.jpg")),
-            metadata: ParsedMetadata {
-                page_num: Some(page_num),
-                page_count,
-                ..Default::default()
-            },
-            page_num,
-        }
-    }
-
-    fn pending(expected_count: Option<u32>, member_count: usize) -> PendingCollection {
-        PendingCollection {
-            category: "pixiv".to_string(),
-            post_id: "42".to_string(),
-            preferred_name: "post".to_string(),
-            expected_count,
-            members: (0..member_count)
-                .map(|page_num| member(page_num as u32, expected_count))
-                .collect(),
-        }
-    }
-
-    #[test]
-    fn pending_collection_requires_every_advertised_member() {
-        assert!(!pending(Some(3), 2).is_complete(false));
-        assert!(pending(Some(3), 3).is_complete(false));
-    }
-
-    #[test]
-    fn unknown_member_count_waits_for_source_completion() {
-        assert!(!pending(None, 2).is_complete(false));
-        assert!(pending(None, 2).is_complete(true));
-    }
-
-    #[test]
-    fn interleaved_posts_complete_independently() {
-        let mut first = pending(None, 0);
-        let mut second = pending(None, 0);
-
-        assert!(!first.push_member(member(0, Some(2))).1);
-        assert!(!second.push_member(member(0, Some(2))).1);
-        assert!(first.push_member(member(1, Some(2))).1);
-        assert!(second.push_member(member(1, Some(2))).1);
     }
 }

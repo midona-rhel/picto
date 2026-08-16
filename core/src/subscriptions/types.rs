@@ -7,16 +7,6 @@ pub struct SubscriptionCoverRecord {
     pub entity_hash: String,
 }
 
-/// A collection entity created by a subscription from a multi-image post.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubscriptionCollectionRecord {
-    pub entity_hash: String,
-    pub name: Option<String>,
-    pub member_count: Option<i64>,
-    pub site_id: String,
-    pub post_id: String,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Subscription {
@@ -24,10 +14,8 @@ pub struct Subscription {
     pub name: String,
     pub schedule: String,
     pub paused: bool,
-    pub group_id: Option<i64>,
     pub initial_post_limit: i64,
     pub periodic_post_limit: i64,
-    pub auto_collections: bool,
     pub created_at: String,
 }
 
@@ -52,13 +40,6 @@ pub struct SubscriptionQuery {
     pub last_failure_at: Option<String>,
     pub last_failure_kind: Option<String>,
     pub last_failure_message: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubscriptionGroup {
-    pub group_id: i64,
-    pub name: String,
-    pub created_at: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -197,21 +178,6 @@ pub struct SubscriptionBulkRetryResult {
     pub failed: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubscriptionPostMemberRecord {
-    pub subscription_id: i64,
-    pub site_id: String,
-    pub post_id: String,
-    pub item_key: String,
-    pub page_num: Option<i64>,
-    pub canonical_post_url: Option<String>,
-    pub media_url: Option<String>,
-    pub entity_hash: Option<String>,
-    pub status: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
 pub struct SubscriptionDownloadAttemptUpsert<'a> {
     pub subscription_id: i64,
     pub query_id: Option<i64>,
@@ -236,7 +202,7 @@ pub struct SubscriptionPostMemberUpsert<'a> {
     pub page_num: Option<i64>,
     pub canonical_post_url: Option<&'a str>,
     pub media_url: Option<&'a str>,
-    pub entity_hash: Option<&'a str>,
+    pub entity_id: Option<i64>,
     pub status: &'a str,
 }
 
@@ -249,7 +215,7 @@ pub struct OwnedSubscriptionPostMemberUpsert {
     pub page_num: Option<i64>,
     pub canonical_post_url: Option<String>,
     pub media_url: Option<String>,
-    pub entity_hash: Option<String>,
+    pub entity_id: Option<i64>,
     pub status: String,
 }
 
@@ -276,8 +242,6 @@ pub struct CredentialDomain {
     pub credential_type: String,
     pub display_name: Option<String>,
     pub created_at: String,
-    /// RFC3339 timestamp when the stored session/cookies expire, if known.
-    pub expires_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

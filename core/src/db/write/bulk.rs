@@ -12,7 +12,7 @@ use std::sync::Arc;
 use rusqlite::{Connection, ToSql};
 
 use crate::db::projection::bitmaps::BitmapStore;
-use crate::db::types::{EntityViewQuery, ExpansionMode, QueryPage};
+use crate::db::types::{EntityViewQuery, QueryPage};
 
 /// Populate `_bulk_target` temp table with entity_ids matching the query,
 /// minus any excluded hashes. Returns the count of ids in the table.
@@ -83,40 +83,6 @@ pub fn populate_bulk_target(
 
     let count: i64 = conn.query_row("SELECT COUNT(*) FROM _bulk_target", [], |r| r.get(0))?;
     Ok(count)
-}
-
-/// Expand _bulk_target in-place to include collection member entity_ids.
-pub fn expand_bulk_target(conn: &Connection, mode: ExpansionMode) -> rusqlite::Result<()> {
-    match mode {
-        ExpansionMode::EntityOnly => {}
-        ExpansionMode::SinglesAndCollectionMembers => {
-            conn.execute_batch(
-                "CREATE TEMP TABLE _bulk_expanded AS
-                 SELECT me.entity_id
-                 FROM media_entity me
-                 JOIN _bulk_target target ON target.entity_id = me.entity_id
-                 WHERE me.entity_kind = 'single'
-                 UNION
-                 SELECT member.entity_id
-                 FROM media_entity member
-                 JOIN media_entity collection ON collection.entity_id = member.parent_collection_entity_id
-                 JOIN _bulk_target target ON target.entity_id = collection.entity_id
-                 WHERE collection.entity_kind = 'collection';
-                 DELETE FROM _bulk_target;
-                 INSERT INTO _bulk_target SELECT entity_id FROM _bulk_expanded;
-                 DROP TABLE _bulk_expanded;",
-            )?;
-        }
-        ExpansionMode::EntityAndDescendants => {
-            conn.execute(
-                "INSERT OR IGNORE INTO _bulk_target (entity_id)
-                 SELECT me.entity_id FROM media_entity me
-                 WHERE me.parent_collection_entity_id IN (SELECT entity_id FROM _bulk_target)",
-                [],
-            )?;
-        }
-    }
-    Ok(())
 }
 
 /// Collect all entity_hashes from _bulk_target.

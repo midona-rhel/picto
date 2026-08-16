@@ -4,7 +4,6 @@
 //! Code outside `db/` consumes typed methods and typed results only.
 //! No SQL, no table names, no bitmap storage details leak out.
 
-mod collection_ops;
 pub mod core;
 mod deferred_ops;
 mod folder_ops;
@@ -143,7 +142,6 @@ fn record_duplicate_review_candidates_on_conn(
 /// is fetched by hash). Derived fields (phash, colors) are excluded.
 fn ingest_entity_created_payload(prepared: &types::IngestPreparedSingle) -> serde_json::Value {
     serde_json::json!({
-        "kind": "single",
         "name": prepared.name,
         "status": prepared.status,
         "mime": prepared.mime_type,
@@ -184,10 +182,7 @@ fn insert_deferred_work_rows(
 }
 
 /// Insert one prepared media entity inside the caller's write transaction.
-///
-/// Collection materialization deliberately passes no deferred work because its
-/// caller batches those rows after the collection transaction commits.
-fn insert_prepared_single(
+fn insert_prepared_entity(
     conn: &Connection,
     device_id: &str,
     prepared: &types::IngestPreparedSingle,
@@ -203,7 +198,7 @@ fn insert_prepared_single(
     // so we don't hit a UNIQUE constraint on file_hash.
     conn.execute(
         "DELETE FROM media_file WHERE file_hash = ?1
-         AND file_id NOT IN (SELECT file_id FROM single_media_entity)",
+         AND file_id NOT IN (SELECT file_id FROM media_entity)",
         rusqlite::params![prepared.entity_hash],
     )?;
     let file_id = write::files::insert_file(
@@ -221,7 +216,7 @@ fn insert_prepared_single(
     if let Some(phash) = prepared.perceptual_hash.as_deref() {
         write::files::replace_file_phash(conn, file_id, Some(phash))?;
     }
-    let entity_id = write::entities::insert_single(
+    let entity_id = write::entities::insert_entity(
         conn,
         &prepared.entity_hash,
         file_id,
@@ -239,7 +234,6 @@ fn insert_prepared_single(
             prepared.notes.as_deref().map(Some),
             source_urls_json.as_deref(),
             &prepared.date_added,
-            types::ExpansionMode::EntityOnly,
         )?;
     }
     if !prepared.tag_strings.is_empty() {
@@ -248,7 +242,6 @@ fn insert_prepared_single(
             &[entity_id],
             &prepared.tag_strings,
             prepared.tag_provenance_mask,
-            types::ExpansionMode::EntityOnly,
         )?;
     }
     insert_deferred_work_rows(conn, &prepared.entity_hash, deferred_work_types)?;
@@ -303,54 +296,6 @@ fn emit_folder_membership_op(
         &uuid,
         &serde_json::json!({ "entities": entities }),
     )
-}
-
-fn emit_collection_membership_op(
-    conn: &Connection,
-    device_id: &str,
-    collection_id: i64,
-    change: &types::CollectionMembershipChange,
-) -> rusqlite::Result<()> {
-    let hash = change
-        .collection_hash
-        .clone()
-        .or(query::collections::get_collection_hash(
-            conn,
-            collection_id,
-        )?);
-    let Some(hash) = hash else {
-        return Ok(());
-    };
-    if change.deleted_collection {
-        return crate::oplog::record_op(
-            conn,
-            device_id,
-            "collection_split",
-            &hash,
-            &serde_json::json!({}),
-        );
-    }
-    if !change.added.is_empty() {
-        let members = entity_hashes_for_ids(conn, &change.added)?;
-        crate::oplog::record_op(
-            conn,
-            device_id,
-            "collection_members_added",
-            &hash,
-            &serde_json::json!({ "members": members }),
-        )?;
-    }
-    if !change.removed.is_empty() {
-        let members = entity_hashes_for_ids(conn, &change.removed)?;
-        crate::oplog::record_op(
-            conn,
-            device_id,
-            "collection_members_removed",
-            &hash,
-            &serde_json::json!({ "members": members }),
-        )?;
-    }
-    Ok(())
 }
 
 /// Record the same op once per entity hash (per-entity keying keeps replay
@@ -793,7 +738,7 @@ impl LibraryDatabase {
 
     // ── Entity operations ────────────────────────────────────────
 
-    pub fn insert_single(
+    pub fn insert_entity(
         &self,
         entity_hash: &str,
         file_id: i64,
@@ -803,7 +748,7 @@ impl LibraryDatabase {
         date_added: &str,
     ) -> Result<i64, String> {
         self.with_write(|conn| {
-            write::entities::insert_single(
+            write::entities::insert_entity(
                 conn,
                 entity_hash,
                 file_id,
@@ -815,42 +760,14 @@ impl LibraryDatabase {
         })
     }
 
-    pub fn insert_collection(
-        &self,
-        entity_hash: &str,
-        name: &str,
-        date_created: &str,
-        date_added: &str,
-    ) -> Result<i64, String> {
-        self.with_write(|conn| {
-            let id = write::entities::insert_collection(
-                conn,
-                entity_hash,
-                name,
-                date_created,
-                date_added,
-            )?;
-            crate::oplog::record_op(
-                conn,
-                &self.device_id,
-                "collection_created",
-                entity_hash,
-                &serde_json::json!({ "name": name, "date_created": date_created }),
-            )?;
-            Ok(id)
-        })
-    }
-
     pub fn set_entity_status(
         &self,
         entity_ids: &[i64],
         status: i64,
-        expansion: ExpansionMode,
     ) -> Result<StatusChange, String> {
         let now = chrono::Utc::now().to_rfc3339();
         self.with_write(|conn| {
-            let change =
-                write::entities::set_entity_status(conn, entity_ids, status, expansion, &now)?;
+            let change = write::entities::set_entity_status(conn, entity_ids, status, &now)?;
             emit_per_entity(
                 conn,
                 &self.device_id,
@@ -978,116 +895,9 @@ impl LibraryDatabase {
                 .transpose()?
                 .unwrap_or_default();
             let (entity_id, file_id) =
-                insert_prepared_single(conn, &self.device_id, &prepared, &deferred_work)?;
+                insert_prepared_entity(conn, &self.device_id, &prepared, &deferred_work)?;
             record_duplicate_review_candidates_on_conn(conn, file_id, &candidates)?;
             Ok((entity_id, !candidates.is_empty()))
-        })
-    }
-
-    pub fn materialize_ingested_collection(
-        &self,
-        name: &str,
-        new_members: &[types::IngestPreparedSingle],
-        existing_member_ids: &[i64],
-        existing_collection_id: Option<i64>,
-    ) -> Result<(i64, String, Vec<String>), String> {
-        let deferred_work = vec![Vec::new(); new_members.len()];
-        let (collection_id, collection_hash, new_hashes, _) = self
-            .materialize_ingested_collection_with_blob_leases(
-                name,
-                new_members,
-                &deferred_work,
-                existing_member_ids,
-                existing_collection_id,
-                crate::duplicates::phash::MAX_INDEXED_DISTANCE,
-                Vec::new(),
-            )?;
-        Ok((collection_id, collection_hash, new_hashes))
-    }
-
-    pub(crate) fn materialize_ingested_collection_with_blob_leases(
-        &self,
-        name: &str,
-        new_members: &[types::IngestPreparedSingle],
-        deferred_work_by_member: &[Vec<crate::background_work::DeferredWorkType>],
-        existing_member_ids: &[i64],
-        existing_collection_id: Option<i64>,
-        duplicate_threshold: u32,
-        blob_leases: Vec<BlobHashLease>,
-    ) -> Result<(i64, String, Vec<String>, bool), String> {
-        if new_members.len() != deferred_work_by_member.len() {
-            return Err("Collection ingest deferred work must match its members".into());
-        }
-        let collection_name = name.to_string();
-        let prepared = new_members.to_vec();
-        let deferred_work = deferred_work_by_member.to_vec();
-        let existing_ids = existing_member_ids.to_vec();
-        let blob_leases = blob_leases;
-        self.with_write(move |conn| {
-            let _blob_leases = blob_leases;
-            let mut member_ids = existing_ids;
-            let mut new_hashes = Vec::with_capacity(prepared.len());
-            let mut duplicates_changed = false;
-
-            for (member, member_work) in prepared.iter().zip(&deferred_work) {
-                let candidates = member
-                    .perceptual_hash
-                    .as_deref()
-                    .map(|phash| {
-                        find_perceptual_hash_candidates_on_conn(conn, phash, duplicate_threshold)
-                    })
-                    .transpose()?
-                    .unwrap_or_default();
-                let (entity_id, file_id) =
-                    insert_prepared_single(conn, &self.device_id, member, member_work)?;
-                record_duplicate_review_candidates_on_conn(conn, file_id, &candidates)?;
-                duplicates_changed |= !candidates.is_empty();
-                member_ids.push(entity_id);
-                new_hashes.push(member.entity_hash.clone());
-            }
-
-            if member_ids.is_empty() {
-                return Err(rusqlite::Error::InvalidQuery);
-            }
-
-            let collection_id = if let Some(collection_id) = existing_collection_id {
-                write::collections::add_members(&conn, collection_id, &member_ids)?;
-                collection_id
-            } else {
-                let now = chrono::Utc::now().to_rfc3339();
-                let collection_id =
-                    write::collections::create_collection(&conn, &collection_name, &now)?;
-                write::collections::add_members(&conn, collection_id, &member_ids)?;
-                collection_id
-            };
-
-            let collection_hash = query::collections::get_collection_hash(&conn, collection_id)?
-                .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
-            if existing_collection_id.is_none() {
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "collection_created",
-                    &collection_hash,
-                    &serde_json::json!({ "name": collection_name }),
-                )?;
-            }
-            if !member_ids.is_empty() {
-                let members = entity_hashes_for_ids(conn, &member_ids)?;
-                crate::oplog::record_op(
-                    conn,
-                    &self.device_id,
-                    "collection_members_added",
-                    &collection_hash,
-                    &serde_json::json!({ "members": members }),
-                )?;
-            }
-            Ok((
-                collection_id,
-                collection_hash,
-                new_hashes,
-                duplicates_changed,
-            ))
         })
     }
 
@@ -1154,7 +964,6 @@ impl LibraryDatabase {
                     .map(|urls| serde_json::to_string(urls).unwrap_or_default())
                     .as_deref(),
                 &now,
-                types::ExpansionMode::EntityOnly,
             )?;
             let payload = entity_patch_payload(patch);
             if payload.as_object().is_some_and(|o| !o.is_empty()) {
@@ -1209,9 +1018,6 @@ impl LibraryDatabase {
         let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            // Metadata belongs to the selected entity only. Collections keep
-            // structural fields, while child content remains child-owned.
-            write::bulk::expand_bulk_target(conn, types::ExpansionMode::EntityOnly)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
             let change = write::entities::patch_entity_metadata(
                 conn,
@@ -1224,7 +1030,6 @@ impl LibraryDatabase {
                     .map(|u| serde_json::to_string(u).unwrap_or_default())
                     .as_deref(),
                 &now,
-                types::ExpansionMode::EntityOnly,
             )?;
             let payload = entity_patch_payload(&p);
             if payload.as_object().is_some_and(|o| !o.is_empty()) {
@@ -1252,15 +1057,8 @@ impl LibraryDatabase {
         let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            write::bulk::expand_bulk_target(conn, types::ExpansionMode::EntityAndDescendants)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::entities::set_entity_status(
-                conn,
-                &ids,
-                status,
-                types::ExpansionMode::EntityOnly,
-                &now,
-            )?;
+            let change = write::entities::set_entity_status(conn, &ids, status, &now)?;
             emit_per_entity(
                 conn,
                 &self.device_id,
@@ -1301,7 +1099,6 @@ impl LibraryDatabase {
         exclusions: &[String],
         tags: &[String],
         provenance_mask: u64,
-        expansion: types::ExpansionMode,
     ) -> Result<types::TagChange, String> {
         let q = query.clone();
         let excl = exclusions.to_vec();
@@ -1309,15 +1106,8 @@ impl LibraryDatabase {
         let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::tags::add_tags(
-                conn,
-                &ids,
-                &t,
-                provenance_mask,
-                types::ExpansionMode::EntityOnly,
-            )?;
+            let change = write::tags::add_tags(conn, &ids, &t, provenance_mask)?;
             if !change.tags_added.is_empty() {
                 let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
                 emit_per_entity(
@@ -1337,7 +1127,6 @@ impl LibraryDatabase {
         query: &types::EntityViewQuery,
         exclusions: &[String],
         tags: &[String],
-        expansion: types::ExpansionMode,
     ) -> Result<types::TagChange, String> {
         let q = query.clone();
         let excl = exclusions.to_vec();
@@ -1345,10 +1134,8 @@ impl LibraryDatabase {
         let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change =
-                write::tags::remove_tags(conn, &ids, &t, types::ExpansionMode::EntityOnly)?;
+            let change = write::tags::remove_tags(conn, &ids, &t)?;
             if !change.tags_removed.is_empty() {
                 let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
                 emit_per_entity(
@@ -1368,21 +1155,14 @@ impl LibraryDatabase {
         folder_id: i64,
         query: &types::EntityViewQuery,
         exclusions: &[String],
-        expansion: types::ExpansionMode,
     ) -> Result<types::FolderMembershipChange, String> {
         let q = query.clone();
         let excl = exclusions.to_vec();
         let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::folders::add_members(
-                conn,
-                folder_id,
-                &ids,
-                types::ExpansionMode::EntityOnly,
-            )?;
+            let change = write::folders::add_members(conn, folder_id, &ids)?;
             emit_folder_membership_op(
                 conn,
                 &self.device_id,
@@ -1399,21 +1179,14 @@ impl LibraryDatabase {
         folder_id: i64,
         query: &types::EntityViewQuery,
         exclusions: &[String],
-        expansion: types::ExpansionMode,
     ) -> Result<types::FolderMembershipChange, String> {
         let q = query.clone();
         let excl = exclusions.to_vec();
         let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::folders::remove_members(
-                conn,
-                folder_id,
-                &ids,
-                types::ExpansionMode::EntityOnly,
-            )?;
+            let change = write::folders::remove_members(conn, folder_id, &ids)?;
             emit_folder_membership_op(
                 conn,
                 &self.device_id,
@@ -1539,13 +1312,14 @@ impl LibraryDatabase {
             })
             .collect();
 
-        let has_thumbnail = !entity.thumbnail_hash.is_empty();
+        let has_thumbnail = crate::media_capabilities::capabilities_for_stored_media(
+            &entity.mime_type,
+            entity.frame_count,
+        )
+        .can_thumbnail();
         let entity_dto = crate::types::EntityDetails {
             entity_id,
-            kind: entity.entity_kind.as_str().to_string(),
             hash: entity.entity_hash.clone(),
-            thumbnail_hash: entity.thumbnail_hash,
-            member_count: entity.member_count,
             name: entity.name,
             size: entity.size_bytes,
             mime: entity.mime_type,
@@ -1761,7 +1535,6 @@ impl LibraryDatabase {
         action: &str,
         hash_a: &str,
         hash_b: &str,
-        preferred_collection_id: Option<i64>,
     ) -> Result<types::DuplicateResolutionResult, String> {
         let action = action.to_string();
         let hash_a = hash_a.to_string();
@@ -1774,7 +1547,6 @@ impl LibraryDatabase {
                 &action,
                 left,
                 right,
-                preferred_collection_id,
             )?;
             if matches!(result.status, types::DuplicateResolveStatus::Resolved) {
                 // The detected pair is recomputable; the user's decision is truth.

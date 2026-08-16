@@ -165,7 +165,7 @@ function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage
             zIndex: i, filter: i === previews.length - 1 ? undefined : 'brightness(0.7)',
           }}>
             <div className={styles.previewFrame}>
-              <img src={`media://localhost/thumb/${(item!.thumbnail_hash ?? item!.entity_hash)}.jpg`} alt="" className={styles.previewImage} draggable={false} />
+              <img src={`media://localhost/thumb/${item!.entity_hash}.jpg`} alt="" className={styles.previewImage} draggable={false} />
               <div className={styles.previewGlass} />
             </div>
           </div>
@@ -223,7 +223,6 @@ export function Inspector() {
     if (!entityData) return null;
 
     const d = entityData;
-    const isCollection = d.entity_kind === 'collection';
     const tags = [...(d.tags ?? [])].sort((a, b) => tagKey(a.namespace, a.subtag).localeCompare(tagKey(b.namespace, b.subtag)));
     const folders = (d.folders ?? []).map((f) => {
       const n = sidebarNodes.find((s) => s.id === `folder:${f.folder_id}`);
@@ -232,8 +231,8 @@ export function Inspector() {
     const palette = (d.dominant_colors ?? []).map((c) => c.hex).filter((h): h is string => !!h && h.length > 0);
 
     return (
-      <Shell footer={<InspectorActionBar count={1} enabled={!isCollection && d.mime_type.startsWith('image/')} />}>
-        <Preview hashes={[d.thumbnail_hash]} type="single" />
+      <Shell footer={<InspectorActionBar count={1} enabled={d.mime_type.startsWith('image/')} />}>
+        <Preview hashes={[d.entity_hash]} type="single" />
         <ColorPalette colors={palette.length > 0 ? palette : d.dominant_color_hex ? [d.dominant_color_hex] : []} />
 
         <div className={styles.fieldStack}>
@@ -241,13 +240,11 @@ export function Inspector() {
           <InspectorField
             value={typeof d.notes === 'string' ? d.notes : ''}
             placeholder="Notes"
-            readOnly={isCollection}
-            onCommit={isCollection ? undefined : (v) => { void entityMutations.setEntityNotes(d.entity_hash, v); }}
+            onCommit={(v) => { void entityMutations.setEntityNotes(d.entity_hash, v); }}
           />
           <InspectorSourceField
             urls={d.source_urls ?? []}
-            readOnly={isCollection}
-            onChange={isCollection ? undefined : (urls) => { void entityMutations.setEntitySourceUrls(d.entity_hash, urls); }}
+            onChange={(urls) => { void entityMutations.setEntitySourceUrls(d.entity_hash, urls); }}
           />
         </div>
 
@@ -266,14 +263,12 @@ export function Inspector() {
           <div className={styles.propsStack}>
             <StarRating
               value={d.rating ?? 0}
-              onChange={isCollection ? undefined : (r) => { void entityMutations.setEntityRating(d.entity_hash, r); }}
+              onChange={(r) => { void entityMutations.setEntityRating(d.entity_hash, r); }}
             />
-            {!isCollection && d.pixel_width && d.pixel_height && <PropertyRow label="Dimensions" value={`${d.pixel_width} × ${d.pixel_height}`} mono />}
-            {!isCollection && <PropertyRow label="Size" value={fmtSize(d.size_bytes)} mono />}
-            {!isCollection && <PropertyRow label="Type" value={fmtExt(d.mime_type)} title={d.mime_type} />}
-            {!isCollection && d.duration_ms != null && d.duration_ms > 0 && <PropertyRow label="Duration" value={fmtDuration(d.duration_ms)} mono />}
-            {isCollection && <PropertyRow label="Items" value={d.member_count?.toLocaleString() ?? '0'} mono />}
-            {isCollection && d.total_size_bytes != null && <PropertyRow label="Total size" value={fmtSize(d.total_size_bytes)} mono />}
+            {d.pixel_width && d.pixel_height && <PropertyRow label="Dimensions" value={`${d.pixel_width} × ${d.pixel_height}`} mono />}
+            <PropertyRow label="Size" value={fmtSize(d.size_bytes)} mono />
+            <PropertyRow label="Type" value={fmtExt(d.mime_type)} title={d.mime_type} />
+            {d.duration_ms != null && d.duration_ms > 0 && <PropertyRow label="Duration" value={fmtDuration(d.duration_ms)} mono />}
             <PropertyRow label="Date added" value={fmtDate(d.date_added)} mono />
             <PropertyRow label="Date created" value={fmtDate(d.date_created)} mono />
             <PropertyRow label="Date modified" value={fmtDate(d.date_modified)} mono />
@@ -351,7 +346,7 @@ export function Inspector() {
 
   return (
     <Shell>
-      <Preview hashes={scopeVM.previewItems.map((i) => i.thumbnail_hash)} type="collage" />
+      <Preview hashes={scopeVM.previewItems.map((i) => i.entity_hash)} type="collage" />
       <ColorPalette colors={[]} />
 
       <div className={styles.fieldStack}>

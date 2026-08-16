@@ -5,7 +5,6 @@ import { confirmModalAtom } from '../../state/modals';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { subscriptionsController } from '../../controllers/subscriptionsController';
 import {
-  buildGroupMenu,
   buildMultiCardMenu,
   buildSubscriptionMenu,
 } from './subscriptionsContextMenu';
@@ -13,12 +12,15 @@ import { RenameDialog, type RenameTarget } from './components/RenameDialog';
 import {
   markSubscriptionRunTriggered,
   refreshSubscriptionsWorkspace,
+  startSubscriptionsSettle,
 } from '../../runtime/subscriptionsSettle';
 import type { SubscriptionInfo } from '../../shared/types/subscriptions';
-import { groupFailedPostAttempts } from '../../shared/lib/subscriptionHelpers';
+import {
+  getCredentialOwnerSiteId,
+  groupFailedPostAttempts,
+} from '../../shared/lib/subscriptionHelpers';
 import { AccountsModal } from './components/AccountsModal';
 import { SubscriptionsGrid } from './components/SubscriptionsGrid';
-import { GroupDetail } from './components/GroupDetail';
 import { SubscriptionDetail } from './components/SubscriptionDetail';
 import { EmptyState } from './components/EmptyState';
 import { NewSubscriptionDialog, type CreateSubscriptionInput } from './components/NewSubscriptionDialog';
@@ -30,7 +32,6 @@ import {
   subscriptionsDetailAtom,
   subscriptionsDetailTabAtom,
   subscriptionsProgressBySubscriptionIdAtom,
-  subscriptionsSelectedGroupAtom,
   subscriptionsSelectedProgressAtom,
   subscriptionsSelectedSubscriptionAtom,
   subscriptionsSelectionAtom,
@@ -52,7 +53,6 @@ export function SubscriptionsScreen() {
   const [accountsModal, setAccountsModal] = useAtom(subscriptionsAccountsModalAtom);
   const [busyKey, setBusyKey] = useAtom(subscriptionsBusyKeyAtom);
   const selectedSubscription = useAtomValue(subscriptionsSelectedSubscriptionAtom);
-  const selectedGroup = useAtomValue(subscriptionsSelectedGroupAtom);
   const selectedProgress = useAtomValue(subscriptionsSelectedProgressAtom);
   const progressBySubscriptionId = useAtomValue(subscriptionsProgressBySubscriptionIdAtom);
   const covers = useAtomValue(subscriptionsCoversAtom);
@@ -101,15 +101,17 @@ export function SubscriptionsScreen() {
     }
   }, [setDetail]);
 
-  // Runtime owns backend settlement; the screen only requests its initial snapshot.
+  // This screen is shared by the main and standalone subscription windows.
   useEffect(() => {
+    const stopSettle = startSubscriptionsSettle();
     void refreshSubscriptionsWorkspace();
+    return stopSettle;
   }, []);
 
   // Detail follows the selected subscription
   useEffect(() => {
     if (selectedSubscription) void refreshDetail(selectedSubscription);
-  }, [selectedSubscription?.id, refreshDetail]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectedSubscription, refreshDetail]);
 
   // A menu belongs to the surface it was opened on — close it on navigation.
   useEffect(() => {
@@ -170,13 +172,9 @@ export function SubscriptionsScreen() {
     await act('wizard', async () => {
       const subscription = await subscriptionsController.create({
         name: result.name,
-        group_id: null,
         initial_post_limit: result.initialPostLimit,
         periodic_post_limit: result.periodicPostLimit,
       });
-      if (!result.autoCollections) {
-        await subscriptionsController.setAutoCollections(subscription.id, false);
-      }
       navigateTo({ kind: 'subscription', id: subscription.id });
       setWizard({ open: false });
     });
@@ -214,12 +212,8 @@ export function SubscriptionsScreen() {
     rename: (id: string, currentName: string) => {
       setRenameTarget({ kind: 'subscription', id, currentName });
     },
-    setAutoCollections: (id: string, on: boolean) =>
-      void act(`autocol:${id}`, () => subscriptionsController.setAutoCollections(id, on)),
     setSchedule: (id: string, schedule: string) =>
       void act(`schedule:${id}`, () => subscriptionsController.setSchedule(id, schedule)),
-    setGroup: (id: string, groupId: number | null) =>
-      void act(`setgroup:${id}`, () => subscriptionsController.setSubscriptionGroup(id, groupId)),
     runQuery: (subscriptionId: string, queryId: string) => {
       markSubscriptionRunTriggered();
       void act(`runq:${queryId}`, () => subscriptionsController.runQuery(subscriptionId, queryId));
@@ -245,7 +239,7 @@ export function SubscriptionsScreen() {
     openExternalUrl: (url: string) => void subscriptionsController.openExternalUrl(url),
   };
 
-  /** Right-click menu for one subscription (card, sidebar row, or detail ⋮). */
+  /** Right-click menu for one subscription card or detail overflow button. */
   const openSubscriptionMenu = useCallback(
     (position: { x: number; y: number }, subscription: SubscriptionInfo) => {
       if (!snapshot) return;
@@ -254,15 +248,11 @@ export function SubscriptionsScreen() {
       contextMenu.openAt(position, buildSubscriptionMenu({
         subscription,
         running,
-        groups: snapshot.groups,
         onRun: () => detailController.run(subscription.id),
         onStop: () => detailController.stop(subscription.id),
         onPause: (paused) => detailController.pause(subscription.id, paused),
         onRename: () => setRenameTarget({ kind: 'subscription', id: subscription.id, currentName: subscription.name }),
         onSetSchedule: (schedule) => detailController.setSchedule(subscription.id, schedule),
-        onMoveToGroup: (groupId) => detailController.setGroup(subscription.id, groupId),
-        onToggleAutoCollections: () =>
-          detailController.setAutoCollections(subscription.id, !subscription.auto_collections),
         onReset: () => detailController.reset(subscription.id),
         onDelete: () => detailController.delete(subscription.id),
       }));
@@ -270,57 +260,19 @@ export function SubscriptionsScreen() {
     [contextMenu, snapshot, progressBySubscriptionId, detailController],
   );
 
-  const openGroupMenu = useCallback(
-    (position: { x: number; y: number }, groupId: string) => {
-      const group = snapshot?.groups.find((entry) => entry.id === groupId);
-      if (!group || !snapshot) return;
-      const anyRunning = group.subscriptions.some(
-        (sub) => snapshot.runningSubscriptionIds.includes(sub.id) || progressBySubscriptionId.has(sub.id),
-      );
-      contextMenu.openAt(position, buildGroupMenu({
-        group,
-        anyRunning,
-        onRunAll: () => {
-          markSubscriptionRunTriggered();
-          void act(`rungroup:${group.id}`, () => subscriptionsController.runGroup(group.id));
-        },
-        onStopAll: () => void act(`stopgroup:${group.id}`, () => subscriptionsController.stopGroup(group.id)),
-        onRename: () => setRenameTarget({ kind: 'group', id: group.id, currentName: group.name }),
-        onDelete: () => {
-          confirm(
-            { title: 'Delete Group', message: 'Its subscriptions are kept and become ungrouped.', confirmLabel: 'Delete', danger: true },
-            () => void act(`delgroup:${group.id}`, async () => {
-              await subscriptionsController.deleteGroup(group.id);
-              if (selection?.kind === 'group' && selection.id === group.id) navigateTo(null);
-            }),
-          );
-        },
-      }));
-    },
-    [contextMenu, snapshot, progressBySubscriptionId, act, confirm, navigateTo, selection],
-  );
-
   /** Bulk menu for a multi-card selection on the subscriptions grid. */
   const openMultiCardMenu = useCallback(
-    (position: { x: number; y: number }, subscriptionIds: string[], groupIds: string[]) => {
+    (position: { x: number; y: number }, subscriptionIds: string[]) => {
       if (!snapshot) return;
-      const allSubIds = [
-        ...subscriptionIds,
-        ...groupIds.flatMap((gid) =>
-          snapshot.groups.find((g) => g.id === gid)?.subscriptions.map((s) => s.id) ?? []),
-      ];
-      const anyRunning = allSubIds.some(
+      const anyRunning = subscriptionIds.some(
         (id) => snapshot.runningSubscriptionIds.includes(id) || progressBySubscriptionId.has(id),
       );
       contextMenu.openAt(position, buildMultiCardMenu({
         subscriptionIds,
-        groupIds,
-        groups: snapshot.groups,
         anyRunning,
         onRunSelected: () => {
           markSubscriptionRunTriggered();
           void act('multi:run', async () => {
-            for (const gid of groupIds) await subscriptionsController.runGroup(gid).catch(() => {});
             for (const sid of subscriptionIds) await subscriptionsController.run(sid).catch(() => {});
           });
         },
@@ -328,22 +280,17 @@ export function SubscriptionsScreen() {
           void act('multi:pause', async () => {
             for (const sid of subscriptionIds) await subscriptionsController.pause(sid, paused).catch(() => {});
           }),
-        onMoveSelectedToGroup: (groupId) =>
-          void act('multi:move', async () => {
-            for (const sid of subscriptionIds) await subscriptionsController.setSubscriptionGroup(sid, groupId);
-          }),
         onDeleteSelected: () => {
-          const total = subscriptionIds.length + groupIds.length;
+          const total = subscriptionIds.length;
           confirm(
             {
               title: `Delete ${total} Item${total === 1 ? '' : 's'}`,
-              message: 'Downloaded files stay in your library. Groups are removed; their subscriptions become ungrouped.',
+              message: 'Downloaded files stay in your library. The selected subscriptions and their queries are removed.',
               confirmLabel: 'Delete',
               danger: true,
             },
             () => void act('multi:delete', async () => {
               for (const sid of subscriptionIds) await subscriptionsController.delete(sid);
-              for (const gid of groupIds) await subscriptionsController.deleteGroup(gid);
             }),
           );
         },
@@ -354,9 +301,7 @@ export function SubscriptionsScreen() {
 
   const commitRename = useCallback(
     (target: RenameTarget, name: string) => {
-      const action = target.kind === 'group'
-        ? () => subscriptionsController.renameGroup(target.id, name)
-        : () => subscriptionsController.rename(target.id, name);
+      const action = () => subscriptionsController.rename(target.id, name);
       void act(`rename:${target.kind}:${target.id}`, action).then(() => setRenameTarget(null));
     },
     [act],
@@ -382,7 +327,6 @@ export function SubscriptionsScreen() {
           <EmptyState title="Loading…" description="Fetching subscriptions." />
         ) : selection == null && snapshot ? (
           <SubscriptionsGrid
-            groups={snapshot.groups}
             subscriptions={snapshot.subscriptions}
             listMetrics={snapshot.listMetrics}
             covers={covers}
@@ -395,58 +339,12 @@ export function SubscriptionsScreen() {
               const subscription = snapshot.subscriptions.find((sub) => sub.id === id);
               if (subscription) openSubscriptionMenu(position, subscription);
             }}
-            onGroupMenu={openGroupMenu}
             onMultiMenu={openMultiCardMenu}
-          />
-        ) : selectedGroup && snapshot ? (
-          <GroupDetail
-            group={selectedGroup}
-            sites={snapshot.sites}
-            runningSubscriptionIds={snapshot.runningSubscriptionIds}
-            coverHash={
-              selectedGroup.subscriptions
-                .filter((sub) => covers.has(sub.id))
-                .sort((a, b) => Number(b.id) - Number(a.id))
-                .map((sub) => covers.get(sub.id))[0] ?? null
-            }
-            busy={busy}
-            onRename={(name) => void act(`renamegroup:${selectedGroup.id}`, () => subscriptionsController.renameGroup(selectedGroup.id, name))}
-            onRun={() => {
-              markSubscriptionRunTriggered();
-              void act(`rungroup:${selectedGroup.id}`, () => subscriptionsController.runGroup(selectedGroup.id));
-            }}
-            onStop={() => void act(`stopgroup:${selectedGroup.id}`, () => subscriptionsController.stopGroup(selectedGroup.id))}
-            onDelete={() => {
-              confirm(
-                { title: 'Delete Group', message: 'Its subscriptions are kept and become ungrouped.', confirmLabel: 'Delete', danger: true },
-                () => void act(`delgroup:${selectedGroup.id}`, async () => {
-                  await subscriptionsController.deleteGroup(selectedGroup.id);
-                  navigateTo(null);
-                }),
-              );
-            }}
-            onAddSource={async (siteId, queryText) => {
-              await act(`groupsource:${selectedGroup.id}`, async () => {
-                const siteName = snapshot.sites.find((site) => site.id === siteId)?.name ?? siteId;
-                const subscription = await subscriptionsController.create({
-                  name: `${siteName}: ${queryText}`,
-                  group_id: Number.parseInt(selectedGroup.id, 10),
-                  initial_post_limit: 100,
-                  periodic_post_limit: 50,
-                });
-                await subscriptionsController.addQuery(subscription.id, siteId, queryText);
-              });
-            }}
-            onRemoveSubscription={(subscriptionId) =>
-              void act(`groupdel:${subscriptionId}`, () =>
-                subscriptionsController.setSubscriptionGroup(subscriptionId, null))}
-            onSelectSubscription={(subscriptionId) => navigateTo({ kind: 'subscription', id: subscriptionId })}
           />
         ) : selectedSubscription && snapshot ? (
           <SubscriptionDetail
             subscription={selectedSubscription}
             snapshot={snapshot}
-            groups={snapshot.groups}
             progress={selectedProgress}
             detail={detail}
             coverHash={covers.get(selectedSubscription.id) ?? null}
@@ -473,7 +371,10 @@ export function SubscriptionsScreen() {
               },
             }}
             onTabChange={setActiveTab}
-            onOpenAccounts={(siteId) => setAccountsModal({ open: true, focusSiteId: siteId })}
+            onOpenAccounts={(siteId) => setAccountsModal({
+              open: true,
+              focusSiteId: siteId ? getCredentialOwnerSiteId(siteId, snapshot.sites) : null,
+            })}
             onLoadMoreHealth={() => void loadMoreHealth()}
             onOpenMenu={(position) => openSubscriptionMenu(position, selectedSubscription)}
           />

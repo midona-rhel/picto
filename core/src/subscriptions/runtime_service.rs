@@ -6,7 +6,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::db::LibraryDatabase;
 use crate::ingest_queue::IngestQueueCounts;
 use crate::subscriptions::gallery_dl_runner::FailureKind;
-use crate::types::{SubscriptionGroupInfo, SubscriptionInfo, SubscriptionQueryInfo};
+use crate::types::{SubscriptionInfo, SubscriptionQueryInfo};
 
 use super::archive::{
     clear_subscription_archive_entries_at_root, subscription_query_archive_prefix,
@@ -16,27 +16,24 @@ use super::runtime_db::{
     count_active_subscription_query_jobs, create_subscription_query_run, create_subscription_run,
     enqueue_subscription_query_job, finalize_subscription_query_run_if_terminal,
     finalize_subscription_run_if_terminal, finalize_subscription_run_status,
-    finish_subscription_query_job, get_subscription_post_collection, lease_subscription_query_job,
+    finish_subscription_query_job, lease_subscription_query_job,
     list_queued_subscription_query_jobs, list_retryable_subscription_download_attempts,
     list_running_subscription_run_ids, list_subscription_download_attempts_page,
-    list_subscription_issues, list_subscription_issues_page, list_subscription_post_members,
-    list_subscription_query_jobs_for_run, list_subscription_query_runs,
-    list_subscription_retry_targets, list_subscription_runs,
+    list_subscription_issues, list_subscription_issues_page, list_subscription_query_jobs_for_run,
+    list_subscription_query_runs, list_subscription_retry_targets, list_subscription_runs,
     mark_subscription_download_attempt_retrying, record_subscription_query_source_completion,
     requeue_interrupted_subscription_query_job, reschedule_subscription_query_job,
     reset_subscription_query_state, reset_subscription_state,
     resolve_subscription_download_attempt, resolve_subscription_issues,
     set_query_completed_initial_run, set_query_resume_state, set_query_terminal_state,
     set_subscription_issue_next_retry, upsert_subscription_download_attempt,
-    upsert_subscription_issue, upsert_subscription_post_collection,
-    upsert_subscription_post_member,
+    upsert_subscription_issue, upsert_subscription_post_member,
 };
 use super::types::{
     OwnedSubscriptionDownloadAttemptUpsert, OwnedSubscriptionPostMemberUpsert, Subscription,
-    SubscriptionDownloadAttemptRecord, SubscriptionDownloadAttemptUpsert, SubscriptionGroup,
-    SubscriptionIssueRecord, SubscriptionPostMemberRecord, SubscriptionPostMemberUpsert,
-    SubscriptionQuery, SubscriptionQueryJob, SubscriptionQueryRunCompletion,
-    SubscriptionQueryRunRecord, SubscriptionRunRecord,
+    SubscriptionDownloadAttemptRecord, SubscriptionDownloadAttemptUpsert, SubscriptionIssueRecord,
+    SubscriptionPostMemberUpsert, SubscriptionQuery, SubscriptionQueryJob,
+    SubscriptionQueryRunCompletion, SubscriptionQueryRunRecord, SubscriptionRunRecord,
 };
 
 #[derive(Debug, Clone)]
@@ -45,18 +42,23 @@ struct CanonicalSubscriptionRow {
     name: String,
     schedule: String,
     paused: bool,
-    group_id: Option<i64>,
     initial_post_limit: i64,
     periodic_post_limit: i64,
-    auto_collections: bool,
     date_added: String,
 }
 
-#[derive(Debug, Clone)]
-struct CanonicalGroupRow {
-    group_id: i64,
-    name: String,
-    date_added: String,
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CurrentQueryRunProgress {
+    pub posts_processed: usize,
+    pub files_downloaded: usize,
+    pub files_skipped: usize,
+    pub metadata_validated: usize,
+    pub metadata_invalid: usize,
+    pub current_posts_processed: usize,
+    pub current_files_downloaded: usize,
+    pub current_files_skipped: usize,
+    pub current_metadata_validated: usize,
+    pub current_metadata_invalid: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -105,14 +107,12 @@ pub async fn link_subscription_entity(
 #[derive(Debug, Clone)]
 pub struct RunnableSubscription {
     pub subscription: Subscription,
-    pub group_name: Option<String>,
     pub queries: Vec<SubscriptionQuery>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RunnableQuery {
     pub subscription: Subscription,
-    pub group_name: Option<String>,
     pub query: SubscriptionQuery,
 }
 
@@ -121,7 +121,7 @@ pub struct ScheduledSubscription {
     pub subscription_id: i64,
     pub name: String,
     pub schedule: String,
-    pub last_full_run_at: Option<String>,
+    pub last_scheduled_success_at: Option<String>,
 }
 
 impl<'a> SubscriptionRuntimeService<'a> {
@@ -130,180 +130,6 @@ impl<'a> SubscriptionRuntimeService<'a> {
             db,
             library_root: library_root.to_path_buf(),
         }
-    }
-
-    pub async fn get_groups(&self) -> Result<Vec<SubscriptionGroupInfo>, String> {
-        let groups = self.db.with_read(list_groups_canonical)?;
-        let subs = self
-            .db
-            .with_read(list_subscriptions_with_counts_canonical)?;
-        let queries = self.db.with_read(list_all_queries_canonical)?;
-
-        let mut queries_map: HashMap<i64, Vec<SubscriptionQueryInfo>> = HashMap::new();
-        for query in queries {
-            queries_map
-                .entry(query.subscription_id)
-                .or_default()
-                .push(query_info_from_row(query));
-        }
-
-        let mut subs_by_group: HashMap<Option<i64>, Vec<SubscriptionInfo>> = HashMap::new();
-        let mut totals_by_group: HashMap<i64, u64> = HashMap::new();
-        for (sub, total_files) in subs {
-            let subscription_id = sub.subscription_id;
-            if let Some(group_id) = sub.group_id {
-                totals_by_group
-                    .entry(group_id)
-                    .and_modify(|total| *total += total_files as u64)
-                    .or_insert(total_files as u64);
-            }
-            subs_by_group
-                .entry(sub.group_id)
-                .or_default()
-                .push(subscription_info_from_row(
-                    sub,
-                    total_files,
-                    queries_map.remove(&subscription_id).unwrap_or_default(),
-                ));
-        }
-
-        Ok(groups
-            .into_iter()
-            .map(|group| SubscriptionGroupInfo {
-                id: group.group_id.to_string(),
-                name: group.name,
-                created_at: group.date_added,
-                total_files: totals_by_group.get(&group.group_id).copied().unwrap_or(0),
-                subscriptions: subs_by_group
-                    .remove(&Some(group.group_id))
-                    .unwrap_or_default(),
-            })
-            .collect())
-    }
-
-    pub async fn create_group(&self, name: String) -> Result<SubscriptionGroupInfo, String> {
-        let trimmed = name.trim().to_string();
-        if trimmed.is_empty() {
-            return Err("Group name cannot be empty".to_string());
-        }
-        let now = chrono::Utc::now().to_rfc3339();
-        let uuid = crate::oplog::new_uuid();
-        let device_id = self.db.device_id().to_string();
-        let group_id = self.db.with_write(|conn| {
-            conn.execute(
-                "INSERT INTO subscription_group (name, uuid, date_added) VALUES (?1, ?2, ?3)",
-                params![trimmed, uuid, now],
-            )?;
-            let group_id = conn.last_insert_rowid();
-            crate::oplog::record_op(
-                conn,
-                &device_id,
-                "subscription_group_created",
-                &uuid,
-                &serde_json::json!({
-                    "name": trimmed,
-                    "date_added": now,
-                }),
-            )?;
-            Ok(group_id)
-        })?;
-
-        Ok(SubscriptionGroupInfo {
-            id: group_id.to_string(),
-            name: trimmed,
-            created_at: now,
-            total_files: 0,
-            subscriptions: vec![],
-        })
-    }
-
-    pub async fn delete_group(&self, id: String) -> Result<(), String> {
-        let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {id}"))?;
-        let device_id = self.db.device_id().to_string();
-        self.db.with_write(|conn| {
-            let group_uuid: Option<String> = conn
-                .query_row(
-                    "SELECT uuid FROM subscription_group WHERE group_id = ?1",
-                    [group_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            let Some(group_uuid) = group_uuid else {
-                return Ok(());
-            };
-
-            let mut affected = Vec::new();
-            let mut stmt = conn.prepare_cached(
-                "SELECT subscription_id, uuid
-                 FROM subscription
-                 WHERE group_id = ?1
-                 ORDER BY subscription_id",
-            )?;
-            let rows = stmt.query_map([group_id], |row| {
-                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-            })?;
-            for row in rows {
-                affected.push(row?);
-            }
-
-            conn.execute(
-                "UPDATE subscription SET group_id = NULL WHERE group_id = ?1",
-                [group_id],
-            )?;
-            for (_, subscription_uuid) in affected {
-                crate::oplog::record_op(
-                    conn,
-                    &device_id,
-                    "subscription_updated",
-                    &subscription_uuid,
-                    &serde_json::json!({ "group_uuid": null }),
-                )?;
-            }
-            conn.execute(
-                "DELETE FROM subscription_group WHERE group_id = ?1",
-                [group_id],
-            )?;
-            crate::oplog::record_op(
-                conn,
-                &device_id,
-                "subscription_group_deleted",
-                &group_uuid,
-                &serde_json::json!({}),
-            )?;
-            Ok(())
-        })
-    }
-
-    pub async fn rename_group(&self, id: String, name: String) -> Result<(), String> {
-        let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {id}"))?;
-        let trimmed = name.trim().to_string();
-        if trimmed.is_empty() {
-            return Err("Name cannot be empty".to_string());
-        }
-        let device_id = self.db.device_id().to_string();
-        self.db.with_write(|conn| {
-            let uuid: Option<String> = conn
-                .query_row(
-                    "SELECT uuid FROM subscription_group WHERE group_id = ?1",
-                    [group_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            conn.execute(
-                "UPDATE subscription_group SET name = ?1 WHERE group_id = ?2",
-                params![trimmed, group_id],
-            )?;
-            if let Some(uuid) = uuid {
-                crate::oplog::record_op(
-                    conn,
-                    &device_id,
-                    "subscription_group_updated",
-                    &uuid,
-                    &serde_json::json!({ "name": trimmed }),
-                )?;
-            }
-            Ok(())
-        })
     }
 
     pub async fn set_subscription_schedule(
@@ -368,7 +194,17 @@ impl<'a> SubscriptionRuntimeService<'a> {
     pub async fn list_scheduled_subscriptions(&self) -> Result<Vec<ScheduledSubscription>, String> {
         self.db.with_read(|conn| {
             let mut stmt = conn.prepare_cached(
-                "SELECT s.subscription_id, s.name, s.schedule, MAX(sr.started_at)
+                "SELECT s.subscription_id, s.name, s.schedule,
+                        MAX(CASE
+                            WHEN sr.status = 'succeeded'
+                             AND EXISTS (
+                                 SELECT 1
+                                 FROM subscription_query_job job
+                                 WHERE job.run_id = sr.run_id
+                                   AND job.requested_by = 'scheduled'
+                             )
+                            THEN sr.finished_at
+                        END)
                  FROM subscription s
                  LEFT JOIN subscription_run sr ON sr.subscription_id = s.subscription_id
                  WHERE s.paused = 0
@@ -386,7 +222,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
                     subscription_id: row.get(0)?,
                     name: row.get(1)?,
                     schedule: row.get(2)?,
-                    last_full_run_at: row.get(3)?,
+                    last_scheduled_success_at: row.get(3)?,
                 })
             })?;
             rows.collect()
@@ -396,7 +232,6 @@ impl<'a> SubscriptionRuntimeService<'a> {
     pub async fn create_subscription(
         &self,
         name: String,
-        group_id: Option<i64>,
         initial_post_limit: Option<u32>,
         periodic_post_limit: Option<u32>,
     ) -> Result<SubscriptionInfo, String> {
@@ -406,26 +241,13 @@ impl<'a> SubscriptionRuntimeService<'a> {
         let uuid = crate::oplog::new_uuid();
         let device_id = self.db.device_id().to_string();
         let subscription_id = self.db.with_write(|conn| {
-            let group_uuid = match group_id {
-                Some(group_id) => Some(
-                    conn.query_row(
-                        "SELECT uuid FROM subscription_group WHERE group_id = ?1",
-                        [group_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()?
-                    .ok_or(rusqlite::Error::QueryReturnedNoRows)?,
-                ),
-                None => None,
-            };
             conn.execute(
                 "INSERT INTO subscription
-                    (name, schedule, paused, group_id, initial_post_limit,
-                     periodic_post_limit, auto_collections, uuid, date_added)
-                 VALUES (?1, 'daily', 0, ?2, ?3, ?4, 1, ?5, ?6)",
+                    (name, schedule, paused, initial_post_limit,
+                     periodic_post_limit, uuid, date_added)
+                 VALUES (?1, 'daily', 0, ?2, ?3, ?4, ?5)",
                 params![
                     name,
-                    group_id,
                     initial_post_limit as i64,
                     periodic_post_limit as i64,
                     uuid,
@@ -444,9 +266,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
                     "paused": false,
                     "initial_post_limit": initial_post_limit,
                     "periodic_post_limit": periodic_post_limit,
-                    "auto_collections": true,
                     "date_added": now,
-                    "group_uuid": group_uuid,
                 }),
             )?;
             Ok(subscription_id)
@@ -457,10 +277,8 @@ impl<'a> SubscriptionRuntimeService<'a> {
             name,
             schedule: "daily".to_string(),
             paused: false,
-            group_id: group_id.map(|id| id.to_string()),
             initial_post_limit,
             periodic_post_limit,
-            auto_collections: true,
             created_at: now,
             total_files: 0,
             queries: vec![],
@@ -582,111 +400,6 @@ impl<'a> SubscriptionRuntimeService<'a> {
         })
     }
 
-    pub async fn set_subscription_auto_collections(
-        &self,
-        subscription_id: i64,
-        auto_collections: bool,
-    ) -> Result<(), String> {
-        let device_id = self.db.device_id().to_string();
-        self.db.with_write(|conn| {
-            let uuid: Option<String> = conn
-                .query_row(
-                    "SELECT uuid FROM subscription WHERE subscription_id = ?1",
-                    [subscription_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            conn.execute(
-                "UPDATE subscription SET auto_collections = ?1 WHERE subscription_id = ?2",
-                params![auto_collections as i64, subscription_id],
-            )?;
-            if let Some(uuid) = uuid {
-                crate::oplog::record_op(
-                    conn,
-                    &device_id,
-                    "subscription_updated",
-                    &uuid,
-                    &serde_json::json!({ "auto_collections": auto_collections }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    /// Move a subscription into a group (or out of every group with None).
-    pub async fn set_subscription_group(
-        &self,
-        subscription_id: i64,
-        group_id: Option<i64>,
-    ) -> Result<(), String> {
-        let device_id = self.db.device_id().to_string();
-        self.db.with_write(move |conn| {
-            let subscription_uuid: Option<String> = conn
-                .query_row(
-                    "SELECT uuid FROM subscription WHERE subscription_id = ?1",
-                    [subscription_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            let group_uuid = match group_id {
-                Some(group_id) => Some(
-                    conn.query_row(
-                        "SELECT uuid FROM subscription_group WHERE group_id = ?1",
-                        [group_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()?
-                    .ok_or_else(|| {
-                        rusqlite::Error::InvalidParameterName(format!("Group {group_id} not found"))
-                    })?,
-                ),
-                None => None,
-            };
-            conn.execute(
-                "UPDATE subscription SET group_id = ?1 WHERE subscription_id = ?2",
-                params![group_id, subscription_id],
-            )?;
-            if let Some(subscription_uuid) = subscription_uuid {
-                crate::oplog::record_op(
-                    conn,
-                    &device_id,
-                    "subscription_updated",
-                    &subscription_uuid,
-                    &serde_json::json!({ "group_uuid": group_uuid }),
-                )?;
-            }
-            Ok(())
-        })
-    }
-
-    /// Collections this subscription has created from multi-image posts.
-    pub async fn list_subscription_collections(
-        &self,
-        subscription_id: i64,
-    ) -> Result<Vec<crate::subscriptions::types::SubscriptionCollectionRecord>, String> {
-        self.db.with_read(move |conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT me.entity_hash, me.name, me.member_count, spc.site_id, spc.post_id
-                 FROM subscription_post_collection spc
-                 JOIN media_entity me ON me.entity_id = spc.collection_entity_id
-                 WHERE spc.subscription_id = ?1
-                 ORDER BY spc.date_modified DESC",
-            )?;
-            let rows = stmt.query_map(params![subscription_id], |row| {
-                Ok(crate::subscriptions::types::SubscriptionCollectionRecord {
-                    entity_hash: row.get(0)?,
-                    name: row.get(1)?,
-                    member_count: row.get(2)?,
-                    site_id: row.get(3)?,
-                    post_id: row.get(4)?,
-                })
-            })?;
-            rows.collect()
-        })
-    }
-
-    /// Newest downloaded file per subscription — cover images for the
-    /// Following grid. One row per subscription that has files.
     pub async fn get_subscription_covers(
         &self,
     ) -> Result<Vec<crate::subscriptions::types::SubscriptionCoverRecord>, String> {
@@ -724,8 +437,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
         if crate::subscriptions::gallery_dl_runner::site_by_id(&site_id).is_none() {
             return Err(format!("Unknown site: {site_id}"));
         }
-        let canonical_site_id =
-            crate::subscriptions::gallery_dl_runner::canonical_site_id(&site_id).to_string();
+        let canonical_site_id = site_id.clone();
         let resolved_query_kind = crate::subscriptions::source_adapter::resolve_query_kind(
             &site_id,
             query_kind.as_deref(),
@@ -738,6 +450,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
             &resolved_query_kind,
             &query_text,
         );
+        crate::subscriptions::source_adapter::validate_query_text(&site_id, &normalized_query)?;
         let query_uuid = crate::oplog::new_uuid();
         let device_id = self.db.device_id().to_string();
         let query_id = self.db.with_write(|conn| {
@@ -812,8 +525,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
         if crate::subscriptions::gallery_dl_runner::site_by_id(&site_id).is_none() {
             return Err(format!("Unknown site: {site_id}"));
         }
-        let canonical_site_id =
-            crate::subscriptions::gallery_dl_runner::canonical_site_id(&site_id).to_string();
+        let canonical_site_id = site_id.clone();
         let resolved_query_kind = crate::subscriptions::source_adapter::resolve_query_kind(
             &site_id,
             query_kind.as_deref(),
@@ -824,18 +536,58 @@ impl<'a> SubscriptionRuntimeService<'a> {
             &resolved_query_kind,
             &query_text,
         );
+        crate::subscriptions::source_adapter::validate_query_text(&site_id, &normalized_query)?;
         let device_id = self.db.device_id().to_string();
-        self.db.with_write(|conn| {
-            let query_identity: Option<(String, String)> = conn
+        enum EditQueryOutcome {
+            Running,
+            Missing,
+            Updated(Option<String>),
+        }
+        let archive_prefix = match self.db.with_write(|conn| {
+            let active_jobs: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM subscription_query_job
+                 WHERE query_id = ?1 AND status IN ('queued', 'running')",
+                [id],
+                |row| row.get(0),
+            )?;
+            if active_jobs > 0 {
+                return Ok(EditQueryOutcome::Running);
+            }
+
+            let query_identity: Option<(String, String, i64, String, String, String)> = conn
                 .query_row(
-                    "SELECT q.uuid, s.uuid
+                    "SELECT q.uuid, s.uuid, q.subscription_id,
+                            q.site_id, q.query_kind, q.query_text
                      FROM subscription_query q
                      JOIN subscription s ON s.subscription_id = q.subscription_id
                      WHERE q.query_id = ?1",
                     [id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                        ))
+                    },
                 )
                 .optional()?;
+            let Some((
+                query_uuid,
+                subscription_uuid,
+                subscription_id,
+                old_site_id,
+                old_query_kind,
+                old_query_text,
+            )) = query_identity
+            else {
+                return Ok(EditQueryOutcome::Missing);
+            };
+            let source_changed = old_site_id != canonical_site_id
+                || old_query_kind != resolved_query_kind
+                || old_query_text != normalized_query;
             conn.execute(
                 "UPDATE subscription_query
                  SET site_id = ?1, query_kind = ?2, query_text = ?3, display_name = ?4, notes = ?5
@@ -849,24 +601,41 @@ impl<'a> SubscriptionRuntimeService<'a> {
                     id
                 ],
             )?;
-            if let Some((query_uuid, subscription_uuid)) = query_identity {
-                crate::oplog::record_op(
-                    conn,
-                    &device_id,
-                    "subscription_query_updated",
-                    &query_uuid,
-                    &serde_json::json!({
-                        "subscription_uuid": subscription_uuid,
-                        "site_id": canonical_site_id,
-                        "query_kind": resolved_query_kind,
-                        "query_text": normalized_query,
-                        "display_name": display_name,
-                        "notes": notes,
-                    }),
-                )?;
+            if source_changed {
+                reset_subscription_query_state(conn, id)?;
             }
-            Ok(())
-        })
+            crate::oplog::record_op(
+                conn,
+                &device_id,
+                "subscription_query_updated",
+                &query_uuid,
+                &serde_json::json!({
+                    "subscription_uuid": subscription_uuid,
+                    "site_id": canonical_site_id,
+                    "query_kind": resolved_query_kind,
+                    "query_text": normalized_query,
+                    "display_name": display_name,
+                    "notes": notes,
+                }),
+            )?;
+            Ok(EditQueryOutcome::Updated(source_changed.then(|| {
+                subscription_query_archive_prefix(subscription_id, id)
+            })))
+        })? {
+            EditQueryOutcome::Running => {
+                return Err("Cannot edit a subscription query while it is running".to_string())
+            }
+            EditQueryOutcome::Missing => return Err(format!("Query {id} not found")),
+            EditQueryOutcome::Updated(archive_prefix) => archive_prefix,
+        };
+        if let Some(archive_prefix) = archive_prefix {
+            clear_subscription_archive_entries_at_root(
+                self.library_root.as_path(),
+                &[archive_prefix],
+            )
+            .await?;
+        }
+        Ok(())
     }
 
     pub async fn delete_subscription_query(&self, id: String) -> Result<(), String> {
@@ -969,25 +738,6 @@ impl<'a> SubscriptionRuntimeService<'a> {
         Ok(())
     }
 
-    pub async fn get_group(&self, group_id: i64) -> Result<Option<SubscriptionGroup>, String> {
-        self.db.with_read(|conn| {
-            get_group_canonical(conn, group_id).map(|row| row.map(group_from_row))
-        })
-    }
-
-    pub async fn list_subscriptions_for_group(
-        &self,
-        group_id: i64,
-    ) -> Result<Vec<Subscription>, String> {
-        self.db.with_read(|conn| {
-            list_subscriptions_for_group_canonical(conn, group_id).map(|rows| {
-                rows.into_iter()
-                    .map(subscription_from_row)
-                    .collect::<Vec<_>>()
-            })
-        })
-    }
-
     pub async fn get_subscription(
         &self,
         subscription_id: i64,
@@ -1025,13 +775,8 @@ impl<'a> SubscriptionRuntimeService<'a> {
             return Ok(None);
         };
         let queries = self.get_subscription_queries(subscription_id).await?;
-        let group_name = match subscription.group_id {
-            Some(group_id) => self.get_group(group_id).await?.map(|group| group.name),
-            None => None,
-        };
         Ok(Some(RunnableSubscription {
             subscription,
-            group_name,
             queries,
         }))
     }
@@ -1054,7 +799,6 @@ impl<'a> SubscriptionRuntimeService<'a> {
         };
         Ok(Some(RunnableQuery {
             subscription: bundle.subscription,
-            group_name: bundle.group_name,
             query,
         }))
     }
@@ -1521,7 +1265,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
                     page_num: input.page_num,
                     canonical_post_url: input.canonical_post_url.as_deref(),
                     media_url: input.media_url.as_deref(),
-                    entity_hash: input.entity_hash.as_deref(),
+                    entity_id: input.entity_id,
                     status: &input.status,
                 },
             )
@@ -1534,52 +1278,6 @@ impl<'a> SubscriptionRuntimeService<'a> {
         entity_hash: &str,
     ) -> Result<bool, String> {
         link_subscription_entity(self.db, subscription_id, entity_hash).await
-    }
-
-    pub async fn upsert_subscription_post_collection(
-        &self,
-        subscription_id: i64,
-        site_id: &str,
-        post_id: &str,
-        collection_entity_id: i64,
-    ) -> Result<(), String> {
-        let site_id = site_id.to_string();
-        let post_id = post_id.to_string();
-        self.db.with_write(move |conn| {
-            upsert_subscription_post_collection(
-                conn,
-                subscription_id,
-                &site_id,
-                &post_id,
-                collection_entity_id,
-            )
-        })
-    }
-
-    pub async fn list_subscription_post_members(
-        &self,
-        subscription_id: i64,
-        site_id: &str,
-        post_id: &str,
-    ) -> Result<Vec<SubscriptionPostMemberRecord>, String> {
-        let site_id = site_id.to_string();
-        let post_id = post_id.to_string();
-        self.db.with_read(move |conn| {
-            list_subscription_post_members(conn, subscription_id, &site_id, &post_id)
-        })
-    }
-
-    pub async fn get_subscription_post_collection(
-        &self,
-        subscription_id: i64,
-        site_id: &str,
-        post_id: &str,
-    ) -> Result<Option<i64>, String> {
-        let site_id = site_id.to_string();
-        let post_id = post_id.to_string();
-        self.db.with_read(move |conn| {
-            get_subscription_post_collection(conn, subscription_id, &site_id, &post_id)
-        })
     }
 
     pub async fn list_subscription_runs(
@@ -1645,17 +1343,35 @@ impl<'a> SubscriptionRuntimeService<'a> {
         self.db.with_read(|conn| {
             conn.query_row(
                 "WITH current_query_run AS (
-                     SELECT query_run_id, run_id
+                     SELECT query_run_id, run_id, started_at
                      FROM subscription_query_run
                      WHERE query_id = ?1
                      ORDER BY query_run_id DESC
+                     LIMIT 1
+                 ), current_job AS (
+                     SELECT job.queued_at
+                     FROM subscription_query_job job
+                     JOIN current_query_run current
+                       ON job.query_id = ?1
+                      AND job.run_id IS current.run_id
+                      AND job.queued_at <= current.started_at
+                     ORDER BY job.queued_at DESC, job.job_id DESC
                      LIMIT 1
                  ), target_query_runs AS (
                      SELECT qr.query_run_id
                      FROM subscription_query_run qr
                      JOIN current_query_run current
                        ON (current.run_id IS NOT NULL AND qr.run_id = current.run_id)
-                       OR (current.run_id IS NULL AND qr.query_run_id = current.query_run_id)
+                       OR (
+                           current.run_id IS NULL
+                           AND qr.run_id IS NULL
+                           AND qr.query_id = ?1
+                           AND qr.started_at >= COALESCE(
+                               (SELECT queued_at FROM current_job),
+                               current.started_at
+                           )
+                       )
+                     WHERE qr.query_id = ?1
                  )
                  SELECT
                      COALESCE(SUM(CASE WHEN i.status = 'pending' THEN 1 ELSE 0 END), 0),
@@ -1679,6 +1395,75 @@ impl<'a> SubscriptionRuntimeService<'a> {
             )
         })
     }
+
+    pub async fn count_current_query_run_progress(
+        &self,
+        query_id: i64,
+    ) -> Result<CurrentQueryRunProgress, String> {
+        self.db.with_read(move |conn| {
+            conn.query_row(
+                "WITH current_query_run AS (
+                     SELECT query_run_id, run_id, started_at
+                     FROM subscription_query_run
+                     WHERE query_id = ?1
+                     ORDER BY query_run_id DESC
+                     LIMIT 1
+                 ), current_job AS (
+                     SELECT job.queued_at
+                     FROM subscription_query_job job
+                     JOIN current_query_run current
+                       ON job.query_id = ?1
+                      AND job.run_id IS current.run_id
+                      AND job.queued_at <= current.started_at
+                     ORDER BY job.queued_at DESC, job.job_id DESC
+                     LIMIT 1
+                 ), target_query_runs AS (
+                     SELECT qr.query_run_id
+                     FROM subscription_query_run qr
+                     JOIN current_query_run current
+                       ON (current.run_id IS NOT NULL AND qr.run_id = current.run_id)
+                       OR (
+                           current.run_id IS NULL
+                           AND qr.run_id IS NULL
+                           AND qr.query_id = ?1
+                           AND qr.started_at >= COALESCE(
+                               (SELECT queued_at FROM current_job),
+                               current.started_at
+                           )
+                       )
+                     WHERE qr.query_id = ?1
+                 )
+                 SELECT COALESCE(SUM(qr.posts_processed), 0),
+                        COALESCE(SUM(qr.files_downloaded), 0),
+                        COALESCE(SUM(qr.files_skipped), 0),
+                        COALESCE(SUM(qr.metadata_validated), 0),
+                        COALESCE(SUM(qr.metadata_invalid), 0),
+                        COALESCE(MAX(CASE WHEN qr.query_run_id = current.query_run_id THEN qr.posts_processed END), 0),
+                        COALESCE(MAX(CASE WHEN qr.query_run_id = current.query_run_id THEN qr.files_downloaded END), 0),
+                        COALESCE(MAX(CASE WHEN qr.query_run_id = current.query_run_id THEN qr.files_skipped END), 0),
+                        COALESCE(MAX(CASE WHEN qr.query_run_id = current.query_run_id THEN qr.metadata_validated END), 0),
+                        COALESCE(MAX(CASE WHEN qr.query_run_id = current.query_run_id THEN qr.metadata_invalid END), 0)
+                 FROM subscription_query_run qr
+                 CROSS JOIN current_query_run current
+                 WHERE qr.query_run_id IN (SELECT query_run_id FROM target_query_runs)",
+                [query_id],
+                |row| {
+                    Ok(CurrentQueryRunProgress {
+                        posts_processed: row.get::<_, i64>(0)?.max(0) as usize,
+                        files_downloaded: row.get::<_, i64>(1)?.max(0) as usize,
+                        files_skipped: row.get::<_, i64>(2)?.max(0) as usize,
+                        metadata_validated: row.get::<_, i64>(3)?.max(0) as usize,
+                        metadata_invalid: row.get::<_, i64>(4)?.max(0) as usize,
+                        current_posts_processed: row.get::<_, i64>(5)?.max(0) as usize,
+                        current_files_downloaded: row.get::<_, i64>(6)?.max(0) as usize,
+                        current_files_skipped: row.get::<_, i64>(7)?.max(0) as usize,
+                        current_metadata_validated: row.get::<_, i64>(8)?.max(0) as usize,
+                        current_metadata_invalid: row.get::<_, i64>(9)?.max(0) as usize,
+                    })
+                },
+            )
+        })
+    }
 }
 
 fn subscription_info_from_row(
@@ -1691,10 +1476,8 @@ fn subscription_info_from_row(
         name: sub.name,
         schedule: sub.schedule,
         paused: sub.paused,
-        group_id: sub.group_id.map(|id| id.to_string()),
         initial_post_limit: sub.initial_post_limit as u32,
         periodic_post_limit: sub.periodic_post_limit as u32,
-        auto_collections: sub.auto_collections,
         created_at: sub.date_added,
         total_files: total_files as u64,
         queries,
@@ -1707,10 +1490,8 @@ fn subscription_from_row(sub: CanonicalSubscriptionRow) -> Subscription {
         name: sub.name,
         schedule: sub.schedule,
         paused: sub.paused,
-        group_id: sub.group_id,
         initial_post_limit: sub.initial_post_limit,
         periodic_post_limit: sub.periodic_post_limit,
-        auto_collections: sub.auto_collections,
         created_at: sub.date_added,
     }
 }
@@ -1718,8 +1499,7 @@ fn subscription_from_row(sub: CanonicalSubscriptionRow) -> Subscription {
 fn query_info_from_row(query: CanonicalQueryRow) -> SubscriptionQueryInfo {
     SubscriptionQueryInfo {
         id: query.query_id.to_string(),
-        site_id: crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id)
-            .to_string(),
+        site_id: query.site_id,
         query_kind: query.query_kind,
         query_text: query.query_text.clone(),
         display_name: query.display_name.or(Some(query.query_text)),
@@ -1742,8 +1522,7 @@ fn query_from_row(query: CanonicalQueryRow) -> SubscriptionQuery {
     SubscriptionQuery {
         query_id: query.query_id,
         subscription_id: query.subscription_id,
-        site_id: crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id)
-            .to_string(),
+        site_id: query.site_id,
         query_kind: query.query_kind,
         query_text: query.query_text.clone(),
         display_name: query.display_name.or(Some(query.query_text)),
@@ -1762,30 +1541,6 @@ fn query_from_row(query: CanonicalQueryRow) -> SubscriptionQuery {
     }
 }
 
-fn group_from_row(group: CanonicalGroupRow) -> SubscriptionGroup {
-    SubscriptionGroup {
-        group_id: group.group_id,
-        name: group.name,
-        created_at: group.date_added,
-    }
-}
-
-fn list_groups_canonical(conn: &Connection) -> rusqlite::Result<Vec<CanonicalGroupRow>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT group_id, name, date_added
-         FROM subscription_group
-         ORDER BY name",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(CanonicalGroupRow {
-            group_id: row.get(0)?,
-            name: row.get(1)?,
-            date_added: row.get(2)?,
-        })
-    })?;
-    rows.collect()
-}
-
 fn list_subscriptions_with_counts_canonical(
     conn: &Connection,
 ) -> rusqlite::Result<Vec<(CanonicalSubscriptionRow, i64)>> {
@@ -1795,10 +1550,8 @@ fn list_subscriptions_with_counts_canonical(
              s.name,
              s.schedule,
              s.paused,
-             s.group_id,
              s.initial_post_limit,
              s.periodic_post_limit,
-             s.auto_collections,
              s.date_added,
              COALESCE(fc.cnt, 0)
          FROM subscription s
@@ -1816,49 +1569,12 @@ fn list_subscriptions_with_counts_canonical(
                 name: row.get(1)?,
                 schedule: row.get(2)?,
                 paused: row.get::<_, i64>(3)? != 0,
-                group_id: row.get(4)?,
-                initial_post_limit: row.get(5)?,
-                periodic_post_limit: row.get(6)?,
-                auto_collections: row.get::<_, i64>(7)? != 0,
-                date_added: row.get(8)?,
+                initial_post_limit: row.get(4)?,
+                periodic_post_limit: row.get(5)?,
+                date_added: row.get(6)?,
             },
-            row.get(9)?,
+            row.get(7)?,
         ))
-    })?;
-    rows.collect()
-}
-
-fn list_subscriptions_for_group_canonical(
-    conn: &Connection,
-    group_id: i64,
-) -> rusqlite::Result<Vec<CanonicalSubscriptionRow>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT
-             subscription_id,
-             name,
-             schedule,
-             paused,
-             group_id,
-             initial_post_limit,
-             periodic_post_limit,
-             auto_collections,
-             date_added
-         FROM subscription
-         WHERE group_id = ?1
-         ORDER BY name",
-    )?;
-    let rows = stmt.query_map([group_id], |row| {
-        Ok(CanonicalSubscriptionRow {
-            subscription_id: row.get(0)?,
-            name: row.get(1)?,
-            schedule: row.get(2)?,
-            paused: row.get::<_, i64>(3)? != 0,
-            group_id: row.get(4)?,
-            initial_post_limit: row.get(5)?,
-            periodic_post_limit: row.get(6)?,
-            auto_collections: row.get::<_, i64>(7)? != 0,
-            date_added: row.get(8)?,
-        })
     })?;
     rows.collect()
 }
@@ -1873,10 +1589,8 @@ fn get_subscription_canonical(
              name,
              schedule,
              paused,
-             group_id,
              initial_post_limit,
              periodic_post_limit,
-             auto_collections,
              date_added
          FROM subscription
          WHERE subscription_id = ?1",
@@ -1887,31 +1601,9 @@ fn get_subscription_canonical(
                 name: row.get(1)?,
                 schedule: row.get(2)?,
                 paused: row.get::<_, i64>(3)? != 0,
-                group_id: row.get(4)?,
-                initial_post_limit: row.get(5)?,
-                periodic_post_limit: row.get(6)?,
-                auto_collections: row.get::<_, i64>(7)? != 0,
-                date_added: row.get(8)?,
-            })
-        },
-    )
-    .optional()
-}
-
-fn get_group_canonical(
-    conn: &Connection,
-    group_id: i64,
-) -> rusqlite::Result<Option<CanonicalGroupRow>> {
-    conn.query_row(
-        "SELECT group_id, name, date_added
-         FROM subscription_group
-         WHERE group_id = ?1",
-        [group_id],
-        |row| {
-            Ok(CanonicalGroupRow {
-                group_id: row.get(0)?,
-                name: row.get(1)?,
-                date_added: row.get(2)?,
+                initial_post_limit: row.get(4)?,
+                periodic_post_limit: row.get(5)?,
+                date_added: row.get(6)?,
             })
         },
     )

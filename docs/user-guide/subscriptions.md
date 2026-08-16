@@ -2,100 +2,82 @@
 
 [← User Guide](README.md)
 
-Subscriptions automate downloading images and media from supported websites. You define what to download (queries), group them, and optionally schedule them to run automatically.
+Subscriptions keep one subject up to date from one or more supported sources. Each query downloads
+new posts, persists progress, and imports media continuously into Inbox.
 
 ## Concepts
 
-- **Subscription** — A single download source: a site + query (e.g., a tag search on a booru)
-- **Group** — A container for related subscriptions that run together
-- **Schedule** — When a group runs: manually, daily, weekly, or monthly
-- **Credentials** — Login details for sites that require authentication
+- **Subscription** — A named subject with one or more source queries and one schedule
+- **Query** — A search or account on one source, such as a Gelbooru tag or Pixiv user
+- **Schedule** — When the subscription runs: manually, daily, weekly, or monthly
+- **Account** — Login material for a source that requires authentication
 
-## Opening the Subscriptions Window
+## Adding a Subscription
 
-Click **Subscriptions** in the sidebar, or use the menu to open the subscriptions management window.
+1. Open **Subscriptions** from the sidebar
+2. Click **New subscription**
+3. Enter a name for the subject
+4. Click **Add**
 
-## Creating a Group
+The subscription does not own a source. Add each source query from its detail view:
 
-1. Click **New Group**
-2. Enter a group name (e.g., "Landscape Art")
-3. Choose a schedule: Manual, Daily, Weekly, or Monthly
+1. Choose a source
+2. Enter the source-specific search or account
+3. Click **Add**
 
-## Adding Subscriptions to a Group
+Add more queries when the same subject should be followed across several sources.
 
-1. Select a group
-2. Click **Add Subscription**
-3. Choose a **site** from the catalog
-4. Enter one or more **queries** (the search terms for that site)
-5. Optionally set file limits:
-   - **Initial file limit** — Maximum files on first run
-   - **Periodic file limit** — Maximum files on subsequent runs
+## Running
 
-## Running a Group
+Click **Run now** to run every enabled query. Each query:
 
-Click the play button on a group to run all its subscriptions. Each subscription:
+1. Connects to its source
+2. Discovers posts from its durable cursor
+3. Skips media already recorded in its download archive
+4. Downloads and imports new media into Inbox as it arrives
+5. Imports every file from a multi-file post as an independent image or video, copying shared
+   source-post metadata and preserving source order on each media entity
 
-1. Connects to the site
-2. Searches for matching content
-3. Downloads new files not already in your library
-4. Imports them into Picto (typically to the Inbox)
+The subscription remains running until every query's downloads and imports have settled. A
+successful run with no new media is shown as up to date.
 
-Progress is shown in both the subscriptions window and the sidebar status bar at the bottom.
-
-## Stopping a Group
-
-Click the stop button on a running group to cancel all active downloads. Already-downloaded files are kept.
+Click **Stop** to cancel pending work and active downloads. Media already imported remains in the
+library. The next run resumes from durable query and archive state.
 
 ## Schedules
 
 | Schedule | Behavior |
 |----------|----------|
-| Manual | Only runs when you click play |
-| Daily | Runs once per day automatically |
+| Manual | Only runs when you click **Run now** |
+| Daily | Runs once per day |
 | Weekly | Runs once per week |
 | Monthly | Runs once per month |
 
-Scheduled runs happen in the background while Picto is open.
+The schedule belongs to the subscription and runs all enabled queries while Picto is open.
 
-## Credentials
+## Accounts
 
-Some sites require authentication. Open the **Credentials** panel in the subscriptions window to manage login details.
+Open **Accounts** from the subscriptions view. Only the login methods supported by the selected
+source are available. Pixiv search and Pixiv user queries share one Pixiv account. Gelbooru requires
+both its account user ID and API key.
 
-### Adding Credentials
+Secrets are stored in the operating system's credential store: Keychain on macOS, Credential
+Manager on Windows, or Secret Service on Linux. Picto records health from real runs and reports
+missing, expired, or rejected credentials.
 
-1. Select the site from the dropdown
-2. Choose the credential type:
-   - **Username + Password** — Standard login
-   - **API Key** — For sites that use API authentication
-   - **Cookies** — Paste cookie key=value pairs (one per line)
-3. Enter the details and save
+## Inbox Limit
 
-Credentials are stored securely in your system's credential store (Keychain on macOS, Credential Manager on Windows, Secret Service on Linux).
+A subscription stops discovering new work when Inbox reaches the configured limit. Review or accept
+Inbox media, then run the subscription again to continue from its saved position.
 
-### Credential Health
+## Supported Sources
 
-Picto monitors credential status and warns about:
-- Expired credentials
-- Unauthorized (wrong password/key)
-- Rate-limited accounts
+Picto supports:
 
-## Download Settings
+- searches on supported booru sources
+- creator/account feeds on supported art and social sources
+- Pixiv searches and Pixiv users through one shared Pixiv login
 
-In [Settings](settings.md) → Download Services:
-
-- **Rate Limit** — Delay between requests (0.5-30 seconds, default ~1s)
-- **Batch Size** — Maximum files per run (or unlimited)
-- **Abort Threshold** — Stop after N consecutive already-downloaded files (default: 10)
-
-## Inbox Cap
-
-Subscription downloads automatically pause when the [inbox](inbox-workflow.md) reaches 1,000 items. Review your inbox to resume downloads.
-
-## Supported Sites
-
-The list of supported sites is loaded from the built-in site plugin catalog. Each site has:
-- Domain and display name
-- Whether authentication is required
-- Query format guidance
-
-The exact list depends on your Picto version and may expand with updates.
+The source picker is the current supported-source list. A source is release-ready only after its
+production-path certification proves independent multi-file media, shared source metadata, source
+order, restart/resume behavior, and its real Electron login and run workflow.

@@ -52,12 +52,18 @@ pub fn resolve_finished_status_text(status: &str, failure_kind: Option<&str>) ->
 }
 
 pub fn default_resume_strategy_for_site(site_id: &str) -> Option<&'static str> {
-    match crate::subscriptions::gallery_dl_runner::canonical_site_id(site_id) {
-        "danbooru" | "gelbooru" | "safebooru" | "rule34" | "yandere" | "e621" | "konachan" => {
+    match site_id {
+        "danbooru" | "gelbooru" | "rule34" | "e621" | "yandere" | "konachan" | "safebooru" => {
             Some("tag_id_lt")
         }
-        // All other sites use sequential range-based pagination via --post-range
-        _ => Some("range_offset"),
+        "pixiv" | "pixivuser" | "webtoons" => Some("range_offset"),
+        // The runner converts this depth into ArtStation's cumulative
+        // `max-posts`; it does not apply gallery-dl's asset-level post range.
+        "artstation" | "hentaifoundry" | "baraag" | "deviantart" | "tumblr" | "furaffinity" => {
+            Some("range_offset")
+        }
+        "idolcomplex" | "sankaku" => Some("source_cursor"),
+        _ => None,
     }
 }
 
@@ -124,9 +130,111 @@ pub fn range_start_from_cursor(resume_cursor: Option<&str>, strategy: Option<&st
 #[cfg(test)]
 mod tests {
     use super::{
-        apply_resume_to_query, derive_resume_cursor, effective_inbox_limit,
-        effective_query_post_limit, range_start_from_cursor, resolve_finished_status_text,
+        apply_resume_to_query, default_resume_strategy_for_site, derive_resume_cursor,
+        effective_inbox_limit, effective_query_post_limit, range_start_from_cursor,
+        resolve_finished_status_text,
     };
+
+    #[test]
+    fn public_boorus_resume_from_the_oldest_committed_post_id() {
+        for site_id in [
+            "danbooru",
+            "gelbooru",
+            "rule34",
+            "e621",
+            "yandere",
+            "konachan",
+            "safebooru",
+        ] {
+            assert_eq!(
+                default_resume_strategy_for_site(site_id),
+                Some("tag_id_lt"),
+                "{site_id}"
+            );
+        }
+    }
+
+    #[test]
+    fn artstation_grows_a_cumulative_project_scan_depth() {
+        assert_eq!(
+            default_resume_strategy_for_site("artstation"),
+            Some("range_offset")
+        );
+        assert_eq!(
+            range_start_from_cursor(Some("25"), Some("range_offset")),
+            26
+        );
+    }
+
+    #[test]
+    fn webtoons_resumes_at_the_next_child_episode() {
+        assert_eq!(
+            default_resume_strategy_for_site("webtoons"),
+            Some("range_offset")
+        );
+        assert_eq!(range_start_from_cursor(Some("1"), Some("range_offset")), 2);
+    }
+
+    #[test]
+    fn hentaifoundry_resumes_with_a_post_safe_range_offset() {
+        assert_eq!(
+            default_resume_strategy_for_site("hentaifoundry"),
+            Some("range_offset")
+        );
+        assert_eq!(
+            range_start_from_cursor(Some("24"), Some("range_offset")),
+            25
+        );
+    }
+
+    #[test]
+    fn baraag_resumes_by_status_without_splitting_attachments() {
+        assert_eq!(
+            default_resume_strategy_for_site("baraag"),
+            Some("range_offset")
+        );
+        assert_eq!(range_start_from_cursor(Some("2"), Some("range_offset")), 3);
+    }
+
+    #[test]
+    fn deviantart_resumes_with_a_gallery_range_offset() {
+        assert_eq!(
+            default_resume_strategy_for_site("deviantart"),
+            Some("range_offset")
+        );
+        assert_eq!(
+            range_start_from_cursor(Some("24"), Some("range_offset")),
+            25
+        );
+    }
+
+    #[test]
+    fn tumblr_resumes_at_the_next_whole_post() {
+        assert_eq!(
+            default_resume_strategy_for_site("tumblr"),
+            Some("range_offset")
+        );
+        assert_eq!(
+            range_start_from_cursor(Some("24"), Some("range_offset")),
+            25
+        );
+    }
+
+    #[test]
+    fn idolcomplex_resumes_by_source_cursor() {
+        assert_eq!(
+            default_resume_strategy_for_site("idolcomplex"),
+            Some("source_cursor")
+        );
+    }
+
+    #[test]
+    fn sankaku_resumes_by_source_cursor() {
+        assert_eq!(
+            default_resume_strategy_for_site("sankaku"),
+            Some("source_cursor")
+        );
+    }
 
     #[test]
     fn effective_query_post_limit_clamps_to_global_cap_when_enabled() {

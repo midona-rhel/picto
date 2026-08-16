@@ -5,10 +5,7 @@
 
 use std::sync::Arc;
 
-use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
-use crate::rate_limiter::RateLimiter;
-use crate::settings::store::SettingsStore;
 use crate::subscriptions::job_queue::{
     activate_subscription_guard, enqueue_retry_job, enqueue_single_query,
     enqueue_subscription_bundle,
@@ -131,55 +128,26 @@ impl SubscriptionRunOrchestrator {
     pub async fn run_subscription(
         db: &Arc<LibraryDatabase>,
         library_root: &std::path::Path,
-        blob_store: &Arc<BlobStore>,
-        rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
         id: String,
-        settings: &SettingsStore,
     ) -> Result<i64, String> {
-        Self::run_subscription_requested_by(
-            db,
-            library_root,
-            blob_store,
-            rate_limiter,
-            running_subs,
-            id,
-            settings,
-            "manual",
-        )
-        .await
+        Self::run_subscription_requested_by(db, library_root, running_subs, id, "manual").await
     }
 
     pub async fn run_scheduled_subscription(
         db: &Arc<LibraryDatabase>,
         library_root: &std::path::Path,
-        blob_store: &Arc<BlobStore>,
-        rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
         id: String,
-        settings: &SettingsStore,
     ) -> Result<i64, String> {
-        Self::run_subscription_requested_by(
-            db,
-            library_root,
-            blob_store,
-            rate_limiter,
-            running_subs,
-            id,
-            settings,
-            "scheduled",
-        )
-        .await
+        Self::run_subscription_requested_by(db, library_root, running_subs, id, "scheduled").await
     }
 
     async fn run_subscription_requested_by(
         db: &Arc<LibraryDatabase>,
         library_root: &std::path::Path,
-        blob_store: &Arc<BlobStore>,
-        rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
         id: String,
-        settings: &SettingsStore,
         requested_by: &str,
     ) -> Result<i64, String> {
         let sub_id: i64 = id
@@ -230,21 +198,15 @@ impl SubscriptionRunOrchestrator {
                 return Err(error);
             }
         };
-        let _ = blob_store;
-        let _ = rate_limiter;
-        let _ = settings;
         Ok(run_id)
     }
 
     pub async fn run_subscription_query(
         db: &Arc<LibraryDatabase>,
         library_root: &std::path::Path,
-        blob_store: &Arc<BlobStore>,
-        rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
         subscription_id: String,
         query_id: String,
-        settings: &SettingsStore,
     ) -> Result<(), String> {
         let sub_id: i64 = subscription_id
             .parse()
@@ -299,22 +261,16 @@ impl SubscriptionRunOrchestrator {
             release_guard_and_task(running_subs, &subscription_id).await;
             return Err(error);
         }
-        let _ = blob_store;
-        let _ = rate_limiter;
-        let _ = settings;
         Ok(())
     }
 
     pub async fn retry_failed_post(
         db: &Arc<LibraryDatabase>,
         library_root: &std::path::Path,
-        blob_store: &Arc<BlobStore>,
-        rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
         subscription_id: String,
         query_id: String,
         post_id: String,
-        settings: &SettingsStore,
     ) -> Result<(), String> {
         let sub_id: i64 = subscription_id
             .parse()
@@ -374,9 +330,6 @@ impl SubscriptionRunOrchestrator {
             return Err(error);
         }
         let _ = retry_url;
-        let _ = blob_store;
-        let _ = rate_limiter;
-        let _ = settings;
         let _ = query;
         Ok(())
     }

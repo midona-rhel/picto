@@ -528,7 +528,7 @@ export function CanvasGrid({
     if (hovIdx != null && !isScrollingRef.current) {
       const hovItem = items[hovIdx];
       const hovPos = layout.positions[hovIdx];
-      if (hovItem && hovPos && hovItem.entity_kind !== 'collection' && !hovItem.mime_type.startsWith('video/')) {
+      if (hovItem && hovPos && !hovItem.mime_type.startsWith('video/')) {
         const drawY = hovPos.y - scrollTop;
         if (drawY + hovPos.h >= 0 && drawY <= vp.viewportHeight) {
           const imgH = hovPos.h - textHeight;
@@ -731,7 +731,7 @@ export function CanvasGrid({
           const curItems = itemsRef.current;
           const ths = state.hashes.slice(0, 3).map((h) => {
             const it = curItems.find((x) => x.entity_hash === h);
-            return it?.thumbnail_hash ?? h;
+            return it?.entity_hash ?? h;
           });
           const sc = ths.length;
           const tw = thumbSize + (sc - 1) * so + 14;
@@ -776,7 +776,7 @@ export function CanvasGrid({
       moveDrag(e.clientX, e.clientY);
       setDragGhost((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
       const scope = getDragState().sourceScope;
-      if (scope && (scope.kind === 'folder' || scope.kind === 'collection')) {
+      if (scope?.kind === 'folder') {
         const ctr = containerRef.current;
         if (ctr) {
           const { x: cx, y: cy } = toLayoutCoords(e.clientX, e.clientY, ctr, headerHeightRef.current);
@@ -989,7 +989,7 @@ export function CanvasGrid({
     // Hover preview: triggered when cursor is over the zoom button area
     if (idx != null && isZoomButtonHit(e.clientX, e.clientY, idx)) {
       const item = items[idx];
-      const isPreviewable = item && !item.mime_type.startsWith('video/') && item.entity_kind !== 'collection';
+      const isPreviewable = item && !item.mime_type.startsWith('video/');
 
       // Cancel any pending hide
       if (hoverHideTimerRef.current) {
@@ -1175,7 +1175,7 @@ export function CanvasGrid({
             : [hash];
           const thumbHashes = hashes.slice(0, 3).map((h) => {
             const it = items.find((i) => i.entity_hash === h);
-            return it?.thumbnail_hash ?? h;
+            return it?.entity_hash ?? h;
           });
           startDrag(hashes, e.clientX, e.clientY, dragSourceScope);
           setDragGhost({ x: e.clientX, y: e.clientY, count: hashes.length, thumbnailHashes: thumbHashes });

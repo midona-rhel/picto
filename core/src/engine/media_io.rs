@@ -79,7 +79,7 @@ impl ApplicationEngine {
         let hashes = self.resolve_target_hashes(target)?;
         let _ = crate::background_work::ensure_missing_color_analysis_jobs(&self.db, &hashes);
         let mut paths = Vec::with_capacity(hashes.len());
-        for hash in hashes {
+        for hash in &hashes {
             if let Ok(path) = self.resolve_file_path(blob_store, &hash).await {
                 paths.push(path);
             }
@@ -108,7 +108,7 @@ impl ApplicationEngine {
         let skipped = 0usize;
         let mut errors = 0usize;
 
-        for (index, hash) in hashes.iter().enumerate() {
+        for hash in &hashes {
             let export_result = async {
                 let record = self
                     .db
@@ -145,9 +145,9 @@ impl ApplicationEngine {
                     return Err(format!(
                         "Format conversion is only supported for image files: {}",
                         if display_name.is_empty() {
-                            hash
+                            hash.as_str()
                         } else {
-                            &display_name
+                            display_name.as_str()
                         }
                     ));
                 }
@@ -172,34 +172,12 @@ impl ApplicationEngine {
             .await;
 
             match export_result {
-                Ok(dest_path) => {
+                Ok(_) => {
                     exported += 1;
-                    crate::events::emit(
-                        crate::events::event_names::MEDIA_EXPORT_PROGRESS,
-                        &crate::events::MediaExportProgressEvent {
-                            done: index + 1,
-                            total,
-                            current_file: file_name_for_progress(&dest_path),
-                            exported,
-                            skipped,
-                            errors,
-                        },
-                    );
                 }
                 Err(err) => {
                     errors += 1;
                     tracing::warn!(hash = %hash, error = %err, "export item failed");
-                    crate::events::emit(
-                        crate::events::event_names::MEDIA_EXPORT_PROGRESS,
-                        &crate::events::MediaExportProgressEvent {
-                            done: index + 1,
-                            total,
-                            current_file: hash.clone(),
-                            exported,
-                            skipped,
-                            errors,
-                        },
-                    );
                 }
             }
         }
@@ -426,13 +404,6 @@ fn extension_for_export_format(format: ExportFormat, original_mime: &str) -> &'s
         ExportFormat::Webp => "webp",
         ExportFormat::Avif => "avif",
     }
-}
-
-fn file_name_for_progress(path: &Path) -> String {
-    path.file_name()
-        .and_then(|value| value.to_str())
-        .map(|value| value.to_string())
-        .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
 fn reject_library_export_path(library_root: &Path, dest: &Path) -> Result<(), String> {

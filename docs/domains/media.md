@@ -1,47 +1,38 @@
 # Media Domain
 
-## Purpose
+Every imported file becomes one image or video media entity. A source post with several files
+creates several independent entities that share source metadata and retain source order.
 
-The media domain handles file import, processing, and blob storage. It covers the full lifecycle from raw file paths to stored, thumbnailed, and indexed media.
+## One Ingest Path
 
-## Import Pipeline
+Manual drag-and-drop, watched folders, subscriptions, and retries normalize into the durable ingest
+queue. Queue workers call the same import pipeline; source adapters do not insert library rows.
 
-1. **Path resolution** — resolve input paths, detect duplicates via SHA256 hash.
-2. **File processing** — extract metadata (dimensions, duration, EXIF), generate thumbnails, compute blurhash, extract dominant colors.
-3. **Blob storage** — copy file to content-addressed blob store (`{library}/blobs/{hash[0..2]}/{hash}`).
-4. **DB insertion** — single-transaction insert of file record, tags, and blob reference.
-5. **Compiler notification** — `FileInserted` event triggers bitmap/projection rebuild.
+1. Resolve and validate the source path.
+2. Hash the bytes and reuse an existing entity when content already exists.
+3. Extract physical metadata and store the content-addressed blob.
+4. Insert the direct entity/file relationship and supplied metadata transactionally.
+5. Schedule deferred thumbnail, color, perceptual-hash, and AI work.
+6. Emit runtime facts for the affected hashes and scopes.
 
-## File Processing Modules
+Imports succeed when the media entity is durable. Derivatives are eventually consistent and survive
+restart through database-backed work queues.
 
-| Module | Purpose |
-|--------|---------|
-| `media_processing/mod.rs` | Shared utilities, MIME detection, metadata extraction |
-| `archive.rs` | CBZ, EPUB, ZIP extraction and thumbnail generation |
-| `blurhash.rs` | BlurHash encoding for progressive image loading |
-| `colors.rs` | Dominant color extraction via k-means clustering |
-| `ffmpeg.rs` | Video/audio metadata and thumbnail extraction via CLI subprocess |
-| `ffmpeg_path.rs` | Bundled ffmpeg/ffprobe binary resolution |
-| `gallery_dl_path.rs` | Bundled gallery-dl binary resolution |
-| `office.rs` | OOXML and OLE document handling |
-| `pdf.rs` | PDF page extraction and thumbnailing |
-| `specialty.rs` | Specialty format handlers |
-| `svg.rs` | SVG rasterization |
+## Lifecycle
 
-## Blob Store
+Inbox media is awaiting acceptance. Active media belongs to `All`. Trash media is awaiting deletion
+or restoration. Folder membership and source provenance do not alter lifecycle.
 
-Content-addressed storage under `{library_root}/blobs/`. Files are stored by their SHA256 hash with a two-character directory prefix for filesystem distribution: `blobs/ab/abcdef1234...`.
+Deleting an entity removes its memberships and deletes its physical blob only when no surviving
+entity references it. Source-post siblings remain untouched.
 
-Thumbnails are stored separately under `{library_root}/thumbnails/`.
+## Ownership
 
-## Key Files
-
-- `core/src/import.rs` — `ImportPipeline`, `ImportOptions`, file processing orchestration
-- `core/src/import_controller.rs` — dispatch-layer orchestration
-- `core/src/blob_store.rs` — content-addressed blob storage
-- `core/src/media_processing/` — file processing modules
-- `core/src/sqlite/import.rs` — single-transaction DB insertion
-- `core/src/sqlite/files.rs` — file CRUD
-- `core/src/dispatch/typed/media_lifecycle.rs` — import, status change, delete commands
-- `core/src/dispatch/typed/media_io.rs` — path resolution, thumbnails, blurhash, color search
-- `core/src/dispatch/typed/media_metadata.rs` — rating, notes, source URLs
+- `core/src/ingest_queue.rs`: durable ingest queue and retries
+- `core/src/import/pipeline.rs`: canonical import processing
+- `core/src/engine/ingest.rs`: ingest behavior orchestration
+- `core/src/db/write/entities.rs`: logical entity writes
+- `core/src/db/write/files.rs`: physical file writes
+- `core/src/blob_store.rs`: content-addressed media and thumbnail storage
+- `core/src/background_work.rs`: deferred derivative execution
+- `core/src/media_processing/`: metadata and derivative implementations

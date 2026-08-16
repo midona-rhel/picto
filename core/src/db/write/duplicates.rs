@@ -3,9 +3,7 @@ use std::collections::BTreeMap;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::query::duplicates::DuplicateSingleRef;
-use crate::db::types::{
-    DuplicateCollectionConflict, DuplicateResolutionResult, DuplicateResolveStatus,
-};
+use crate::db::types::{DuplicateResolutionResult, DuplicateResolveStatus};
 
 pub fn upsert_duplicate_pair_for_review(
     conn: &Connection,
@@ -190,7 +188,6 @@ pub fn resolve_duplicate_pair(
     action: &str,
     left: DuplicateSingleRef,
     right: DuplicateSingleRef,
-    preferred_collection_id: Option<i64>,
 ) -> rusqlite::Result<DuplicateResolutionResult> {
     let active_or_inbox_entities: i64 = conn.query_row(
         "SELECT COUNT(*)
@@ -240,9 +237,7 @@ pub fn resolve_duplicate_pair(
             cleanup_error: None,
             action: action.to_string(),
             affected_folder_ids: Vec::new(),
-            affected_collection_ids: Vec::new(),
             tags_merged: 0,
-            conflict: None,
         });
     }
 
@@ -265,9 +260,7 @@ pub fn resolve_duplicate_pair(
             cleanup_error: None,
             action: action.to_string(),
             affected_folder_ids: Vec::new(),
-            affected_collection_ids: Vec::new(),
             tags_merged: 0,
-            conflict: None,
         });
     }
 
@@ -281,55 +274,9 @@ pub fn resolve_duplicate_pair(
             cleanup_error: None,
             action: action.to_string(),
             affected_folder_ids: Vec::new(),
-            affected_collection_ids: Vec::new(),
             tags_merged: 0,
-            conflict: None,
         });
     };
-
-    if winner.parent_collection_entity_id.is_some()
-        && loser.parent_collection_entity_id.is_some()
-        && winner.parent_collection_entity_id != loser.parent_collection_entity_id
-        && preferred_collection_id.is_none()
-    {
-        return Ok(DuplicateResolutionResult {
-            status: DuplicateResolveStatus::Conflict,
-            winner_hash: Some(winner.entity_hash.clone()),
-            loser_hash: Some(loser.entity_hash.clone()),
-            loser_file_hash: None,
-            blob_cleanup_pending: false,
-            cleanup_error: None,
-            action: action.to_string(),
-            affected_folder_ids: Vec::new(),
-            affected_collection_ids: Vec::new(),
-            tags_merged: 0,
-            conflict: Some(DuplicateCollectionConflict {
-                winner_hash: winner.entity_hash.clone(),
-                loser_hash: loser.entity_hash.clone(),
-                winner_collection_id: winner.parent_collection_entity_id,
-                loser_collection_id: loser.parent_collection_entity_id,
-            }),
-        });
-    }
-
-    if let Some(chosen_collection_id) = preferred_collection_id {
-        let valid = [
-            winner.parent_collection_entity_id,
-            loser.parent_collection_entity_id,
-        ]
-        .into_iter()
-        .flatten()
-        .any(|value| value == chosen_collection_id);
-        if !valid {
-            return Err(rusqlite::Error::InvalidParameterName(
-                "preferred_collection_id must match one of the duplicate owners".into(),
-            ));
-        }
-    }
-
-    let final_collection_id = preferred_collection_id
-        .or(winner.parent_collection_entity_id)
-        .or(loser.parent_collection_entity_id);
 
     let tags_merged: usize = conn
         .query_row(
@@ -339,6 +286,7 @@ pub fn resolve_duplicate_pair(
                    SELECT 1 FROM entity_tag existing
                    WHERE existing.entity_id = ?2
                      AND existing.tag_id = et.tag_id
+                     AND existing.source = et.source
                )",
             params![loser.entity_id, winner.entity_id],
             |row| row.get::<_, i64>(0),
@@ -355,6 +303,7 @@ pub fn resolve_duplicate_pair(
         params![winner.entity_id, loser.entity_id],
     )?;
 
+    let merged_name = winner.name.clone().or(loser.name.clone());
     let merged_notes = merge_notes(winner.notes.as_deref(), loser.notes.as_deref());
     let merged_urls = merge_source_urls(
         winner.source_urls_json.as_deref(),
@@ -366,22 +315,27 @@ pub fn resolve_duplicate_pair(
         (None, None) => None,
     };
     let merged_created_at = winner.date_created.min(loser.date_created);
+    let merged_date_added = winner.date_added.min(loser.date_added);
     let merged_status = merged_status(winner.status, loser.status);
     conn.execute(
         "UPDATE media_entity
          SET status = ?1,
-             notes = ?2,
-             source_urls_json = ?3,
-             rating = ?4,
-             date_created = ?5,
-             date_modified = ?6
-         WHERE entity_id = ?7",
+             name = ?2,
+             notes = ?3,
+             source_urls_json = ?4,
+             rating = ?5,
+             date_created = ?6,
+             date_added = ?7,
+             date_modified = ?8
+         WHERE entity_id = ?9",
         params![
             merged_status,
+            merged_name.as_deref(),
             merged_notes.as_deref(),
             merged_urls.as_deref(),
             merged_rating,
             merged_created_at,
+            merged_date_added,
             chrono::Utc::now().to_rfc3339(),
             winner.entity_id
         ],
@@ -420,53 +374,22 @@ pub fn resolve_duplicate_pair(
         [loser.entity_id],
     )?;
 
-    let mut affected_collection_ids = Vec::<i64>::new();
-    for collection_id in [
-        winner.parent_collection_entity_id,
-        loser.parent_collection_entity_id,
-        final_collection_id,
-    ]
-    .into_iter()
-    .flatten()
-    {
-        if !affected_collection_ids.contains(&collection_id) {
-            affected_collection_ids.push(collection_id);
-        }
-    }
-
-    match final_collection_id {
-        Some(collection_id) => {
-            let ordinal = if loser.parent_collection_entity_id == Some(collection_id) {
-                loser.collection_ordinal.unwrap_or(1)
-            } else if winner.parent_collection_entity_id == Some(collection_id) {
-                winner.collection_ordinal.unwrap_or(1)
-            } else {
-                conn.query_row(
-                    "SELECT COALESCE(MAX(collection_ordinal), 0) + 1
-                     FROM media_entity
-                     WHERE parent_collection_entity_id = ?1",
-                    [collection_id],
-                    |row| row.get::<_, i64>(0),
-                )?
-            };
-            conn.execute(
-                "UPDATE media_entity
-                 SET parent_collection_entity_id = ?1,
-                     collection_ordinal = ?2
-                 WHERE entity_id = ?3",
-                params![collection_id, ordinal, winner.entity_id],
-            )?;
-        }
-        None => {
-            conn.execute(
-                "UPDATE media_entity
-                 SET parent_collection_entity_id = NULL,
-                     collection_ordinal = NULL
-                 WHERE entity_id = ?1",
-                [winner.entity_id],
-            )?;
-        }
-    }
+    conn.execute(
+        "INSERT INTO entity_tag_implied (entity_id, tag_id)
+         SELECT ?1, tag_id FROM entity_tag_implied WHERE entity_id = ?2
+         ON CONFLICT(entity_id, tag_id) DO NOTHING",
+        params![winner.entity_id, loser.entity_id],
+    )?;
+    conn.execute(
+        "INSERT INTO media_view (entity_id, viewed_at)
+         SELECT ?1, viewed_at FROM media_view WHERE entity_id = ?2
+         ON CONFLICT(entity_id) DO UPDATE SET viewed_at = MAX(media_view.viewed_at, excluded.viewed_at)",
+        params![winner.entity_id, loser.entity_id],
+    )?;
+    conn.execute(
+        "UPDATE subscription_post_member SET entity_id = ?1 WHERE entity_id = ?2",
+        params![winner.entity_id, loser.entity_id],
+    )?;
 
     conn.execute(
         "UPDATE duplicate
@@ -486,37 +409,38 @@ pub fn resolve_duplicate_pair(
         ],
     )?;
     conn.execute(
-        "DELETE FROM deferred_work_item
-         WHERE entity_hash = ?1 AND work_type != 'blob_delete'",
-        [&loser.file_hash],
-    )?;
-    conn.execute(
-        "INSERT INTO deferred_work_item
-             (entity_hash, work_type, status, attempt_count, available_at, queued_at)
-         VALUES (?1, 'blob_delete', 'pending', 0, ?2, ?2)
-         ON CONFLICT(entity_hash, work_type) DO NOTHING",
-        params![loser.file_hash, chrono::Utc::now().to_rfc3339()],
-    )?;
-    conn.execute(
         "DELETE FROM duplicate WHERE file_id_a = ?1 OR file_id_b = ?1",
         [loser.file_id],
-    )?;
-    conn.execute(
-        "DELETE FROM single_media_entity WHERE entity_id = ?1",
-        [loser.entity_id],
-    )?;
-    conn.execute(
-        "DELETE FROM entity_tag WHERE entity_id = ?1",
-        [loser.entity_id],
     )?;
     conn.execute(
         "DELETE FROM media_entity WHERE entity_id = ?1",
         [loser.entity_id],
     )?;
-    conn.execute("DELETE FROM media_file WHERE file_id = ?1", [loser.file_id])?;
 
-    for collection_id in &affected_collection_ids {
-        crate::db::write::collections::sync_aggregates(&conn, *collection_id)?;
+    conn.execute(
+        "DELETE FROM file_color_rtree
+         WHERE id IN (SELECT rowid FROM file_color WHERE file_id = ?1)",
+        [loser.file_id],
+    )?;
+    let file_deleted = conn.execute(
+        "DELETE FROM media_file
+         WHERE file_id = ?1
+           AND NOT EXISTS (SELECT 1 FROM media_entity WHERE file_id = ?1)",
+        [loser.file_id],
+    )? > 0;
+    if file_deleted {
+        conn.execute(
+            "DELETE FROM deferred_work_item
+             WHERE entity_hash = ?1 AND work_type != 'blob_delete'",
+            [&loser.file_hash],
+        )?;
+        conn.execute(
+            "INSERT INTO deferred_work_item
+                 (entity_hash, work_type, status, attempt_count, available_at, queued_at)
+             VALUES (?1, 'blob_delete', 'pending', 0, ?2, ?2)
+             ON CONFLICT(entity_hash, work_type) DO NOTHING",
+            params![loser.file_hash, chrono::Utc::now().to_rfc3339()],
+        )?;
     }
 
     Ok(DuplicateResolutionResult {
@@ -524,12 +448,10 @@ pub fn resolve_duplicate_pair(
         winner_hash: Some(winner.entity_hash),
         loser_hash: Some(loser.entity_hash),
         loser_file_hash: Some(loser.file_hash),
-        blob_cleanup_pending: true,
+        blob_cleanup_pending: file_deleted,
         cleanup_error: None,
         action: action.to_string(),
         affected_folder_ids,
-        affected_collection_ids,
         tags_merged,
-        conflict: None,
     })
 }

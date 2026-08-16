@@ -26,15 +26,12 @@ pub enum BitmapKey {
     Folder(i64),
     SmartFolder(i64),
     Tagged,
-    CollectionMember,
 }
 
 impl BitmapKey {
     pub fn category(&self) -> BitmapCategory {
         match self {
-            BitmapKey::Status(_) | BitmapKey::Tagged | BitmapKey::CollectionMember => {
-                BitmapCategory::Status
-            }
+            BitmapKey::Status(_) | BitmapKey::Tagged => BitmapCategory::Status,
             BitmapKey::Tag(_) | BitmapKey::ImpliedTag(_) | BitmapKey::EffectiveTag(_) => {
                 BitmapCategory::Tags
             }

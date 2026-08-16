@@ -33,7 +33,6 @@ pub struct RuntimeTask {
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
     Subscription,
-    SubscriptionGroup,
     Import,
     ModelDownload,
     AutoTag,

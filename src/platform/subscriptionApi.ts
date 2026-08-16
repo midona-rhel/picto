@@ -1,6 +1,5 @@
 import { invoke } from './ipc';
 import type {
-  AuthSessionBounds,
   AuthSessionState,
   CredentialDomain,
   CredentialHealth,
@@ -8,7 +7,6 @@ import type {
   PixivOAuthStartResult,
   SubscriptionDownloadAttemptPage,
   SubscriptionBulkRetryResult,
-  SubscriptionGroupInfo,
   SubscriptionInfo,
   SubscriptionIssuePage,
   SubscriptionProgressEvent,
@@ -18,56 +16,6 @@ import type {
 
 export function getSubscriptionSites(): Promise<SubscriptionSiteInfo[]> {
   return invoke<SubscriptionSiteInfo[]>('get_sites');
-}
-
-export interface SiteVerificationItemReport {
-  post_id: string | null;
-  tag_count: number;
-  namespaced_tag_counts: Record<string, number>;
-  page_num: number | null;
-  page_count: number | null;
-  canonical_post_url: string | null;
-  created_at_present: boolean;
-  creator_present: boolean;
-  schema_validation: unknown | null;
-}
-
-export interface SiteVerificationReport {
-  site_id: string;
-  url: string;
-  credential_state: string;
-  exit_code: number | null;
-  failure_kind: string | null;
-  stderr_tail: string;
-  discovered: number;
-  downloaded: number;
-  skipped_archive: number;
-  items: SiteVerificationItemReport[];
-  passed: boolean;
-  failure_reasons: string[];
-}
-
-/** Move a subscription into a group, or out of every group with null. */
-export function setSubscriptionGroup(subscriptionId: string, groupId: number | null): Promise<void> {
-  return invoke<void>('set_subscription_group', {
-    subscription_id: subscriptionId,
-    group_id: groupId,
-  });
-}
-
-export interface SubscriptionCollectionRecord {
-  entity_hash: string;
-  name: string | null;
-  member_count: number | null;
-  site_id: string;
-  post_id: string;
-}
-
-/** Collections this subscription created from multi-image posts. */
-export function listSubscriptionCollections(subscriptionId: string): Promise<SubscriptionCollectionRecord[]> {
-  return invoke<SubscriptionCollectionRecord[]>('list_subscription_collections', {
-    subscription_id: subscriptionId,
-  });
 }
 
 export interface SubscriptionCoverRecord {
@@ -99,54 +47,16 @@ export function suggestSiteTags(
   });
 }
 
-/** Live end-to-end probe of one site (downloads 1-3 posts, never ingests). */
-export function verifySubscriptionSite(
-  siteId: string,
-  query?: string | null,
-  postLimit?: number | null,
-): Promise<SiteVerificationReport> {
-  return invoke<SiteVerificationReport>('verify_subscription_site', {
-    site_id: siteId,
-    query: query ?? null,
-    post_limit: postLimit ?? null,
-  });
-}
-
 export function getSubscriptions(): Promise<SubscriptionInfo[]> {
   return invoke<SubscriptionInfo[]>('get_subscriptions');
-}
-
-export function getGroups(): Promise<SubscriptionGroupInfo[]> {
-  return invoke<SubscriptionGroupInfo[]>('get_groups');
-}
-
-export function createGroup(name: string): Promise<SubscriptionGroupInfo> {
-  return invoke<SubscriptionGroupInfo>('create_group', { name });
-}
-
-export function renameGroup(id: string, name: string): Promise<void> {
-  return invoke<void>('rename_group', { id, name });
-}
-
-export function deleteGroup(id: string): Promise<void> {
-  return invoke<void>('delete_group', { id });
 }
 
 export function setSubscriptionSchedule(id: string, schedule: string): Promise<void> {
   return invoke<void>('set_subscription_schedule', { id, schedule });
 }
 
-export function runGroup(id: string): Promise<void> {
-  return invoke<void>('run_group', { id });
-}
-
-export function stopGroup(id: string): Promise<void> {
-  return invoke<void>('stop_group', { id });
-}
-
 export function createSubscription(params: {
   name: string;
-  group_id?: number | null;
   initial_post_limit?: number | null;
   periodic_post_limit?: number | null;
 }): Promise<SubscriptionInfo> {
@@ -163,13 +73,6 @@ export function renameSubscription(id: string, name: string): Promise<void> {
 
 export function pauseSubscription(id: string, paused: boolean): Promise<void> {
   return invoke<void>('pause_subscription', { id, paused });
-}
-
-export function setSubscriptionAutoCollections(id: string, autoCollections: boolean): Promise<void> {
-  return invoke<void>('set_subscription_auto_collections', {
-    id,
-    auto_collections: autoCollections,
-  });
 }
 
 export function runSubscription(id: string): Promise<void> {
@@ -313,7 +216,6 @@ export function setCredential(input: {
   password?: string | null;
   cookies?: Record<string, string> | null;
   oauth_token?: string | null;
-  expires_at?: string | null;
 }): Promise<void> {
   return invoke<void>('set_credential', input as unknown as Record<string, unknown>);
 }
@@ -331,10 +233,6 @@ export function startAuthSession(siteCategory: string, startUrl?: string | null)
     site_category: siteCategory,
     start_url: startUrl ?? null,
   });
-}
-
-export function setAuthSessionBounds(bounds: AuthSessionBounds): Promise<void> {
-  return invoke<void>('auth_session_set_bounds', bounds as unknown as Record<string, unknown>);
 }
 
 export function cancelAuthSession(): Promise<void> {

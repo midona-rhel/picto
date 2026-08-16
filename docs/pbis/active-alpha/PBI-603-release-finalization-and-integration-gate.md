@@ -38,6 +38,6 @@ This ticket closes integration debt only. It must not introduce another architec
 - Legacy frontend tests do not run in the release verification lane.
 - Fresh schema creation and upgrades from the last released schema both pass.
 - Opening a current database performs no opportunistic schema mutation.
-- App smoke passes for import, grid, inspector, folder, collection, subscription navigation,
+- App smoke passes for import, grid, inspector, folder, flattened multi-file subscription import,
   duplicate manager, tag manager, and AI-tagging entry points.
 - No active PBI claims completion while its required gate is red.

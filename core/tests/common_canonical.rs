@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use picto_core::db::projection::bitmaps::BitmapKey;
-use picto_core::db::types::{ExpansionMode, TAG_PROVENANCE_MANUAL};
+use picto_core::db::types::{TAG_PROVENANCE_MANUAL};
 use picto_core::db::LibraryDatabase;
 
 pub struct TestHarness {
@@ -45,7 +45,7 @@ impl TestHarness {
             )
             .expect("insert file");
         self.db
-            .insert_single(hash, file_id, Some(name), status, &now, &now)
+            .insert_entity(hash, file_id, Some(name), status, &now, &now)
             .expect("insert single entity")
     }
 
@@ -76,7 +76,6 @@ impl TestHarness {
                 &[entity_id],
                 &[tag],
                 TAG_PROVENANCE_MANUAL,
-                ExpansionMode::EntityOnly,
             )
             .expect("add tag");
     }

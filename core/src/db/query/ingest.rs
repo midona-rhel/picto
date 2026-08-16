@@ -74,8 +74,7 @@ where
              mf.frame_count,
              mf.perceptual_hash
          FROM media_file mf
-         JOIN single_media_entity sme ON sme.file_id = mf.file_id
-         JOIN media_entity me ON me.entity_id = sme.entity_id
+         JOIN media_entity me ON me.file_id = mf.file_id
          WHERE {clause}"
         ),
         params,
@@ -119,8 +118,7 @@ pub fn get_derivative_target_by_entity_hash(
              mf.color_analysis_version,
              mf.perceptual_hash
          FROM media_entity me
-         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-         JOIN media_file mf ON mf.file_id = sme.file_id
+         JOIN media_file mf ON mf.file_id = me.file_id
          WHERE me.entity_hash = ?1",
         [entity_hash],
         |row| {
@@ -165,8 +163,7 @@ pub fn get_derivative_targets_by_entity_hashes(
              mf.color_analysis_version,
              mf.perceptual_hash
          FROM media_entity me
-         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-         JOIN media_file mf ON mf.file_id = sme.file_id
+         JOIN media_file mf ON mf.file_id = me.file_id
          WHERE me.entity_hash IN ({placeholders})"
     );
 

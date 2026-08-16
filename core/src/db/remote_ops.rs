@@ -94,15 +94,6 @@ fn smart_folder_id_by_uuid(conn: &Connection, uuid: &str) -> rusqlite::Result<Op
     .optional()
 }
 
-fn subscription_group_id_by_uuid(conn: &Connection, uuid: &str) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT group_id FROM subscription_group WHERE uuid = ?1",
-        [uuid],
-        |row| row.get(0),
-    )
-    .optional()
-}
-
 fn subscription_id_by_uuid(conn: &Connection, uuid: &str) -> rusqlite::Result<Option<i64>> {
     conn.query_row(
         "SELECT subscription_id FROM subscription WHERE uuid = ?1",
@@ -204,36 +195,6 @@ fn entity_ids_for_hashes(conn: &Connection, hashes: &[String]) -> rusqlite::Resu
     Ok(ids)
 }
 
-fn entity_scope_ids_for_hashes(conn: &Connection, hashes: &[String]) -> rusqlite::Result<Vec<i64>> {
-    let mut ids = entity_ids_for_hashes(conn, hashes)?;
-    let mut collection_ids = Vec::new();
-    for entity_id in &ids {
-        let kind: Option<String> = conn
-            .query_row(
-                "SELECT entity_kind FROM media_entity WHERE entity_id = ?1",
-                [entity_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if kind.as_deref() == Some("collection") {
-            collection_ids.push(*entity_id);
-        }
-    }
-    for collection_id in collection_ids {
-        let members = conn
-            .prepare_cached(
-                "SELECT entity_id FROM media_entity
-                 WHERE parent_collection_entity_id = ?1",
-            )?
-            .query_map([collection_id], |row| row.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        ids.extend(members);
-    }
-    ids.sort_unstable();
-    ids.dedup();
-    Ok(ids)
-}
-
 fn tag_ids_for_entities(conn: &Connection, entity_ids: &[i64]) -> rusqlite::Result<Vec<i64>> {
     let mut tag_ids = Vec::new();
     for entity_id in entity_ids {
@@ -280,20 +241,8 @@ fn projection_snapshot(
         | "entity_status_changed"
         | "entity_updated"
         | "entity_deleted"
-        | "collection_split"
         | "entity_tags_added"
-        | "entity_tags_removed"
-        | "collection_members_added"
-        | "collection_members_removed"
-        | "collection_members_reordered"
-        | "collection_renamed" => entity_hashes.push(op.entity_key.clone()),
-        _ => {}
-    }
-    match op.op_type.as_str() {
-        "collection_members_added" | "collection_members_removed" => {
-            entity_hashes.extend(payload_strings(p, "members"));
-        }
-        "collection_members_reordered" => entity_hashes.extend(payload_strings(p, "order")),
+        | "entity_tags_removed" => entity_hashes.push(op.entity_key.clone()),
         _ => {}
     }
     if matches!(
@@ -307,7 +256,7 @@ fn projection_snapshot(
             }
         }
     }
-    let entity_ids = entity_scope_ids_for_hashes(conn, &entity_hashes)?;
+    let entity_ids = entity_ids_for_hashes(conn, &entity_hashes)?;
     let mut tag_ids = tag_ids_for_entities(conn, &entity_ids)?;
     for key in tag_keys {
         if let Some(tag_id) = tag_id_by_key(conn, &key)? {
@@ -334,10 +283,7 @@ fn applied_impact(
     before: RemoteProjectionSnapshot,
 ) -> rusqlite::Result<RemoteOpOutcome> {
     let after = projection_snapshot(conn, op)?;
-    let deletes = matches!(
-        op.op_type.as_str(),
-        "entity_deleted" | "entity_recreated" | "collection_split"
-    );
+    let deletes = matches!(op.op_type.as_str(), "entity_deleted" | "entity_recreated");
     let deleted_entity_ids = if deletes {
         let mut deleted = Vec::new();
         let mut exists =
@@ -363,9 +309,6 @@ fn applied_impact(
             | "tag_deleted"
             | "tag_alias_set"
             | "tag_implication_set"
-            | "collection_members_added"
-            | "collection_members_removed"
-            | "collection_split"
     );
     let mut dirty_tag_ids = if tags_changed {
         before.tag_ids
@@ -379,14 +322,7 @@ fn applied_impact(
     }
     let rebuild_status = matches!(
         op.op_type.as_str(),
-        "entity_created"
-            | "entity_recreated"
-            | "entity_deleted"
-            | "entity_status_changed"
-            | "collection_created"
-            | "collection_split"
-            | "collection_members_added"
-            | "collection_members_removed"
+        "entity_created" | "entity_recreated" | "entity_deleted" | "entity_status_changed"
     );
     let rebuild_all_smart_folders = matches!(
         op.op_type.as_str(),
@@ -398,8 +334,6 @@ fn applied_impact(
             | "tag_deleted"
             | "tag_alias_set"
             | "tag_implication_set"
-            | "collection_renamed"
-            | "collection_members_reordered"
     );
     let rebuild_tag_derivatives = (matches!(
         op.op_type.as_str(),
@@ -416,11 +350,8 @@ fn applied_impact(
         op.op_type.as_str(),
         "entity_recreated"
             | "entity_deleted"
-            | "collection_split"
             | "folder_members_added"
             | "folder_members_removed"
-            | "collection_members_added"
-            | "collection_members_removed"
             | "duplicate_decided"
     );
     Ok(RemoteOpOutcome::Applied(RemoteProjectionImpact {
@@ -458,13 +389,8 @@ fn missing_prerequisite(
     match op.op_type.as_str() {
         "entity_status_changed"
         | "entity_updated"
-        | "collection_split"
         | "entity_tags_added"
-        | "entity_tags_removed"
-        | "collection_renamed"
-        | "collection_members_added"
-        | "collection_members_removed"
-        | "collection_members_reordered" => {
+        | "entity_tags_removed" => {
             if entity_id_by_hash(conn, key)?.is_none() {
                 return Ok(missing("entity", key));
             }
@@ -531,22 +457,10 @@ fn missing_prerequisite(
                 }
             }
         }
-        "subscription_group_updated" => {
-            if subscription_group_id_by_uuid(conn, key)?.is_none() {
-                return Ok(missing("subscription group", key));
-            }
-        }
         "subscription_created" | "subscription_updated" => {
             if op.op_type == "subscription_updated" && subscription_id_by_uuid(conn, key)?.is_none()
             {
                 return Ok(missing("subscription", key));
-            }
-            if let Some(group_uuid) = payload_str(p, "group_uuid") {
-                if subscription_group_id_by_uuid(conn, group_uuid)?.is_none()
-                    && !target_was_deleted(conn, "subscription_group", group_uuid)?
-                {
-                    return Ok(missing("subscription group", group_uuid));
-                }
             }
         }
         "subscription_query_created" | "subscription_query_updated" => {
@@ -582,8 +496,6 @@ fn missing_prerequisite(
 
     let referenced = match op.op_type.as_str() {
         "folder_members_added" | "folder_members_removed" => payload_strings(p, "entities"),
-        "collection_members_added" | "collection_members_removed" => payload_strings(p, "members"),
-        "collection_members_reordered" => payload_strings(p, "order"),
         _ => Vec::new(),
     };
     if let Some(hash) = first_missing_entity(conn, &referenced)? {
@@ -596,6 +508,12 @@ pub(super) fn apply_remote_op(
     conn: &Connection,
     op: &crate::oplog::OpRecord,
 ) -> rusqlite::Result<RemoteOpOutcome> {
+    if !crate::oplog::is_supported_op_type(&op.op_type) {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "unsupported remote operation: {}",
+            op.op_type
+        )));
+    }
     let Some(op) = crate::oplog::conflict::accept_remote_op(conn, op)? else {
         return Ok(RemoteOpOutcome::Ignored);
     };
@@ -622,7 +540,7 @@ pub(super) fn apply_remote_op(
             }
             conn.execute(
                 "DELETE FROM media_file WHERE file_hash = ?1
-                 AND file_id NOT IN (SELECT file_id FROM single_media_entity)",
+                 AND file_id NOT IN (SELECT file_id FROM media_entity)",
                 [key],
             )?;
             let file_id = write::files::insert_file(
@@ -639,7 +557,7 @@ pub(super) fn apply_remote_op(
                     .unwrap_or(false),
                 &now,
             )?;
-            let entity_id = write::entities::insert_single(
+            let entity_id = write::entities::insert_entity(
                 conn,
                 key,
                 file_id,
@@ -663,7 +581,6 @@ pub(super) fn apply_remote_op(
                     payload_str(p, "notes").map(Some),
                     source_urls_json.as_deref(),
                     &now,
-                    types::ExpansionMode::EntityOnly,
                 )?;
             }
             let tags = payload_strings(p, "tags");
@@ -673,7 +590,6 @@ pub(super) fn apply_remote_op(
                     &[entity_id],
                     &tags,
                     payload_mask(p, "tag_provenance", types::TAG_PROVENANCE_MANUAL),
-                    types::ExpansionMode::EntityOnly,
                 )?;
             }
             let work_types = crate::media_analysis::derivative_work_types_for_target(
@@ -686,13 +602,7 @@ pub(super) fn apply_remote_op(
         "entity_status_changed" => {
             if let Some(id) = entity_id_by_hash(conn, key)? {
                 if let Some(status) = p.get("status").and_then(|v| v.as_i64()) {
-                    write::entities::set_entity_status(
-                        conn,
-                        &[id],
-                        status,
-                        types::ExpansionMode::EntityOnly,
-                        &now,
-                    )?;
+                    write::entities::set_entity_status(conn, &[id], status, &now)?;
                 }
             }
         }
@@ -708,7 +618,6 @@ pub(super) fn apply_remote_op(
                         .and_then(|v| serde_json::to_string(v).ok())
                         .as_deref(),
                     &now,
-                    types::ExpansionMode::EntityOnly,
                 )?;
                 if let Some(created) = payload_str(p, "date_created") {
                     write::entities::set_entity_date_created(conn, id, created, &now)?;
@@ -718,11 +627,6 @@ pub(super) fn apply_remote_op(
         "entity_deleted" => {
             if let Some(id) = entity_id_by_hash(conn, key)? {
                 write::entities::delete_entities(conn, &[id])?;
-            }
-        }
-        "collection_split" => {
-            if let Some(id) = entity_id_by_hash(conn, key)? {
-                write::collections::split_collection(conn, id)?;
             }
         }
         "entity_tags_added" | "entity_tags_removed" => {
@@ -737,10 +641,9 @@ pub(super) fn apply_remote_op(
                         &[id],
                         &tags,
                         payload_mask(p, "provenance", types::TAG_PROVENANCE_MANUAL),
-                        types::ExpansionMode::EntityOnly,
                     )?;
                 } else {
-                    write::tags::remove_tags(conn, &[id], &tags, types::ExpansionMode::EntityOnly)?;
+                    write::tags::remove_tags(conn, &[id], &tags)?;
                 }
             }
         }
@@ -835,14 +738,9 @@ pub(super) fn apply_remote_op(
                     return applied_impact(conn, &op, before);
                 }
                 if op.op_type == "folder_members_added" {
-                    write::folders::add_members(conn, id, &ids, types::ExpansionMode::EntityOnly)?;
+                    write::folders::add_members(conn, id, &ids)?;
                 } else {
-                    write::folders::remove_members(
-                        conn,
-                        id,
-                        &ids,
-                        types::ExpansionMode::EntityOnly,
-                    )?;
+                    write::folders::remove_members(conn, id, &ids)?;
                 }
             }
         }
@@ -898,57 +796,19 @@ pub(super) fn apply_remote_op(
                 write::smart_folders::delete_smart_folder(conn, id)?;
             }
         }
-        "subscription_group_created" => {
-            if subscription_group_id_by_uuid(conn, key)?.is_none() {
-                conn.execute(
-                    "INSERT INTO subscription_group (name, uuid, date_added)
-                     VALUES (?1, ?2, ?3)",
-                    rusqlite::params![
-                        payload_str(p, "name").unwrap_or("Subscription group"),
-                        key,
-                        payload_str(p, "date_added").unwrap_or(&now),
-                    ],
-                )?;
-            }
-        }
-        "subscription_group_updated" => {
-            if let Some(id) = subscription_group_id_by_uuid(conn, key)? {
-                if let Some(name) = payload_str(p, "name") {
-                    conn.execute(
-                        "UPDATE subscription_group SET name = ?1 WHERE group_id = ?2",
-                        rusqlite::params![name, id],
-                    )?;
-                }
-            }
-        }
-        "subscription_group_deleted" => {
-            if let Some(id) = subscription_group_id_by_uuid(conn, key)? {
-                conn.execute(
-                    "UPDATE subscription SET group_id = NULL WHERE group_id = ?1",
-                    [id],
-                )?;
-                conn.execute("DELETE FROM subscription_group WHERE group_id = ?1", [id])?;
-            }
-        }
         "subscription_created" => {
             if subscription_id_by_uuid(conn, key)?.is_none() {
-                let group_id = payload_str(p, "group_uuid")
-                    .map(|uuid| subscription_group_id_by_uuid(conn, uuid))
-                    .transpose()?
-                    .flatten();
                 conn.execute(
                     "INSERT INTO subscription (
-                         name, schedule, paused, group_id, initial_post_limit,
-                         periodic_post_limit, auto_collections, uuid, date_added
-                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                         name, schedule, paused, initial_post_limit,
+                         periodic_post_limit, uuid, date_added
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
                     rusqlite::params![
                         payload_str(p, "name").unwrap_or("Subscription"),
                         payload_str(p, "schedule").unwrap_or("manual"),
                         payload_bool(p, "paused", false),
-                        group_id,
                         payload_i64(p, "initial_post_limit", 100),
                         payload_i64(p, "periodic_post_limit", 100),
-                        payload_bool(p, "auto_collections", true),
                         key,
                         payload_str(p, "date_added").unwrap_or(&now),
                     ],
@@ -983,22 +843,6 @@ pub(super) fn apply_remote_op(
                     .and_then(|value| value.as_i64())
                 {
                     conn.execute("UPDATE subscription SET periodic_post_limit = ?1 WHERE subscription_id = ?2", rusqlite::params![value, id])?;
-                }
-                if let Some(value) = p.get("auto_collections").and_then(|value| value.as_bool()) {
-                    conn.execute(
-                        "UPDATE subscription SET auto_collections = ?1 WHERE subscription_id = ?2",
-                        rusqlite::params![value, id],
-                    )?;
-                }
-                if p.get("group_uuid").is_some() {
-                    let group_id = payload_str(p, "group_uuid")
-                        .map(|uuid| subscription_group_id_by_uuid(conn, uuid))
-                        .transpose()?
-                        .flatten();
-                    conn.execute(
-                        "UPDATE subscription SET group_id = ?1 WHERE subscription_id = ?2",
-                        rusqlite::params![group_id, id],
-                    )?;
                 }
             }
         }
@@ -1073,50 +917,11 @@ pub(super) fn apply_remote_op(
                 conn.execute("DELETE FROM subscription_query WHERE query_id = ?1", [id])?;
             }
         }
-        "collection_created" => {
-            if entity_id_by_hash(conn, key)?.is_none() {
-                write::entities::insert_collection(
-                    conn,
-                    key,
-                    payload_str(p, "name").unwrap_or("Collection"),
-                    payload_str(p, "date_created").unwrap_or(&now),
-                    &now,
-                )?;
-            }
-        }
-        "collection_renamed" => {
-            if let (Some(id), Some(name)) = (entity_id_by_hash(conn, key)?, payload_str(p, "name"))
-            {
-                write::collections::update_collection_name(conn, id, name, &now)?;
-            }
-        }
-        "collection_members_added" | "collection_members_removed" => {
-            if let Some(id) = entity_id_by_hash(conn, key)? {
-                let ids = entity_ids_for_hashes(conn, &payload_strings(p, "members"))?;
-                if ids.is_empty() {
-                    return applied_impact(conn, &op, before);
-                }
-                if op.op_type == "collection_members_added" {
-                    write::collections::add_members(conn, id, &ids)?;
-                } else {
-                    write::collections::remove_members(conn, id, &ids)?;
-                }
-            }
-        }
-        "collection_members_reordered" => {
-            if let Some(id) = entity_id_by_hash(conn, key)? {
-                let ids = entity_ids_for_hashes(conn, &payload_strings(p, "order"))?;
-                if !ids.is_empty() {
-                    write::collections::reorder_members(conn, id, &ids)?;
-                }
-            }
-        }
         "duplicate_decided" => {
             if let Some((hash_a, hash_b)) = key.split_once('|') {
                 let file_of = |hash: &str| -> rusqlite::Result<Option<i64>> {
                     conn.query_row(
-                        "SELECT sme.file_id FROM media_entity me
-                         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
+                        "SELECT me.file_id FROM media_entity me
                          WHERE me.entity_hash = ?1",
                         [hash],
                         |row| row.get(0),
@@ -1201,14 +1006,9 @@ mod tests {
         .unwrap();
         conn.execute(
             "INSERT INTO media_entity
-             (entity_id, entity_hash, entity_kind, status, date_created, date_added, date_modified)
-             VALUES (?1, ?2, 'single', ?3, '2026-01-01', '2026-01-01', '2026-01-01')",
+             (entity_id, entity_hash, file_id, status, date_created, date_added, date_modified)
+             VALUES (?1, ?2, ?1, ?3, '2026-01-01', '2026-01-01', '2026-01-01')",
             params![id, hash, status],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (?1, ?1)",
-            [id],
         )
         .unwrap();
     }
@@ -1241,12 +1041,8 @@ mod tests {
             )?;
             conn.execute(
                 "INSERT INTO media_entity
-                 (entity_id, entity_hash, entity_kind, status, date_created, date_added, date_modified)
-                 VALUES (1, 'h1', 'single', 1, '2026-01-01', '2026-01-01', '2026-01-01')",
-                [],
-            )?;
-            conn.execute(
-                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1)",
+                 (entity_id, entity_hash, file_id, status, date_created, date_added, date_modified)
+                 VALUES (1, 'h1', 1, 1, '2026-01-01', '2026-01-01', '2026-01-01')",
                 [],
             )?;
             conn.execute(
@@ -1426,52 +1222,25 @@ mod tests {
     }
 
     #[test]
-    fn remote_collection_split_only_evicts_the_deleted_aggregate() {
-        let (_root, db) = library_with_entity();
-        let collection_id = db
-            .with_write(|conn| {
-                let id =
-                    write::collections::create_collection(conn, "Split", "2026-01-01T00:00:00Z")?;
-                write::collections::add_members(conn, id, &[1])?;
-                Ok(id)
-            })
-            .unwrap();
-        let collection_hash = db.get_collection_hash(collection_id).unwrap().unwrap();
-
-        let outcome = db
-            .with_write(|conn| {
-                apply_remote_op(
-                    conn,
-                    &op(
-                        "0000000000001-0000",
-                        "peer",
-                        "collection_split",
-                        &collection_hash,
-                        serde_json::json!({}),
-                    ),
-                )
-            })
-            .unwrap();
-        let RemoteOpOutcome::Applied(impact) = outcome else {
-            panic!("collection split should apply");
+    fn removed_operations_fail_as_unknown_remote_ops() {
+        let conn = db();
+        let result = apply_remote_op(
+            &conn,
+            &op(
+                "0000000000001-0000",
+                "peer",
+                "removed_operation",
+                "removed-entity",
+                serde_json::json!({}),
+            ),
+        );
+        let Err(error) = result else {
+            panic!("unsupported operation must not be applied");
         };
 
-        assert_eq!(impact.deleted_entity_ids, vec![collection_id]);
-        assert_eq!(
-            db.with_read(|conn| entity_id_by_hash(conn, "h1")).unwrap(),
-            Some(1)
-        );
-        assert_eq!(
-            db.with_read(|conn| {
-                conn.query_row(
-                    "SELECT parent_collection_entity_id FROM media_entity WHERE entity_id = 1",
-                    [],
-                    |row| row.get::<_, Option<i64>>(0),
-                )
-            })
-            .unwrap(),
-            None
-        );
+        assert!(error
+            .to_string()
+            .contains("unsupported remote operation: removed_operation"));
     }
 
     #[test]
@@ -1810,8 +1579,7 @@ mod tests {
             .query_row(
                 "SELECT me.name, me.rating, mf.mime_type
                  FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
+                 JOIN media_file mf ON mf.file_id = me.file_id
                  WHERE me.entity_hash = 'h1'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -1829,13 +1597,6 @@ mod tests {
             op(
                 "0000000000001-0000",
                 "peer",
-                "subscription_group_created",
-                "group-uuid",
-                serde_json::json!({"name":"Artists","date_added":"2026-01-01"}),
-            ),
-            op(
-                "0000000000002-0000",
-                "peer",
                 "subscription_created",
                 "subscription-uuid",
                 serde_json::json!({
@@ -1844,8 +1605,6 @@ mod tests {
                     "paused":false,
                     "initial_post_limit":200,
                     "periodic_post_limit":50,
-                    "auto_collections":true,
-                    "group_uuid":"group-uuid",
                     "date_added":"2026-01-02"
                 }),
             ),
@@ -1874,19 +1633,17 @@ mod tests {
             assert!(impact.into_compiler_plan().is_empty());
         }
 
-        let (name, schedule, group_uuid): (String, String, Option<String>) = conn
+        let (name, schedule): (String, String) = conn
             .query_row(
-                "SELECT s.name, s.schedule, g.uuid
+                "SELECT s.name, s.schedule
                  FROM subscription s
-                 LEFT JOIN subscription_group g ON g.group_id = s.group_id
                  WHERE s.uuid = 'subscription-uuid'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
         assert_eq!(name, "Daily artists");
         assert_eq!(schedule, "daily");
-        assert_eq!(group_uuid.as_deref(), Some("group-uuid"));
 
         conn.execute(
             "UPDATE subscription_query
@@ -1924,62 +1681,27 @@ mod tests {
     }
 
     #[test]
-    fn remote_subscription_parent_deletes_settle_without_orphans() {
+    fn removed_subscription_group_remote_operations_are_rejected() {
         let conn = db();
         for operation in [
-            op(
-                "0000000000001-0000",
-                "peer",
-                "subscription_group_created",
-                "group-uuid",
-                serde_json::json!({"name":"Group"}),
-            ),
-            op(
-                "0000000000002-0000",
-                "peer",
-                "subscription_group_deleted",
-                "group-uuid",
-                serde_json::json!({}),
-            ),
-            op(
-                "0000000000003-0000",
-                "peer",
-                "subscription_created",
-                "subscription-uuid",
-                serde_json::json!({"name":"Subscription","group_uuid":"group-uuid"}),
-            ),
-            op(
-                "0000000000004-0000",
-                "peer",
-                "subscription_deleted",
-                "subscription-uuid",
-                serde_json::json!({}),
-            ),
-            op(
-                "0000000000005-0000",
-                "peer",
-                "subscription_query_created",
-                "query-uuid",
-                serde_json::json!({
-                    "subscription_uuid":"subscription-uuid",
-                    "site_id":"gelbooru",
-                    "query_kind":"tag_search",
-                    "query_text":"one_girl"
-                }),
-            ),
+            "subscription_group_created",
+            "subscription_group_updated",
+            "subscription_group_deleted",
         ] {
-            consumed(&conn, operation);
+            let result = apply_remote_op(
+                &conn,
+                &op(
+                    "0000000000001-0000",
+                    "peer",
+                    operation,
+                    "group-uuid",
+                    serde_json::json!({}),
+                ),
+            );
+            match result {
+                Err(error) => assert!(error.to_string().contains("unsupported remote operation")),
+                Ok(_) => panic!("removed subscription-group operations must be rejected"),
+            }
         }
-
-        let subscriptions: i64 = conn
-            .query_row("SELECT COUNT(*) FROM subscription", [], |row| row.get(0))
-            .unwrap();
-        let queries: i64 = conn
-            .query_row("SELECT COUNT(*) FROM subscription_query", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(subscriptions, 0);
-        assert_eq!(queries, 0);
     }
 }

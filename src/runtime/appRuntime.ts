@@ -2,7 +2,6 @@ import { startAppSettingsSettle } from './appSettingsSettle';
 import { startGridSettle } from './gridSettle';
 import { startInspectorSettle } from './inspectorSettle';
 import { startSidebarSettle } from './sidebarSettle';
-import { startSubscriptionsSettle } from './subscriptionsSettle';
 
 let cleanupFns: Array<() => void> = [];
 
@@ -13,7 +12,6 @@ export function startAppRuntime(): () => void {
     startSidebarSettle(),
     startGridSettle(),
     startInspectorSettle(),
-    startSubscriptionsSettle(),
   ];
   return () => {
     for (const cleanup of cleanupFns) cleanup();

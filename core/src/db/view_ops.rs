@@ -3,23 +3,21 @@
 use super::*;
 
 impl LibraryDatabase {
-    /// Record the top-level logical entity and return its hash plus visible recent count.
+    /// Record the media entity and return its hash plus visible recent count.
     pub fn record_media_view(&self, entity_hash: &str) -> Result<(String, i64), String> {
         let entity_hash = entity_hash.to_string();
         let viewed_at = chrono::Utc::now().to_rfc3339();
         self.with_write(move |conn| {
-            let top_level: Option<(i64, String)> = conn
+            let entity: Option<(i64, String)> = conn
                 .query_row(
-                    "SELECT top.entity_id, top.entity_hash
-                     FROM media_entity selected
-                     JOIN media_entity top
-                       ON top.entity_id = COALESCE(selected.parent_collection_entity_id, selected.entity_id)
-                     WHERE selected.entity_hash = ?1",
+                    "SELECT entity_id, entity_hash
+                     FROM media_entity
+                     WHERE entity_hash = ?1",
                     [&entity_hash],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
-            let (entity_id, top_level_hash) = top_level.ok_or_else(|| {
+            let (entity_id, resolved_hash) = entity.ok_or_else(|| {
                 rusqlite::Error::InvalidParameterName(format!(
                     "Unknown media entity hash: {entity_hash}"
                 ))
@@ -31,7 +29,7 @@ impl LibraryDatabase {
                 rusqlite::params![entity_id, viewed_at],
             )?;
             let count = query::grid::recently_viewed_count(conn)?;
-            Ok((top_level_hash, count))
+            Ok((resolved_hash, count))
         })
     }
 }

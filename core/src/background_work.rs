@@ -426,20 +426,16 @@ mod tests {
             .unwrap();
         db.with_write(|conn| {
             conn.execute(
-                "INSERT INTO media_entity
-                    (entity_id, entity_hash, entity_kind, status, date_created, date_added, date_modified)
-                 VALUES (1, ?1, 'single', 1, '2026-08-13', '2026-08-13', '2026-08-13')",
-                [hash],
-            )?;
-            conn.execute(
                 "INSERT INTO media_file
                     (file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, frame_count, date_added)
                  VALUES (1, ?1, 'image/png', 100, 8, 8, 1, '2026-08-13')",
                 [hash],
             )?;
             conn.execute(
-                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1)",
-                [],
+                "INSERT INTO media_entity
+                    (entity_id, entity_hash, file_id, status, date_created, date_added, date_modified)
+                 VALUES (1, ?1, 1, 1, '2026-08-13', '2026-08-13', '2026-08-13')",
+                [hash],
             )?;
             Ok(())
         })

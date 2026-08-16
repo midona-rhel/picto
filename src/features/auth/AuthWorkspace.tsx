@@ -3,9 +3,8 @@ import { authController } from '../../controllers/authController';
 import { registerAuthWorkspaceRefresh } from '../../runtime/subscriptionsSettle';
 import type { AuthSessionState } from '../../shared/types/subscriptions';
 import type { AuthSiteSnapshot, AuthWorkspaceSnapshot } from '../../shared/types/subscriptionsWorkspace';
-import { AuthSiteDetail, type AuthManualFormState } from './components/AuthSiteDetail';
+import { AuthSiteDetail } from './components/AuthSiteDetail';
 import { AuthSitesSidebar } from './components/AuthSitesSidebar';
-import { parseBooruApiCredential, parseCookies } from './authUtils';
 import styles from './AuthWorkspace.module.css';
 
 const IDLE_SESSION: AuthSessionState = {
@@ -16,16 +15,6 @@ const IDLE_SESSION: AuthSessionState = {
   message: null,
   credential: null,
 };
-
-function emptyManualForm(entry: AuthSiteSnapshot | null): AuthManualFormState {
-  return {
-    displayName: entry?.credential?.display_name ?? entry?.site.name ?? '',
-    username: '',
-    password: '',
-    cookiesRaw: '',
-    booruApiRaw: '',
-  };
-}
 
 export function AuthWorkspace({
   hideSidebar = false,
@@ -44,7 +33,6 @@ export function AuthWorkspace({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [pixivVerifier, setPixivVerifier] = useState<string | null>(null);
-  const [manualForm, setManualForm] = useState<AuthManualFormState>(emptyManualForm(null));
 
   // Sync external selection when provided
   useEffect(() => {
@@ -71,7 +59,6 @@ export function AuthWorkspace({
   );
 
   useEffect(() => {
-    setManualForm(emptyManualForm(selectedEntry));
     setMessage(null);
   }, [selectedEntry?.site.id, selectedEntry?.credential?.site_category]);
 
@@ -123,17 +110,25 @@ export function AuthWorkspace({
       return;
     }
 
-    if ((credential.site_category === 'gelbooru' || credential.credential_type === 'api_key') && credential.username && credential.password) {
+    const selectedCredentialOwner = selectedEntry?.site.credential_owner_site_id;
+    const cookies = credential.cookies ?? null;
+    const isApprovedCookiePayload = Boolean(
+      selectedCredentialOwner
+      && credential.site_category === selectedCredentialOwner
+      && credential.credential_type === 'cookies'
+      && cookies
+      && Object.keys(cookies).length > 0,
+    );
+    if (isApprovedCookiePayload) {
       setBusy(true);
       void authController.setCredential({
         site_category: credential.site_category,
-        credential_type: 'api_key',
+        credential_type: 'cookies',
         display_name: selectedEntry?.site.name ?? credential.site_category,
-        username: credential.username,
-        password: credential.password,
+        cookies,
       }).then(async () => {
         await refresh();
-        setMessage('Credential saved from the login window.');
+        setMessage('Login session saved in the system credential store.');
       }).catch((err) => {
         setMessage(err instanceof Error ? err.message : String(err));
       }).finally(() => {
@@ -142,15 +137,23 @@ export function AuthWorkspace({
       });
       return;
     }
-
-    if (credential.credential_type === 'cookies' && credential.cookies) {
+    const username = credential.username?.trim();
+    const password = credential.password?.trim();
+    const isApprovedApiKeyPayload = Boolean(
+      selectedCredentialOwner
+      && credential.site_category === selectedCredentialOwner
+      && credential.credential_type === 'api_key'
+      && username
+      && password,
+    );
+    if (isApprovedApiKeyPayload) {
       setBusy(true);
       void authController.setCredential({
         site_category: credential.site_category,
-        credential_type: 'cookies',
+        credential_type: 'api_key',
         display_name: selectedEntry?.site.name ?? credential.site_category,
-        cookies: credential.cookies,
-        expires_at: credential.expires_at ?? null,
+        username,
+        password,
       }).then(async () => {
         await refresh();
         setMessage('Credential saved from the login window.');
@@ -161,7 +164,7 @@ export function AuthWorkspace({
         setSession(IDLE_SESSION);
       });
     }
-  }, [pixivVerifier, selectedEntry?.site.name, session]);
+  }, [pixivVerifier, selectedEntry?.site.credential_owner_site_id, selectedEntry?.site.name, session]);
 
   async function startLogin() {
     if (!selectedEntry) return;
@@ -190,58 +193,6 @@ export function AuthWorkspace({
     setPixivVerifier(null);
   }
 
-  async function saveManual() {
-    if (!selectedEntry) return;
-    setBusy(true);
-    setMessage(null);
-    try {
-      if (selectedEntry.site.id === 'rule34') {
-        const parsed = parseBooruApiCredential(manualForm.booruApiRaw);
-        if (!parsed) throw new Error('Paste a credential string containing both api_key and user_id.');
-        await authController.setCredential({
-          site_category: selectedEntry.site.id,
-          credential_type: 'api_key',
-          display_name: manualForm.displayName || null,
-          username: parsed.userId,
-          password: parsed.apiKey,
-        });
-      } else if (selectedEntry.site.id === 'twitter') {
-        const cookies = parseCookies(manualForm.cookiesRaw);
-        if (!cookies.auth_token || !cookies.ct0) throw new Error('Twitter/X requires auth_token and ct0 cookies.');
-        await authController.setCredential({
-          site_category: selectedEntry.site.id,
-          credential_type: 'cookies',
-          display_name: manualForm.displayName || null,
-          cookies,
-        });
-      } else if (selectedEntry.site.id === 'furaffinity') {
-        const cookies = parseCookies(manualForm.cookiesRaw);
-        if (!cookies.a || !cookies.b) throw new Error('FurAffinity requires a and b cookies.');
-        await authController.setCredential({
-          site_category: selectedEntry.site.id,
-          credential_type: 'cookies',
-          display_name: manualForm.displayName || null,
-          cookies,
-        });
-      } else {
-        if (!manualForm.password.trim()) throw new Error('Password or key value is required.');
-        await authController.setCredential({
-          site_category: selectedEntry.site.id,
-          credential_type: 'username_password',
-          display_name: manualForm.displayName || null,
-          username: manualForm.username.trim() || null,
-          password: manualForm.password.trim(),
-        });
-      }
-      await refresh();
-      setMessage('Credential saved.');
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  }
-
   async function removeCredential() {
     if (!selectedEntry) return;
     setBusy(true);
@@ -252,6 +203,28 @@ export function AuthWorkspace({
       setMessage('Credential removed.');
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function saveUsernamePassword(username: string, password: string) {
+    if (!selectedEntry) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      await authController.setCredential({
+        site_category: selectedEntry.site.credential_owner_site_id,
+        credential_type: 'username_password',
+        display_name: selectedEntry.site.name,
+        username,
+        password,
+      });
+      await refresh();
+      setMessage('Credential saved in the system credential store.');
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+      throw err;
     } finally {
       setBusy(false);
     }
@@ -280,12 +253,10 @@ export function AuthWorkspace({
         session={session}
         busy={busy}
         message={message}
-        manualForm={manualForm}
-        onManualFormChange={(patch) => setManualForm((current) => ({ ...current, ...patch }))}
         onStartLogin={startLogin}
         onCancelLogin={cancelLogin}
-        onSaveManual={saveManual}
         onRemoveCredential={removeCredential}
+        onSaveUsernamePassword={saveUsernamePassword}
       />
     </div>
   );

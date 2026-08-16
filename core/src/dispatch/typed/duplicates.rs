@@ -37,9 +37,6 @@ pub struct ResolveDuplicatePairInput {
     pub action: String,
     pub hash_a: String,
     pub hash_b: String,
-    #[serde(default)]
-    #[ts(type = "number | null")]
-    pub preferred_collection_id: Option<i64>,
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
@@ -90,12 +87,10 @@ pub async fn resolve_duplicate_pair(
     state: &AppState,
     input: ResolveDuplicatePairInput,
 ) -> Result<serde_json::Value, String> {
-    let mut result = state.engine.resolve_duplicate_pair(
-        &input.action,
-        &input.hash_a,
-        &input.hash_b,
-        input.preferred_collection_id,
-    )?;
+    let mut result =
+        state
+            .engine
+            .resolve_duplicate_pair(&input.action, &input.hash_a, &input.hash_b)?;
     if result.blob_cleanup_pending {
         if let Some(file_hash) = result.loser_file_hash.as_deref() {
             match state

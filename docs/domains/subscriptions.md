@@ -1,35 +1,47 @@
 # Subscriptions Domain
 
-## Purpose
+A subscription is a named, scheduled set of source queries. Users run the subscription as a unit;
+queries retain their own source cursor and provenance.
 
-Subscriptions automate file acquisition from external sources (websites, galleries) via gallery-dl. A subscription is a saved query (URL pattern) that periodically checks for new content and imports it.
+Subscriptions are top-level. There is no group entity or group-level run state.
 
-## Entity Hierarchy
+## Run Lifecycle
 
-- **Flow** — groups multiple subscriptions with a shared schedule. Execution runs all subscriptions in the flow sequentially.
-- **Subscription** — a named source with one or more queries.
-- **Query** — a specific URL or search pattern within a subscription. Tracks cursor position for incremental fetching.
+1. A manual or scheduled trigger creates one durable run.
+2. Query jobs execute sequentially through the source adapter and gallery-dl runner, except dedicated
+   runners such as OnlyFans.
+3. Each discovered file is queued immediately through the canonical media ingest path.
+4. Download, queue, import, skip, and failure progress is persisted and reported from durable state.
+5. A query cursor advances only after its durable work is accounted for.
+6. The run succeeds, stops, or remains retryable with a truthful persisted reason.
 
-## Sync Engine Lifecycle
+Restart resumes durable jobs without losing prior run totals or re-importing deliberately deleted
+content. One failed query must not falsify another query's result.
 
-1. **Trigger** — manual run or scheduled flow execution.
-2. **gallery-dl subprocess** — runs gallery-dl with the query URL, outputs JSON metadata per downloaded file.
-3. **Metadata validation** — gallery-dl output is parsed, validated, and mapped to import parameters.
-4. **File import** — each downloaded file is imported through the standard import pipeline with tags from `parse_tag_ingest`.
-5. **Cursor update** — query cursor is advanced so the next run only fetches new content.
-6. **Events** — `subscription-started`, `subscription-progress`, `subscription-finished` events are emitted throughout.
+## Source Metadata
 
-## Credential Handling
+Each imported entity retains source ID, post ID, item key, page order, canonical post URL, media URL,
+source tags, and supported source-specific fields. Adapters normalize source output; they may not
+invent tag namespaces or bypass the canonical ingest path.
 
-Site credentials are stored in the OS keychain via `credential_store.rs`. Credentials are injected into gallery-dl's config at runtime. The credential domain in `sqlite/subscriptions.rs` stores which sites have saved credentials.
+## Authentication
 
-## Key Files
+Every source has one direct-site login flow. Picto opens the real source page in a managed browser,
+captures the resulting session, and stores it in the operating-system credential store. The product
+does not ask users to paste passwords, cookies, tokens, or API keys.
 
-- `core/src/subscription_sync.rs` — sync engine, gallery-dl orchestration
-- `core/src/subscription_controller.rs` — subscription/flow CRUD orchestration
-- `core/src/flow_controller.rs` — flow CRUD, execution scheduling
-- `core/src/gallery_dl_runner.rs` — gallery-dl subprocess management
-- `core/src/credential_store.rs` — OS keychain integration
-- `core/src/sqlite/subscriptions.rs` — subscription, query, credential CRUD
-- `core/src/sqlite/flows.rs` — flow CRUD
-- `core/src/dispatch/typed/subscriptions.rs` — typed command handlers
+## Certification
+
+A source is visible only after the strict production-path harness proves discovery, download,
+independent-media ingest, metadata, cursor resume, restart, replay, and the real Electron workflow.
+
+## Ownership
+
+- `core/src/subscriptions/runtime_service.rs`: public subscription behavior
+- `core/src/subscriptions/run_orchestrator.rs`: durable run coordination
+- `core/src/subscriptions/job_queue.rs`: query job claims and retries
+- `core/src/subscriptions/gallery_dl_runner.rs`: gallery-dl process ownership
+- `core/src/subscriptions/source_adapter/`: source normalization
+- `core/src/subscriptions/sync_engine/`: download-to-ingest handoff and persistence
+- `core/src/subscriptions/credential_service.rs`: direct-site session handling
+- `core/src/subscriptions/runtime_db.rs`: durable subscription runtime state

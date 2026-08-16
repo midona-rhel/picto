@@ -38,11 +38,8 @@ impl ApplicationEngine {
         action: &str,
         hash_a: &str,
         hash_b: &str,
-        preferred_collection_id: Option<i64>,
     ) -> Result<DuplicateResolutionResult, String> {
-        let result =
-            self.db
-                .resolve_duplicate_pair(action, hash_a, hash_b, preferred_collection_id)?;
+        let result = self.db.resolve_duplicate_pair(action, hash_a, hash_b)?;
         if matches!(
             result.status,
             crate::db::types::DuplicateResolveStatus::Resolved

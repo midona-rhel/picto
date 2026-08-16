@@ -29,13 +29,17 @@ if (isAutomation && process.env.PICTO_SMOKE_APP_DATA) {
   app.setPath('appData', process.env.PICTO_SMOKE_APP_DATA);
   app.setPath('userData', path.join(process.env.PICTO_SMOKE_APP_DATA, 'user-data'));
 }
-
 app.commandLine.appendSwitch('disable-features', 'AutofillServerCommunication');
 app.commandLine.appendSwitch('force_high_performance_gpu');
 if (process.env.PICTO_EXPERIMENTAL_GPU_FLAGS === '1') {
   app.commandLine.appendSwitch('enable-gpu-rasterization');
   app.commandLine.appendSwitch('enable-zero-copy');
   app.commandLine.appendSwitch('num-raster-threads', '4');
+}
+
+const isDev = !app.isPackaged;
+if (isDev && process.platform === 'darwin') {
+  app.setActivationPolicy('accessory');
 }
 
 // Single instance guard — prevent multiple Picto processes from running.
@@ -47,7 +51,6 @@ if (!gotLock) {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-const isDev = !app.isPackaged;
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:8080';
 const SMOKE_SETTLE_MS = 1500;
 const PACKAGED_SYNC_SMOKE_LIBRARY = 'packaged-sync-smoke';
@@ -220,8 +223,12 @@ function awaitNativeShutdownBeforeQuit(event) {
 
 app.on('before-quit', awaitNativeShutdownBeforeQuit);
 app.on('will-quit', awaitNativeShutdownBeforeQuit);
-
 if (isDev) {
+  process.once('SIGTERM', () => app.quit());
+  process.once('SIGINT', () => app.quit());
+}
+
+if (isDev && process.env.PICTO_REMOTE_DEBUGGING !== '0') {
   // CDP endpoint for dev tooling (electron-mcp-server, screenshots, eval).
   app.commandLine.appendSwitch('remote-debugging-port', '9222');
 }
@@ -365,24 +372,6 @@ registerIpcHandlers({
 function wireNativeEvents() {
   onNativeEvent((name, payload) => {
     if (!name || typeof name !== 'string') return;
-
-    if (name === 'open-detail-window') {
-      try {
-        const data = typeof payload === 'string' ? JSON.parse(payload) : payload;
-        const hash = data?.hash;
-        if (isValidHash(hash)) {
-          const label = `detail-${hash.slice(0, 12)}`;
-          const existing = windowManager.getWindow(label);
-          if (existing && !existing.isDestroyed()) {
-            existing.focus();
-          } else {
-            const size = windowManager.calcDetailWindowSize(data?.width ?? 0, data?.height ?? 0);
-            windowManager.createWindow(label, hash, size.width, size.height);
-          }
-        }
-      } catch {}
-      return;
-    }
 
     windowManager.sendToAllWindows(name, payload);
   });

@@ -156,16 +156,10 @@ pub fn get_folder_entity_hashes(
 ) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT me.entity_hash
-         FROM (
-             SELECT COALESCE(child.parent_collection_entity_id, child.entity_id) AS top_entity_id,
-                    MIN(COALESCE(fm.position_rank, child.entity_id)) AS min_rank
-             FROM folder_member fm
-             JOIN media_entity child ON child.entity_id = fm.entity_id
-             WHERE fm.folder_id = ?1
-             GROUP BY COALESCE(child.parent_collection_entity_id, child.entity_id)
-         ) ordered
-         JOIN media_entity me ON me.entity_id = ordered.top_entity_id
-         ORDER BY ordered.min_rank ASC, me.entity_hash ASC",
+         FROM folder_member fm
+         JOIN media_entity me ON me.entity_id = fm.entity_id
+         WHERE fm.folder_id = ?1
+         ORDER BY fm.position_rank ASC, me.entity_hash ASC",
     )?;
     let hashes = stmt.query_map([folder_id], |row| row.get(0))?;
     hashes.collect()
@@ -177,18 +171,11 @@ pub fn get_folder_cover_hash(
 ) -> rusqlite::Result<Option<String>> {
     conn.query_row(
         "SELECT me.entity_hash
-         FROM (
-             SELECT COALESCE(child.parent_collection_entity_id, child.entity_id) AS top_entity_id,
-                    MIN(COALESCE(fm.position_rank, child.entity_id)) AS min_rank
-             FROM folder_member fm
-             JOIN media_entity child ON child.entity_id = fm.entity_id
-             WHERE fm.folder_id = ?1
-               AND child.status = 1
-             GROUP BY COALESCE(child.parent_collection_entity_id, child.entity_id)
-         ) ordered
-         JOIN media_entity me ON me.entity_id = ordered.top_entity_id
+         FROM folder_member fm
+         JOIN media_entity me ON me.entity_id = fm.entity_id
          WHERE me.status = 1
-         ORDER BY ordered.min_rank ASC, me.entity_hash ASC
+           AND fm.folder_id = ?1
+         ORDER BY fm.position_rank ASC, me.entity_hash ASC
          LIMIT 1",
         [folder_id],
         |row| row.get(0),
@@ -200,29 +187,14 @@ pub fn get_entity_folder_memberships(
     conn: &Connection,
     entity_id: i64,
 ) -> rusqlite::Result<Vec<crate::db::types::FolderMembership>> {
-    let target_entity_id: Option<i64> = conn
-        .query_row(
-            "SELECT COALESCE(parent_collection_entity_id, entity_id)
-             FROM media_entity
-             WHERE entity_id = ?1",
-            [entity_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-
-    let Some(target_entity_id) = target_entity_id else {
-        return Ok(Vec::new());
-    };
-
     let mut stmt = conn.prepare(
-        "SELECT DISTINCT f.folder_id, f.name
+        "SELECT f.folder_id, f.name
          FROM folder_member fm
          JOIN folder f ON f.folder_id = fm.folder_id
-         JOIN media_entity child ON child.entity_id = fm.entity_id
-         WHERE COALESCE(child.parent_collection_entity_id, child.entity_id) = ?1
+         WHERE fm.entity_id = ?1
          ORDER BY f.name ASC, f.folder_id ASC",
     )?;
-    let memberships = stmt.query_map([target_entity_id], |row| {
+    let memberships = stmt.query_map([entity_id], |row| {
         Ok(crate::db::types::FolderMembership {
             folder_id: row.get(0)?,
             folder_name: row.get(1)?,

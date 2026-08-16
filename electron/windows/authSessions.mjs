@@ -1,68 +1,48 @@
 /**
- * Embedded auth sessions — cookie-login capture, booru API-key scraping,
- * and the Pixiv OAuth popup. Split from windowManager.mjs; all window
- * primitives arrive injected so this module stays electron-import-free.
+ * Embedded auth sessions for Pixiv OAuth, booru API keys, and allowlisted
+ * gallery-dl browser cookies. All window primitives arrive injected so this
+ * module stays electron-import-free.
  */
 
-// Cookie-based browser-login sites. `cookieNames` are the cookies gallery-dl's
-// extractor requires — their presence in the isolated auth session means the
-// user finished logging in. `avoidUrlSubstrings` delays capture while the user
-// is still on a login page (for sites whose session cookie exists pre-login).
-// `expiryCookie` names the cookie whose expiration represents the session's
-// real lifetime (default: first of cookieNames) — short-lived helpers like
-// twitter's ct0 CSRF token must not drive the credential's expires_at.
-const COOKIE_LOGIN_SITES = {
-  twitter: {
-    loginUrl: 'https://x.com/i/flow/login',
-    cookieUrl: 'https://x.com',
-    cookieNames: ['auth_token', 'ct0'],
-    expiryCookie: 'auth_token',
-    successMessage: 'Twitter/X cookies captured.',
-  },
-  furaffinity: {
+const BOORU_AUTH_SITES = Object.freeze({
+  gelbooru: Object.freeze({
+    id: 'gelbooru',
+    label: 'Gelbooru',
+    loginUrl: 'https://gelbooru.com/index.php?code=00&page=account&s=login',
+    optionsUrl: 'https://gelbooru.com/index.php?page=account&s=options',
+  }),
+  rule34: Object.freeze({
+    id: 'rule34',
+    label: 'Rule34.xxx',
+    loginUrl: 'https://rule34.xxx/index.php?code=00&page=account&s=login',
+    optionsUrl: 'https://rule34.xxx/index.php?page=account&s=options',
+  }),
+});
+
+const COOKIE_AUTH_SITES = Object.freeze({
+  hentaifoundry: Object.freeze({
+    id: 'hentaifoundry',
+    label: 'Hentai Foundry',
+    loginUrl: 'https://www.hentai-foundry.com/site/index',
+    cookieUrl: 'https://www.hentai-foundry.com',
+    cookieNames: Object.freeze(['PHPSESSID']),
+    requireLogoutLink: true,
+  }),
+  furaffinity: Object.freeze({
+    id: 'furaffinity',
+    label: 'Fur Affinity',
     loginUrl: 'https://www.furaffinity.net/login/',
     cookieUrl: 'https://www.furaffinity.net',
-    cookieNames: ['a', 'b'],
-    successMessage: 'FurAffinity cookies captured.',
-  },
-  patreon: {
-    loginUrl: 'https://www.patreon.com/login',
-    cookieUrl: 'https://www.patreon.com',
-    cookieNames: ['session_id'],
-    successMessage: 'Patreon session captured.',
-  },
-  fanbox: {
-    loginUrl: 'https://www.fanbox.cc/login',
-    cookieUrl: 'https://www.fanbox.cc',
-    cookieNames: ['FANBOXSESSID'],
-    successMessage: 'Fanbox session captured.',
-  },
-  fantia: {
-    loginUrl: 'https://fantia.jp/sessions/signin',
-    cookieUrl: 'https://fantia.jp',
-    cookieNames: ['_session_id'],
-    successMessage: 'Fantia session captured.',
-    avoidUrlSubstrings: ['/sessions/signin'],
-  },
-  instagram: {
-    loginUrl: 'https://www.instagram.com/accounts/login/',
-    cookieUrl: 'https://www.instagram.com',
-    cookieNames: ['sessionid'],
-    successMessage: 'Instagram session captured.',
-  },
-  deviantart: {
-    loginUrl: 'https://www.deviantart.com/users/login',
-    cookieUrl: 'https://www.deviantart.com',
-    cookieNames: ['auth', 'auth_secure', 'userinfo'],
-    successMessage: 'DeviantArt session captured.',
-  },
-  nijie: {
-    loginUrl: 'https://nijie.info/login.php',
-    cookieUrl: 'https://nijie.info',
-    cookieNames: ['nijie_tok'],
-    successMessage: 'Nijie session captured.',
-  },
-};
+    cookieNames: Object.freeze(['a', 'b']),
+  }),
+});
+
+const SUPPORTED_AUTH_SITES = new Set([
+  'pixiv',
+  'pixivuser',
+  ...Object.keys(BOORU_AUTH_SITES),
+  ...Object.keys(COOKIE_AUTH_SITES),
+]);
 
 export function createAuthSessions({ BrowserWindow, getMainWindow }) {
   let authSession = {
@@ -90,25 +70,17 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
     return authSession.state;
   }
 
-
-  function getEmbeddedAuthUserAgent() {
-    return [
-      'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)',
-      'AppleWebKit/537.36 (KHTML, like Gecko)',
-      'Chrome/137.0.0.0',
-      'Safari/537.36',
-    ].join(' ');
-  }
-
-  async function teardownAuthSessionWindow() {
+  async function teardownAuthSessionWindow({ clearStorage = false } = {}) {
     const popup = authSession.popup;
     authSession.popup = null;
     authSession.partition = null;
     authSession.closing = false;
     if (!popup || popup.isDestroyed()) return;
-    try {
-      await popup.webContents.session.clearStorageData();
-    } catch {}
+    if (clearStorage) {
+      try {
+        await popup.webContents.session.clearStorageData();
+      } catch {}
+    }
     try {
       authSession.closing = true;
       popup.close();
@@ -117,7 +89,9 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
 
   function createAuthSessionWindow(site, title) {
     const win = getMainWindow();
-    const partition = `picto-auth-${site}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    // A stable site profile lets browser verification survive retries. The
+    // authenticated session is cleared after Picto captures the credential.
+    const partition = `persist:picto-auth-v1-${site}`;
     const popup = new BrowserWindow({
       width: 520,
       height: 760,
@@ -131,12 +105,11 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
+        sandbox: true,
         partition,
       },
     });
     popup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    popup.webContents.setUserAgent(getEmbeddedAuthUserAgent());
     popup.once('ready-to-show', () => {
       if (!popup.isDestroyed()) popup.show();
     });
@@ -167,69 +140,24 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
       message,
       credential,
     });
-    await teardownAuthSessionWindow();
+    await teardownAuthSessionWindow({ clearStorage: true });
     return authSession.state;
   }
 
-  async function scrapeGelbooruCredential(webContents) {
-    return webContents.executeJavaScript(`
-      (() => {
-        const collect = () => {
-          const inputs = Array.from(document.querySelectorAll('input'));
-          const findByName = (...names) => {
-            for (const input of inputs) {
-              const key = (input.name || input.id || '').toLowerCase();
-              if (names.some((name) => key.includes(name))) {
-                const value = (input.value || '').trim();
-                if (value) return value;
-              }
-            }
-            return null;
-          };
-          const text = document.body ? document.body.innerText : '';
-          const apiKeyFromText = text.match(/api[_ -]?key\\s*[:\\n]\\s*([a-f0-9]{16,})/i)?.[1] ?? null;
-          const userIdFromText = text.match(/user[_ -]?id\\s*[:\\n]\\s*(\\d+)/i)?.[1] ?? null;
-          return {
-            apiKey: findByName('api_key', 'api-key') || apiKeyFromText,
-            userId: findByName('user_id', 'user-id') || userIdFromText,
-            href: location.href,
-            title: document.title || null,
-          };
-        };
-        return collect();
-      })();
-    `, true);
-  }
-
-  async function inspectNamedCookies(webContents, url, names, expiryCookie) {
-    const cookies = await webContents.session.cookies.get({ url });
-    const values = {};
-    let expiresAt = null;
-    const expiryName = expiryCookie || names[0];
-    for (const name of names) {
-      const cookie = cookies.find((c) => c.name === name);
-      const value = (cookie?.value || '').trim();
-      if (value) {
-        values[name] = value;
-        // expirationDate is epoch seconds; session cookies have none. Only the
-        // designated session cookie's lifetime represents the login's expiry.
-        if (name === expiryName && cookie.expirationDate) {
-          expiresAt = new Date(cookie.expirationDate * 1000).toISOString();
-        }
-      }
-    }
-    return {
-      hasAll: names.every((name) => Boolean(values[name])),
-      values,
-      expiresAt,
-    };
-  }
-
-  async function inspectGelbooruPage(webContents) {
+  async function inspectBooruPage(webContents) {
     return webContents.executeJavaScript(`
       (() => {
         const text = document.body ? document.body.innerText : '';
         const href = location.href;
+        const hasCookieConsent = /agree to the usage of cookies according to our cookie policy/i.test(text);
+        const cookieConsentButton = hasCookieConsent
+          ? Array.from(document.querySelectorAll('button, a, [role="button"], input[type="button"], input[type="submit"]'))
+              .find((element) => {
+                const label = (element.textContent || element.value || '').trim().toLowerCase();
+                return label === 'accept';
+              })
+          : null;
+        if (cookieConsentButton) cookieConsentButton.click();
         const hasLoginForm = Boolean(
           document.querySelector('input[name="user"], input[name="username"], input[type="password"]')
         );
@@ -246,6 +174,7 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
           }
           return null;
         };
+        const validApiKey = (value) => /^[a-f0-9]{16,}$/i.test((value || '').trim());
         const snippets = [];
         snippets.push(text);
         snippets.push(href);
@@ -264,14 +193,26 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
             return apiKey ? { apiKey, userId } : null;
           })
           .find(Boolean) ?? null;
-        const apiKey = readInput('api_key', 'api-key') || apiKeyText || combinedCredential?.apiKey || null;
+        const inputApiKey = readInput('api_key', 'api-key');
+        const apiKey = validApiKey(inputApiKey)
+          ? inputApiKey
+          : apiKeyText || combinedCredential?.apiKey || null;
         const userId = readInput('user_id', 'user-id') || userIdText || combinedCredential?.userId || null;
         const hasLogoutLink = Array.from(document.querySelectorAll('a')).some((anchor) => {
-          const label = (anchor.textContent || '').trim().toLowerCase();
-          return label === 'logout';
+          const label = (anchor.textContent || '')
+            .trim()
+            .toLowerCase()
+            .replace(/[^a-z]+/g, ' ')
+            .trim();
+          return label === 'logout' || label.endsWith(' logout');
         });
         const hasAccountHome = /account home/i.test(text);
         const hasAccountOptions = /account options/i.test(text);
+        const hasChallenge = Boolean(
+          document.querySelector('#challenge-running, #challenge-stage, .cf-challenge')
+        ) || /just a moment|verify (?:that )?you are human|checking your browser|cloudflare/i.test(
+          [document.title || '', text].join('\\n')
+        );
         return {
           href,
           title: document.title || null,
@@ -279,6 +220,8 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
           hasLogoutLink,
           hasAccountHome,
           hasAccountOptions,
+          hasChallenge,
+          cookieConsentAccepted: Boolean(cookieConsentButton),
           apiKey,
           userId,
         };
@@ -286,87 +229,99 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
     `, true);
   }
 
-  async function inspectGelbooruCookies(webContents) {
-    const cookies = await webContents.session.cookies.get({ url: 'https://gelbooru.com' });
-    const names = new Map(cookies.map((cookie) => [cookie.name, cookie.value]));
-    const userId = (names.get('user_id') || '').trim();
-    const passHash = (names.get('pass_hash') || '').trim();
-    return {
-      hasAuthCookies: Boolean(userId && passHash),
-      userId,
-      passHash,
-    };
-  }
-
-  async function inspectBooruCookies(webContents, url) {
-    const cookies = await webContents.session.cookies.get({ url });
-    const names = new Map(cookies.map((cookie) => [cookie.name, cookie.value]));
-    const userId = (names.get('user_id') || '').trim();
-    const passHash = (names.get('pass_hash') || '').trim();
-    return {
-      hasAuthCookies: Boolean(userId && passHash),
-      userId,
-      passHash,
-    };
-  }
-
-  async function startBooruApiKeySession({
-    site,
-    loginUrl,
-    optionsUrl,
-    cookieUrl,
-    successMessage,
-  }) {
+  async function startBooruSession(site) {
     const popup = authSession.popup;
     if (!popup || popup.isDestroyed()) throw new Error('Auth popup is unavailable.');
     const authContents = popup.webContents;
     let navigatingToOptions = false;
     let completed = false;
+    let inspectionRunning = false;
+    let inspectionTimer = null;
+
+    const isOptionsUrl = (url) => /[?&]page=account(?:&|$)/i.test(url || '')
+      && /[?&]s=options(?:&|$)/i.test(url || '');
+    const isAuthenticatedAccountUrl = (url) => /[?&]page=account(?:&|$)/i.test(url || '')
+      && /[?&]s=(?:home|profile)(?:&|$)/i.test(url || '');
+
+    const navigateToOptions = async (url) => {
+      if (completed || navigatingToOptions) return;
+      navigatingToOptions = true;
+      emitAuthSessionState({
+        status: 'loading',
+        current_url: url,
+        message: `Authenticated. Reading ${site.label} API credentials…`,
+      });
+      try {
+        popup.hide();
+      } catch {}
+      await authContents.loadURL(site.optionsUrl);
+    };
 
     const inspectAndAdvance = async () => {
-      if (completed || authSession.popup !== popup || authContents.isDestroyed()) return;
+      if (completed || inspectionRunning || authSession.popup !== popup || authContents.isDestroyed()) return;
+      inspectionRunning = true;
       try {
-        const result = await inspectGelbooruPage(authContents);
-        const cookieState = await inspectBooruCookies(authContents, cookieUrl);
-        const looksAuthenticated = cookieState.hasAuthCookies || result.hasLogoutLink || result.hasAccountHome;
-        const effectiveUserId = result?.userId || cookieState.userId || null;
+        const currentUrl = authContents.getURL();
+        if (isAuthenticatedAccountUrl(currentUrl) && !isOptionsUrl(currentUrl)) {
+          await navigateToOptions(currentUrl);
+          return;
+        }
+        const result = await inspectBooruPage(authContents);
+        if (result.cookieConsentAccepted) {
+          emitAuthSessionState({
+            status: 'active',
+            current_url: result.href ?? authContents.getURL(),
+            title: result.title ?? authSession.state.title,
+            message: `Preparing ${site.label} login…`,
+          });
+          return;
+        }
+        const isOptionsPage = result.hasAccountOptions || isOptionsUrl(result.href);
+        const looksAuthenticated = result.hasLogoutLink || result.hasAccountHome;
+        if (result.hasChallenge) {
+          emitAuthSessionState({
+            status: 'active',
+            current_url: result.href ?? authContents.getURL(),
+            title: result.title ?? authSession.state.title,
+            message: `${site.label} is asking for a browser check. Complete it in the login window; Picto will continue automatically.`,
+          });
+          return;
+        }
         emitAuthSessionState({
           status: 'active',
           current_url: result?.href ?? authContents.getURL(),
           title: result?.title ?? authSession.state.title,
           message: !looksAuthenticated && result.hasLoginForm
-            ? `Log in with ${site} to continue.`
+            ? `Log in with ${site.label} to continue.`
             : navigatingToOptions
-              ? `Loading ${site} account settings…`
-              : `Authenticated. Reading ${site} API credentials…`,
+              ? `Reading ${site.label} account settings…`
+              : looksAuthenticated
+                ? `Authenticated. Reading ${site.label} API credentials…`
+                : `Waiting for ${site.label} login…`,
         });
-        if (looksAuthenticated && (!result.apiKey || !effectiveUserId) && !navigatingToOptions) {
-          navigatingToOptions = true;
-          try {
-            popup.hide();
-          } catch {}
-          await authContents.loadURL(optionsUrl);
+        if (looksAuthenticated && !isOptionsPage && !navigatingToOptions) {
+          await navigateToOptions(result.href ?? currentUrl);
           return;
         }
-        if (result?.apiKey && effectiveUserId) {
+        if (result.apiKey && result.userId) {
           completed = true;
           await completeAuthSession({
-            site_category: site,
+            site_category: site.id,
             credential_type: 'api_key',
-            username: effectiveUserId,
+            username: result.userId,
             password: result.apiKey,
-          }, successMessage);
+          }, `${site.label} API key captured.`);
           return;
         }
-        if (looksAuthenticated && navigatingToOptions) {
+        if (isOptionsPage && navigatingToOptions) {
           try {
             if (!popup.isDestroyed()) popup.show();
           } catch {}
           emitAuthSessionState({
             status: 'error',
-            current_url: result?.href ?? authContents.getURL(),
-            title: result?.title ?? authSession.state.title,
-            message: `Logged in, but Picto could not find ${site} user_id and api_key on account settings.`,
+            current_url: result.href ?? authContents.getURL(),
+            title: result.title ?? authSession.state.title,
+            message: `Logged in, but Picto could not find ${site.label} user_id and api_key on account settings.`,
             credential: null,
           });
         }
@@ -375,17 +330,24 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
           status: 'error',
           current_url: authContents.getURL(),
           title: authSession.state.title,
-          message: err instanceof Error ? err.message : `Failed to inspect ${site} login state.`,
+          message: err instanceof Error ? err.message : `Failed to inspect ${site.label} login state.`,
           credential: null,
         });
+      } finally {
+        inspectionRunning = false;
       }
     };
+
+    popup.on('closed', () => {
+      if (inspectionTimer != null) clearInterval(inspectionTimer);
+      inspectionTimer = null;
+    });
 
     authContents.on('page-title-updated', (_event, title) => {
       emitAuthSessionState({ title });
     });
     authContents.on('did-navigate', (_event, url) => {
-      emitAuthSessionState({ status: 'loading', current_url: url, message: `Checking ${site} login state…` });
+      emitAuthSessionState({ status: 'loading', current_url: url, message: `Checking ${site.label} login state…` });
       void inspectAndAdvance();
     });
     authContents.on('did-navigate-in-page', (_event, url) => {
@@ -400,70 +362,90 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
       });
       void inspectAndAdvance();
     });
+    authContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      if (isMainFrame === false || errorCode === -3) return;
+      try {
+        if (!popup.isDestroyed()) popup.show();
+      } catch {}
+      emitAuthSessionState({
+        status: 'error',
+        current_url: validatedUrl || authContents.getURL(),
+        message: `${site.label} could not load in the login window (${errorDescription || `error ${errorCode}`}). Retry login; if the site shows a browser check, complete it in this window.`,
+        credential: null,
+      });
+    });
 
-    await authContents.loadURL(loginUrl);
+    await authContents.loadURL(site.loginUrl);
+    inspectionTimer = setInterval(() => { void inspectAndAdvance(); }, 750);
     emitAuthSessionState({
       status: 'active',
-      current_url: loginUrl,
-      message: `Log in with ${site} in the popup window. Picto will finish the account-settings step automatically after authentication.`,
+      current_url: site.loginUrl,
+      message: `Log in with ${site.label} in the popup window. Picto will finish the account-settings step automatically after authentication.`,
     });
     popup.focus();
     return authSession.state;
   }
 
-  async function startCookieSession({
-    site,
-    loginUrl,
-    cookieUrl,
-    cookieNames,
-    expiryCookie,
-    successMessage,
-    avoidUrlSubstrings,
-  }) {
+  async function startCookieSession(site) {
     const popup = authSession.popup;
     if (!popup || popup.isDestroyed()) throw new Error('Auth popup is unavailable.');
     const authContents = popup.webContents;
     let completed = false;
 
-    const inspectAndComplete = async () => {
+    const inspectCookies = async () => {
       if (completed || authSession.popup !== popup || authContents.isDestroyed()) return;
       try {
-        // Some sites (Rails apps like Fantia) set their session cookie for
-        // anonymous visitors too — the cookie only proves login once the user
-        // has left the login page.
-        const currentUrl = authContents.getURL() || '';
-        if ((avoidUrlSubstrings ?? []).some((needle) => currentUrl.includes(needle))) {
+        if (site.requireLogoutLink) {
+          let hasLogoutLink = false;
+          try {
+            hasLogoutLink = await authContents.executeJavaScript(`
+              Array.from(document.querySelectorAll('a')).some((anchor) => {
+                const label = (anchor.textContent || '').trim().toLowerCase();
+                const href = (anchor.getAttribute('href') || '').toLowerCase();
+                return label === 'logout' || href.includes('/logout');
+              })
+            `, true);
+          } catch {
+            return;
+          }
+          if (!hasLogoutLink) {
+            emitAuthSessionState({
+              status: 'active',
+              current_url: authContents.getURL(),
+              message: `Log in with ${site.label} to continue.`,
+            });
+            return;
+          }
+        }
+
+        const stored = await authContents.session.cookies.get({ url: site.cookieUrl });
+        const values = new Map(stored.map((cookie) => [cookie.name, cookie.value]));
+        const cookies = Object.fromEntries(
+          site.cookieNames
+            .map((name) => [name, (values.get(name) || '').trim()])
+            .filter(([, value]) => value),
+        );
+        const missing = site.cookieNames.filter((name) => !cookies[name]);
+        if (missing.length > 0) {
           emitAuthSessionState({
             status: 'active',
-            current_url: currentUrl,
-            title: authContents.getTitle() || authSession.state.title,
-            message: `Log in with ${site} to continue.`,
+            current_url: authContents.getURL(),
+            message: `Log in with ${site.label} to continue.`,
           });
           return;
         }
-        const cookieState = await inspectNamedCookies(authContents, cookieUrl, cookieNames, expiryCookie);
-        emitAuthSessionState({
-          status: 'active',
-          current_url: currentUrl,
-          title: authContents.getTitle() || authSession.state.title,
-          message: cookieState.hasAll
-            ? `Authenticated. Saving ${site} session cookies…`
-            : `Log in with ${site} to continue.`,
-        });
-        if (!cookieState.hasAll) return;
+
         completed = true;
         await completeAuthSession({
-          site_category: site,
+          site_category: site.id,
           credential_type: 'cookies',
-          cookies: cookieState.values,
-          expires_at: cookieState.expiresAt,
-        }, successMessage);
+          cookies,
+        }, `${site.label} session captured.`);
       } catch (err) {
         emitAuthSessionState({
           status: 'error',
           current_url: authContents.getURL(),
-          title: authSession.state.title,
-          message: err instanceof Error ? err.message : `Failed to inspect ${site} cookies.`,
+          message: err instanceof Error ? err.message : `Failed to inspect ${site.label} login state.`,
           credential: null,
         });
       }
@@ -473,27 +455,23 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
       emitAuthSessionState({ title });
     });
     authContents.on('did-navigate', (_event, url) => {
-      emitAuthSessionState({ status: 'loading', current_url: url, message: `Checking ${site} session…` });
-      void inspectAndComplete();
+      emitAuthSessionState({ status: 'loading', current_url: url });
+      void inspectCookies();
     });
     authContents.on('did-navigate-in-page', (_event, url) => {
       emitAuthSessionState({ status: 'loading', current_url: url });
-      void inspectAndComplete();
+      void inspectCookies();
     });
     authContents.on('did-finish-load', () => {
-      emitAuthSessionState({
-        status: 'active',
-        current_url: authContents.getURL(),
-        title: authContents.getTitle() || authSession.state.title,
-      });
-      void inspectAndComplete();
+      emitAuthSessionState({ status: 'active', current_url: authContents.getURL() });
+      void inspectCookies();
     });
 
-    await authContents.loadURL(loginUrl);
+    await authContents.loadURL(site.loginUrl);
     emitAuthSessionState({
       status: 'active',
-      current_url: loginUrl,
-      message: `Log in with ${site} in the popup window. Picto will save the session cookies gallery-dl needs.`,
+      current_url: site.loginUrl,
+      message: `Log in with ${site.label} in the popup window. Picto stores only the session cookies gallery-dl requires.`,
     });
     popup.focus();
     return authSession.state;
@@ -501,10 +479,18 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
 
   async function startAuthSession(siteCategory, startUrl = null) {
     await cancelAuthSession();
-    const site = String(siteCategory || '').trim().toLowerCase();
-    if (!site) throw new Error('Missing site_category');
+    const requestedSite = String(siteCategory || '').trim().toLowerCase();
+    if (!requestedSite) throw new Error('Missing site_category');
+    if (!SUPPORTED_AUTH_SITES.has(requestedSite)) {
+      throw new Error(`Unsupported auth site: ${requestedSite}`);
+    }
 
-    const title = site === 'pixiv' ? 'Pixiv Login' : `Login: ${site}`;
+    // Pixiv search and user queries share one credential owner and one OAuth flow.
+    const site = requestedSite === 'pixivuser' ? 'pixiv' : requestedSite;
+
+    const title = site === 'pixiv'
+      ? 'Pixiv Login'
+      : `Login: ${BOORU_AUTH_SITES[site]?.label ?? COOKIE_AUTH_SITES[site]?.label ?? site}`;
     const popup = createAuthSessionWindow(site, title);
     const authContents = popup.webContents;
     emitAuthSessionState({
@@ -512,8 +498,10 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
       status: 'starting',
       title,
       current_url: startUrl,
-      message: site === 'gelbooru'
-        ? 'Log in in the popup window, then Picto will read the account options page for user_id and api_key.'
+      message: BOORU_AUTH_SITES[site]
+        ? `Log in in the popup window, then Picto will read the ${BOORU_AUTH_SITES[site].label} account options page for user_id and api_key.`
+        : COOKIE_AUTH_SITES[site]
+          ? `Log in in the popup window. Picto will capture only the cookies required by ${COOKIE_AUTH_SITES[site].label}.`
         : 'Waiting for login…',
       credential: null,
     });
@@ -571,46 +559,15 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
       return authSession.state;
     }
 
-    if (site === 'gelbooru') {
-      return startBooruApiKeySession({
-        site: 'gelbooru',
-        loginUrl: startUrl || 'https://gelbooru.com/index.php?code=00&page=account&s=login',
-        optionsUrl: 'https://gelbooru.com/index.php?page=account&s=options',
-        cookieUrl: 'https://gelbooru.com',
-        successMessage: 'Gelbooru API key captured.',
-      });
+    if (BOORU_AUTH_SITES[site]) {
+      return startBooruSession(BOORU_AUTH_SITES[site]);
     }
 
-    if (site === 'rule34') {
-      return startBooruApiKeySession({
-        site: 'rule34',
-        loginUrl: startUrl || 'https://rule34.xxx/index.php?code=00&page=account&s=login',
-        optionsUrl: 'https://rule34.xxx/index.php?page=account&s=options',
-        cookieUrl: 'https://rule34.xxx',
-        successMessage: 'Rule34 API key captured.',
-      });
+    if (COOKIE_AUTH_SITES[site]) {
+      return startCookieSession(COOKIE_AUTH_SITES[site]);
     }
 
-    const cookieLoginSpec = COOKIE_LOGIN_SITES[site];
-    if (cookieLoginSpec) {
-      return startCookieSession({
-        site,
-        loginUrl: startUrl || cookieLoginSpec.loginUrl,
-        cookieUrl: cookieLoginSpec.cookieUrl,
-        cookieNames: cookieLoginSpec.cookieNames,
-        expiryCookie: cookieLoginSpec.expiryCookie,
-        successMessage: cookieLoginSpec.successMessage,
-        avoidUrlSubstrings: cookieLoginSpec.avoidUrlSubstrings,
-      });
-    }
-
-    emitAuthSessionState({
-      status: 'error',
-      message: `Popup auth is not implemented for ${site}.`,
-      credential: null,
-    });
-    await teardownAuthSessionWindow();
-    return authSession.state;
+    throw new Error(`Unsupported auth site: ${site}`);
   }
 
   async function cancelAuthSession() {
@@ -626,90 +583,8 @@ export function createAuthSessions({ BrowserWindow, getMainWindow }) {
     return null;
   }
 
-  function setAuthSessionBounds(_bounds) {
-    return null;
-  }
-
-
-  /**
-   * Open a popup for Pixiv OAuth login.
-   * Intercepts the pixiv:// callback redirect and extracts the auth code.
-   * Returns a Promise that resolves with the code or rejects on cancel/error.
-   */
-  function openPixivOAuthPopup(loginUrl) {
-    return new Promise((resolve, reject) => {
-      const popup = new BrowserWindow({
-        width: 500,
-        height: 700,
-        resizable: false,
-        minimizable: false,
-        maximizable: false,
-        title: 'Pixiv Login',
-        webPreferences: {
-          nodeIntegration: false,
-          contextIsolation: true,
-        },
-      });
-
-      popup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-      let resolved = false;
-
-      const extractCode = (url) => {
-        try {
-          const parsed = new URL(url);
-          return parsed.searchParams.get('code') || null;
-        } catch {
-          return null;
-        }
-      };
-
-      const handlePixivCallback = async (url) => {
-        resolved = true;
-        const code = extractCode(url);
-        if (!code) {
-          reject(new Error('No code in Pixiv callback'));
-          popup.close();
-          return;
-        }
-        // Capture PHPSESSID cookie from the login session
-        let phpsessid = null;
-        try {
-          const cookies = await popup.webContents.session.cookies.get({ domain: '.pixiv.net', name: 'PHPSESSID' });
-          if (cookies.length > 0) phpsessid = cookies[0].value;
-        } catch { /* best effort */ }
-        resolve({ code, phpsessid });
-        popup.close();
-      };
-
-      // Intercept redirects to pixiv:// scheme — prevent OS from handling it
-      popup.webContents.on('will-redirect', (event, url) => {
-        if (url.startsWith('pixiv://')) {
-          event.preventDefault();
-          handlePixivCallback(url);
-        }
-      });
-
-      popup.webContents.on('will-navigate', (event, url) => {
-        if (url.startsWith('pixiv://')) {
-          event.preventDefault();
-          handlePixivCallback(url);
-        }
-      });
-
-      popup.on('closed', () => {
-        if (!resolved) {
-          reject(new Error('Pixiv login cancelled'));
-        }
-      });
-
-      popup.loadURL(loginUrl);
-    });
-  }
-
   return {
     startAuthSession,
     cancelAuthSession,
-    setAuthSessionBounds,
-    openPixivOAuthPopup,
   };
 }

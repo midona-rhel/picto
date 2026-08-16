@@ -109,7 +109,6 @@ export function createLibraryHostService({
     const libraryPath = path.join(savePath, `${name}.library`);
     await fs.mkdir(path.join(libraryPath, 'db'), { recursive: true });
     await fs.mkdir(path.join(libraryPath, 'blobs'), { recursive: true });
-    await fs.mkdir(path.join(libraryPath, 'plugins', 'sites'), { recursive: true });
     await switchLibrary(libraryPath);
     return libraryPath;
   }

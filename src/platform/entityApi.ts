@@ -68,13 +68,3 @@ export function deleteEntities(target: EntityTarget): Promise<unknown> {
 export function getSelectionSummary(target: EntityTarget): Promise<SelectionSummary> {
   return invoke<SelectionSummary>('get_selection_summary', { target } as unknown as Record<string, unknown>);
 }
-
-export interface SweepOrphanedBlobsResult {
-  deleted_count: number;
-  freed_bytes: number;
-}
-
-/** Remove blob files that no library record references anymore. */
-export function sweepOrphanedBlobs(): Promise<SweepOrphanedBlobsResult> {
-  return invoke<SweepOrphanedBlobsResult>('sweep_orphaned_blobs', {});
-}

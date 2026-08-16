@@ -10,7 +10,7 @@ Press `Ctrl+I` (`Cmd+I` on Mac) to open the file picker. Select one or more file
 
 ## Folder Import
 
-Import an entire folder at once. The folder structure can optionally be preserved as Picto folders. This is useful for migrating an existing collection.
+Import an entire folder at once. The folder structure can optionally be preserved as Picto folders. This is useful for migrating an existing library.
 
 ## Drag and Drop
 
@@ -22,7 +22,7 @@ By default, imported files go to the **Inbox** with status 0. This lets you revi
 
 The three statuses are:
 - **Inbox** (0) — Staging area for review
-- **Active** (1) — Part of your main collection
+- **Active** (1) — Part of your accepted library
 - **Trash** (2) — Marked for deletion
 
 ## Watched Folders

@@ -18,8 +18,6 @@ vi.mock('../../platform/duplicateApi', () => ({
 function details(hash: string, name: string): CanonicalEntityDetails {
   return {
     entity_hash: hash,
-    thumbnail_hash: hash,
-    entity_kind: 'single',
     name,
     mime_type: 'image/png',
     size_bytes: 1_024,
@@ -40,8 +38,6 @@ function details(hash: string, name: string): CanonicalEntityDetails {
     perceptual_hash: null,
     tags: [],
     folders: [],
-    member_count: null,
-    total_size_bytes: null,
   };
 }
 
@@ -68,7 +64,7 @@ describe('DuplicatesScreen', () => {
     });
   });
 
-  it('does not resolve a cross-collection conflict until the user chooses an owner', async () => {
+  it('resolves a duplicate using direct media ownership', async () => {
     vi.mocked(getDuplicatePairs)
       .mockResolvedValueOnce({
         items: [{ hash_a: 'left', hash_b: 'right', distance: 1, similarity_pct: 98, status: 'detected' }],
@@ -77,33 +73,13 @@ describe('DuplicatesScreen', () => {
         total: 1,
       })
       .mockResolvedValueOnce({ items: [], next_cursor: null, has_more: false, total: 0 });
-    vi.mocked(resolveDuplicatePair)
-      .mockResolvedValueOnce({
-        status: 'conflict',
-        winner_hash: 'left',
-        loser_hash: 'right',
-        action: 'keep_left',
-        affected_folder_ids: [],
-        affected_collection_ids: [],
-        tags_merged: 0,
-        conflict: {
-          winner_hash: 'left',
-          loser_hash: 'right',
-          winner_collection_id: 11,
-          loser_collection_id: 22,
-        },
-        blob_cleanup_pending: false,
-        cleanup_error: null,
-      })
-      .mockResolvedValueOnce({
+    vi.mocked(resolveDuplicatePair).mockResolvedValueOnce({
         status: 'resolved',
         winner_hash: 'left',
         loser_hash: 'right',
         action: 'keep_left',
         affected_folder_ids: [],
-        affected_collection_ids: [11, 22],
         tags_merged: 0,
-        conflict: null,
         blob_cleanup_pending: false,
         cleanup_error: null,
       });
@@ -125,16 +101,8 @@ describe('DuplicatesScreen', () => {
       await user.click(screen.getByRole('button', { name: 'Keep left' }));
     });
 
-    expect(await screen.findByRole('dialog')).toBeInTheDocument();
-    expect(resolveDuplicatePair).toHaveBeenLastCalledWith('keep_left', 'left', 'right', undefined);
-    expect(screen.queryByText('Review complete')).not.toBeInTheDocument();
-
-    await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Collection 11' }));
-    });
-
     await waitFor(() => {
-      expect(resolveDuplicatePair).toHaveBeenLastCalledWith('keep_left', 'left', 'right', 11);
+      expect(resolveDuplicatePair).toHaveBeenLastCalledWith('keep_left', 'left', 'right');
       expect(screen.getByText('Review complete')).toBeInTheDocument();
     });
   });
@@ -146,9 +114,7 @@ describe('DuplicatesScreen', () => {
       loser_hash: null,
       action: 'smart_merge',
       affected_folder_ids: [],
-      affected_collection_ids: [],
       tags_merged: 0,
-      conflict: null,
       blob_cleanup_pending: false,
       cleanup_error: null,
     });
@@ -189,9 +155,7 @@ describe('DuplicatesScreen', () => {
       loser_hash: 'right',
       action: 'keep_left',
       affected_folder_ids: [],
-      affected_collection_ids: [],
       tags_merged: 0,
-      conflict: null,
       blob_cleanup_pending: true,
       cleanup_error: 'Cleanup will resume after the blob store is available.',
     });

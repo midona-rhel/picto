@@ -19,7 +19,11 @@ export default defineConfig({
         url: 'http://localhost/',
       },
     },
-    exclude: ['**/node_modules/**', '**/dist/**'],
+    exclude: [
+      '**/node_modules/**',
+      '**/dist/**',
+      'scripts/subscription-verifier-mcp.test.mjs',
+    ],
     setupFiles: './src/test/setup.ts',
     css: true,
   },

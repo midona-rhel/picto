@@ -10,7 +10,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use crate::db::LibraryDatabase;
-use rusqlite::OptionalExtension;
 use sha2::{Digest, Sha256};
 
 use super::backend::SyncBackend;
@@ -49,8 +48,6 @@ pub struct SyncReport {
     affected_folder_ids: Vec<i64>,
     #[serde(skip)]
     affected_smart_folder_ids: Vec<i64>,
-    #[serde(skip)]
-    affected_collection_ids: Vec<i64>,
 }
 
 pub fn binding(db: &LibraryDatabase) -> Result<Option<(PathBuf, String)>, String> {
@@ -475,28 +472,18 @@ fn sync_change_impact(
             .add_domain(Domain::SmartFolders)
             .smart_folder_ids(report.affected_smart_folder_ids.clone());
     }
-    let mut exact_scopes = report
+    let exact_scopes = report
         .affected_folder_ids
         .iter()
         .map(|id| format!("folder:{id}"))
         .collect::<Vec<_>>();
-    exact_scopes.extend(
-        report
-            .affected_collection_ids
-            .iter()
-            .map(|id| format!("collection:{id}")),
-    );
     if !exact_scopes.is_empty() {
         impact = impact.extra_grid_scopes(exact_scopes);
     }
     let membership_changed = report.applied_op_types.iter().any(|op_type| {
         matches!(
             op_type.as_str(),
-            "folder_members_added"
-                | "folder_members_removed"
-                | "collection_members_added"
-                | "collection_members_removed"
-                | "collection_split"
+            "folder_members_added" | "folder_members_removed"
         )
     });
     if membership_changed && !report.affected_folder_ids.is_empty() {
@@ -538,27 +525,8 @@ fn sync_change_impact(
             | "smart_folder_deleted" => {
                 impact.add_domains(&[Domain::SmartFolders, Domain::Sidebar])
             }
-            "collection_created"
-            | "collection_split"
-            | "collection_members_added"
-            | "collection_members_removed" => impact
-                .add_domains(&[Domain::Files, Domain::Folders, Domain::Sidebar])
-                .status_changed()
-                .status_sensitive_grid_scopes_changed()
-                .all_smart_folder_scopes_changed(),
-            "collection_renamed" => impact
-                .add_domains(&[Domain::Files, Domain::Folders])
-                .media_metadata_changed()
-                .all_smart_folder_scopes_changed(),
-            "collection_members_reordered" => impact
-                .add_domains(&[Domain::Files, Domain::Folders])
-                .grid_reorder()
-                .all_smart_folder_scopes_changed(),
             "duplicate_decided" => impact.add_domains(&[Domain::Files, Domain::Sidebar]),
-            "subscription_group_created"
-            | "subscription_group_updated"
-            | "subscription_group_deleted"
-            | "subscription_created"
+            "subscription_created"
             | "subscription_updated"
             | "subscription_deleted"
             | "subscription_query_created"
@@ -581,14 +549,12 @@ fn sync_change_impact(
 struct SyncScopeImpact {
     folder_ids: BTreeSet<i64>,
     smart_folder_ids: BTreeSet<i64>,
-    collection_ids: BTreeSet<i64>,
 }
 
 impl SyncScopeImpact {
     fn merge(&mut self, other: Self) {
         self.folder_ids.extend(other.folder_ids);
         self.smart_folder_ids.extend(other.smart_folder_ids);
-        self.collection_ids.extend(other.collection_ids);
     }
 }
 
@@ -620,10 +586,6 @@ fn resolve_scope_impacts(
              )
              SELECT smart_folder_id FROM descendants",
         )?;
-        let mut entity = conn.prepare_cached(
-            "SELECT entity_id, parent_collection_entity_id, entity_kind
-             FROM media_entity WHERE entity_hash = ?1",
-        )?;
         for (index, op) in ops.iter().enumerate() {
             let impact = &mut impacts[index];
             if op.op_type.starts_with("folder_") {
@@ -639,48 +601,6 @@ fn resolve_scope_impacts(
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 for id in ids {
                     impact.smart_folder_ids.insert(id);
-                }
-            } else if let Some((entity_id, parent_id, kind)) = entity
-                .query_row([&op.entity_key], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, Option<i64>>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })
-                .optional()?
-            {
-                if kind == "collection" {
-                    impact.collection_ids.insert(entity_id);
-                } else if let Some(collection_id) = parent_id {
-                    impact.collection_ids.insert(collection_id);
-                }
-            }
-        }
-        let collection_ids = impacts
-            .iter()
-            .flat_map(|impact| impact.collection_ids.iter().copied())
-            .collect::<BTreeSet<_>>();
-        let mut collection_folders = conn.prepare_cached(
-            "SELECT DISTINCT folder_id FROM folder_member
-             WHERE entity_id = ?1 OR entity_id IN (
-                 SELECT entity_id FROM media_entity WHERE parent_collection_entity_id = ?1
-             )",
-        )?;
-        let mut folders_by_collection = BTreeMap::<i64, Vec<i64>>::new();
-        for collection_id in collection_ids {
-            let rows = collection_folders.query_map([collection_id], |row| row.get::<_, i64>(0))?;
-            for row in rows {
-                folders_by_collection
-                    .entry(collection_id)
-                    .or_default()
-                    .push(row?);
-            }
-        }
-        for impact in &mut impacts {
-            for collection_id in &impact.collection_ids {
-                if let Some(folder_ids) = folders_by_collection.get(collection_id) {
-                    impact.folder_ids.extend(folder_ids);
                 }
             }
         }
@@ -858,7 +778,6 @@ fn sync_once_inner(
                 .collect();
             report.affected_folder_ids = scope_impact.folder_ids.into_iter().collect();
             report.affected_smart_folder_ids = scope_impact.smart_folder_ids.into_iter().collect();
-            report.affected_collection_ids = scope_impact.collection_ids.into_iter().collect();
         }
         None => {
             report.waiting_for_prerequisites = true;
@@ -1070,10 +989,8 @@ mod tests {
             source_root.path(),
         );
 
-        let group = service.create_group("Artists".into()).await.unwrap();
-        let group_id = group.id.parse::<i64>().unwrap();
         let subscription = service
-            .create_subscription("Daily artists".into(), Some(group_id), Some(200), Some(50))
+            .create_subscription("Daily artists".into(), Some(200), Some(50))
             .await
             .unwrap();
         let query = service
@@ -1089,28 +1006,22 @@ mod tests {
 
         sync_once(&source, &backend).unwrap();
         let report = sync_once(&target, &backend).unwrap();
-        assert_eq!(report.ops_applied, 3);
+        assert_eq!(report.ops_applied, 2);
         assert!(report
             .applied_op_types
             .contains(&"subscription_query_created".to_string()));
         target
             .with_read(|conn| {
-                let definition: (String, String, String, String) = conn.query_row(
-                    "SELECT g.name, s.name, q.site_id, q.query_text
-                     FROM subscription_group g
-                     JOIN subscription s ON s.group_id = g.group_id
+                let definition: (String, String, String) = conn.query_row(
+                    "SELECT s.name, q.site_id, q.query_text
+                     FROM subscription s
                      JOIN subscription_query q ON q.subscription_id = s.subscription_id",
                     [],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )?;
                 assert_eq!(
                     definition,
-                    (
-                        "Artists".into(),
-                        "Daily artists".into(),
-                        "gelbooru".into(),
-                        "one_girl".into(),
-                    )
+                    ("Daily artists".into(), "gelbooru".into(), "one_girl".into(),)
                 );
                 Ok(())
             })
@@ -1150,16 +1061,6 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-
-        service.delete_group(group.id).await.unwrap();
-        sync_once(&source, &backend).unwrap();
-        sync_once(&target, &backend).unwrap();
-        let target_group_id: Option<i64> = target
-            .with_read(|conn| {
-                conn.query_row("SELECT group_id FROM subscription", [], |row| row.get(0))
-            })
-            .unwrap();
-        assert_eq!(target_group_id, None);
 
         service.delete_subscription(subscription.id).await.unwrap();
         sync_once(&source, &backend).unwrap();
@@ -1394,10 +1295,9 @@ mod tests {
             ops_applied: 2,
             applied_op_types: vec![
                 "folder_members_added".into(),
-                "collection_members_removed".into(),
+                "folder_members_removed".into(),
             ],
             affected_folder_ids: vec![7],
-            affected_collection_ids: vec![11],
             ..Default::default()
         };
 
@@ -1406,8 +1306,6 @@ mod tests {
         assert_eq!(impact.folder_membership_changed, Some(vec![7]));
         let scopes = impact.extra_grid_scopes.unwrap();
         assert!(scopes.contains(&"folder:7".to_string()));
-        assert!(scopes.contains(&"collection:11".to_string()));
-        assert!(scopes.contains(&"system:active".to_string()));
     }
 
     #[test]
@@ -2104,7 +2002,7 @@ mod tests {
             )
             .unwrap();
         dev_b
-            .insert_single(
+            .insert_entity(
                 &entity_hash,
                 file_id,
                 Some("ready"),

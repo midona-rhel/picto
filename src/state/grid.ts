@@ -5,7 +5,7 @@
 import { atom } from 'jotai';
 import type { CanonicalEntityGridItem, BaseScope, EntityViewQuery } from '../shared/types/canonical';
 import type { GridViewMode } from '../shared/types/grid';
-import { activeNodeIdAtom, collectionNameAtom } from './navigation';
+import { activeNodeIdAtom } from './navigation';
 import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
 import { nodeIdToGridScope } from '../shared/lib/gridScope';
 
@@ -41,7 +41,6 @@ export const gridShowNameAtom = atom(true);
 export const gridShowExtensionAtom = atom(false);
 export const gridShowResolutionAtom = atom(false);
 export const gridShowExtensionLabelAtom = atom(false);
-export const stripFitModeAtom = atom<'horizontal' | 'vertical'>('horizontal');
 export const gridFitThumbnailsAtom = atom(false);
 export const gridShowSubfoldersAtom = atom(true);
 
@@ -73,10 +72,6 @@ export const gridSoftTransitionActionAtom = atom<(() => void) | null>(null);
 /** Human-readable label for the current scope. Derived from sidebar nodes. */
 export const gridScopeLabelAtom = atom((get) => {
   const nodeId = get(activeNodeIdAtom);
-  // Collection scope — use the stored collection name
-  if (nodeId.startsWith('collection:')) {
-    return get(collectionNameAtom) ?? 'Collection';
-  }
   const SYSTEM_LABELS: Record<string, string> = {
     'system:active': 'All',
     'system:inbox': 'Inbox',

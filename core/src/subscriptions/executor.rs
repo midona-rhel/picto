@@ -14,7 +14,6 @@ use crate::subscriptions::policy::{
 use crate::subscriptions::runtime_tasks::{
     publish_finished, publish_panic, schedule_progress_snapshot_clear,
 };
-use crate::subscriptions::source_adapter::runner_key_for_site;
 use crate::subscriptions::sync_engine::{
     query_run_completion, SubscriptionSyncEngine, SyncProgress,
 };
@@ -112,9 +111,6 @@ pub async fn execute_query_job(
         Err(error) => fail_job_and_finalize!(FailureKind::Runtime, error),
     };
 
-    let runner_key = runner_key_for_site(&query.site_id);
-    let _site_guard = rate_limiter.acquire_domain_run(&runner_key).await;
-
     let cancel = {
         let map = running_subs.lock().await;
         map.get(&sub_id_str).cloned().unwrap_or_else(|| {
@@ -124,15 +120,6 @@ pub async fn execute_query_job(
         })
     };
 
-    let group_name = match sub.group_id {
-        Some(gid) => runtime
-            .get_group(gid)
-            .await
-            .ok()
-            .flatten()
-            .map(|group| group.name),
-        None => None,
-    };
     let mode = if job.requested_by == "query" || job.requested_by == "retry" {
         "query"
     } else {
@@ -166,7 +153,6 @@ pub async fn execute_query_job(
         sub.clone(),
         query.clone(),
         job.clone(),
-        group_name.clone(),
         query_name.clone(),
         query_run_id,
         cancel.clone(),
@@ -442,7 +428,6 @@ async fn run_job_inner(
     sub: crate::subscriptions::types::Subscription,
     query: crate::subscriptions::types::SubscriptionQuery,
     job: SubscriptionQueryJob,
-    group_name: Option<String>,
     _query_name: String,
     query_run_id: i64,
     cancel: tokio_util::sync::CancellationToken,
@@ -473,14 +458,12 @@ async fn run_job_inner(
                     "subscription"
                 },
             )
-            .with_group_name(group_name.clone())
             .with_rate_limiter(rate_limiter.clone())
             .with_auto_merge(
                 auto_merge_enabled,
                 auto_merge_distance,
                 auto_merge_require_matching_dimensions,
-            )
-            .with_auto_collections(sub.auto_collections),
+            ),
         Err(error) => {
             return failed_job_outcome(
                 &runtime,
@@ -495,8 +478,6 @@ async fn run_job_inner(
     };
 
     if job.job_kind == "retry_post" {
-        let canonical_site_id =
-            crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id).to_string();
         let post_id = job.post_id.as_deref().unwrap_or_default();
         let matching = match runtime
             .find_unresolved_subscription_post_attempts(
@@ -562,7 +543,7 @@ async fn run_job_inner(
                 query_run_id,
                 sub.subscription_id,
                 query.query_id,
-                &canonical_site_id,
+                &query.site_id,
                 &retry_url,
                 post_id,
                 cancel,

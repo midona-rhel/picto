@@ -78,14 +78,12 @@ export function addMedia(paths: string[], params?: {
   initial_status?: number;
   parent_folder_id?: number | null;
   preserve_structure?: boolean;
-  collection_name?: string | null;
 }): Promise<void> {
   return invoke<void>('add_media', {
     paths,
     ...params,
     preserve_structure: params?.preserve_structure ?? false,
     parent_folder_id: params?.parent_folder_id ?? null,
-    collection_name: params?.collection_name ?? null,
   } as unknown as Record<string, unknown>);
 }
 

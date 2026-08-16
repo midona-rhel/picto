@@ -11,12 +11,7 @@ use crate::smart_folders::types::{MatchMode, PredicateRule, SmartFolderPredicate
 
 const ENTITY_BASE_SQL: &str = "SELECT me.entity_id
     FROM media_entity me
-    LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-    LEFT JOIN media_file mf ON mf.file_id = sme.file_id
-    LEFT JOIN media_entity pm ON pm.entity_id = me.primary_member_entity_id
-    LEFT JOIN single_media_entity psme ON psme.entity_id = pm.entity_id
-    LEFT JOIN media_file pmf ON pmf.file_id = psme.file_id
-    WHERE me.parent_collection_entity_id IS NULL";
+     JOIN media_file mf ON mf.file_id = me.file_id";
 
 pub fn compile_smart_folder(conn: &Connection, bitmaps: &BitmapStore, smart_folder_id: i64) {
     let result = build_effective_predicate(conn, smart_folder_id)
@@ -121,39 +116,32 @@ fn compile_group(
 
     for rule in &group.rules {
         match rule.field.as_str() {
-            "tags" => compile_tag_rule(rule, bitmaps, &tag_id_map, &mut include_bitmaps, &mut exclude_bitmaps),
+            "tags" => compile_tag_rule(
+                rule,
+                bitmaps,
+                &tag_id_map,
+                &mut include_bitmaps,
+                &mut exclude_bitmaps,
+            ),
             "rating" => compile_numeric_rule(conn, "me.rating", rule, &mut include_bitmaps)?,
             "file_size" => compile_numeric_rule(
                 conn,
-                "COALESCE(mf.size_bytes, me.total_size_bytes, 0)",
+                "COALESCE(mf.size_bytes, 0)",
                 rule,
                 &mut include_bitmaps,
             )?,
-            "width" => compile_numeric_rule(
-                conn,
-                "COALESCE(mf.pixel_width, pmf.pixel_width)",
-                rule,
-                &mut include_bitmaps,
-            )?,
-            "height" => compile_numeric_rule(
-                conn,
-                "COALESCE(mf.pixel_height, pmf.pixel_height)",
-                rule,
-                &mut include_bitmaps,
-            )?,
-            "duration" => compile_numeric_rule(
-                conn,
-                "COALESCE(mf.duration_ms, pmf.duration_ms)",
-                rule,
-                &mut include_bitmaps,
-            )?,
+            "width" => compile_numeric_rule(conn, "mf.pixel_width", rule, &mut include_bitmaps)?,
+            "height" => compile_numeric_rule(conn, "mf.pixel_height", rule, &mut include_bitmaps)?,
+            "duration" => compile_numeric_rule(conn, "mf.duration_ms", rule, &mut include_bitmaps)?,
             "aspect_ratio" => compile_numeric_rule(
                 conn,
-                "CAST(COALESCE(mf.pixel_width, pmf.pixel_width) AS REAL) / NULLIF(COALESCE(mf.pixel_height, pmf.pixel_height), 0)",
+                "CAST(mf.pixel_width AS REAL) / NULLIF(mf.pixel_height, 0)",
                 rule,
                 &mut include_bitmaps,
             )?,
-            "file_type" => compile_file_type_rule(conn, rule, &mut include_bitmaps, &mut exclude_bitmaps)?,
+            "file_type" => {
+                compile_file_type_rule(conn, rule, &mut include_bitmaps, &mut exclude_bitmaps)?
+            }
             "date_imported" | "date_added" => {
                 compile_text_comparable_rule(conn, "me.date_added", rule, &mut include_bitmaps)?
             }
@@ -164,8 +152,20 @@ fn compile_group(
                 compile_text_comparable_rule(conn, "me.date_modified", rule, &mut include_bitmaps)?
             }
             "has_audio" => compile_has_audio_rule(conn, rule, &mut include_bitmaps)?,
-            "notes" => compile_text_rule(conn, "me.notes", rule, &mut include_bitmaps, &mut exclude_bitmaps)?,
-            "name" => compile_text_rule(conn, "me.name", rule, &mut include_bitmaps, &mut exclude_bitmaps)?,
+            "notes" => compile_text_rule(
+                conn,
+                "me.notes",
+                rule,
+                &mut include_bitmaps,
+                &mut exclude_bitmaps,
+            )?,
+            "name" => compile_text_rule(
+                conn,
+                "me.name",
+                rule,
+                &mut include_bitmaps,
+                &mut exclude_bitmaps,
+            )?,
             "source_url" => compile_text_rule(
                 conn,
                 "me.source_urls_json",
@@ -427,22 +427,10 @@ fn compile_file_type_rule(
     };
 
     let (clause, arg) = match value {
-        "image" => (
-            "COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?1",
-            "image/%".to_string(),
-        ),
-        "video" => (
-            "COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?1",
-            "video/%".to_string(),
-        ),
-        "audio" => (
-            "COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?1",
-            "audio/%".to_string(),
-        ),
-        other => (
-            "COALESCE(mf.mime_type, pmf.mime_type, '') = ?1",
-            other.to_string(),
-        ),
+        "image" => ("mf.mime_type LIKE ?1", "image/%".to_string()),
+        "video" => ("mf.mime_type LIKE ?1", "video/%".to_string()),
+        "audio" => ("mf.mime_type LIKE ?1", "audio/%".to_string()),
+        other => ("mf.mime_type = ?1", other.to_string()),
     };
     let bitmap = entity_sql_to_bitmap(
         conn,
@@ -475,7 +463,7 @@ fn compile_has_audio_rule(
     if let Some(value) = value {
         include_bitmaps.push(entity_sql_to_bitmap(
             conn,
-            &format!("{ENTITY_BASE_SQL} AND COALESCE(mf.has_audio, pmf.has_audio, 0) = ?1"),
+            &format!("{ENTITY_BASE_SQL} AND COALESCE(mf.has_audio, 0) = ?1"),
             params![value],
         )?);
     }
@@ -503,7 +491,7 @@ fn compile_color_rule(
         "{ENTITY_BASE_SQL} AND EXISTS (
             SELECT 1
             FROM file_color fc
-            WHERE fc.file_id IN (COALESCE(mf.file_id, -1), COALESCE(pmf.file_id, -1))
+            WHERE fc.file_id = mf.file_id
               AND fc.hex IN ({placeholders})
         )"
     );
@@ -527,8 +515,8 @@ fn compile_shape_rule(
     let Some(shape) = rule.value.as_ref().and_then(|raw| raw.as_str()) else {
         return Ok(());
     };
-    let dims_w = "COALESCE(mf.pixel_width, pmf.pixel_width)";
-    let dims_h = "COALESCE(mf.pixel_height, pmf.pixel_height)";
+    let dims_w = "mf.pixel_width";
+    let dims_h = "mf.pixel_height";
     let clause = match shape {
         "landscape" => format!("{dims_w} > {dims_h}"),
         "portrait" => format!("{dims_h} > {dims_w}"),
@@ -615,17 +603,6 @@ mod tests {
         let bitmaps = BitmapStore::new();
 
         conn.execute(
-            "INSERT INTO media_entity (
-                entity_id, entity_hash, entity_kind, status, name, notes, rating, source_urls_json,
-                date_created, date_added, date_modified
-            ) VALUES
-                (1, 'e1', 'single', 1, 'Landscape', 'alpha', 4, '[\"https://a\"]', '2026-04-01', '2026-04-01', '2026-04-01'),
-                (2, 'e2', 'single', 1, 'Portrait', 'beta', 2, '[\"https://b\"]', '2026-04-02', '2026-04-02', '2026-04-02'),
-                (3, 'e3', 'single', 2, 'Trash', 'gamma', 5, '[\"https://c\"]', '2026-04-03', '2026-04-03', '2026-04-03')",
-            [],
-        )
-        .expect("insert entities");
-        conn.execute(
             "INSERT INTO media_file (
                 file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, duration_ms,
                 has_audio, dominant_color_hex, date_added
@@ -637,10 +614,16 @@ mod tests {
         )
         .expect("insert files");
         conn.execute(
-            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2), (3, 3)",
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, file_id, status, name, notes, rating, source_urls_json,
+                date_created, date_added, date_modified
+            ) VALUES
+                (1, 'e1', 1, 1, 'Landscape', 'alpha', 4, '[\"https://a\"]', '2026-04-01', '2026-04-01', '2026-04-01'),
+                (2, 'e2', 2, 1, 'Portrait', 'beta', 2, '[\"https://b\"]', '2026-04-02', '2026-04-02', '2026-04-02'),
+                (3, 'e3', 3, 2, 'Trash', 'gamma', 5, '[\"https://c\"]', '2026-04-03', '2026-04-03', '2026-04-03')",
             [],
         )
-        .expect("link files");
+        .expect("insert entities");
         conn.execute("INSERT INTO tag (tag_id, namespace, subtag) VALUES (1, 'general', 'landscape'), (2, 'general', 'portrait')", [])
             .expect("insert tags");
         conn.execute(

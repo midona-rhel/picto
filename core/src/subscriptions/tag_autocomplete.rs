@@ -12,8 +12,6 @@ use serde::Serialize;
 use tracing::warn;
 use ts_rs::TS;
 
-use super::gallery_dl_runner::canonical_site_id;
-
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
 const DEFAULT_LIMIT: u32 = 10;
 const MAX_LIMIT: u32 = 25;
@@ -33,21 +31,13 @@ pub struct TagSuggestion {
 enum AutocompleteStyle {
     Danbooru,
     Gelbooru,
-    GelbooruV02,
-    Moebooru,
 }
 
-/// Which sites support autocomplete, and how. Keyed by canonical site id.
-/// Sankaku/idolcomplex are omitted (suggest API requires auth tokens), as is
-/// e621 (no public tag autocomplete endpoint).
+/// Which supported sites expose public autocomplete, keyed by canonical site id.
 fn autocomplete_style(site_id: &str) -> Option<(AutocompleteStyle, &'static str)> {
-    match canonical_site_id(site_id) {
+    match site_id {
         "danbooru" => Some((AutocompleteStyle::Danbooru, "https://danbooru.donmai.us")),
         "gelbooru" => Some((AutocompleteStyle::Gelbooru, "https://gelbooru.com")),
-        "rule34" => Some((AutocompleteStyle::GelbooruV02, "https://rule34.xxx")),
-        "safebooru" => Some((AutocompleteStyle::GelbooruV02, "https://safebooru.org")),
-        "yandere" => Some((AutocompleteStyle::Moebooru, "https://yande.re")),
-        "konachan" => Some((AutocompleteStyle::Moebooru, "https://konachan.com")),
         _ => None,
     }
 }
@@ -105,7 +95,7 @@ pub async fn suggest_tags(site_id: &str, prefix: &str, limit: Option<u32>) -> Ve
     };
     let limit = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
 
-    let cache_key = (canonical_site_id(site_id).to_string(), prefix.clone());
+    let cache_key = (site_id.to_string(), prefix.clone());
     if let Ok(map) = cache().lock() {
         if let Some(hit) = map.get(&cache_key) {
             return hit.clone();
@@ -162,10 +152,6 @@ fn build_request_url(style: AutocompleteStyle, base: &str, prefix: &str, limit: 
                 "{base}/index.php?page=autocomplete2&term={encoded}&type=tag_query&limit={limit}"
             )
         }
-        AutocompleteStyle::GelbooruV02 => format!("{base}/autocomplete.php?q={encoded}"),
-        AutocompleteStyle::Moebooru => {
-            format!("{base}/tag.json?name={encoded}*&limit={limit}&order=count")
-        }
     }
 }
 
@@ -200,36 +186,6 @@ fn parse_suggestions(style: AutocompleteStyle, json: &serde_json::Value) -> Vec<
                         .get("category")
                         .and_then(|v| v.as_str())
                         .and_then(gelbooru_category)
-                        .map(str::to_string),
-                })
-            }
-            AutocompleteStyle::GelbooruV02 => {
-                let name = item.get("value").and_then(|v| v.as_str())?;
-                // Count is embedded in the label: "tag_name (12345)"
-                let count = item
-                    .get("label")
-                    .and_then(|v| v.as_str())
-                    .and_then(|label| label.rsplit_once('('))
-                    .and_then(|(_, tail)| tail.trim_end_matches(')').parse().ok());
-                Some(TagSuggestion {
-                    name: name.to_string(),
-                    post_count: count,
-                    category: item
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .and_then(gelbooru_category)
-                        .map(str::to_string),
-                })
-            }
-            AutocompleteStyle::Moebooru => {
-                let name = item.get("name").and_then(|v| v.as_str())?;
-                Some(TagSuggestion {
-                    name: name.to_string(),
-                    post_count: item.get("count").and_then(|v| v.as_u64()),
-                    category: item
-                        .get("type")
-                        .and_then(|v| v.as_i64())
-                        .and_then(danbooru_category)
                         .map(str::to_string),
                 })
             }
@@ -268,50 +224,14 @@ mod tests {
     }
 
     #[test]
-    fn parses_gelbooru_v02_autocomplete_count_from_label() {
-        let body = json!([
-            { "label": "samus_aran (50000)", "value": "samus_aran", "type": "character" }
-        ]);
-        let result = parse_suggestions(AutocompleteStyle::GelbooruV02, &body);
-        assert_eq!(result[0].name, "samus_aran");
-        assert_eq!(result[0].post_count, Some(50_000));
-        assert_eq!(result[0].category.as_deref(), Some("character"));
-    }
-
-    #[test]
-    fn parses_moebooru_tag_json() {
-        let body = json!([
-            { "id": 1, "name": "landscape", "count": 30000, "type": 0 },
-            { "id": 2, "name": "wlop", "count": 900, "type": 1 }
-        ]);
-        let result = parse_suggestions(AutocompleteStyle::Moebooru, &body);
-        assert_eq!(result[0].category.as_deref(), Some("general"));
-        assert_eq!(result[1].category.as_deref(), Some("creator"));
-        assert_eq!(result[1].post_count, Some(900));
-    }
-
-    #[test]
     fn malformed_body_yields_empty() {
         assert!(parse_suggestions(AutocompleteStyle::Danbooru, &json!({"error": true})).is_empty());
-        assert!(parse_suggestions(AutocompleteStyle::Moebooru, &json!("nope")).is_empty());
+        assert!(parse_suggestions(AutocompleteStyle::Gelbooru, &json!("nope")).is_empty());
     }
 
     #[test]
-    fn unsupported_sites_have_no_style() {
+    fn non_booru_supported_sources_have_no_style() {
         assert!(autocomplete_style("pixiv").is_none());
-        assert!(autocomplete_style("sankaku").is_none());
-        assert!(autocomplete_style("twitter").is_none());
-    }
-
-    #[test]
-    fn alias_site_ids_resolve_via_canonicalization() {
-        assert!(autocomplete_style("rule34.xxx").is_some());
-        assert!(autocomplete_style("yande.re").is_some());
-    }
-
-    #[test]
-    fn e621_has_no_autocomplete() {
-        assert!(autocomplete_style("e621").is_none());
-        assert!(autocomplete_style("e621.net").is_none());
+        assert!(autocomplete_style("pixivuser").is_none());
     }
 }

@@ -35,7 +35,7 @@ pub trait SyncBackend: Send + Sync {
         prefix: &str,
         max_results: usize,
     ) -> Result<Vec<String>, BackendError>;
-    /// Remove an object. Only garbage collection may call this.
+    /// Remove an object. Only backend cleanup may call this.
     fn delete(&self, key: &str) -> Result<(), BackendError>;
 }
 

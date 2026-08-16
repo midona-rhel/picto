@@ -7,10 +7,7 @@ use std::sync::Arc;
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
-use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
-use crate::rate_limiter::RateLimiter;
-use crate::settings::store::SettingsStore;
 use crate::types::RunningSubscriptions;
 
 const SCHEDULER_WARN_WINDOW: Duration = Duration::from_secs(300);
@@ -79,13 +76,13 @@ fn schedule_interval_seconds(schedule: &str) -> Option<i64> {
 
 fn is_due(
     schedule: &str,
-    last_full_run_at: Option<&str>,
+    last_scheduled_success_at: Option<&str>,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
     let Some(interval_secs) = schedule_interval_seconds(schedule) else {
         return false;
     };
-    let Some(last_run) = last_full_run_at else {
+    let Some(last_run) = last_scheduled_success_at else {
         return true;
     };
     let Ok(last_run) = chrono::DateTime::parse_from_rfc3339(last_run) else {
@@ -98,10 +95,7 @@ fn is_due(
 pub async fn check_scheduled_subscriptions(
     db: &Arc<LibraryDatabase>,
     library_root: &std::path::Path,
-    blob_store: &Arc<BlobStore>,
-    rate_limiter: &RateLimiter,
     running_subs: &RunningSubscriptions,
-    settings: &SettingsStore,
 ) {
     let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
         db.as_ref(),
@@ -122,7 +116,7 @@ pub async fn check_scheduled_subscriptions(
     for subscription in subscriptions {
         if is_due(
             &subscription.schedule,
-            subscription.last_full_run_at.as_deref(),
+            subscription.last_scheduled_success_at.as_deref(),
             now,
         ) {
             let subscription_id = subscription.subscription_id.to_string();
@@ -135,11 +129,8 @@ pub async fn check_scheduled_subscriptions(
             if let Err(e) = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::run_scheduled_subscription(
                     db,
                     library_root,
-                    blob_store,
-                    rate_limiter,
                     running_subs,
                     subscription_id,
-                    settings,
                 )
                 .await
             {
@@ -170,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn schedule_intervals_use_the_latest_full_run() {
+    fn schedule_intervals_use_the_latest_scheduled_success() {
         let now = Utc.with_ymd_and_hms(2026, 8, 5, 12, 0, 0).unwrap();
         assert!(!is_due("daily", Some("2026-08-05T11:59:59Z"), now));
         assert!(is_due("daily", Some("2026-08-04T12:00:00Z"), now));

@@ -1,6 +1,6 @@
 /**
- * Context-menu builders for subscription cards, sidebar rows, and
- * detail overflow menus all build from here so actions stay consistent.
+ * Context-menu builders for subscription cards and detail overflow menus all
+ * build from here so actions stay consistent.
  *
  * Mirrors gridContextMenu.tsx: pure builders returning MenuEntry[] for the
  * shared ContextMenu primitive. Only destructive actions are `danger`.
@@ -9,17 +9,15 @@
 import {
   IconCheck,
   IconClock,
-  IconFolderSymlink,
   IconPlayerPlay,
   IconPlayerPause,
   IconPlayerStop,
   IconRefresh,
-  IconStack2,
   IconTrash,
 } from '@tabler/icons-react';
 import type { MenuEntry, MenuSeparator } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
-import type { SubscriptionGroupInfo, SubscriptionInfo } from '../../shared/types/subscriptions';
+import type { SubscriptionInfo } from '../../shared/types/subscriptions';
 
 function sep(): MenuSeparator {
   return { separator: true };
@@ -28,14 +26,11 @@ function sep(): MenuSeparator {
 export interface SubscriptionMenuContext {
   subscription: SubscriptionInfo;
   running: boolean;
-  groups: SubscriptionGroupInfo[];
   onRun: () => void;
   onStop: () => void;
   onPause: (paused: boolean) => void;
   onRename: () => void;
   onSetSchedule: (schedule: string) => void;
-  onMoveToGroup: (groupId: number | null) => void;
-  onToggleAutoCollections: () => void;
   onReset: () => void;
   onDelete: () => void;
 }
@@ -48,24 +43,7 @@ const SCHEDULES: Array<{ value: string; label: string }> = [
 ];
 
 export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[] {
-  const { subscription, running, groups } = ctx;
-  const currentGroup = subscription.group_id ?? null;
-
-  const groupChildren: MenuEntry[] = [
-    {
-      label: 'No group',
-      icon: currentGroup == null ? <IconCheck size={14} /> : undefined,
-      action: () => ctx.onMoveToGroup(null),
-      disabled: currentGroup == null,
-    },
-    ...(groups.length > 0 ? [sep()] : []),
-    ...groups.map((group): MenuEntry => ({
-      label: group.name,
-      icon: currentGroup === group.id ? <IconCheck size={14} /> : undefined,
-      action: () => ctx.onMoveToGroup(Number(group.id)),
-      disabled: currentGroup === group.id,
-    })),
-  ];
+  const { subscription, running } = ctx;
 
   return [
     running
@@ -87,12 +65,6 @@ export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[]
         disabled: subscription.schedule === entry.value,
       })),
     },
-    { submenu: true, label: 'Move to Group', icon: <IconFolderSymlink size={14} />, children: groupChildren },
-    {
-      label: subscription.auto_collections ? 'Disable Post Collections' : 'Enable Post Collections',
-      icon: <IconStack2 size={14} />,
-      action: ctx.onToggleAutoCollections,
-    },
     sep(),
     { label: 'Reset Sync Progress…', icon: <IconRefresh size={14} />, action: ctx.onReset },
     sep(),
@@ -100,42 +72,16 @@ export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[]
   ];
 }
 
-export interface GroupMenuContext {
-  group: SubscriptionGroupInfo;
-  anyRunning: boolean;
-  onRunAll: () => void;
-  onStopAll: () => void;
-  onRename: () => void;
-  onDelete: () => void;
-}
-
-export function buildGroupMenu(ctx: GroupMenuContext): MenuEntry[] {
-  const { anyRunning } = ctx;
-  return [
-    anyRunning
-      ? { label: 'Stop All', icon: <IconPlayerStop size={14} />, action: ctx.onStopAll }
-      : { label: 'Run All Now', icon: <IconPlayerPlay size={14} />, action: ctx.onRunAll },
-    sep(),
-    { label: 'Rename', icon: <IconRename />, action: ctx.onRename },
-    sep(),
-    { label: 'Delete Group…', icon: <IconTrash size={14} />, action: ctx.onDelete, danger: true },
-  ];
-}
-
 export interface MultiCardMenuContext {
   subscriptionIds: string[];
-  groupIds: string[];
-  groups: SubscriptionGroupInfo[];
   anyRunning: boolean;
   onRunSelected: () => void;
   onPauseSelected: (paused: boolean) => void;
-  onMoveSelectedToGroup: (groupId: number | null) => void;
   onDeleteSelected: () => void;
 }
 
 export function buildMultiCardMenu(ctx: MultiCardMenuContext): MenuEntry[] {
-  const total = ctx.subscriptionIds.length + ctx.groupIds.length;
-  const subsOnly = ctx.groupIds.length === 0;
+  const total = ctx.subscriptionIds.length;
   return [
     {
       label: `Run ${total} Now`,
@@ -146,21 +92,6 @@ export function buildMultiCardMenu(ctx: MultiCardMenuContext): MenuEntry[] {
     { label: `Pause ${total}`, icon: <IconPlayerPause size={14} />, action: () => ctx.onPauseSelected(true) },
     { label: `Resume ${total}`, icon: <IconPlayerPlay size={14} />, action: () => ctx.onPauseSelected(false) },
     sep(),
-    ...(subsOnly
-      ? [{
-          submenu: true as const,
-          label: `Move ${total} to Group`,
-          icon: <IconFolderSymlink size={14} />,
-          children: [
-            { label: 'No group', action: () => ctx.onMoveSelectedToGroup(null) },
-            ...(ctx.groups.length > 0 ? [sep()] : []),
-            ...ctx.groups.map((group): MenuEntry => ({
-              label: group.name,
-              action: () => ctx.onMoveSelectedToGroup(Number(group.id)),
-            })),
-          ],
-        }, sep()]
-      : []),
     { label: `Delete ${total}…`, icon: <IconTrash size={14} />, action: ctx.onDeleteSelected, danger: true },
   ];
 }

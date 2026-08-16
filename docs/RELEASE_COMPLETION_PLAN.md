@@ -8,8 +8,10 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 ## Release Rules
 
 1. SQLite is truth; Roaring bitmaps are rebuildable query projections.
-2. `add_media` is the only ingest entrypoint for manual imports, watches, subscriptions, and retries.
-3. Collections contain images only and aggregate child metadata.
+2. The durable ingest queue is the only ingest entrypoint for manual imports, watches,
+   subscriptions, and retries.
+3. Media entities are images or videos only. Multi-file posts create independent media with shared
+   source-post metadata and order; no hidden grouping or automatic folders are created.
 4. Durable background work owns derivatives and automatic AI tagging.
 5. Folder sync uses a user-owned directory transported by Drive, Dropbox, or equivalent software.
 6. Every visible action works or is removed.
@@ -36,11 +38,9 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 
 ## Phase 2: Core Library Contracts
 
-- [x] Prove manual, collection, folder, watch, subscription, and retry imports use the durable queue.
+- [x] Prove manual, folder, watch, subscription, and retry imports use the durable queue.
 - [x] Delete competing import/retry paths; keep explicit user-requested derivative repair actions.
-- [x] Reject videos from collection creation, queued imports, and membership before writes.
-- [x] Create collections with members atomically; keep split non-destructive and deletion destructive.
-- [x] Verify collection metadata aggregation and tag fan-out.
+- [x] Keep image and video media separate from explicit folder membership and source metadata.
 - [x] Delete folders atomically with all descendants while leaving media untouched.
 - [x] Fall back to the nearest surviving parent or All when deleting the active folder hierarchy.
 - [x] Emit every deleted folder in runtime facts.
@@ -49,8 +49,24 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [x] Remove incomplete batch rename and no-op folder actions; retain drag-and-drop folder Move.
 - [x] Make manual file drag-and-drop honor the active lifecycle destination. Inbox imports remain
       Inbox media, and every open grid settles membership from its canonical query after import.
-      Verify `All` remains unchanged, Inbox increases, and the same canonical `add_media` path is
+      Verify `All` remains unchanged, Inbox increases, and the same durable ingest path is
       used rather than adding a second import implementation.
+
+## Phase 2.5: Flattened Media Model
+
+- [x] Media entities are images or videos only; the aggregate-entity path is deleted.
+- [x] Import every file in a multi-file source post as an independent media entity with shared
+      source-post metadata and source order.
+- [x] Never create a hidden group, placeholder, automatic per-post folder, or grouping extension hook.
+- [x] Keep `All` as the accepted active library and exclude Inbox/Trash from `All`, folders, smart
+      folders, search, and counts.
+- [x] Allow any future grouping or rearrangement only through a dedicated external media
+      manifest/file format, outside the current media data model.
+- [x] Delete the replaced aggregate path and pass compile, unit, contract, parity, and build tests.
+- [x] Pass the fresh-library packaged-application smoke and delete the completed implementation PBI.
+
+Source certification may now resume. Existing source evidence remains historical until it is rerun
+against independent media entities.
 
 ## Phase 3: PBI-575 Subscriptions
 
@@ -58,24 +74,52 @@ prove persistence and user-visible outcomes, delete replaced code, and ship a pa
 - [x] Replace newest-500 retry scans with one indexed attempt lookup.
 - [x] S1: Give query and subscription issues stable non-null identity.
 - [x] S2: Classify every meaningful failure through one persisted recovery disposition.
-- [x] S3: Move schedules from groups to subscriptions; make retry, restart, shutdown, stop, reset,
-      delete, and multi-query finalization durable and safe.
-- [x] S4: Finish one streaming metadata/collection ingest path and delete proven competitors.
+- [x] S3: Make each subscription the only scheduled run unit; make retry, restart, shutdown, stop,
+      reset, delete, and multi-query finalization durable and safe.
+- [x] S4: Finish one streaming metadata ingest path and delete proven competitors.
 - [x] S5: Keep run-scoped progress visible and the run active through terminal ingest; make Health
       actions truthful and uncapped.
-- [x] S6: Certify sources in bounded batches, expose only passed sources, run the real Electron
-      workflow, and archive PBI-575.
+- [ ] S6: Certify sources in bounded batches, expose only passed sources, and run the real Electron
+      workflow. Unattended tests may use an explicit test-only plaintext fixture through a
+      process-local credential store, but must never read or modify the system credential store.
 
-Accepted 2026-08-07: Electron collection/non-collection import, progress, stop/resume, and settled
-state matched the contract. The advertised Danbooru, Gelbooru, Pixiv search, and Pixiv user modes
-also passed deterministic metadata and live backend download/resume/ingest certification.
+Prior acceptance on 2026-08-07 covered the then-current import, progress, stop/resume, and settled
+state behavior. Its media-shape claims are obsolete. No source certification closes until the
+flattened multi-file behavior is accepted.
+
+Source closure starts with the 18-source production registry. Additional paid sources are added only
+when their dedicated implementation enters that registry; an unimplemented source is not counted as
+certified:
+
+- [x] Audit every hidden registry entry against its packaged gallery-dl extractor and live probe.
+- [x] Delete the shallow download-only verifier; one strict production-path certification now owns
+      download, ingest, metadata, restart, resume, and archive replay.
+- [ ] Recertify every source against the flattened media model. Collection-era artifacts are
+      historical diagnostics and do not close current acceptance.
+- [ ] Restore and finish the remaining 14 gallery-dl-backed sources through explicit source-family
+      adapters. Do not use a generic fallback adapter to claim support. Historical evidence exists
+      for several sources, but all current certification must prove independent media entities,
+      source provenance, restart, and the Electron workflow after the flattened-model rewrite.
+      SubscribeStar is gallery-dl-backed and remains in the paid-source certification matrix.
+      Authenticated restricted-content access remains unfinished for sources that provide it.
+- [ ] Add OnlyFans through a dedicated runner, not gallery-dl. It owns OnlyFans authentication,
+      pagination, media resolution, and video downloads, then emits the same normalized source events
+      and enters the same durable ingest queue as other sources.
+- [ ] Give every source one direct-site login path: open the real source page in a Picto-managed
+      browser, capture the resulting session, and store it in the OS credential store. Remove UI
+      that asks users to paste passwords, cookies, tokens, or API keys.
+- [ ] Certify every active registry source with the strict production-path harness and one real
+      Electron workflow before S6 closes. A source remains hidden until it passes.
+
+The authoritative source list and per-source acceptance state live in the active PBI-575 matrix.
 
 Phase gates:
 
 - Runtime gate after S3: stop/restart/retry manually verified; shutdown leaves no gallery-dl process,
   executor, lease, or false active run; subscription schedules pass interval, pause, full-run, and
   manual-query tests.
-- Delivery gate after S5: streaming, collection modes, metadata, and progress manually verified.
+- Delivery gate after S5: streaming, independent multi-file media, metadata, and progress verified
+  against the flattened model.
 - Release gate after S6: every visible source has deterministic and live proof, credential-backed
   where that source supports credentials.
 
@@ -84,7 +128,7 @@ Phase gates:
 - [x] Preserve the existing-candidate guard in the release test lane before every destructive
       resolution.
 - [x] Make failed loser original/thumbnail blob cleanup visible and durably retryable.
-- [x] Test every decision and cross-collection ownership choice against a live candidate.
+- [x] Test every decision and cross-media ownership choice against a live candidate.
 - [x] Verify reference repointing, All/Inbox/Trash boundaries, and blob state after restart.
 - [x] Measure and replace the unconditional quadratic scan. The exact indexed implementation
       matched brute force on 4,096 deterministic 256-bit hashes and all tested thresholds; the
@@ -134,7 +178,7 @@ reference application-reference UI pass and must reuse this canonical API rather
 - [x] Track and retry missing blobs.
 - [x] Enqueue derivatives exactly once after remote blob hydration.
 - [x] Persist last success, failure, pending work, and missing-media state.
-- [x] Sync subscription definitions and groups; keep credentials and run history device-local.
+- [x] Sync subscription definitions and queries; keep credentials and run history device-local.
 - [x] Preserve tag provenance during replay.
 - [x] Report uploads, downloads, pending work, failures, and derivative catch-up truthfully.
 - [x] Pass two-device restore, corruption, ordering, and restart tests, then archive PBI-602.
@@ -153,13 +197,15 @@ reference application-reference UI pass and must reuse this canonical API rather
 - [ ] Remove every production TODO by implementing, removing, or documenting a real limitation.
 - [ ] Remove unsupported authentication entrypoints.
 - [ ] Delete commands without active callers and minimize the parity allowlist.
+- [ ] Route actionable operation failures and background completion summaries through one shared
+      non-modal notification path; raw IPC wrapper errors and local feature banners must not leak
+      into the UI.
 - [ ] Consolidate only measured duplicate behavior, not files that are merely large.
 - [ ] Delete archived PBIs, historical plans, and stale architecture documents after closure.
 - [ ] Replace the large guide program with concise release-accurate user documentation.
 - [x] Delete unreproduced bug buckets, absent Random work, and legacy-parity menu work.
-- [ ] Make first launch lead directly to creating a library; do not mount library-scoped UI or issue
-      library-scoped backend calls until open succeeds, and show no library feature navigation in
-      the cold no-library state; then archive PBI-227.
+- [x] Remove guided onboarding as a feature. Cold start keeps one ordinary create/open-library state
+      and does not mount library-scoped UI or issue library-scoped backend calls before open succeeds.
 
 ## Phase 9: Release Gate
 
@@ -168,9 +214,11 @@ reference application-reference UI pass and must reuse this canonical API rather
 - [ ] TypeScript, Vitest, and command parity.
 - [ ] Fresh, exact-version, malformed, and mismatch schema tests.
 - [ ] Native module build and packaged Electron build.
-- [ ] Smoke import, grid, inspector, folders, collections, subscriptions, duplicates, tags, AI,
-      sync, deletion, and restart recovery.
+- [ ] Smoke import, grid, inspector, folders, flattened multi-file subscription imports, duplicates,
+      tags, AI, sync, deletion, and restart recovery.
 - [ ] Run supported platform checks and archive PBI-603.
+- [ ] Clean Rust targets and stale packaged output after each source-certification batch and before
+      the final packaged build; do not let repeated native test links accumulate indefinitely.
 
 ## Agent Waves
 

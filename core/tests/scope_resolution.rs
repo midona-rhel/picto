@@ -5,7 +5,7 @@ mod common_canonical;
 use std::collections::BTreeSet;
 
 use picto_core::db::types::{
-    BaseScope, EntityViewQuery, ExpansionMode, QueryFilters, QueryPage, QuerySort, ScopeKind,
+    BaseScope, EntityViewQuery, QueryFilters, QueryPage, QuerySort, ScopeKind,
     TagFilter, TagMatchMode,
 };
 
@@ -90,7 +90,7 @@ async fn untagged_and_uncategorized_are_active_only() {
         .unwrap();
     harness
         .db
-        .add_folder_members(folder, &[categorized], ExpansionMode::EntityOnly)
+        .add_folder_members(folder, &[categorized])
         .unwrap();
 
     let untagged = system_ids(&harness, "untagged");
@@ -117,7 +117,7 @@ async fn folder_scope_returns_active_members() {
         .unwrap();
     harness
         .db
-        .add_folder_members(folder, &[member], ExpansionMode::EntityOnly)
+        .add_folder_members(folder, &[member])
         .unwrap();
 
     let ids = query_ids(
@@ -202,11 +202,11 @@ async fn system_counts_match_canonical_queries_after_mutations() {
 
     harness
         .db
-        .set_entity_status(&[inbox], 1, ExpansionMode::EntityOnly)
+        .set_entity_status(&[inbox], 1)
         .unwrap();
     harness
         .db
-        .set_entity_status(&[active], 2, ExpansionMode::EntityOnly)
+        .set_entity_status(&[active], 2)
         .unwrap();
 
     let counts = harness.db.get_scope_counts().unwrap();

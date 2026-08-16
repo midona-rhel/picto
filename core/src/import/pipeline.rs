@@ -35,7 +35,7 @@ pub struct ImportOptions {
     pub name: Option<String>,
     /// Notes to store on the file (key → text).
     pub notes: Option<std::collections::HashMap<String, String>>,
-    /// Skip thumbnail generation (e.g. for non-cover collection members).
+    /// Skip thumbnail generation when the caller will defer it.
     pub skip_thumbnail: bool,
 }
 

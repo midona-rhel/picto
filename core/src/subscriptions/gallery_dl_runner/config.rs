@@ -16,25 +16,68 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
 
     extractor.insert("metadata".into(), serde_json::Value::Bool(true));
 
-    // Fetch categorized tags (tags_artist, tags_character, etc.) from post HTML.
-    // Only for booru sites that support it — enabling globally causes extra
-    // HTTP requests on sites like Coomer that don't have tag categories.
-    let tags_true = serde_json::Value::Bool(true);
-    for booru in [
-        "gelbooru",
-        "danbooru",
-        "rule34",
-        "safebooru",
-        "yandere",
-        "konachan",
-        "sankaku",
-        "idolcomplex",
-    ] {
-        let site_obj = extractor
-            .entry(booru)
-            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-        if let serde_json::Value::Object(ref mut m) = site_obj {
-            m.insert("tags".into(), tags_true.clone());
+    // Moebooru and Gelbooru-v0.2 expose categorized tags through the post
+    // page. e621 already returns categorized tags from its API response.
+    if matches!(
+        opts.site_id.as_str(),
+        "gelbooru" | "danbooru" | "yandere" | "konachan" | "safebooru" | "idolcomplex" | "sankaku"
+    ) {
+        extractor.insert(opts.site_id.clone(), serde_json::json!({"tags": true}));
+    }
+    if matches!(opts.site_id.as_str(), "idolcomplex" | "sankaku") {
+        let site = extractor
+            .entry(opts.site_id.clone())
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(site) = site.as_object_mut() {
+            if let Some(limit) = opts.post_limit.filter(|limit| *limit > 0) {
+                site.insert("picto-page-size".into(), serde_json::json!(limit));
+            }
+            if let Some(cursor) = opts
+                .source_cursor
+                .as_ref()
+                .filter(|cursor| !cursor.trim().is_empty())
+            {
+                site.insert("picto-next".into(), serde_json::json!(cursor));
+            }
+        }
+    }
+    // The release source is deliberately public-only. Exclude mature/private
+    // stubs that DeviantArt lists to anonymous API clients but whose CDN URLs
+    // reject downloads, and preserve the quality authorized by signed URLs.
+    if opts.site_id == "deviantart" {
+        extractor.insert(
+            "deviantart".into(),
+            serde_json::json!({"mature": false, "quality": null}),
+        );
+    }
+    if opts.site_id == "tumblr" {
+        let mut tumblr = serde_json::Map::new();
+        tumblr.insert(
+            "offset".into(),
+            serde_json::json!(opts.range_start.saturating_sub(1)),
+        );
+        if let Some(limit) = opts.post_limit.filter(|limit| *limit > 0) {
+            tumblr.insert("picto-post-limit".into(), serde_json::json!(limit));
+        }
+        tumblr.insert("reblogs".into(), serde_json::json!(false));
+        // Tumblr photo posts are commonly represented as text posts with
+        // images embedded in the body. Keep gallery-dl's inline extraction on
+        // so those images are not silently discarded.
+        tumblr.insert("inline".into(), serde_json::json!(true));
+        tumblr.insert("external".into(), serde_json::json!(false));
+        tumblr.insert("original".into(), serde_json::json!(true));
+        extractor.insert("tumblr".into(), serde_json::Value::Object(tumblr));
+    }
+    // ArtStation's generic gallery-dl post range counts assets, not projects,
+    // and can split a multi-asset project. Scan a cumulative project prefix
+    // instead; the archive skips prior assets while the prefix grows deeper.
+    if opts.site_id == "artstation" {
+        if let Some(limit) = opts.post_limit.filter(|limit| *limit > 0) {
+            let max_posts = opts.range_start.saturating_sub(1).saturating_add(limit);
+            extractor.insert(
+                "artstation".into(),
+                serde_json::json!({"max-posts": max_posts}),
+            );
         }
     }
 
@@ -51,20 +94,6 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
 
     if let Some(ref auth) = opts.auth {
         apply_credential_auth(&mut extractor, auth);
-    }
-
-    // Sites using dispatch URLs: include gallery + scraps, exclude favorites/stories.
-    let gallery_scraps = serde_json::Value::Array(vec![
-        serde_json::Value::String("gallery".into()),
-        serde_json::Value::String("scraps".into()),
-    ]);
-    for site_key in ["furaffinity", "hentaifoundry"] {
-        let site_obj = extractor
-            .entry(site_key)
-            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
-        if let serde_json::Value::Object(ref mut m) = site_obj {
-            m.insert("include".into(), gallery_scraps.clone());
-        }
     }
 
     // Ugoira postprocessor: convert Pixiv animation ZIPs to WebM via ffmpeg.
@@ -160,6 +189,7 @@ mod tests {
             url: "https://gelbooru.com/index.php?page=post&s=list&tags=test".to_string(),
             post_limit: Some(1),
             range_start: 1,
+            source_cursor: None,
             abort_threshold: None,
             auth: Some(GalleryDlAuthConfig {
                 site_category: "gelbooru".to_string(),
@@ -205,6 +235,223 @@ mod tests {
         assert_eq!(
             gelbooru.get("user-id").and_then(|value| value.as_str()),
             Some("277923")
+        );
+    }
+
+    #[test]
+    fn e621_uses_api_categories_without_html_tag_fetching() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "e621".to_string(),
+            url: "https://e621.net/posts?tags=canine".to_string(),
+            post_limit: Some(1),
+            range_start: 1,
+            source_cursor: None,
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        let extractor = config
+            .get("extractor")
+            .and_then(|value| value.as_object())
+            .expect("extractor config");
+        assert!(extractor.get("e621").is_none());
+    }
+
+    #[test]
+    fn deviantart_preserves_the_quality_authorized_by_the_signed_media_url() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "deviantart".to_string(),
+            url: "https://www.deviantart.com/artist/gallery/".to_string(),
+            post_limit: Some(1),
+            range_start: 1,
+            source_cursor: None,
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        assert!(config["extractor"]["deviantart"]["quality"].is_null());
+        assert_eq!(
+            config["extractor"]["deviantart"]["mature"].as_bool(),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn rule34_uses_api_categories_and_one_second_pacing() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "rule34".to_string(),
+            url: "https://rule34.xxx/index.php?page=post&s=list&tags=solo".to_string(),
+            post_limit: Some(1),
+            range_start: 1,
+            source_cursor: None,
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        let extractor = config
+            .get("extractor")
+            .and_then(|value| value.as_object())
+            .expect("extractor config");
+        assert_eq!(
+            extractor.get("sleep-request").and_then(|v| v.as_u64()),
+            Some(1)
+        );
+        assert_eq!(extractor.get("sleep").and_then(|v| v.as_u64()), Some(1));
+        assert!(extractor.get("rule34").is_none());
+    }
+
+    #[test]
+    fn artstation_limits_projects_without_splitting_project_assets() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "artstation".to_string(),
+            url: "https://www.artstation.com/artist".to_string(),
+            post_limit: Some(2),
+            range_start: 5,
+            source_cursor: None,
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        assert_eq!(
+            config["extractor"]["artstation"]["max-posts"].as_u64(),
+            Some(6)
+        );
+    }
+
+    #[test]
+    fn tumblr_uses_native_post_offset_and_keeps_embedded_media() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "tumblr".to_string(),
+            url: "https://www.tumblr.com/nasa".to_string(),
+            post_limit: Some(2),
+            range_start: 5,
+            source_cursor: None,
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        let tumblr = &config["extractor"]["tumblr"];
+        assert_eq!(tumblr["offset"].as_u64(), Some(4));
+        assert_eq!(tumblr["picto-post-limit"].as_u64(), Some(2));
+        assert_eq!(tumblr["reblogs"].as_bool(), Some(false));
+        assert_eq!(tumblr["inline"].as_bool(), Some(true));
+        assert_eq!(tumblr["external"].as_bool(), Some(false));
+        assert_eq!(tumblr["original"].as_bool(), Some(true));
+    }
+
+    #[test]
+    fn furaffinity_receives_cookie_auth_under_its_extractor() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "furaffinity".to_string(),
+            url: "https://www.furaffinity.net/gallery/artist".to_string(),
+            post_limit: Some(2),
+            range_start: 1,
+            source_cursor: None,
+            abort_threshold: None,
+            auth: Some(GalleryDlAuthConfig {
+                site_category: "furaffinity".to_string(),
+                fragment: serde_json::json!({
+                    "cookies": {"a": "session-a", "b": "session-b"},
+                }),
+            }),
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        assert_eq!(
+            config["extractor"]["furaffinity"]["cookies"]["a"].as_str(),
+            Some("session-a")
+        );
+        assert_eq!(
+            config["extractor"]["furaffinity"]["cookies"]["b"].as_str(),
+            Some("session-b")
+        );
+    }
+
+    #[test]
+    fn idolcomplex_fetches_categorized_tags() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "idolcomplex".to_string(),
+            url: "https://www.idolcomplex.com/en/posts?tags=solo".to_string(),
+            post_limit: Some(1),
+            range_start: 1,
+            source_cursor: None,
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        assert_eq!(
+            config["extractor"]["idolcomplex"]["tags"].as_bool(),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn sankaku_fetches_categorized_tags() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "sankaku".to_string(),
+            url: "https://sankaku.app/?tags=solo+rating%3Asafe".to_string(),
+            post_limit: Some(1),
+            range_start: 1,
+            source_cursor: Some("opaque-next".to_string()),
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        assert_eq!(config["extractor"]["sankaku"]["tags"].as_bool(), Some(true));
+        assert_eq!(
+            config["extractor"]["sankaku"]["picto-page-size"].as_u64(),
+            Some(1)
+        );
+        assert_eq!(
+            config["extractor"]["sankaku"]["picto-next"].as_str(),
+            Some("opaque-next")
         );
     }
 }

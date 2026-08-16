@@ -11,12 +11,6 @@ import { atom } from 'jotai';
 /** The sidebar node ID that is currently active (e.g. "system:active", "folder:5"). */
 export const activeNodeIdAtom = atom<string>('system:active');
 
-/** When navigating into a collection, this holds the scope we came from (for breadcrumb + back). */
-export const parentNodeIdAtom = atom<string | null>(null);
-
-/** The name of the currently viewed collection (set when navigating into one). */
-export const collectionNameAtom = atom<string | null>(null);
-
 /** When true, the next grid scope transition skips the fade-out phase. */
 export const skipFadeOutAtom = atom(false);
 

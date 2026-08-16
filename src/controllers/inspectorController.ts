@@ -39,7 +39,7 @@ export async function loadInspectorData(entityHash: string | null) {
   try {
     const result = await getEntityDetails(entityHash);
     if (v !== loadVersion || !result) return;
-    await preloadImage(`media://localhost/thumb/${result.thumbnail_hash ?? result.entity_hash}.jpg`);
+    await preloadImage(`media://localhost/thumb/${result.entity_hash}.jpg`);
     if (v !== loadVersion) return;
     // Atomic swap — old data visible until this point
     store.set(displayedInspectorEntityDataAtom, result);

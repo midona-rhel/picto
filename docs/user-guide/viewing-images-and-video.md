@@ -73,6 +73,5 @@ Picto includes a built-in video player for MP4, WebM, MKV, and other supported f
 
 The video player shows a seek bar, current time, duration, and playback rate. Videos auto-play by default (configurable in [Settings](settings.md)).
 
-## Collections in Detail View
-
-When viewing a file that belongs to a [collection](collections.md), a strip view appears showing all collection members as a horizontal carousel. Navigate between members with the arrow keys.
+The detail view navigates the current image or video result order. Multi-file source posts remain
+independent media; Picto does not create a hidden group or automatic folder for them.

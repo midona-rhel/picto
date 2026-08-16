@@ -13,37 +13,12 @@ use tracing::{info, warn};
 use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
 use crate::ingest::{
-    apply_compiler_plan, build_ingest_change_impact, ingest_single_path, materialize_collection,
-    CollectionIngestMember, IngestBatchSummary, IngestSourceKind, SingleIngestDisposition,
-    SingleIngestOutcome, SingleIngestRequest,
+    apply_compiler_plan, build_ingest_change_impact, ingest_single_path, IngestBatchSummary,
+    IngestSourceKind, SingleIngestDisposition, SingleIngestOutcome, SingleIngestRequest,
 };
 use crate::subscriptions::runtime_service::link_subscription_entity;
 use crate::subscriptions::source_adapter::ParsedMetadata;
 use crate::tags::logging::{preview_tag_strings, summarize_tag_strings};
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum IngestQueueKind {
-    Single,
-    Collection,
-}
-
-impl IngestQueueKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Single => "single",
-            Self::Collection => "collection",
-        }
-    }
-
-    fn from_str(value: &str) -> Option<Self> {
-        match value {
-            "single" => Some(Self::Single),
-            "collection" => Some(Self::Collection),
-            _ => None,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IngestQueueItemPayload {
@@ -55,7 +30,6 @@ pub struct IngestQueueItemPayload {
 #[derive(Debug, Clone)]
 pub struct IngestQueueEntry {
     pub queue_id: i64,
-    pub queue_kind: IngestQueueKind,
     pub source_kind: String,
     pub subscription_id: Option<i64>,
     pub query_id: Option<i64>,
@@ -63,8 +37,6 @@ pub struct IngestQueueEntry {
     pub cleanup_root: Option<String>,
     pub post_id: Option<String>,
     pub category: Option<String>,
-    pub preferred_name: Option<String>,
-    pub expected_count: Option<i64>,
     pub status: String,
 }
 
@@ -103,6 +75,14 @@ pub struct IngestQueueCounts {
     pub ingested: usize,
     pub reused: usize,
     pub failed: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SubscriptionIngestCheckpoint {
+    pub query_run_id: i64,
+    pub files_downloaded: i64,
+    pub posts_processed: i64,
+    pub metadata_validated: i64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -240,29 +220,6 @@ fn collect_import_paths(root: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Str
     Ok((directories, files))
 }
 
-/// Collections are image aggregates. Extensions only narrow the manual picker
-/// candidates; the bytes decide whether a collection import is valid.
-async fn preflight_collection_sources(paths: &[PathBuf]) -> Result<(), String> {
-    for path in paths {
-        let mime = crate::media_processing::get_mime(path)
-            .await
-            .map_err(|error| {
-                format!(
-                    "Failed to inspect collection source {}: {error}",
-                    path.display()
-                )
-            })?;
-        if !crate::media_processing::is_image(mime) {
-            return Err(format!(
-                "Collections can contain images only: {} is {}",
-                path.display(),
-                mime.mime_string()
-            ));
-        }
-    }
-    Ok(())
-}
-
 fn now_rfc3339() -> String {
     chrono::Utc::now().to_rfc3339()
 }
@@ -311,7 +268,6 @@ fn log_ingest_queue_payload(
 
 fn create_ingest_queue_entry(
     conn: &Connection,
-    queue_kind: IngestQueueKind,
     source_kind: &str,
     subscription_id: Option<i64>,
     query_id: Option<i64>,
@@ -319,18 +275,14 @@ fn create_ingest_queue_entry(
     cleanup_root: Option<&str>,
     post_id: Option<&str>,
     category: Option<&str>,
-    preferred_name: Option<&str>,
-    expected_count: Option<i64>,
 ) -> rusqlite::Result<i64> {
     let now = now_rfc3339();
     conn.execute(
         "INSERT INTO ingest_queue (
-             queue_kind, source_kind, subscription_id, query_id, query_run_id,
-             cleanup_root, post_id, category, preferred_name, expected_count,
-             status, created_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 'pending', ?11, ?11)",
+             source_kind, subscription_id, query_id, query_run_id,
+             cleanup_root, post_id, category, status, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'pending', ?8, ?8)",
         params![
-            queue_kind.as_str(),
             source_kind,
             subscription_id,
             query_id,
@@ -338,8 +290,6 @@ fn create_ingest_queue_entry(
             cleanup_root,
             post_id,
             category,
-            preferred_name,
-            expected_count,
             now,
         ],
     )?;
@@ -377,37 +327,24 @@ fn add_ingest_queue_item(
 fn lease_next_ingest_queue(conn: &Connection) -> rusqlite::Result<Option<IngestQueueEntry>> {
     let leased: Option<IngestQueueEntry> = conn
         .query_row(
-            "SELECT queue_id, queue_kind, source_kind, subscription_id, query_id, query_run_id,
-                    cleanup_root, post_id, category, preferred_name, expected_count, status
+            "SELECT queue_id, source_kind, subscription_id, query_id, query_run_id,
+                    cleanup_root, post_id, category, status
              FROM ingest_queue
              WHERE status = 'pending'
              ORDER BY created_at ASC, queue_id ASC
              LIMIT 1",
             [],
             |row| {
-                let queue_kind_raw: String = row.get(1)?;
                 Ok(IngestQueueEntry {
                     queue_id: row.get(0)?,
-                    queue_kind: IngestQueueKind::from_str(&queue_kind_raw).ok_or_else(|| {
-                        rusqlite::Error::FromSqlConversionFailure(
-                            1,
-                            rusqlite::types::Type::Text,
-                            Box::new(std::io::Error::new(
-                                std::io::ErrorKind::InvalidData,
-                                format!("invalid ingest queue kind: {queue_kind_raw}"),
-                            )),
-                        )
-                    })?,
-                    source_kind: row.get(2)?,
-                    subscription_id: row.get(3)?,
-                    query_id: row.get(4)?,
-                    query_run_id: row.get(5)?,
-                    cleanup_root: row.get(6)?,
-                    post_id: row.get(7)?,
-                    category: row.get(8)?,
-                    preferred_name: row.get(9)?,
-                    expected_count: row.get(10)?,
-                    status: row.get(11)?,
+                    source_kind: row.get(1)?,
+                    subscription_id: row.get(2)?,
+                    query_id: row.get(3)?,
+                    query_run_id: row.get(4)?,
+                    cleanup_root: row.get(5)?,
+                    post_id: row.get(6)?,
+                    category: row.get(7)?,
+                    status: row.get(8)?,
                 })
             },
         )
@@ -503,8 +440,11 @@ fn complete_ingest_queue(
     queue_id: i64,
     completions: &[IngestQueueItemCompletion],
 ) -> rusqlite::Result<()> {
-    let mut stmt =
-        conn.prepare("SELECT item_id FROM ingest_queue_item WHERE queue_id = ?1 ORDER BY item_id")?;
+    let mut stmt = conn.prepare(
+        "SELECT item_id FROM ingest_queue_item
+         WHERE queue_id = ?1 AND status != 'complete'
+         ORDER BY item_id",
+    )?;
     let expected = stmt
         .query_map([queue_id], |row| row.get::<_, i64>(0))?
         .collect::<rusqlite::Result<HashSet<_>>>()?;
@@ -609,15 +549,14 @@ fn count_retained_sources_under_root(
     )
 }
 
-fn list_duplicate_failed_single_queue_candidates(
+fn list_exact_hash_failed_queue_candidates(
     conn: &Connection,
 ) -> rusqlite::Result<Vec<(i64, i64, String)>> {
     let mut stmt = conn.prepare(
         "SELECT q.queue_id, i.item_id, i.source_path
          FROM ingest_queue q
          JOIN ingest_queue_item i ON i.queue_id = q.queue_id
-         WHERE q.queue_kind = 'single'
-           AND q.status = 'failed'
+         WHERE q.status = 'failed'
            AND i.status = 'failed'
            AND COALESCE(i.last_error, q.last_error, '') LIKE '%UNIQUE constraint failed: media_file.file_hash%'
          ORDER BY q.queue_id ASC",
@@ -653,9 +592,8 @@ fn reset_ingest_queue_item_for_retry(
 }
 
 impl LibraryDatabase {
-    pub async fn enqueue_ingest_queue(
+    pub(crate) async fn enqueue_ingest_queue(
         &self,
-        queue_kind: IngestQueueKind,
         source_kind: &str,
         subscription_id: Option<i64>,
         query_id: Option<i64>,
@@ -663,19 +601,16 @@ impl LibraryDatabase {
         cleanup_root: Option<&Path>,
         post_id: Option<&str>,
         category: Option<&str>,
-        preferred_name: Option<&str>,
-        expected_count: Option<i64>,
         items: Vec<(PathBuf, Option<i64>, IngestQueueItemPayload, bool)>,
+        subscription_checkpoint: Option<SubscriptionIngestCheckpoint>,
     ) -> Result<i64, String> {
         let source_kind = source_kind.to_string();
         let cleanup_root = cleanup_root.map(|path| path.display().to_string());
         let post_id = post_id.map(ToOwned::to_owned);
         let category = category.map(ToOwned::to_owned);
-        let preferred_name = preferred_name.map(ToOwned::to_owned);
         self.with_write(move |conn| {
             let queue_id = create_ingest_queue_entry(
                 &conn,
-                queue_kind,
                 &source_kind,
                 subscription_id,
                 query_id,
@@ -683,8 +618,6 @@ impl LibraryDatabase {
                 cleanup_root.as_deref(),
                 post_id.as_deref(),
                 category.as_deref(),
-                preferred_name.as_deref(),
-                expected_count,
             )?;
             for (source_path, page_num, payload, delete_after_ingest) in items {
                 let payload_json = serde_json::to_string(&payload)
@@ -698,6 +631,15 @@ impl LibraryDatabase {
                     delete_after_ingest,
                 )?;
                 log_ingest_queue_payload("enqueue", queue_id, item_id, &payload);
+            }
+            if let Some(checkpoint) = subscription_checkpoint {
+                crate::subscriptions::runtime_db::checkpoint_subscription_query_progress(
+                    &conn,
+                    checkpoint.query_run_id,
+                    checkpoint.files_downloaded,
+                    checkpoint.posts_processed,
+                    checkpoint.metadata_validated,
+                )?;
             }
             Ok(queue_id)
         })
@@ -795,10 +737,10 @@ impl LibraryDatabase {
         self.with_read(move |conn| count_ingest_queue_by_subscription(conn, subscription_id))
     }
 
-    pub async fn list_duplicate_failed_single_queue_candidates(
+    pub async fn list_exact_hash_failed_queue_candidates(
         &self,
     ) -> Result<Vec<(i64, i64, String)>, String> {
-        self.with_read(list_duplicate_failed_single_queue_candidates)
+        self.with_read(list_exact_hash_failed_queue_candidates)
     }
 
     pub async fn reset_ingest_queue_item_for_retry(
@@ -830,21 +772,16 @@ pub async fn enqueue_single_ingest_request(
     target_folder_id: Option<i64>,
     delete_after_ingest: bool,
 ) -> Result<i64, String> {
-    let name = request.name.clone();
     let post_id = subscription_metadata
         .as_ref()
         .and_then(|m| m.post_id.clone());
     let category = subscription_metadata
         .as_ref()
         .and_then(|m| m.category.clone());
-    let expected_count = subscription_metadata
-        .as_ref()
-        .and_then(|m| m.page_count.map(i64::from));
     let page_num = subscription_metadata
         .as_ref()
         .and_then(|m| m.page_num.map(i64::from));
     db.enqueue_ingest_queue(
-        IngestQueueKind::Single,
         match source_kind {
             IngestSourceKind::Manual => "manual",
             IngestSourceKind::WatchFolder => "watch_folder",
@@ -857,8 +794,6 @@ pub async fn enqueue_single_ingest_request(
         cleanup_root,
         post_id.as_deref(),
         category.as_deref(),
-        name.as_deref(),
-        expected_count,
         vec![(
             source_path.to_path_buf(),
             page_num,
@@ -869,6 +804,7 @@ pub async fn enqueue_single_ingest_request(
             },
             delete_after_ingest,
         )],
+        None,
     )
     .await
 }
@@ -935,93 +871,6 @@ pub async fn enqueue_manual_files(
     }
 
     Ok(())
-}
-
-pub async fn enqueue_manual_collection(
-    db: &LibraryDatabase,
-    paths: Vec<String>,
-    name: String,
-    tag_strings: Option<Vec<String>>,
-    source_urls: Option<Vec<String>>,
-    initial_status: i64,
-    target_folder_id: Option<i64>,
-    library_root: Option<&Path>,
-) -> Result<i64, String> {
-    let name = name.trim().to_string();
-    if name.is_empty() {
-        return Err("Collection name cannot be blank".to_string());
-    }
-
-    let mut file_paths: Vec<PathBuf> = paths
-        .into_iter()
-        .flat_map(|raw_path| {
-            let path = PathBuf::from(raw_path);
-            let path = path.canonicalize().unwrap_or(path);
-            if path.is_dir() {
-                collect_files_recursive(&path)
-            } else {
-                vec![path]
-            }
-        })
-        .filter(|path| {
-            path.is_file()
-                && crate::media_processing::has_supported_extension(path)
-                && !library_root.is_some_and(|root| path.starts_with(root))
-        })
-        .collect();
-    file_paths.sort();
-    file_paths.dedup();
-    if file_paths.is_empty() {
-        return Err("No supported media files to add to collection".to_string());
-    }
-    preflight_collection_sources(&file_paths).await?;
-
-    let tag_strings = tag_strings.unwrap_or_default();
-    let source_urls = source_urls.unwrap_or_default();
-    let items = file_paths
-        .into_iter()
-        .enumerate()
-        .map(|(index, path)| {
-            let request = SingleIngestRequest {
-                source_kind: IngestSourceKind::Manual,
-                path: path.clone(),
-                tag_strings: tag_strings.clone(),
-                source_urls: source_urls.clone(),
-                name: None,
-                notes: None,
-                created_at: None,
-                initial_status,
-                skip_thumbnail: false,
-                tag_provenance_mask: crate::db::types::TAG_PROVENANCE_MANUAL,
-                subscription_id: None,
-            };
-            (
-                path,
-                Some(index as i64),
-                IngestQueueItemPayload {
-                    request,
-                    subscription_metadata: None,
-                    target_folder_id,
-                },
-                false,
-            )
-        })
-        .collect();
-
-    db.enqueue_ingest_queue(
-        IngestQueueKind::Collection,
-        "manual",
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        Some(&name),
-        None,
-        items,
-    )
-    .await
 }
 
 pub async fn enqueue_folder_import(
@@ -1214,7 +1063,10 @@ fn persist_subscription_post_member(
     let post_id = post_id.to_string();
     let canonical_post_url = metadata.canonical_post_url.clone();
     let media_url = metadata.media_url.clone();
-    let entity_hash = entity_hash.map(ToOwned::to_owned);
+    let entity_id = entity_hash
+        .map(|hash| canonical_db.resolve_entity_hashes(&[hash.to_string()]))
+        .transpose()?
+        .and_then(|ids| ids.into_iter().next());
     let status = status.to_string();
     let page_num = metadata.page_num.map(i64::from);
     canonical_db.with_write(move |conn| {
@@ -1228,40 +1080,11 @@ fn persist_subscription_post_member(
                 page_num,
                 canonical_post_url: canonical_post_url.as_deref(),
                 media_url: media_url.as_deref(),
-                entity_hash: entity_hash.as_deref(),
+                entity_id,
                 status: &status,
             },
         )
     })
-}
-
-fn reconcile_subscription_collection_order(
-    canonical_db: &LibraryDatabase,
-    subscription_id: i64,
-    site_id: &str,
-    post_id: &str,
-    collection_id: i64,
-) -> Result<(), String> {
-    let site_id = site_id.to_string();
-    let post_id = post_id.to_string();
-    let members = canonical_db.with_read(move |conn| {
-        crate::subscriptions::runtime_db::list_subscription_post_members(
-            conn,
-            subscription_id,
-            &site_id,
-            &post_id,
-        )
-    })?;
-    let ordered_hashes: Vec<String> = members
-        .into_iter()
-        .filter(|member| matches!(member.status.as_str(), "imported" | "reused"))
-        .filter_map(|member| member.entity_hash)
-        .collect();
-    if ordered_hashes.is_empty() {
-        return Ok(());
-    }
-    canonical_db.reorder_collection_members_by_hashes(collection_id, &ordered_hashes)?;
-    Ok(())
 }
 
 async fn delete_source_file_if_owned(path: &str) {
@@ -1292,23 +1115,12 @@ async fn maybe_cleanup_root(db: &LibraryDatabase, cleanup_root: Option<&str>) {
     }
 }
 
-fn unique_entity_hashes<'a>(entity_hashes: impl IntoIterator<Item = &'a str>) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut unique = Vec::new();
-    for entity_hash in entity_hashes {
-        if seen.insert(entity_hash) {
-            unique.push(entity_hash.to_string());
-        }
-    }
-    unique
-}
-
 async fn process_single_queue(
     db: &Arc<LibraryDatabase>,
     blob_store: &Arc<BlobStore>,
     queue: &IngestQueueEntry,
     item: &IngestQueueItem,
-) -> Result<Vec<IngestQueueItemCompletion>, String> {
+) -> Result<IngestQueueItemCompletion, String> {
     let mut payload: IngestQueueItemPayload =
         serde_json::from_str(&item.payload_json).map_err(|err| err.to_string())?;
     log_ingest_queue_payload("execute_single", queue.queue_id, item.item_id, &payload);
@@ -1334,7 +1146,7 @@ async fn process_single_queue(
     if let Some(folder_id) = payload.target_folder_id {
         let ids = db.resolve_entity_hashes(&[outcome.entity_hash.clone()])?;
         if !ids.is_empty() {
-            db.add_folder_members(folder_id, &ids, crate::db::types::ExpansionMode::EntityOnly)?;
+            db.add_folder_members(folder_id, &ids)?;
             summary.folder_ids.push(folder_id);
         }
     }
@@ -1399,293 +1211,16 @@ async fn process_single_queue(
         std::slice::from_ref(&outcome.entity_hash),
     )
     .await;
-    Ok(vec![IngestQueueItemCompletion {
+    Ok(IngestQueueItemCompletion {
         item_id: item.item_id,
         result_kind,
         resolved_entity_hash: outcome.entity_hash,
         resolved_file_hash: outcome.file_hash,
-    }])
-}
-
-#[derive(Debug)]
-struct SubscriptionCollectionContext<'a> {
-    subscription_id: i64,
-    category: &'a str,
-    post_id: &'a str,
-}
-
-fn subscription_collection_context(
-    queue: &IngestQueueEntry,
-) -> Result<Option<SubscriptionCollectionContext<'_>>, String> {
-    match (
-        queue.subscription_id,
-        queue.category.as_deref(),
-        queue.post_id.as_deref(),
-    ) {
-        (Some(subscription_id), Some(category), Some(post_id))
-            if !category.trim().is_empty() && !post_id.trim().is_empty() =>
-        {
-            Ok(Some(SubscriptionCollectionContext {
-                subscription_id,
-                category,
-                post_id,
-            }))
-        }
-        (None, None, None) => Ok(None),
-        _ => Err("collection queue has partial subscription context".to_string()),
-    }
-}
-
-fn persist_subscription_collection_association(
-    db: &LibraryDatabase,
-    context: &SubscriptionCollectionContext<'_>,
-    collection_id: i64,
-) -> Result<(), String> {
-    let site_id = context.category.to_string();
-    let post_id = context.post_id.to_string();
-    db.with_write(move |conn| {
-        crate::subscriptions::runtime_db::upsert_subscription_post_collection(
-            conn,
-            context.subscription_id,
-            &site_id,
-            &post_id,
-            collection_id,
-        )
     })
 }
 
-async fn process_collection_queue(
-    db: &Arc<LibraryDatabase>,
-    blob_store: &Arc<BlobStore>,
-    queue: &IngestQueueEntry,
-    items: &[IngestQueueItem],
-) -> Result<Vec<IngestQueueItemCompletion>, String> {
-    let subscription = subscription_collection_context(queue)?;
-    let preferred_name = queue
-        .preferred_name
-        .as_deref()
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .ok_or_else(|| "collection queue missing preferred_name".to_string())?;
-
-    let mut target_folder_id = None;
-    let mut prepared = Vec::new();
-    let mut missing_count = 0usize;
-    for item in items {
-        let payload: IngestQueueItemPayload =
-            serde_json::from_str(&item.payload_json).map_err(|err| err.to_string())?;
-        if let Some(previous_target) = target_folder_id {
-            if previous_target != payload.target_folder_id {
-                return Err("collection queue has conflicting target folders".to_string());
-            }
-        } else {
-            target_folder_id = Some(payload.target_folder_id);
-        }
-        log_ingest_queue_payload("execute_collection", queue.queue_id, item.item_id, &payload);
-        let path = PathBuf::from(&item.source_path);
-        if !path.exists() {
-            missing_count += 1;
-            prepared.push((item.clone(), payload, None));
-            continue;
-        }
-        prepared.push((item.clone(), payload, Some(path)));
-    }
-
-    if missing_count > 0 {
-        return Err(format!(
-            "Collection ingest is missing {missing_count} queued source file{}",
-            if missing_count == 1 { "" } else { "s" },
-        ));
-    }
-
-    let present_paths: Vec<_> = prepared
-        .iter()
-        .filter_map(|(_, _, path)| path.clone())
-        .collect();
-    preflight_collection_sources(&present_paths).await?;
-
-    let mut processable = Vec::new();
-    for (item, payload, path) in prepared {
-        let path = path.expect("missing collection sources were rejected above");
-        db.mark_ingest_queue_item_running(item.item_id).await?;
-        let mut request = payload.request;
-        request.path = path;
-        processable.push((
-            item,
-            CollectionIngestMember {
-                request,
-                metadata: payload.subscription_metadata,
-            },
-        ));
-    }
-    processable.sort_by_key(|(_, member)| {
-        member
-            .metadata
-            .as_ref()
-            .and_then(|metadata| metadata.page_num)
-            .unwrap_or(u32::MAX)
-    });
-    for (index, (_, member)) in processable.iter_mut().enumerate() {
-        member.request.skip_thumbnail = index > 0;
-    }
-    let (processable_items, members): (Vec<_>, Vec<_>) = processable.into_iter().unzip();
-
-    let (existing_collection_id, prior_member_hashes) = if let Some(context) = &subscription {
-        let subscription_id = context.subscription_id;
-        let category = context.category.to_string();
-        let post_id = context.post_id.to_string();
-        db.with_read(move |conn| {
-            let collection_id = crate::subscriptions::runtime_db::get_subscription_post_collection(
-                conn,
-                subscription_id,
-                &category,
-                &post_id,
-            )?;
-            let member_hashes = crate::subscriptions::runtime_db::list_subscription_post_members(
-                conn,
-                subscription_id,
-                &category,
-                &post_id,
-            )?
-            .into_iter()
-            .filter(|member| matches!(member.status.as_str(), "imported" | "reused"))
-            .filter_map(|member| member.entity_hash)
-            .collect();
-            Ok((collection_id, member_hashes))
-        })?
-    } else {
-        (None, Vec::new())
-    };
-
-    let result = materialize_collection(
-        db,
-        blob_store,
-        preferred_name,
-        &members,
-        existing_collection_id,
-        &prior_member_hashes,
-    )
-    .await?;
-    let collection_id = result.collection_id.or(existing_collection_id);
-    let target_folder_id = target_folder_id.flatten();
-    let mut folder_ids = Vec::new();
-    if let (Some(folder_id), Some(collection_id)) = (target_folder_id, collection_id) {
-        db.add_folder_members(
-            folder_id,
-            &[collection_id],
-            crate::db::types::ExpansionMode::EntityOnly,
-        )?;
-        folder_ids.push(folder_id);
-    }
-
-    if let Some(context) = &subscription {
-        for member in &result.resolved_members {
-            let Some(mut metadata) = member.metadata.clone() else {
-                continue;
-            };
-            metadata.post_id = Some(context.post_id.to_string());
-            metadata.category = Some(context.category.to_string());
-            if let Some(item_key) = metadata.item_key.clone() {
-                db.with_write(move |conn| {
-                    crate::subscriptions::runtime_db::resolve_subscription_download_attempt(
-                        conn,
-                        context.subscription_id,
-                        queue.query_id,
-                        &item_key,
-                    )
-                })?;
-            }
-            persist_subscription_post_member(
-                db,
-                context.subscription_id,
-                &metadata,
-                Some(member.entity_hash.as_str()),
-                member.disposition.result_kind(),
-            )?;
-        }
-        if let Some(collection_id) = collection_id {
-            let collection_hash = db.with_read(move |conn| {
-                conn.query_row(
-                    "SELECT entity_hash FROM media_entity WHERE entity_id = ?1",
-                    [collection_id],
-                    |row| row.get::<_, String>(0),
-                )
-            })?;
-            link_subscription_entity(db, context.subscription_id, &collection_hash).await?;
-            persist_subscription_collection_association(db, context, collection_id)?;
-            reconcile_subscription_collection_order(
-                db,
-                context.subscription_id,
-                context.category,
-                context.post_id,
-                collection_id,
-            )?;
-        }
-    }
-
-    apply_compiler_plan(db, &result.flags, &folder_ids);
-    let mut summary = IngestBatchSummary::default();
-    summary.flags.merge(&result.flags);
-    summary.folder_ids = folder_ids;
-    if let Some(collection_hash) = result.collection_hash.clone() {
-        summary.imported_hashes.push(collection_hash);
-    } else {
-        summary
-            .imported_hashes
-            .extend(result.imported_hashes.clone());
-    }
-    let extra_grid_scopes = if subscription.is_some() {
-        vec!["system:inbox".into()]
-    } else {
-        vec!["system:active".into(), "system:inbox".into()]
-    };
-    let mut impact = build_ingest_change_impact(&summary, extra_grid_scopes);
-    if let Some(collection_id) = collection_id {
-        let collection_folder_ids = db
-            .get_collection_folder_ids(collection_id)
-            .unwrap_or_default();
-        impact = impact.merge(
-            crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
-                collection_id,
-                &collection_folder_ids,
-            ),
-        );
-    }
-    crate::events::emit_state_changed(
-        "ingest_queue_collection_commit",
-        crate::ingest::attach_current_sidebar_counts(db, impact, summary.flags.duplicates_changed),
-    );
-
-    let completions = processable_items
-        .into_iter()
-        .zip(result.resolved_members.iter())
-        .map(|(item, member)| IngestQueueItemCompletion {
-            item_id: item.item_id,
-            result_kind: match member.disposition {
-                SingleIngestDisposition::Imported => IngestQueueItemResultKind::Imported,
-                SingleIngestDisposition::Reused => IngestQueueItemResultKind::Reused,
-            },
-            resolved_entity_hash: member.entity_hash.clone(),
-            resolved_file_hash: member.file_hash.clone(),
-        })
-        .collect::<Vec<_>>();
-    let derivative_entity_hashes = unique_entity_hashes(
-        result
-            .resolved_members
-            .iter()
-            .map(|member| member.entity_hash.as_str()),
-    );
-    crate::background_work::enqueue_missing_derivative_jobs(
-        db,
-        blob_store,
-        &derivative_entity_hashes,
-    )
-    .await;
-    Ok(completions)
-}
-
-async fn repair_duplicate_failed_single_queues(db: &Arc<LibraryDatabase>) -> Result<(), String> {
-    let candidates = db.list_duplicate_failed_single_queue_candidates().await?;
+async fn repair_exact_hash_failed_queues(db: &Arc<LibraryDatabase>) -> Result<(), String> {
+    let candidates = db.list_exact_hash_failed_queue_candidates().await?;
     for (queue_id, item_id, source_path) in candidates {
         let path = PathBuf::from(&source_path);
         if !path.exists() {
@@ -1726,17 +1261,27 @@ async fn process_queue_entry(
         return Ok(());
     }
 
-    let result = match queue.queue_kind {
-        IngestQueueKind::Single => process_single_queue(db, blob_store, &queue, &items[0]).await,
-        IngestQueueKind::Collection => {
-            process_collection_queue(db, blob_store, &queue, &items).await
+    let result = async {
+        let mut completions = Vec::new();
+        for item in &items {
+            if item.status == "complete" {
+                continue;
+            }
+            completions.push(process_single_queue(db, blob_store, &queue, item).await?);
         }
-    };
-
-    match result {
-        Ok(completions) => {
+        if completions.is_empty() {
+            db.mark_ingest_queue_failed(queue.queue_id, "complete", None)
+                .await?;
+        } else {
             db.complete_ingest_queue(queue.queue_id, completions)
                 .await?;
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
             for item in &items {
                 if item.delete_after_ingest {
                     delete_source_file_if_owned(&item.source_path).await;
@@ -1785,8 +1330,8 @@ pub async fn start_worker_loop(
     running_subscriptions: crate::types::RunningSubscriptions,
     cancel: CancellationToken,
 ) {
-    if let Err(error) = repair_duplicate_failed_single_queues(&db).await {
-        warn!(error = %error, "Failed to repair duplicate-failed ingest queue rows");
+    if let Err(error) = repair_exact_hash_failed_queues(&db).await {
+        warn!(error = %error, "Failed to repair exact-hash ingest failures");
     }
 
     loop {
@@ -1846,7 +1391,6 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE ingest_queue (
                  queue_id INTEGER PRIMARY KEY,
-                 queue_kind TEXT NOT NULL,
                  source_kind TEXT NOT NULL,
                  subscription_id INTEGER,
                  query_id INTEGER,
@@ -1854,8 +1398,6 @@ mod tests {
                  cleanup_root TEXT,
                  post_id TEXT,
                  category TEXT,
-                 preferred_name TEXT,
-                 expected_count INTEGER,
                  status TEXT NOT NULL DEFAULT 'pending',
                  last_error TEXT,
                  created_at TEXT NOT NULL,
@@ -1891,11 +1433,6 @@ mod tests {
             .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
             .unwrap();
         fs::write(path, bytes).unwrap();
-    }
-
-    fn write_video_fixture(path: &Path) {
-        // Enough of an ISO base media header for the MIME detector to identify MP4.
-        fs::write(path, b"\0\0\0\x18ftypmp42\0\0\0\0mp42isom\0\0\0\0").unwrap();
     }
 
     #[tokio::test]
@@ -1934,14 +1471,11 @@ mod tests {
             subscription_id: None,
         };
         db.enqueue_ingest_queue(
-            IngestQueueKind::Single,
             "subscription",
             None,
             None,
             None,
             Some(&staged.root),
-            None,
-            None,
             None,
             None,
             vec![(
@@ -1954,6 +1488,7 @@ mod tests {
                 },
                 true,
             )],
+            None,
         )
         .await
         .unwrap();
@@ -1973,6 +1508,172 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subscription_enqueue_checkpoints_progress_atomically() {
+        let temp = TempDir::new().unwrap();
+        let library_root = temp.path().join("library");
+        fs::create_dir_all(&library_root).unwrap();
+        let db = LibraryDatabase::open(&library_root).unwrap();
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            &db,
+            &library_root,
+        );
+        let subscription = runtime
+            .create_subscription("Checkpoint".to_string(), None, None)
+            .await
+            .unwrap();
+        let subscription_id = subscription.id.parse::<i64>().unwrap();
+        let query = runtime
+            .add_subscription_query(
+                subscription.id,
+                "gelbooru".to_string(),
+                Some("search".to_string()),
+                "1girl".to_string(),
+                None,
+            )
+            .await
+            .unwrap();
+        let query_id = query.id.parse::<i64>().unwrap();
+        let query_run_id = runtime
+            .create_subscription_query_run(None, subscription_id, query_id)
+            .await
+            .unwrap();
+        let request = SingleIngestRequest {
+            source_kind: IngestSourceKind::Subscription,
+            path: library_root.join("source.png"),
+            tag_strings: Vec::new(),
+            source_urls: Vec::new(),
+            name: None,
+            notes: None,
+            created_at: None,
+            initial_status: 0,
+            skip_thumbnail: false,
+            tag_provenance_mask: crate::db::types::TAG_PROVENANCE_UNKNOWN,
+            subscription_id: Some(subscription_id),
+        };
+        let item = |path: &str| {
+            (
+                library_root.join(path),
+                None,
+                IngestQueueItemPayload {
+                    request: request.clone(),
+                    subscription_metadata: None,
+                    target_folder_id: None,
+                },
+                true,
+            )
+        };
+
+        db.enqueue_ingest_queue(
+            "subscription",
+            Some(subscription_id),
+            Some(query_id),
+            Some(query_run_id),
+            None,
+            Some("post-1"),
+            Some("gelbooru"),
+            vec![item("first.png"), item("second.png")],
+            Some(SubscriptionIngestCheckpoint {
+                query_run_id,
+                files_downloaded: 2,
+                posts_processed: 1,
+                metadata_validated: 2,
+            }),
+        )
+        .await
+        .unwrap();
+
+        let (run_counts, query_counts) = db
+            .with_read(move |conn| {
+                let run_counts = conn.query_row(
+                    "SELECT files_downloaded, posts_processed, metadata_validated
+                     FROM subscription_query_run WHERE query_run_id = ?1",
+                    [query_run_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )?;
+                let query_counts = conn.query_row(
+                    "SELECT files_found, posts_found FROM subscription_query WHERE query_id = ?1",
+                    [query_id],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )?;
+                Ok((run_counts, query_counts))
+            })
+            .unwrap();
+        assert_eq!(run_counts, (2, 1, 2));
+        assert_eq!(query_counts, (2, 1));
+
+        let error = db
+            .enqueue_ingest_queue(
+                "subscription",
+                Some(subscription_id),
+                Some(query_id),
+                Some(query_run_id),
+                None,
+                Some("post-2"),
+                Some("gelbooru"),
+                vec![item("rollback.png")],
+                Some(SubscriptionIngestCheckpoint {
+                    query_run_id: i64::MAX,
+                    files_downloaded: 1,
+                    posts_processed: 1,
+                    metadata_validated: 1,
+                }),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.contains("Query returned no rows"));
+        assert_eq!(
+            db.with_read(|conn| {
+                conn.query_row("SELECT COUNT(*) FROM ingest_queue", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+            })
+            .unwrap(),
+            1
+        );
+
+        runtime
+            .record_subscription_query_source_completion(
+                query_run_id,
+                crate::subscriptions::types::SubscriptionQueryRunCompletion {
+                    status: "failed".to_string(),
+                    failure_kind: Some("runtime".to_string()),
+                    error_message: Some("executor stopped".to_string()),
+                    posts_processed: 0,
+                    files_downloaded: 0,
+                    files_skipped: 0,
+                    metadata_validated: 0,
+                    metadata_invalid: 0,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            db.with_read(move |conn| {
+                conn.query_row(
+                    "SELECT files_downloaded, posts_processed, metadata_validated
+                     FROM subscription_query_run WHERE query_run_id = ?1",
+                    [query_run_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )
+            })
+            .unwrap(),
+            (2, 1, 2)
+        );
+    }
+
+    #[tokio::test]
     async fn subscription_single_ingest_links_the_imported_entity() {
         let temp = TempDir::new().unwrap();
         let library_root = temp.path().join("library");
@@ -1989,7 +1690,7 @@ mod tests {
             &library_root,
         );
         let subscription = runtime
-            .create_subscription("Artist".to_string(), None, None, None)
+            .create_subscription("Artist".to_string(), None, None)
             .await
             .unwrap();
         let subscription_id = subscription.id.parse::<i64>().unwrap();
@@ -2007,7 +1708,6 @@ mod tests {
             subscription_id: Some(subscription_id),
         };
         db.enqueue_ingest_queue(
-            IngestQueueKind::Single,
             "subscription",
             Some(subscription_id),
             None,
@@ -2015,8 +1715,6 @@ mod tests {
             None,
             Some("post-1"),
             Some("site"),
-            None,
-            None,
             vec![(
                 source,
                 None,
@@ -2027,6 +1725,7 @@ mod tests {
                 },
                 false,
             )],
+            None,
         )
         .await
         .unwrap();
@@ -2047,16 +1746,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn subscription_collection_ingest_persists_children_metadata_and_tracking() {
+    async fn multi_file_post_stays_ordered_but_each_media_entity_is_independent() {
+        use crate::db::types::{EntityTarget, EntityTargetKind};
+        use crate::engine::folders::MembershipOperation;
+        use crate::engine::tags::TagOperation;
+        use crate::engine::ApplicationEngine;
+
         let temp = TempDir::new().unwrap();
         let library_root = temp.path().join("library");
         let source_root = temp.path().join("source");
         fs::create_dir_all(&library_root).unwrap();
         fs::create_dir_all(&source_root).unwrap();
-        let first = source_root.join("first.png");
-        let second = source_root.join("second.png");
-        write_image(&first, 32);
-        write_image(&second, 224);
 
         let db = Arc::new(LibraryDatabase::open(&library_root).unwrap());
         let blob_store = Arc::new(BlobStore::open(&library_root).unwrap());
@@ -2065,101 +1765,220 @@ mod tests {
             &library_root,
         );
         let subscription = runtime
-            .create_subscription("Artist".to_string(), None, None, None)
+            .create_subscription("Three files".to_string(), None, None)
             .await
             .unwrap();
         let subscription_id = subscription.id.parse::<i64>().unwrap();
-        let payload = |path: &Path, page_num: u32| IngestQueueItemPayload {
-            request: SingleIngestRequest {
-                source_kind: IngestSourceKind::Subscription,
-                path: path.to_path_buf(),
-                tag_strings: vec!["creator:artist".to_string(), "rating:safe".to_string()],
-                source_urls: vec!["https://example.test/post/42".to_string()],
-                name: Some(format!("Artwork p{page_num}")),
-                notes: Some("Post notes".to_string()),
-                created_at: Some("2026-01-01T00:00:00Z".to_string()),
-                initial_status: 0,
-                skip_thumbnail: false,
-                tag_provenance_mask: crate::db::types::TAG_PROVENANCE_UNKNOWN,
-                subscription_id: Some(subscription_id),
-            },
-            subscription_metadata: Some(ParsedMetadata {
-                post_id: Some("42".to_string()),
-                category: Some("pixiv".to_string()),
-                page_num: Some(page_num),
-                page_count: Some(2),
-                item_key: Some(format!("pixiv:42:{page_num}")),
-                canonical_post_url: Some("https://example.test/post/42".to_string()),
-                ..Default::default()
-            }),
-            target_folder_id: None,
-        };
+        let shared_post_url = "https://example.test/posts/42";
+        let shared_description = "Shared post description";
+
+        let mut queue_items = Vec::new();
+        for page_num in 1..=3 {
+            let source = source_root.join(format!("page-{page_num}.png"));
+            write_image(&source, 32 * page_num as u8);
+            let media_url = format!("https://cdn.example.test/42/{page_num}.png");
+            queue_items.push((
+                source.clone(),
+                Some(page_num),
+                IngestQueueItemPayload {
+                    request: SingleIngestRequest {
+                        source_kind: IngestSourceKind::Subscription,
+                        path: source,
+                        tag_strings: vec!["general:shared".to_string()],
+                        source_urls: vec![shared_post_url.to_string(), media_url.clone()],
+                        name: Some(format!("Page {page_num}")),
+                        notes: Some(shared_description.to_string()),
+                        created_at: Some("2026-08-16T00:00:00Z".to_string()),
+                        initial_status: 0,
+                        skip_thumbnail: false,
+                        tag_provenance_mask: crate::db::types::TAG_PROVENANCE_UNKNOWN,
+                        subscription_id: Some(subscription_id),
+                    },
+                    subscription_metadata: Some(ParsedMetadata {
+                        tags: vec![("general".to_string(), "shared".to_string())],
+                        description: Some(shared_description.to_string()),
+                        source_url: Some(shared_post_url.to_string()),
+                        source_urls: vec![shared_post_url.to_string(), media_url.clone()],
+                        media_url: Some(media_url),
+                        post_id: Some("42".to_string()),
+                        created_at: Some("2026-08-16T00:00:00Z".to_string()),
+                        category: Some("fixture".to_string()),
+                        page_num: Some(page_num as u32),
+                        page_count: Some(3),
+                        canonical_post_url: Some(shared_post_url.to_string()),
+                        item_key: Some(format!("fixture:42:{page_num}")),
+                        ..Default::default()
+                    }),
+                    target_folder_id: None,
+                },
+                false,
+            ));
+        }
 
         db.enqueue_ingest_queue(
-            IngestQueueKind::Collection,
             "subscription",
             Some(subscription_id),
             None,
             None,
             None,
             Some("42"),
-            Some("pixiv"),
-            Some("Artwork"),
-            Some(2),
-            vec![
-                (first.clone(), Some(1), payload(&first, 1), false),
-                (second.clone(), Some(2), payload(&second, 2), false),
-            ],
+            Some("fixture"),
+            queue_items,
+            None,
         )
         .await
         .unwrap();
-
         let queue = db.lease_next_ingest_queue().await.unwrap().unwrap();
         process_queue_entry(&db, &blob_store, queue).await.unwrap();
 
-        db.with_read(move |conn| {
-            let collection_count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM media_entity WHERE entity_kind = 'collection' AND member_count = 2",
-                [],
-                |row| row.get(0),
-            )?;
-            let tagged_children: i64 = conn.query_row(
-                "SELECT COUNT(DISTINCT child.entity_id)
-                 FROM media_entity child
-                 JOIN entity_tag et ON et.entity_id = child.entity_id
-                 JOIN tag t ON t.tag_id = et.tag_id
-                 WHERE child.parent_collection_entity_id IS NOT NULL
-                   AND t.namespace = 'creator' AND t.subtag = 'artist'",
-                [],
-                |row| row.get(0),
-            )?;
-            let source_children: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM media_entity
-                 WHERE parent_collection_entity_id IS NOT NULL
-                   AND source_urls_json LIKE '%example.test/post/42%'",
-                [],
-                |row| row.get(0),
-            )?;
-            let tracked_members: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM subscription_post_member
-                 WHERE subscription_id = ?1 AND site_id = 'pixiv' AND post_id = '42'",
-                [subscription_id],
-                |row| row.get(0),
-            )?;
-            let tracked_collection: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM subscription_post_collection
-                 WHERE subscription_id = ?1 AND site_id = 'pixiv' AND post_id = '42'",
-                [subscription_id],
-                |row| row.get(0),
-            )?;
-            assert_eq!(collection_count, 1);
-            assert_eq!(tagged_children, 2);
-            assert_eq!(source_children, 2);
-            assert_eq!(tracked_members, 2);
-            assert_eq!(tracked_collection, 1);
+        let members: Vec<(i64, i64, String, String, String)> = db
+            .with_read(move |conn| {
+                conn.prepare(
+                    "SELECT spm.page_num, me.entity_id, me.entity_hash, me.notes,
+                            me.source_urls_json
+                       FROM subscription_post_member spm
+                       JOIN media_entity me ON me.entity_id = spm.entity_id
+                      WHERE spm.subscription_id = ?1 AND spm.post_id = '42'
+                      ORDER BY spm.page_num",
+                )?
+                .query_map([subscription_id], |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap();
+        assert_eq!(members.len(), 3);
+        assert_eq!(
+            members.iter().map(|row| row.0).collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            members
+                .iter()
+                .map(|row| row.2.as_str())
+                .collect::<HashSet<_>>()
+                .len(),
+            3
+        );
+        assert!(members.iter().all(|row| row.3 == shared_description));
+        assert!(members.iter().all(|row| row.4.contains(shared_post_url)));
+        db.with_read(|conn| {
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row
+                    .get::<_, i64>(0))?,
+                3
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| row
+                    .get::<_, i64>(0))?,
+                3
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM folder", [], |row| row
+                    .get::<_, i64>(0))?,
+                0
+            );
+            assert_eq!(
+                conn.query_row("SELECT COUNT(*) FROM folder_member", [], |row| row
+                    .get::<_, i64>(0))?,
+                0
+            );
             Ok(())
         })
         .unwrap();
+        let counts = db.get_scope_counts().unwrap();
+        assert_eq!((counts.active, counts.inbox, counts.trash), (0, 3, 0));
+
+        let engine = ApplicationEngine::new(db.clone());
+        let all_hashes = members.iter().map(|row| row.2.clone()).collect::<Vec<_>>();
+        let target = |hashes: Vec<String>| EntityTarget {
+            kind: EntityTargetKind::EntityHashes,
+            entity_hashes: Some(hashes),
+            query: None,
+            excluded_entity_hashes: None,
+        };
+        engine
+            .set_entity_status(target(all_hashes.clone()), 1)
+            .unwrap();
+        let folder_id = engine.create_folder("Ordered", None, None, None).unwrap();
+        engine
+            .update_folder_membership(
+                target(all_hashes.clone()),
+                folder_id,
+                MembershipOperation::Add,
+            )
+            .unwrap();
+        let reordered = vec![(members[2].1, 0), (members[0].1, 1), (members[1].1, 2)];
+        engine.reorder_folder_items(folder_id, &reordered).unwrap();
+        engine
+            .apply_entity_tags(
+                target(vec![members[1].2.clone()]),
+                TagOperation::Add,
+                &["general:middle-only".to_string()],
+                None,
+            )
+            .unwrap();
+
+        let deleted_blob = blob_store
+            .original_path_with_ext(&members[1].2, Some("png"))
+            .unwrap();
+        assert!(deleted_blob.exists());
+        let deleted = engine
+            .delete_entities(target(vec![members[1].2.clone()]))
+            .unwrap();
+        assert_eq!(deleted.entity_ids, vec![members[1].1]);
+        assert_eq!(deleted.freed_file_hashes, vec![members[1].2.clone()]);
+        db.enqueue_blob_delete_and_attempt(&blob_store, &members[1].2)
+            .unwrap();
+        assert!(!deleted_blob.exists());
+
+        db.with_read(|conn| {
+            let remaining: Vec<i64> = conn
+                .prepare("SELECT entity_id FROM media_entity ORDER BY entity_id")?
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            assert_eq!(remaining, vec![members[0].1, members[2].1]);
+            let provenance: Vec<(i64, Option<i64>, String)> = conn
+                .prepare(
+                    "SELECT page_num, entity_id, status
+                       FROM subscription_post_member
+                      WHERE subscription_id = ?1 AND post_id = '42'
+                      ORDER BY page_num",
+                )?
+                .query_map([subscription_id], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+                })?
+                .collect::<rusqlite::Result<_>>()?;
+            assert_eq!(provenance[0].1, Some(members[0].1));
+            assert_eq!(provenance[1], (2, None, "deleted".to_string()));
+            assert_eq!(provenance[2].1, Some(members[2].1));
+            let folder_order: Vec<i64> = conn
+                .prepare(
+                    "SELECT entity_id FROM folder_member
+                      WHERE folder_id = ?1 ORDER BY position_rank, entity_id",
+                )?
+                .query_map([folder_id], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            assert_eq!(folder_order, vec![members[2].1, members[0].1]);
+            let local_tag_count: i64 = conn.query_row(
+                "SELECT COUNT(*)
+                   FROM entity_tag et JOIN tag t ON t.tag_id = et.tag_id
+                  WHERE t.subtag = 'middle-only'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(local_tag_count, 0);
+            Ok(())
+        })
+        .unwrap();
+        let counts = db.get_scope_counts().unwrap();
+        assert_eq!((counts.active, counts.inbox, counts.trash), (2, 0, 0));
     }
 
     #[tokio::test]
@@ -2176,7 +1995,6 @@ mod tests {
         drop(conn);
         let queue = IngestQueueEntry {
             queue_id: 1,
-            queue_kind: IngestQueueKind::Single,
             source_kind: "subscription".to_string(),
             subscription_id: Some(7),
             query_id: Some(9),
@@ -2184,8 +2002,6 @@ mod tests {
             cleanup_root: None,
             post_id: Some("post-42".to_string()),
             category: Some("site".to_string()),
-            preferred_name: None,
-            expected_count: None,
             status: "failed".to_string(),
         };
 
@@ -2208,8 +2024,8 @@ mod tests {
         setup_queue_schema(&conn);
         conn.execute(
             "INSERT INTO ingest_queue (
-                 queue_id, queue_kind, source_kind, subscription_id, status, created_at, updated_at
-             ) VALUES (1, 'single', 'subscription', 7, 'running', 'now', 'now')",
+                 queue_id, source_kind, subscription_id, status, created_at, updated_at
+             ) VALUES (1, 'subscription', 7, 'running', 'now', 'now')",
             [],
         )
         .unwrap();
@@ -2240,8 +2056,8 @@ mod tests {
         setup_queue_schema(&conn);
         conn.execute(
             "INSERT INTO ingest_queue (
-                 queue_id, queue_kind, source_kind, subscription_id, status, created_at, updated_at
-             ) VALUES (1, 'single', 'subscription', 7, 'running', 'old', 'old')",
+                 queue_id, source_kind, subscription_id, status, created_at, updated_at
+             ) VALUES (1, 'subscription', 7, 'running', 'old', 'old')",
             [],
         )
         .unwrap();
@@ -2280,8 +2096,8 @@ mod tests {
         setup_queue_schema(&conn);
         conn.execute(
             "INSERT INTO ingest_queue (
-                 queue_id, queue_kind, source_kind, subscription_id, status, created_at, updated_at
-             ) VALUES (1, 'collection', 'subscription', 7, 'running', 'now', 'now')",
+                 queue_id, source_kind, subscription_id, status, created_at, updated_at
+             ) VALUES (1, 'subscription', 7, 'running', 'now', 'now')",
             [],
         )
         .unwrap();
@@ -2324,233 +2140,6 @@ mod tests {
             )
             .unwrap();
         assert_eq!(completed, ("complete".to_string(), 2));
-    }
-
-    #[test]
-    fn collection_queue_rejects_partial_subscription_context() {
-        let queue = IngestQueueEntry {
-            queue_id: 1,
-            queue_kind: IngestQueueKind::Collection,
-            source_kind: "subscription".to_string(),
-            subscription_id: Some(7),
-            query_id: None,
-            query_run_id: None,
-            cleanup_root: None,
-            post_id: None,
-            category: Some("site".to_string()),
-            preferred_name: Some("post".to_string()),
-            expected_count: None,
-            status: "pending".to_string(),
-        };
-
-        assert_eq!(
-            subscription_collection_context(&queue).unwrap_err(),
-            "collection queue has partial subscription context"
-        );
-    }
-
-    #[tokio::test]
-    async fn manual_collection_enqueue_rejects_blank_names_and_empty_media() {
-        let temp = TempDir::new().unwrap();
-        let library_root = temp.path().join("library");
-        fs::create_dir_all(&library_root).unwrap();
-        let db = LibraryDatabase::open(&library_root).unwrap();
-
-        let blank_name = enqueue_manual_collection(
-            &db,
-            Vec::new(),
-            "  ".to_string(),
-            None,
-            None,
-            1,
-            None,
-            Some(&library_root),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(blank_name, "Collection name cannot be blank");
-
-        let empty_media = enqueue_manual_collection(
-            &db,
-            Vec::new(),
-            "Valid name".to_string(),
-            None,
-            None,
-            1,
-            None,
-            Some(&library_root),
-        )
-        .await
-        .unwrap_err();
-        assert_eq!(empty_media, "No supported media files to add to collection");
-    }
-
-    #[tokio::test]
-    async fn manual_collection_enqueue_rejects_non_image_without_creating_queue_rows() {
-        let temp = TempDir::new().unwrap();
-        let library_root = temp.path().join("library");
-        let source_root = temp.path().join("source");
-        fs::create_dir_all(&library_root).unwrap();
-        fs::create_dir_all(&source_root).unwrap();
-        let image = source_root.join("image.png");
-        let video = source_root.join("video.mp4");
-        write_image(&image, 96);
-        write_video_fixture(&video);
-        let db = LibraryDatabase::open(&library_root).unwrap();
-
-        let error = enqueue_manual_collection(
-            &db,
-            vec![image.display().to_string(), video.display().to_string()],
-            "Mixed collection".to_string(),
-            None,
-            None,
-            1,
-            None,
-            Some(&library_root),
-        )
-        .await
-        .unwrap_err();
-
-        assert!(error.contains("Collections can contain images only"));
-        db.with_read(|conn| {
-            let queue_count: i64 =
-                conn.query_row("SELECT COUNT(*) FROM ingest_queue", [], |row| row.get(0))?;
-            assert_eq!(queue_count, 0);
-            Ok(())
-        })
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn collection_execution_preflight_keeps_items_pending_for_non_image_sources() {
-        let temp = TempDir::new().unwrap();
-        let library_root = temp.path().join("library");
-        let source_root = temp.path().join("source");
-        fs::create_dir_all(&library_root).unwrap();
-        fs::create_dir_all(&source_root).unwrap();
-        let image = source_root.join("image.png");
-        let video = source_root.join("video.mp4");
-        write_image(&image, 96);
-        write_video_fixture(&video);
-
-        let db = Arc::new(LibraryDatabase::open(&library_root).unwrap());
-        let blob_store = Arc::new(BlobStore::open(&library_root).unwrap());
-        let payload = |path: &Path| IngestQueueItemPayload {
-            request: SingleIngestRequest {
-                source_kind: IngestSourceKind::Manual,
-                path: path.to_path_buf(),
-                tag_strings: Vec::new(),
-                source_urls: Vec::new(),
-                name: None,
-                notes: None,
-                created_at: None,
-                initial_status: 1,
-                skip_thumbnail: false,
-                tag_provenance_mask: crate::db::types::TAG_PROVENANCE_MANUAL,
-                subscription_id: None,
-            },
-            subscription_metadata: None,
-            target_folder_id: None,
-        };
-        db.enqueue_ingest_queue(
-            IngestQueueKind::Collection,
-            "manual",
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            Some("Mixed collection"),
-            None,
-            vec![
-                (image.clone(), Some(0), payload(&image), false),
-                (video.clone(), Some(1), payload(&video), false),
-            ],
-        )
-        .await
-        .unwrap();
-
-        let queue = db.lease_next_ingest_queue().await.unwrap().unwrap();
-        let items = db.list_ingest_queue_items(queue.queue_id).await.unwrap();
-        let error = process_collection_queue(&db, &blob_store, &queue, &items)
-            .await
-            .unwrap_err();
-        assert!(error.contains("Collections can contain images only"));
-        assert!(blob_store.list_originals().is_empty());
-
-        db.with_read(|conn| {
-            let pending_count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM ingest_queue_item WHERE queue_id = ?1 AND status = 'pending'",
-                params![queue.queue_id],
-                |row| row.get(0),
-            )?;
-            let entity_count: i64 =
-                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?;
-            assert_eq!(pending_count, 2);
-            assert_eq!(entity_count, 0);
-            Ok(())
-        })
-        .unwrap();
-    }
-
-    #[tokio::test]
-    async fn manual_collection_queue_adds_collection_to_folder_not_members() {
-        let temp = TempDir::new().unwrap();
-        let library_root = temp.path().join("library");
-        let source_root = temp.path().join("source");
-        fs::create_dir_all(&library_root).unwrap();
-        fs::create_dir_all(&source_root).unwrap();
-        let first = source_root.join("first.png");
-        let second = source_root.join("second.png");
-        write_image(&first, 32);
-        write_image(&second, 224);
-
-        let db = Arc::new(LibraryDatabase::open(&library_root).unwrap());
-        let blob_store = Arc::new(BlobStore::open(&library_root).unwrap());
-        let folder_id = db.create_folder("Imported", None, None, None).unwrap();
-        enqueue_manual_collection(
-            db.as_ref(),
-            vec![first.display().to_string(), second.display().to_string()],
-            "Manual collection".to_string(),
-            Some(vec!["general:manual".to_string()]),
-            None,
-            1,
-            Some(folder_id),
-            Some(&library_root),
-        )
-        .await
-        .unwrap();
-
-        let queue = db.lease_next_ingest_queue().await.unwrap().unwrap();
-        process_queue_entry(&db, &blob_store, queue).await.unwrap();
-
-        db.with_read(|conn| {
-            let (collection_id, member_count): (i64, i64) = conn.query_row(
-                "SELECT entity_id, member_count FROM media_entity
-                 WHERE entity_kind = 'collection' AND name = 'Manual collection'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-            assert_eq!(member_count, 2);
-            let collection_folder_count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM folder_member WHERE folder_id = ?1 AND entity_id = ?2",
-                params![folder_id, collection_id],
-                |row| row.get(0),
-            )?;
-            let child_folder_count: i64 = conn.query_row(
-                "SELECT COUNT(*)
-                 FROM folder_member fm
-                 JOIN media_entity child ON child.entity_id = fm.entity_id
-                 WHERE fm.folder_id = ?1 AND child.parent_collection_entity_id = ?2",
-                params![folder_id, collection_id],
-                |row| row.get(0),
-            )?;
-            assert_eq!(collection_folder_count, 1);
-            assert_eq!(child_folder_count, 0);
-            Ok(())
-        })
-        .unwrap();
     }
 
     #[tokio::test]
@@ -2646,8 +2235,8 @@ mod tests {
         setup_queue_schema(&conn);
         conn.execute(
             "INSERT INTO ingest_queue (
-                 queue_id, queue_kind, source_kind, subscription_id, status, last_error, created_at, updated_at
-             ) VALUES (9, 'single', 'subscription', 1, 'failed', 'boom', 'now', 'now')",
+                 queue_id, source_kind, subscription_id, status, last_error, created_at, updated_at
+             ) VALUES (9, 'subscription', 1, 'failed', 'boom', 'now', 'now')",
             [],
         )
         .unwrap();
@@ -2698,16 +2287,16 @@ mod tests {
     }
 
     #[test]
-    fn duplicate_failed_single_queue_candidates_only_include_exact_hash_failures() {
+    fn failed_queue_candidates_only_include_exact_hash_failures() {
         let conn = Connection::open_in_memory().unwrap();
         setup_queue_schema(&conn);
         conn.execute_batch(
             "INSERT INTO ingest_queue (
-                 queue_id, queue_kind, source_kind, subscription_id, status, last_error, created_at, updated_at
+                 queue_id, source_kind, subscription_id, status, last_error, created_at, updated_at
              ) VALUES
-                 (1, 'single', 'subscription', 1, 'failed', 'UNIQUE constraint failed: media_file.file_hash', 'now', 'now'),
-                 (2, 'collection', 'subscription', 1, 'failed', 'UNIQUE constraint failed: media_file.file_hash', 'now', 'now'),
-                 (3, 'single', 'subscription', 1, 'failed', 'other', 'now', 'now');
+                 (1, 'subscription', 1, 'failed', 'UNIQUE constraint failed: media_file.file_hash', 'now', 'now'),
+                 (2, 'subscription', 1, 'failed', 'UNIQUE constraint failed: media_file.file_hash', 'now', 'now'),
+                 (3, 'subscription', 1, 'failed', 'other', 'now', 'now');
              INSERT INTO ingest_queue_item (
                  item_id, queue_id, source_path, payload_json, delete_after_ingest,
                  status, last_error, created_at, updated_at
@@ -2718,16 +2307,10 @@ mod tests {
         )
         .unwrap();
 
-        let candidates = list_duplicate_failed_single_queue_candidates(&conn).unwrap();
-        assert_eq!(candidates, vec![(1, 11, "/tmp/a".to_string())]);
-    }
-
-    #[test]
-    fn unique_entity_hashes_preserves_order_while_deduping() {
-        let unique = unique_entity_hashes(["a", "b", "a", "c", "b"]);
+        let candidates = list_exact_hash_failed_queue_candidates(&conn).unwrap();
         assert_eq!(
-            unique,
-            vec!["a".to_string(), "b".to_string(), "c".to_string()]
+            candidates,
+            vec![(1, 11, "/tmp/a".to_string()), (2, 12, "/tmp/b".to_string()),]
         );
     }
 }

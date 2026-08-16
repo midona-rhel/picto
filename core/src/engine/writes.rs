@@ -35,10 +35,7 @@ impl ApplicationEngine {
     ) -> Result<StatusChange, String> {
         let resolved = target::resolve(&self.db, &target)?;
         let change = match resolved {
-            target::ResolvedTarget::Ids(ids) => {
-                self.db
-                    .set_entity_status(&ids, status, ExpansionMode::EntityAndDescendants)?
-            }
+            target::ResolvedTarget::Ids(ids) => self.db.set_entity_status(&ids, status)?,
             target::ResolvedTarget::Query {
                 view_query,
                 exclusions,

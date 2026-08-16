@@ -11,7 +11,6 @@ import { getProgressBySubscriptionId } from '../shared/lib/subscriptionHelpers';
 
 export type SubscriptionsSelection =
   | { kind: 'subscription'; id: string }
-  | { kind: 'group'; id: string }
   | null;
 
 export type SubscriptionDetailTab = 'queries' | 'health' | 'history';
@@ -100,13 +99,6 @@ export const subscriptionsSelectedSubscriptionAtom = atom((get) => {
   const selection = get(subscriptionsSelectionAtom);
   if (!snapshot || selection?.kind !== 'subscription') return null;
   return snapshot.subscriptions.find((subscription) => subscription.id === selection.id) ?? null;
-});
-
-export const subscriptionsSelectedGroupAtom = atom((get) => {
-  const snapshot = get(subscriptionsWorkspaceSnapshotAtom);
-  const selection = get(subscriptionsSelectionAtom);
-  if (!snapshot || selection?.kind !== 'group') return null;
-  return snapshot.groups.find((group) => group.id === selection.id) ?? null;
 });
 
 export const subscriptionsSelectedProgressAtom = atom((get) => {

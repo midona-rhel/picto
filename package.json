@@ -8,10 +8,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:electron": "concurrently -k -n vite,rust,electron -c cyan,red,green \"vite --host 127.0.0.1 --port 8080\" \"cargo watch -w core/src -w native/picto-node/src -s 'cd native/picto-node && ./node_modules/.bin/napi build' -d 1\" \"wait-on tcp:8080 && nodemon --watch electron --ext mjs,cjs --delay 1 --exec 'electron electron/main.mjs'\"",
+    "dev:electron": "concurrently -k -n vite,rust,electron -c cyan,red,green \"vite --host 127.0.0.1 --port 8080\" \"cargo watch -w core/src -w native/picto-node/src -s 'cd native/picto-node && ./node_modules/.bin/napi build' -d 1\" \"wait-on tcp:8080 && nodemon --signal SIGTERM --watch electron --ext mjs,cjs --delay 1 --exec 'electron electron/main.mjs'\"",
     "start:electron": "npm run rebuild:native && electron electron/main.mjs",
     "rebuild:native": "cd native/picto-node && ./node_modules/.bin/napi build",
+    "generate:bindings": "cargo run --manifest-path core/Cargo.toml --example export_bindings",
     "build:native": "cd native/picto-node && ./node_modules/.bin/napi build --release",
+    "build:gallery-dl-bridge": "node -e \"const {spawnSync}=require('node:child_process'); const python=process.platform==='win32'?'python':'python3'; const result=spawnSync(python,['scripts/build-gallery-dl-bridge.py',...process.argv.slice(1)],{stdio:'inherit'}); process.exit(result.status ?? 1)\" --",
     "build": "tsc && vite build",
     "build:electron": "tsc && vite build",
     "dist:electron": "electron-builder",
@@ -20,14 +22,16 @@
     "test:ui": "vitest --ui",
     "test:watch": "vitest --watch",
     "alpha:verify": "npx tsc -p tsconfig.json --noEmit && npm run test -- --run && cargo test --manifest-path core/Cargo.toml --quiet && npm run check:command-parity",
-    "alpha:package": "npm run build:native && npm run build:electron && npx electron-builder --publish=never",
+    "alpha:package": "npm run build:native && npm run build:electron && npm run build:gallery-dl-bridge && npx electron-builder --publish=never",
     "alpha:smoke": "node ./scripts/ci/alpha-smoke.mjs",
     "duplicate:smoke": "node ./scripts/ci/duplicate-review-smoke.mjs",
     "duplicate:benchmark": "node ./scripts/ci/duplicate-scan-benchmark.mjs",
+    "subscriptions:verify-sites": "node ./scripts/verify-sites.mjs",
+    "subscriptions:verify-mcp": "node ./scripts/subscription-verifier-mcp.mjs",
+    "test:subscriptions:verify-mcp": "node --test ./scripts/subscription-verifier-mcp.test.mjs",
     "gate:alpha": "npm run alpha:verify",
     "check:command-parity": "node ./scripts/check-command-parity.mjs",
-    "test:rust": "cargo test --manifest-path core/Cargo.toml",
-    "profile:cpu": "bash ./scripts/profile-cpu.sh"
+    "test:rust": "cargo test --manifest-path core/Cargo.toml"
   },
   "main": "electron/main.mjs",
   "build": {
@@ -80,8 +84,8 @@
         "from": "vendor/gallery-dl/",
         "to": "gallery-dl/",
         "filter": [
-          "**/*",
-          "!*.whl"
+          "picto-gallery-dl-bridge",
+          "picto-gallery-dl-bridge.exe"
         ]
       }
     ],
@@ -123,6 +127,8 @@
     "@mantine/core": "^8.3.14",
     "@mantine/hooks": "^8.3.14",
     "@mantine/notifications": "^8.3.14",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@tabler/icons-react": "^3.36.1",
     "@tanstack/react-virtual": "^3.13.18",
     "@testing-library/dom": "^10.4.1",
@@ -146,7 +152,8 @@
     "typescript": "^5.3.3",
     "vite": "^5.0.12",
     "vitest": "^1.2.1",
-    "wait-on": "^8.0.5"
+    "wait-on": "^8.0.5",
+    "zod": "^4.4.3"
   },
   "allowScripts": {
     "electron": true

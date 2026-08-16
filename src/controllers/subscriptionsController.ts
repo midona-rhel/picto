@@ -1,14 +1,11 @@
 import { openExternalUrl } from '../platform/shellApi';
 import {
   addSubscriptionQuery,
-  createGroup,
   createSubscription,
   deleteCredential,
-  deleteGroup,
   deleteSubscription,
   deleteSubscriptionQuery,
   editSubscriptionQuery,
-  getGroups,
   getRunningSubscriptionProgress,
   getRunningSubscriptions,
   getSubscriptionCovers,
@@ -16,7 +13,6 @@ import {
   getSubscriptions,
   listCredentialHealth,
   listCredentials,
-  listSubscriptionCollections,
   listSubscriptionDownloadAttempts,
   listSubscriptionIssues,
   listSubscriptionRuns,
@@ -24,37 +20,26 @@ import {
   pauseSubscriptionQuery,
   pixivOAuthExchange,
   pixivOAuthStart,
-  renameGroup,
   renameSubscription,
   resetSubscription,
   resetSubscriptionQuery,
   retrySubscriptionFailedPost,
   retrySubscriptionFailedPosts,
-  runGroup,
   runSubscription,
   runSubscriptionQuery,
   setCredential,
   setSubscriptionSchedule,
-  setSubscriptionAutoCollections,
-  setSubscriptionGroup,
-  stopGroup,
   stopSubscription,
   stopSubscriptionQuery,
   suggestSiteTags,
-  verifySubscriptionSite,
 } from '../platform/subscriptionApi';
-import type {
-  SiteVerificationReport,
-  SubscriptionCollectionRecord,
-  TagSuggestion,
-} from '../platform/subscriptionApi';
+import type { TagSuggestion } from '../platform/subscriptionApi';
 import type {
   CredentialDomain,
   CredentialHealth,
   CredentialType,
   PixivOAuthExchangeResult,
   PixivOAuthStartResult,
-  SubscriptionGroupInfo,
   SubscriptionInfo,
   SubscriptionProgressEvent,
   SubscriptionRunRecord,
@@ -74,9 +59,8 @@ function deriveLastActivityAt(subscription: SubscriptionInfo): string | null {
 
 export const subscriptionsController = {
   async loadWorkspaceSnapshot(): Promise<SubscriptionWorkspaceSnapshot> {
-    const [subscriptions, groups, sites, credentials, credentialHealth, runningSubscriptionIds, runningProgress] = await Promise.all([
+    const [subscriptions, sites, credentials, credentialHealth, runningSubscriptionIds, runningProgress] = await Promise.all([
       getSubscriptions(),
-      getGroups(),
       getSubscriptionSites(),
       listCredentials(),
       listCredentialHealth(),
@@ -103,7 +87,6 @@ export const subscriptionsController = {
 
     return {
       subscriptions,
-      groups,
       sites,
       credentials,
       credentialHealth,
@@ -153,55 +136,18 @@ export const subscriptionsController = {
 
   create(input: {
     name: string;
-    group_id?: number | null;
     initial_post_limit?: number | null;
     periodic_post_limit?: number | null;
   }): Promise<SubscriptionInfo> {
     return createSubscription(input);
   },
 
-  getGroups(): Promise<SubscriptionGroupInfo[]> {
-    return getGroups();
-  },
-
-  createGroup(name: string): Promise<SubscriptionGroupInfo> {
-    return createGroup(name);
-  },
-
-  renameGroup(id: string, name: string): Promise<void> {
-    return renameGroup(id, name);
-  },
-
-  deleteGroup(id: string): Promise<void> {
-    return deleteGroup(id);
-  },
-
   setSchedule(id: string, schedule: string): Promise<void> {
     return setSubscriptionSchedule(id, schedule);
   },
 
-  runGroup(id: string): Promise<void> {
-    return runGroup(id);
-  },
-
-  stopGroup(id: string): Promise<void> {
-    return stopGroup(id);
-  },
-
-  setSubscriptionGroup(subscriptionId: string, groupId: number | null): Promise<void> {
-    return setSubscriptionGroup(subscriptionId, groupId);
-  },
-
   suggestSiteTags(siteId: string, prefix: string, limit?: number): Promise<TagSuggestion[]> {
     return suggestSiteTags(siteId, prefix, limit);
-  },
-
-  verifySite(siteId: string, query?: string | null): Promise<SiteVerificationReport> {
-    return verifySubscriptionSite(siteId, query, 2);
-  },
-
-  listCollections(subscriptionId: string): Promise<SubscriptionCollectionRecord[]> {
-    return listSubscriptionCollections(subscriptionId);
   },
 
   /** Newest downloaded file hash per subscription id, for grid covers. */
@@ -242,10 +188,6 @@ export const subscriptionsController = {
 
   stop(id: string): Promise<void> {
     return stopSubscription(id);
-  },
-
-  setAutoCollections(id: string, autoCollections: boolean): Promise<void> {
-    return setSubscriptionAutoCollections(id, autoCollections);
   },
 
   addQuery(
