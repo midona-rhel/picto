@@ -13,6 +13,7 @@ use rusqlite::{Connection, OpenFlags, Transaction};
 pub const DATABASE_FILE: &str = "library.sqlite";
 
 pub struct Store {
+    root: PathBuf,
     path: PathBuf,
     writer: Mutex<Connection>,
     consistency: RwLock<()>,
@@ -33,10 +34,15 @@ impl Store {
         }
 
         Ok(Self {
+            root: library_root.to_path_buf(),
             path,
             writer: Mutex::new(writer),
             consistency: RwLock::new(()),
         })
+    }
+
+    pub fn library_root(&self) -> &Path {
+        &self.root
     }
 
     pub fn read<T>(

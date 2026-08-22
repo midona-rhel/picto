@@ -304,6 +304,7 @@ fn next_retry_at(now: &str, attempt_count: i64) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     use super::*;
@@ -379,11 +380,14 @@ mod tests {
         (directory, application, subscription)
     }
 
-    fn item(post_key: &str, item_key: &str) -> DownloadedItem {
-        item_at(post_key, item_key, 0)
+    fn item(root: &Path, post_key: &str, item_key: &str) -> DownloadedItem {
+        item_at(root, post_key, item_key, 0)
     }
 
-    fn item_at(post_key: &str, item_key: &str, position: i64) -> DownloadedItem {
+    fn item_at(root: &Path, post_key: &str, item_key: &str, position: i64) -> DownloadedItem {
+        let bytes = format!("media-{post_key}-{item_key}").into_bytes();
+        let source_path = root.join(format!("{post_key}-{item_key}.png"));
+        std::fs::write(&source_path, &bytes).unwrap();
         DownloadedItem {
             post: NormalizedPost {
                 site_id: "example".to_string(),
@@ -401,11 +405,11 @@ mod tests {
                     canonical_url: None,
                 }],
             },
-            source_path: PathBuf::from(format!("/tmp/{item_key}.png")),
+            source_path,
             input: PreparedMediaInput {
-                file_hash: format!("hash-{item_key}"),
+                file_hash: hex::encode(crate::media_processing::get_hash_from_bytes(&bytes)),
                 mime_type: "image/png".to_string(),
-                size_bytes: 1,
+                size_bytes: bytes.len() as i64,
                 pixel_width: Some(1),
                 pixel_height: Some(1),
                 duration_ms: None,
@@ -439,10 +443,13 @@ mod tests {
 
     #[tokio::test]
     async fn streams_two_items_before_successful_completion() {
-        let (_directory, application, _subscription) = fixture();
+        let (directory, application, _subscription) = fixture();
         let runner = FakeRunner {
             runs: Mutex::new(VecDeque::from([FakeRun {
-                items: vec![item("post-a", "item-a"), item("post-b", "item-b")],
+                items: vec![
+                    item(directory.path(), "post-a", "item-a"),
+                    item(directory.path(), "post-b", "item-b"),
+                ],
                 result: Ok(RunnerSuccess {
                     resume_cursor: Some("cursor-2".to_string()),
                 }),
@@ -481,11 +488,14 @@ mod tests {
 
     #[tokio::test]
     async fn retryable_runner_failure_preserves_streamed_items_and_retries() {
-        let (_directory, application, _subscription) = fixture();
+        let (directory, application, _subscription) = fixture();
         let runner = FakeRunner {
             runs: Mutex::new(VecDeque::from([
                 FakeRun {
-                    items: vec![item("post-a", "item-a"), item("post-b", "item-b")],
+                    items: vec![
+                        item(directory.path(), "post-a", "item-a"),
+                        item(directory.path(), "post-b", "item-b"),
+                    ],
                     result: Err(RunnerFailure::retryable(
                         RunnerFailureKind::Network,
                         "temporary source failure",
@@ -534,10 +544,13 @@ mod tests {
 
     #[tokio::test]
     async fn streamed_multi_item_post_promotes_to_one_inbox_collection() {
-        let (_directory, application, _subscription) = fixture();
+        let (directory, application, _subscription) = fixture();
         let runner = FakeRunner {
             runs: Mutex::new(VecDeque::from([FakeRun {
-                items: vec![item_at("post", "page-1", 0), item_at("post", "page-2", 1)],
+                items: vec![
+                    item_at(directory.path(), "post", "page-1", 0),
+                    item_at(directory.path(), "post", "page-2", 1),
+                ],
                 result: Ok(RunnerSuccess::default()),
             }])),
         };

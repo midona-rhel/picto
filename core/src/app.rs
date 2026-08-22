@@ -8,6 +8,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::blob_store::BlobStore;
 use crate::projection_v2::ProjectionStore;
 use crate::store::Store;
 
@@ -180,6 +181,7 @@ impl From<&MutationReceipt> for LibraryChanged {
 
 pub struct Application {
     store: Arc<Store>,
+    blobs: Arc<BlobStore>,
     projections: Arc<ProjectionStore>,
 }
 
@@ -189,8 +191,16 @@ impl Application {
     }
 
     pub fn try_new(store: Arc<Store>) -> Result<Self, String> {
+        let blobs = Arc::new(
+            BlobStore::open(store.library_root())
+                .map_err(|error| format!("Failed to open blob store: {error}"))?,
+        );
         let projections = Arc::new(store.read_result(ProjectionStore::initialize)?);
-        Ok(Self { store, projections })
+        Ok(Self {
+            store,
+            blobs,
+            projections,
+        })
     }
 
     pub fn store(&self) -> &Store {
@@ -199,6 +209,10 @@ impl Application {
 
     pub fn projections(&self) -> &ProjectionStore {
         &self.projections
+    }
+
+    pub fn blobs(&self) -> &BlobStore {
+        &self.blobs
     }
 
     pub fn transaction<T, D>(

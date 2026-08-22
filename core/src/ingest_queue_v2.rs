@@ -1,6 +1,8 @@
 //! Durable entrypoint for every media import.
 
 use std::collections::BTreeSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Utc};
 use rusqlite::{params, OptionalExtension};
@@ -83,6 +85,7 @@ pub struct IngestQueue<'a> {
 impl<'a> IngestQueue<'a> {
     pub fn start(application: &'a Application) -> Result<Self, String> {
         reset_running(application)?;
+        cleanup_orphaned_staging(application)?;
         Ok(Self { application })
     }
 
@@ -95,8 +98,81 @@ impl<'a> IngestQueue<'a> {
     }
 }
 
+fn cleanup_orphaned_staging(application: &Application) -> Result<(), String> {
+    let staging = application.store().library_root().join("ingest-staging");
+    let entries = match fs::read_dir(&staging) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(format!("Failed to inspect ingest staging: {error}")),
+    };
+    let referenced = application.store().read(|connection| {
+        let mut statement = connection.prepare("SELECT source_path FROM ingest_job")?;
+        let paths = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
+        Ok(paths)
+    })?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_file() && !referenced.contains(path.to_string_lossy().as_ref()) {
+            let _ = fs::remove_file(path);
+        }
+    }
+    Ok(())
+}
+
 pub fn enqueue(application: &Application, spec: &IngestJobSpec) -> Result<EnqueueResult, String> {
-    enqueue_at(application, spec, &Utc::now().to_rfc3339())
+    validate_spec(spec)?;
+    reject_deleted_source_item(application, &spec.input)?;
+    if let Some(existing) = existing_job(application, &spec.job_key)? {
+        remove_owned_source(spec);
+        return Ok(existing);
+    }
+
+    let staged_path = stage_source(application, spec)?;
+    let mut staged = spec.clone();
+    staged.source_path = staged_path.display().to_string();
+    staged.delete_after_ingest = true;
+    let result = enqueue_at(application, &staged, &Utc::now().to_rfc3339());
+    match result {
+        Ok(result) => {
+            if !result.inserted {
+                let _ = fs::remove_file(&staged_path);
+            }
+            remove_owned_source(spec);
+            Ok(result)
+        }
+        Err(error) => {
+            let _ = fs::remove_file(staged_path);
+            Err(error)
+        }
+    }
+}
+
+fn reject_deleted_source_item(
+    application: &Application,
+    input: &PreparedMediaInput,
+) -> Result<(), String> {
+    let Some(source) = &input.source else {
+        return Ok(());
+    };
+    let deleted = application.store().read(|connection| {
+        connection
+            .query_row(
+                "SELECT si.state
+                 FROM source_item si
+                 JOIN source_post sp ON sp.source_post_id = si.source_post_id
+                 WHERE sp.site_id = ?1 AND sp.post_key = ?2 AND si.item_key = ?3",
+                params![source.site_id, source.post_key, source.item_key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .map(|state| state.as_deref() == Some("deleted"))
+    })?;
+    if deleted {
+        return Err("This source item was deliberately deleted and cannot be resurrected".into());
+    }
+    Ok(())
 }
 
 fn enqueue_at(
@@ -104,12 +180,7 @@ fn enqueue_at(
     spec: &IngestJobSpec,
     now: &str,
 ) -> Result<EnqueueResult, String> {
-    if spec.job_key.trim().is_empty() {
-        return Err("An ingest job key is required".to_string());
-    }
-    if spec.source_kind.trim().is_empty() || spec.source_path.trim().is_empty() {
-        return Err("An ingest source kind and path are required".to_string());
-    }
+    validate_spec(spec)?;
     let payload = serde_json::to_string(&spec.input).map_err(|error| error.to_string())?;
     let (result, revision, _) = application.store().transaction_if_changed(|transaction| {
         let source_item = if let Some(source) = &spec.input.source {
@@ -188,6 +259,67 @@ fn enqueue_at(
         ))
     })?;
     Ok(EnqueueResult { revision, ..result })
+}
+
+fn validate_spec(spec: &IngestJobSpec) -> Result<(), String> {
+    if spec.job_key.trim().is_empty() {
+        return Err("An ingest job key is required".to_string());
+    }
+    if spec.source_kind.trim().is_empty() || spec.source_path.trim().is_empty() {
+        return Err("An ingest source kind and path are required".to_string());
+    }
+    Ok(())
+}
+
+fn existing_job(application: &Application, job_key: &str) -> Result<Option<EnqueueResult>, String> {
+    application.store().read(|connection| {
+        connection
+            .query_row(
+                "SELECT ingest_job_id FROM ingest_job WHERE job_key = ?1",
+                [job_key],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map(|job| {
+                job.map(|ingest_job_id| EnqueueResult {
+                    ingest_job_id,
+                    inserted: false,
+                    revision: 0,
+                })
+            })
+    })
+}
+
+fn stage_source(application: &Application, spec: &IngestJobSpec) -> Result<PathBuf, String> {
+    let source = Path::new(&spec.source_path);
+    if !source.is_file() {
+        return Err(format!("Ingest source is missing: {}", source.display()));
+    }
+    let staging = application.store().library_root().join("ingest-staging");
+    fs::create_dir_all(&staging)
+        .map_err(|error| format!("Failed to create ingest staging: {error}"))?;
+    let extension = source
+        .extension()
+        .and_then(|value| value.to_str())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| crate::blob_store::mime_to_extension(&spec.input.mime_type));
+    let nonce = rand::random::<u64>();
+    let final_path = staging.join(format!("{nonce:016x}.{extension}"));
+    let partial_path = staging.join(format!("{nonce:016x}.partial"));
+    fs::copy(source, &partial_path)
+        .map_err(|error| format!("Failed to stage ingest source: {error}"))?;
+    fs::File::open(&partial_path)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| format!("Failed to sync staged ingest source: {error}"))?;
+    fs::rename(&partial_path, &final_path)
+        .map_err(|error| format!("Failed to publish staged ingest source: {error}"))?;
+    Ok(final_path)
+}
+
+fn remove_owned_source(spec: &IngestJobSpec) {
+    if spec.delete_after_ingest {
+        let _ = fs::remove_file(&spec.source_path);
+    }
 }
 
 pub fn reset_running(application: &Application) -> Result<usize, String> {
@@ -311,9 +443,23 @@ pub fn run_batch(application: &Application, limit: usize) -> Result<IngestRunRep
 }
 
 fn process_job(application: &Application, job: &IngestJob) -> Result<IngestMediaResult, String> {
+    let bytes = fs::read(&job.source_path)
+        .map_err(|error| format!("Failed to read staged ingest source: {error}"))?;
+    let actual_hash = hex::encode(crate::media_processing::get_hash_from_bytes(&bytes));
+    if actual_hash != job.input.file_hash {
+        return Err(format!(
+            "Staged ingest hash mismatch: expected {}, found {actual_hash}",
+            job.input.file_hash
+        ));
+    }
+    let extension = crate::blob_store::mime_to_extension(&job.input.mime_type);
+    application
+        .blobs()
+        .write_original(&job.input.file_hash, &bytes, Some(extension))
+        .map_err(|error| format!("Failed to persist original blob: {error}"))?;
     let result = application.ingest_prepared(&job.input)?;
     if job.delete_after_ingest {
-        match std::fs::remove_file(&job.source_path) {
+        match fs::remove_file(&job.source_path) {
             Ok(()) => {}
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
             Err(error) => {
@@ -366,6 +512,7 @@ fn retry_or_fail(application: &Application, job: &IngestJob, error: &str) -> Res
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::sync::Arc;
 
     use rusqlite::params;
@@ -375,6 +522,8 @@ mod tests {
     use crate::ingest_v2::{PreparedMediaInput, SourcePostInput};
     use crate::store::Store;
 
+    const MEDIA_BYTES: &[u8] = b"picto-ingest-test";
+
     fn application() -> (tempfile::TempDir, Application) {
         let directory = tempfile::tempdir().unwrap();
         let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
@@ -383,9 +532,9 @@ mod tests {
 
     fn input() -> PreparedMediaInput {
         PreparedMediaInput {
-            file_hash: "hash".to_string(),
+            file_hash: hex::encode(crate::media_processing::get_hash_from_bytes(MEDIA_BYTES)),
             mime_type: "image/png".to_string(),
-            size_bytes: 10,
+            size_bytes: MEDIA_BYTES.len() as i64,
             pixel_width: Some(10),
             pixel_height: Some(10),
             duration_ms: None,
@@ -442,7 +591,9 @@ mod tests {
 
     #[test]
     fn pending_subscription_item_flows_through_the_durable_queue() {
-        let (_directory, app) = application();
+        let (directory, app) = application();
+        let source = directory.path().join("source.png");
+        fs::write(&source, MEDIA_BYTES).unwrap();
         app.store()
             .transaction(|transaction| {
                 transaction.execute(
@@ -463,7 +614,7 @@ mod tests {
             .unwrap();
 
         let queue = IngestQueue::start(&app).unwrap();
-        queue.enqueue(&spec("/tmp/item")).unwrap();
+        queue.enqueue(&spec(source.to_str().unwrap())).unwrap();
         let downloaded_state: String = app
             .store()
             .read(|connection| {
@@ -497,12 +648,24 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        let extension = crate::blob_store::mime_to_extension(&input().mime_type);
+        assert!(app
+            .blobs()
+            .find_original(&input().file_hash, Some(extension))
+            .unwrap()
+            .is_some());
+        assert!(fs::read_dir(directory.path().join("ingest-staging"))
+            .unwrap()
+            .next()
+            .is_none());
     }
 
     #[test]
     fn a_failed_job_returns_to_pending_with_backoff() {
-        let (_directory, app) = application();
-        let mut invalid = spec("/tmp/item");
+        let (directory, app) = application();
+        let source = directory.path().join("invalid.bin");
+        fs::write(&source, MEDIA_BYTES).unwrap();
+        let mut invalid = spec(source.to_str().unwrap());
         invalid.input.mime_type = "application/octet-stream".to_string();
         enqueue_at(&app, &invalid, "2026-01-01T00:00:00Z").unwrap();
         let report = IngestQueue::start(&app).unwrap().run_batch(1).unwrap();
