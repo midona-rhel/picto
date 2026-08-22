@@ -133,13 +133,14 @@ interface SourceFieldProps {
   urls: string[];
   onChange?: (urls: string[]) => void;
   readOnly?: boolean;
+  unavailable?: boolean;
 }
 
 function extractDomain(url: string): string {
   try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
 }
 
-export function InspectorSourceField({ urls, onChange, readOnly = false }: SourceFieldProps) {
+export function InspectorSourceField({ urls, onChange, readOnly = false, unavailable = false }: SourceFieldProps) {
   const [open, setOpen] = useState(false);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [editVal, setEditVal] = useState('');
@@ -147,9 +148,9 @@ export function InspectorSourceField({ urls, onChange, readOnly = false }: Sourc
   const wrapRef = useRef<HTMLDivElement>(null);
   const hideTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const domainSummary = urls.length > 0 ? urls.map(extractDomain).join(', ') : '';
-  const canEdit = !readOnly && !!onChange;
-  const showPopover = hovered && !open && urls.length > 0;
+  const domainSummary = unavailable ? '—' : urls.length > 0 ? urls.map(extractDomain).join(', ') : '';
+  const canEdit = !unavailable && !readOnly && !!onChange;
+  const showPopover = !unavailable && hovered && !open && urls.length > 0;
 
   const clearHide = () => clearTimeout(hideTimer.current);
   const scheduleHide = (ms: number) => {
@@ -208,16 +209,18 @@ export function InspectorSourceField({ urls, onChange, readOnly = false }: Sourc
     <div ref={wrapRef} className={styles.fieldWrap}>
       <div
         className={styles.fieldRow}
-        onMouseEnter={() => { if (!open) { clearHide(); if (urls.length > 0) setHovered(true); } }}
+        onMouseEnter={() => { if (!unavailable && !open) { clearHide(); if (urls.length > 0) setHovered(true); } }}
         onMouseLeave={() => scheduleHide(400)}
       >
         <div className={styles.fieldContent} onClick={handleBtnClick}>
           {domainSummary || <span className={styles.fieldPlaceholder}>Source</span>}
         </div>
-        <div className={styles.fieldSep} />
-        <button className={styles.fieldActionBtn} onClick={handleBtnClick} type="button">
-          <IconLink size={14} stroke={1.5} />
-        </button>
+        {!unavailable && <>
+          <div className={styles.fieldSep} />
+          <button className={styles.fieldActionBtn} onClick={handleBtnClick} type="button">
+            <IconLink size={14} stroke={1.5} />
+          </button>
+        </>}
       </div>
 
       {showPopover && (

@@ -3,7 +3,8 @@
 .panel {
   flex: 1;
   min-height: 0;
-  background: var(--color-surface-1);
+  background: var(--inspector-surface, rgb(31, 32, 35));
+  font-family: var(--inspector-font-family, var(--font-family-ui));
   display: flex;
   flex-direction: column;
   position: relative;
@@ -22,17 +23,7 @@
   display: flex;
   flex-direction: column;
   width: 100%;
-  color: var(--color-text-primary);
-}
-
-/* Pinned action bar — Auto Tag + Export */
-.actionBar {
-  display: flex;
-  gap: 6px;
-  padding: 10px 12px;
-  border-top: 1px solid var(--color-border-secondary);
-  background: var(--color-black-10);
-  flex-shrink: 0;
+  color: var(--inspector-text-primary, #f8f9fb);
 }
 
 .actionBtn {
@@ -74,6 +65,103 @@
 .actionBtnPrimary:hover {
   background: var(--color-primary-60);
   border-color: var(--color-primary-60);
+}
+
+/* Mirrors reference application's in-flow inspector export action without copying its asset. */
+.flowAction {
+  width: 100%;
+  margin-top: 12px;
+}
+
+.flowActionBtn {
+  width: 100%;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 24px 0 16px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(248, 249, 251, 0.05);
+  color: var(--inspector-text-primary, #f8f9fb);
+  font-family: var(--inspector-font-family, var(--font-family-ui));
+  font-size: 12px;
+  font-weight: 400;
+  cursor: pointer;
+  transition: background 150ms var(--ease-default), outline-color 150ms var(--ease-default);
+}
+
+.flowActionBtn svg {
+  opacity: 0.8;
+  transition: opacity 200ms var(--ease-default);
+}
+
+.flowActionBtn:hover,
+.flowActionBtn:active {
+  background: rgba(248, 249, 251, 0.10);
+}
+
+.flowActionBtn:hover svg,
+.flowActionBtn:active svg {
+  opacity: 1;
+}
+
+.flowActionBtn:focus-visible {
+  outline: 1px solid var(--inspector-field-focus, var(--color-primary));
+  outline-offset: 1px;
+}
+
+.flowActionBtn:disabled {
+  background: transparent;
+  cursor: default;
+  opacity: 0.25;
+}
+
+/* reference application's expanded empty Tags/Folders control is full-width but compact. */
+.emptySectionActionBtn {
+  width: 100%;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 0 24px 0 16px;
+  border: none;
+  border-radius: 6px;
+  background: rgba(248, 249, 251, 0.05);
+  color: var(--inspector-text-primary, #f8f9fb);
+  font-family: var(--inspector-font-family, var(--font-family-ui));
+  font-size: 12px;
+  font-weight: 400;
+  cursor: pointer;
+  transition: background 150ms var(--ease-default), outline-color 150ms var(--ease-default);
+}
+
+.emptySectionActionBtn svg {
+  opacity: 0.8;
+  transition: opacity 200ms var(--ease-default);
+}
+
+.emptySectionActionBtn:hover,
+.emptySectionActionBtn:active {
+  background: rgba(248, 249, 251, 0.10);
+}
+
+.emptySectionActionBtn:hover svg,
+.emptySectionActionBtn:active svg {
+  opacity: 1;
+}
+
+.emptySectionActionBtn:focus-visible {
+  outline: 1px solid var(--inspector-field-focus, var(--color-primary));
+  outline-offset: 1px;
+}
+
+.emptySectionActionBtn:disabled {
+  background: transparent;
+  cursor: default;
+  opacity: 0.25;
 }
 
 /* Empty state */
@@ -120,6 +208,14 @@
 .errorText {
   color: var(--color-negative);
   font-size: var(--font-size-xs);
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 20px;
+  margin-top: 10px;
 }
 
 /* Image preview — entity mode */
@@ -320,7 +416,7 @@
   border: none;
   border-radius: 6px;
   background: none;
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   cursor: pointer;
   opacity: 0.5;
   transition: opacity var(--ease-default) 200ms;
@@ -328,6 +424,12 @@
 
 .tagAddBtn:hover {
   opacity: 1;
+}
+
+.tagActionBtn {
+  composes: actionBtn;
+  flex: 0 0 auto;
+  gap: 6px;
 }
 
 .tagInput {

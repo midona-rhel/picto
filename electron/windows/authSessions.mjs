@@ -82,6 +82,30 @@ const COOKIE_AUTH_SITES = Object.freeze({
     cookieUrl: 'https://www.deviantart.com',
     unauthenticatedUrlPattern: /\/(?:users\/login|join)(?:[/?#]|$)/i,
   }),
+  patreon: Object.freeze({
+    id: 'patreon',
+    label: 'Patreon',
+    loginUrl: 'https://www.patreon.com/login?l=en-GB',
+    cookieUrl: 'https://www.patreon.com',
+    cookieNames: Object.freeze(['session_id']),
+    authenticatedCookieNames: Object.freeze(['session_id']),
+  }),
+  fanbox: Object.freeze({
+    id: 'fanbox',
+    label: 'pixivFANBOX',
+    loginUrl: 'https://accounts.pixiv.net/login?prompt=select_account&return_to=https%3A%2F%2Fwww.fanbox.cc%2Fauth%2Fstart&source=fanbox',
+    cookieUrl: 'https://www.fanbox.cc',
+    cookieNames: Object.freeze(['FANBOXSESSID']),
+    authenticatedCookieNames: Object.freeze(['FANBOXSESSID']),
+  }),
+  subscribestar: Object.freeze({
+    id: 'subscribestar',
+    label: 'SubscribeStar',
+    loginUrl: 'https://www.subscribestar.com/login',
+    cookieUrl: 'https://www.subscribestar.com',
+    cookieNames: Object.freeze(['_personalization_id']),
+    authenticatedCookieNames: Object.freeze(['_personalization_id']),
+  }),
   idolcomplex: Object.freeze({
     id: 'idolcomplex',
     label: 'Idol Complex',
@@ -121,6 +145,14 @@ export function getStaticAuthLoginRoutes() {
 
 function formBody(values) {
   return new URLSearchParams(values).toString();
+}
+
+function sanitizeAuthUserAgent(userAgent) {
+  return String(userAgent || '')
+    .replace(/\s+Electron\/[^\s]+/gi, '')
+    .replace(/\s+Picto\/[^\s]+/gi, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 
 function oauthEncode(value) {
@@ -240,6 +272,13 @@ export function createAuthSessions({ BrowserWindow, getMainWindow, fetchImpl = f
         partition,
       },
     });
+    const currentUserAgent = authSession.popup?.webContents?.getUserAgent?.()
+      ?? popup.webContents.getUserAgent?.()
+      ?? '';
+    const sanitizedUserAgent = sanitizeAuthUserAgent(currentUserAgent);
+    if (sanitizedUserAgent) {
+      popup.webContents.setUserAgent(sanitizedUserAgent);
+    }
     popup.webContents.setWindowOpenHandler(({ url }) => {
       // Keep target=_blank signup/OAuth links inside Picto's isolated auth
       // profile instead of discarding them or opening the system browser.

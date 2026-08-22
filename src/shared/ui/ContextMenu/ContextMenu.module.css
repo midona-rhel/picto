@@ -24,9 +24,9 @@
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   border-top: var(--glass-border-top);
-  border-right: var(--glass-border-side);
-  border-bottom: var(--glass-border-bottom);
-  border-left: var(--glass-border-side);
+  border-right: 1px solid rgba(255, 255, 255, 0.15);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
+  border-left: 1px solid rgba(255, 255, 255, 0.15);
   border-radius: 8px;
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.5);
   animation: menuIn 100ms cubic-bezier(0.4, 0, 0.22, 1);

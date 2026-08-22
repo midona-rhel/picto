@@ -3,10 +3,13 @@ mod baraag;
 mod danbooru;
 mod deviantart;
 mod e621;
+mod fanbox;
 mod furaffinity;
 mod hentaifoundry;
 mod pixiv;
+mod patreon;
 mod sankaku;
+mod subscribestar;
 mod tumblr;
 mod webtoons;
 
@@ -60,10 +63,13 @@ pub(super) fn adapter_for_json(json: &Value) -> Option<&'static dyn SiteAdapter>
         }
         "deviantart" => Some(&deviantart::ADAPTER),
         "e621" => Some(&e621::ADAPTER),
+        "fanbox" => Some(&fanbox::ADAPTER),
         "furaffinity" => Some(&furaffinity::ADAPTER),
         "hentaifoundry" => Some(&hentaifoundry::ADAPTER),
         "idolcomplex" | "sankaku" => Some(&sankaku::ADAPTER),
+        "patreon" => Some(&patreon::ADAPTER),
         "pixiv" => Some(&pixiv::ADAPTER),
+        "subscribestar" => Some(&subscribestar::ADAPTER),
         "tumblr" => Some(&tumblr::ADAPTER),
         "webtoons" => Some(&webtoons::ADAPTER),
         _ => None,

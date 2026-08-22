@@ -1,6 +1,6 @@
 .section {
   width: 100%;
-  border-top: 1px solid var(--color-border-secondary);
+  border-top: 1px solid var(--inspector-separator, var(--color-border-secondary));
   padding-top: 10px;
   margin-top: 10px;
   font-size: 12px;
@@ -12,15 +12,15 @@
   align-items: center;
   cursor: pointer;
   user-select: none;
-  color: var(--color-text-tertiary);
+  color: var(--inspector-text-tertiary, var(--color-text-tertiary));
 }
 
 .header:hover {
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
 }
 
 .title {
-  font-weight: var(--font-weight-bold, 600);
+  font-weight: 700;
   font-size: 12px;
 }
 

@@ -82,9 +82,9 @@ re-downloading every source.
       pagination, interruption, restart, replay, and user-visible terminal state.
 - [x] Use direct-site login in a Picto-managed browser and store captured credentials in the OS
       credential store. Product UI never asks users to paste secrets.
-- [x] Certify the 17-source production registry: Pixiv search, Pixiv user, Gelbooru, Rule34,
-      Danbooru, Webtoons, Hentai Foundry, Baraag, DeviantArt, Tumblr, Fur Affinity, Idol Complex,
-      Sankaku, Yande.re, Konachan, Safebooru, and e621.
+- [ ] Certify the current production registry: Pixiv search, Pixiv user, Gelbooru, Rule34,
+      Danbooru, Webtoons, Hentai Foundry, Baraag, DeviantArt, Tumblr, Fur Affinity, Patreon,
+      pixivFANBOX, SubscribeStar, Idol Complex, Sankaku, Yande.re, Konachan, Safebooru, and e621.
 - [x] Prove the shared flattened ingest model with representative single-file, ordered multi-file,
       and mixed image/video sources instead of repeating unchanged 100-post downloads per adapter.
 - [x] Run real Electron login and ingest workflows, including Webtoons cookie capture and Tumblr
@@ -94,10 +94,10 @@ re-downloading every source.
 
 Baraag's public production path is certified. Its optional private login cannot be certified with a
 throwaway account because the source requires an applicant's own artwork and moderator approval;
-Picto retains the direct OAuth path without pretending that external approval occurred. Paid sources
-such as Patreon, SubscribeStar, Fanbox, and OnlyFans are not implemented registry entries and are not
-part of this release gate. If added later, they require their own production adapter and the same
-source, authentication, recovery, and Electron evidence before becoming visible.
+Picto retains the direct OAuth path without pretending that external approval occurred. Patreon,
+pixivFANBOX, and SubscribeStar now use the same direct-site cookie-capture contract as the other
+cookie-auth sources and remain pending attended certification. OnlyFans remains outside the current
+registry because it needs a separate downloader/runtime path for mixed image and video handling.
 
 ## Phase 4: PBI-577 Duplicates
 

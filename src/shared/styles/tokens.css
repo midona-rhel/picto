@@ -91,14 +91,14 @@
   /* ── Shadows ─────────────────────────────────────────────── */
   --shadow-1: 0 1px 3px var(--color-black-10);
   --shadow-2: 0 4px 12px var(--color-black-30);
-  --shadow-panel: 0 3px 12px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.5);
+  --shadow-panel: 0 12px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.5);
 
   /* ── Glass panel surface ────────────────────────────────── */
   --glass-bg: color-mix(in srgb, var(--color-surface-1) 92%, transparent);
   --glass-blur: blur(13px) brightness(0.7);
   --glass-border-top: 1px solid rgba(255, 255, 255, 0.25);
-  --glass-border-side: 1px solid rgba(255, 255, 255, 0.12);
-  --glass-border-bottom: 1px solid rgba(0, 0, 0, 0.20);
+  --glass-border-side: 1px solid rgba(255, 255, 255, 0.15);
+  --glass-border-bottom: 1px solid rgba(0, 0, 0, 0.10);
 
   /* ── Interaction overlays (theme-aware hover/active tints) ─ */
   --color-hover-overlay: rgba(255, 255, 255, 0.08);

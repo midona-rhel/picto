@@ -11,8 +11,8 @@
   display: flex;
   align-items: center;
   min-height: 32px;
-  background: rgba(0, 0, 0, 0.2);
-  border: 1px solid var(--color-border-secondary);
+  background: var(--inspector-field-surface, rgba(0, 0, 0, 0.20));
+  border: 1px solid var(--inspector-separator, var(--color-border-secondary));
   border-radius: 6px;
   box-sizing: border-box;
   width: 100%;
@@ -22,7 +22,7 @@
 .fieldSep {
   width: 1px;
   align-self: stretch;
-  background: var(--color-border-secondary);
+  background: var(--inspector-separator, var(--color-border-secondary));
   flex-shrink: 0;
 }
 
@@ -38,7 +38,7 @@
   border-radius: 0 5px 5px 0;
   border: none;
   background: none;
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   opacity: 0.5;
   cursor: pointer;
   padding: 0;
@@ -48,7 +48,7 @@
 
 .fieldActionBtn:hover {
   opacity: 1;
-  background: var(--color-surface-hover);
+  background: var(--inspector-field-surface, var(--color-surface-hover));
 }
 
 /* Content area — view mode */
@@ -56,10 +56,10 @@
   flex: 1;
   min-width: 0;
   padding: 0 10px;
-  font-family: var(--font-family);
+  font-family: var(--inspector-font-family, var(--font-family));
   font-size: 13px;
   line-height: 30px;
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -68,7 +68,7 @@
 }
 
 .fieldPlaceholder {
-  color: var(--color-text-tertiary);
+  color: var(--inspector-text-tertiary, var(--color-text-tertiary));
   cursor: text;
 }
 
@@ -90,14 +90,14 @@
   max-height: 132px;
   overflow-y: auto;
   scrollbar-width: none;
-  background: var(--color-surface-hover);
-  border: 1px solid var(--color-border-secondary);
+  background: var(--inspector-field-surface, var(--color-surface-hover));
+  border: 1px solid var(--inspector-separator, var(--color-border-secondary));
   border-radius: 6px;
   box-shadow: var(--shadow-panel);
-  font-family: var(--font-family);
+  font-family: var(--inspector-font-family, var(--font-family));
   font-size: 13px;
   line-height: 1.5;
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   animation: popoverFadeIn 120ms ease-out;
   backdrop-filter: blur(16px) saturate(1.2);
   -webkit-backdrop-filter: blur(16px) saturate(1.2);
@@ -107,6 +107,10 @@
 
 .popover::-webkit-scrollbar {
   display: none;
+}
+
+.popover:focus-within {
+  border-color: var(--inspector-field-focus, var(--color-border-focus));
 }
 
 .popoverBody {
@@ -125,10 +129,10 @@
   align-items: center;
   justify-content: center;
   width: 33px;
-  border: 1px solid var(--color-border-secondary);
+  border: 1px solid var(--inspector-separator, var(--color-border-secondary));
   border-radius: 0 6px 6px 0;
   background: none;
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   opacity: 0.5;
   cursor: pointer;
   padding: 0;
@@ -145,7 +149,7 @@
 
 .popoverActionBtn:hover {
   opacity: 1;
-  background: var(--color-surface-hover);
+  background: var(--inspector-field-surface, var(--color-surface-hover));
 }
 
 .popoverText {
@@ -159,8 +163,8 @@
   background: none;
   border: none;
   outline: none;
-  color: var(--color-text-primary);
-  font-family: var(--font-family);
+  color: var(--inspector-text-primary, var(--color-text-primary));
+  font-family: var(--inspector-font-family, var(--font-family));
   font-size: 13px;
   line-height: 20px;
   padding: 0;
@@ -171,7 +175,7 @@
 }
 
 .popoverInput::placeholder {
-  color: var(--color-text-tertiary);
+  color: var(--inspector-text-tertiary, var(--color-text-tertiary));
 }
 
 /* ── Source URL management ── */
@@ -182,10 +186,10 @@
   left: 0;
   right: 0;
   z-index: var(--layer-overlay);
-  background: var(--color-surface-hover);
+  background: var(--inspector-field-surface, var(--color-surface-hover));
   backdrop-filter: blur(16px) saturate(1.2);
   -webkit-backdrop-filter: blur(16px) saturate(1.2);
-  border: 1px solid var(--color-border-secondary);
+  border: 1px solid var(--inspector-separator, var(--color-border-secondary));
   border-radius: 6px;
   box-shadow: var(--shadow-panel);
   min-width: 100%;
@@ -205,14 +209,14 @@
 }
 
 .urlRow:hover {
-  background: var(--color-surface-hover);
+  background: var(--inspector-field-surface, var(--color-surface-hover));
 }
 
 .urlText {
   flex: 1;
   min-width: 0;
   font-size: 13px;
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   cursor: text;
   line-height: 28px;
   overflow: hidden;
@@ -226,15 +230,15 @@
   background: none;
   border: none;
   outline: none;
-  font-family: var(--font-family);
+  font-family: var(--inspector-font-family, var(--font-family));
   font-size: 13px;
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   line-height: 28px;
   padding: 0;
 }
 
 .urlEditInput::placeholder {
-  color: var(--color-text-tertiary);
+  color: var(--inspector-text-tertiary, var(--color-text-tertiary));
 }
 
 .urlActionBtn {
@@ -246,7 +250,7 @@
   flex-shrink: 0;
   border: none;
   background: none;
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   opacity: 0.4;
   cursor: pointer;
   padding: 0;
@@ -265,22 +269,22 @@
   padding: 0 10px;
   border: none;
   background: none;
-  color: var(--color-text-tertiary);
+  color: var(--inspector-text-tertiary, var(--color-text-tertiary));
   font-size: 12px;
-  font-family: var(--font-family);
+  font-family: var(--inspector-font-family, var(--font-family));
   cursor: pointer;
   transition: color 150ms var(--ease-default);
 }
 
 .addUrlBtn:hover {
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
 }
 
 /* Popover URL links */
 .popoverLink {
   display: block;
   padding: 2px 0;
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   text-shadow: 0 0 12px rgba(255, 255, 255, 0.15);
   cursor: pointer;
   text-decoration: none;

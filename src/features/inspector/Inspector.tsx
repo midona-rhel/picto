@@ -6,9 +6,9 @@
  * - Multiple items selected → shared tags/folders from backend
  */
 
-import { useEffect, useState } from 'react';
+import { forwardRef, useEffect, useState } from 'react';
 import { useAtomValue, getDefaultStore } from 'jotai';
-import { IconAlertCircle, IconFolder, IconPlus } from '@tabler/icons-react';
+import { IconAlertCircle, IconFolder, IconPlus, IconSparkles } from '@tabler/icons-react';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ColorPalette } from '../../shared/ui/ColorPalette';
@@ -203,6 +203,174 @@ function useSelectionSummary() {
   return { target, selectedHashes, summary, ready };
 }
 
+type CorePropertyLabel =
+  | 'Items'
+  | 'Dimensions'
+  | 'Size'
+  | 'Type'
+  | 'Duration'
+  | 'Date added'
+  | 'Date created'
+  | 'Date modified';
+
+type CoreProperty = {
+  label: CorePropertyLabel;
+  value: string;
+  mono: boolean;
+  title?: string;
+};
+
+const CORE_PROPERTIES: Array<Pick<CoreProperty, 'label' | 'mono'>> = [
+  { label: 'Items', mono: true },
+  { label: 'Dimensions', mono: true },
+  { label: 'Size', mono: true },
+  { label: 'Type', mono: false },
+  { label: 'Duration', mono: true },
+  { label: 'Date added', mono: true },
+  { label: 'Date created', mono: true },
+  { label: 'Date modified', mono: true },
+];
+
+type CorePropertyValues = Partial<Record<CorePropertyLabel, Pick<CoreProperty, 'value' | 'title'>>>;
+
+function normalizedCoreProperties(values: CorePropertyValues): CoreProperty[] {
+  return CORE_PROPERTIES.map(({ label, mono }) => ({
+    label,
+    mono,
+    value: values[label]?.value ?? '—',
+    title: values[label]?.title,
+  }));
+}
+
+type TextFieldModel = {
+  value: string;
+  readOnly?: boolean;
+  onCommit?: (value: string) => void;
+};
+
+type SourceFieldModel = {
+  urls: string[];
+  onChange?: (urls: string[]) => void;
+  unavailable?: boolean;
+};
+
+type InspectorSkeletonProps = {
+  preview: React.ReactNode;
+  palette: string[];
+  name: TextFieldModel;
+  notes: TextFieldModel;
+  source: SourceFieldModel;
+  rating: { value: number; onChange?: (rating: number) => void };
+  coreProperties: CoreProperty[];
+  tags: Array<{ ns: string; sub: string; raw: string }>;
+  onRemoveTag?: (raw: string) => void;
+  folders: Array<{ id: number; name: string; color: string | null }>;
+  onRemoveFolder?: (folderId: number) => void;
+  onNavigateFolder?: (folderId: number) => void;
+  extras?: Array<{ label: string; value: string }>;
+  action?: React.ReactNode;
+  status?: { kind: 'loading' | 'error'; message: string };
+};
+
+/** The inspector's invariant top stack; content state changes data, not row order. */
+export function InspectorSkeleton({
+  preview,
+  palette,
+  name,
+  notes,
+  source,
+  rating,
+  coreProperties,
+  tags,
+  onRemoveTag,
+  folders,
+  onRemoveFolder,
+  onNavigateFolder,
+  extras = [],
+  action,
+  status,
+}: InspectorSkeletonProps) {
+  return (
+    <Shell>
+      {preview}
+      <ColorPalette colors={palette} />
+
+      <div className={styles.fieldStack} data-inspector-identity="">
+        <div data-inspector-anchor="name">
+          <InspectorField value={name.value} placeholder="Name" readOnly={name.readOnly} onCommit={name.onCommit} />
+        </div>
+        <div data-inspector-anchor="notes">
+          <InspectorField value={notes.value} placeholder="Notes" readOnly={notes.readOnly} onCommit={notes.onCommit} />
+        </div>
+        <div data-inspector-anchor="source">
+          <InspectorSourceField urls={source.urls} onChange={source.onChange} unavailable={source.unavailable} />
+        </div>
+      </div>
+
+      <div data-inspector-section="tags">
+        <TagsSection tags={tags} onRemove={onRemoveTag} editable={Boolean(onRemoveTag)} />
+      </div>
+      <div data-inspector-section="folders">
+        <FoldersSection folders={folders} onRemove={onRemoveFolder} onNavigate={onNavigateFolder} editable={Boolean(onRemoveFolder)} />
+      </div>
+      <div data-inspector-section="properties">
+        <InspectorSection title="Properties">
+          <div className={styles.propsStack} data-inspector-core-properties="">
+            <StarRating value={rating.value} onChange={rating.onChange} />
+            {coreProperties.map((property) => (
+              <div key={property.label} data-inspector-core-property={property.label}>
+                <PropertyRow {...property} />
+              </div>
+            ))}
+          </div>
+        </InspectorSection>
+      </div>
+
+      {extras.length > 0 && (
+        <div data-inspector-section="details">
+          <InspectorSection title="Details">
+            <div className={styles.propsStack}>
+              {extras.map((property) => <PropertyRow key={property.label} {...property} />)}
+            </div>
+          </InspectorSection>
+        </div>
+      )}
+
+      {action && <div className={styles.flowAction} data-inspector-section="actions">{action}</div>}
+
+      {status && (
+        <div className={styles.status} role="status">
+          {status.kind === 'error' && <IconAlertCircle size={16} stroke={1.5} className={styles.errorIcon} />}
+          <span className={status.kind === 'error' ? styles.errorText : styles.emptyInline}>{status.message}</span>
+        </div>
+      )}
+    </Shell>
+  );
+}
+
+function UnavailableInspectorSkeleton({ status }: { status?: InspectorSkeletonProps['status'] }) {
+  return (
+    <InspectorSkeleton
+      preview={<div className={styles.preview} aria-hidden="true" />}
+      palette={[]}
+      name={{ value: '—', readOnly: true }}
+      notes={{ value: '—', readOnly: true }}
+      source={{ urls: [], unavailable: true }}
+      rating={{ value: 0 }}
+      coreProperties={normalizedCoreProperties({})}
+      tags={[]}
+      folders={[]}
+      status={status}
+    />
+  );
+}
+
+function navigateToFolder(folderId: number) {
+  const nodeId = `folder:${folderId}`;
+  store.set(activeNodeIdAtom, nodeId);
+  pushHistory(nodeId);
+}
+
 // ── Main component ──────────────────────────────────────────────
 
 export function Inspector() {
@@ -218,9 +386,7 @@ export function Inspector() {
 
   // ── Single entity ─────────────────────────────────────────────
   if (inspectorTarget.kind === 'entity') {
-    if (loading && !entityData) return <Shell><div className={styles.empty}><span className={styles.emptyText}>Loading...</span></div></Shell>;
-    if (error && !entityData) return <Shell><div className={styles.empty}><IconAlertCircle size={20} stroke={1.5} className={styles.errorIcon} /><span className={styles.errorText}>{error}</span></div></Shell>;
-    if (!entityData) return null;
+    if (!entityData) return <UnavailableInspectorSkeleton status={error ? { kind: 'error', message: error } : loading ? { kind: 'loading', message: 'Loading...' } : undefined} />;
 
     const d = entityData;
     const tags = [...(d.tags ?? [])].sort((a, b) => tagKey(a.namespace, a.subtag).localeCompare(tagKey(b.namespace, b.subtag)));
@@ -230,52 +396,30 @@ export function Inspector() {
     });
     const palette = (d.dominant_colors ?? []).map((c) => c.hex).filter((h): h is string => !!h && h.length > 0);
 
-    return (
-      <Shell footer={<InspectorActionBar count={1} enabled={d.mime_type.startsWith('image/')} />}>
-        <Preview hashes={[d.entity_hash]} type="single" />
-        <ColorPalette colors={palette.length > 0 ? palette : d.dominant_color_hex ? [d.dominant_color_hex] : []} />
-
-        <div className={styles.fieldStack}>
-          <InspectorField value={d.name ?? ''} placeholder="Name" onCommit={(v) => { void entityMutations.setEntityName(d.entity_hash, v); }} />
-          <InspectorField
-            value={typeof d.notes === 'string' ? d.notes : ''}
-            placeholder="Notes"
-            onCommit={(v) => { void entityMutations.setEntityNotes(d.entity_hash, v); }}
-          />
-          <InspectorSourceField
-            urls={d.source_urls ?? []}
-            onChange={(urls) => { void entityMutations.setEntitySourceUrls(d.entity_hash, urls); }}
-          />
-        </div>
-
-        <TagsSection
-          tags={tags.map((t) => ({ ns: t.namespace, sub: t.subtag, raw: t.namespace && t.namespace !== 'default' ? `${t.namespace}:${t.subtag}` : t.subtag }))}
-          onRemove={(raw) => { void entityMutations.removeEntityTags(d.entity_hash, [raw]); }}
-        />
-
-        <FoldersSection
-          folders={folders}
-          onRemove={(fid) => { void entityMutations.removeEntityFromFolder(d.entity_hash, fid); }}
-          onNavigate={(fid) => { const nodeId = `folder:${fid}`; store.set(activeNodeIdAtom, nodeId); pushHistory(nodeId); }}
-        />
-
-        <InspectorSection title="Properties">
-          <div className={styles.propsStack}>
-            <StarRating
-              value={d.rating ?? 0}
-              onChange={(r) => { void entityMutations.setEntityRating(d.entity_hash, r); }}
-            />
-            {d.pixel_width && d.pixel_height && <PropertyRow label="Dimensions" value={`${d.pixel_width} × ${d.pixel_height}`} mono />}
-            <PropertyRow label="Size" value={fmtSize(d.size_bytes)} mono />
-            <PropertyRow label="Type" value={fmtExt(d.mime_type)} title={d.mime_type} />
-            {d.duration_ms != null && d.duration_ms > 0 && <PropertyRow label="Duration" value={fmtDuration(d.duration_ms)} mono />}
-            <PropertyRow label="Date added" value={fmtDate(d.date_added)} mono />
-            <PropertyRow label="Date created" value={fmtDate(d.date_created)} mono />
-            <PropertyRow label="Date modified" value={fmtDate(d.date_modified)} mono />
-          </div>
-        </InspectorSection>
-      </Shell>
-    );
+    return <InspectorSkeleton
+      preview={<Preview hashes={[d.entity_hash]} type="single" />}
+      palette={palette.length > 0 ? palette : d.dominant_color_hex ? [d.dominant_color_hex] : []}
+      name={{ value: d.name ?? '', onCommit: (value) => { void entityMutations.setEntityName(d.entity_hash, value); } }}
+      notes={{ value: d.notes ?? '', onCommit: (value) => { void entityMutations.setEntityNotes(d.entity_hash, value); } }}
+      source={{ urls: d.source_urls ?? [], onChange: (urls) => { void entityMutations.setEntitySourceUrls(d.entity_hash, urls); } }}
+      rating={{ value: d.rating ?? 0, onChange: (rating) => { void entityMutations.setEntityRating(d.entity_hash, rating); } }}
+      coreProperties={normalizedCoreProperties({
+        Items: { value: '1' },
+        Dimensions: { value: d.pixel_width && d.pixel_height ? `${d.pixel_width} × ${d.pixel_height}` : '—' },
+        Size: { value: fmtSize(d.size_bytes) },
+        Type: { value: fmtExt(d.mime_type), title: d.mime_type },
+        Duration: { value: d.duration_ms != null && d.duration_ms > 0 ? fmtDuration(d.duration_ms) : '—' },
+        'Date added': { value: fmtDate(d.date_added) ?? '—' },
+        'Date created': { value: fmtDate(d.date_created) ?? '—' },
+        'Date modified': { value: fmtDate(d.date_modified) ?? '—' },
+      })}
+      tags={tags.map((t) => ({ ns: t.namespace, sub: t.subtag, raw: t.namespace && t.namespace !== 'default' ? `${t.namespace}:${t.subtag}` : t.subtag }))}
+      onRemoveTag={(raw) => { void entityMutations.removeEntityTags(d.entity_hash, [raw]); }}
+      folders={folders}
+      onRemoveFolder={(folderId) => { void entityMutations.removeEntityFromFolder(d.entity_hash, folderId); }}
+      onNavigateFolder={navigateToFolder}
+      action={<InspectorAutoTagAction count={1} enabled={d.mime_type.startsWith('image/')} />}
+    />;
   }
 
   // ── Multi-select ──────────────────────────────────────────────
@@ -289,42 +433,28 @@ export function Inspector() {
     });
     const previewHashes = summary?.sample_hashes ?? [...selectedHashes].slice(0, 3);
 
-    return (
-      <Shell footer={<InspectorActionBar count={count} enabled={selectionSupportsAiTagging(selTarget, summary)} />}>
-        <Preview hashes={previewHashes} type="stacked" />
-        <ColorPalette colors={[]} />
-
-        <div className={styles.fieldStack}>
-          <InspectorField value={`${count.toLocaleString()} items selected`} placeholder="Name" readOnly />
-          <InspectorField value="" placeholder="Notes" onCommit={selTarget ? (v) => { void entityMutations.setTargetNotes(selTarget, v); } : undefined} />
-        </div>
-
-        <TagsSection
-          tags={tags}
-          onRemove={selTarget ? (raw) => { void entityMutations.removeTargetTags(selTarget, [raw]); } : undefined}
-        />
-
-        <FoldersSection
-          folders={folders}
-          onRemove={selTarget ? (fid) => { void entityMutations.updateTargetFolderMembership(selTarget, fid, 'remove'); } : undefined}
-          onNavigate={(fid) => { const nodeId = `folder:${fid}`; store.set(activeNodeIdAtom, nodeId); pushHistory(nodeId); }}
-        />
-
-        <InspectorSection title="Properties">
-          <div className={styles.propsStack}>
-            <StarRating
-              value={summary?.stats?.rating_stats?.shared ?? 0}
-              onChange={selTarget ? (r) => { void entityMutations.setTargetRating(selTarget, r); } : undefined}
-            />
-            <PropertyRow label="Total size" value={summary?.stats?.total_size_bytes != null ? fmtSize(summary.stats.total_size_bytes) : '—'} mono />
-          </div>
-        </InspectorSection>
-      </Shell>
-    );
+    return <InspectorSkeleton
+      preview={<Preview hashes={previewHashes} type="stacked" />}
+      palette={[]}
+      name={{ value: `${count.toLocaleString()} items selected`, readOnly: true }}
+      notes={{ value: '', onCommit: selTarget ? (value) => { void entityMutations.setTargetNotes(selTarget, value); } : undefined }}
+      source={{ urls: [], unavailable: true }}
+      rating={{ value: summary?.stats?.rating_stats?.shared ?? 0, onChange: selTarget ? (rating) => { void entityMutations.setTargetRating(selTarget, rating); } : undefined }}
+      coreProperties={normalizedCoreProperties({
+        Items: { value: count.toLocaleString() },
+        Size: { value: summary?.stats?.total_size_bytes != null ? fmtSize(summary.stats.total_size_bytes) : '—' },
+      })}
+      tags={tags}
+      onRemoveTag={selTarget ? (raw) => { void entityMutations.removeTargetTags(selTarget, [raw]); } : undefined}
+      folders={folders}
+      onRemoveFolder={selTarget ? (folderId) => { void entityMutations.updateTargetFolderMembership(selTarget, folderId, 'remove'); } : undefined}
+      onNavigateFolder={navigateToFolder}
+      action={<InspectorAutoTagAction count={count} enabled={selectionSupportsAiTagging(selTarget, summary)} />}
+    />;
   }
 
   // ── Scope (nothing selected — show current view) ──────────────
-  if (!scopeVM) return null;
+  if (!scopeVM) return <UnavailableInspectorSkeleton status={error ? { kind: 'error', message: error } : loading ? { kind: 'loading', message: 'Loading...' } : undefined} />;
   const node = scopeVM.node;
   const isSystem = node.kind === 'system';
   const canEdit = !isSystem;
@@ -344,81 +474,105 @@ export function Inspector() {
 
   const scopeSize = scopeVM.totalSizeBytes != null ? fmtSize(scopeVM.totalSizeBytes) : null;
 
-  return (
-    <Shell>
-      <Preview hashes={scopeVM.previewItems.map((i) => i.entity_hash)} type="collage" />
-      <ColorPalette colors={[]} />
+  const extras = [
+    scopeVM.searchText ? { label: 'Search', value: scopeVM.searchText } : null,
+    node.kind === 'folder' ? { label: 'Auto tags', value: scopeVM.folder!.autoTags.length > 0 ? 'Yes' : 'No' } : null,
+    node.kind === 'folder' ? { label: 'Watch', value: scopeVM.folder!.watchEnabled ? 'Yes' : 'No' } : null,
+    node.kind === 'smart_folder' && scopeVM.smartFolder?.sortField
+      ? { label: 'Sort', value: `${scopeVM.smartFolder.sortField.replace(/_/g, ' ')}${scopeVM.smartFolder.sortOrder ? ` ${scopeVM.smartFolder.sortOrder.toUpperCase()}` : ''}` }
+      : null,
+  ].filter((property): property is { label: string; value: string } => property !== null);
 
-      <div className={styles.fieldStack}>
-        <InspectorField value={node.name} placeholder="Name" readOnly={isSystem} onCommit={canEdit ? (v) => { void saveName(v); } : undefined} />
-        <InspectorField
-          value={(isSystem ? scopeVM.description : scopeVM.folder?.notes ?? scopeVM.smartFolder?.notes) ?? ''}
-          placeholder="Notes" readOnly={isSystem}
-          onCommit={canEdit ? (v) => { void saveNotes(v); } : undefined}
-        />
-      </div>
-
-      <InspectorSection title="Properties">
-        <div className={styles.propsStack}>
-          <PropertyRow label="Items" value={scopeVM.totalCount.toLocaleString()} mono />
-          {scopeSize != null && <PropertyRow label="Size" value={scopeSize} mono />}
-          {scopeVM.searchText && <PropertyRow label="Search" value={scopeVM.searchText} />}
-          {node.kind === 'folder' && <PropertyRow label="Auto tags" value={scopeVM.folder!.autoTags.length > 0 ? 'Yes' : 'No'} />}
-          {node.kind === 'folder' && <PropertyRow label="Watch" value={scopeVM.folder!.watchEnabled ? 'Yes' : 'No'} />}
-          {node.kind === 'smart_folder' && scopeVM.smartFolder?.sortField && (
-            <PropertyRow label="Sort" value={`${scopeVM.smartFolder.sortField.replace(/_/g, ' ')}${scopeVM.smartFolder.sortOrder ? ` ${scopeVM.smartFolder.sortOrder.toUpperCase()}` : ''}`} />
-          )}
-        </div>
-      </InspectorSection>
-    </Shell>
-  );
+  return <InspectorSkeleton
+    preview={<Preview hashes={scopeVM.previewItems.map((item) => item.entity_hash)} type="collage" />}
+    palette={[]}
+    name={{ value: node.name, readOnly: isSystem, onCommit: canEdit ? (value) => { void saveName(value); } : undefined }}
+    notes={{ value: (isSystem ? scopeVM.description : scopeVM.folder?.notes ?? scopeVM.smartFolder?.notes) ?? '', readOnly: isSystem, onCommit: canEdit ? (value) => { void saveNotes(value); } : undefined }}
+    source={{ urls: [], unavailable: true }}
+    rating={{ value: 0 }}
+    coreProperties={normalizedCoreProperties({
+      Items: { value: scopeVM.totalCount.toLocaleString() },
+      Size: { value: scopeSize ?? '—' },
+    })}
+    tags={[]}
+    folders={[]}
+    extras={extras}
+  />;
 }
 
 // ── Shared sub-components ───────────────────────────────────────
 
-function Shell({ children, footer }: { children: React.ReactNode; footer?: React.ReactNode }) {
+function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className={styles.panel} data-inspector-panel="">
-      <div className={styles.scrollContent}>
+      <div className={styles.scrollContent} data-inspector-scroll-content="">
         <div className={styles.contentStack}>{children}</div>
       </div>
-      {footer}
     </div>
   );
 }
 
-/** Pinned action bar at the bottom of the inspector. */
-function InspectorActionBar({ count, enabled }: { count: number; enabled: boolean }) {
+/** reference application's analogous export action lives after inspector properties, not in chrome. */
+function InspectorAutoTagAction({ count, enabled }: { count: number; enabled: boolean }) {
   const autoTagDef = getShortcut('organize.autoTag');
   return (
-    <div className={styles.actionBar}>
-      <KbdTooltip
-        label={enabled ? 'Suggest tags with AI' : 'AI tagging requires an explicit image selection'}
-        shortcut={autoTagDef ? formatKeysDisplay(autoTagDef.keys) : undefined}
+    <KbdTooltip
+      label={enabled ? 'Suggest tags with AI' : 'AI tagging requires an explicit image selection'}
+      shortcut={autoTagDef ? formatKeysDisplay(autoTagDef.keys) : undefined}
+    >
+      <InspectorActionButton
+        variant="flow"
+        action="auto-tag"
+        onClick={(e) => openPortal(e, aiTaggerPortalAtom)}
+        disabled={!enabled}
       >
-        <button
-          className={styles.actionBtnPrimary}
-          onClick={(e) => openPortal(e, aiTaggerPortalAtom)}
-          disabled={!enabled}
-          type="button"
-        >
-          {count > 1 ? `Auto Tag ${count.toLocaleString()} Images` : 'Auto Tag'}
-        </button>
-      </KbdTooltip>
-    </div>
+        <IconSparkles size={14} stroke={1.5} />
+        <span>{count > 1 ? `Auto Tag ${count.toLocaleString()} Images` : 'Auto Tag'}</span>
+      </InspectorActionButton>
+    </KbdTooltip>
   );
 }
 
-function TagsSection({ tags, onRemove, onNavigate }: {
+const InspectorActionButton = forwardRef<HTMLButtonElement, {
+  action: string;
+  children: React.ReactNode;
+  className?: string;
+  disabled?: boolean;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
+  variant?: 'default' | 'primary' | 'flow' | 'empty-section';
+}>(function InspectorActionButton({
+  action,
+  children,
+  className,
+  disabled,
+  onClick,
+  variant = 'default',
+}, ref) {
+  const variantClass = variant === 'primary'
+    ? styles.actionBtnPrimary
+    : variant === 'flow'
+      ? styles.flowActionBtn
+      : variant === 'empty-section'
+        ? styles.emptySectionActionBtn
+      : styles.actionBtn;
+  const buttonClass = [variantClass, className]
+    .filter(Boolean)
+    .join(' ');
+  return <button ref={ref} className={buttonClass} data-inspector-action={action} data-inspector-button-primitive="action" data-inspector-button-variant={variant} data-inspector-empty-action={variant === 'empty-section' ? action : undefined} disabled={disabled} onClick={onClick} type="button">{children}</button>;
+});
+
+function TagsSection({ tags, onRemove, onNavigate, editable = true }: {
   tags: Array<{ ns: string; sub: string; raw: string }>;
   onRemove?: (raw: string) => void;
   onNavigate?: (tag: string) => void;
+  editable?: boolean;
 }) {
   const chipMenu = useContextMenu();
+  const hasTags = tags.length > 0;
   return (
     <InspectorSection title="Tags" count={tags.length}>
-      <div className={styles.tagsWrap}>
-        {tags.map((t) => (
+      {hasTags || editable ? <div className={styles.tagsWrap}>
+        {hasTags && tags.map((t) => (
           <TagChip
             key={t.raw} namespace={t.ns} subtag={t.sub}
             onRemove={onRemove ? () => onRemove(t.raw) : undefined}
@@ -432,27 +586,36 @@ function TagsSection({ tags, onRemove, onNavigate }: {
             }}
           />
         ))}
-        <KbdTooltip label="Add Tags" shortcut="T">
-          <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, tagSelectPortalAtom)} type="button">
+        {editable && !hasTags && <KbdTooltip label="Add Tags" shortcut="T">
+          <InspectorActionButton action="add-tags" variant="empty-section" onClick={(e) => openPortal(e, tagSelectPortalAtom)}>
             <IconPlus size={14} stroke={1.5} />
-          </button>
-        </KbdTooltip>
-      </div>
+            <span>Add Tags</span>
+          </InspectorActionButton>
+        </KbdTooltip>}
+        {editable && hasTags && <KbdTooltip label="Add Tags" shortcut="T">
+          <InspectorActionButton action="add-tags" className={styles.tagActionBtn} onClick={(e) => openPortal(e, tagSelectPortalAtom)}>
+            <IconPlus size={14} stroke={1.5} />
+            <span>Add Tags</span>
+          </InspectorActionButton>
+        </KbdTooltip>}
+      </div> : null}
       {chipMenu.state && <ContextMenu entries={chipMenu.state.entries} position={chipMenu.state.position} onClose={chipMenu.close} searchable={false} />}
     </InspectorSection>
   );
 }
 
-function FoldersSection({ folders, onRemove, onNavigate }: {
+function FoldersSection({ folders, onRemove, onNavigate, editable = true }: {
   folders: Array<{ id: number; name: string; color: string | null }>;
   onRemove?: (fid: number) => void;
   onNavigate?: (folderId: number) => void;
+  editable?: boolean;
 }) {
   const chipMenu = useContextMenu();
+  const hasFolders = folders.length > 0;
   return (
     <InspectorSection title="Folders" count={folders.length}>
-      <div className={styles.foldersWrap}>
-        {folders.map((f) => (
+      {hasFolders || editable ? <div className={styles.foldersWrap}>
+        {hasFolders && folders.map((f) => (
           <TagChip
             key={f.id} namespace="" subtag={f.name} colorRgb={hexToRgb(f.color)}
             onRemove={onRemove ? () => onRemove(f.id) : undefined}
@@ -465,12 +628,18 @@ function FoldersSection({ folders, onRemove, onNavigate }: {
             }}
           />
         ))}
-        <KbdTooltip label="Add to Folder" shortcut="F">
+        {editable && !hasFolders && <KbdTooltip label="Add to Folder" shortcut="F">
+          <InspectorActionButton action="add-folder" variant="empty-section" onClick={(e) => openPortal(e, folderPickerPortalAtom)}>
+            <IconPlus size={14} stroke={1.5} />
+            <span>Add to Folder</span>
+          </InspectorActionButton>
+        </KbdTooltip>}
+        {editable && hasFolders && <KbdTooltip label="Add to Folder" shortcut="F">
           <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button">
             <IconPlus size={14} stroke={1.5} />
           </button>
-        </KbdTooltip>
-      </div>
+        </KbdTooltip>}
+      </div> : null}
       {chipMenu.state && <ContextMenu entries={chipMenu.state.entries} position={chipMenu.state.position} onClose={chipMenu.close} searchable={false} />}
     </InspectorSection>
   );

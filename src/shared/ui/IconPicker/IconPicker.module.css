@@ -82,6 +82,28 @@
   transition: background var(--duration-fast) var(--ease-default);
 }
 
+/* The default-folder tile is used by the context-menu picker. */
+.defaultIconBtn {
+  display: none;
+  appearance: none;
+  border: none;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 0;
+  transition: background var(--duration-fast) var(--ease-default);
+}
+
+.defaultIconBtn:hover {
+  background: var(--color-menu-hover);
+  color: var(--color-text-primary);
+}
+
 .iconBtn:hover {
   background: var(--color-menu-hover);
   color: var(--color-text-primary);
@@ -98,4 +120,44 @@
   color: var(--color-text-tertiary);
   text-align: center;
   padding: 12px 0;
+}
+
+/* Keep the context picker compact for Picto's 115 curated icons plus the
+ * default tile. Cancel the menu wrapper's horizontal inset so the 6px inner
+ * padding produces the same visual edge inset on every side. */
+:global([aria-label="Context submenu"]) .root {
+  box-sizing: border-box;
+  width: 252px;
+  height: 300px;
+  margin-inline: -6px;
+  overflow: hidden;
+  padding: 6px;
+}
+
+:global([aria-label="Context submenu"]) .searchRow {
+  display: none;
+}
+
+:global([aria-label="Context submenu"]) .grid {
+  grid-template-columns: repeat(10, 24px);
+  gap: 0;
+  max-height: none;
+  overflow: visible;
+}
+
+:global([aria-label="Context submenu"]) .iconBtn,
+:global([aria-label="Context submenu"]) .defaultIconBtn {
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+}
+
+:global([aria-label="Context submenu"]) .defaultIconBtn {
+  display: flex;
+}
+
+:global([aria-label="Context submenu"]) .iconBtn svg,
+:global([aria-label="Context submenu"]) .defaultIconBtn svg {
+  width: 20px;
+  height: 20px;
 }

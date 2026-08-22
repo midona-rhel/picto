@@ -7,7 +7,7 @@
 }
 
 .label {
-  color: var(--color-text-secondary);
+  color: var(--inspector-text-secondary, var(--color-text-secondary));
   font-size: 11px;
   min-width: 64px;
   overflow: hidden;
@@ -15,7 +15,7 @@
 
 .value {
   flex: 1;
-  color: var(--color-text-primary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   font-size: 11px;
   text-align: right;
   opacity: 0.8;

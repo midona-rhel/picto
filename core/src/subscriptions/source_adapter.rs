@@ -5,7 +5,8 @@ use serde::Serialize;
 use url::Url;
 
 use crate::subscriptions::gallery_dl_runner::{
-    build_url, normalize_baraag_username, normalize_furaffinity_username, normalize_tumblr_blog,
+    build_url, normalize_baraag_username, normalize_fanbox_creator, normalize_furaffinity_username,
+    normalize_patreon_creator, normalize_subscribestar_creator, normalize_tumblr_blog,
     normalize_webtoons_url, site_by_id, SiteEntry,
 };
 
@@ -94,6 +95,15 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
     if site_id == "furaffinity" && query_kind == "user" {
         return normalize_furaffinity_username(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
+    if site_id == "patreon" && query_kind == "user" {
+        return normalize_patreon_creator(trimmed).unwrap_or_else(|_| trimmed.to_string());
+    }
+    if site_id == "fanbox" && query_kind == "user" {
+        return normalize_fanbox_creator(trimmed).unwrap_or_else(|_| trimmed.to_string());
+    }
+    if site_id == "subscribestar" && query_kind == "user" {
+        return normalize_subscribestar_creator(trimmed).unwrap_or_else(|_| trimmed.to_string());
+    }
     if site_id == "pixivuser" && query_kind == "user" {
         if let Ok(url) = Url::parse(trimmed) {
             let segments: Vec<_> = url
@@ -165,6 +175,15 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
     }
     if site_id == "furaffinity" {
         normalize_furaffinity_username(query_text)?;
+    }
+    if site_id == "patreon" {
+        normalize_patreon_creator(query_text)?;
+    }
+    if site_id == "fanbox" {
+        normalize_fanbox_creator(query_text)?;
+    }
+    if site_id == "subscribestar" {
+        normalize_subscribestar_creator(query_text)?;
     }
     if matches!(
         site_id,
@@ -325,6 +344,26 @@ mod tests {
             normalize_query_text("tumblr", "user", "https://nasa.tumblr.com/"),
             "nasa"
         );
+        assert_eq!(
+            normalize_query_text(
+                "patreon",
+                "user",
+                "https://www.patreon.com/creator-name/posts"
+            ),
+            "creator-name"
+        );
+        assert_eq!(
+            normalize_query_text("fanbox", "user", "https://creator-name.fanbox.cc/"),
+            "creator-name"
+        );
+        assert_eq!(
+            normalize_query_text(
+                "subscribestar",
+                "user",
+                "https://www.subscribestar.com/creator-name"
+            ),
+            "creator-name"
+        );
     }
 
     #[test]
@@ -384,6 +423,22 @@ mod tests {
                 "accepted {value}"
             );
         }
+        assert!(validate_query_text("patreon", "creator-name").is_ok());
+        assert!(validate_query_text("patreon", "https://www.patreon.com/c/creator-name").is_ok());
+        assert!(validate_query_text("patreon", "https://www.patreon.com/posts/123").is_err());
+        assert!(validate_query_text("fanbox", "creator-name").is_ok());
+        assert!(validate_query_text("fanbox", "https://creator-name.fanbox.cc/").is_ok());
+        assert!(validate_query_text("fanbox", "https://www.fanbox.cc/").is_err());
+        assert!(validate_query_text("subscribestar", "creator-name").is_ok());
+        assert!(validate_query_text(
+            "subscribestar",
+            "https://www.subscribestar.com/creator-name"
+        )
+        .is_ok());
+        assert!(
+            validate_query_text("subscribestar", "https://www.subscribestar.com/posts/123")
+                .is_err()
+        );
         assert!(validate_query_text(
             "hentaifoundry",
             "https://www.hentai-foundry.com/pictures/user/artist-name?x=1"

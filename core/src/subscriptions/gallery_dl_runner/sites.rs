@@ -179,6 +179,45 @@ pub static SITES: &[SiteEntry] = &[
         oauth_provider: None,
     },
     SiteEntry {
+        id: "patreon",
+        domain: "patreon.com",
+        credential_owner_site_id: "patreon",
+        name: "Patreon",
+        example_query: "creator-slug",
+        supports_query: false,
+        supports_account: true,
+        auth_required_for_full_access: true,
+        auth_strictly_required: false,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
+        oauth_provider: None,
+    },
+    SiteEntry {
+        id: "fanbox",
+        domain: "fanbox.cc",
+        credential_owner_site_id: "fanbox",
+        name: "pixivFANBOX",
+        example_query: "creator-slug",
+        supports_query: false,
+        supports_account: true,
+        auth_required_for_full_access: true,
+        auth_strictly_required: false,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
+        oauth_provider: None,
+    },
+    SiteEntry {
+        id: "subscribestar",
+        domain: "subscribestar.com",
+        credential_owner_site_id: "subscribestar",
+        name: "SubscribeStar",
+        example_query: "creator-slug",
+        supports_query: false,
+        supports_account: true,
+        auth_required_for_full_access: true,
+        auth_strictly_required: false,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
+        oauth_provider: None,
+    },
+    SiteEntry {
         id: "idolcomplex",
         domain: "idolcomplex.com",
         credential_owner_site_id: "idolcomplex",
@@ -288,6 +327,15 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "furaffinity" => normalize_furaffinity_username(query)
             .ok()
             .and_then(|username| build_furaffinity_gallery_url(&username)),
+        "patreon" => normalize_patreon_creator(query)
+            .ok()
+            .and_then(|creator| build_patreon_creator_url(&creator)),
+        "fanbox" => normalize_fanbox_creator(query)
+            .ok()
+            .and_then(|creator| build_fanbox_creator_url(&creator)),
+        "subscribestar" => normalize_subscribestar_creator(query)
+            .ok()
+            .and_then(|creator| build_subscribestar_creator_url(&creator)),
         "idolcomplex" => build_booru_url("https://www.idolcomplex.com/en/posts", query),
         "sankaku" => build_booru_url("https://sankaku.app/", query),
         "yandere" => build_booru_url("https://yande.re/post", query),
@@ -588,6 +636,175 @@ fn build_furaffinity_gallery_url(username: &str) -> Option<String> {
     Some(url.to_string())
 }
 
+pub fn normalize_patreon_creator(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Patreon subscriptions require a creator slug".to_string());
+    }
+
+    let creator = if let Ok(url) = Url::parse(trimmed) {
+        if !matches!(url.scheme(), "http" | "https")
+            || !matches!(url.host_str(), Some("patreon.com" | "www.patreon.com"))
+            || url.username() != ""
+            || url.password().is_some()
+            || url.port().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("Patreon subscriptions require a canonical creator URL".to_string());
+        }
+
+        let segments: Vec<_> = url
+            .path_segments()
+            .into_iter()
+            .flatten()
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        match segments.as_slice() {
+            ["c", creator] | [creator] | [creator, "posts"] => (*creator).to_string(),
+            _ => return Err("Patreon subscriptions require a creator profile URL".to_string()),
+        }
+    } else {
+        trimmed.to_string()
+    };
+
+    validate_simple_creator_slug(
+        &creator,
+        128,
+        "Patreon subscriptions require a safe creator slug",
+    )
+}
+
+fn build_patreon_creator_url(creator: &str) -> Option<String> {
+    let mut url = Url::parse("https://www.patreon.com").ok()?;
+    url.path_segments_mut().ok()?.push("c").push(creator);
+    Some(url.to_string())
+}
+
+pub fn normalize_fanbox_creator(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("pixivFANBOX subscriptions require a creator slug".to_string());
+    }
+
+    let creator = if let Ok(url) = Url::parse(trimmed) {
+        if !matches!(url.scheme(), "http" | "https")
+            || url.username() != ""
+            || url.password().is_some()
+            || url.port().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("pixivFANBOX subscriptions require a canonical creator URL".to_string());
+        }
+
+        let host = url.host_str().unwrap_or_default();
+        let segments: Vec<_> = url
+            .path_segments()
+            .into_iter()
+            .flatten()
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        if matches!(host, "fanbox.cc" | "www.fanbox.cc") {
+            match segments.as_slice() {
+                [creator] if creator.starts_with('@') && creator.len() > 1 => {
+                    creator[1..].to_string()
+                }
+                _ => {
+                    return Err("pixivFANBOX subscriptions require a public creator URL".to_string())
+                }
+            }
+        } else if let Some(creator) = host.strip_suffix(".fanbox.cc") {
+            if !segments.is_empty() {
+                return Err("pixivFANBOX subscriptions require a public creator URL".to_string());
+            }
+            creator.to_string()
+        } else {
+            return Err("pixivFANBOX subscriptions require a fanbox.cc URL".to_string());
+        }
+    } else {
+        trimmed.strip_prefix('@').unwrap_or(trimmed).to_string()
+    };
+
+    validate_simple_creator_slug(
+        &creator,
+        128,
+        "pixivFANBOX subscriptions require a safe creator slug",
+    )
+}
+
+fn build_fanbox_creator_url(creator: &str) -> Option<String> {
+    let mut url = Url::parse(&format!("https://{creator}.fanbox.cc")).ok()?;
+    url.set_path("/");
+    Some(url.to_string())
+}
+
+pub fn normalize_subscribestar_creator(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("SubscribeStar subscriptions require a creator slug".to_string());
+    }
+
+    let creator = if let Ok(url) = Url::parse(trimmed) {
+        if !matches!(url.scheme(), "http" | "https")
+            || !matches!(
+                url.host_str(),
+                Some("subscribestar.com" | "www.subscribestar.com")
+            )
+            || url.username() != ""
+            || url.password().is_some()
+            || url.port().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("SubscribeStar subscriptions require a canonical creator URL".to_string());
+        }
+
+        let segments: Vec<_> = url
+            .path_segments()
+            .into_iter()
+            .flatten()
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        match segments.as_slice() {
+            [creator] => (*creator).to_string(),
+            _ => {
+                return Err("SubscribeStar subscriptions require a creator profile URL".to_string())
+            }
+        }
+    } else {
+        trimmed.to_string()
+    };
+
+    validate_simple_creator_slug(
+        &creator,
+        128,
+        "SubscribeStar subscriptions require a safe creator slug",
+    )
+}
+
+fn build_subscribestar_creator_url(creator: &str) -> Option<String> {
+    let mut url = Url::parse("https://www.subscribestar.com").ok()?;
+    url.path_segments_mut().ok()?.push(creator);
+    Some(url.to_string())
+}
+
+fn validate_simple_creator_slug(
+    creator: &str,
+    max_len: usize,
+    error_message: &str,
+) -> Result<String, String> {
+    if creator.is_empty()
+        || creator.len() > max_len
+        || !creator
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err(error_message.to_string());
+    }
+    Ok(creator.to_string())
+}
+
 fn build_deviantart_gallery_url(username: &str) -> Option<String> {
     let mut url = Url::parse("https://www.deviantart.com").ok()?;
     url.set_path(&format!("/{username}/gallery/"));
@@ -723,6 +940,9 @@ mod tests {
                 "deviantart",
                 "tumblr",
                 "furaffinity",
+                "patreon",
+                "fanbox",
+                "subscribestar",
                 "idolcomplex",
                 "sankaku",
                 "yandere",
@@ -731,7 +951,7 @@ mod tests {
                 "e621",
             ])
         );
-        assert_eq!(SITES.len(), 17);
+        assert_eq!(SITES.len(), 20);
     }
 
     #[test]
@@ -830,6 +1050,22 @@ mod tests {
             Some("https://www.furaffinity.net/gallery/Artist_Name")
         );
         assert_eq!(
+            build_url("patreon", "https://www.patreon.com/creator-name/posts").as_deref(),
+            Some("https://www.patreon.com/c/creator-name")
+        );
+        assert_eq!(
+            build_url("fanbox", "https://www.fanbox.cc/@creator-name").as_deref(),
+            Some("https://creator-name.fanbox.cc/")
+        );
+        assert_eq!(
+            build_url(
+                "subscribestar",
+                "https://www.subscribestar.com/creator-name"
+            )
+            .as_deref(),
+            Some("https://www.subscribestar.com/creator-name")
+        );
+        assert_eq!(
             build_url("idolcomplex", "solo rating:safe").as_deref(),
             Some("https://www.idolcomplex.com/en/posts?tags=solo+rating%3Asafe")
         );
@@ -884,6 +1120,78 @@ mod tests {
     #[test]
     fn unsupported_sources_and_aliases_are_not_registered() {
         assert!(site_by_id("rule34xxx").is_none());
+    }
+
+    #[test]
+    fn paid_creator_sources_accept_only_canonical_profile_inputs() {
+        for value in [
+            "creator-name",
+            "https://www.patreon.com/c/creator-name",
+            "https://www.patreon.com/creator-name",
+            "https://www.patreon.com/creator-name/posts",
+        ] {
+            assert_eq!(
+                normalize_patreon_creator(value).as_deref(),
+                Ok("creator-name"),
+                "{value}"
+            );
+        }
+        for value in [
+            "creator/name",
+            "https://example.com/c/creator-name",
+            "https://www.patreon.com/creator-name?view=posts",
+            "https://www.patreon.com/posts/12345",
+        ] {
+            assert!(
+                normalize_patreon_creator(value).is_err(),
+                "accepted {value}"
+            );
+        }
+
+        for value in [
+            "creator-name",
+            "@creator-name",
+            "https://creator-name.fanbox.cc/",
+            "https://www.fanbox.cc/@creator-name",
+        ] {
+            assert_eq!(
+                normalize_fanbox_creator(value).as_deref(),
+                Ok("creator-name"),
+                "{value}"
+            );
+        }
+        for value in [
+            "creator/name",
+            "https://www.fanbox.cc/@creator-name/posts/1",
+            "https://www.fanbox.cc/@creator-name?foo=1",
+            "https://www.fanbox.cc/",
+            "https://example.com/@creator-name",
+        ] {
+            assert!(normalize_fanbox_creator(value).is_err(), "accepted {value}");
+        }
+
+        for value in [
+            "creator-name",
+            "https://www.subscribestar.com/creator-name",
+            "https://subscribestar.com/creator-name",
+        ] {
+            assert_eq!(
+                normalize_subscribestar_creator(value).as_deref(),
+                Ok("creator-name"),
+                "{value}"
+            );
+        }
+        for value in [
+            "creator/name",
+            "https://example.com/creator-name",
+            "https://www.subscribestar.com/creator-name?tag=foo",
+            "https://www.subscribestar.com/posts/12345",
+        ] {
+            assert!(
+                normalize_subscribestar_creator(value).is_err(),
+                "accepted {value}"
+            );
+        }
     }
 
     #[test]

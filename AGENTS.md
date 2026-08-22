@@ -46,6 +46,19 @@ may take seconds, but must be measured on representative data and keep the UI re
 - PBIs describe observed unfinished behavior with a finite acceptance test. Delete them when the
   behavior works; Git history is the archive. Do not create PBIs to postpone cleanup.
 
+# Host Input Automation Safety
+
+- Never launch or use macOS System Events, `osascript`/AppleScript, Accessibility UI automation,
+  synthetic keyboard or mouse events, or any tool that can capture host input for Picto audits or
+  tests. Use ASAR/source inspection and read-only Electron CDP/DOM queries or screenshots instead.
+- If UI driving is absolutely necessary, obtain explicit user approval before starting it. Run one
+  bounded process with a timeout, record its PID, and guarantee termination and cleanup on success,
+  failure, or interruption. Never leave System Events running.
+- Emergency recovery: identify and terminate only the automation PID or System Events instance
+  started by this task; do not kill broad or unrelated processes.
+- This rule follows an observed incident where System Events launched during a visual audit captured
+  host-wide keyboard and left-click input until its PID was terminated.
+
 # Release Completion
 
 The executable release backlog is `docs/RELEASE_COMPLETION_PLAN.md`. Work follows its dependency

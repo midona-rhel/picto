@@ -4,7 +4,7 @@
  */
 
 import { useState, useMemo } from 'react';
-import { IconRotate2 } from '@tabler/icons-react';
+import { IconFolder, IconRotate2 } from '@tabler/icons-react';
 import { CURATED_ICONS } from './iconRegistry';
 import styles from './IconPicker.module.css';
 
@@ -54,6 +54,14 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
       </div>
 
       <div className={styles.grid}>
+        <button
+          title="Use default folder icon"
+          aria-label="Use default folder icon"
+          onClick={() => handleSelect(null)}
+          className={`${styles.defaultIconBtn} ${!local ? styles.iconSelected : ''}`}
+        >
+          <IconFolder size={ICON_SIZE} stroke={1.5} />
+        </button>
         {filtered.length === 0 && (
           <div className={styles.empty}>No icons found</div>
         )}

@@ -134,6 +134,9 @@ describe('auth session routing', () => {
   it.each([
     ['webtoons', 'https://www.webtoons.com/member/login'],
     ['deviantart', 'https://www.deviantart.com/users/login'],
+    ['patreon', 'https://www.patreon.com/login?l=en-GB'],
+    ['fanbox', 'https://accounts.pixiv.net/login?prompt=select_account&return_to=https%3A%2F%2Fwww.fanbox.cc%2Fauth%2Fstart&source=fanbox'],
+    ['subscribestar', 'https://www.subscribestar.com/login'],
     ['idolcomplex', 'https://login.idol.sankakucomplex.com/oidc/auth?response_type=code&scope=openid&client_id=idol-web-app&redirect_uri=https%3A%2F%2Fwww.idolcomplex.com%2Fsso%2Fcallback&state=return_uri%3Dhttps%3A%2F%2Fwww.idolcomplex.com%2Fen%2Flogin&theme=black&route=login&lang=en'],
     ['sankaku', 'https://login.sankakucomplex.com/oidc/auth?response_type=code&scope=openid&client_id=sankaku-web-app&redirect_uri=https%3A%2F%2Fsankaku.app%2Fsso%2Fcallback&state=return_uri%3Dhttps%3A%2F%2Fsankaku.app%2F&theme=black&route=login&lang=en'],
     ['yandere', 'https://yande.re/user/login'],
@@ -370,7 +373,7 @@ describe('auth session routing', () => {
     expect(browser.instances[0].loadedUrl).toBe('https://rule34.xxx/index.php?code=00&page=account&s=login');
     expect(browser.instances[0].options.webPreferences.sandbox).toBe(true);
     expect(browser.instances[0].options.webPreferences.partition).toBe('persist:picto-auth-v1-rule34');
-    expect(browser.instances[0].userAgent).toBeUndefined();
+    expect(browser.instances[0].userAgent).toBe('Mozilla/5.0 Chrome/138.0.0.0 Safari/537.36');
     expect(state.site_category).toBe('rule34');
     expect(state.status).toBe('active');
     await sessions.cancelAuthSession();
