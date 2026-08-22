@@ -16,6 +16,7 @@ pub mod duplicates;
 pub mod duplicates_v2;
 pub mod folders;
 pub mod folders_v2;
+pub mod gallery_dl_source_v2;
 pub mod import;
 pub mod ingest;
 pub mod ingest_queue;

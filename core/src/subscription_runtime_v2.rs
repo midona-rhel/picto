@@ -199,7 +199,12 @@ async fn run_stream<R: SourceRunner>(
                 break result;
             }
             item = input.recv() => match item {
-                Some(item) => process_item(application, query, &item, item_ids)?,
+                Some(item) => {
+                    if let Err(error) = process_item(application, query, &item, item_ids) {
+                        release_post_archive(application, query, &item.post.post_key).await;
+                        return Err(error);
+                    }
+                }
                 None => {
                     break runner_future.await;
                 }
@@ -208,9 +213,25 @@ async fn run_stream<R: SourceRunner>(
     };
 
     while let Some(item) = input.recv().await {
-        process_item(application, query, &item, item_ids)?;
+        if let Err(error) = process_item(application, query, &item, item_ids) {
+            release_post_archive(application, query, &item.post.post_key).await;
+            return Err(error);
+        }
     }
     Ok(runner_result)
+}
+
+async fn release_post_archive(application: &Application, query: &ClaimedQueryRun, post_key: &str) {
+    let prefix = crate::subscriptions::archive::subscription_query_archive_prefix(
+        query.subscription_id,
+        query.query_id,
+    );
+    let _ = crate::subscriptions::archive::clear_post_archive_entries_at_root(
+        application.store().library_root(),
+        &prefix,
+        &[post_key.to_string()],
+    )
+    .await;
 }
 
 fn process_item(
@@ -588,5 +609,38 @@ mod tests {
             })
             .unwrap();
         assert_eq!(application.projections().inbox_bitmap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn durable_enqueue_failure_releases_gallery_archive_for_retry() {
+        let (directory, application, subscription_id) = fixture();
+        let failed_item = item(directory.path(), "post-a", "item-a");
+        std::fs::remove_file(&failed_item.source_path).unwrap();
+        let archive =
+            rusqlite::Connection::open(directory.path().join("gdl-archive.sqlite3")).unwrap();
+        archive
+            .execute_batch(
+                "CREATE TABLE archive (entry TEXT PRIMARY KEY);
+                 INSERT INTO archive VALUES ('picto_s1_q1_example_post-a_item-a');",
+            )
+            .unwrap();
+        drop(archive);
+        let runner = FakeRunner {
+            runs: Mutex::new(VecDeque::from([FakeRun {
+                items: vec![failed_item],
+                result: Ok(RunnerSuccess::default()),
+            }])),
+        };
+        let mut worker = SubscriptionWorker::new(&application, runner);
+
+        worker.tick(FIRST_NOW).await.unwrap().unwrap();
+
+        let archive =
+            rusqlite::Connection::open(directory.path().join("gdl-archive.sqlite3")).unwrap();
+        let remaining: i64 = archive
+            .query_row("SELECT COUNT(*) FROM archive", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(subscription_id, 1);
+        assert_eq!(remaining, 0);
     }
 }
