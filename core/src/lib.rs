@@ -11,18 +11,25 @@ pub mod engine;
 
 // ── Domain modules ──────────────────────────────────
 pub mod ai_tagger;
+pub mod app;
 pub mod duplicates;
+pub mod duplicates_v2;
 pub mod folders;
+pub mod folders_v2;
 pub mod import;
 pub mod ingest;
 pub mod ingest_queue;
+pub mod ingest_queue_v2;
+pub mod ingest_v2;
 pub mod media_analysis;
 pub mod media_capabilities;
 pub mod scope;
 pub mod selection;
 pub mod settings;
 pub mod smart_folders;
+pub mod smart_v2;
 pub mod subscriptions;
+pub mod subscriptions_v2;
 pub mod tags;
 
 // ── Cross-cutting infrastructure ────────────────────
@@ -33,13 +40,19 @@ pub mod credential_store;
 pub mod dispatch;
 pub mod events;
 pub mod media_processing;
+pub mod media_processing_v2;
+pub mod operations_v2;
 pub mod oplog;
 pub mod perf;
 pub mod poison;
+pub mod projection_v2;
+pub mod query_v2;
 pub mod rate_limiter;
 pub mod runtime_contract;
 pub mod runtime_state;
 pub mod scheduler;
 pub mod state;
+pub mod store;
 pub mod types;
 pub mod workers;
+pub mod workers_v2;

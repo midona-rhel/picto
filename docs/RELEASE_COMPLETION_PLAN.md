@@ -2,213 +2,101 @@
 
 ## Goal
 
-Finish the application without another architecture program. Keep one production path per behavior,
-prove persistence and user-visible outcomes, delete replaced code, and ship a packaged Electron build.
+Ship one understandable backend: command, application operation, SQLite transaction, synchronous
+projection settlement, compact resource invalidation. Delete each replaced path in the same cutover.
 
 ## Release Rules
 
-1. SQLite is truth; Roaring bitmaps are rebuildable query projections.
-2. The durable ingest queue is the only ingest entrypoint for manual imports, watches,
-   subscriptions, and retries.
-3. Media entities are images or videos only. Multi-file posts create independent media with shared
-   source-post metadata and order; no hidden grouping or automatic folders are created.
-4. Durable background work owns derivatives and automatic AI tagging.
-5. Folder sync uses a user-owned directory transported by Drive, Dropbox, or equivalent software.
-6. Every visible action works or is removed.
-7. PBIs close only after focused tests and an application smoke.
-8. Agents never share write scopes or commit independently.
+- `All` is active roots only. Inbox and Trash are separate.
+- Library roots are standalone media or collections. Attached members have no independent lifecycle
+  or folder membership.
+- One ingest queue accepts manual, watched, and subscription media.
+- One persisted subscription state machine owns runs, retries, interruption, and progress.
+- SQLite is authoritative; projections are settled before readers and events observe a revision.
+- No pre-1.0 migration, dual writes, compatibility backend, cloud sync, or disabled release UI.
+- Preserve the current active test library until cutover. Then run one reviewed manual conversion,
+  verify the converted copy, and delete the conversion tool before release.
+- Retained tests prove behavior or persistence. Wrapper/parity/mock-only tests are deleted.
 
-## Phase 0: Clean Integration
+## Phase 0: Integration Boundary
 
-- [x] Resolve all unmerged paths without dropping current behavior.
-- [x] Delete the conflicted legacy frontend rather than resolving obsolete behavior.
-- [x] Require an empty unmerged-file list and clean `git diff --check`.
-- [x] Run Rust tests, TypeScript, Vitest, and command parity.
-- [x] Create one reviewed integration baseline commit.
-- [x] Delete the remaining unreachable `legacy/` tree after reachability and packaging checks.
+- [x] Commit the prior subscription/frontend checkpoint.
+- [x] Isolate the replacement in `codex/backend-replacement`.
+- [x] Restore the collection/root product contract and remove cloud sync from release scope.
+- [ ] Keep one replacement PBI and delete it after the packaged smoke.
 
-## Phase 1: Truthful Verification and Migrations
+## Phase 1: Store and Application Core
 
-- [x] Remove dead runtime-schema, typed-command, and undo-coverage checks.
-- [x] Keep TypeScript, Vitest, Rust tests, command parity, and behavior-boundary tests.
-- [x] Replace the stale smoke script with a real packaged-app launch/open-library smoke.
-- [x] Create only the current pre-1.0 schema and validate exact-version opens.
-- [x] Reject old, newer, malformed, and unknown schemas without mutating user data.
-- [x] Delete legacy imports, ordered migrations, and canonical open-time schema mutation.
+- [x] Create exact schema 118 and reject incompatible databases without mutation.
+- [x] Separate item, media, and physical file identity.
+- [x] Add direct Store read/transaction boundaries and monotonic library revision.
+- [x] Add compact mutation receipts and `LibraryChanged` resources.
+- [ ] Settle projection changes under the same read/write consistency boundary as SQLite commits.
 
-## Phase 2: Core Library Contracts
+## Phase 2: Queries, Projections, and Core Operations
 
-- [x] Prove manual, folder, watch, subscription, and retry imports use the durable queue.
-- [x] Delete competing import/retry paths; keep explicit user-requested derivative repair actions.
-- [x] Keep image and video media separate from explicit folder membership and source metadata.
-- [x] Delete folders atomically with all descendants while leaving media untouched.
-- [x] Fall back to the nearest surviving parent or All when deleting the active folder hierarchy.
-- [x] Emit every deleted folder in runtime facts.
-- [x] Verify grid, sidebar, folder, smart-folder, tag, and special-scope counts agree.
-- [x] Verify recently viewed is unique per entity and ordered by latest view.
-- [x] Remove incomplete batch rename and no-op folder actions; retain drag-and-drop folder Move.
-- [x] Make manual file drag-and-drop honor the active lifecycle destination. Inbox imports remain
-      Inbox media, and every open grid settles membership from its canonical query after import.
-      Verify `All` remains unchanged, Inbox increases, and the same durable ingest path is
-      used rather than adding a second import implementation.
+- [x] Implement canonical All, Inbox, Trash, Recently Viewed, Untagged, Uncategorized, and folder
+  root queries with visible-item and underlying-media counts.
+- [ ] Implement smart-folder and search predicates through the same root resolver.
+- [ ] Use one query for pages, outline, selection, export, and sidebar counts.
+- [x] Implement lifecycle, folders, tags, metadata, group, detach, ungroup, reorder, cover, and
+  destructive delete as transaction-owned operations.
+- [ ] Prove incremental projection behavior at 100k and 1M representative assets.
 
-## Phase 2.5: Flattened Media Model
+## Phase 3: Ingest and Background Work
 
-- [x] Media entities are images or videos only; the aggregate-entity path is deleted.
-- [x] Import every file in a multi-file source post as an independent media entity with shared
-      source-post metadata and source order.
-- [x] Never create a hidden group, placeholder, automatic per-post folder, or grouping extension hook.
-- [x] Keep `All` as the accepted active library and exclude Inbox/Trash from `All`, folders, smart
-      folders, search, and counts.
-- [x] Allow any future grouping or rearrangement only through a dedicated external media
-      manifest/file format, outside the current media data model.
-- [x] Delete the replaced aggregate path and pass compile, unit, contract, parity, and build tests.
-- [x] Pass the fresh-library packaged-application smoke and delete the completed implementation PBI.
+- [x] Implement physical-byte reuse with distinct logical media occurrences.
+- [x] Implement source-item idempotency, deletion tombstones, and second-item collection promotion.
+- [ ] Make the durable ingest queue the only manual/watch/subscription entrypoint.
+- [ ] Finish one durable worker for derivatives, AI tagging, and blob deletion.
 
-Source certification may now resume. Collection-shaped persistence assertions are obsolete, but
-accepted authentication, extraction, metadata, pagination, recovery, and UI evidence remains valid
-unless the code that owns that behavior changed. The independent-media ingest layer is proved once
-with representative single-file, ordered multi-file, and mixed-media sources rather than by
-re-downloading every source.
+## Phase 4: Subscriptions
 
-## Phase 3: Subscriptions
+- [ ] Replace transient run ownership with one persisted subscription/query-run state machine.
+- [ ] Resume from the first non-terminal source item after restart.
+- [ ] Derive all counters from persisted rows and serialize same-domain requests one second apart.
+- [ ] Normalize every adapter to ordered posts/items and sanitize descriptions centrally.
+- [ ] Reuse unchanged authentication/extraction evidence and recertify changed adapters.
 
-- [x] Give query and subscription issues stable identity and one persisted recovery disposition.
-- [x] Make the subscription the only scheduled run unit; make restart, stop, retry, reset, delete,
-      and multi-query completion durable.
-- [x] Stream every source through the durable ingest queue and keep progress active until downloads
-      and ingest are terminal.
-- [x] Use explicit source adapters rather than a generic fallback, and certify extraction, metadata,
-      pagination, interruption, restart, replay, and user-visible terminal state.
-- [x] Use direct-site login in a Picto-managed browser and store captured credentials in the OS
-      credential store. Product UI never asks users to paste secrets.
-- [ ] Certify the current production registry: Pixiv search, Pixiv user, Gelbooru, Rule34,
-      Danbooru, Webtoons, Hentai Foundry, Baraag, DeviantArt, Tumblr, Fur Affinity, Patreon,
-      pixivFANBOX, SubscribeStar, Idol Complex, Sankaku, Yande.re, Konachan, Safebooru, and e621.
-- [x] Prove the shared flattened ingest model with representative single-file, ordered multi-file,
-      and mixed image/video sources instead of repeating unchanged 100-post downloads per adapter.
-- [x] Run real Electron login and ingest workflows, including Webtoons cookie capture and Tumblr
-      OAuth credential capture.
-- [x] Remove deferred ArtStation from the registry and Accounts UI rather than advertising an
-      uncertified source.
+## Phase 5: Duplicates and AI
 
-Baraag's public production path is certified. Its optional private login cannot be certified with a
-throwaway account because the source requires an applicant's own artwork and moderator approval;
-Picto retains the direct OAuth path without pretending that external approval occurred. Patreon,
-pixivFANBOX, and SubscribeStar now use the same direct-site cookie-capture contract as the other
-cookie-auth sources and remain pending attended certification. OnlyFans remains outside the current
-registry because it needs a separate downloader/runtime path for mixed image and video handling.
+- [ ] Detect at physical-file level and present affected logical roots.
+- [ ] Resolve deterministic quality winners using decoded information, dimensions, format, alpha,
+  file size, and similarity.
+- [ ] Repoint logical occurrences without losing source provenance, ordering, folders, or tags.
+- [ ] Finish automatic tagging through the shared durable worker.
 
-## Phase 4: PBI-577 Duplicates
+## Phase 6: Atomic App Cutover
 
-- [x] Preserve the existing-candidate guard in the release test lane before every destructive
-      resolution.
-- [x] Make failed loser original/thumbnail blob cleanup visible and durably retryable.
-- [x] Test every decision and cross-media ownership choice against a live candidate.
-- [x] Verify reference repointing, All/Inbox/Trash boundaries, and blob state after restart.
-- [x] Measure and replace the unconditional quadratic scan. The exact indexed implementation
-      matched brute force on 4,096 deterministic 256-bit hashes and all tested thresholds; the
-      release measurement was 13.57 ms brute force and 20.00 ms indexed at this small population,
-      with no unsupported large-library speed claim.
-- [x] Replace per-import full-library pHash scans with a durable eight-partition SQLite index for
-      the normal 97% threshold. Candidate lookup and pair insertion now share the import write
-      transaction; a one-million-row query-plan probe used all eight indexes and returned one
-      synthetic candidate in about 1 ms.
-- [x] Delete unused similar-media commands, types, BK-tree path, and parity exception.
-- [x] Run the packaged Electron duplicate-review smoke through rendered controls. Evidence:
-      `artifacts/duplicates/smoke.json` on 2026-08-14.
-- [x] Archived PBI-577 after focused, full-suite, package, restart, and UI-smoke verification.
+- [ ] Build a one-time development conversion for the current active library; dry-run and back it up
+  before mutation. Never ship or auto-run this conversion.
+- [ ] Replace hash-based logical UI identity with item IDs.
+- [ ] Replace detailed state-change settlement with the resource invalidation registry.
+- [ ] Remove optimistic grid/count ownership and reconcile from canonical queries.
+- [ ] Remove unused commands and switch IPC/backend/frontend contracts atomically.
+- [ ] Delete old engine, DB facade, compiler/change-impact, old ingest/subscription paths, and cloud
+  sync immediately after the smoke passes.
+- [ ] Delete the one-time conversion tool after the converted active library passes verification.
 
-## Phase 5: PBI-604 Tag Manager
+## Phase 7: OnlyFans
 
-- [x] Return tag pages as `{ items, next_cursor }`.
-- [x] Build one direct rebuilt Tag Manager without a manager framework or legacy port.
-- [x] Support search, namespace filtering, stable pagination, and zero-count tags.
-- [x] Support rename, merge, delete, aliases, and implications.
-- [x] Settle grid, inspector, smart-folder, untagged, and sidebar reads through normal facts.
-- [x] Test real mutations, remove the placeholder, run the Electron smoke, and archive PBI-604.
+- [ ] Add a native source runner behind the same normalized post/item stream.
+- [ ] Prove direct-site auth, images, videos, mixed posts, pagination, restart, and expired sessions.
 
-Accepted 2026-08-14. The behavior is release-complete; visual restyling remains part of the later
-reference application-reference UI pass and must reuse this canonical API rather than introducing another tag path.
+## Phase 8: Release Gate
 
-## Phase 6: PBI-605 AI Tagging
+- [ ] Remove production TODO/FIXME items by implementation or deletion.
+- [ ] Delete mock-only/pass-through tests and obsolete PBIs/docs.
+- [ ] Pass Rust, TypeScript, Vitest, native addon, packaged Electron, and behavior smokes.
+- [ ] Report production/test LOC and deleted modules.
+- [ ] Delete the replacement PBI.
 
-- [x] Download model artifacts into a temporary directory and activate them atomically.
-- [x] Validate labels and load the ONNX session before reporting ready.
-- [x] Prove preprocessing, channel order, normalization, thresholds, and output interpretation.
-- [x] Use one prediction helper for reviewed and automatic tagging.
-- [x] Move auto-tagging from ingest into durable retryable background work.
-- [x] Keep reviewed application explicit and preserve AI provenance.
-- [x] Make cancellation behavior honest and leave no stuck task.
-- [ ] Run restart and packaged CPU inference smokes and archive PBI-605.
+## User Verification
 
-## Phase 7: PBI-602 Folder Sync
-
-- [x] Replace the architecture document with a short folder-sync behavior contract.
-- [x] Use one `sync_cycle` for startup, periodic, and manual sync.
-- [x] Upload verified blobs before operations that reference them.
-- [x] Verify downloaded content hashes before storing originals.
-- [x] Reject symlinks and paths escaping the selected sync root.
-- [x] Park missing-prerequisite operations instead of advancing past them.
-- [x] Stop safely on unknown operation versions or types.
-- [x] Track and retry missing blobs.
-- [x] Enqueue derivatives exactly once after remote blob hydration.
-- [x] Persist last success, failure, pending work, and missing-media state.
-- [x] Sync subscription definitions and queries; keep credentials and run history device-local.
-- [x] Preserve tag provenance during replay.
-- [x] Report uploads, downloads, pending work, failures, and derivative catch-up truthfully.
-- [x] Pass two-device restore, corruption, ordering, and restart tests, then archive PBI-602.
-
-## Phase 8: Performance, Deletion, and PBI Cleanup
-
-- [x] Delete unused frontend dependencies and update third-party licenses.
-- [ ] Benchmark single writes, bulk writes, startup rebuilds, and large smart-folder reads on
-      representative 100k-1M entity data.
-      Baseline: one status change at 100k entities took 1.7s with 10 smart folders and 20.7s with
-      100 smart folders; projection rebuilding, not the sub-millisecond SQL write, dominated.
-- [ ] Keep common status and tag writes incremental; they must not trigger full-library tag,
-      smart-folder, sidebar, or cached-size rebuilds.
-- [ ] Make query-result bulk mutations ID-only and set-based, with bounded runtime events.
-- [ ] Stop expanding large smart-folder bitmaps into SQL `IN` lists.
-- [ ] Remove every production TODO by implementing, removing, or documenting a real limitation.
-- [ ] Remove unsupported authentication entrypoints.
-- [ ] Delete commands without active callers and minimize the parity allowlist.
-- [ ] Route actionable operation failures and background completion summaries through one shared
-      non-modal notification path; raw IPC wrapper errors and local feature banners must not leak
-      into the UI.
-- [ ] Consolidate only measured duplicate behavior, not files that are merely large.
-- [ ] Delete archived PBIs, historical plans, and stale architecture documents after closure.
-- [ ] Replace the large guide program with concise release-accurate user documentation.
-- [x] Delete unreproduced bug buckets, absent Random work, and legacy-parity menu work.
-- [x] Remove guided onboarding as a feature. Cold start keeps one ordinary create/open-library state
-      and does not mount library-scoped UI or issue library-scoped backend calls before open succeeds.
-
-## Phase 9: Release Gate
-
-- [ ] Audit the release test harness by behavior: delete tests that only prove mocked values move
-      between preconfigured layers, retain focused unit tests without calling them product proof,
-      and require real persistence/application evidence for every release claim.
-- [ ] Clean Git index and diff checks.
-- [ ] Rust formatting and full Rust tests.
-- [ ] TypeScript, Vitest, and command parity.
-- [ ] Fresh, exact-version, malformed, and mismatch schema tests.
-- [ ] Native module build and packaged Electron build.
-- [ ] Smoke import, grid, inspector, folders, flattened multi-file subscription imports, duplicates,
-      tags, AI, sync, deletion, and restart recovery.
-- [ ] Run supported platform checks and archive PBI-603.
-- [ ] Clean Rust targets and stale packaged output after each source-certification batch and before
-      the final packaged build; do not let repeated native test links accumulate indefinitely.
-
-## Agent Waves
-
-1. Integration is coordinator-owned; one read-only agent reviews conflict choices.
-2. Migrations, verification scripts, and docs use separate Terra agents with disjoint files.
-3. Subscription and duplicate correctness may run in parallel; shared schema edits are integrated
-   serially.
-4. Tag backend lands before the Tag Manager UI agent begins.
-5. AI tagging runs mostly alone because it crosses downloads, inference, workers, ingest, and UI.
-6. Sync backend work runs alone in ordered slices; its UI starts only after the status contract is stable.
-7. Deletion, docs, and final smoke work run in parallel only when their write scopes do not overlap.
-
-Every agent prompt defines behavior, allowed files, forbidden refactors, deletions, and focused tests.
-The coordinator reviews the diff, runs the gate, and commits one coherent slice at a time.
+1. Core: import, lifecycle drag, folders, group/reorder/detach/ungroup, destructive collection delete.
+2. Subscriptions: booru and multi-media creator run, interruption, restart, truthful progress/counts.
+3. Cutover: grids, sidebar, inspector, duplicates, tags, and subscriptions settle without refresh or
+   visual ghost items.
+4. OnlyFans: attended login and representative image/video/mixed posts.
+5. Packaged release: fresh library through import, acceptance, organization, subscription,
+   deduplication, tagging, AI tagging, restart, and deletion.
