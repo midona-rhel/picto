@@ -472,7 +472,15 @@ mod tests {
             .unwrap();
         assert_eq!(downloaded_state, "downloaded");
         let report = queue.run_batch(8).unwrap();
-        assert_eq!(report.ingested, 1);
+        let job_state: (String, Option<String>) = app
+            .store()
+            .read(|connection| {
+                connection.query_row("SELECT status, last_error FROM ingest_job", [], |row| {
+                    Ok((row.get(0)?, row.get(1)?))
+                })
+            })
+            .unwrap();
+        assert_eq!(report.ingested, 1, "report={report:?}, job={job_state:?}");
         assert_eq!(report.item_ids.len(), 1);
         app.store()
             .read(|connection| {

@@ -2,7 +2,7 @@
 
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 120;
+pub const CURRENT_SCHEMA_VERSION: i64 = 121;
 
 pub const LIBRARY_DDL: &str = r#"
 CREATE TABLE library_meta (
@@ -160,6 +160,7 @@ CREATE TABLE subscription_query (
     query_key TEXT NOT NULL UNIQUE,
     subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
     site_id TEXT NOT NULL,
+    domain_key TEXT NOT NULL,
     query_kind TEXT NOT NULL,
     query_text TEXT NOT NULL,
     display_name TEXT,
@@ -455,7 +456,7 @@ mod tests {
                 "retained {removed}"
             );
         }
-        assert_eq!(CURRENT_SCHEMA_VERSION, 118);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 121);
     }
 
     #[test]

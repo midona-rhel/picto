@@ -27,6 +27,7 @@ pub struct SubscriptionInput {
 pub struct QueryInput {
     pub query_key: String,
     pub site_id: String,
+    pub domain_key: String,
     pub query_kind: String,
     pub query_text: String,
     pub display_name: Option<String>,
@@ -123,8 +124,15 @@ pub struct ClaimedQueryRun {
     pub run_query_id: i64,
     pub run_id: i64,
     pub query_id: i64,
+    pub subscription_id: i64,
     pub site_id: String,
+    pub domain_key: String,
+    pub query_kind: String,
     pub query_text: String,
+    pub initial_post_limit: Option<i64>,
+    pub periodic_post_limit: Option<i64>,
+    pub initial_run_complete: bool,
+    pub resume_cursor: Option<String>,
     pub attempt_count: i64,
 }
 
@@ -168,18 +176,18 @@ impl DomainSchedule {
         Self::default()
     }
 
-    pub fn next_allowed_at_ms(&self, site_id: &str) -> Option<i64> {
-        self.next_allowed_at_ms.get(site_id).copied()
+    pub fn next_allowed_at_ms(&self, domain_key: &str) -> Option<i64> {
+        self.next_allowed_at_ms.get(domain_key).copied()
     }
 
-    fn allows(&self, site_id: &str, now_ms: i64) -> bool {
-        self.next_allowed_at_ms(site_id)
+    fn allows(&self, domain_key: &str, now_ms: i64) -> bool {
+        self.next_allowed_at_ms(domain_key)
             .is_none_or(|next| next <= now_ms)
     }
 
-    fn mark_started(&mut self, site_id: String, now_ms: i64) {
+    fn mark_started(&mut self, domain_key: String, now_ms: i64) {
         self.next_allowed_at_ms
-            .insert(site_id, now_ms + DOMAIN_INTERVAL_MS);
+            .insert(domain_key, now_ms + DOMAIN_INTERVAL_MS);
     }
 }
 
@@ -219,17 +227,19 @@ pub fn create_query(
 ) -> Result<i64, String> {
     require_text("query key", &input.query_key)?;
     require_text("site id", &input.site_id)?;
+    require_text("domain key", &input.domain_key)?;
     require_text("query kind", &input.query_kind)?;
     let (id, _) = store.transaction(|tx| {
         tx.execute(
             "INSERT INTO subscription_query (
-                 query_key, subscription_id, site_id, query_kind, query_text,
+                 query_key, subscription_id, site_id, domain_key, query_kind, query_text,
                  display_name, notes
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 input.query_key,
                 subscription_id,
                 input.site_id,
+                input.domain_key,
                 input.query_kind,
                 input.query_text,
                 input.display_name,
@@ -319,8 +329,11 @@ pub fn claim_next_query_run(
     let now_ms = parse_timestamp_ms(now)?;
     let (claim, _) = store.transaction(|tx| {
         let mut statement = tx.prepare(
-            "SELECT qr.run_query_id, qr.run_id, qr.query_id, q.site_id,
-                    q.query_text, qr.attempt_count
+            "SELECT qr.run_query_id, qr.run_id, qr.query_id, r.subscription_id,
+                    q.site_id, q.domain_key, q.query_kind, q.query_text,
+                    s.initial_post_limit, s.periodic_post_limit,
+                    q.initial_run_complete, COALESCE(qr.resume_cursor, q.resume_cursor),
+                    qr.attempt_count
              FROM subscription_run_query qr
              JOIN subscription_run r ON r.run_id = qr.run_id
              JOIN subscription_query q ON q.query_id = qr.query_id
@@ -336,9 +349,16 @@ pub fn claim_next_query_run(
                     run_query_id: row.get(0)?,
                     run_id: row.get(1)?,
                     query_id: row.get(2)?,
-                    site_id: row.get(3)?,
-                    query_text: row.get(4)?,
-                    attempt_count: row.get(5)?,
+                    subscription_id: row.get(3)?,
+                    site_id: row.get(4)?,
+                    domain_key: row.get(5)?,
+                    query_kind: row.get(6)?,
+                    query_text: row.get(7)?,
+                    initial_post_limit: row.get(8)?,
+                    periodic_post_limit: row.get(9)?,
+                    initial_run_complete: row.get(10)?,
+                    resume_cursor: row.get(11)?,
+                    attempt_count: row.get(12)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -346,7 +366,7 @@ pub fn claim_next_query_run(
 
         let Some(candidate) = candidates
             .into_iter()
-            .find(|candidate| schedule.allows(&candidate.site_id, now_ms))
+            .find(|candidate| schedule.allows(&candidate.domain_key, now_ms))
         else {
             return Ok(None);
         };
@@ -372,7 +392,7 @@ pub fn claim_next_query_run(
         }))
     })?;
     if let Some(claim) = &claim {
-        schedule.mark_started(claim.site_id.clone(), now_ms);
+        schedule.mark_started(claim.domain_key.clone(), now_ms);
     }
     Ok(claim)
 }
@@ -559,6 +579,15 @@ pub fn complete_query_run(
     run_query_id: i64,
     now: &str,
 ) -> Result<QueryRunTransition, String> {
+    complete_query_run_with_cursor(store, run_query_id, None, now)
+}
+
+pub fn complete_query_run_with_cursor(
+    store: &Store,
+    run_query_id: i64,
+    resume_cursor: Option<&str>,
+    now: &str,
+) -> Result<QueryRunTransition, String> {
     let (transition, _) = store.transaction(|tx| {
         let query_id: i64 = tx.query_row(
             "SELECT query_id FROM subscription_run_query
@@ -569,14 +598,17 @@ pub fn complete_query_run(
         tx.execute(
             "UPDATE subscription_run_query
              SET status = 'succeeded', finished_at = ?1,
+                 resume_cursor = COALESCE(?2, resume_cursor),
                  failure_kind = NULL, error_message = NULL
-             WHERE run_query_id = ?2 AND status = 'running'",
-            params![now, run_query_id],
+             WHERE run_query_id = ?3 AND status = 'running'",
+            params![now, resume_cursor, run_query_id],
         )?;
         tx.execute(
-            "UPDATE subscription_query SET last_success_at = ?1
-             WHERE query_id = ?2",
-            params![now, query_id],
+            "UPDATE subscription_query
+             SET last_success_at = ?1, initial_run_complete = 1,
+                 resume_cursor = COALESCE(?2, resume_cursor)
+             WHERE query_id = ?3",
+            params![now, resume_cursor, query_id],
         )?;
         let run_state = settle_run_for_query(tx, run_query_id, now)?;
         Ok(QueryRunTransition {
@@ -872,6 +904,7 @@ mod tests {
             &QueryInput {
                 query_key: key.into(),
                 site_id: site.into(),
+                domain_key: site.into(),
                 query_kind: "search".into(),
                 query_text: key.into(),
                 display_name: None,
@@ -961,6 +994,44 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn different_adapters_on_one_domain_share_the_same_throttle() {
+        let (_directory, store) = store();
+        let sub = subscription(&store);
+        for (key, site) in [("search", "pixiv"), ("user", "pixivuser")] {
+            create_query(
+                &store,
+                sub,
+                &QueryInput {
+                    query_key: key.into(),
+                    site_id: site.into(),
+                    domain_key: "pixiv.net".into(),
+                    query_kind: key.into(),
+                    query_text: "123".into(),
+                    display_name: None,
+                    notes: None,
+                },
+            )
+            .unwrap();
+        }
+        create_run(&store, sub, "manual", "2026-01-01T00:00:00Z").unwrap();
+        let mut schedule = DomainSchedule::new();
+        let first = claim_next_query_run(&store, &mut schedule, "2026-01-01T00:00:01Z")
+            .unwrap()
+            .unwrap();
+        assert_eq!(first.domain_key, "pixiv.net");
+        assert!(
+            claim_next_query_run(&store, &mut schedule, "2026-01-01T00:00:01Z")
+                .unwrap()
+                .is_none()
+        );
+        let second = claim_next_query_run(&store, &mut schedule, "2026-01-01T00:00:02Z")
+            .unwrap()
+            .unwrap();
+        assert_ne!(first.site_id, second.site_id);
+        assert_eq!(second.domain_key, "pixiv.net");
     }
 
     #[test]
@@ -1118,11 +1189,28 @@ mod tests {
                 .completed(),
             4
         );
-        complete_query_run(&store, claim.run_query_id, "2026-01-01T00:00:04Z").unwrap();
+        complete_query_run_with_cursor(
+            &store,
+            claim.run_query_id,
+            Some("next-page"),
+            "2026-01-01T00:00:04Z",
+        )
+        .unwrap();
         assert_eq!(
             get_run(&store, run.run_id).unwrap().unwrap().state,
             RunState::Succeeded
         );
+        let query_state = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT initial_run_complete, resume_cursor
+                     FROM subscription_query WHERE query_id = ?1",
+                    [claim.query_id],
+                    |row| Ok((row.get::<_, bool>(0)?, row.get::<_, String>(1)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(query_state, (true, "next-page".to_string()));
     }
 
     #[test]

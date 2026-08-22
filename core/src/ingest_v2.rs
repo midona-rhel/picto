@@ -552,7 +552,7 @@ fn enqueue_derivatives(
                  media_item_id, file_id, work_type, status, attempt_count,
                  available_at, created_at, updated_at
              ) VALUES (?1, ?2, ?3, 'pending', 0, ?4, ?4, ?4)
-             ON CONFLICT(media_item_id, file_id, work_type) DO NOTHING",
+             ON CONFLICT DO NOTHING",
             params![media_item_id, file_id, work_type, now],
         )?;
     }

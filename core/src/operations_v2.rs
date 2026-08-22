@@ -14,6 +14,7 @@ use crate::projection_v2::{
 };
 
 const RANK_GAP: i64 = 1024;
+const MAX_RECEIPT_ITEM_IDS: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -655,7 +656,11 @@ fn receipt(revision: u64, resources: &[&str], item_ids: &[i64]) -> MutationRecei
     MutationReceipt {
         revision,
         resources: resources.iter().map(|value| (*value).to_string()).collect(),
-        item_ids: item_ids.iter().copied().map(ItemId).collect(),
+        item_ids: if item_ids.len() <= MAX_RECEIPT_ITEM_IDS {
+            item_ids.iter().copied().map(ItemId).collect()
+        } else {
+            Vec::new()
+        },
     }
 }
 
@@ -1126,5 +1131,14 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn bulk_receipts_invalidate_resources_without_transmitting_every_item_id() {
+        let ids = (1..=257).collect::<Vec<_>>();
+        let receipt = super::receipt(4, &[crate::app::resources::LIBRARY], &ids);
+        assert_eq!(receipt.revision, 4);
+        assert_eq!(receipt.resources, vec!["library"]);
+        assert!(receipt.item_ids.is_empty());
     }
 }
