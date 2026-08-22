@@ -35,6 +35,7 @@ pub mod subscriptions;
 pub mod subscriptions_v2;
 pub mod tags;
 pub mod tags_v2;
+pub mod tasks_v2;
 
 // ── Cross-cutting infrastructure ────────────────────
 pub mod background_runtime_v2;
