@@ -46,6 +46,7 @@ pub mod dispatch;
 pub mod events;
 pub mod media_processing;
 pub mod media_processing_v2;
+pub mod navigation_v2;
 pub mod operations_v2;
 pub mod oplog;
 pub mod perf;

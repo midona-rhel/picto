@@ -132,7 +132,7 @@ CREATE TABLE smart_folder (
     smart_folder_id INTEGER PRIMARY KEY,
     smart_folder_key TEXT NOT NULL UNIQUE,
     name TEXT NOT NULL,
-    parent_id INTEGER REFERENCES smart_folder(smart_folder_id) ON DELETE SET NULL,
+    parent_id INTEGER REFERENCES smart_folder(smart_folder_id) ON DELETE CASCADE,
     icon TEXT,
     color TEXT,
     notes TEXT,
