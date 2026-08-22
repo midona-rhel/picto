@@ -53,6 +53,7 @@ pub mod query_v2;
 pub mod rate_limiter;
 pub mod runtime_contract;
 pub mod runtime_state;
+pub mod runtime_v2;
 pub mod scheduler;
 pub mod state;
 pub mod store;

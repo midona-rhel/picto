@@ -152,6 +152,7 @@ CREATE TABLE subscription (
     paused INTEGER NOT NULL DEFAULT 0,
     initial_post_limit INTEGER,
     periodic_post_limit INTEGER,
+    next_run_at TEXT,
     created_at TEXT NOT NULL
 );
 

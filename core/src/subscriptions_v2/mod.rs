@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use chrono::DateTime;
+use chrono::{DateTime, Duration, Months, Utc};
 use rusqlite::{params, OptionalExtension, Transaction};
 
 use crate::store::Store;
@@ -198,13 +198,13 @@ pub fn create_subscription(
 ) -> Result<i64, String> {
     require_text("subscription key", &input.subscription_key)?;
     require_text("subscription name", &input.name)?;
-    require_text("schedule", &input.schedule)?;
+    let next_run_at = next_schedule_at(&input.schedule, now)?;
     let (id, _) = store.transaction(|tx| {
         tx.execute(
             "INSERT INTO subscription (
                  subscription_key, name, schedule, paused,
-                 initial_post_limit, periodic_post_limit, created_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 initial_post_limit, periodic_post_limit, next_run_at, created_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 input.subscription_key,
                 input.name,
@@ -212,6 +212,7 @@ pub fn create_subscription(
                 input.paused as i64,
                 input.initial_post_limit,
                 input.periodic_post_limit,
+                next_run_at,
                 now,
             ],
         )?;
@@ -258,51 +259,137 @@ pub fn create_run(
     now: &str,
 ) -> Result<CreatedRun, String> {
     require_text("requested by", requested_by)?;
-    let (run, _) = store.transaction(|tx| {
-        if let Some((run_id, state)) = tx
-            .query_row(
-                "SELECT run_id, status FROM subscription_run
-                 WHERE subscription_id = ?1 AND status IN ('pending', 'running')
-                 ORDER BY run_id LIMIT 1",
-                [subscription_id],
-                |row| Ok((row.get::<_, i64>(0)?, parse_run_state(row.get(1)?))),
-            )
-            .optional()?
-        {
-            return Ok(CreatedRun {
-                run_id,
-                created: false,
-                state: state?,
-            });
-        }
-
-        tx.execute(
-            "INSERT INTO subscription_run (
-                 subscription_id, requested_by, status, created_at
-             ) VALUES (?1, ?2, 'pending', ?3)",
-            params![subscription_id, requested_by, now],
-        )?;
-        let run_id = tx.last_insert_rowid();
-        tx.execute(
-            "INSERT INTO subscription_run_query (
-                 run_id, query_id, status, available_at
-             ) SELECT ?1, query_id, 'pending', ?2
-               FROM subscription_query
-               WHERE subscription_id = ?3 AND paused = 0",
-            params![run_id, now, subscription_id],
-        )?;
-        let state = settle_run(tx, run_id, now)?.unwrap_or(RunState::Pending);
-        Ok(CreatedRun {
-            run_id,
-            created: true,
-            state,
-        })
+    let (run, _, _) = store.transaction_if_changed(|tx| {
+        let run = create_run_in(tx, subscription_id, requested_by, now)?;
+        Ok((run, run.created))
     })?;
     Ok(run)
 }
 
+/// Create runs for subscriptions whose persisted schedule is due.
+/// Existing active runs are left untouched and the next due time still moves
+/// forward, preventing a stalled subscription from being scheduled repeatedly.
+pub fn schedule_due_runs(store: &Store, now: &str) -> Result<Vec<CreatedRun>, String> {
+    let (runs, _, _) = store.transaction_if_changed(|tx| {
+        let due = tx
+            .prepare(
+                "SELECT subscription_id, schedule
+                 FROM subscription
+                 WHERE paused = 0 AND next_run_at IS NOT NULL AND next_run_at <= ?1
+                 ORDER BY next_run_at, subscription_id",
+            )?
+            .query_map([now], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let changed = !due.is_empty();
+        let mut created = Vec::new();
+        for (subscription_id, schedule) in due {
+            let run = create_run_in(tx, subscription_id, "scheduled", now)?;
+            let next_run_at =
+                next_schedule_at(&schedule, now).map_err(|error| sql_error(&error))?;
+            tx.execute(
+                "UPDATE subscription SET next_run_at = ?1 WHERE subscription_id = ?2",
+                params![next_run_at, subscription_id],
+            )?;
+            if run.created {
+                created.push(run);
+            }
+        }
+        Ok((created, changed))
+    })?;
+    Ok(runs)
+}
+
+pub fn set_schedule(
+    store: &Store,
+    subscription_id: i64,
+    schedule: &str,
+    now: &str,
+) -> Result<(), String> {
+    let next_run_at = next_schedule_at(schedule, now)?;
+    store.transaction(|tx| {
+        let changed = tx.execute(
+            "UPDATE subscription SET schedule = ?1, next_run_at = ?2
+             WHERE subscription_id = ?3",
+            params![schedule, next_run_at, subscription_id],
+        )?;
+        if changed != 1 {
+            return Err(sql_error("subscription does not exist"));
+        }
+        Ok(())
+    })?;
+    Ok(())
+}
+
+fn create_run_in(
+    tx: &Transaction<'_>,
+    subscription_id: i64,
+    requested_by: &str,
+    now: &str,
+) -> rusqlite::Result<CreatedRun> {
+    if let Some((run_id, state)) = tx
+        .query_row(
+            "SELECT run_id, status FROM subscription_run
+             WHERE subscription_id = ?1 AND status IN ('pending', 'running')
+             ORDER BY run_id LIMIT 1",
+            [subscription_id],
+            |row| Ok((row.get::<_, i64>(0)?, parse_run_state(row.get(1)?))),
+        )
+        .optional()?
+    {
+        return Ok(CreatedRun {
+            run_id,
+            created: false,
+            state: state?,
+        });
+    }
+
+    tx.execute(
+        "INSERT INTO subscription_run (
+             subscription_id, requested_by, status, created_at
+         ) VALUES (?1, ?2, 'pending', ?3)",
+        params![subscription_id, requested_by, now],
+    )?;
+    let run_id = tx.last_insert_rowid();
+    tx.execute(
+        "INSERT INTO subscription_run_query (
+             run_id, query_id, status, available_at
+         ) SELECT ?1, query_id, 'pending', ?2
+           FROM subscription_query
+           WHERE subscription_id = ?3 AND paused = 0",
+        params![run_id, now, subscription_id],
+    )?;
+    let state = settle_run(tx, run_id, now)?.unwrap_or(RunState::Pending);
+    Ok(CreatedRun {
+        run_id,
+        created: true,
+        state,
+    })
+}
+
+fn next_schedule_at(schedule: &str, now: &str) -> Result<Option<String>, String> {
+    let now = DateTime::parse_from_rfc3339(now)
+        .map_err(|error| format!("Invalid schedule timestamp: {error}"))?
+        .with_timezone(&Utc);
+    let next = match schedule {
+        "manual" => return Ok(None),
+        "daily" => now + Duration::days(1),
+        "weekly" => now + Duration::weeks(1),
+        "monthly" => now
+            .checked_add_months(Months::new(1))
+            .ok_or_else(|| "Monthly schedule overflowed".to_string())?,
+        _ => {
+            return Err(format!(
+                "Invalid schedule: {schedule}. Must be one of: manual, daily, weekly, monthly"
+            ))
+        }
+    };
+    Ok(Some(next.to_rfc3339()))
+}
+
 pub fn recover_startup(store: &Store, now: &str) -> Result<RecoveryCounts, String> {
-    let (counts, _) = store.transaction(|tx| {
+    let (counts, _, _) = store.transaction_if_changed(|tx| {
         let query_runs = tx.execute(
             "UPDATE subscription_run_query
              SET status = 'pending', available_at = ?1, started_at = NULL,
@@ -316,7 +403,10 @@ pub fn recover_startup(store: &Store, now: &str) -> Result<RecoveryCounts, Strin
              WHERE status = 'running'",
             [],
         )?;
-        Ok(RecoveryCounts { runs, query_runs })
+        Ok((
+            RecoveryCounts { runs, query_runs },
+            runs != 0 || query_runs != 0,
+        ))
     })?;
     Ok(counts)
 }
@@ -327,7 +417,7 @@ pub fn claim_next_query_run(
     now: &str,
 ) -> Result<Option<ClaimedQueryRun>, String> {
     let now_ms = parse_timestamp_ms(now)?;
-    let (claim, _) = store.transaction(|tx| {
+    let (claim, _, _) = store.transaction_if_changed(|tx| {
         let mut statement = tx.prepare(
             "SELECT qr.run_query_id, qr.run_id, qr.query_id, r.subscription_id,
                     q.site_id, q.domain_key, q.query_kind, q.query_text,
@@ -368,7 +458,7 @@ pub fn claim_next_query_run(
             .into_iter()
             .find(|candidate| schedule.allows(&candidate.domain_key, now_ms))
         else {
-            return Ok(None);
+            return Ok((None, false));
         };
 
         let changed = tx.execute(
@@ -378,7 +468,7 @@ pub fn claim_next_query_run(
             params![now, candidate.run_query_id],
         )?;
         if changed != 1 {
-            return Ok(None);
+            return Ok((None, false));
         }
         tx.execute(
             "UPDATE subscription_run
@@ -386,10 +476,13 @@ pub fn claim_next_query_run(
              WHERE run_id = ?2 AND status = 'pending'",
             params![now, candidate.run_id],
         )?;
-        Ok(Some(ClaimedQueryRun {
-            attempt_count: candidate.attempt_count + 1,
-            ..candidate
-        }))
+        Ok((
+            Some(ClaimedQueryRun {
+                attempt_count: candidate.attempt_count + 1,
+                ..candidate
+            }),
+            true,
+        ))
     })?;
     if let Some(claim) = &claim {
         schedule.mark_started(claim.domain_key.clone(), now_ms);
@@ -1232,5 +1325,68 @@ mod tests {
             schedule.next_allowed_at_ms(&first.site_id),
             Some(parse_timestamp_ms("2026-01-01T00:00:01Z").unwrap() + DOMAIN_INTERVAL_MS)
         );
+    }
+
+    #[test]
+    fn persisted_schedule_creates_one_due_run_and_advances() {
+        let (_directory, store) = store();
+        let sub = create_subscription(
+            &store,
+            &SubscriptionInput {
+                subscription_key: "scheduled-sub".into(),
+                name: "Scheduled".into(),
+                schedule: "daily".into(),
+                paused: false,
+                initial_post_limit: None,
+                periodic_post_limit: None,
+            },
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        query(&store, sub, "q", "example.test");
+
+        assert!(schedule_due_runs(&store, "2026-01-01T23:59:59Z")
+            .unwrap()
+            .is_empty());
+        let due = schedule_due_runs(&store, "2026-01-02T00:00:00Z").unwrap();
+        assert_eq!(due.len(), 1);
+        assert!(due[0].created);
+        assert_eq!(due[0].state, RunState::Pending);
+        assert!(schedule_due_runs(&store, "2026-01-02T00:00:00Z")
+            .unwrap()
+            .is_empty());
+
+        let next: String = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT next_run_at FROM subscription WHERE subscription_id = ?1",
+                    [sub],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(next, "2026-01-03T00:00:00+00:00");
+    }
+
+    #[test]
+    fn manual_schedule_has_no_due_time() {
+        let (_directory, store) = store();
+        let sub = subscription(&store);
+        let next: Option<String> = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT next_run_at FROM subscription WHERE subscription_id = ?1",
+                    [sub],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(next, None);
+
+        set_schedule(&store, sub, "weekly", "2026-01-01T00:00:00Z").unwrap();
+        set_schedule(&store, sub, "manual", "2026-01-02T00:00:00Z").unwrap();
+        assert!(schedule_due_runs(&store, "2027-01-01T00:00:00Z")
+            .unwrap()
+            .is_empty());
     }
 }

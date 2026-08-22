@@ -20,6 +20,7 @@ use crate::ingest_v2::PreparedMediaInput;
 use crate::subscriptions_v2::{self, ClaimedQueryRun, DomainSchedule, NormalizedPost};
 
 const CHANNEL_CAPACITY: usize = 32;
+const STREAM_INGEST_BATCH_SIZE: usize = 8;
 const MAX_ATTEMPTS: i64 = 3;
 const RETRY_BASE_SECONDS: i64 = 60;
 
@@ -271,6 +272,12 @@ fn process_item(
     ingest_queue_v2::enqueue(application, &spec)
         .map_err(|error| format!("enqueueing subscription item failed: {error}"))?;
 
+    // A streamed download should become visible while the source run is still
+    // active. The durable queue remains authoritative if processing retries.
+    let report = ingest_queue_v2::run_batch(application, STREAM_INGEST_BATCH_SIZE)
+        .map_err(|error| format!("processing subscription ingest failed: {error}"))?;
+    item_ids.extend(report.item_ids.into_iter().map(|item_id| item_id.0));
+
     let visible_ids = application.store().read(|connection| {
         let mut statement = connection.prepare(
             "SELECT si.media_item_id, sp.root_item_id
@@ -375,7 +382,7 @@ mod tests {
             &SubscriptionInput {
                 subscription_key: "subscription".to_string(),
                 name: "Subscription".to_string(),
-                schedule: "hourly".to_string(),
+                schedule: "manual".to_string(),
                 paused: false,
                 initial_post_limit: None,
                 periodic_post_limit: None,
@@ -578,14 +585,15 @@ mod tests {
         let mut worker = SubscriptionWorker::new(&application, runner);
         worker.tick(FIRST_NOW).await.unwrap().unwrap();
 
-        let report = crate::ingest_queue_v2::IngestQueue::start(&application)
-            .unwrap()
-            .run_batch(8)
-            .unwrap();
-        assert_eq!(report.ingested, 2);
         application
             .store()
             .read(|connection| {
+                let ingested: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM ingest_job WHERE status = 'succeeded'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(ingested, 2);
                 let root: (i64, String, String) = connection.query_row(
                     "SELECT lr.item_id, lr.lifecycle, li.kind
                      FROM library_root lr
