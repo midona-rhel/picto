@@ -60,19 +60,22 @@ impl Application {
         let parent_id = input.parent_id.map(|id| id.0);
         let now = Utc::now().to_rfc3339();
 
-        let (folder_id, revision) = self.transaction_rebuilding(|transaction| {
-            if let Some(parent_id) = parent_id {
-                require_folder(transaction, parent_id)?;
-            }
-            let sort_rank = next_sibling_rank(transaction, parent_id, None)?;
-            transaction.execute(
-                "INSERT INTO folder
-                    (folder_key, name, parent_id, sort_rank, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
-                params![folder_key, name, parent_id, sort_rank, now],
-            )?;
-            Ok(transaction.last_insert_rowid())
-        })?;
+        let (folder_id, revision) = self.transaction(
+            |transaction| {
+                if let Some(parent_id) = parent_id {
+                    require_folder(transaction, parent_id)?;
+                }
+                let sort_rank = next_sibling_rank(transaction, parent_id, None)?;
+                transaction.execute(
+                    "INSERT INTO folder
+                        (folder_key, name, parent_id, sort_rank, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+                    params![folder_key, name, parent_id, sort_rank, now],
+                )?;
+                Ok((transaction.last_insert_rowid(), ()))
+            },
+            |_, ()| Ok(()),
+        )?;
 
         let folder_id = FolderId(folder_id);
         Ok((
@@ -88,14 +91,17 @@ impl Application {
     ) -> Result<FolderMutationReceipt, String> {
         let name = non_empty("Folder name", name)?;
         let now = Utc::now().to_rfc3339();
-        let ((), revision) = self.transaction_rebuilding(|transaction| {
-            require_folder(transaction, folder_id.0)?;
-            transaction.execute(
-                "UPDATE folder SET name = ?1, updated_at = ?2 WHERE folder_id = ?3",
-                params![name, now, folder_id.0],
-            )?;
-            Ok(())
-        })?;
+        let ((), revision) = self.transaction(
+            |transaction| {
+                require_folder(transaction, folder_id.0)?;
+                transaction.execute(
+                    "UPDATE folder SET name = ?1, updated_at = ?2 WHERE folder_id = ?3",
+                    params![name, now, folder_id.0],
+                )?;
+                Ok(((), ()))
+            },
+            |_, ()| Ok(()),
+        )?;
 
         Ok(folder_receipt(revision, vec![folder_id], Vec::new(), None))
     }
@@ -107,26 +113,31 @@ impl Application {
     ) -> Result<FolderMutationReceipt, String> {
         let parent_id = parent_id.map(|id| id.0);
         let now = Utc::now().to_rfc3339();
-        let ((), revision) = self.transaction_rebuilding(|transaction| {
-            require_folder(transaction, folder_id.0)?;
-            if let Some(parent_id) = parent_id {
-                require_folder(transaction, parent_id)?;
-                if parent_id == folder_id.0 || is_descendant(transaction, folder_id.0, parent_id)? {
-                    return Err(invalid(
-                        "Cannot move a folder below itself or its descendant",
-                    ));
+        let ((), revision) = self.transaction(
+            |transaction| {
+                require_folder(transaction, folder_id.0)?;
+                if let Some(parent_id) = parent_id {
+                    require_folder(transaction, parent_id)?;
+                    if parent_id == folder_id.0
+                        || is_descendant(transaction, folder_id.0, parent_id)?
+                    {
+                        return Err(invalid(
+                            "Cannot move a folder below itself or its descendant",
+                        ));
+                    }
                 }
-            }
 
-            let sort_rank = next_sibling_rank(transaction, parent_id, Some(folder_id.0))?;
-            transaction.execute(
-                "UPDATE folder
+                let sort_rank = next_sibling_rank(transaction, parent_id, Some(folder_id.0))?;
+                transaction.execute(
+                    "UPDATE folder
                  SET parent_id = ?1, sort_rank = ?2, updated_at = ?3
                  WHERE folder_id = ?4",
-                params![parent_id, sort_rank, now, folder_id.0],
-            )?;
-            Ok(())
-        })?;
+                    params![parent_id, sort_rank, now, folder_id.0],
+                )?;
+                Ok(((), ()))
+            },
+            |_, ()| Ok(()),
+        )?;
 
         Ok(folder_receipt(revision, vec![folder_id], Vec::new(), None))
     }
@@ -139,34 +150,37 @@ impl Application {
         let parent_id = input.parent_id.map(|id| id.0);
         let now = Utc::now().to_rfc3339();
 
-        let ((), revision) = self.transaction_rebuilding(|transaction| {
-            if let Some(parent_id) = parent_id {
-                require_folder(transaction, parent_id)?;
-            }
-            let expected = child_folder_ids(transaction, parent_id)?;
-            let requested = folder_ids.iter().map(|id| id.0).collect::<BTreeSet<_>>();
-            if expected.len() != requested.len()
-                || expected.into_iter().collect::<BTreeSet<_>>() != requested
-            {
-                return Err(invalid(
-                    "Folder reorder must contain every sibling exactly once",
-                ));
-            }
-            for (index, folder_id) in folder_ids.iter().enumerate() {
-                transaction.execute(
-                    "UPDATE folder SET sort_rank = ?1, updated_at = ?2 WHERE folder_id = ?3",
-                    params![(index as i64 + 1) * RANK_GAP, now, folder_id.0],
-                )?;
-            }
-            Ok(())
-        })?;
+        let ((), revision) = self.transaction(
+            |transaction| {
+                if let Some(parent_id) = parent_id {
+                    require_folder(transaction, parent_id)?;
+                }
+                let expected = child_folder_ids(transaction, parent_id)?;
+                let requested = folder_ids.iter().map(|id| id.0).collect::<BTreeSet<_>>();
+                if expected.len() != requested.len()
+                    || expected.into_iter().collect::<BTreeSet<_>>() != requested
+                {
+                    return Err(invalid(
+                        "Folder reorder must contain every sibling exactly once",
+                    ));
+                }
+                for (index, folder_id) in folder_ids.iter().enumerate() {
+                    transaction.execute(
+                        "UPDATE folder SET sort_rank = ?1, updated_at = ?2 WHERE folder_id = ?3",
+                        params![(index as i64 + 1) * RANK_GAP, now, folder_id.0],
+                    )?;
+                }
+                Ok(((), ()))
+            },
+            |_, ()| Ok(()),
+        )?;
 
         Ok(folder_receipt(revision, folder_ids, Vec::new(), None))
     }
 
     pub fn delete_folder(&self, folder_id: FolderId) -> Result<FolderMutationReceipt, String> {
-        let ((deleted_folder_ids, fallback_folder_id), revision) =
-            self.transaction_rebuilding(|transaction| {
+        let ((deleted_folder_ids, fallback_folder_id), revision) = self.transaction(
+            |transaction| {
                 require_folder(transaction, folder_id.0)?;
                 let fallback_folder_id = transaction.query_row(
                     "SELECT parent_id FROM folder WHERE folder_id = ?1",
@@ -175,8 +189,13 @@ impl Application {
                 )?;
                 let deleted_folder_ids = descendant_folder_ids(transaction, folder_id.0)?;
                 transaction.execute("DELETE FROM folder WHERE folder_id = ?1", [folder_id.0])?;
-                Ok((deleted_folder_ids, fallback_folder_id))
-            })?;
+                Ok((
+                    (deleted_folder_ids.clone(), fallback_folder_id),
+                    deleted_folder_ids,
+                ))
+            },
+            |projections, deleted_folder_ids| projections.remove_folders(&deleted_folder_ids),
+        )?;
 
         let deleted_folder_ids = deleted_folder_ids
             .into_iter()

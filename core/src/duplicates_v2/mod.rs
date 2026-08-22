@@ -8,6 +8,7 @@
 use std::collections::{BTreeSet, HashMap};
 
 use chrono::Utc;
+use img_hash::ImageHash;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 
@@ -49,6 +50,25 @@ impl FileQuality {
     }
 }
 
+fn ratio_at_least(value: i64, reference: i64, numerator: u64, denominator: u64) -> bool {
+    value > 0
+        && reference > 0
+        && (value as u128) * u128::from(denominator) >= (reference as u128) * u128::from(numerator)
+}
+
+fn ratio_at_most(value: i64, reference: i64, numerator: u64, denominator: u64) -> bool {
+    value > 0
+        && reference > 0
+        && (value as u128) * u128::from(denominator) <= (reference as u128) * u128::from(numerator)
+}
+
+fn materially_greater(value: f64, reference: f64) -> bool {
+    value.is_finite()
+        && reference.is_finite()
+        && value > reference
+        && (reference <= 0.0 || value >= reference * 1.20)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QualityDecision {
     LeftBetter,
@@ -83,6 +103,10 @@ pub fn compare_quality(
     right: &FileQuality,
     distance: Option<u32>,
 ) -> QualityDecision {
+    if left.file_hash == right.file_hash {
+        return stable_tie(left, right);
+    }
+
     let left_pixels = left.pixel_count();
     let right_pixels = right.pixel_count();
 
@@ -90,79 +114,204 @@ pub fn compare_quality(
     // checked before byte density: a larger source is not discarded just
     // because it compresses better.
     if let (Some(left_pixels), Some(right_pixels)) = (left_pixels, right_pixels) {
-        if left_pixels >= right_pixels.saturating_mul(2) {
+        if ratio_at_least(left_pixels, right_pixels, 2, 1) {
             return QualityDecision::LeftBetter;
         }
-        if right_pixels >= left_pixels.saturating_mul(2) {
+        if ratio_at_least(right_pixels, left_pixels, 2, 1) {
             return QualityDecision::RightBetter;
         }
     }
 
-    // When decoded information is available, prefer the materially richer
-    // decoded result before considering encoded size.
-    if let (Some(left_information), Some(right_information)) =
-        (left.decoded_information, right.decoded_information)
-    {
-        if left_information >= right_information * 1.20 {
-            return QualityDecision::LeftBetter;
+    // Encoded quality is only evidence for an exact/negligible match. A
+    // perceptually distant pair at the same dimensions still needs review.
+    let negligible_hash = distance.is_some_and(|value| value <= 1);
+    if negligible_hash {
+        // When decoded information is available, prefer the materially richer
+        // decoded result before considering encoded size.
+        if let (Some(left_information), Some(right_information)) =
+            (left.decoded_information, right.decoded_information)
+        {
+            if materially_greater(left_information, right_information) {
+                return QualityDecision::LeftBetter;
+            }
+            if materially_greater(right_information, left_information) {
+                return QualityDecision::RightBetter;
+            }
         }
-        if right_information >= left_information * 1.20 {
-            return QualityDecision::RightBetter;
-        }
-    }
 
-    if left.is_image() && right.is_image() {
-        if left.has_alpha == Some(true) && right.has_alpha == Some(false) {
-            return QualityDecision::LeftBetter;
+        if left.is_image() && right.is_image() {
+            if left.has_alpha == Some(true) && right.has_alpha == Some(false) {
+                return QualityDecision::LeftBetter;
+            }
+            if right.has_alpha == Some(true) && left.has_alpha == Some(false) {
+                return QualityDecision::RightBetter;
+            }
         }
-        if right.has_alpha == Some(true) && left.has_alpha == Some(false) {
-            return QualityDecision::RightBetter;
-        }
-    }
 
-    // Lossless encoding wins only when the decoded dimensions are comparable.
-    // A tiny thumbnail should not beat a full-size lossy image merely because
-    // its format is lossless.
-    if let (Some(left_pixels), Some(right_pixels)) = (left_pixels, right_pixels) {
-        let comparable_dimensions = left_pixels.saturating_mul(10)
-            >= right_pixels.saturating_mul(9)
-            && right_pixels.saturating_mul(10) >= left_pixels.saturating_mul(9);
-        if comparable_dimensions && left.is_lossless() != right.is_lossless() {
-            return if left.is_lossless() {
-                QualityDecision::LeftBetter
-            } else {
-                QualityDecision::RightBetter
-            };
+        // Lossless encoding wins only when the decoded dimensions are
+        // comparable. A tiny thumbnail must not beat a full-size lossy image.
+        if let (Some(left_pixels), Some(right_pixels)) = (left_pixels, right_pixels) {
+            let comparable_dimensions = ratio_at_least(left_pixels, right_pixels, 9, 10)
+                && ratio_at_least(right_pixels, left_pixels, 9, 10);
+            if comparable_dimensions && left.is_lossless() != right.is_lossless() {
+                return if left.is_lossless() {
+                    QualityDecision::LeftBetter
+                } else {
+                    QualityDecision::RightBetter
+                };
+            }
         }
-    }
 
-    // Same-size, same-format candidates with a close pHash are usually the
-    // same encoded image at different compression settings. Keep the larger
-    // representation when it is materially larger; a near tie is resolved by
-    // stable file id rather than making the user review noise.
-    let close_hash = distance.is_some_and(|value| value <= 1);
-    if close_hash && left.mime_type == right.mime_type {
-        if left.size_bytes >= right.size_bytes.saturating_mul(5) / 4 {
-            return QualityDecision::LeftBetter;
-        }
-        if right.size_bytes >= left.size_bytes.saturating_mul(5) / 4 {
-            return QualityDecision::RightBetter;
+        // Same-format candidates with a close pHash are usually the same image
+        // at different compression settings. Keep materially more encoded
+        // information, then resolve a negligible tie by stable file id.
+        if left.mime_type == right.mime_type {
+            if ratio_at_least(left.size_bytes, right.size_bytes, 5, 4) {
+                return QualityDecision::LeftBetter;
+            }
+            if ratio_at_least(right.size_bytes, left.size_bytes, 5, 4) {
+                return QualityDecision::RightBetter;
+            }
         }
 
         let same_dimensions =
             left.pixel_width == right.pixel_width && left.pixel_height == right.pixel_height;
-        let sizes_are_negligible = left.size_bytes.max(1) * 100 <= right.size_bytes.max(1) * 105
-            && right.size_bytes.max(1) * 100 <= left.size_bytes.max(1) * 105;
+        let sizes_are_negligible =
+            ratio_at_most(left.size_bytes.max(1), right.size_bytes.max(1), 105, 100)
+                && ratio_at_most(right.size_bytes.max(1), left.size_bytes.max(1), 105, 100);
         if same_dimensions && sizes_are_negligible {
-            return if left.file_id <= right.file_id {
-                QualityDecision::AutoTieLeft
-            } else {
-                QualityDecision::AutoTieRight
-            };
+            return stable_tie(left, right);
         }
     }
 
     QualityDecision::NeedsChoice
+}
+
+fn stable_tie(left: &FileQuality, right: &FileQuality) -> QualityDecision {
+    if left.file_id <= right.file_id {
+        QualityDecision::AutoTieLeft
+    } else {
+        QualityDecision::AutoTieRight
+    }
+}
+
+const SUPPORTED_PHASH_BYTES: usize = 32;
+fn parse_supported_hash(raw: &str) -> Option<ImageHash<Vec<u8>>> {
+    let hash = ImageHash::<Vec<u8>>::from_base64(raw).ok()?;
+    (hash.as_bytes().len() == SUPPORTED_PHASH_BYTES).then_some(hash)
+}
+
+struct CandidateIndex {
+    threshold: u32,
+    buckets: HashMap<(usize, usize, u64), Vec<usize>>,
+    entry_count: usize,
+}
+
+impl CandidateIndex {
+    fn new(threshold: u32) -> Self {
+        Self {
+            threshold,
+            buckets: HashMap::new(),
+            entry_count: 0,
+        }
+    }
+
+    fn insert(&mut self, entry_index: usize, hash: &ImageHash<Vec<u8>>) {
+        debug_assert_eq!(entry_index, self.entry_count);
+        self.entry_count += 1;
+
+        for (partition, key) in partition_keys(hash.as_bytes(), self.threshold) {
+            self.buckets
+                .entry((SUPPORTED_PHASH_BYTES * 8, partition, key))
+                .or_default()
+                .push(entry_index);
+        }
+    }
+
+    fn find_within(
+        &self,
+        parsed: &[(i64, ImageHash<Vec<u8>>)],
+        hash: &ImageHash<Vec<u8>>,
+    ) -> Vec<(i64, u32)> {
+        if self.entry_count == 0 {
+            return Vec::new();
+        }
+
+        let mut candidate_indices = Vec::new();
+        if self.threshold < (SUPPORTED_PHASH_BYTES * 8) as u32 {
+            for (partition, key) in partition_keys(hash.as_bytes(), self.threshold) {
+                if let Some(entries) =
+                    self.buckets
+                        .get(&(SUPPORTED_PHASH_BYTES * 8, partition, key))
+                {
+                    candidate_indices.extend(entries);
+                }
+            }
+        } else {
+            candidate_indices.extend(0..self.entry_count);
+        }
+        candidate_indices.sort_unstable();
+        candidate_indices.dedup();
+
+        candidate_indices
+            .into_iter()
+            .filter_map(|entry_index| {
+                let (file_id, candidate_hash) = &parsed[entry_index];
+                let distance = candidate_hash.dist(hash);
+                (distance <= self.threshold).then_some((*file_id, distance))
+            })
+            .collect()
+    }
+}
+
+fn partition_keys(bytes: &[u8], threshold: u32) -> Vec<(usize, u64)> {
+    let bit_len = bytes.len() * 8;
+    let minimum_partitions = bit_len.div_ceil(64);
+    let required_partitions = threshold.saturating_add(1) as usize;
+    let partition_count = minimum_partitions.max(required_partitions).min(bit_len);
+    let base_len = bit_len / partition_count;
+    let remainder = bit_len % partition_count;
+    let mut start = 0;
+    let mut keys = Vec::with_capacity(partition_count);
+    for partition in 0..partition_count {
+        let length = base_len + usize::from(partition < remainder);
+        keys.push((partition, bits_as_key(bytes, start, length)));
+        start += length;
+    }
+    keys
+}
+
+fn bits_as_key(bytes: &[u8], start: usize, length: usize) -> u64 {
+    debug_assert!(length <= 64);
+    let mut key = 0_u64;
+    for offset in 0..length {
+        let bit = start + offset;
+        key = (key << 1) | u64::from((bytes[bit / 8] >> (7 - bit % 8)) & 1);
+    }
+    key
+}
+
+fn find_candidate_pairs(
+    parsed: &[(i64, ImageHash<Vec<u8>>)],
+    threshold: u32,
+) -> Vec<(i64, i64, u32)> {
+    let parsed = parsed
+        .iter()
+        .filter(|(_, hash)| hash.as_bytes().len() == SUPPORTED_PHASH_BYTES)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut index = CandidateIndex::new(threshold);
+    let mut pairs = Vec::new();
+    for (entry_index, (file_id, hash)) in parsed.iter().enumerate() {
+        pairs.extend(
+            index
+                .find_within(&parsed, hash)
+                .into_iter()
+                .map(|(other_file_id, distance)| (other_file_id, *file_id, distance)),
+        );
+        index.insert(entry_index, hash);
+    }
+    pairs
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -212,11 +361,11 @@ pub fn scan(app: &Application, distance_threshold: u32) -> Result<DuplicateScanR
             let parsed = files
                 .iter()
                 .filter_map(|file| {
-                    crate::duplicates::phash::parse_supported_hash(file.perceptual_hash.as_deref()?)
+                    parse_supported_hash(file.perceptual_hash.as_deref()?)
                         .map(|hash| (file.file_id, hash))
                 })
                 .collect::<Vec<_>>();
-            let pairs = crate::duplicates::phash::find_candidate_pairs(&parsed, distance_threshold);
+            let pairs = find_candidate_pairs(&parsed, distance_threshold);
 
             transaction.execute("DELETE FROM duplicate WHERE status = 'detected'", [])?;
             let by_id = files
@@ -587,8 +736,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        compare_quality, list_candidates, resolve, scan, FileQuality, QualityDecision,
-        ResolutionChoice,
+        compare_quality, find_candidate_pairs, list_candidates, parse_supported_hash, resolve,
+        scan, FileQuality, QualityDecision, ResolutionChoice,
     };
     use crate::app::{Application, FileHash};
     use crate::store::Store;
@@ -643,6 +792,57 @@ mod tests {
             compare_quality(&left, &right, Some(10)),
             QualityDecision::NeedsChoice
         );
+    }
+
+    #[test]
+    fn information_preserving_quality_wins_only_for_negligible_hash_distance() {
+        let left = quality(1, 600_000, 1200, 800, "image/png");
+        let right = quality(2, 550_000, 1200, 800, "image/jpeg");
+        assert_eq!(
+            compare_quality(&left, &right, Some(1)),
+            QualityDecision::LeftBetter
+        );
+        assert_eq!(
+            compare_quality(&left, &right, Some(10)),
+            QualityDecision::NeedsChoice
+        );
+
+        let mut richer = quality(3, 500_000, 1200, 800, "image/jpeg");
+        let mut poorer = quality(4, 500_000, 1200, 800, "image/jpeg");
+        richer.decoded_information = Some(120.0);
+        poorer.decoded_information = Some(100.0);
+        assert_eq!(
+            compare_quality(&richer, &poorer, Some(1)),
+            QualityDecision::LeftBetter
+        );
+        assert_eq!(
+            compare_quality(&richer, &poorer, Some(10)),
+            QualityDecision::NeedsChoice
+        );
+    }
+
+    #[test]
+    fn replacement_parser_and_pairing_accept_only_supported_hashes() {
+        let base = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 32]).unwrap();
+        let mut one_bit = [0_u8; 32];
+        one_bit[0] = 1;
+        let far = ImageHash::<Vec<u8>>::from_bytes(&[0xff_u8; 32]).unwrap();
+        let short = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 31]).unwrap();
+
+        assert!(parse_supported_hash(&base.to_base64()).is_some());
+        assert!(parse_supported_hash(&short.to_base64()).is_none());
+        assert!(parse_supported_hash("not-a-base64-hash").is_none());
+
+        let pairs = find_candidate_pairs(
+            &[
+                (10, base),
+                (11, ImageHash::<Vec<u8>>::from_bytes(&one_bit).unwrap()),
+                (12, far),
+                (13, short),
+            ],
+            1,
+        );
+        assert_eq!(pairs, vec![(10, 11, 1)]);
     }
 
     #[test]

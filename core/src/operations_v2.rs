@@ -237,29 +237,66 @@ impl Application {
         if media_ids.is_empty() {
             return Err("No collection members were selected".to_string());
         }
-        let (affected, revision) = self.transaction_rebuilding(|transaction| {
-            let lifecycle = require_collection_root(transaction, input.collection_id.0)?;
-            let folders = folder_ids_for_roots(transaction, &[input.collection_id.0])?;
-            for media_id in &media_ids {
-                let removed = transaction.execute(
-                    "DELETE FROM collection_member
-                     WHERE collection_id = ?1 AND media_item_id = ?2",
-                    params![input.collection_id.0, media_id],
-                )?;
-                if removed != 1 {
-                    return Err(invalid(format!(
-                        "Media item {media_id} is not attached to collection {}",
-                        input.collection_id.0
-                    )));
+        let (affected, revision) = self.transaction(
+            |transaction| {
+                let lifecycle = require_collection_root(transaction, input.collection_id.0)?;
+                let projected_lifecycle = parse_lifecycle(&lifecycle)?;
+                let folders = folder_ids_for_roots(transaction, &[input.collection_id.0])?;
+                let mut delta = StructureProjectionDelta::default();
+                for media_id in &media_ids {
+                    let removed = transaction.execute(
+                        "DELETE FROM collection_member
+                         WHERE collection_id = ?1 AND media_item_id = ?2",
+                        params![input.collection_id.0, media_id],
+                    )?;
+                    if removed != 1 {
+                        return Err(invalid(format!(
+                            "Media item {media_id} is not attached to collection {}",
+                            input.collection_id.0
+                        )));
+                    }
+                    create_root_with_folders(transaction, *media_id, &lifecycle, &folders)?;
+                    project_detached_root(
+                        &mut delta,
+                        input.collection_id.0,
+                        *media_id,
+                        projected_lifecycle,
+                        &folders,
+                    );
                 }
-                create_root_with_folders(transaction, *media_id, &lifecycle, &folders)?;
-            }
 
-            let mut affected = media_ids.clone();
-            affected.push(input.collection_id.0);
-            dissolve_small_collection(transaction, input.collection_id.0, &mut affected)?;
-            Ok(affected)
-        })?;
+                let mut affected = media_ids.clone();
+                affected.push(input.collection_id.0);
+                let remaining = collection_members(transaction, input.collection_id.0)?;
+                if remaining.len() > 1 {
+                    ensure_valid_cover(transaction, input.collection_id.0, &remaining)?;
+                } else {
+                    if let Some(media_id) = remaining.first().copied() {
+                        transaction.execute(
+                            "DELETE FROM collection_member
+                             WHERE collection_id = ?1 AND media_item_id = ?2",
+                            params![input.collection_id.0, media_id],
+                        )?;
+                        create_root_with_folders(transaction, media_id, &lifecycle, &folders)?;
+                        project_detached_root(
+                            &mut delta,
+                            input.collection_id.0,
+                            media_id,
+                            projected_lifecycle,
+                            &folders,
+                        );
+                        affected.push(media_id);
+                    }
+                    transaction.execute(
+                        "DELETE FROM library_item WHERE item_id = ?1",
+                        [input.collection_id.0],
+                    )?;
+                    project_removed_collection(&mut delta, input.collection_id.0, &folders);
+                }
+                Ok((affected, delta))
+            },
+            |projections, delta| projections.apply_structure_delta(delta),
+        )?;
         Ok(receipt(
             revision,
             &[resources::LIBRARY, resources::SIDEBAR, resources::FOLDERS],
@@ -268,21 +305,34 @@ impl Application {
     }
 
     pub fn ungroup_collection(&self, collection_id: ItemId) -> Result<MutationReceipt, String> {
-        let (affected, revision) = self.transaction_rebuilding(|transaction| {
-            let lifecycle = require_collection_root(transaction, collection_id.0)?;
-            let folders = folder_ids_for_roots(transaction, &[collection_id.0])?;
-            let members = collection_members(transaction, collection_id.0)?;
-            for member in &members {
-                create_root_with_folders(transaction, *member, &lifecycle, &folders)?;
-            }
-            transaction.execute(
-                "DELETE FROM library_item WHERE item_id = ?1",
-                [collection_id.0],
-            )?;
-            let mut affected = members;
-            affected.push(collection_id.0);
-            Ok(affected)
-        })?;
+        let (affected, revision) = self.transaction(
+            |transaction| {
+                let lifecycle = require_collection_root(transaction, collection_id.0)?;
+                let projected_lifecycle = parse_lifecycle(&lifecycle)?;
+                let folders = folder_ids_for_roots(transaction, &[collection_id.0])?;
+                let members = collection_members(transaction, collection_id.0)?;
+                let mut delta = StructureProjectionDelta::default();
+                for member in &members {
+                    create_root_with_folders(transaction, *member, &lifecycle, &folders)?;
+                    project_detached_root(
+                        &mut delta,
+                        collection_id.0,
+                        *member,
+                        projected_lifecycle,
+                        &folders,
+                    );
+                }
+                transaction.execute(
+                    "DELETE FROM library_item WHERE item_id = ?1",
+                    [collection_id.0],
+                )?;
+                project_removed_collection(&mut delta, collection_id.0, &folders);
+                let mut affected = members;
+                affected.push(collection_id.0);
+                Ok((affected, delta))
+            },
+            |projections, delta| projections.apply_structure_delta(delta),
+        )?;
         Ok(receipt(
             revision,
             &[resources::LIBRARY, resources::SIDEBAR, resources::FOLDERS],
@@ -492,17 +542,55 @@ impl Application {
     }
 
     pub fn delete_items(&self, target: &ItemTarget) -> Result<DeleteItemsResult, String> {
-        let ((freed_file_hashes, item_ids), revision) =
-            self.transaction_rebuilding(|transaction| {
+        let ((freed_file_hashes, item_ids), revision) = self.transaction(
+            |transaction| {
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
                 let mut delete_items = BTreeSet::new();
+                let mut delta = StructureProjectionDelta::default();
                 for item_id in &item_ids {
                     require_root(transaction, *item_id)?;
+                    let folders = folder_ids_for_roots(transaction, &[*item_id])?;
                     delete_items.insert(*item_id);
-                    for member in collection_members(transaction, *item_id)? {
-                        delete_items.insert(member);
+                    let members = collection_members(transaction, *item_id)?;
+                    if members.is_empty() {
+                        delta.items.push(ItemProjectionChange {
+                            item_id: *item_id,
+                            kind: crate::app::ItemKind::Media,
+                            present: false,
+                        });
+                    } else {
+                        delta.items.push(ItemProjectionChange {
+                            item_id: *item_id,
+                            kind: crate::app::ItemKind::Collection,
+                            present: false,
+                        });
+                        for member in members {
+                            delete_items.insert(member);
+                            delta.memberships.push(MembershipProjectionChange {
+                                collection_id: *item_id,
+                                media_id: member,
+                                present: false,
+                            });
+                            delta.items.push(ItemProjectionChange {
+                                item_id: member,
+                                kind: crate::app::ItemKind::Media,
+                                present: false,
+                            });
+                        }
                     }
+                    delta.roots.push(RootProjectionChange {
+                        item_id: *item_id,
+                        lifecycle: None,
+                    });
+                    delta.folders.extend(folders.into_iter().map(|folder_id| {
+                        FolderProjectionChange {
+                            folder_id,
+                            item_id: *item_id,
+                            present: false,
+                        }
+                    }));
                 }
+                let affected_item_ids = delete_items.iter().copied().collect::<Vec<_>>();
                 for item_id in delete_items {
                     transaction.execute(
                         "UPDATE source_item
@@ -535,8 +623,10 @@ impl Application {
                  )",
                     [],
                 )?;
-                Ok((hashes, item_ids))
-            })?;
+                Ok(((hashes, affected_item_ids), delta))
+            },
+            |projections, delta| projections.apply_structure_delta(delta),
+        )?;
         Ok(DeleteItemsResult {
             receipt: receipt(
                 revision,
@@ -696,46 +786,71 @@ fn create_root_with_folders(
     Ok(())
 }
 
-fn dissolve_small_collection(
+fn ensure_valid_cover(
     transaction: &Transaction<'_>,
     collection_id: i64,
-    affected: &mut Vec<i64>,
+    members: &[i64],
 ) -> rusqlite::Result<()> {
-    let members = collection_members(transaction, collection_id)?;
-    if members.len() > 1 {
-        if let Some(cover) = transaction
-            .query_row(
-                "SELECT cover_media_item_id FROM library_item WHERE item_id = ?1",
-                [collection_id],
-                |row| row.get::<_, Option<i64>>(0),
-            )?
-            .filter(|cover| members.contains(cover))
-        {
-            let _ = cover;
-        } else {
-            transaction.execute(
-                "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
-                params![members[0], collection_id],
-            )?;
-        }
-        return Ok(());
-    }
-
-    let lifecycle = require_collection_root(transaction, collection_id)?;
-    let folders = folder_ids_for_roots(transaction, &[collection_id])?;
-    if let Some(member) = members.first().copied() {
-        transaction.execute(
-            "DELETE FROM collection_member WHERE collection_id = ?1 AND media_item_id = ?2",
-            params![collection_id, member],
-        )?;
-        create_root_with_folders(transaction, member, &lifecycle, &folders)?;
-        affected.push(member);
-    }
-    transaction.execute(
-        "DELETE FROM library_item WHERE item_id = ?1",
+    let cover = transaction.query_row(
+        "SELECT cover_media_item_id FROM library_item WHERE item_id = ?1",
         [collection_id],
+        |row| row.get::<_, Option<i64>>(0),
     )?;
+    if !cover.is_some_and(|cover| members.contains(&cover)) {
+        transaction.execute(
+            "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
+            params![members[0], collection_id],
+        )?;
+    }
     Ok(())
+}
+
+fn project_detached_root(
+    delta: &mut StructureProjectionDelta,
+    collection_id: i64,
+    media_id: i64,
+    lifecycle: Lifecycle,
+    folder_ids: &[i64],
+) {
+    delta.memberships.push(MembershipProjectionChange {
+        collection_id,
+        media_id,
+        present: false,
+    });
+    delta.roots.push(RootProjectionChange {
+        item_id: media_id,
+        lifecycle: Some(lifecycle),
+    });
+    delta
+        .folders
+        .extend(folder_ids.iter().map(|folder_id| FolderProjectionChange {
+            folder_id: *folder_id,
+            item_id: media_id,
+            present: true,
+        }));
+}
+
+fn project_removed_collection(
+    delta: &mut StructureProjectionDelta,
+    collection_id: i64,
+    folder_ids: &[i64],
+) {
+    delta.roots.push(RootProjectionChange {
+        item_id: collection_id,
+        lifecycle: None,
+    });
+    delta.items.push(ItemProjectionChange {
+        item_id: collection_id,
+        kind: crate::app::ItemKind::Collection,
+        present: false,
+    });
+    delta
+        .folders
+        .extend(folder_ids.iter().map(|folder_id| FolderProjectionChange {
+            folder_id: *folder_id,
+            item_id: collection_id,
+            present: false,
+        }));
 }
 
 fn media_items_for_roots(
@@ -788,6 +903,7 @@ fn parse_lifecycle(value: &str) -> rusqlite::Result<Lifecycle> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
     use rusqlite::params;
@@ -883,11 +999,20 @@ mod tests {
             Lifecycle::Trash,
         )
         .unwrap();
-        app.detach_items(DetachItemsInput {
-            collection_id: grouped.collection_id,
-            media_item_ids: vec![ids[0]],
-        })
-        .unwrap();
+        let detached = app
+            .detach_items(DetachItemsInput {
+                collection_id: grouped.collection_id,
+                media_item_ids: vec![ids[0]],
+            })
+            .unwrap();
+        assert_eq!(
+            detached.item_ids,
+            vec![ids[0], grouped.collection_id, ids[1]]
+        );
+        let trash = app.projections().trash_bitmap();
+        assert!(trash.contains(ids[0].0 as u32));
+        assert!(trash.contains(ids[1].0 as u32));
+        assert!(!trash.contains(grouped.collection_id.0 as u32));
 
         app.store()
             .read(|connection| {
@@ -931,6 +1056,21 @@ mod tests {
             })
             .unwrap();
         assert_eq!(result.freed_file_hashes.len(), 2);
+        assert_eq!(
+            result
+                .receipt
+                .item_ids
+                .iter()
+                .map(|id| id.0)
+                .collect::<BTreeSet<_>>(),
+            [grouped.collection_id.0, ids[0].0, ids[1].0]
+                .into_iter()
+                .collect()
+        );
+        let active = app.projections().active_bitmap();
+        assert!(!active.contains(grouped.collection_id.0 as u32));
+        assert!(!active.contains(ids[0].0 as u32));
+        assert!(!active.contains(ids[1].0 as u32));
 
         app.store()
             .read(|connection| {

@@ -511,6 +511,16 @@ impl ProjectionStore {
         Ok(())
     }
 
+    pub fn remove_folders(&self, folder_ids: &[i64]) -> Result<(), String> {
+        let mut state = self.state.write().unwrap();
+        for folder_id in folder_ids {
+            validate_id(*folder_id)?;
+            state.folder_members.remove(folder_id);
+            state.folder_bitmaps.remove(folder_id);
+        }
+        Ok(())
+    }
+
     /// Apply a direct media tag change and project it to the media's root.
     pub fn apply_tag_delta(&self, media_id: i64, tag_id: i64, present: bool) -> Result<(), String> {
         validate_id(media_id)?;
