@@ -258,12 +258,21 @@ pub fn create_run(
     requested_by: &str,
     now: &str,
 ) -> Result<CreatedRun, String> {
+    create_run_with_revision(store, subscription_id, requested_by, now).map(|(run, _)| run)
+}
+
+pub fn create_run_with_revision(
+    store: &Store,
+    subscription_id: i64,
+    requested_by: &str,
+    now: &str,
+) -> Result<(CreatedRun, u64), String> {
     require_text("requested by", requested_by)?;
-    let (run, _, _) = store.transaction_if_changed(|tx| {
+    let (run, revision, _) = store.transaction_if_changed(|tx| {
         let run = create_run_in(tx, subscription_id, requested_by, now)?;
         Ok((run, run.created))
     })?;
-    Ok(run)
+    Ok((run, revision))
 }
 
 /// Create runs for subscriptions whose persisted schedule is due.
@@ -368,7 +377,7 @@ fn create_run_in(
     })
 }
 
-fn next_schedule_at(schedule: &str, now: &str) -> Result<Option<String>, String> {
+pub(crate) fn next_schedule_at(schedule: &str, now: &str) -> Result<Option<String>, String> {
     let now = DateTime::parse_from_rfc3339(now)
         .map_err(|error| format!("Invalid schedule timestamp: {error}"))?
         .with_timezone(&Utc);
@@ -837,6 +846,37 @@ pub fn cancel_run(store: &Store, run_id: i64, now: &str) -> Result<(), String> {
         Ok(())
     })?;
     Ok(())
+}
+
+pub fn cancel_subscription_run(
+    store: &Store,
+    subscription_id: i64,
+    now: &str,
+) -> Result<u64, String> {
+    let (_, revision) = store.transaction(|tx| {
+        let run_id: i64 = tx
+            .query_row(
+                "SELECT run_id FROM subscription_run
+                 WHERE subscription_id = ?1 AND status IN ('pending', 'running')",
+                [subscription_id],
+                |row| row.get(0),
+            )
+            .optional()?
+            .ok_or_else(|| sql_error("subscription is not running"))?;
+        tx.execute(
+            "UPDATE subscription_run_query
+             SET status = 'cancelled', finished_at = ?1
+             WHERE run_id = ?2 AND status IN ('pending', 'running')",
+            params![now, run_id],
+        )?;
+        tx.execute(
+            "UPDATE subscription_run SET status = 'cancelled', finished_at = ?1
+             WHERE run_id = ?2",
+            params![now, run_id],
+        )?;
+        Ok(())
+    })?;
+    Ok(revision)
 }
 
 pub fn get_run(store: &Store, run_id: i64) -> Result<Option<RunRecord>, String> {
