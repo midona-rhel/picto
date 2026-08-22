@@ -324,13 +324,7 @@ fn tag_condition(rule: &PredicateRule, arguments: &mut Vec<Value>) -> rusqlite::
             let namespace_index = arguments.len();
             arguments.push(Value::Text(subtag));
             let subtag_index = arguments.len();
-            format!(
-                "EXISTS (SELECT 1 FROM media_tag mt \
-                 JOIN tag t ON t.tag_id = mt.tag_id \
-                 WHERE mt.media_item_id = ma.item_id \
-                 AND t.namespace = ?{namespace_index} \
-                 AND t.subtag = ?{subtag_index})"
-            )
+            crate::tags_v2::effective_tag_exists_sql("ma.item_id", namespace_index, subtag_index)
         })
         .collect::<Vec<_>>();
 
@@ -667,6 +661,58 @@ mod tests {
         };
 
         assert_eq!(compile_predicate(&connection, &predicate).unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn tag_rules_use_aliases_and_transitive_implications() {
+        let connection = connection();
+        media(&connection, 1, "one", "active", "one", 5, 10);
+        connection
+            .execute(
+                "INSERT INTO tag (tag_id, namespace, subtag) VALUES
+                     (1, 'general', 'direct'),
+                     (2, 'general', 'alias'),
+                     (3, 'general', 'parent'),
+                     (4, 'general', 'grandparent')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO media_tag (media_item_id, tag_id) VALUES (1, 1)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO tag_alias (from_tag_id, to_tag_id) VALUES (1, 2)",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO tag_implication (child_tag_id, parent_tag_id) VALUES
+                     (1, 3), (3, 4)",
+                [],
+            )
+            .unwrap();
+
+        for tag in ["alias", "parent", "grandparent"] {
+            let predicate = SmartFolderPredicate {
+                groups: vec![SmartRuleGroup {
+                    match_mode: MatchMode::All,
+                    negate: false,
+                    rules: vec![PredicateRule {
+                        field: "tags".to_string(),
+                        op: "include".to_string(),
+                        value: None,
+                        value2: None,
+                        values: Some(vec![tag.to_string()]),
+                    }],
+                }],
+            };
+            assert_eq!(compile_predicate(&connection, &predicate).unwrap(), vec![1]);
+        }
     }
 
     #[test]

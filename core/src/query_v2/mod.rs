@@ -900,34 +900,54 @@ fn apply_filters(
     }
 
     for tag in &filters.include_tags {
-        let index = push_argument(arguments, tag.clone());
+        let (namespace, subtag) = split_tag(tag);
+        let namespace_index = push_argument(arguments, namespace);
+        let subtag_index = push_argument(arguments, subtag);
+        let effective_match = crate::tags_v2::effective_tag_exists_sql(
+            "rm.media_item_id",
+            namespace_index,
+            subtag_index,
+        );
         predicates.push(format!(
             "EXISTS (
                  SELECT 1
                  FROM root_media rm
-                 JOIN media_tag mt ON mt.media_item_id = rm.media_item_id
-                 JOIN tag t ON t.tag_id = mt.tag_id
                  WHERE rm.root_item_id = ri.item_id
-                   AND (t.namespace || ':' || t.subtag = ?{index}
-                        OR t.subtag = ?{index})
+                   AND {effective_match}
              )"
         ));
     }
 
     for tag in &filters.exclude_tags {
-        let index = push_argument(arguments, tag.clone());
+        let (namespace, subtag) = split_tag(tag);
+        let namespace_index = push_argument(arguments, namespace);
+        let subtag_index = push_argument(arguments, subtag);
+        let effective_match = crate::tags_v2::effective_tag_exists_sql(
+            "rm.media_item_id",
+            namespace_index,
+            subtag_index,
+        );
         predicates.push(format!(
             "NOT EXISTS (
                  SELECT 1
                  FROM root_media rm
-                 JOIN media_tag mt ON mt.media_item_id = rm.media_item_id
-                 JOIN tag t ON t.tag_id = mt.tag_id
                  WHERE rm.root_item_id = ri.item_id
-                   AND (t.namespace || ':' || t.subtag = ?{index}
-                        OR t.subtag = ?{index})
+                   AND {effective_match}
              )"
         ));
     }
+}
+
+fn split_tag(value: &str) -> (String, String) {
+    value
+        .split_once(':')
+        .map(|(namespace, subtag)| {
+            (
+                namespace.trim().to_lowercase(),
+                subtag.trim().to_lowercase(),
+            )
+        })
+        .unwrap_or_else(|| ("general".to_string(), value.trim().to_lowercase()))
 }
 
 fn push_argument<T: ToSql + 'static>(arguments: &mut Vec<Box<dyn ToSql>>, value: T) -> usize {
@@ -1238,6 +1258,40 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![ItemId(1)]
         );
+    }
+
+    #[test]
+    fn tag_filters_use_aliases_and_transitive_implications() {
+        let (_directory, store) = seed_store();
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO tag (tag_id, namespace, subtag) VALUES
+                         (2, 'general', 'alias-tag'),
+                         (3, 'general', 'parent-tag'),
+                         (4, 'general', 'grandparent-tag')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO tag_alias (from_tag_id, to_tag_id) VALUES (1, 2)",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO tag_implication (child_tag_id, parent_tag_id) VALUES
+                         (1, 3), (3, 4)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        for tag in ["alias-tag", "parent-tag", "grandparent-tag"] {
+            let mut item_query = query_for(ItemScope::All);
+            item_query.filters.include_tags = vec![tag.to_string()];
+            let page = query(&store, &item_query, ItemPageRequest::default()).unwrap();
+            assert_eq!(page.items.len(), 1, "effective tag {tag}");
+            assert_eq!(page.items[0].item_id, ItemId(10));
+        }
     }
 
     #[test]

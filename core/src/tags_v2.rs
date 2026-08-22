@@ -401,6 +401,42 @@ fn normalize_search(value: &str) -> String {
         .replace(' ', "_")
 }
 
+/// Match a media row against a requested effective tag. The recursive set is
+/// rooted at one requested tag, so aliases and implication children are
+/// resolved without expanding every media/tag assignment in the library.
+pub(crate) fn effective_tag_exists_sql(
+    media_id_expression: &str,
+    namespace_parameter: usize,
+    subtag_parameter: usize,
+) -> String {
+    format!(
+        "EXISTS (
+             WITH RECURSIVE matching_tags(tag_id) AS (
+                 SELECT tag_id FROM tag
+                 WHERE namespace = ?{namespace_parameter}
+                   AND subtag = ?{subtag_parameter}
+                 UNION
+                 SELECT CASE
+                            WHEN alias.from_tag_id = matching.tag_id THEN alias.to_tag_id
+                            ELSE alias.from_tag_id
+                        END
+                 FROM matching_tags matching
+                 JOIN tag_alias alias
+                   ON alias.from_tag_id = matching.tag_id
+                   OR alias.to_tag_id = matching.tag_id
+                 UNION
+                 SELECT implication.child_tag_id
+                 FROM matching_tags matching
+                 JOIN tag_implication implication
+                   ON implication.parent_tag_id = matching.tag_id
+             )
+             SELECT 1 FROM media_tag assigned
+             JOIN matching_tags matching ON matching.tag_id = assigned.tag_id
+             WHERE assigned.media_item_id = {media_id_expression}
+         )"
+    )
+}
+
 fn invalid(message: impl Into<String>) -> rusqlite::Error {
     rusqlite::Error::InvalidParameterName(message.into())
 }
