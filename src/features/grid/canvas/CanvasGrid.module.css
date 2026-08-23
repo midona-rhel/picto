@@ -33,3 +33,24 @@
   width: 100%;
   overflow: hidden;
 }
+
+.marquee {
+  position: absolute;
+  background: rgba(51, 154, 240, 0.12);
+  border: 1px solid rgba(51, 154, 240, 0.5);
+  pointer-events: none;
+  z-index: 100;
+}
+
+.baseCanvas {
+  display: block;
+  width: 100%;
+}
+
+.overlayCanvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  pointer-events: none;
+}

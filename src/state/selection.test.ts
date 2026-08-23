@@ -4,6 +4,10 @@ import type { ItemSummary } from '../shared/types/generated/application/ItemSumm
 import { currentGridQueryAtom, gridSessionAtom } from './grid';
 import {
   clearSelectionAtom,
+  emptyGridSelection,
+  gridSelectionActionAtom,
+  loadedSelectedItemIdsAtom,
+  reduceGridSelection,
   selectedItemIdsAtom,
   selectedSubfolderNodeIdAtom,
   selectedSubfolderNodeIdsAtom,
@@ -57,6 +61,33 @@ describe('selection state', () => {
     });
   });
 
+  it('uses numeric item IDs for explicit targets and anchors', () => {
+    const initial = emptyGridSelection();
+    const selected = reduceGridSelection(initial, {
+      type: 'replace_items', itemIds: new Set([11]), anchor: 11,
+    });
+    expect(selected.itemIds).toEqual(new Set([11]));
+    expect(selected.anchor).toEqual({ kind: 'item', id: 11 });
+    expect(reduceGridSelection(selected, { type: 'range_items', itemIds: new Set([11, 12]) }).itemIds)
+      .toEqual(new Set([11, 12]));
+  });
+
+  it('keeps query-wide selection while excluding a numeric item', () => {
+    const query = reduceGridSelection(emptyGridSelection(), { type: 'select_all', totalCount: 1_000_000 });
+    const excluded = reduceGridSelection(query, { type: 'toggle_query_item', itemId: 42, totalCount: 1_000_000 });
+    expect(excluded.mode).toBe('query_results');
+    expect(excluded.excludedItemIds).toEqual(new Set([42]));
+    expect(excluded.anchor).toEqual({ kind: 'item', id: 42 });
+  });
+
+  it('keeps item and folder marquee hits in separate sets', () => {
+    const selection = reduceGridSelection(emptyGridSelection(), {
+      type: 'marquee', itemIds: new Set([7]), folderNodeIds: new Set(['folder:2']), additive: false,
+    });
+    expect(selection.itemIds).toEqual(new Set([7]));
+    expect(selection.folderNodeIds).toEqual(new Set(['folder:2']));
+  });
+
   it('keeps subfolder selection out of item targets', () => {
     const store = createStore();
     store.set(selectedItemIdsAtom, new Set([1]));
@@ -69,5 +100,18 @@ describe('selection state', () => {
 
     store.set(clearSelectionAtom);
     expect(store.get(selectedSubfolderNodeIdAtom)).toBeNull();
+  });
+
+  it('projects query selection onto loaded numeric item IDs', () => {
+    const store = createStore();
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      items: [buildGridItem(1, 'a'), buildGridItem(2, 'b')],
+      totalCount: 4,
+    });
+    store.set(selectAllResultsAtom);
+    store.set(gridSelectionActionAtom, { type: 'toggle_query_item', itemId: 2, totalCount: 4 });
+
+    expect(store.get(loadedSelectedItemIdsAtom)).toEqual(new Set([1]));
   });
 });

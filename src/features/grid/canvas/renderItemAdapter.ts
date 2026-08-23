@@ -1,9 +1,12 @@
-import type { CanonicalEntityGridItem, SidebarNodeDto } from '../../../shared/types/canonical';
+import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 
 export interface CanvasRenderItem {
-  itemId: number | null;
+  itemId: number;
   displayFileHash: string;
-  kind: 'single' | 'folder';
+  // Compatibility keys for the activation/reveal helpers. `hash` is the
+  // logical item identity; `thumbnailHash` is the physical file identity.
+  hash: string;
+  thumbnailHash: string;
   name: string | null;
   mime: string;
   width: number | null;
@@ -13,16 +16,7 @@ export interface CanvasRenderItem {
   dominantColor: string | null;
   aspectRatio: number | null;
   numFrames: number | null;
-  // Folder-specific fields
-  folderIcon?: string | null;
-  folderColor?: string | null;
-  itemCount?: number | null;
-  folderId?: number | null;
 }
-
-export type GridItem =
-  | { kind: 'entity'; data: CanonicalEntityGridItem }
-  | { kind: 'folder'; data: SidebarNodeDto; coverFileHash: string | null };
 
 export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
   const aspectRatio = item.pixel_width && item.pixel_height
@@ -32,7 +26,8 @@ export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
   return {
     itemId: item.item_id,
     displayFileHash: item.display_file_hash,
-    kind: 'single',
+    hash: String(item.item_id),
+    thumbnailHash: item.display_file_hash,
     name: item.name,
     mime: item.display_mime_type,
     width: item.pixel_width,
@@ -42,27 +37,5 @@ export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
     dominantColor: item.dominant_color_hex,
     aspectRatio,
     numFrames: item.frame_count,
-  };
-}
-
-export function adaptFolderItem(folder: SidebarNodeDto, coverFileHash: string | null): CanvasRenderItem {
-  const numericId = parseInt(folder.id.replace('folder:', ''), 10);
-  return {
-    itemId: null,
-    displayFileHash: coverFileHash ?? '',
-    kind: 'folder',
-    name: folder.name,
-    mime: 'application/x-folder',
-    width: null,
-    height: null,
-    rating: null,
-    durationMs: null,
-    dominantColor: null,
-    aspectRatio: 4 / 3,
-    numFrames: null,
-    folderIcon: folder.icon ?? null,
-    folderColor: folder.color ?? null,
-    itemCount: folder.count,
-    folderId: isNaN(numericId) ? null : numericId,
   };
 }

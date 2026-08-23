@@ -17,6 +17,7 @@ import {
   gridTargetSizeAtom,
   gridShowNameAtom,
   gridShowExtensionAtom,
+  gridShowExtensionLabelAtom,
   gridShowResolutionAtom,
   gridFitThumbnailsAtom,
   gridSearchTextAtom,
@@ -32,14 +33,12 @@ import { foldersController } from '../../controllers/foldersController';
 import { isNativeDragPending, isDragActive as isDragActiveCheck, isInternalDragOrigin } from './dragState';
 import {
   clearSelectionAtom,
-  querySelectionActiveAtom,
+  gridSelectionActionAtom,
+  gridSelectionAtom,
+  loadedSelectedItemIdsAtom,
   selectAllResultsAtom,
-  selectedItemIdsAtom,
-  selectedSubfolderNodeIdsAtom,
   selectionCountAtom,
-  selectionModeAtom,
   selectionTargetAtom,
-  toggleQuerySelectionItemIdAtom,
 } from '../../state/selection';
 import {
   displayedGridSnapshotAtom,
@@ -51,7 +50,7 @@ import {
 } from '../../state/inspector';
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { CanvasGrid } from './canvas/CanvasGrid';
-import { SubfolderGrid } from './SubfolderGrid';
+import { SubfolderGrid, type SubfolderGridHandle } from './SubfolderGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import { pushHistory } from '../../state/navigationHistory';
@@ -73,6 +72,7 @@ import { ApplicationMenuButton } from '../../shared/ui/ApplicationMenuButton/App
 import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
 import { resolveContextMenuTarget } from './gridMenuSelection';
 import styles from './GridScreen.module.css';
+import type { Lifecycle } from '../../shared/types/generated/application/Lifecycle';
 
 const store = getDefaultStore();
 function supportsExplicitImageAutoTagging(
@@ -116,6 +116,7 @@ export function GridScreen({
   const targetSize = useAtomValue(gridTargetSizeAtom);
   const showName = useAtomValue(gridShowNameAtom);
   const showExtension = useAtomValue(gridShowExtensionAtom);
+  const showExtensionLabel = useAtomValue(gridShowExtensionLabelAtom);
   const showResolution = useAtomValue(gridShowResolutionAtom);
   const fitThumbnails = useAtomValue(gridFitThumbnailsAtom);
   const searchText = useAtomValue(gridSearchTextAtom);
@@ -123,18 +124,16 @@ export function GridScreen({
   const totalSizeBytes = useAtomValue(gridTotalSizeBytesAtom);
   const gridScope = useAtomValue(gridScopeAtom);
   const sidebarNodes = useAtomValue(sidebarNodesAtom);
-  const selectedItemIds = useAtomValue(selectedItemIdsAtom);
-  const selectedSubfolderNodeIds = useAtomValue(selectedSubfolderNodeIdsAtom);
-  const selectionMode = useAtomValue(selectionModeAtom);
-  const querySelectionActive = useAtomValue(querySelectionActiveAtom);
+  const selection = useAtomValue(gridSelectionAtom);
+  const selectedItemIds = useAtomValue(loadedSelectedItemIdsAtom);
+  const selectedSubfolderNodeIds = selection.folderNodeIds;
+  const selectionMode = selection.mode;
+  const querySelectionActive = selection.mode === 'query_results';
   const selectionCount = useAtomValue(selectionCountAtom);
   const selectionTarget = useAtomValue(selectionTargetAtom);
-  const setSelectedItemIds = useSetAtom(selectedItemIdsAtom);
-  const setSelectedSubfolderNodeIds = useSetAtom(selectedSubfolderNodeIdsAtom);
+  const dispatchSelection = useSetAtom(gridSelectionActionAtom);
   const clearSelection = useSetAtom(clearSelectionAtom);
   const selectAllResults = useSetAtom(selectAllResultsAtom);
-  const toggleQuerySelectionItemId = useSetAtom(toggleQuerySelectionItemIdAtom);
-  const lastClickedIndexRef = useRef<number | null>(null);
   const viewerSession = useAtomValue(viewerSessionAtom);
   const setViewerSession = useSetAtom(viewerSessionAtom);
   const quickLookSession = useAtomValue(quickLookSessionAtom);
@@ -145,6 +144,7 @@ export function GridScreen({
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const gridLayoutRef = useRef<LayoutResult | null>(null);
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
+  const subfolderGridRef = useRef<SubfolderGridHandle>(null);
 
   const scrollToItem = useCallback((index: number, alignment: GridScrollAlignment = 'nearest') => {
     const layout = gridLayoutRef.current;
@@ -159,8 +159,8 @@ export function GridScreen({
     layoutRef: gridLayoutRef,
     containerRef: gridContainerRef,
     selectedItemIds,
-    setSelectedItemIds,
-    lastClickedIndexRef,
+    selection,
+    dispatchSelection,
     viewerOpen: !!(viewerSession || quickLookSession),
     containerWidth: gridContainerRef.current?.clientWidth ?? 0,
     targetSize,
@@ -211,17 +211,6 @@ export function GridScreen({
   const childFolders = useAtomValue(gridChildFoldersAtom);
   const contextMenu = useContextMenu();
 
-  // Metadata reconciliation replaces item objects without changing selection
-  // order. Preserve the range anchor unless membership or order truly changes.
-  const previousItemOrderRef = useRef<string[]>([]);
-  useEffect(() => {
-    const nextOrder = items.map((item) => String(item.item_id));
-    const previousOrder = previousItemOrderRef.current;
-    if (previousOrder.length !== nextOrder.length || previousOrder.some((id, index) => id !== nextOrder[index])) {
-      lastClickedIndexRef.current = null;
-    }
-    previousItemOrderRef.current = nextOrder;
-  }, [items]);
   const setDisplayedGridSnapshot = useSetAtom(displayedGridSnapshotAtom);
   const setDisplayedInspectorTarget = useSetAtom(displayedInspectorTargetAtom);
   const setDisplayedEntityData = useSetAtom(displayedInspectorItemDetailsAtom);
@@ -293,7 +282,7 @@ export function GridScreen({
     await entityMutations.updateTargetFolderMembership(target, gridScope.folder_id, 'remove');
   }, [gridScope, selectionTarget]);
 
-  const setSelectionStatus = useCallback(async (lifecycle: 'active' | 'inbox' | 'trash', target = selectionTarget) => {
+  const setSelectionLifecycle = useCallback(async (lifecycle: Lifecycle, target = selectionTarget) => {
     if (!target) return;
     await entityMutations.setTargetLifecycle(target, lifecycle);
   }, [selectionTarget]);
@@ -329,14 +318,13 @@ export function GridScreen({
       if (!readyHash) return;
       const label = `detail-${readyHash.slice(0, 12)}`;
       // Look up what we stored when Cmd+O was pressed
-      const selectedIds = detailWindowSelectionRef.current.get(label);
-      if (!selectedIds) return;
+      const selectedItemIds = detailWindowSelectionRef.current.get(label);
+      if (!selectedItemIds) return;
       const curItems = itemsRef.current;
-      const lightImages = selectedIds
+      const lightImages = selectedItemIds
         .map((itemId: number) => curItems.find((i: any) => i.item_id === itemId))
         .filter(Boolean)
         .map((i: any) => ({
-          item_id: i.item_id,
           hash: i.display_file_hash,
           name: i.name,
           mime: i.display_mime_type,
@@ -408,6 +396,10 @@ export function GridScreen({
       const scope = gridScopeRef.current;
       const isTrash = scope.kind === 'trash';
       const singleItemId = count === 1 ? [...itemIds][0] : null;
+      const singleItem = singleItemId == null
+        ? null
+        : curItems.find((item) => item.item_id === singleItemId) ?? null;
+      const singleFileHash = singleItem?.display_file_hash ?? null;
       const canAutoTag = supportsExplicitImageAutoTagging(
         querySelectionActiveRef.current,
         itemIds,
@@ -427,19 +419,19 @@ export function GridScreen({
         return;
       }
 
-      const singleItem = singleItemId == null ? null : curItems.find((item) => item.item_id === singleItemId) ?? null;
-      if (matchesShortcutDef(e, defs.openDefault) && singleItem) {
-        e.preventDefault(); void filesController.openDefaultAppForHash(singleItem.display_file_hash); return;
+      if (matchesShortcutDef(e, defs.openDefault) && singleFileHash) {
+        e.preventDefault(); void filesController.openDefaultAppForHash(singleFileHash); return;
       }
-      if (matchesShortcutDef(e, defs.revealInFolder) && singleItem) {
-        e.preventDefault(); void filesController.revealHashInFolder(singleItem.display_file_hash); return;
+      if (matchesShortcutDef(e, defs.revealInFolder) && singleFileHash) {
+        e.preventDefault(); void filesController.revealHashInFolder(singleFileHash); return;
       }
       if (matchesShortcutDef(e, defs.openNewWindow) && count > 0) {
         e.preventDefault();
+        // Use first selected hash as the window identity
         const selectedArr = [...itemIds];
-        const primaryItemId = singleItemId ?? selectedArr[0];
-        const item = curItems.find((i) => i.item_id === primaryItemId);
-        const primaryHash = item?.display_file_hash ?? '';
+        const item = singleItem ?? curItems.find((candidate) => candidate.item_id === selectedArr[0]);
+        if (!item) return;
+        const primaryHash = item.display_file_hash;
         const label = `detail-${primaryHash.slice(0, 12)}`;
         detailWindowSelectionRef.current.set(label, selectedArr);
         void windowController.openDetailWindow({
@@ -454,13 +446,13 @@ export function GridScreen({
       if (matchesShortcutDef(e, defs.delete_) && count > 0) {
         e.preventDefault();
         if (isTrash) void permanentlyDeleteSelection();
-        else void setSelectionStatus('trash');
+        else void setSelectionLifecycle('trash');
         return;
       }
       // Mod+Shift+Backspace: context-dependent reverse action
       if (matchesShortcutDef(e, defs.restore) && count > 0) {
         e.preventDefault();
-        if (isTrash) void setSelectionStatus('active');
+        if (isTrash) void setSelectionLifecycle('active');
         else if (scope.kind === 'folder') void removeSelectionFromCurrentFolder();
         return;
       }
@@ -495,7 +487,7 @@ export function GridScreen({
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [clearSelection, selectAllResults, setViewerSession, setQuickLookSession, setSelectionStatus, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder]);
+  }, [clearSelection, selectAllResults, setViewerSession, setQuickLookSession, setSelectionLifecycle, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder]);
 
   const isEmpty = items.length === 0 && !loading;
 
@@ -512,9 +504,7 @@ export function GridScreen({
     }
 
     if (isEmpty) {
-      const scopeKey = gridScope.kind === 'smart_folder'
-        ? 'smart_folder'
-        : gridScope.kind === 'folder' ? 'folder' : gridScope.kind;
+      const scopeKey = gridScope.kind;
       const hasSearch = searchText.trim().length > 0;
       const emptyTitle = hasSearch ? 'No results found'
         : scopeKey === 'inbox' ? 'Inbox is empty'
@@ -590,6 +580,7 @@ export function GridScreen({
 
     const subfolderHeader = hasSubfolders ? (
       <SubfolderGrid
+        ref={subfolderGridRef}
         childFolders={childFolders}
         targetSize={targetSize}
         totalImageCount={items.length}
@@ -600,19 +591,15 @@ export function GridScreen({
         }}
         onSelectFolder={(nodeId, event) => {
           if (event.metaKey || event.ctrlKey) {
-            setSelectedSubfolderNodeIds((prev) => {
-              const next = new Set(prev);
-              if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId);
-              return next;
-            });
+            dispatchSelection({ type: 'toggle_folder', id: nodeId });
           } else {
-            setSelectedSubfolderNodeIds(new Set([nodeId]));
+            dispatchSelection({ type: 'replace_folders', ids: new Set([nodeId]), anchor: nodeId });
           }
         }}
         onFolderContextMenu={(nodeId, _folder, pos) => {
           // Select the folder if not already selected
           if (!selectedSubfolderNodeIds.has(nodeId)) {
-            setSelectedSubfolderNodeIds(new Set([nodeId]));
+            dispatchSelection({ type: 'replace_folders', ids: new Set([nodeId]), anchor: nodeId });
           }
           const folderId = parseInt(nodeId.replace('folder:', ''), 10);
           if (isNaN(folderId)) return;
@@ -648,12 +635,13 @@ export function GridScreen({
         targetSize={targetSize}
         showName={showName}
         showExtension={showExtension}
+        showExtensionLabel={showExtensionLabel}
         showResolution={showResolution}
         fitThumbnails={fitThumbnails}
-        totalCount={totalCount}
         interactive={!viewerSession && !quickLookSession}
         suppressTileReveal={transitionPhase === 'fading_out' || transitionPhase === 'waiting'}
         selectedItemIds={selectedItemIds}
+        selectedFolderNodeIds={selectedSubfolderNodeIds}
         initialScrollTop={initialScrollTop}
         onContainerRef={(el) => { gridContainerRef.current = el; }}
         onLayoutChange={(l) => { gridLayoutRef.current = l; }}
@@ -668,39 +656,35 @@ export function GridScreen({
         onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; onScrollTopChange?.(scrollTop); }}
         onTileClick={(index, item, event) => {
           const itemId = item.item_id;
-          if (event?.shiftKey && lastClickedIndexRef.current != null) {
-            const from = Math.min(lastClickedIndexRef.current, index);
-            const to = Math.max(lastClickedIndexRef.current, index);
+          if (event?.shiftKey && selection.anchor?.kind === 'item') {
+            const anchorIndex = items.findIndex((entry) => entry.item_id === selection.anchor!.id);
+            const from = Math.min(anchorIndex >= 0 ? anchorIndex : index, index);
+            const to = Math.max(anchorIndex >= 0 ? anchorIndex : index, index);
             const base = (event.metaKey || event.ctrlKey)
               ? new Set(selectedItemIds)
               : new Set<number>();
             for (let i = from; i <= to; i++) {
               if (items[i]) base.add(items[i].item_id);
             }
-            setSelectedItemIds(base);
+            dispatchSelection({ type: 'range_items', itemIds: base });
           } else if (event?.metaKey || event?.ctrlKey) {
-            if (selectionMode === 'query_results') {
-              toggleQuerySelectionItemId(itemId);
-            } else {
-              setSelectedItemIds((prev) => {
-                const next = new Set(prev);
-                if (next.has(itemId)) next.delete(itemId);
-                else next.add(itemId);
-                return next;
-              });
-            }
-            lastClickedIndexRef.current = index;
+            dispatchSelection(selectionMode === 'query_results'
+              ? { type: 'toggle_query_item', itemId, totalCount: totalCount ?? items.length }
+              : { type: 'toggle_item', itemId });
           } else {
-            setSelectedItemIds(new Set([itemId]));
-            lastClickedIndexRef.current = index;
+            dispatchSelection({ type: 'replace_items', itemIds: new Set([itemId]), anchor: itemId });
           }
         }}
         onTileDoubleClick={(_index, item) => {
           setViewerSession(createViewerSession(items, item.item_id));
         }}
         onEmptyClick={() => clearSelection()}
-        onSelectionChange={setSelectedItemIds}
-        onTileContextMenu={(index, item, pos) => {
+        onSelectionChange={(itemIds) => dispatchSelection({ type: 'replace_items', itemIds })}
+        onMarqueeSelectionChange={({ itemIds, folderNodeIds }) => {
+          dispatchSelection({ type: 'marquee', itemIds, folderNodeIds, additive: false });
+        }}
+        collectHeaderMarqueeHits={(rect) => subfolderGridRef.current?.collectMarqueeHits(rect) ?? new Set()}
+        onTileContextMenu={(_index, item, pos) => {
           // Ensure the right-clicked tile is selected
           let effectiveItemIds = selectedItemIds;
           let effectiveSelectionMode = selectionMode;
@@ -708,8 +692,7 @@ export function GridScreen({
           let effectiveQuerySelectionActive = querySelectionActive;
           if (!selectedItemIds.has(item.item_id)) {
             effectiveItemIds = new Set([item.item_id]);
-            setSelectedItemIds(effectiveItemIds);
-            lastClickedIndexRef.current = index;
+            dispatchSelection({ type: 'replace_items', itemIds: effectiveItemIds, anchor: item.item_id });
             effectiveSelectionMode = 'explicit';
             effectiveSelectionCount = 1;
             effectiveQuerySelectionActive = false;
@@ -727,13 +710,13 @@ export function GridScreen({
             selectionTarget,
             effectiveItemIds,
           );
-          const scopeKind = gridScope.kind === 'all' || gridScope.kind === 'inbox' || gridScope.kind === 'trash' ? 'system'
-            : gridScope.kind === 'folder' ? 'folder'
+          const scopeKind = gridScope.kind === 'folder' ? 'folder'
             : gridScope.kind === 'smart_folder' ? 'smart_folder'
+            : 'system';
+          const statusFilter = gridScope.kind === 'inbox' ? 'inbox'
+            : gridScope.kind === 'trash' ? 'trash'
+            : gridScope.kind === 'all' ? 'active'
             : null;
-          const statusFilter = gridScope.kind === 'inbox' || gridScope.kind === 'trash'
-            ? gridScope.kind
-            : gridScope.kind === 'all' ? 'active' : null;
 
           const entries = buildTileContextMenu({
             selectionCount: selCount,
@@ -829,11 +812,11 @@ export function GridScreen({
             onOpenAiTagger: canAutoTag
               ? () => { setAiTaggerPortal({ open: true, anchor: inspectorAnchor() }); }
               : undefined,
-            onMoveToTrash: () => { void setSelectionStatus('trash', effectiveTarget); },
-            onRestore: () => { void setSelectionStatus('active', effectiveTarget); },
+            onMoveToTrash: () => { void setSelectionLifecycle('trash', effectiveTarget); },
+            onRestore: () => { void setSelectionLifecycle('active', effectiveTarget); },
             onPermanentDelete: () => { permanentlyDeleteSelection(effectiveTarget, selCount); },
-            onAccept: () => { void setSelectionStatus('active', effectiveTarget); },
-            onReject: () => { void setSelectionStatus('trash', effectiveTarget); },
+            onAccept: () => { void setSelectionLifecycle('active', effectiveTarget); },
+            onReject: () => { void setSelectionLifecycle('trash', effectiveTarget); },
           });
           contextMenu.openAt(pos, entries);
         }}
@@ -882,15 +865,14 @@ export function GridScreen({
             const next = navigateViewerSession(viewerSession, items, delta);
             if (next) {
               setViewerSession(next);
-              setSelectedItemIds(new Set([next.currentItemId]));
+              dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
             }
           }}
           onClose={(exitItemId) => {
             setViewerSession(null);
             if (exitItemId != null) {
-              setSelectedItemIds(new Set([exitItemId]));
+              dispatchSelection({ type: 'replace_items', itemIds: new Set([exitItemId]), anchor: exitItemId });
               const idx = items.findIndex((i) => i.item_id === exitItemId);
-              if (idx >= 0) lastClickedIndexRef.current = idx;
               scrollToItem(idx);
             }
           }}
@@ -907,10 +889,9 @@ export function GridScreen({
             const next = navigateViewerSession(quickLookSession, items, delta);
             if (next) {
               setQuickLookSession(next);
-              setSelectedItemIds(new Set([next.currentItemId]));
+              dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
               const idx = items.findIndex((item) => item.item_id === next.currentItemId);
               if (idx >= 0) {
-                lastClickedIndexRef.current = idx;
                 scrollToItem(idx, 'center');
               }
             }
@@ -918,9 +899,8 @@ export function GridScreen({
           onClose={(exitItemId) => {
             setQuickLookSession(null);
             if (exitItemId != null) {
-              setSelectedItemIds(new Set([exitItemId]));
+              dispatchSelection({ type: 'replace_items', itemIds: new Set([exitItemId]), anchor: exitItemId });
               const idx = items.findIndex((i) => i.item_id === exitItemId);
-              if (idx >= 0) lastClickedIndexRef.current = idx;
               scrollToItem(idx);
             }
           }}

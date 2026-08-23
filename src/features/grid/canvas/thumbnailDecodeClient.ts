@@ -1,18 +1,16 @@
 /**
  * Thin bridge to the thumbnail decode worker.
  *
- * The worker owns all loading, caching, and reveal staggering.
- * The main thread sends a plan (visible physical file hashes) and receives
- * revealed bitmaps — it never waits on the worker.
+ * The main thread sends an activation plan and receives decoded bitmaps.
  */
 
 import ThumbnailWorker from './thumbnailDecodeWorker?worker';
 
-type RevealCallback = (fileHash: string, bitmap: ImageBitmap) => void;
+type BitmapCallback = (fileHash: string, bitmap: ImageBitmap) => void;
 type ErrorCallback = (fileHash: string) => void;
 
 let worker: Worker | null = null;
-let revealCb: RevealCallback | null = null;
+let bitmapCb: BitmapCallback | null = null;
 let errorCb: ErrorCallback | null = null;
 
 function ensureWorker(): Worker | null {
@@ -21,7 +19,7 @@ function ensureWorker(): Worker | null {
     worker = new ThumbnailWorker();
     worker.onmessage = (event: MessageEvent) => {
       const msg = event.data;
-      if (msg.type === 'reveal') revealCb?.(msg.fileHash, msg.bitmap);
+      if (msg.type === 'bitmap') bitmapCb?.(msg.fileHash, msg.bitmap);
       else if (msg.type === 'error') errorCb?.(msg.fileHash);
     };
     worker.onerror = () => {
@@ -44,8 +42,8 @@ export function clearThumbnailWorker(): void {
   worker?.postMessage({ type: 'clear' });
 }
 
-export function setThumbnailRevealCallback(cb: RevealCallback | null): void {
-  revealCb = cb;
+export function setThumbnailBitmapCallback(cb: BitmapCallback | null): void {
+  bitmapCb = cb;
 }
 
 export function setThumbnailErrorCallback(cb: ErrorCallback | null): void {

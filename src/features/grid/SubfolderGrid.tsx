@@ -5,7 +5,7 @@
  * Left-click selects, double-click navigates, right-click opens context menu.
  */
 
-import { useState, useEffect, useCallback } from 'react';
+import { forwardRef, useState, useEffect, useCallback, useImperativeHandle, useRef } from 'react';
 import { IconChevronRight, IconFolder } from '@tabler/icons-react';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
 import { foldersController } from '../../controllers/foldersController';
@@ -22,12 +22,17 @@ interface SubfolderGridProps {
   selectedNodeIds?: Set<string>;
 }
 
-export function SubfolderGrid({
+export interface SubfolderGridHandle {
+  collectMarqueeHits(rect: { left: number; top: number; width: number; height: number }): Set<string>;
+}
+
+export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>(function SubfolderGrid({
   childFolders, targetSize, totalImageCount,
   onOpenFolder, onSelectFolder, onFolderContextMenu,
   selectedNodeIds,
-}: SubfolderGridProps) {
+}, ref) {
   const [expanded, setExpanded] = useState(true);
+  const rootRef = useRef<HTMLDivElement>(null);
   const [coverHashes, setCoverHashes] = useState<Map<number, string | null>>(new Map());
 
   // Fetch all child covers through one backend read instead of one IPC per tile.
@@ -67,15 +72,30 @@ export function SubfolderGrid({
     onFolderContextMenu?.(nodeId, folder, { x: e.clientX, y: e.clientY });
   }, [onFolderContextMenu]);
 
+  useImperativeHandle(ref, () => ({
+    collectMarqueeHits(rect) {
+      const root = rootRef.current;
+      const hits = new Set<string>();
+      if (!root) return hits;
+      for (const tile of root.querySelectorAll<HTMLElement>('[data-folder-hash]')) {
+        const id = tile.dataset.folderHash;
+        const top = tile.offsetTop - root.offsetHeight;
+        if (id && tile.offsetLeft + tile.offsetWidth > rect.left && tile.offsetLeft < rect.left + rect.width
+          && top + tile.offsetHeight > rect.top && top < rect.top + rect.height) hits.add(id);
+      }
+      return hits;
+    },
+  }), []);
+
   if (childFolders.length === 0) return null;
 
   const clampedSize = Math.max(150, Math.min(400, targetSize));
   const gridColumns = `repeat(auto-fill, minmax(${clampedSize}px, 1fr))`;
 
   return (
-    <div className={styles.container}>
+    <div ref={rootRef} className={styles.container}>
       {/* Section header */}
-      <div className={styles.sectionLabel} onClick={() => setExpanded(!expanded)}>
+      <div className={styles.sectionLabel} data-grid-header-interactive onClick={() => setExpanded(!expanded)}>
         <span className={`${styles.chevron} ${!expanded ? styles.chevronCollapsed : ''}`}>
           <IconChevronRight size={11} />
         </span>
@@ -94,6 +114,7 @@ export function SubfolderGrid({
                 key={folder.id}
                 className={`${styles.tile} ${selectedNodeIds?.has(folder.id) ? styles.tileSelected : ''}`}
                 data-folder-hash={folder.id}
+                data-grid-header-interactive
                 onClick={(e) => handleClick(e, folder.id)}
                 onDoubleClick={(e) => handleDoubleClick(e, folder.id)}
                 onContextMenu={(e) => handleContextMenu(e, folder.id, folder)}
@@ -144,7 +165,7 @@ export function SubfolderGrid({
       )}
     </div>
   );
-}
+});
 
 function parseFolderId(nodeId: string): number | null {
   if (!nodeId.startsWith('folder:')) return null;

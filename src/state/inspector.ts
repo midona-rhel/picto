@@ -15,6 +15,7 @@ import type { ItemDetails } from '../shared/types/generated/application/ItemDeta
 import { gridActiveAtom } from './grid';
 import { activeNodeIdAtom } from './navigation';
 import {
+  gridSelectionAtom,
   selectedItemIdAtom,
   selectionCountAtom,
   selectedSubfolderNodeIdAtom,
@@ -40,8 +41,12 @@ export type DisplayedGridSnapshot = {
 
 export const liveInspectorTargetAtom = atom<InspectorTarget>((get) => {
   if (!get(gridActiveAtom)) return { kind: 'none' };
+  const selection = get(gridSelectionAtom);
   const selectionMode = get(selectionModeAtom);
   const selectionCount = get(selectionCountAtom);
+  if (selectionCount > 0 && selection.folderNodeIds.size > 0) {
+    return { kind: 'multi', count: selectionCount + selection.folderNodeIds.size, selectionMode };
+  }
   if (selectionMode === 'query_results' && selectionCount > 0) {
     return { kind: 'multi', count: selectionCount, selectionMode };
   }

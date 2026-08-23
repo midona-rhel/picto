@@ -16,9 +16,10 @@ export function startInspectorSettle(): () => void {
   let cancelled = false;
   let lastItemId: number | null = null;
 
-  const unregisterInvalidation = libraryInvalidation.register('library', () => {
+  const unregisterInvalidation = libraryInvalidation.register('library', (payload) => {
     if (cancelled) return;
     const itemId = store.get(displayedInspectorItemDetailsAtom)?.item_id ?? lastItemId;
+    if (payload?.item_ids.length && !payload.item_ids.includes(itemId ?? -1)) return;
     if (itemId != null) void loadInspectorData(itemId);
   });
 

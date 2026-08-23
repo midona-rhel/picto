@@ -96,6 +96,7 @@ function selectionSupportsAiTagging(
 ): boolean {
   if (!target || !summary) return false;
   const mimeCounts = summary.stats.mime_counts;
+  if (!mimeCounts) return false;
   const imageCount = Object.entries(mimeCounts)
     .filter(([mime]) => mime.startsWith('image/'))
     .reduce((count, [, value]) => count + value, 0);

@@ -13,3 +13,51 @@ export function dragGhostStackCount(thumbnailCount: number): number {
 export function formatDragGhostCount(count: number): string {
   return String(count);
 }
+
+export function createNativeDragImageUrl(
+  fileHashes: string[],
+  count: number,
+  getBitmap: (fileHash: string) => ImageBitmap | null,
+): string {
+  const stackCount = dragGhostStackCount(fileHashes.length);
+  const width = DRAG_GHOST_THUMB_SIZE + (stackCount - 1) * DRAG_GHOST_STACK_OFFSET + 14;
+  const height = DRAG_GHOST_THUMB_SIZE + (stackCount - 1) * DRAG_GHOST_STACK_OFFSET + 8;
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext('2d');
+  if (!context) return '';
+
+  for (let i = 0; i < stackCount; i++) {
+    const bitmap = getBitmap(fileHashes[i]);
+    if (!bitmap) continue;
+    const x = i * DRAG_GHOST_STACK_OFFSET;
+    const y = i * DRAG_GHOST_STACK_OFFSET + 6;
+    context.save();
+    context.beginPath();
+    context.roundRect(x, y, DRAG_GHOST_THUMB_SIZE, DRAG_GHOST_THUMB_SIZE, DRAG_GHOST_RADIUS);
+    context.clip();
+    context.drawImage(bitmap, x, y, DRAG_GHOST_THUMB_SIZE, DRAG_GHOST_THUMB_SIZE);
+    context.restore();
+    context.strokeStyle = DRAG_GHOST_BORDER;
+    context.lineWidth = 1;
+    context.beginPath();
+    context.roundRect(x + 0.5, y + 0.5, DRAG_GHOST_THUMB_SIZE - 1, DRAG_GHOST_THUMB_SIZE - 1, DRAG_GHOST_RADIUS);
+    context.stroke();
+  }
+
+  if (count > 1) {
+    const label = formatDragGhostCount(count);
+    context.font = 'bold 10px -apple-system, BlinkMacSystemFont, sans-serif';
+    const badgeWidth = Math.max(DRAG_GHOST_BADGE_MIN_WIDTH, context.measureText(label).width + 10);
+    context.fillStyle = '#3297FF';
+    context.beginPath();
+    context.roundRect(width - badgeWidth, 0, badgeWidth, DRAG_GHOST_BADGE_HEIGHT, DRAG_GHOST_BADGE_HEIGHT / 2);
+    context.fill();
+    context.fillStyle = 'white';
+    context.textAlign = 'center';
+    context.textBaseline = 'middle';
+    context.fillText(label, width - badgeWidth / 2, DRAG_GHOST_BADGE_HEIGHT / 2);
+  }
+  return canvas.toDataURL('image/png');
+}

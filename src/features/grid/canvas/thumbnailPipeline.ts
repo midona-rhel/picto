@@ -1,20 +1,20 @@
 /**
  * Thumbnail pipeline — thin main-thread layer over the decode worker.
  *
- * The worker owns loading, caching, concurrency, and reveal staggering.
+ * The worker owns loading, cancellation, and decoding.
  * This class just:
  *  1. Sends the plan (visible hashes) to the worker each frame.
- *  2. Receives revealed bitmaps and stores them for drawing.
+ *  2. Receives decoded bitmaps and stores them for drawing.
  *  3. Handles eviction of transferred bitmaps.
  *
- * The main thread never waits on the decoder. Bitmap arrival IS the
- * signal to start fading in.
+ * The main thread never waits on the decoder. Reveal identity is owned
+ * separately by ThumbnailRevealTracker.
  */
 
 import {
   sendThumbnailPlan,
   clearThumbnailWorker,
-  setThumbnailRevealCallback,
+  setThumbnailBitmapCallback,
   setThumbnailErrorCallback,
   terminateThumbnailWorker,
 } from './thumbnailDecodeClient';
@@ -28,51 +28,45 @@ import {
 
 export type { PlanTile } from './thumbnailPlan';
 
-export const THUMBNAIL_PIPELINE_REVEAL_MS = 250;
 export type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
+
+export const THUMBNAIL_PIPELINE_REVEAL_MS = 250;
 
 /** If a tile exceeds this size in either axis, load the full original instead of the 512px thumb. */
 const FULL_QUALITY_THRESHOLD_PX = 752;
 
-function mediaThumbnailUrl(fileHash: string): string {
-  return `media://localhost/thumb/${fileHash}.jpg`;
+function mediaThumbnailUrl(hash: string): string {
+  return `media://localhost/thumb/${hash}.jpg`;
 }
 
 export class ThumbnailPipeline {
   private cache = new Map<string, ThumbnailPipelineEntry>();
   private onDirty: () => void;
+  private onBitmapAvailable: (hash: string) => void;
   private destroyed = false;
   private totalBytes = 0;
-  /** When true, new thumbnails appear instantly without fade animation. */
-  suppressAnimation = false;
-  /** Timestamp until which animation is suppressed (handles async thumbnail arrival after transition). */
-  private suppressUntil = 0;
 
   // ── Plan deduplication ──
-  // Only send the plan when the visible physical-file set actually changes.
+  // Only send plan to worker when the visible hash set actually changes.
   // -1 = never computed; computePlanFingerprint always returns >= 0.
   private lastPlanFingerprint = -1;
   // Reusable array for building plan entries — avoids per-frame allocation.
   private planBuffer: Array<{ fileHash: string; url: string }> = [];
 
-  constructor(onDirty: () => void = () => {}) {
+  constructor(onDirty: () => void = () => {}, onBitmapAvailable: (hash: string) => void = () => {}) {
     this.onDirty = onDirty;
-    setThumbnailRevealCallback((fileHash, bitmap) => this.handleReveal(fileHash, bitmap));
-    setThumbnailErrorCallback((fileHash) => this.handleError(fileHash));
+    this.onBitmapAvailable = onBitmapAvailable;
+    setThumbnailBitmapCallback((hash, bitmap) => this.handleBitmap(hash, bitmap));
+    setThumbnailErrorCallback((hash) => this.handleError(hash));
   }
 
   setOnDirty(onDirty: () => void): void {
     this.onDirty = onDirty;
   }
 
-  /** Suppress fade animation for the next N milliseconds (covers async arrivals after transition). */
-  suppressAnimationFor(ms: number): void {
-    this.suppressUntil = performance.now() + ms;
-  }
-
   /**
    * Send the current set of visible tiles to the worker.
-   * Call once per frame with all physical file hashes in the activation zone.
+   * Call once per frame with all hashes in the activation zone.
    * Deduplicates — only posts to the worker when the set actually changes.
    */
   updatePlan(tiles: PlanTile[], viewportCenterY: number): void {
@@ -111,22 +105,20 @@ export class ThumbnailPipeline {
   }
 
   /** Get a cached entry for drawing. Returns null if no bitmap received yet. */
-  get(fileHash: string): ThumbnailPipelineEntry | null {
-    return this.cache.get(fileHash) ?? null;
+  get(hash: string): ThumbnailPipelineEntry | null {
+    return this.cache.get(hash) ?? null;
   }
 
-  /** Close bitmaps for tiles no longer in the visible set. */
-  evictOutsideVisible(visibleFileHashes: Set<string>): void {
-    for (const [fileHash, entry] of this.cache) {
-      if (visibleFileHashes.has(fileHash)) continue;
+  /** Close bitmaps for tiles no longer in the decode activation zone. */
+  evictOutsideActive(activeHashes: Set<string>): void {
+    for (const [hash, entry] of this.cache) {
+      if (activeHashes.has(hash)) continue;
       if (entry.thumb) {
         this.totalBytes -= entry.bytes;
         entry.thumb.close();
         entry.thumb = null;
         entry.bytes = 0;
       }
-      entry.animateIn = false;
-      entry.revealStartedAt = 0;
       entry.state = 'idle';
     }
   }
@@ -149,13 +141,13 @@ export class ThumbnailPipeline {
 
   // ── Worker callbacks ────────────────────────────────────────────
 
-  private handleReveal(fileHash: string, bitmap: ImageBitmap): void {
+  private handleBitmap(hash: string, bitmap: ImageBitmap): void {
     if (this.destroyed) { bitmap.close(); return; }
 
-    let entry = this.cache.get(fileHash);
+    let entry = this.cache.get(hash);
     if (!entry) {
       entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0, animateIn: false, revealStartedAt: 0 };
-      this.cache.set(fileHash, entry);
+      this.cache.set(hash, entry);
     }
 
     const isUpgrade = entry.thumb != null;
@@ -168,22 +160,18 @@ export class ThumbnailPipeline {
     entry.bytes = bitmap.width * bitmap.height * 4;
     this.totalBytes += entry.bytes;
     entry.state = 'shown';
+    entry.animateIn = !isUpgrade;
+    entry.revealStartedAt = performance.now();
 
-    if (isUpgrade || this.suppressAnimation || performance.now() < this.suppressUntil) {
-      entry.animateIn = false;
-    } else {
-      entry.animateIn = true;
-      entry.revealStartedAt = performance.now();
-    }
-
+    if (!isUpgrade) this.onBitmapAvailable(hash);
     this.onDirty();
   }
 
-  private handleError(fileHash: string): void {
-    let entry = this.cache.get(fileHash);
+  private handleError(hash: string): void {
+    let entry = this.cache.get(hash);
     if (!entry) {
       entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0, animateIn: false, revealStartedAt: 0 };
-      this.cache.set(fileHash, entry);
+      this.cache.set(hash, entry);
     }
     entry.state = 'error';
   }
