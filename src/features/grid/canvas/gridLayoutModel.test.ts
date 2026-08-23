@@ -37,6 +37,24 @@ describe('buildGridLayoutModel', () => {
     expect(reordered.items[0]).not.toBe(appended.items[1]);
     expect(reordered.hashToIndex).toEqual(new Map([['b', 0], ['a', 1], ['c', 2]]));
   });
+
+  it.each(['grid', 'waterfall', 'justified'] as const)(
+    'matches a clean %s layout after an append without mutating prior positions',
+    (viewMode) => {
+      const config = { width: 937, targetSize: 180, gap: 16, viewMode, textHeight: 20, scrollbarWidth: 8 };
+      const first = Array.from({ length: 37 }, (_, index) => item(String(index), 100 + index * 7, 80 + (index % 9) * 13));
+      const all = [...first, ...Array.from({ length: 17 }, (_, index) => item(String(37 + index), 180 + index * 11, 90 + index * 5))];
+      const runtime = new GridLayoutRuntime();
+      const before = runtime.update(first, config);
+      const priorPositions = before.positions.map((position) => ({ ...position }));
+      const appended = runtime.update(all, config);
+      const clean = new GridLayoutRuntime().update(all, config);
+
+      expect(appended.positions).toEqual(clean.positions);
+      expect(appended.totalHeight).toBe(clean.totalHeight);
+      expect(before.positions).toEqual(priorPositions);
+    },
+  );
 });
 
 describe('estimateGridScrollHeight', () => {

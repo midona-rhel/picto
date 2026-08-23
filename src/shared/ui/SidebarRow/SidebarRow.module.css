@@ -48,7 +48,12 @@
   width: 100%;
 }
 
-.row:hover::before {
+:global(html:not([data-grid-drag-active])) .row:hover::before {
+  background: var(--sidebar-list-highlight-hover-bg);
+  opacity: 1;
+}
+
+.row[data-drop-highlighted='true']::before {
   background: var(--sidebar-list-highlight-hover-bg);
   opacity: 1;
 }

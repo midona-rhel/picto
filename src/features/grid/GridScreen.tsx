@@ -1,7 +1,3 @@
-/**
- * Grid screen — feature root. Reads state, delegates to CanvasGrid.
- */
-
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { IconPhoto, IconUpload, IconFolderPlus } from '@tabler/icons-react';
@@ -9,22 +5,7 @@ import * as entityMutations from '../../controllers/entityMutations';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { activeNodeIdAtom } from '../../state/navigation';
 import {
-  gridItemsAtom,
-  gridLoadingAtom,
-  gridErrorAtom,
-  gridCursorAtom,
-  gridViewModeAtom,
-  gridTargetSizeAtom,
-  gridShowNameAtom,
-  gridShowExtensionAtom,
-  gridShowExtensionLabelAtom,
-  gridShowResolutionAtom,
-  gridFitThumbnailsAtom,
-  gridSearchTextAtom,
-  gridTotalCountAtom,
-  gridTotalSizeBytesAtom,
-  gridScopeAtom,
-  gridShowSubfoldersAtom,
+  gridSessionAtom,
   gridChildFoldersAtom,
   type GridTransitionPhase,
 } from '../../state/grid';
@@ -54,7 +35,7 @@ import { SubfolderGrid, type SubfolderGridHandle } from './SubfolderGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import { pushHistory } from '../../state/navigationHistory';
-import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
+import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex, type ViewerSession } from '../../state/viewer';
 import { aiTaggerPortalAtom, inspectorAnchor } from '../../state/portals';
 import { confirmModalAtom, folderImportModalAtom, exportModalAtom, tagSelectModalAtom, folderPickerModalAtom } from '../../state/modals';
 import { MediaView } from '../viewer/MediaView';
@@ -76,6 +57,19 @@ import styles from './GridScreen.module.css';
 const store = getDefaultStore();
 const STATUS_ACTIVE = 1;
 const STATUS_TRASH = 2;
+const EMPTY_COPY: Record<string, [string, string]> = {
+  inbox: ['Inbox is empty', 'Run subscriptions to add new images to your inbox'],
+  uncategorized: ['No uncategorized images', 'All your images are already assigned to folders'],
+  untagged: ['No untagged images', 'All your images have been tagged'],
+  smart_folder: ['No matching images', 'Try adjusting the rules for this smart folder'],
+  folder: ['This folder is empty', 'Drag and drop files here, or import them below'],
+};
+
+function useLatest<T>(value: T) {
+  const ref = useRef(value);
+  ref.current = value;
+  return ref;
+}
 
 function supportsExplicitImageAutoTagging(
   querySelectionActive: boolean,
@@ -110,21 +104,11 @@ export function GridScreen({
   const activeNodeId = useAtomValue(activeNodeIdAtom);
   const displayedNodeId = nodeId ?? activeNodeId;
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
-  const items = useAtomValue(gridItemsAtom);
-  const loading = useAtomValue(gridLoadingAtom);
-  const error = useAtomValue(gridErrorAtom);
-  const cursor = useAtomValue(gridCursorAtom);
-  const viewMode = useAtomValue(gridViewModeAtom);
-  const targetSize = useAtomValue(gridTargetSizeAtom);
-  const showName = useAtomValue(gridShowNameAtom);
-  const showExtension = useAtomValue(gridShowExtensionAtom);
-  const showExtensionLabel = useAtomValue(gridShowExtensionLabelAtom);
-  const showResolution = useAtomValue(gridShowResolutionAtom);
-  const fitThumbnails = useAtomValue(gridFitThumbnailsAtom);
-  const searchText = useAtomValue(gridSearchTextAtom);
-  const totalCount = useAtomValue(gridTotalCountAtom);
-  const totalSizeBytes = useAtomValue(gridTotalSizeBytesAtom);
-  const gridScope = useAtomValue(gridScopeAtom);
+  const session = useAtomValue(gridSessionAtom);
+  const { items, cursor, totalCount, totalSizeBytes, searchText, scope: gridScope, error } = session;
+  const { mode: viewMode, targetSize, showName, showExtension, showExtensionLabel,
+    showResolution, fitThumbnails, showSubfolders } = session.view;
+  const loading = session.status === 'loading';
   const sidebarNodes = useAtomValue(sidebarNodesAtom);
   const selection = useAtomValue(gridSelectionAtom);
   const selectedHashes = useAtomValue(loadedSelectedEntityHashesAtom);
@@ -147,6 +131,16 @@ export function GridScreen({
   const gridLayoutRef = useRef<LayoutResult | null>(null);
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
   const subfolderGridRef = useRef<SubfolderGridHandle>(null);
+  const itemsRef = useLatest(items);
+  const selectionCountRef = useLatest(selectionCount);
+  const selectedHashesRef = useLatest(selectedHashes);
+  const querySelectionActiveRef = useLatest(querySelectionActive);
+  const viewerSessionRef = useLatest(viewerSession);
+  const quickLookSessionRef = useLatest(quickLookSession);
+  const gridScopeRef = useLatest(gridScope);
+  const setTagSelectModalRef = useLatest(setTagSelectModal);
+  const setFolderPickerModalRef = useLatest(setFolderPickerModal);
+  const setAiTaggerPortalRef = useLatest(setAiTaggerPortal);
 
   const scrollToItem = useCallback((index: number, alignment: GridScrollAlignment = 'nearest') => {
     const layout = gridLayoutRef.current;
@@ -168,10 +162,7 @@ export function GridScreen({
     targetSize,
   });
 
-  // ── External file drop (drag from OS into app) ──
   const [fileDragOver, setFileDragOver] = useState(false);
-  const gridScopeRef2 = useRef(gridScope);
-  gridScopeRef2.current = gridScope;
 
   useEffect(() => {
     const webview = (window as any).picto?.webview;
@@ -179,20 +170,17 @@ export function GridScreen({
 
     const promise = webview.onDragDropEvent((event: { payload: { type: string; paths?: string[] } }) => {
       const { type, paths } = event.payload;
-      // Completely ignore all drag events while any app-originated drag is active
       if (isNativeDragPending() || isDragActiveCheck() || isInternalDragOrigin()) return;
       if (type === 'enter') { setFileDragOver(true); return; }
       if (type === 'leave') { setFileDragOver(false); return; }
       if (type !== 'drop' || !paths?.length) return;
       setFileDragOver(false);
 
-      const scope = gridScopeRef2.current;
+      const scope = gridScopeRef.current;
       const folderId = scope.kind === 'folder' ? scope.id : null;
 
-      // Detect folder drop (single path without media extension)
       const mediaExt = /\.(jpe?g|png|gif|webp|bmp|tiff?|svg|mp4|mkv|webm|avi|mov|wmv|flv|m4v|avif|jxl|ico|pdf)$/i;
       if (paths.length === 1 && !mediaExt.test(paths[0])) {
-        // Show import modal for folder drops
         store.set(folderImportModalAtom, {
           open: true,
           path: paths[0],
@@ -200,7 +188,6 @@ export function GridScreen({
           initialStatus: manualImportParamsForScope(scope).initial_status,
         });
       } else {
-        // File import — direct
         void filesController.addMedia(paths, manualImportParamsForScope(scope,
           folderId != null ? { parent_folder_id: folderId } : {}));
       }
@@ -209,7 +196,6 @@ export function GridScreen({
     return () => { promise.then((fn: () => void) => fn()); };
   }, []);
 
-  const showSubfolders = useAtomValue(gridShowSubfoldersAtom);
   const childFolders = useAtomValue(gridChildFoldersAtom);
   const contextMenu = useContextMenu();
 
@@ -222,14 +208,10 @@ export function GridScreen({
 
   const lastScrollTopRef = useRef(0);
 
-  // Commit the displayed scene — snapshot + inspector target — atomically.
-  // ONLY commits during fading_in (new data arriving after transition).
-  // During idle: only commits if data changed within the SAME scope (reconcile, sort, search).
+  // Commit at transition midpoint; idle commits are same-scope reconciliation.
   const displayedNodeIdRef = useRef(displayedNodeId);
 
   useEffect(() => {
-    // During fading_in: commit only when data is loaded (not loading)
-    // During idle: only commit if we're on the SAME scope (data update, not scope change)
     const isSameScope = displayedNodeId === displayedNodeIdRef.current;
     const shouldCommit = (transitionPhase === 'fading_in' && !loading) || (transitionPhase === 'idle' && isSameScope);
 
@@ -304,12 +286,37 @@ export function GridScreen({
     });
   }, [selectionTarget, selectionCount, clearSelection]);
 
-  // ── Detail window communication ──
-  // When a detail window opens, it sends 'detail-window-ready' with { hash }.
-  // We respond with ONLY the selected images (not the entire grid).
-  // Single selection → one image, no navigation in detail window.
-  // Multi selection → those images as a navigable set.
+  const importMedia = useCallback(async (directory: boolean) => {
+    try {
+      const result = await (window as any).picto.dialog.open(directory ? {
+        properties: ['openDirectory'], multiple: false, title: 'Import folder',
+      } : {
+        properties: ['openFile'], multiple: true, title: 'Import files',
+        filters: [{ name: 'Media', extensions: ['png','jpg','jpeg','gif','webp','bmp','mp4','webm','mkv','mov','avi'] }],
+      });
+      if (!result) return;
+      const paths = Array.isArray(result) ? result : [result];
+      await filesController.addMedia(paths, manualImportParamsForScope(gridScope, directory ? {
+        preserve_structure: true,
+        parent_folder_id: gridScope.kind === 'folder' ? gridScope.id : null,
+      } : gridScope.kind === 'folder' ? { parent_folder_id: gridScope.id } : {}));
+    } catch (error) {
+      console.error(`[grid] import ${directory ? 'folder' : 'files'} failed:`, error);
+    }
+  }, [gridScope]);
+
   const detailWindowSelectionRef = useRef(new Map<string, string[]>());
+  const openDetailWindow = useCallback((hash: string, hashes = [...selectedHashesRef.current]) => {
+    const item = itemsRef.current.find((entry) => entry.entity_hash === hash);
+    const label = `detail-${hash.slice(0, 12)}`;
+    detailWindowSelectionRef.current.set(label, hashes);
+    void windowController.openDetailWindow({
+      hash,
+      width: item?.pixel_width ?? null,
+      height: item?.pixel_height ?? null,
+    });
+  }, []);
+
   useEffect(() => {
     const picto = (window as any).picto;
     if (!picto?.events?.on) return;
@@ -319,7 +326,6 @@ export function GridScreen({
       const readyHash = payload?.hash;
       if (!readyHash) return;
       const label = `detail-${readyHash.slice(0, 12)}`;
-      // Look up what we stored when Cmd+O was pressed
       const selectedHashes = detailWindowSelectionRef.current.get(label);
       if (!selectedHashes) return;
       const curItems = itemsRef.current;
@@ -341,31 +347,6 @@ export function GridScreen({
     return () => { cancelled = true; p.then((fn: any) => fn?.()).catch(() => {}); };
   }, []);
 
-  // ── Grid keyboard shortcuts ──
-  // Refs for values that change frequently — avoids re-registering the listener.
-  const selectionCountRef = useRef(selectionCount);
-  selectionCountRef.current = selectionCount;
-  const selectedHashesRef = useRef(selectedHashes);
-  selectedHashesRef.current = selectedHashes;
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
-  const querySelectionActiveRef = useRef(querySelectionActive);
-  querySelectionActiveRef.current = querySelectionActive;
-  const viewerSessionRef = useRef(viewerSession);
-  viewerSessionRef.current = viewerSession;
-  const quickLookSessionRef = useRef(quickLookSession);
-  quickLookSessionRef.current = quickLookSession;
-  const gridScopeRef = useRef(gridScope);
-  gridScopeRef.current = gridScope;
-
-  // Refs for setters used in the keydown handler (avoid re-registering on every render)
-  const setTagSelectModalRef = useRef(setTagSelectModal);
-  setTagSelectModalRef.current = setTagSelectModal;
-  const setFolderPickerModalRef = useRef(setFolderPickerModal);
-  setFolderPickerModalRef.current = setFolderPickerModal;
-  const setAiTaggerPortalRef = useRef(setAiTaggerPortal);
-  setAiTaggerPortalRef.current = setAiTaggerPortal;
-
   useEffect(() => {
     const defs = {
       selectAll:       getShortcut('edit.selectAll')!,
@@ -386,10 +367,7 @@ export function GridScreen({
 
     function handleKeyDown(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      // Don't handle grid shortcuts while a viewer is open — the viewer handles its own keys.
-      // Exception: detailView/quicklook shortcuts to open viewers are checked below with their own guards.
       if (viewerSessionRef.current || quickLookSessionRef.current) {
-        // Only allow viewer-opening shortcuts through (they have their own viewer-state guards)
         if (!matchesShortcutDef(e, defs.detailView) && !matchesShortcutDef(e, defs.quicklook)) return;
       }
       const count = selectionCountRef.current;
@@ -425,28 +403,17 @@ export function GridScreen({
       }
       if (matchesShortcutDef(e, defs.openNewWindow) && count > 0) {
         e.preventDefault();
-        // Use first selected hash as the window identity
         const selectedArr = [...hashes];
-        const primaryHash = singleHash ?? selectedArr[0];
-        const item = curItems.find((i) => i.entity_hash === primaryHash);
-        const label = `detail-${primaryHash.slice(0, 12)}`;
-        detailWindowSelectionRef.current.set(label, selectedArr);
-        void windowController.openDetailWindow({
-          hash: primaryHash,
-          width: item?.pixel_width ?? null,
-          height: item?.pixel_height ?? null,
-        });
+        openDetailWindow(singleHash ?? selectedArr[0], selectedArr);
         return;
       }
 
-      // Mod+Backspace: context-dependent destructive action
       if (matchesShortcutDef(e, defs.delete_) && count > 0) {
         e.preventDefault();
         if (isTrash) void permanentlyDeleteSelection();
         else void setSelectionStatus(STATUS_TRASH);
         return;
       }
-      // Mod+Shift+Backspace: context-dependent reverse action
       if (matchesShortcutDef(e, defs.restore) && count > 0) {
         e.preventDefault();
         if (isTrash) void setSelectionStatus(STATUS_ACTIVE);
@@ -458,7 +425,6 @@ export function GridScreen({
         e.preventDefault(); void addSelectionToFolder(); return;
       }
 
-      // T — open tag select modal, F — open folder picker modal
       if (matchesShortcutDef(e, defs.addTag) && count > 0) {
         e.preventDefault(); setTagSelectModalRef.current({ open: true }); return;
       }
@@ -469,7 +435,6 @@ export function GridScreen({
         e.preventDefault(); setAiTaggerPortalRef.current({ open: true, anchor: inspectorAnchor() }); return;
       }
 
-      // Rating keys 0-5 (plain digits, no modifiers)
       if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && count > 0) {
         const digit = parseInt(e.key, 10);
         if (digit >= 0 && digit <= 5) {
@@ -484,9 +449,29 @@ export function GridScreen({
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [clearSelection, selectAllResults, setViewerSession, setQuickLookSession, setSelectionStatus, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder]);
+  }, [clearSelection, selectAllResults, setViewerSession, setQuickLookSession, setSelectionStatus, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder, openDetailWindow]);
 
   const isEmpty = items.length === 0 && !loading;
+
+  const navigateOverlay = (
+    session: ViewerSession,
+    setSession: (next: ViewerSession | null) => void,
+    delta: number,
+    center: boolean,
+  ) => {
+    const next = navigateViewerSession(session, items, delta);
+    if (!next) return;
+    setSession(next);
+    dispatchSelection({ type: 'replace_entities', hashes: new Set([next.currentHash]), anchor: next.currentHash });
+    if (center) scrollToItem(items.findIndex((item) => item.entity_hash === next.currentHash), 'center');
+  };
+
+  const closeOverlay = (setSession: (next: ViewerSession | null) => void, exitHash: string | null) => {
+    setSession(null);
+    if (!exitHash) return;
+    dispatchSelection({ type: 'replace_entities', hashes: new Set([exitHash]), anchor: exitHash });
+    scrollToItem(items.findIndex((item) => item.entity_hash === exitHash));
+  };
 
   const renderIncomingSurface = () => {
     if (error) {
@@ -501,22 +486,11 @@ export function GridScreen({
     }
 
     if (isEmpty) {
-      const scopeKey = gridScope.kind === 'system' ? gridScope.key : gridScope.kind;
+      const scopeKey = gridScope.kind === 'system' ? gridScope.key ?? 'all' : gridScope.kind;
       const hasSearch = searchText.trim().length > 0;
-      const emptyTitle = hasSearch ? 'No results found'
-        : scopeKey === 'inbox' ? 'Inbox is empty'
-        : scopeKey === 'uncategorized' ? 'No uncategorized images'
-        : scopeKey === 'untagged' ? 'No untagged images'
-        : scopeKey === 'smart_folder' ? 'No matching images'
-        : scopeKey === 'folder' ? 'This folder is empty'
-        : 'No images';
-      const emptyDesc = hasSearch ? 'Try different search terms or clear filters'
-        : scopeKey === 'inbox' ? 'Run subscriptions to add new images to your inbox'
-        : scopeKey === 'uncategorized' ? 'All your images are already assigned to folders'
-        : scopeKey === 'untagged' ? 'All your images have been tagged'
-        : scopeKey === 'smart_folder' ? 'Try adjusting the rules for this smart folder'
-        : scopeKey === 'folder' ? 'Drag and drop files here, or import them below'
-        : 'Drag and drop files here, or click the button below to import';
+      const [emptyTitle, emptyDesc] = hasSearch
+        ? ['No results found', 'Try different search terms or clear filters']
+        : EMPTY_COPY[scopeKey] ?? ['No images', 'Drag and drop files here, or click the button below to import'];
       const showImport = !hasSearch && scopeKey !== 'inbox' && scopeKey !== 'untagged' && scopeKey !== 'smart_folder';
 
       return (
@@ -526,44 +500,11 @@ export function GridScreen({
           description={emptyDesc}
           actions={showImport ? (
             <>
-              <EmptyStateAction onClick={() => {
-                void (async () => {
-                  try {
-                    const result = await (window as any).picto.dialog.open({
-                      properties: ['openFile'], multiple: true, title: 'Import files',
-                      filters: [{ name: 'Media', extensions: ['png','jpg','jpeg','gif','webp','bmp','mp4','webm','mkv','mov','avi'] }],
-                    });
-                    if (result) {
-                      const paths = Array.isArray(result) ? result : [result];
-                      await filesController.addMedia(paths, manualImportParamsForScope(gridScope,
-                        gridScope.kind === 'folder' ? { parent_folder_id: gridScope.id } : {}));
-                    }
-                  } catch (err) {
-                    console.error('[grid] import files failed:', err);
-                  }
-                })();
-              }}>
+              <EmptyStateAction onClick={() => void importMedia(false)}>
                 <IconUpload size={14} stroke={1.5} />
                 Import Files
               </EmptyStateAction>
-              <EmptyStateAction onClick={() => {
-                void (async () => {
-                  try {
-                    const result = await (window as any).picto.dialog.open({
-                      properties: ['openDirectory'], multiple: false, title: 'Import folder',
-                    });
-                    if (result) {
-                      const folderPath = typeof result === 'string' ? result : result[0];
-                      await filesController.addMedia([folderPath], manualImportParamsForScope(gridScope, {
-                        preserve_structure: true,
-                        parent_folder_id: gridScope.kind === 'folder' ? gridScope.id : null,
-                      }));
-                    }
-                  } catch (err) {
-                    console.error('[grid] import folder failed:', err);
-                  }
-                })();
-              }}>
+              <EmptyStateAction onClick={() => void importMedia(true)}>
                 <IconFolderPlus size={14} stroke={1.5} />
                 Import Folder
               </EmptyStateAction>
@@ -594,7 +535,6 @@ export function GridScreen({
           }
         }}
         onFolderContextMenu={(nodeId, _folder, pos) => {
-          // Select the folder if not already selected
           if (!selectedSubfolderNodeIds.has(nodeId)) {
             dispatchSelection({ type: 'replace_folders', ids: new Set([nodeId]), anchor: nodeId });
           }
@@ -602,15 +542,12 @@ export function GridScreen({
           if (isNaN(folderId)) return;
           const entries = buildTileContextMenu({
             selectionCount: 1,
-            querySelectionActive: false,
             singleSelected: true,
             singleHash: nodeId,
-            hasFolders: true,
             isMixed: false,
             isFoldersOnly: true,
             scopeKind: 'folder',
             statusFilter: null,
-            loadedCount: items.length,
             onSelectAll: () => selectAllResults(),
             onDeselectAll: () => clearSelection(),
             onOpen: () => {
@@ -683,7 +620,6 @@ export function GridScreen({
         }}
         collectHeaderMarqueeHits={(rect) => subfolderGridRef.current?.collectMarqueeHits(rect) ?? new Set()}
         onTileContextMenu={(_index, item, pos) => {
-          // Ensure the right-clicked tile is selected
           let effectiveHashes = selectedHashes;
           let effectiveSelectionMode = selectionMode;
           let effectiveSelectionCount = selectionCount;
@@ -696,7 +632,6 @@ export function GridScreen({
             effectiveQuerySelectionActive = false;
           }
 
-          // Derive context for menu builder
           const selCount = effectiveSelectionCount;
           const selectedItems = items.filter((it) => effectiveHashes.has(it.entity_hash));
           const singleItem = effectiveSelectionMode === 'explicit' && selCount === 1 ? selectedItems[0] : null;
@@ -718,27 +653,15 @@ export function GridScreen({
 
           const entries = buildTileContextMenu({
             selectionCount: selCount,
-            querySelectionActive: effectiveQuerySelectionActive,
             aiTagEnabled: canAutoTag,
             singleSelected: effectiveSelectionMode === 'explicit' && selCount === 1,
             singleHash: singleItem?.entity_hash ?? null,
             scopeKind,
             statusFilter,
-            loadedCount: items.length,
             onSelectAll: () => selectAllResults(),
             onDeselectAll: () => clearSelection(),
             onOpen: singleItem ? () => setViewerSession(createViewerSession(items, singleItem.entity_hash)) : undefined,
-            onOpenNewWindow: (hash) => {
-              const it = items.find((i) => i.entity_hash === hash);
-              const selectedArr = [...effectiveHashes];
-              const label = `detail-${hash.slice(0, 12)}`;
-              detailWindowSelectionRef.current.set(label, selectedArr);
-              void windowController.openDetailWindow({
-                hash,
-                width: it?.pixel_width ?? null,
-                height: it?.pixel_height ?? null,
-              });
-            },
+            onOpenNewWindow: (hash) => openDetailWindow(hash, [...effectiveHashes]),
             onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
             onRevealInFolder: (hash) => { void filesController.revealHashInFolder(hash); },
             onCopyFilePath: (hash) => { void filesController.copyFilePath(hash); },
@@ -793,7 +716,6 @@ export function GridScreen({
                 yandex: `https://yandex.com/images/search?rpt=imageview&url=`,
                 bing: `https://www.bing.com/images/search?view=detailv2&iss=sbi&form=SBIVSP&sbisrc=UrlPaste&q=imgurl:`,
               };
-              // Use the thumbnail URL as the search source
               const thumbUrl = `media://localhost/thumb/${hash}.jpg`;
               const url = urls[engine];
               if (url) void (window as any).picto?.shell?.openExternal(url + encodeURIComponent(thumbUrl));
@@ -821,15 +743,12 @@ export function GridScreen({
           contextMenu.openAt(pos, entries);
         }}
         onEmptyContextMenu={(pos) => {
-          // Don't clear selection — let the menu reflect current state
           const entries = buildEmptyContextMenu({
             selectionCount,
-            querySelectionActive,
             singleSelected: selectionCount === 1,
             singleHash: selectionCount === 1 ? [...selectedHashes][0] ?? null : null,
             scopeKind: null,
             statusFilter: null,
-            loadedCount: items.length,
             onSelectAll: () => selectAllResults(),
             onDeselectAll: () => clearSelection(),
           });
@@ -859,21 +778,8 @@ export function GridScreen({
           items={items}
           currentIndex={resolveViewerIndex(viewerSession, items)}
           totalCount={totalCount}
-          onNavigate={(delta) => {
-            const next = navigateViewerSession(viewerSession, items, delta);
-            if (next) {
-              setViewerSession(next);
-              dispatchSelection({ type: 'replace_entities', hashes: new Set([next.currentHash]), anchor: next.currentHash });
-            }
-          }}
-          onClose={(exitHash) => {
-            setViewerSession(null);
-            if (exitHash) {
-              dispatchSelection({ type: 'replace_entities', hashes: new Set([exitHash]), anchor: exitHash });
-              const idx = items.findIndex((i) => i.entity_hash === exitHash);
-              scrollToItem(idx);
-            }
-          }}
+          onNavigate={(delta) => navigateOverlay(viewerSession, setViewerSession, delta, false)}
+          onClose={(exitHash) => closeOverlay(setViewerSession, exitHash)}
           onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
         />
       )}
@@ -883,25 +789,8 @@ export function GridScreen({
           items={items}
           currentIndex={resolveViewerIndex(quickLookSession, items)}
           totalCount={totalCount}
-          onNavigate={(delta) => {
-            const next = navigateViewerSession(quickLookSession, items, delta);
-            if (next) {
-              setQuickLookSession(next);
-              dispatchSelection({ type: 'replace_entities', hashes: new Set([next.currentHash]), anchor: next.currentHash });
-              const idx = items.findIndex((item) => item.entity_hash === next.currentHash);
-              if (idx >= 0) {
-                scrollToItem(idx, 'center');
-              }
-            }
-          }}
-          onClose={(exitHash) => {
-            setQuickLookSession(null);
-            if (exitHash) {
-              dispatchSelection({ type: 'replace_entities', hashes: new Set([exitHash]), anchor: exitHash });
-              const idx = items.findIndex((i) => i.entity_hash === exitHash);
-              scrollToItem(idx);
-            }
-          }}
+          onNavigate={(delta) => navigateOverlay(quickLookSession, setQuickLookSession, delta, true)}
+          onClose={(exitHash) => closeOverlay(setQuickLookSession, exitHash)}
           onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
         />
       )}

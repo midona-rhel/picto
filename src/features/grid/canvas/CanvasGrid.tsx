@@ -1,11 +1,3 @@
-/**
- * Canvas2D grid renderer — dual-canvas (base + overlay) with thumbnail pipeline.
- *
- * Activation zone: viewport ± 100px. Tiles inside are drawn and loaded;
- * reveal eligibility is tracked against the actual viewport.
- * One linear scan per frame drives everything.
- */
-
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { GridViewMode, LayoutResult } from '../layout/types';
@@ -33,14 +25,12 @@ import {
 } from './scrollState';
 import { useCanvasRedrawScheduler } from './useCanvasRedrawScheduler';
 import { snapshotViewport, ensureCanvasSize } from './canvasViewportUtils';
+import { GRID_GAP, GRID_REORDER_COLOR, GRID_SELECTION_COLOR, GRID_TILE_RADIUS } from '../gridAppearance';
 import styles from './CanvasGrid.module.css';
 
-const GAP = 16;
 const TEXT_NAME_ROW_H = 20;
 const EMPTY_HASH_SET = new Set<string>();
 
-/** Convert viewport (visual) coordinates to CSS layout coordinates.
- *  Uses shared zoom compensation for browser zoom support. */
 function toLayoutCoords(clientX: number, clientY: number, container: HTMLDivElement, headerHeight: number) {
   const rect = container.getBoundingClientRect();
   const zoomX = rect.width / (container.offsetWidth || 1);
@@ -48,14 +38,45 @@ function toLayoutCoords(clientX: number, clientY: number, container: HTMLDivElem
   return {
     x: (clientX - rect.left) / zoomX,
     y: (clientY - rect.top) / zoomY + container.scrollTop - headerHeight,
-    rect,
-    zoom: zoomX,
   };
 }
 const ZOOM_BTN_SIZE = 24;
 const HOVER_PREVIEW_DELAY_MS = 200;
 const HOVER_HIDE_DELAY_MS = 90;
 const GRID_RESIZE_SETTLE_MS = 180;
+
+function useLatest<T>(value: T) {
+  const ref = useRef(value);
+  ref.current = value;
+  return ref;
+}
+
+function zoomButtonRect(position: { x: number; y: number; w: number }, imageHeight: number, y = position.y) {
+  const width = ZOOM_BTN_SIZE + 4;
+  const height = ZOOM_BTN_SIZE + 2;
+  return { x: position.x + position.w - width, y: y + imageHeight - height, width, height };
+}
+
+function drawZoomButton(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number) {
+  ctx.fillStyle = 'rgba(0,0,0,.4)';
+  ctx.beginPath();
+  ctx.roundRect(x, y, width, height, [10, 0, GRID_TILE_RADIUS, 0]);
+  ctx.fill();
+  const cx = x + width / 2;
+  const cy = y + height / 2;
+  ctx.strokeStyle = 'rgba(255,255,255,.7)';
+  ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  ctx.arc(cx, cy, 5, 0, Math.PI * 2);
+  ctx.moveTo(cx + 3.5, cy + 3.5);
+  ctx.lineTo(cx + 6, cy + 6);
+  ctx.stroke();
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - 2.5); ctx.lineTo(cx, cy + 2.5);
+  ctx.moveTo(cx - 2.5, cy); ctx.lineTo(cx + 2.5, cy);
+  ctx.stroke();
+}
 
 export interface CanvasGridProps {
   items: CanonicalEntityGridItem[];
@@ -66,7 +87,6 @@ export interface CanvasGridProps {
   showExtensionLabel?: boolean;
   showResolution?: boolean;
   fitThumbnails?: boolean;
-  /** Complete query result count used to preserve full-library scroll range. */
   totalCount?: number | null;
   onTileClick?: (index: number, item: CanonicalEntityGridItem, event?: React.MouseEvent) => void;
   onTileDoubleClick?: (index: number, item: CanonicalEntityGridItem) => void;
@@ -78,24 +98,17 @@ export interface CanvasGridProps {
   onScrollTopChange?: (scrollTop: number) => void;
   interactive?: boolean;
   suppressTileReveal?: boolean;
-  /** Restore scroll position on first paint (e.g., after back/forward navigation). */
   initialScrollTop?: number | null;
   selectedEntityHashes?: Set<string>;
   selectedFolderNodeIds?: Set<string>;
   onSelectionChange?: (hashes: Set<string>) => void;
   onMarqueeSelectionChange?: (selection: { entityHashes: Set<string>; folderNodeIds: Set<string> }) => void;
   collectHeaderMarqueeHits?: (rect: { left: number; top: number; width: number; height: number }) => Set<string>;
-  /** DOM content rendered above the canvas inside the scroll container (e.g. SubfolderGrid). */
   headerContent?: React.ReactNode;
-  /** Current scope for drag-and-drop context. */
   dragSourceScope?: { kind: string; id?: number | null; key?: string | null } | null;
-  /** Expose the scroll container ref to parent. */
   onContainerRef?: (el: HTMLDivElement | null) => void;
-  /** Notify parent when layout changes (for scroll-to-item). */
   onLayoutChange?: (layout: LayoutResult) => void;
-  /** Index of tile currently being renamed (inline edit overlay). */
   renamingIndex?: number | null;
-  /** Called when inline rename commits or cancels. */
   onRenameCommit?: (index: number, newName: string) => void;
   onRenameCancel?: () => void;
 }
@@ -148,35 +161,34 @@ export function CanvasGrid({
   const suppressTileRevealRef = useRef(suppressTileReveal);
   const suppressRevealUntilRef = useRef(0);
 
-  // Reusable per-frame buffers — avoids allocating new arrays/sets every draw call.
   const activeTilesRef = useRef<number[]>([]);
+  const visibleTilesRef = useRef<number[]>([]);
   const activeHashesRef = useRef(new Set<string>());
   const viewportHashesRef = useRef(new Set<string>());
   const planTilesRef = useRef<PlanTile[]>([]);
   const activationBuffersRef = useRef({
     activeTiles: activeTilesRef.current,
+    visibleTiles: visibleTilesRef.current,
     activeHashes: activeHashesRef.current,
     viewportHashes: viewportHashesRef.current,
     planTiles: planTilesRef.current,
   });
 
-  // Cache theme CSS values — avoids getComputedStyle() on every draw frame
   const cachedThemeRef = useRef({
     placeholderBg: 'rgba(255,255,255,0.04)',
-    borderRadius: 4,
+    borderRadius: GRID_TILE_RADIUS,
     textPrimary: 'rgba(255,255,255,0.92)',
     textTertiary: 'rgba(255,255,255,0.36)',
     glassBorder: 'rgba(255,255,255,0.14)',
     tileBoundary: 'rgba(255,255,255,0.12)',
   });
-  // Refresh theme cache when container mounts or theme changes
   const refreshTheme = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     const s = getComputedStyle(el);
     cachedThemeRef.current = {
       placeholderBg: s.getPropertyValue('--color-surface-2').trim() || 'rgba(255,255,255,0.04)',
-      borderRadius: 4,
+      borderRadius: GRID_TILE_RADIUS,
       textPrimary: s.getPropertyValue('--color-text-primary').trim() || 'rgba(255,255,255,0.92)',
       textTertiary: s.getPropertyValue('--color-text-tertiary').trim() || 'rgba(255,255,255,0.36)',
       glassBorder: s.getPropertyValue('--color-border-primary').trim() || 'rgba(255,255,255,0.14)',
@@ -200,9 +212,6 @@ export function CanvasGrid({
   const dragJustEndedRef = useRef(false);
   const tileDragRef = useRef<{ tileIdx: number; startClientX: number; startClientY: number } | null>(null);
   const reorderDropRef = useRef<{ dropIndex: number; dropSide: 'left' | 'right' } | null>(null);
-  // True when the overlay canvas currently has no painted content — lets
-  // scroll frames skip the overlay redraw entirely (selection borders are
-  // viewport-space, so a non-empty overlay must redraw every scroll frame).
   const overlayBlankRef = useRef(true);
   const autoScrollRef = useRef<number | null>(null);
   const autoScrollSpeedRef = useRef(0);
@@ -212,13 +221,9 @@ export function CanvasGrid({
   const [marqueeVisual, setMarqueeVisual] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [dragGhost, setDragGhost] = useState<{ x: number; y: number; count: number; thumbnailHashes: string[] } | null>(null);
   const firstPaintRef = useRef(false);
-  const onLoadMoreRef = useRef(onLoadMore);
-  const onScrollTopChangeRef = useRef(onScrollTopChange);
-  onLoadMoreRef.current = onLoadMore;
-  onScrollTopChangeRef.current = onScrollTopChange;
+  const onLoadMoreRef = useLatest(onLoadMore);
+  const onScrollTopChangeRef = useLatest(onScrollTopChange);
 
-  // Width changes settle before layout; height changes size the sticky canvas
-  // imperatively and never enter React state.
   const [layoutWidth, setLayoutWidth] = useState({ width: 0, scrollbarWidth: 0 });
   const [headerHeight, setHeaderHeight] = useState(0);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -229,7 +234,7 @@ export function CanvasGrid({
   const layoutModel = useMemo(() => layoutRuntimeRef.current.update(items, {
     width: layoutWidth.width,
     targetSize,
-    gap: GAP,
+    gap: GRID_GAP,
     viewMode,
     textHeight,
     scrollbarWidth: layoutWidth.scrollbarWidth,
@@ -239,25 +244,13 @@ export function CanvasGrid({
     [items.length, layoutModel.totalHeight, totalCount],
   );
 
-  const onLayoutChangeRef = useRef(onLayoutChange);
-  onLayoutChangeRef.current = onLayoutChange;
+  const onLayoutChangeRef = useLatest(onLayoutChange);
   useEffect(() => { onLayoutChangeRef.current?.(layoutModel); }, [layoutModel]);
   const spatialIndexRef = useRef(layoutModel.spatialIndex);
   spatialIndexRef.current = layoutModel.spatialIndex;
-  // Reusable query output buffer — avoids per-frame allocation.
   const candidateBufRef = useRef<number[]>([]);
 
-  // ── Scroll anchor on resize / zoom / viewMode / display toggle ──
-  // Anchor on the TOP EDGE of the topmost visible tile. The image top
-  // is stable when text height changes (names/resolution toggle adds
-  // space below images, not above). For zoom and view mode changes
-  // the tile top is still the most intuitive anchor point.
-  //
-  // useLayoutEffect so we run before the browser paints / clamps scrollTop.
-  // lastScrollTopRef is the pre-layout scroll position (kept in sync by
-  // handleScroll and the initialScrollTop restore).
-  const selectedHashesRef = useRef(selectedEntityHashes);
-  selectedHashesRef.current = selectedEntityHashes;
+  const selectedHashesRef = useLatest(selectedEntityHashes);
 
   useLayoutEffect(() => {
     const prev = prevLayoutRef.current;
@@ -265,7 +258,6 @@ export function CanvasGrid({
     const prevItems = prevItemsRef.current;
     prevItemsRef.current = items;
 
-    // No previous layout (first mount / first resize) or same layout object.
     if (!prev || prev === layoutModel) return;
     if (prev.positions.length === 0 || layoutModel.positions.length === 0) return;
 
@@ -289,7 +281,6 @@ export function CanvasGrid({
     lastScrollTopRef.current = next;
   }, [layoutModel, items]);
 
-  // ── Thumbnail pipeline lifecycle ──
   useEffect(() => {
     const pipeline = new ThumbnailPipeline(() => {
       markDirty('base');
@@ -310,8 +301,6 @@ export function CanvasGrid({
     };
   }, []);
 
-  // Track previous items length separately for the scroll reset decision.
-  // prevItemsRef is updated in useLayoutEffect (runs first), so we need our own tracker.
   const prevItemsLengthForScrollRef = useRef(0);
   useEffect(() => {
     const container = containerRef.current;
@@ -320,27 +309,19 @@ export function CanvasGrid({
     prevItemsLengthForScrollRef.current = items.length;
 
     if (initialScrollTop != null && initialScrollTop > 0) {
-      // Restore scroll position from back/forward navigation
       firstPaintRef.current = false;
       container.scrollTop = initialScrollTop;
       lastScrollTopRef.current = initialScrollTop;
     } else if (prevLen === 0 || items.length === 0) {
-      // Fresh navigation or cleared → start at top
       firstPaintRef.current = false;
       container.scrollTop = 0;
       lastScrollTopRef.current = 0;
     }
-    // Otherwise: items grew/changed incrementally — don't touch scroll or firstPaint
   }, [items]); // eslint-disable-line react-hooks/exhaustive-deps -- initialScrollTop read once per items change
 
-  // ── Draw functions ──
-  // Suppress thumbnail fade animation during grid transitions.
-  // Thumbnails loaded during fade-out/fade-in appear instantly.
   const prevSuppressRef = useRef(suppressTileReveal);
   useEffect(() => {
     suppressTileRevealRef.current = suppressTileReveal;
-    // When transition ends (suppress goes false), keep suppressing for 500ms
-    // to cover thumbnails still in flight from the transition period.
     if (prevSuppressRef.current && !suppressTileReveal) {
       suppressRevealUntilRef.current = performance.now() + 500;
     }
@@ -359,7 +340,6 @@ export function CanvasGrid({
 
     ensureCanvasSize(canvas, vp.containerWidth, vp.viewportHeight, vp.dpr);
 
-    // Offset by header height — tile positions start at Y=0 but the header pushes canvas content down
     const scrollTop = Math.max(0, vp.scrollTop - headerHeight);
     const now = performance.now();
 
@@ -367,21 +347,14 @@ export function CanvasGrid({
     ctx.scale(vp.dpr, vp.dpr);
     ctx.clearRect(0, 0, vp.containerWidth, vp.viewportHeight);
 
-    // The activation zone controls decode residency. The actual viewport
-    // independently controls entity reveal identity.
     const ACTIVATION_MARGIN = 100;
     const zoneTop = scrollTop - ACTIVATION_MARGIN;
     const zoneBottom = scrollTop + vp.viewportHeight + ACTIVATION_MARGIN;
 
-    // Reuse arrays/sets across frames to avoid per-frame GC pressure.
-    const activeTiles = activeTilesRef.current;
     const activeHashes = activeHashesRef.current;
     const viewportHashes = viewportHashesRef.current;
     const planTiles = planTilesRef.current;
 
-    // Y-binned index lookup — masonry positions are NOT Y-sorted (tiles
-    // placed in shortest column), so candidates come from the spatial index
-    // and get a precise re-test here.
     const candidates = candidateBufRef.current;
     candidates.length = 0;
     layoutModel.spatialIndex.queryYRange(zoneTop, zoneBottom, candidates);
@@ -396,7 +369,6 @@ export function CanvasGrid({
       activationBuffersRef.current,
     );
 
-    // Send plan to worker — deduplicates internally, only posts when visible set changes.
     pipeline.updatePlan(planTiles, scrollTop + vp.viewportHeight / 2);
     const suppressReveal = suppressTileRevealRef.current || now < suppressRevealUntilRef.current;
     revealTrackerRef.current.updateViewport(
@@ -408,9 +380,8 @@ export function CanvasGrid({
 
     const drawCtx: DrawContext = {
       scrollTop,
-      viewportHeight: vp.viewportHeight,
       textHeight,
-      borderRadius: 4,
+      borderRadius: GRID_TILE_RADIUS,
     };
 
     const hasActiveRevealFromDraw = drawCanvasBaseLayer({
@@ -419,7 +390,7 @@ export function CanvasGrid({
       items: layoutModel.items,
       atlasGet: (hash) => pipeline.get(hash),
       revealProgress: (hash) => revealTrackerRef.current.getProgress(hash, now),
-      activeTiles,
+      visibleTiles: visibleTilesRef.current,
       draw: drawCtx,
       theme: cachedThemeRef.current,
       viewMode,
@@ -432,17 +403,11 @@ export function CanvasGrid({
 
     ctx.restore();
 
-    // Evict main-thread bitmaps outside the draw zone.
-    // The worker handles load cancellation via the plan diff.
     pipeline.evictOutsideActive(activeHashes);
-
-    // Continue animation loop for active reveals
     if (hasActiveRevealFromDraw) {
       markDirty('base');
     }
-
-    // First paint notification
-    if (!firstPaintRef.current && activeTiles.length > 0) {
+    if (!firstPaintRef.current && visibleTilesRef.current.length > 0) {
       firstPaintRef.current = true;
       onFirstPaint?.();
     }
@@ -464,26 +429,23 @@ export function CanvasGrid({
     ctx.scale(vp.dpr, vp.dpr);
     const scrollTop = Math.max(0, vp.scrollTop - headerHeight);
 
-    // Draw selection borders on all selected tiles
     if (selectedEntityHashes.size > 0) {
-      ctx.strokeStyle = '#3297FF';
+      ctx.strokeStyle = GRID_SELECTION_COLOR;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      const visible = activeTilesRef.current;
+      const visible = visibleTilesRef.current;
       for (let k = 0; k < visible.length; k++) {
         const i = visible[k];
         if (!selectedEntityHashes.has(layoutModel.items[i]?.hash)) continue;
         const pos = layoutModel.positions[i];
         if (!pos) continue;
         const drawY = pos.y - scrollTop;
-        if (drawY + pos.h < -100 || drawY > vp.viewportHeight + 100) continue;
         const imgH = pos.h - textHeight;
-        ctx.roundRect(pos.x - 1, drawY - 1, pos.w + 2, imgH + 2, 4);
+        ctx.roundRect(pos.x - 1, drawY - 1, pos.w + 2, imgH + 2, GRID_TILE_RADIUS);
       }
       ctx.stroke();
     }
 
-    // Draw hover zoom button (bottom-right of hovered tile)
     const hovIdx = hoveredTileRef.current;
     if (hovIdx != null && !isScrollingRef.current) {
       const hovItem = items[hovIdx];
@@ -492,69 +454,30 @@ export function CanvasGrid({
         const drawY = hovPos.y - scrollTop;
         if (drawY + hovPos.h >= 0 && drawY <= vp.viewportHeight) {
           const imgH = hovPos.h - textHeight;
-          const ZOOM_SIZE = 24;
-          const bgW = ZOOM_SIZE + 4;
-          const bgH = ZOOM_SIZE + 2;
-          const zx = hovPos.x + hovPos.w - bgW;
-          const zy = drawY + imgH - bgH;
-
-          // Background pill
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.4)';
-          ctx.beginPath();
-          ctx.roundRect(zx, zy, bgW, bgH, [10, 0, 4, 0]);
-          ctx.fill();
-
-          // Magnifying glass
-          const cx = zx + bgW / 2;
-          const cy = zy + bgH / 2;
-          ctx.strokeStyle = 'rgba(255, 255, 255, 0.7)';
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.arc(cx, cy, 5, 0, Math.PI * 2);
-          ctx.stroke();
-          // Handle
-          ctx.beginPath();
-          ctx.moveTo(cx + 3.5, cy + 3.5);
-          ctx.lineTo(cx + 6, cy + 6);
-          ctx.stroke();
-          // Plus crosshair
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(cx, cy - 2.5);
-          ctx.lineTo(cx, cy + 2.5);
-          ctx.stroke();
-          ctx.beginPath();
-          ctx.moveTo(cx - 2.5, cy);
-          ctx.lineTo(cx + 2.5, cy);
-          ctx.stroke();
+          const button = zoomButtonRect(hovPos, imgH, drawY);
+          drawZoomButton(ctx, button.x, button.y, button.width, button.height);
         }
       }
     }
 
-    // Marquee is rendered as a DOM overlay (covers both header and canvas)
-
-    // Draw reorder drop indicator (blue vertical line + triangle)
     const rd = reorderDropRef.current;
     if (rd) {
       const rdPos = layoutModel.positions[rd.dropIndex];
       if (rdPos) {
         const rdDrawY = rdPos.y - scrollTop;
         const rdImgH = rdPos.h - textHeight;
-        const gap = 16;
         const indicatorX = rd.dropSide === 'left'
-          ? rdPos.x - gap / 2
-          : rdPos.x + rdPos.w + gap / 2;
+          ? rdPos.x - GRID_GAP / 2
+          : rdPos.x + rdPos.w + GRID_GAP / 2;
 
-        // Vertical line
-        ctx.strokeStyle = '#228be6';
+        ctx.strokeStyle = GRID_REORDER_COLOR;
         ctx.lineWidth = 2;
         ctx.beginPath();
         ctx.moveTo(indicatorX, rdDrawY);
         ctx.lineTo(indicatorX, rdDrawY + rdImgH);
         ctx.stroke();
 
-        // Triangle arrow at top
-        ctx.fillStyle = '#228be6';
+        ctx.fillStyle = GRID_REORDER_COLOR;
         ctx.beginPath();
         ctx.moveTo(indicatorX - 5, rdDrawY);
         ctx.lineTo(indicatorX + 5, rdDrawY);
@@ -564,8 +487,6 @@ export function CanvasGrid({
       }
     }
 
-    // Coarse blank flags — conservative: a selection that is offscreen still
-    // counts as content so scrolling it into view redraws correctly.
     overlayBlankRef.current =
       selectedEntityHashes.size === 0 &&
       hoveredTileRef.current == null &&
@@ -574,7 +495,6 @@ export function CanvasGrid({
     ctx.restore();
   }, [layoutModel, items, selectedEntityHashes, textHeight, headerHeight]);
 
-  // ── Shared RAF scheduler ──
   const drawBaseRef = useRef(drawBase);
   drawBaseRef.current = drawBase;
   const drawOverlayRef = useRef(drawOverlay);
@@ -584,7 +504,6 @@ export function CanvasGrid({
     drawOverlayRef,
   });
 
-  // ── Resize observer ──
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -615,7 +534,6 @@ export function CanvasGrid({
     });
     observer.observe(container);
 
-    // Re-measure when page zoom changes (Cmd+/Cmd-) — DPR changes with zoom
     const dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
     const handleDprChange = sizeViewport;
     dprQuery.addEventListener('change', handleDprChange);
@@ -627,7 +545,6 @@ export function CanvasGrid({
     };
   }, [markDirty]);
 
-  // ── Header height observer ──
   useEffect(() => {
     const el = headerRef.current;
     if (!el) { setHeaderHeight(0); return; }
@@ -638,7 +555,6 @@ export function CanvasGrid({
     return () => ro.disconnect();
   }, [headerContent]);
 
-  // ── Redraw on layout/prop changes ──
   useEffect(() => { markDirty('both'); }, [layoutModel, markDirty]);
   useEffect(() => { markDirty('base'); }, [showName, showExtension, showResolution, viewMode, fitThumbnails, suppressTileReveal, markDirty]);
   useEffect(() => { markDirty('overlay'); }, [selectedEntityHashes, markDirty]);
@@ -666,26 +582,17 @@ export function CanvasGrid({
     };
   }, [markDirty, refreshTheme]);
 
-  // ── Global pointer tracking during drag ──
-  // Uses refs to avoid effect re-runs on every ghost position update.
-  const itemsRef = useRef(items);
-  itemsRef.current = items;
-  const layoutModelRef = useRef(layoutModel);
-  layoutModelRef.current = layoutModel;
-  const textHeightRef = useRef(textHeight);
-  textHeightRef.current = textHeight;
-  const headerHeightRef = useRef(headerHeight);
-  headerHeightRef.current = headerHeight;
-  const markDirtyRef = useRef(markDirty);
-  markDirtyRef.current = markDirty;
-  const onSelectionChangeRef = useRef(onSelectionChange);
-  onSelectionChangeRef.current = onSelectionChange;
+  const itemsRef = useLatest(items);
+  const layoutModelRef = useLatest(layoutModel);
+  const textHeightRef = useLatest(textHeight);
+  const headerHeightRef = useLatest(headerHeight);
+  const markDirtyRef = useLatest(markDirty);
+  const onSelectionChangeRef = useLatest(onSelectionChange);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!isDragActive()) return;
 
-      // If cursor exits the window during drag, initiate native OS file drag
       if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
         const state = getDragState();
         reorderDropRef.current = null;
@@ -711,7 +618,6 @@ export function CanvasGrid({
         const ctr = containerRef.current;
         if (ctr) {
           const { x: cx, y: cy } = toLayoutCoords(e.clientX, e.clientY, ctr, headerHeightRef.current);
-          // Build skip set from dragged item indices
           const draggedHashes = new Set(getDragState().hashes);
           const skipIdx = new Set<number>();
           const model = layoutModelRef.current;
@@ -727,7 +633,6 @@ export function CanvasGrid({
     };
     const onUp = (e: MouseEvent) => {
       if (isDragActive()) {
-        // If cursor is outside the window, the onMove handler already triggered native drag
         if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
           return;
         }
@@ -743,7 +648,6 @@ export function CanvasGrid({
           if (moves.length > 0) setDropTarget({ kind: 'reorder', moves });
         }
         reorderDropRef.current = null;
-        // Preserve selection: re-select the dragged hashes after drop
         const draggedHashes = new Set(getDragState().hashes);
         endDrag();
         dragJustEndedRef.current = true; // suppress the click that follows mouseup
@@ -763,7 +667,6 @@ export function CanvasGrid({
   }, []); // stable — never re-runs, uses refs for all mutable data
 
 
-  // ── Scroll handler ──
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -791,13 +694,11 @@ export function CanvasGrid({
     scrollStateRef.current = nextScrollState;
     isScrollingRef.current = nextScrollState.phase !== 'idle';
 
-    // Clear hover and preview during scroll
     if (hoveredTileRef.current != null) {
       hoveredTileRef.current = null;
     }
     if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
     if (hoverHideTimerRef.current) { clearTimeout(hoverHideTimerRef.current); hoverHideTimerRef.current = null; }
-    // Always clear preview on scroll — the tile moved away from cursor
     setHoverPreview(null);
 
     onScrollTopChangeRef.current?.(scrollTop);
@@ -810,7 +711,6 @@ export function CanvasGrid({
       !overlayBlankRef.current;
     markDirty(overlayNeedsRedraw ? 'both' : 'base');
 
-    // Transition to idle after inactivity
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
       scrollStateRef.current = createIdleCanvasScrollState();
@@ -818,7 +718,6 @@ export function CanvasGrid({
       markDirty('base');
     }, CANVAS_SCROLL_IDLE_DELAY_MS);
 
-    // Prefetch against real loaded content, not the estimated full extent.
     const distanceFromLoadedEnd = headerHeightRef.current + layoutModel.totalHeight
       - scrollTop - container.clientHeight;
     if (distanceFromLoadedEnd < container.clientHeight * 3) {
@@ -826,8 +725,6 @@ export function CanvasGrid({
     }
   }, [interactive, layoutModel.totalHeight, markDirty]);
 
-  // Continue filling the runway after each append, including when the user
-  // drags the scrollbar into an estimated-but-not-yet-loaded region.
   useEffect(() => {
     const container = containerRef.current;
     if (!container || !onLoadMore) return;
@@ -836,12 +733,10 @@ export function CanvasGrid({
     if (distanceFromLoadedEnd < container.clientHeight * 3) onLoadMore();
   }, [headerHeight, layoutModel.totalHeight, onLoadMore]);
 
-  // ── Click handler ──
   const isInHeader = useCallback((target: EventTarget) => {
     return headerRef.current?.contains(target as Node) ?? false;
   }, []);
 
-  /** Check if the event target is on an interactive element inside the header (folder tile, button, etc.) */
   const isOnHeaderInteractive = useCallback((target: EventTarget) => {
     const el = target as HTMLElement;
     if (!isInHeader(target)) return false;
@@ -849,12 +744,10 @@ export function CanvasGrid({
   }, [isInHeader]);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
-    // Suppress click that fires after a marquee drag ends
     if (dragJustEndedRef.current) {
       dragJustEndedRef.current = false;
       return;
     }
-    // Folder tiles handle their own clicks; empty header space clears selection
     if (isOnHeaderInteractive(e.target)) return;
 
     const container = containerRef.current;
@@ -870,7 +763,6 @@ export function CanvasGrid({
     }
   }, [items, layoutModel.positions, onTileClick, onEmptyClick, textHeight, isOnHeaderInteractive, headerHeight]);
 
-  // ── Double-click handler ──
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
     if (isOnHeaderInteractive(e.target)) return;
     if (!onTileDoubleClick) return;
@@ -883,7 +775,6 @@ export function CanvasGrid({
     }
   }, [items, layoutModel.positions, onTileDoubleClick, textHeight, isOnHeaderInteractive, headerHeight]);
 
-  // ── Zoom button hit test (bottom-right corner of tile image area) ──
   const isZoomButtonHit = useCallback((clientX: number, clientY: number, tileIdx: number): boolean => {
     const container = containerRef.current;
     if (!container) return false;
@@ -891,20 +782,15 @@ export function CanvasGrid({
     const pos = layoutModel.positions[tileIdx];
     if (!pos) return false;
     const imgH = pos.h - textHeight;
-    const bgW = ZOOM_BTN_SIZE + 4;
-    const bgH = ZOOM_BTN_SIZE + 2;
-    const zx = pos.x + pos.w - bgW;
-    const zy = pos.y + imgH - bgH;
-    return mx >= zx && mx < zx + bgW && my >= zy && my < zy + bgH;
+    const button = zoomButtonRect(pos, imgH);
+    return mx >= button.x && mx < button.x + button.width && my >= button.y && my < button.y + button.height;
   }, [layoutModel.positions, textHeight, headerHeight]);
 
-  // ── Clear hover timers helper ──
   const clearHoverTimers = useCallback(() => {
     if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
     if (hoverHideTimerRef.current) { clearTimeout(hoverHideTimerRef.current); hoverHideTimerRef.current = null; }
   }, []);
 
-  // ── Mouse move — hover tracking + zoom button preview logic ──
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     if (marqueeRef.current.active) return;
     const container = containerRef.current;
@@ -917,19 +803,16 @@ export function CanvasGrid({
       markDirty('overlay');
     }
 
-    // Hover preview: triggered when cursor is over the zoom button area
     if (idx != null && isZoomButtonHit(e.clientX, e.clientY, idx)) {
       const item = items[idx];
       const isPreviewable = item && !item.mime_type.startsWith('video/');
 
-      // Cancel any pending hide
       if (hoverHideTimerRef.current) {
         clearTimeout(hoverHideTimerRef.current);
         hoverHideTimerRef.current = null;
       }
 
       if (isPreviewable && !hoverTimerRef.current) {
-        // Start preview timer
         hoverTimerRef.current = setTimeout(() => {
           hoverTimerRef.current = null;
           if (item) {
@@ -940,7 +823,6 @@ export function CanvasGrid({
         }, HOVER_PREVIEW_DELAY_MS);
       }
     } else {
-      // Cursor not on zoom button — cancel show timer, start hide timer
       if (hoverTimerRef.current) {
         clearTimeout(hoverTimerRef.current);
         hoverTimerRef.current = null;
@@ -955,7 +837,6 @@ export function CanvasGrid({
   }, [layoutModel.positions, textHeight, items, isZoomButtonHit, hoverPreview, markDirty, headerHeight]);
 
   const handleMouseLeave = useCallback(() => {
-    // Don't cancel drag when cursor moves to sidebar — ghost follows globally
     if (isDragActive()) return;
     if (hoveredTileRef.current != null) {
       hoveredTileRef.current = null;
@@ -970,7 +851,6 @@ export function CanvasGrid({
     }
   }, [clearHoverTimers, hoverPreview, markDirty]);
 
-  // ── Context menu handler ──
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     if (isInHeader(e.target)) return; // header handles its own context menu
     e.preventDefault();
@@ -988,8 +868,6 @@ export function CanvasGrid({
     }
   }, [items, layoutModel.positions, onTileContextMenu, onEmptyContextMenu, textHeight, headerHeight]);
 
-  // Marquee rect → selected hashes (canvas tiles via spatial index + folder
-  // DOM tiles). Reads refs so the auto-scroll RAF tick never goes stale.
   const collectMarqueeHits = useCallback((left: number, top: number, width: number, height: number) => {
     const entityHashes = new Set(marqueeBaseSelectionRef.current);
     const folderNodeIds = new Set(marqueeBaseFolderSelectionRef.current);
@@ -1013,7 +891,6 @@ export function CanvasGrid({
     return { entityHashes, folderNodeIds };
   }, [collectHeaderMarqueeHits]);
 
-  // ── Marquee drag handlers ──
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return; // left button only
     if (isOnHeaderInteractive(e.target)) return; // folder tiles handle their own clicks
@@ -1022,8 +899,6 @@ export function CanvasGrid({
 
     const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
 
-    // If clicking on a tile, set up potential tile drag (not marquee)
-    // Also position the invisible drag helper over this tile for HTML5 native drag-out
     const idx = hitTestTile(layoutModel.positions, x, y, textHeight, 0, layoutModel.positions.length);
     if (idx != null) {
       tileDragRef.current = { tileIdx: idx, startClientX: e.clientX, startClientY: e.clientY };
@@ -1044,14 +919,12 @@ export function CanvasGrid({
     autoScrollSpeedRef.current = 0;
     container.setPointerCapture(e.pointerId);
 
-    // Start auto-scroll RAF loop — also updates marquee rect during scroll
     if (autoScrollRef.current == null) {
       const tick = () => {
         if (!marqueeRef.current.active) { autoScrollRef.current = null; return; }
         const c = containerRef.current;
         if (c && autoScrollSpeedRef.current !== 0) {
           c.scrollTop += autoScrollSpeedRef.current;
-          // Update marquee rect using stored cursor position + new scroll
           const { startX: sx, startY: sy, lastClientX: lcx, lastClientY: lcy } = marqueeRef.current;
           const curY = lcy + c.scrollTop - headerHeight;
           const curX = lcx;
@@ -1073,7 +946,6 @@ export function CanvasGrid({
   }, [layoutModel.positions, textHeight, selectedEntityHashes, selectedFolderNodeIds, headerHeight, collectMarqueeHits, markDirty, onMarqueeSelectionChange]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    // Check for tile drag initiation (5px threshold)
     if (tileDragRef.current && !isDragActive()) {
       const dx = e.clientX - tileDragRef.current.startClientX;
       const dy = e.clientY - tileDragRef.current.startClientY;
@@ -1098,7 +970,6 @@ export function CanvasGrid({
       }
       return;
     }
-    // Active tile drag — global onMove handler computes reorder target + ghost position
     if (isDragActive()) return;
     if (!marqueeRef.current.active) return;
     const container = containerRef.current;
@@ -1114,8 +985,6 @@ export function CanvasGrid({
     marqueeRef.current.lastClientY = clientY;
     const { startX, startY } = marqueeRef.current;
 
-    // Auto-scroll: set speed based on cursor proximity to edge.
-    // A RAF loop in the background applies the scroll continuously.
     const EDGE_ZONE = 50;
     const MAX_SPEED = 12;
     if (clientY < EDGE_ZONE) {
@@ -1134,17 +1003,13 @@ export function CanvasGrid({
     if (width < 5 && height < 5) return;
 
     marqueeRectRef.current = { left, top, width, height };
-    // Visual marquee in scroll-space (add headerHeight back for DOM overlay)
     setMarqueeVisual({ left, top: top + headerHeight, width, height });
-
-    // Compute intersecting tiles (canvas + folder DOM)
     onMarqueeSelectionChange?.(collectMarqueeHits(left, top, width, height));
     markDirty('overlay');
   }, [items, onMarqueeSelectionChange, markDirty, collectMarqueeHits, headerHeight]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     tileDragRef.current = null;
-    // Tile drag end is handled by the global window mouseup listener — don't interfere here
     if (isDragActive()) return;
     if (!marqueeRef.current.active) return;
     const hadVisibleMarquee = marqueeRectRef.current != null;
@@ -1162,7 +1027,6 @@ export function CanvasGrid({
     markDirty('overlay');
   }, [markDirty]);
 
-  // ── Render ──
   return (
     <div className={styles.root}>
       <div
@@ -1206,7 +1070,7 @@ export function CanvasGrid({
                 zIndex: 200,
                 textAlign: 'center',
                 padding: '0 4px',
-                borderRadius: 4,
+                borderRadius: GRID_TILE_RADIUS,
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {

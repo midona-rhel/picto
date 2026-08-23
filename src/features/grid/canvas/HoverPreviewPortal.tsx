@@ -1,12 +1,3 @@
-/**
- * Hover preview portal — full-screen enlarged image overlay.
- *
- * Rendered as a React portal to document.body. Shows the full-size media
- * file with a dark backdrop. Fades in over 150ms once image is decoded.
- *
- * CSS matches legacy v0.5.0-alpha HoverPreviewPortal exactly.
- */
-
 import { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { mediaFileUrl } from '../../../shared/lib/mediaUrl';

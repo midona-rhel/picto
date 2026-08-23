@@ -1,177 +1,134 @@
-/* SubfolderGrid — legacy-matched stacked card folder tiles */
-
 .container {
+  --folder-card: radial-gradient(100% 100% at 50% 0%, rgb(255 255 255 / 15%), rgb(255 255 255 / 5%));
+  --folder-card-top: rgb(255 255 255 / 15%);
+  --folder-card-side: rgb(255 255 255 / 5%);
+  --folder-stack-middle: rgb(255 255 255 / 15%);
+  --folder-stack-back: rgb(255 255 255 / 10%);
+  box-sizing: border-box;
   width: 100%;
   margin-bottom: 4px;
   padding: 0 16px;
-  box-sizing: border-box;
+  font-family: var(--font-family-ui);
 }
 
-/* Section label */
+:global([data-mantine-color-scheme="light"]) .container {
+  --folder-card: linear-gradient(rgb(0 0 0 / 10%), rgb(0 0 0 / 10%));
+  --folder-card-top: rgb(0 0 0 / 20%);
+  --folder-card-side: rgb(0 0 0 / 10%);
+  --folder-stack-middle: rgb(0 0 0 / 20%);
+  --folder-stack-back: rgb(0 0 0 / 10%);
+}
+
+.sectionLabel,
+.contentLabel {
+  margin: 4px 0 6px 2px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
 
 .sectionLabel {
   display: inline-flex;
   align-items: center;
   gap: 2px;
-  margin: 4px 0 6px 2px;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
   cursor: pointer;
   transition: color 200ms;
   user-select: none;
 }
 
-.sectionLabel:hover {
-  color: var(--color-text-primary);
-}
+.sectionLabel:hover { color: var(--color-text-primary); }
 
 .chevron {
-  width: 14px;
-  height: 14px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: transform 200ms;
+  width: 14px;
+  height: 14px;
   transform: rotate(90deg);
+  transition: transform 200ms;
 }
 
-.chevronCollapsed {
-  transform: rotate(0deg);
-}
-
-/* Grid layout — grid-template-columns set inline from JS */
+.chevronCollapsed { transform: rotate(0deg); }
 
 .list {
+  position: relative;
   display: grid;
   gap: 16px;
+  margin: 6px 0 30px;
   padding: 0;
-  margin-top: 6px;
-  margin-bottom: 30px;
-  position: relative;
 }
-
-/* Folder tile */
 
 .tile {
   position: relative;
-  text-align: center;
-  cursor: pointer;
   box-sizing: border-box;
   backface-visibility: hidden;
+  text-align: center;
+  cursor: pointer;
   user-select: none;
-  -webkit-user-select: none;
 }
 
-.tileSelected::after {
+.tileSelected::after,
+.tile[data-drop-highlighted='true']::after {
   content: "";
+  z-index: 1;
   position: absolute;
-  left: -3px;
-  right: -3px;
   top: -3px;
+  right: -3px;
+  left: -3px;
   padding-bottom: calc(75% + 16px);
   border-radius: 8px;
   box-shadow: 0 0 0 2px var(--color-primary);
-  z-index: 1;
   pointer-events: none;
 }
-
-/* Thumbnail area — padding-bottom creates 4:3 ratio + 10px stack offset */
 
 .thumbnail {
   z-index: 10;
   position: relative;
-  padding-bottom: calc(75% + 10px);
-  margin-bottom: 12px;
-  border-radius: 3px;
   box-sizing: border-box;
-}
-
-.thumbnail:hover {
+  margin-bottom: 12px;
+  padding-bottom: calc(75% + 10px);
+  border-radius: 3px;
   cursor: pointer;
 }
-
-/* Stacked cards — three layered divs creating a deck-of-cards effect */
 
 .pic1,
 .pic2,
 .pic3 {
   z-index: 1;
   position: absolute;
-  background-size: contain;
-  background-position: center;
-  background-repeat: no-repeat;
   border-radius: 10px;
-  background: radial-gradient(100% 100% at 50% 0%, rgba(255, 255, 255, 0.15) 0%, rgba(255, 255, 255, 0.05) 100%);
+  background: var(--folder-card) center / contain no-repeat;
 }
 
-:global([data-mantine-color-scheme="light"]) .pic1,
-:global([data-mantine-color-scheme="light"]) .pic2,
-:global([data-mantine-color-scheme="light"]) .pic3 {
-  background: linear-gradient(180deg, rgba(0, 0, 0, 0.10) 0%, rgba(0, 0, 0, 0.10) 100%);
-}
-
-/* Front card — contains the cover image */
 .pic1 {
   z-index: 10;
-  top: 10px;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  padding: 4px;
   display: flex;
   align-content: center;
   justify-content: center;
-  border-top: 1px solid rgba(255, 255, 255, 0.15);
-  border-right: 1px solid rgba(255, 255, 255, 0.05);
-  border-left: 1px solid rgba(255, 255, 255, 0.05);
+  inset: 10px 0 0;
+  padding: 4px;
+  border-top: 1px solid var(--folder-card-top);
+  border-right: 1px solid var(--folder-card-side);
+  border-left: 1px solid var(--folder-card-side);
 }
 
-:global([data-mantine-color-scheme="light"]) .pic1 {
-  border-top: 1px solid rgba(0, 0, 0, 0.20);
-  border-right: 1px solid rgba(0, 0, 0, 0.10);
-  border-left: 1px solid rgba(0, 0, 0, 0.10);
-}
-
-/* Middle card */
-.pic2 {
-  z-index: 9;
-  left: 10px;
-  right: 10px;
-  top: 6px;
-  height: 2px;
-  border-radius: 50% 50% 0 0;
-  background: rgba(255, 255, 255, 0.15);
-}
-
-:global([data-mantine-color-scheme="light"]) .pic2 {
-  background: rgba(0, 0, 0, 0.20);
-}
-
-/* Back card */
+.pic2,
 .pic3 {
   z-index: 9;
-  left: 20px;
-  right: 20px;
-  top: 2px;
   height: 2px;
   border-radius: 50% 50% 0 0;
-  background: rgba(255, 255, 255, 0.10);
 }
 
-:global([data-mantine-color-scheme="light"]) .pic3 {
-  background: rgba(0, 0, 0, 0.10);
-}
-
-/* Cover image */
+.pic2 { top: 6px; right: 10px; left: 10px; background: var(--folder-stack-middle); }
+.pic3 { top: 2px; right: 20px; left: 20px; background: var(--folder-stack-back); }
 
 .coverImage {
-  border-radius: 4px;
   position: absolute;
+  top: 50%;
+  display: block;
   max-width: calc(100% - 8px);
   max-height: calc(100% - 8px);
-  top: 50%;
+  border-radius: 4px;
   transform: translateY(-50%);
-  display: block;
 }
 
 .folderPlaceholder {
@@ -183,26 +140,22 @@
   pointer-events: none;
 }
 
-.folderPlaceholder svg {
-  opacity: 0.2;
-}
-
-/* Text below thumbnail */
+.folderPlaceholder svg { opacity: .2; }
 
 .name {
+  display: -webkit-box;
+  min-height: 15px;
+  max-height: 30px;
+  margin-bottom: 4px;
+  overflow: hidden;
   color: var(--color-text-primary);
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-regular);
   line-height: 15px;
-  min-height: 15px;
-  max-height: 30px;
-  overflow: hidden;
   text-overflow: ellipsis;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   word-break: break-word;
-  margin-bottom: 4px;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .nameRow {
@@ -212,26 +165,17 @@
   max-width: 100%;
 }
 
-.nameRow .name {
-  margin-bottom: 0;
-}
+.nameRow .name { margin-bottom: 0; }
 
 .metas {
+  overflow: hidden;
   color: var(--color-text-tertiary);
   font-size: 10px;
   font-weight: var(--font-weight-medium);
   line-height: 1.3;
-  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   pointer-events: none;
 }
 
-/* Content label */
-
-.contentLabel {
-  display: block;
-  margin: 4px 0 6px 2px;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-}
+.contentLabel { display: block; }

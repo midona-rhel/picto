@@ -1,34 +1,18 @@
-/**
- * useGridArrowNav — arrow key + WASD + Home/End/PageUp/PageDown navigation for the image grid.
- *
- * ArrowLeft/A = −1, ArrowRight/D = +1, ArrowUp/W = −columnCount, ArrowDown/S = +columnCount.
- * Home = first image, End = last image.
- * PageUp/PageDown = ±visible rows.
- * Shift+key extends range selection from anchor.
- * Scrolls the target item into view.
- */
-
 import { useEffect, useRef, type RefObject } from 'react';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
-import type { LayoutResult } from '../layout/types';
 import type { GridSelection, GridSelectionAction } from '../../../state/selection';
+import { GRID_GAP } from '../gridAppearance';
+import type { LayoutResult } from '../layout/types';
 
-const GAP = 16;
-
-/** Map WASD to arrow equivalents so both sets work. */
-const WASD_MAP: Record<string, string> = {
-  w: 'ArrowUp', a: 'ArrowLeft', s: 'ArrowDown', d: 'ArrowRight',
-  W: 'ArrowUp', A: 'ArrowLeft', S: 'ArrowDown', D: 'ArrowRight',
-};
-
-type NavAction = 'left' | 'right' | 'up' | 'down' | 'first' | 'last' | 'pageUp' | 'pageDown';
-
-const KEY_TO_ACTION: Record<string, NavAction> = {
-  ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
+const NAV_KEY: Record<string, 'left' | 'right' | 'up' | 'down' | 'first' | 'last' | 'pageUp' | 'pageDown'> = {
+  ArrowLeft: 'left', a: 'left', A: 'left',
+  ArrowRight: 'right', d: 'right', D: 'right',
+  ArrowUp: 'up', w: 'up', W: 'up',
+  ArrowDown: 'down', s: 'down', S: 'down',
   Home: 'first', End: 'last', PageUp: 'pageUp', PageDown: 'pageDown',
 };
 
-export function useGridArrowNav(opts: {
+interface GridArrowNavOptions {
   items: CanonicalEntityGridItem[];
   layoutRef: RefObject<LayoutResult | null>;
   containerRef: RefObject<HTMLDivElement | null>;
@@ -38,98 +22,56 @@ export function useGridArrowNav(opts: {
   viewerOpen: boolean;
   containerWidth: number;
   targetSize: number;
-}) {
-  const optsRef = useRef(opts);
-  optsRef.current = opts;
+}
 
+export function useGridArrowNav(options: GridArrowNavOptions) {
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
   useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      const { items, layoutRef, containerRef, selectedHashes, selection, dispatchSelection, viewerOpen, containerWidth, targetSize } = optsRef.current;
-
-      if (viewerOpen) return;
-      if (items.length === 0) return;
-
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-
-      // Map WASD to arrow equivalents, then look up action
-      const mappedKey = WASD_MAP[e.key] ?? e.key;
-      const action = KEY_TO_ACTION[mappedKey];
-      if (!action) return;
-
-      e.preventDefault();
-
+    const onKeyDown = (event: KeyboardEvent) => {
+      const action = NAV_KEY[event.key];
+      if (!action || event.metaKey || event.ctrlKey || event.altKey) return;
+      const { items, layoutRef, containerRef, selectedHashes, selection, dispatchSelection,
+        viewerOpen, containerWidth, targetSize } = optionsRef.current;
+      if (viewerOpen || !items.length || ['INPUT', 'TEXTAREA', 'SELECT'].includes((event.target as HTMLElement)?.tagName)) return;
       const layout = layoutRef.current;
-      if (!layout || layout.positions.length === 0) return;
+      if (!layout?.positions.length) return;
+      event.preventDefault();
 
-      // Compute column count (must match computeLayout's formula)
-      const snappedSize = Math.max(50, Math.round(targetSize / 50) * 50);
-      const fullWidth = containerWidth;
-      const minInnerWidth = fullWidth - 2 * GAP;
-      const columnCount = Math.max(1, Math.round((minInnerWidth + GAP) / (snappedSize + GAP)));
-
-      // Find current position
+      const size = Math.max(50, Math.round(targetSize / 50) * 50);
+      const columns = Math.max(1, Math.round((containerWidth - GRID_GAP) / (size + GRID_GAP)));
+      const container = containerRef.current;
+      const rows = container ? Math.max(1, Math.floor(container.clientHeight / (size + GRID_GAP))) : 5;
       let current = selection.anchor?.kind === 'entity'
         ? items.findIndex((item) => item.entity_hash === selection.anchor!.id)
-        : -1;
-      if (current == null || current < 0 || current >= items.length) {
-        for (let i = 0; i < items.length; i++) {
-          if (selectedHashes.has(items[i].entity_hash)) { current = i; break; }
-        }
-        if (current == null) current = 0;
-      }
+        : items.findIndex((item) => selectedHashes.has(item.entity_hash));
+      if (current < 0) current = 0;
 
-      // Compute visible rows for page up/down
-      const container = containerRef.current;
-      const visibleRows = container ? Math.max(1, Math.floor(container.clientHeight / (snappedSize + GAP))) : 5;
-
-      let target: number;
-      switch (action) {
-        case 'left':     target = Math.max(0, current - 1); break;
-        case 'right':    target = Math.min(items.length - 1, current + 1); break;
-        case 'up':       target = Math.max(0, current - columnCount); break;
-        case 'down':     target = Math.min(items.length - 1, current + columnCount); break;
-        case 'first':    target = 0; break;
-        case 'last':     target = items.length - 1; break;
-        case 'pageUp':   target = Math.max(0, current - columnCount * visibleRows); break;
-        case 'pageDown': target = Math.min(items.length - 1, current + columnCount * visibleRows); break;
-        default: return;
-      }
-
+      const deltas = { left: -1, right: 1, up: -columns, down: columns, pageUp: -columns * rows, pageDown: columns * rows };
+      const target = action === 'first' ? 0 : action === 'last' ? items.length - 1
+        : Math.max(0, Math.min(items.length - 1, current + deltas[action]));
       if (target === current) return;
+      const hash = items[target]?.entity_hash;
+      if (!hash) return;
 
-      if (e.shiftKey) {
-        // Range select from anchor to target
+      if (event.shiftKey) {
         const anchorIndex = selection.anchor?.kind === 'entity'
-          ? items.findIndex((item) => item.entity_hash === selection.anchor!.id)
-          : current;
-        const anchor = anchorIndex >= 0 ? anchorIndex : current;
-        const [lo, hi] = [Math.min(anchor, target), Math.max(anchor, target)];
-        const next = new Set<string>();
-        for (let i = lo; i <= hi; i++) {
-          if (items[i]) next.add(items[i].entity_hash);
-        }
-        dispatchSelection({ type: 'range_entities', hashes: next });
+          ? items.findIndex((item) => item.entity_hash === selection.anchor!.id) : current;
+        const [from, to] = [Math.min(Math.max(anchorIndex, 0), target), Math.max(Math.max(anchorIndex, 0), target)];
+        dispatchSelection({ type: 'range_entities', hashes: new Set(items.slice(from, to + 1).map((item) => item.entity_hash)) });
       } else {
-        const hash = items[target]?.entity_hash;
-        if (hash) dispatchSelection({ type: 'replace_entities', hashes: new Set([hash]), anchor: hash });
+        dispatchSelection({ type: 'replace_entities', hashes: new Set([hash]), anchor: hash });
       }
 
-      // Scroll target into view
-      const pos = layout.positions[target];
-      if (pos && container) {
-        const scrollTop = container.scrollTop;
-        const viewportH = container.clientHeight;
-        if (pos.y < scrollTop + GAP) {
-          container.scrollTop = pos.y - GAP;
-        } else if (pos.y + pos.h > scrollTop + viewportH - GAP) {
-          container.scrollTop = pos.y + pos.h - viewportH + GAP;
-        }
+      const position = layout.positions[target];
+      if (!container || !position) return;
+      const bottom = container.scrollTop + container.clientHeight;
+      if (position.y < container.scrollTop + GRID_GAP) container.scrollTop = position.y - GRID_GAP;
+      else if (position.y + position.h > bottom - GRID_GAP) {
+        container.scrollTop = position.y + position.h - container.clientHeight + GRID_GAP;
       }
-    }
-
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 }

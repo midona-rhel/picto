@@ -1,12 +1,3 @@
-/**
- * Grid context menu — context-aware entry builder for right-click on grid tiles.
- *
- * Rules:
- *   - Only "Delete Permanently" is ever danger (red). Everything else is normal.
- *   - Reject and Move to Trash use the trash icon, never custom icons.
- *   - Accept/Reject appear at the top in inbox scope.
- */
-
 import {
   IconArrowsMaximize, IconExternalLink, IconFolderSearch, IconBrandFinder, IconAppWindow,
   IconFolderMinus, IconFolderPlus,
@@ -31,16 +22,13 @@ function kbd(id: string): string | undefined {
 
 interface GridMenuContext {
   selectionCount: number;
-  querySelectionActive: boolean;
   aiTagEnabled?: boolean;
   singleSelected: boolean;
   singleHash: string | null;
-  hasFolders?: boolean;
   isMixed?: boolean;
   isFoldersOnly?: boolean;
   scopeKind: 'system' | 'folder' | 'smart_folder' | null;
   statusFilter: string | null;
-  loadedCount: number;
   onSelectAll: () => void;
   onDeselectAll: () => void;
   onOpen?: () => void;
@@ -97,14 +85,12 @@ function item(
   };
 }
 
-/** Build context menu entries for right-clicking a tile. */
 export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const { selectionCount, singleSelected, singleHash, statusFilter, scopeKind } = ctx;
   const hasSelection = selectionCount > 0;
   const aiTagEnabled = ctx.aiTagEnabled ?? !!ctx.onOpenAiTagger;
   const entries: MenuEntry[] = [];
 
-  // ── Mixed selection (folders + entities) or folders-only: limited menu ──
   if (ctx.isMixed) {
     entries.push(item('Select All', { shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
     entries.push(item('Deselect All', { action: ctx.onDeselectAll }));
@@ -124,7 +110,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     return entries;
   }
 
-  // ── Inbox accept/reject — top of menu ──
   if (statusFilter === 'inbox' && hasSelection) {
     const acceptLabel = selectionCount > 1 ? `Accept ${selectionCount} Items` : 'Accept';
     entries.push(item(acceptLabel, { icon: <IconArrowBackUp size={15} />, shortcut: kbd('inbox.accept'), action: ctx.onAccept }));
@@ -133,7 +118,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── Open actions ──
   if (singleSelected) {
     entries.push(item('Open', { icon: <IconArrowsMaximize size={15} />, shortcut: kbd('view.detailView'), action: ctx.onOpen }));
     entries.push(item('Open with Default App', {
@@ -154,12 +138,10 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── View options ──
   const viewEntries = buildContextMenuViewEntries();
   for (const entry of viewEntries) entries.push(entry);
   entries.push(sep());
 
-  // ── Organization ──
   if (hasSelection) {
     entries.push(item('Add to Folder', {
       icon: <IconFolderPlus size={15} />,
@@ -175,7 +157,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── Rename ──
   if (singleSelected) {
     entries.push(item('Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.rename'), action: ctx.onRename }));
   }
@@ -183,7 +164,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── Copy ──
   if (singleSelected && singleHash) {
     entries.push(item('Copy', {
       icon: <IconCopy size={15} />,
@@ -210,7 +190,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── Tags ──
   if (hasSelection) {
     entries.push(item('Add Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('organize.addTag'), action: ctx.onOpenTagSelect }));
     entries.push(item(selectionCount > 1 ? `Auto Tag ${selectionCount} Images` : 'Auto Tag', {
@@ -224,7 +203,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── Rating ──
   if (hasSelection && ctx.onSetRating) {
     entries.push({
       submenu: true,
@@ -237,13 +215,11 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     });
   }
 
-  // ── Export ──
   if (hasSelection && ctx.onExport) {
     entries.push(item('Export...', { icon: <IconFileExport size={15} />, action: ctx.onExport }));
     entries.push(sep());
   }
 
-  // ── Search by Image ──
   if (singleSelected && singleHash && ctx.onSearchByImage) {
     const engines = [
       { key: 'tineye', label: 'TinEye' },
@@ -263,21 +239,18 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── Thumbnails ──
   if (hasSelection) {
     const thumbLabel = selectionCount > 1 ? `Regenerate ${selectionCount} Thumbnails` : 'Regenerate Thumbnail';
     entries.push(item(thumbLabel, { icon: <IconRefresh size={15} />, shortcut: kbd('file.regenerateThumbnail'), action: ctx.onRegenerateThumbnails }));
     entries.push(sep());
   }
 
-  // ── Selection ──
   entries.push(item('Select All', { icon: <IconSelectAll size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
   if (hasSelection) {
     entries.push(item('Deselect All', { icon: <IconDeselect size={15} />, shortcut: kbd('edit.deselectAll'), action: ctx.onDeselectAll }));
   }
   entries.push(sep());
 
-  // ── Folder removal ──
   if (scopeKind === 'folder' && hasSelection) {
     const removeLabel = selectionCount > 1 ? `Remove ${selectionCount} from Folder` : 'Remove from Folder';
     entries.push(item(removeLabel, {
@@ -288,8 +261,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── Trash / Delete ──
-  // ONLY "Delete Permanently" gets danger:true. Move to Trash is normal.
   if (hasSelection) {
     if (statusFilter === 'trash') {
       const restoreLabel = selectionCount > 1 ? `Restore ${selectionCount} Items` : 'Restore';
@@ -309,7 +280,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   return entries;
 }
 
-/** Build context menu entries for right-clicking empty grid space. */
 export function buildEmptyContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const entries: MenuEntry[] = [];
 

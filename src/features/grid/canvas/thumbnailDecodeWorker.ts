@@ -1,36 +1,23 @@
 /// <reference lib="webworker" />
 
-/**
- * Thumbnail decode worker — owns loading, cancellation, and decoding.
- *
- * The main thread sends a "plan" (visible hashes + URLs) each frame.
- * Decoded bitmaps are transferred immediately. Reveal timing belongs to the
- * main-thread ThumbnailRevealTracker.
- */
-
-// ── Messages ────────────────────────────────────────────────────
+// Fetches and transfers the active decode plan immediately; reveal timing is main-thread owned.
 
 type PlanEntry = { hash: string; url: string };
 type PlanMessage = { type: 'plan'; entries: PlanEntry[] };
 type ClearMessage = { type: 'clear' };
 type IncomingMessage = PlanMessage | ClearMessage;
 
-// ── State ───────────────────────────────────────────────────────
-
 const ctx = self as DedicatedWorkerGlobalScope;
 
-const currentPlan = new Map<string, string>();          // hash → url
+const currentPlan = new Map<string, string>();
 const inFlight = new Map<string, AbortController>();
-const delivered = new Map<string, string>();             // hash -> transferred URL
+const delivered = new Map<string, string>();
 const failCounts = new Map<string, number>();
 
 const MAX_CONCURRENT = 6;
 const MAX_FAILURES = 2;
 
-// ── Plan ────────────────────────────────────────────────────────
-
 function handlePlan(entries: PlanEntry[]): void {
-  // Build next plan as a set for O(1) lookups
   const nextHashes = new Set<string>();
   const nextUrls = new Map<string, string>();
   for (let i = 0; i < entries.length; i++) {
@@ -38,7 +25,6 @@ function handlePlan(entries: PlanEntry[]): void {
     nextUrls.set(entries[i].hash, entries[i].url);
   }
 
-  // Cancel loads no longer in plan
   for (const [hash, controller] of inFlight) {
     if (!nextHashes.has(hash)) {
       controller.abort();
@@ -63,8 +49,6 @@ function handleClear(): void {
   failCounts.clear();
   currentPlan.clear();
 }
-
-// ── Loading ─────────────────────────────────────────────────────
 
 function pumpLoads(): void {
   for (const [hash, url] of currentPlan) {
@@ -103,8 +87,6 @@ function startLoad(hash: string, url: string): void {
     }
   })();
 }
-
-// ── Entry ───────────────────────────────────────────────────────
 
 ctx.onmessage = (event: MessageEvent<IncomingMessage>) => {
   const msg = event.data;

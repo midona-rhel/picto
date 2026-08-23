@@ -19,6 +19,7 @@ const item = (hash: string): CanvasRenderItem => ({
 function buffers() {
   return {
     activeTiles: [] as number[],
+    visibleTiles: [] as number[],
     activeHashes: new Set<string>(),
     viewportHashes: new Set<string>(),
     planTiles: [],
@@ -44,6 +45,7 @@ describe('collectThumbnailActivation', () => {
     );
 
     expect(output.activeHashes).toEqual(new Set(['prefetch-above', 'visible', 'prefetch-below']));
+    expect(output.visibleTiles).toEqual([1]);
     expect(output.viewportHashes).toEqual(new Set(['visible']));
   });
 

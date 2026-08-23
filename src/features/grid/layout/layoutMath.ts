@@ -1,37 +1,31 @@
-/**
- * Grid layout math — pure computation, no DOM or React dependencies.
- *
- * Three layout modes:
- *   - waterfall: masonry (shortest-column placement)
- *   - grid: uniform square tiles
- *   - justified: row-filling with aspect-ratio-aware sizing
- *
- * Based on the prior grid layout algorithm, with a justified last-row fix:
- * incomplete last rows use target height instead of stretching.
- */
-
 import type { LayoutItem, LayoutResult, GridViewMode } from './types';
 
-// Top and bottom padding match the gap between tiles — equal spacing everywhere.
 const LAYOUT_PADDING_TOP = 16;
 const LAYOUT_PADDING_BOTTOM = 16;
+
+export type LayoutContinuation =
+  | { mode: 'grid' }
+  | { mode: 'waterfall'; columnHeights: Float64Array }
+  | { mode: 'justified'; lastRowStart: number; lastRowY: number };
+
+export interface StatefulLayoutResult extends LayoutResult {
+  continuation: LayoutContinuation;
+}
+
+interface Geometry {
+  fullWidth: number;
+  usedWidth: number;
+  columnCount: number;
+  columnWidth: number;
+  offsetX: number;
+  snappedSize: number;
+}
 
 export function safeAspectRatio(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 1.5;
   return Math.min(8, Math.max(0.125, value));
 }
 
-/**
- * Compute layout positions for all items.
- *
- * @param aspectRatios - aspect ratio per item (width/height)
- * @param containerWidth - available width in pixels
- * @param targetSize - target tile width/height in pixels (100–900)
- * @param gap - pixel gap between tiles
- * @param viewMode - waterfall, grid, or justified
- * @param textHeight - extra height below each tile for name/resolution text
- * @param paddingX - horizontal inset from container edges
- */
 export function computeLayout(
   aspectRatios: number[],
   containerWidth: number,
@@ -39,47 +33,96 @@ export function computeLayout(
   gap: number,
   viewMode: GridViewMode,
   textHeight: number,
-  _paddingX = 0,
   scrollbarWidth = 0,
 ): LayoutResult {
-  if (aspectRatios.length === 0 || containerWidth <= 0) {
-    return { positions: [], totalHeight: 0 };
-  }
-
-  // Snap target size to 50px increments for consistent column counts.
-  const snappedSize = Math.max(50, Math.round(targetSize / 50) * 50);
-
-  // The containerWidth is clientWidth (excludes scrollbar). But visually
-  // the scrollbar sits between the grid and the window edge. To make the
-  // visual left margin equal the visual right margin (gap to window edge),
-  // treat the full width as containerWidth + scrollbarWidth, center the
-  // grid within that, then clamp to containerWidth.
-  const fullWidth = containerWidth + scrollbarWidth;
-  const minInnerWidth = fullWidth - 2 * gap;
-  const columnCount = Math.max(1, Math.round((minInnerWidth + gap) / (snappedSize + gap)));
-  const colWidth = Math.floor((minInnerWidth - (columnCount - 1) * gap) / columnCount);
-  const usedWidth = columnCount * colWidth + (columnCount - 1) * gap;
-  const offsetX = Math.floor((fullWidth - usedWidth) / 2);
-
-  let result: LayoutResult;
-  if (viewMode === 'grid') {
-    result = layoutGrid(aspectRatios.length, colWidth, columnCount, gap, textHeight);
-  } else if (viewMode === 'justified') {
-    result = layoutJustified(aspectRatios, usedWidth, snappedSize, gap, textHeight);
-  } else {
-    result = layoutWaterfall(aspectRatios, colWidth, columnCount, gap, textHeight);
-  }
-
-  for (const pos of result.positions) {
-    pos.x += offsetX;
-    pos.y += LAYOUT_PADDING_TOP;
-  }
-  result.totalHeight += LAYOUT_PADDING_TOP + LAYOUT_PADDING_BOTTOM;
-
+  const { continuation: _, ...result } = computeStatefulLayout(
+    aspectRatios, containerWidth, targetSize, gap, viewMode, textHeight, scrollbarWidth,
+  );
   return result;
 }
 
-// ── Waterfall (masonry) ──────────────────────────────────────────
+export function computeStatefulLayout(
+  aspectRatios: number[],
+  containerWidth: number,
+  targetSize: number,
+  gap: number,
+  viewMode: GridViewMode,
+  textHeight: number,
+  scrollbarWidth = 0,
+): StatefulLayoutResult {
+  if (aspectRatios.length === 0 || containerWidth <= 0) {
+    return { positions: [], totalHeight: 0, continuation: { mode: viewMode } as LayoutContinuation };
+  }
+  const geometry = layoutGeometry(containerWidth, targetSize, gap, scrollbarWidth);
+  let result: StatefulLayoutResult;
+  if (viewMode === 'grid') {
+    result = layoutGrid(aspectRatios.length, geometry.columnWidth, geometry.columnCount, gap, textHeight);
+  } else if (viewMode === 'justified') {
+    result = layoutJustified(aspectRatios, geometry.usedWidth, geometry.snappedSize, gap, textHeight);
+  } else {
+    result = layoutWaterfall(aspectRatios, geometry.columnWidth, geometry.columnCount, gap, textHeight);
+  }
+  return finalize(result, geometry.offsetX, 0);
+}
+
+export function appendLayout(
+  aspectRatios: number[],
+  previousCount: number,
+  previous: StatefulLayoutResult,
+  containerWidth: number,
+  targetSize: number,
+  gap: number,
+  viewMode: GridViewMode,
+  textHeight: number,
+  scrollbarWidth = 0,
+): { result: StatefulLayoutResult; stablePrefix: number } {
+  if (previousCount === 0) return { result: computeStatefulLayout(
+    aspectRatios, containerWidth, targetSize, gap, viewMode, textHeight, scrollbarWidth,
+  ), stablePrefix: 0 };
+  const geometry = layoutGeometry(containerWidth, targetSize, gap, scrollbarWidth);
+  if (viewMode === 'grid' && previous.continuation.mode === 'grid') {
+    const result = layoutGrid(aspectRatios.length, geometry.columnWidth, geometry.columnCount, gap, textHeight, previous.positions);
+    return { result: finalize(result, geometry.offsetX, previousCount), stablePrefix: previousCount };
+  }
+  if (viewMode === 'waterfall' && previous.continuation.mode === 'waterfall') {
+    const result = layoutWaterfall(
+      aspectRatios, geometry.columnWidth, geometry.columnCount, gap, textHeight,
+      previous.positions, previous.continuation.columnHeights,
+    );
+    return { result: finalize(result, geometry.offsetX, previousCount), stablePrefix: previousCount };
+  }
+  if (viewMode === 'justified' && previous.continuation.mode === 'justified') {
+    const start = previous.continuation.lastRowStart;
+    const result = layoutJustified(
+      aspectRatios, geometry.usedWidth, geometry.snappedSize, gap, textHeight,
+      previous.positions, start, previous.continuation.lastRowY,
+    );
+    return { result: finalize(result, geometry.offsetX, start), stablePrefix: start };
+  }
+  return { result: computeStatefulLayout(
+    aspectRatios, containerWidth, targetSize, gap, viewMode, textHeight, scrollbarWidth,
+  ), stablePrefix: 0 };
+}
+
+function layoutGeometry(containerWidth: number, targetSize: number, gap: number, scrollbarWidth: number): Geometry {
+  const snappedSize = Math.max(50, Math.round(targetSize / 50) * 50);
+  const fullWidth = containerWidth + scrollbarWidth;
+  const minInnerWidth = fullWidth - 2 * gap;
+  const columnCount = Math.max(1, Math.round((minInnerWidth + gap) / (snappedSize + gap)));
+  const columnWidth = Math.floor((minInnerWidth - (columnCount - 1) * gap) / columnCount);
+  const usedWidth = columnCount * columnWidth + (columnCount - 1) * gap;
+  return { fullWidth, usedWidth, columnCount, columnWidth,
+    offsetX: Math.floor((fullWidth - usedWidth) / 2), snappedSize };
+}
+
+function finalize(result: StatefulLayoutResult, offsetX: number, start: number): StatefulLayoutResult {
+  for (let index = start; index < result.positions.length; index++) {
+    result.positions[index].x += offsetX;
+    result.positions[index].y += LAYOUT_PADDING_TOP;
+  }
+  result.totalHeight += LAYOUT_PADDING_TOP + LAYOUT_PADDING_BOTTOM;
+  return result;
+}
 
 function layoutWaterfall(
   aspectRatios: number[],
@@ -87,11 +130,15 @@ function layoutWaterfall(
   columnCount: number,
   gap: number,
   textHeight: number,
-): LayoutResult {
-  const colHeights = new Float64Array(columnCount);
-  const positions: LayoutItem[] = new Array(aspectRatios.length);
+  previous: LayoutItem[] = [],
+  previousHeights: Float64Array = new Float64Array(columnCount),
+): StatefulLayoutResult {
+  const start = previous.length;
+  const colHeights = previousHeights.slice();
+  const positions = previous.slice();
+  positions.length = aspectRatios.length;
 
-  for (let i = 0; i < aspectRatios.length; i++) {
+  for (let i = start; i < aspectRatios.length; i++) {
     let shortest = 0;
     for (let c = 1; c < columnCount; c++) {
       if (colHeights[c] < colHeights[shortest]) shortest = c;
@@ -110,10 +157,9 @@ function layoutWaterfall(
     if (colHeights[c] > maxHeight) maxHeight = colHeights[c];
   }
 
-  return { positions, totalHeight: Math.max(0, maxHeight - gap) };
+  return { positions, totalHeight: Math.max(0, maxHeight - gap),
+    continuation: { mode: 'waterfall', columnHeights: colHeights } };
 }
-
-// ── Grid (uniform squares) ───────────────────────────────────────
 
 function layoutGrid(
   imageCount: number,
@@ -121,12 +167,15 @@ function layoutGrid(
   columnCount: number,
   gap: number,
   textHeight: number,
-): LayoutResult {
-  const positions: LayoutItem[] = new Array(imageCount);
+  previous: LayoutItem[] = [],
+): StatefulLayoutResult {
+  const start = previous.length;
+  const positions = previous.slice();
+  positions.length = imageCount;
   const tileSize = colWidth;
   const cellH = tileSize + textHeight;
 
-  for (let i = 0; i < imageCount; i++) {
+  for (let i = start; i < imageCount; i++) {
     const col = i % columnCount;
     const row = Math.floor(i / columnCount);
     positions[i] = {
@@ -139,10 +188,8 @@ function layoutGrid(
 
   const rows = Math.ceil(imageCount / columnCount);
   const totalHeight = rows > 0 ? rows * cellH + (rows - 1) * gap : 0;
-  return { positions, totalHeight };
+  return { positions, totalHeight, continuation: { mode: 'grid' } };
 }
-
-// ── Justified (row-filling) ──────────────────────────────────────
 
 function layoutJustified(
   aspectRatios: number[],
@@ -150,16 +197,21 @@ function layoutJustified(
   targetRowHeight: number,
   gap: number,
   textHeight: number,
-): LayoutResult {
-  const positions: LayoutItem[] = new Array(aspectRatios.length);
-  let y = 0;
-  let rowStart = 0;
+  previous: LayoutItem[] = [],
+  rowStart = 0,
+  y = 0,
+): StatefulLayoutResult {
+  const positions = previous.slice(0, rowStart);
+  positions.length = aspectRatios.length;
+  let lastRowStart = rowStart;
+  let lastRowY = y;
 
   while (rowStart < aspectRatios.length) {
+    lastRowStart = rowStart;
+    lastRowY = y;
     let rowEnd = rowStart;
     let totalAspect = 0;
 
-    // Fill the row until it reaches or exceeds the container width
     while (rowEnd < aspectRatios.length) {
       totalAspect += safeAspectRatio(aspectRatios[rowEnd]);
       rowEnd++;
@@ -171,16 +223,9 @@ function layoutJustified(
     const count = rowEnd - rowStart;
     const gapSpace = (count - 1) * gap;
 
-    let finalHeight: number;
-    if (isLastRow) {
-      // Last incomplete row: use target height, don't stretch.
-      // Items are left-aligned at their natural width.
-      finalHeight = targetRowHeight;
-    } else {
-      // Full row: compute height that makes items fill the container width exactly.
-      const rowHeight = (containerWidth - gapSpace) / totalAspect;
-      finalHeight = Math.min(rowHeight, targetRowHeight * 1.5);
-    }
+    const finalHeight = isLastRow
+      ? targetRowHeight
+      : Math.min((containerWidth - gapSpace) / totalAspect, targetRowHeight * 1.5);
 
     const cellH = finalHeight + textHeight;
 
@@ -189,7 +234,6 @@ function layoutJustified(
       const ar = safeAspectRatio(aspectRatios[i]);
       let w = finalHeight * ar;
       let h = cellH;
-      // Wide panoramas: cap width to container, shrink height to preserve aspect ratio.
       if (w > containerWidth) {
         w = containerWidth;
         h = w / ar + textHeight;
@@ -202,5 +246,6 @@ function layoutJustified(
     rowStart = rowEnd;
   }
 
-  return { positions, totalHeight: Math.max(0, y - gap) };
+  return { positions, totalHeight: Math.max(0, y - gap),
+    continuation: { mode: 'justified', lastRowStart, lastRowY } };
 }

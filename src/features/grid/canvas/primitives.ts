@@ -1,14 +1,12 @@
-/**
- * Canvas drawing primitives — shared by base and overlay draw layers.
- */
+import { GRID_BADGE_FONT, GRID_INFO_FONT, GRID_NAME_FONT, GRID_RATING_FONT, GRID_TILE_RADIUS } from '../gridAppearance';
 
 export const BADGE_H = 18;
-export const BADGE_FONT = '600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+export const BADGE_FONT = GRID_BADGE_FONT;
 export const BADGE_PAD_X = 4;
-export const BADGE_RADIUS = 4;
-export const NAME_FONT = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-export const INFO_FONT = '11px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
-export const RATING_FONT = '10px sans-serif';
+export const BADGE_RADIUS = GRID_TILE_RADIUS;
+export const NAME_FONT = GRID_NAME_FONT;
+export const INFO_FONT = GRID_INFO_FONT;
+export const RATING_FONT = GRID_RATING_FONT;
 
 const BADGE_HIDDEN_TYPES = new Set(['jpg', 'jpeg', 'png', 'webp']);
 const truncateCache = new Map<string, string>();
@@ -34,7 +32,6 @@ export function mimeToExt(mime: string): string {
   return MIME_TO_EXT[sub] ?? sub;
 }
 
-/** Draw a center-cropped image (cover mode). */
 export function drawImageCover(
   ctx: CanvasRenderingContext2D,
   img: ImageBitmap,
@@ -51,7 +48,6 @@ export function drawImageCover(
   ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
 }
 
-/** Draw a contained image (contain mode). */
 export function drawImageContain(
   ctx: CanvasRenderingContext2D,
   img: ImageBitmap,
@@ -63,7 +59,6 @@ export function drawImageContain(
   ctx.drawImage(img, 0, 0, img.width, img.height, dx + (dw - sw) / 2, dy + (dh - sh) / 2, sw, sh);
 }
 
-/** Get the bounding rect of a contained image within a tile. */
 export function getContainRect(
   aspectRatio: number,
   dx: number, dy: number, dw: number, dh: number,
@@ -75,7 +70,6 @@ export function getContainRect(
   return { x: dx + (dw - w) / 2, y: dy + (dh - h) / 2, w, h };
 }
 
-/** Draw a dark rounded-rect badge with white text. */
 export function drawBadge(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -100,7 +94,6 @@ export function drawBadge(
   return w;
 }
 
-/** Truncate text with ellipsis, cached. */
 export function truncateText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -126,7 +119,6 @@ export function truncateText(
   return result;
 }
 
-/** Format milliseconds as m:ss or h:mm:ss. */
 export function formatDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);

@@ -1,10 +1,5 @@
-/**
- * Canvas hit testing — find which tile a pointer event targets.
- */
-
 import type { LayoutItem } from '../layout/types';
 
-/** Returns the item index at the given canvas coordinates, or null. */
 export function hitTestTile(
   positions: LayoutItem[],
   x: number,
@@ -40,7 +35,6 @@ export function computeReorderTarget(
   if (positions.length === 0) return null;
   const skip = skipIndices ?? new Set<number>();
 
-  // 1. Direct hit — cursor is over a non-dragged tile → split at midpoint
   for (let i = 0; i < positions.length; i++) {
     if (skip.has(i)) continue;
     const pos = positions[i];
@@ -51,7 +45,6 @@ export function computeReorderTarget(
     }
   }
 
-  // 2. Same band — collect non-skipped tiles at cursor's Y, find gap
   const bandTiles: { idx: number; pos: LayoutItem }[] = [];
   for (let i = 0; i < positions.length; i++) {
     if (skip.has(i)) continue;
@@ -64,16 +57,13 @@ export function computeReorderTarget(
   bandTiles.sort((a, b) => a.pos.x - b.pos.x);
 
   if (bandTiles.length > 0) {
-    // Left of first tile
     if (mouseX < bandTiles[0].pos.x) {
       return { index: bandTiles[0].idx, side: 'left' };
     }
-    // Right of last tile
     const last = bandTiles[bandTiles.length - 1];
     if (mouseX > last.pos.x + last.pos.w) {
       return { index: last.idx, side: 'right' };
     }
-    // In a gap between two tiles
     for (let j = 0; j < bandTiles.length - 1; j++) {
       const lt = bandTiles[j];
       const rt = bandTiles[j + 1];
@@ -86,7 +76,6 @@ export function computeReorderTarget(
     }
   }
 
-  // 3. Fallback — find nearest non-dragged tile by distance
   let bestDist = Infinity;
   let bestTarget: ReorderTarget | null = null;
   for (let i = 0; i < positions.length; i++) {

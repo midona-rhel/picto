@@ -1,8 +1,3 @@
-/**
- * Grid view menu — layout, sort, and display options panel.
- * Uses shared ToggleSwitch and CmSelect components.
- */
-
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
   IconBorderAll, IconLayoutBoard,
@@ -25,8 +20,6 @@ import type { CmSelectOption } from '../../shared/ui/CmSelect/CmSelect';
 import type { MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import s from './GridViewMenu.module.css';
 
-// ── Options ──────────────────────────────────────────────────────
-
 function LayoutIcon({ mode }: { mode: string }) {
   if (mode === 'grid') return <IconBorderAll size={14} />;
   if (mode === 'justified') return <IconLayoutBoard size={14} style={{ transform: 'rotate(-90deg)' }} />;
@@ -48,8 +41,6 @@ const SORT_OPTIONS: CmSelectOption[] = [
   { value: 'rating', label: 'Rating' },
   { value: 'duration', label: 'Duration' },
 ];
-
-// ── Panel ────────────────────────────────────────────────────────
 
 function ViewPanel() {
   const viewMode = useAtomValue(gridViewModeAtom);
@@ -101,7 +92,6 @@ function ViewPanel() {
   );
 }
 
-/** Display toggle panel — shown inside the "Display" submenu. */
 function DisplayPanel() {
   const viewMode = useAtomValue(gridViewModeAtom);
   const showName = useAtomValue(gridShowNameAtom);
@@ -139,7 +129,6 @@ function DisplayPanel() {
   );
 }
 
-/** Build entries for the toolbar view menu button (full panel: layout + sort + display toggles). */
 export function buildViewMenuEntries(): MenuEntry[] {
   return [
     { custom: true, key: 'view-layout-sort', render: () => <ViewPanel /> },
@@ -148,7 +137,6 @@ export function buildViewMenuEntries(): MenuEntry[] {
   ];
 }
 
-/** Build entries for context menu: layout/sort inline, separator, display as submenu. */
 export function buildContextMenuViewEntries(): MenuEntry[] {
   return [
     { custom: true, key: 'view-layout-sort', render: () => <ViewPanel /> },

@@ -1,10 +1,3 @@
-/**
- * Canvas base layer — images, placeholders, badges, text.
- *
- * Receives activeTiles[] from CanvasGrid and draws only those tiles.
- * Multi-pass: images+reveal → glass borders → badges → stars → text.
- */
-
 import type { LayoutItem, GridViewMode } from '../layout/types';
 import type { CanvasRenderItem } from './renderItemAdapter';
 import type { ThumbnailPipelineEntry } from './thumbnailPipeline';
@@ -21,8 +14,6 @@ import {
   truncateText,
   formatDuration,
 } from './primitives';
-
-
 interface ThemeLike {
   placeholderBg: string;
   borderRadius: number;
@@ -34,7 +25,6 @@ interface ThemeLike {
 
 export interface DrawContext {
   scrollTop: number;
-  viewportHeight: number;
   textHeight: number;
   borderRadius: number;
 }
@@ -45,8 +35,7 @@ export interface BaseLayerArgs {
   items: CanvasRenderItem[];
   atlasGet: (hash: string) => ThumbnailPipelineEntry | null;
   revealProgress: (entityHash: string) => number;
-  /** Indices of tiles in the activation zone — the ONLY tiles to draw. */
-  activeTiles: number[];
+  visibleTiles: number[];
   draw: DrawContext;
   theme: ThemeLike;
   viewMode: GridViewMode;
@@ -95,7 +84,7 @@ export function drawCanvasBaseLayer({
   items,
   atlasGet,
   revealProgress,
-  activeTiles,
+  visibleTiles,
   draw,
   theme,
   viewMode,
@@ -105,23 +94,19 @@ export function drawCanvasBaseLayer({
   showExtension,
   showExtensionLabel,
 }: BaseLayerArgs): boolean {
-  const { scrollTop, viewportHeight: cssH, textHeight: th, borderRadius: br } = draw;
-  // Grid default = contain. fitThumbnails flips grid to cover (fill/crop).
-  // Waterfall/justified = always cover.
+  const { scrollTop, textHeight: th, borderRadius: br } = draw;
   const effectiveFit = viewMode === 'grid'
     ? (fitThumbnails ? 'cover' as const : 'contain' as const)
     : 'cover' as const;
   let hasActiveReveal = false;
 
-  // ── Pass 1: Images with reveal animation ──
-  for (const i of activeTiles) {
+  for (const i of visibleTiles) {
     const pos = positions[i];
     const item = items[i];
     if (!pos || !item) continue;
 
     const drawY = pos.y - scrollTop;
     const imageHeight = pos.h - th;
-    if (drawY + pos.h < 0 || drawY > cssH) continue;
 
     const entry = atlasGet(item.thumbnailHash);
     const isVideo = item.mime.startsWith('video/');
@@ -130,7 +115,6 @@ export function drawCanvasBaseLayer({
 
     ctx.save();
 
-    // Clip to tile area with rounded corners
     if (useContain && item.aspectRatio) {
       const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imageHeight);
       ctx.beginPath();
@@ -142,7 +126,6 @@ export function drawCanvasBaseLayer({
       ctx.clip();
     }
 
-    // Preserve the two-phase visual: image first, then placeholder removal.
     if (entry?.thumb) {
       const progress = revealProgress(item.hash);
       const imageProgress = Math.min(1, progress * 2);
@@ -172,17 +155,15 @@ export function drawCanvasBaseLayer({
     ctx.restore();
   }
 
-  // ── Pass 2: Glass border ring ──
   ctx.strokeStyle = theme.glassBorder;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  for (const i of activeTiles) {
+  for (const i of visibleTiles) {
     const pos = positions[i];
     const item = items[i];
     if (!pos || !item) continue;
     const drawY = pos.y - scrollTop;
     const imageHeight = pos.h - th;
-    if (drawY + pos.h < 0 || drawY > cssH) continue;
     if (effectiveFit === 'contain' && item.aspectRatio) {
       const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imageHeight);
       ctx.roundRect(rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1, br);
@@ -192,22 +173,17 @@ export function drawCanvasBaseLayer({
   }
   ctx.stroke();
 
-  // ── Pass 2b: Contain-mode tile boundary outline ──
-  // When tiles use letterbox (contain), the image doesn't fill the tile.
-  // Draw the full tile square outline so the click area is visible.
   if (effectiveFit === 'contain') {
     ctx.strokeStyle = theme.tileBoundary;
     ctx.lineWidth = 2;
     ctx.beginPath();
-    for (const i of activeTiles) {
+    for (const i of visibleTiles) {
       const pos = positions[i];
       const item = items[i];
       if (!pos || !item || !item.aspectRatio) continue;
       const drawY = pos.y - scrollTop;
       const imageHeight = pos.h - th;
-      if (drawY + pos.h < 0 || drawY > cssH) continue;
       const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imageHeight);
-      // Only draw if the image doesn't fill the tile (actual letterboxing)
       if (rect.w < pos.w - 2 || rect.h < imageHeight - 2) {
         ctx.roundRect(pos.x + 0.5, drawY + 0.5, pos.w - 1, imageHeight - 1, br);
       }
@@ -215,14 +191,12 @@ export function drawCanvasBaseLayer({
     ctx.stroke();
   }
 
-  // ── Pass 3: Badges (extension, duration) ──
   const isContain = effectiveFit === 'contain';
-  for (const i of activeTiles) {
+  for (const i of visibleTiles) {
     const pos = positions[i];
     const item = items[i];
     if (!pos || !item) continue;
     const drawY = pos.y - scrollTop;
-    if (drawY + pos.h < 0 || drawY > cssH) continue;
 
     const imgH = pos.h - th;
     let bx = pos.x;
@@ -240,22 +214,18 @@ export function drawCanvasBaseLayer({
     const isAnimated = item.mime === 'image/gif' && (item.numFrames ?? 0) > 1;
     const showBadge = showExtensionLabel && ext && !isHiddenBadgeType(ext);
 
-    // Extension badge — top-left
     if (showBadge) {
       drawBadge(ctx, ext.toUpperCase(), bx + 5, by + 5);
     }
 
-    // Duration badge — top-right (video/animated only)
     if ((isVideo || isAnimated) && typeof item.durationMs === 'number' && item.durationMs > 0) {
       const durText = formatDuration(item.durationMs);
       ctx.font = BADGE_FONT;
       const durW = ctx.measureText(durText).width + 8;
       drawBadge(ctx, durText, bx + bw - durW - 5, by + 5);
     }
-
   }
 
-  // ── Pass 4: Name and resolution text ──
   if ((showTileName || showResolution) && th > 0) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -263,13 +233,12 @@ export function drawCanvasBaseLayer({
     if (showTileName) {
       ctx.font = NAME_FONT;
       ctx.fillStyle = theme.textPrimary;
-      for (const i of activeTiles) {
+      for (const i of visibleTiles) {
         const pos = positions[i];
         const item = items[i];
         if (!pos || !item) continue;
         const drawY = pos.y - scrollTop;
         const imageHeight = pos.h - th;
-        if (drawY + pos.h < 0 || drawY > cssH) continue;
         const textX = pos.x + pos.w / 2;
         const nameY = drawY + imageHeight + 14;
         const textMaxW = pos.w - 8;
@@ -283,13 +252,12 @@ export function drawCanvasBaseLayer({
       ctx.font = INFO_FONT;
       ctx.fillStyle = theme.textTertiary;
       const resOffset = showTileName ? 20 : 0;
-      for (const i of activeTiles) {
+      for (const i of visibleTiles) {
         const pos = positions[i];
         const item = items[i];
         if (!pos || !item || !item.width || !item.height) continue;
         const drawY = pos.y - scrollTop;
         const imageHeight = pos.h - th;
-        if (drawY + pos.h < 0 || drawY > cssH) continue;
         ctx.fillText(`${item.width} × ${item.height}`, pos.x + pos.w / 2, drawY + imageHeight + 14 + resOffset);
       }
     }

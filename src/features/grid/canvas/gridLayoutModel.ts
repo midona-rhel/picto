@@ -1,5 +1,5 @@
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
-import { computeLayout, safeAspectRatio } from '../layout/layoutMath';
+import { appendLayout, computeStatefulLayout, safeAspectRatio, type StatefulLayoutResult } from '../layout/layoutMath';
 import { buildTileSpatialIndex, type TileSpatialIndex } from '../layout/spatialIndex';
 import { adaptGridItem, type CanvasRenderItem } from './renderItemAdapter';
 import type { GridViewMode, LayoutItem } from '../layout/types';
@@ -30,11 +30,17 @@ interface LayoutConfig {
 function createModel(
   source: CanonicalEntityGridItem[],
   config: LayoutConfig,
-  prefix?: { items: CanvasRenderItem[]; ratios: number[]; hashToIndex: Map<string, number> },
-): { model: GridLayoutModel; ratios: number[] } {
+  prefix?: {
+    items: CanvasRenderItem[];
+    ratios: number[];
+    hashToIndex: Map<string, number>;
+    layout: StatefulLayoutResult;
+  },
+): { model: GridLayoutModel; ratios: number[]; layout: StatefulLayoutResult } {
   const start = prefix?.items.length ?? 0;
-  const items = prefix ? [...prefix.items] : new Array<CanvasRenderItem>(source.length);
-  const ratios = prefix ? [...prefix.ratios] : new Array<number>(source.length);
+  const items = prefix?.items ?? new Array<CanvasRenderItem>(source.length);
+  const ratios = prefix?.ratios ?? new Array<number>(source.length);
+  items.length = ratios.length = source.length;
   const hashToIndex = prefix?.hashToIndex ?? new Map<string, number>();
   for (let i = start; i < source.length; i++) {
     const item = adaptGridItem(source[i]);
@@ -42,14 +48,22 @@ function createModel(
     ratios[i] = safeAspectRatio(item.aspectRatio ?? 1.5);
     hashToIndex.set(item.hash, i);
   }
-  const layout = computeLayout(ratios, config.width, config.targetSize, config.gap, config.viewMode, config.textHeight, 0, config.scrollbarWidth);
+  const layout = prefix
+    ? appendLayout(
+      ratios, start, prefix.layout, config.width, config.targetSize, config.gap,
+      config.viewMode, config.textHeight, config.scrollbarWidth,
+    ).result
+    : computeStatefulLayout(
+      ratios, config.width, config.targetSize, config.gap,
+      config.viewMode, config.textHeight, config.scrollbarWidth,
+    );
   return { ratios, model: {
     items,
     positions: layout.positions,
     spatialIndex: buildTileSpatialIndex(layout.positions),
     hashToIndex,
     totalHeight: layout.totalHeight,
-  } };
+  }, layout };
 }
 
 /** Retains immutable item adaptation across page appends; every other change rebuilds. */
@@ -58,6 +72,7 @@ export class GridLayoutRuntime {
   private config: LayoutConfig | null = null;
   private model: GridLayoutModel | null = null;
   private ratios: number[] = [];
+  private layout: StatefulLayoutResult | null = null;
 
   update(source: CanonicalEntityGridItem[], config: LayoutConfig): GridLayoutModel {
     if (this.source === source && this.config && sameConfig(this.config, config)) return this.model!;
@@ -68,11 +83,13 @@ export class GridLayoutRuntime {
       items: this.model!.items,
       ratios: this.ratios,
       hashToIndex: this.model!.hashToIndex,
+      layout: this.layout!,
     } : undefined);
     this.source = source;
     this.config = config;
     this.model = result.model;
     this.ratios = result.ratios;
+    this.layout = result.layout;
     return result.model;
   }
 }

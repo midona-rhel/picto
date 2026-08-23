@@ -1,22 +1,10 @@
-/**
- * Grid toolbar — renders in the titlebar right section.
- *
- * Layout matches legacy ImageGridControls normal mode:
- *   [title(abs)] [- slider +] [view btn][filter btn][search input] [perf] [loading]
- */
-
 import { useAtomValue } from 'jotai';
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import {
   IconSearch,
 } from '@tabler/icons-react';
-import {
-  gridTransitionPhaseAtom,
-  gridTargetSizeAtom,
-  gridSearchTextAtom,
-  gridFiltersAtom,
-} from '../../state/grid';
+import { gridTargetSizeAtom, gridSearchTextAtom, gridFiltersAtom } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import { viewerDisplayStateAtom, viewerDisplayControlsAtom } from '../../state/viewer';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
@@ -43,8 +31,6 @@ import styles from './GridToolbar.module.css';
 const ZOOM_MIN = 150;
 const ZOOM_MAX = 900;
 const ZOOM_STEP = 50;
-
-// ── Zoom controls ───────────────────────────────────────────────
 
 function ZoomControls() {
   const targetSize = useAtomValue(gridTargetSizeAtom);
@@ -77,8 +63,6 @@ function ZoomControls() {
   );
 }
 
-// ── Search input ────────────────────────────────────────────────
-
 function SearchInput() {
   const searchText = useAtomValue(gridSearchTextAtom);
   const ref = useRef<HTMLInputElement>(null);
@@ -108,8 +92,6 @@ function SearchInput() {
     </div>
   );
 }
-
-// ── Toolbar root ────────────────────────────────────────────────
 
 // Logarithmic zoom slider: 0→5%, 50→100%, 100→800%
 function zoomToSlider(zoomPct: number): number {
@@ -215,7 +197,6 @@ export function ViewerToolbar() {
 }
 
 export function GridToolbar() {
-  const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
   const viewMenu = useContextMenu();
   const filterMenu = useContextMenu();
   const filters = useAtomValue(gridFiltersAtom);
@@ -250,11 +231,7 @@ export function GridToolbar() {
   const showZoom = toolbarWidth > 300;
 
   return (
-    <div
-      ref={toolbarRef}
-      className={styles.toolbar}
-      data-transition-phase={transitionPhase}
-    >
+    <div ref={toolbarRef} className={styles.toolbar}>
       <div className={styles.centerGroup} style={showZoom ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}>
         <ZoomControls />
       </div>

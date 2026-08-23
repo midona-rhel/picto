@@ -4,6 +4,7 @@ import type { PlanTile } from './thumbnailPlan';
 
 interface ThumbnailActivationBuffers {
   activeTiles: number[];
+  visibleTiles: number[];
   activeHashes: Set<string>;
   viewportHashes: Set<string>;
   planTiles: PlanTile[];
@@ -20,6 +21,7 @@ export function collectThumbnailActivation(
   buffers: ThumbnailActivationBuffers,
 ): void {
   buffers.activeTiles.length = 0;
+  buffers.visibleTiles.length = 0;
   buffers.activeHashes.clear();
   buffers.viewportHashes.clear();
   let planCount = 0;
@@ -33,6 +35,7 @@ export function collectThumbnailActivation(
     buffers.activeTiles.push(index);
     buffers.activeHashes.add(item.thumbnailHash);
     if (position.y + position.h >= viewportTop && position.y <= viewportBottom) {
+      buffers.visibleTiles.push(index);
       buffers.viewportHashes.add(item.hash);
     }
 

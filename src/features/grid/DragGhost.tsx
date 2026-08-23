@@ -1,9 +1,3 @@
-/**
- * DragGhost — floating stacked thumbnail preview during grid tile drag.
- * Matches legacy v0.5.0-alpha exactly: up to 3 stacked 44x44 thumbnails + count badge.
- * Rendered via portal to document.body to escape overflow clipping.
- */
-
 import { createPortal } from 'react-dom';
 import {
   DRAG_GHOST_BADGE_HEIGHT,

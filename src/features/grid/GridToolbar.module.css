@@ -1,5 +1,3 @@
-/* Grid toolbar — matches legacy ImageGridControls layout and styling. */
-
 .toolbar {
   position: relative;
   display: flex;
@@ -11,42 +9,6 @@
   color: #f8f9fb;
   font-family: var(--font-family-ui);
 }
-
-.toolbar[data-chrome-transition='leaving_grid'] {
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 170ms var(--ease-default);
-}
-
-.toolbar[data-chrome-transition='entering_grid'][data-transition-phase='waiting'] {
-  opacity: 0;
-  pointer-events: none;
-}
-
-.toolbar[data-chrome-transition='entering_grid'][data-transition-phase='fading_in'] {
-  opacity: 1;
-  transition: opacity 170ms var(--ease-default);
-}
-
-
-/* ── Title (absolutely positioned, fade mask at right) ── */
-
-.title {
-  position: absolute;
-  left: 64px;
-  right: 50%;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-medium);
-  color: var(--color-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  user-select: none;
-  pointer-events: none;
-  mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
-  -webkit-mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
-}
-
-/* ── Center group (zoom controls, centered) ──────────── */
 
 .centerGroup {
   flex: 1;
@@ -65,7 +27,6 @@
   -webkit-app-region: no-drag;
 }
 
-/* Fade gradient on the left of the slider — covers title text smoothly */
 .sliderSection::before {
   content: '';
   position: absolute;
@@ -87,47 +48,12 @@
   -webkit-app-region: no-drag;
 }
 
-/* ── Right section ───────────────────────────────────── */
-
 .rightSection {
   display: flex;
   align-items: center;
   gap: 4px;
   flex-shrink: 0;
 }
-
-.modeBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 26px;
-  padding: 0 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 5px;
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--color-text-secondary);
-  font-size: 11px;
-  font-weight: var(--font-weight-medium);
-  letter-spacing: 0.01em;
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-  transition: background 150ms var(--ease-default),
-              border-color 150ms var(--ease-default),
-              color 150ms var(--ease-default);
-}
-
-.modeBtn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--color-text-primary);
-}
-
-.modeBtnActive {
-  color: var(--color-text-primary);
-  border-color: rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.1);
-}
-
-/* ── Search ──────────────────────────────────────────── */
 
 .searchWrap {
   position: relative;

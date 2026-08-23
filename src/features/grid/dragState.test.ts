@@ -21,6 +21,13 @@ describe('grid drag target resolution', () => {
 
   afterEach(() => cancelDrag());
 
+  it('marks only the lifetime of an active grid drag', () => {
+    startDrag(['hash'], 0, 0, { kind: 'all' });
+    expect(document.documentElement.dataset.gridDragActive).toBe('true');
+    cancelDrag();
+    expect(document.documentElement.dataset.gridDragActive).toBeUndefined();
+  });
+
   it('resolves nested content to its exact folder drop surface', () => {
     const row = document.createElement('div');
     row.dataset.folderDropId = '42';
@@ -67,5 +74,11 @@ describe('grid drag target resolution', () => {
     expect(row.dataset.dropHighlighted).toBeUndefined();
     expect(unrelated.dataset.dropHighlighted).toBe('true');
     expect(getDragState().dropTarget).toBeNull();
+  });
+
+  it('does not accept system rows without an explicit mutation target', () => {
+    const recent = document.createElement('div');
+    recent.dataset.sidebarNodeId = 'system:recent_viewed';
+    expect(resolveDropTarget(recent)).toBeNull();
   });
 });

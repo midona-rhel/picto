@@ -8,12 +8,10 @@ describe('buildTileContextMenu', () => {
     const onMoveToTrash = vi.fn();
     const entries = buildTileContextMenu({
       selectionCount: 2,
-      querySelectionActive: false,
       singleSelected: false,
       singleHash: null,
       scopeKind: 'system',
       statusFilter: null,
-      loadedCount: 2,
       isMixed: true,
       onSelectAll: vi.fn(),
       onDeselectAll: vi.fn(),
@@ -33,12 +31,10 @@ describe('buildTileContextMenu', () => {
     const onExport = vi.fn();
     const entries = buildTileContextMenu({
       selectionCount: 1,
-      querySelectionActive: false,
       singleSelected: false,
       singleHash: null,
       scopeKind: 'system',
       statusFilter: null,
-      loadedCount: 1,
       onSelectAll: vi.fn(),
       onDeselectAll: vi.fn(),
       onExport,
@@ -56,13 +52,11 @@ describe('buildTileContextMenu', () => {
   it('disables auto tag when the current selection cannot be tagged', () => {
     const entries = buildTileContextMenu({
       selectionCount: 12,
-      querySelectionActive: true,
       aiTagEnabled: false,
       singleSelected: false,
       singleHash: null,
       scopeKind: 'system',
       statusFilter: null,
-      loadedCount: 50,
       onSelectAll: vi.fn(),
       onDeselectAll: vi.fn(),
       onOpenAiTagger: vi.fn(),
@@ -78,13 +72,11 @@ describe('buildTileContextMenu', () => {
   it('uses Picto bookmark semantics for tag actions', () => {
     const entries = buildTileContextMenu({
       selectionCount: 1,
-      querySelectionActive: false,
       singleSelected: false,
       singleHash: null,
       hasClipboardTags: true,
       scopeKind: 'system',
       statusFilter: null,
-      loadedCount: 1,
       onSelectAll: vi.fn(),
       onDeselectAll: vi.fn(),
       onOpenTagSelect: vi.fn(),
