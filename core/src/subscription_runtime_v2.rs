@@ -653,6 +653,15 @@ mod tests {
             })
             .unwrap();
         assert_eq!(final_state, ("succeeded".to_string(), 2, 2));
+        let issue_status: String = application
+            .store()
+            .read(|connection| {
+                connection.query_row("SELECT status FROM subscription_issue", [], |row| {
+                    row.get(0)
+                })
+            })
+            .unwrap();
+        assert_eq!(issue_status, "resolved");
     }
 
     #[tokio::test]

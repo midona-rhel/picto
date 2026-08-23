@@ -2,7 +2,7 @@
 
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 123;
+pub const CURRENT_SCHEMA_VERSION: i64 = 124;
 
 pub const LIBRARY_DDL: &str = r#"
 CREATE TABLE library_meta (
@@ -312,6 +312,8 @@ CREATE TABLE subscription_issue (
     last_seen_at TEXT NOT NULL,
     resolved_at TEXT
 );
+CREATE INDEX idx_subscription_issue_page
+    ON subscription_issue(subscription_id, status, last_seen_at DESC, issue_id DESC);
 
 CREATE TABLE credential (
     site_id TEXT PRIMARY KEY,
@@ -469,7 +471,7 @@ mod tests {
                 "retained {removed}"
             );
         }
-        assert_eq!(CURRENT_SCHEMA_VERSION, 123);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 124);
     }
 
     #[test]

@@ -34,6 +34,7 @@ pub mod selection;
 pub mod settings;
 pub mod smart_folders;
 pub mod smart_v2;
+pub mod subscription_activity_v2;
 pub mod subscription_catalog_v2;
 pub mod subscription_runtime_v2;
 pub mod subscriptions;

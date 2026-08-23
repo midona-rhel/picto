@@ -712,6 +712,12 @@ pub fn complete_query_run_with_cursor(
              WHERE query_id = ?3",
             params![now, resume_cursor, query_id],
         )?;
+        tx.execute(
+            "UPDATE subscription_issue
+             SET status = 'resolved', last_seen_at = ?1, resolved_at = ?1
+             WHERE query_id = ?2 AND status = 'open'",
+            params![now, query_id],
+        )?;
         let run_state = settle_run_for_query(tx, run_query_id, now)?;
         Ok(QueryRunTransition {
             query_state: RunState::Succeeded,
@@ -730,11 +736,13 @@ pub fn fail_query_run(
     now: &str,
 ) -> Result<QueryRunTransition, String> {
     let (transition, _) = store.transaction(|tx| {
-        let query_id: i64 = tx.query_row(
-            "SELECT query_id FROM subscription_run_query
-             WHERE run_query_id = ?1 AND status = 'running'",
+        let (query_id, subscription_id): (i64, i64) = tx.query_row(
+            "SELECT q.query_id, q.subscription_id
+             FROM subscription_run_query rq
+             JOIN subscription_query q ON q.query_id = rq.query_id
+             WHERE rq.run_query_id = ?1 AND rq.status = 'running'",
             [run_query_id],
-            |row| row.get(0),
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         let (status, finished): (&str, Option<&str>) = if retry_at.is_some() {
             ("pending", None)
@@ -761,6 +769,26 @@ pub fn fail_query_run(
                  last_failure_message = ?3
              WHERE query_id = ?4",
             params![now, failure_kind, message, query_id],
+        )?;
+        let issue_key = format!("query:{query_id}:{failure_kind}");
+        tx.execute(
+            "INSERT INTO subscription_issue (
+                 issue_key, subscription_id, query_id, issue_kind, message,
+                 status, first_seen_at, last_seen_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'open', ?6, ?6)
+             ON CONFLICT(issue_key) DO UPDATE SET
+                 message = excluded.message,
+                 status = 'open',
+                 last_seen_at = excluded.last_seen_at,
+                 resolved_at = NULL",
+            params![
+                issue_key,
+                subscription_id,
+                query_id,
+                failure_kind,
+                message,
+                now
+            ],
         )?;
         let query_state = if retry_at.is_some() {
             RunState::Pending
@@ -1228,6 +1256,23 @@ mod tests {
         assert_eq!(
             get_run(&store, run.run_id).unwrap().unwrap().state,
             RunState::Failed
+        );
+        let issue: (String, String, String) = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT issue_kind, message, status FROM subscription_issue",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            issue,
+            (
+                "auth".to_string(),
+                "login required".to_string(),
+                "open".to_string()
+            )
         );
 
         retry_query_run(&store, claim.run_query_id, "2026-01-01T00:00:03Z").unwrap();

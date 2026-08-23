@@ -70,6 +70,36 @@ pub fn dispatch(
             )?)
         }
         "subscriptions.list" => read(crate::subscription_catalog_v2::list(application)?),
+        "subscriptions.runs.list" => {
+            let input: SubscriptionRunsInput = parse(args_json)?;
+            read(crate::subscription_activity_v2::list_runs(
+                application.store(),
+                input.subscription_id,
+                input.limit,
+            )?)
+        }
+        "subscriptions.runs.get" => {
+            let input: SubscriptionRunActivityInput = parse(args_json)?;
+            read(crate::subscription_activity_v2::run_activity(
+                application.store(),
+                input.run_id,
+                input.source_item_limit,
+            )?)
+        }
+        "subscriptions.progress.get" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            read(crate::subscription_activity_v2::current_progress(
+                application.store(),
+                input.subscription_id,
+            )?)
+        }
+        "subscriptions.issues.list" => {
+            let input: crate::subscription_activity_v2::IssuePageRequest = parse(args_json)?;
+            read(crate::subscription_activity_v2::list_issues(
+                application.store(),
+                &input,
+            )?)
+        }
         "sources.list" => read(crate::auth_v2::sources()),
         "auth.credentials.list" => read(crate::auth_v2::list_credentials(application.store())?),
         "auth.health.list" => read(crate::auth_v2::list_health(application.store())?),
@@ -731,6 +761,18 @@ struct SubscriptionInput {
     subscription_id: i64,
 }
 #[derive(Deserialize)]
+struct SubscriptionRunsInput {
+    subscription_id: i64,
+    #[serde(default = "default_page_limit")]
+    limit: usize,
+}
+#[derive(Deserialize)]
+struct SubscriptionRunActivityInput {
+    run_id: i64,
+    #[serde(default = "default_page_limit")]
+    source_item_limit: usize,
+}
+#[derive(Deserialize)]
 struct RenameSubscriptionInput {
     subscription_id: i64,
     name: String,
@@ -765,6 +807,9 @@ struct PatchViewSettingsInput {
 }
 
 fn default_limit() -> i64 {
+    100
+}
+fn default_page_limit() -> usize {
     100
 }
 fn default_distance_threshold() -> u32 {
