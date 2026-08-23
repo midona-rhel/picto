@@ -41,6 +41,7 @@ import { sidebarNodesAtom } from '../../state/sidebar';
 import { tagSelectPortalAtom, folderPickerPortalAtom, aiTaggerPortalAtom } from '../../state/portals';
 import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
 import { activeNodeIdAtom } from '../../state/navigation';
+import { confirmModalAtom } from '../../state/modals';
 import { pushHistory } from '../../state/navigationHistory';
 import { InspectorAddIcon } from '../../shared/ui/icons/toolbar-icons';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
@@ -114,6 +115,26 @@ function openPortal(e: React.MouseEvent, atom: typeof tagSelectPortalAtom) {
   const panel = e.currentTarget.closest('[class*="inspector"]') as HTMLElement | null;
   const x = panel ? panel.getBoundingClientRect().left : btn.left;
   store.set(atom, { open: true, anchor: { x, y: btn.top } });
+}
+
+function sameStrings(left: string[] | null | undefined, right: string[]): boolean {
+  return Boolean(left && left.length === right.length && left.every((value, index) => value === right[index]));
+}
+
+function confirmSelectionOverwrite(
+  field: 'notes' | 'sources',
+  selectedCount: number,
+  onConfirm: () => void,
+) {
+  const label = field === 'notes' ? 'notes' : 'source URLs';
+  store.set(confirmModalAtom, {
+    open: true,
+    title: `Overwrite ${field}?`,
+    message: `This will replace existing ${label} on all ${selectedCount.toLocaleString()} selected items. Are you sure?`,
+    confirmLabel: `Overwrite ${field === 'notes' ? 'Notes' : 'Sources'}`,
+    danger: true,
+    onConfirm,
+  });
 }
 
 // ── Preview components ──────────────────────────────────────────
@@ -381,25 +402,26 @@ export function InspectorSkeleton({
       {preview}
       <ColorPalette colors={palette} />
 
-      {selectionCount != null ? (
+      {selectionCount != null && (
         <div className={styles.selectionCount} data-inspector-selection-count="">
           {selectionCount.toLocaleString()} items selected
         </div>
-      ) : name && notes && source ? (
+      )}
+      {(name || notes || (showSource && source)) && (
         <div className={styles.fieldStack} data-inspector-identity="">
-          <div data-inspector-anchor="name">
+          {name && <div data-inspector-anchor="name">
             <InspectorField value={name.value} placeholder="Name" readOnly={name.readOnly} onCommit={name.onCommit} />
-          </div>
-          <div data-inspector-anchor="notes">
+          </div>}
+          {notes && <div data-inspector-anchor="notes">
             <InspectorField value={notes.value} placeholder="Notes" readOnly={notes.readOnly} onCommit={notes.onCommit} />
-          </div>
-          {showSource && (
+          </div>}
+          {showSource && source && (
             <div data-inspector-anchor="source">
               <InspectorSourceField urls={source.urls} onChange={source.onChange} unavailable={source.unavailable} />
             </div>
           )}
         </div>
-      ) : null}
+      )}
 
       {showTags && (
         <div data-inspector-section="tags">
@@ -543,11 +565,30 @@ export function Inspector() {
       return { id: f.folder_id, name: n?.name ?? f.name, color: n?.color ?? null };
     });
     const previewHashes = summary?.sample_hashes ?? [];
+    const commitNotes = selTarget ? (notes: string) => {
+      const apply = () => { void entityMutations.setTargetNotes(selTarget, notes); };
+      if ((summary?.notes_present_count ?? 0) > 0 && notes !== (summary?.shared_notes ?? '')) {
+        confirmSelectionOverwrite('notes', count, apply);
+      } else {
+        apply();
+      }
+    } : undefined;
+    const commitSources = selTarget ? (urls: string[]) => {
+      if (sameStrings(summary?.shared_source_urls, urls)) return;
+      const apply = () => { void entityMutations.setTargetSourceUrls(selTarget, urls); };
+      if ((summary?.source_urls_present_count ?? 0) > 0) {
+        confirmSelectionOverwrite('sources', count, apply);
+      } else {
+        apply();
+      }
+    } : undefined;
 
     return <InspectorSkeleton
       preview={<Preview hashes={previewHashes} type="stacked" />}
       palette={[]}
       selectionCount={count}
+      notes={{ value: summary?.shared_notes ?? '', onCommit: commitNotes, readOnly: summaryPending }}
+      source={{ urls: summary?.shared_source_urls ?? [], onChange: commitSources, unavailable: summaryPending }}
       rating={{ value: summary?.stats?.rating_stats?.shared ?? 0, onChange: selTarget ? (rating) => { void entityMutations.setTargetRating(selTarget, rating); } : undefined }}
       coreProperties={normalizedCoreProperties({
         Size: summaryPending

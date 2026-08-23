@@ -224,6 +224,10 @@ export interface SelectionSummary {
   shared_tags: SelectionTagCount[];
   top_tags: SelectionTagCount[];
   shared_folders: SelectionFolderInfo[];
+  shared_notes: string | null;
+  notes_present_count: number;
+  shared_source_urls: string[] | null;
+  source_urls_present_count: number;
   stats: SelectionSummaryStats;
   pending: boolean;
   generated_at: string;

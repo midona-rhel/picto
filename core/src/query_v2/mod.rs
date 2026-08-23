@@ -189,6 +189,12 @@ pub struct SelectionSummary {
     pub shared_tags: Vec<SelectionTagCount>,
     pub top_tags: Vec<SelectionTagCount>,
     pub shared_folders: Vec<SelectionFolderInfo>,
+    pub shared_notes: Option<String>,
+    #[ts(type = "number")]
+    pub notes_present_count: i64,
+    pub shared_source_urls: Option<Vec<String>>,
+    #[ts(type = "number")]
+    pub source_urls_present_count: i64,
     pub stats: SelectionSummaryStats,
     #[ts(type = "number")]
     pub revision: u64,
@@ -255,7 +261,16 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
                  COALESCE(SUM(mf.size_bytes), 0),
                  MIN(ma.rating),
                  MAX(ma.rating),
-                 COUNT(ma.rating)
+                 COUNT(ma.rating),
+                 COUNT(NULLIF(TRIM(ma.notes), '')),
+                 MIN(COALESCE(NULLIF(TRIM(ma.notes), ''), '')),
+                 MAX(COALESCE(NULLIF(TRIM(ma.notes), ''), '')),
+                 COALESCE(SUM(
+                     CASE WHEN json_array_length(COALESCE(ma.source_urls_json, '[]')) > 0
+                          THEN 1 ELSE 0 END
+                 ), 0),
+                 MIN(COALESCE(ma.source_urls_json, '[]')),
+                 MAX(COALESCE(ma.source_urls_json, '[]'))
              FROM selected_media sm
              JOIN media_asset ma ON ma.item_id = sm.media_item_id
              JOIN media_file mf ON mf.file_id = ma.file_id",
@@ -268,17 +283,41 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
             min_rating,
             max_rating,
             rated_count,
-        ): (i64, i64, i64, Option<i64>, Option<i64>, i64) =
-            connection.query_row(&stats_sql, parameters.as_slice(), |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                    row.get(5)?,
-                ))
-            })?;
+            notes_present_count,
+            min_notes,
+            max_notes,
+            source_urls_present_count,
+            min_source_urls_json,
+            max_source_urls_json,
+        ): (
+            i64,
+            i64,
+            i64,
+            Option<i64>,
+            Option<i64>,
+            i64,
+            i64,
+            Option<String>,
+            Option<String>,
+            i64,
+            Option<String>,
+            Option<String>,
+        ) = connection.query_row(&stats_sql, parameters.as_slice(), |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+                row.get(10)?,
+                row.get(11)?,
+            ))
+        })?;
         let rating_stats = SelectionRatingStats {
             min: min_rating,
             max: max_rating,
@@ -288,6 +327,23 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
                 .then_some(min_rating)
                 .flatten(),
         };
+        let shared_notes = (selected_media_count > 0 && min_notes == max_notes)
+            .then_some(min_notes)
+            .flatten()
+            .filter(|notes| !notes.is_empty());
+        let shared_source_urls = (selected_media_count > 0
+            && min_source_urls_json == max_source_urls_json)
+            .then_some(min_source_urls_json)
+            .flatten()
+            .map(|json| serde_json::from_str::<Vec<String>>(&json))
+            .transpose()
+            .map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    10,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })?;
 
         let mime_sql = format!(
             "{}
@@ -407,6 +463,10 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
             shared_tags,
             top_tags,
             shared_folders,
+            shared_notes,
+            notes_present_count,
+            shared_source_urls,
+            source_urls_present_count,
             stats: SelectionSummaryStats {
                 total_size_bytes: Some(total_size_bytes),
                 mime_counts,
@@ -1817,6 +1877,15 @@ mod tests {
                     "INSERT INTO media_tag (media_item_id, tag_id) VALUES (1, 1)",
                     [],
                 )?;
+                transaction.execute(
+                    "UPDATE media_asset
+                     SET notes = CASE WHEN item_id = 12 THEN 'different' ELSE 'shared note' END,
+                         source_urls_json = CASE WHEN item_id = 12
+                             THEN '[\"https://example.com/two\"]'
+                             ELSE '[\"https://example.com/one\"]' END
+                     WHERE item_id IN (1, 11, 12)",
+                    [],
+                )?;
                 Ok(())
             })
             .unwrap();
@@ -1836,6 +1905,10 @@ mod tests {
         assert_eq!(summary.stats.rating_stats.min, Some(2));
         assert_eq!(summary.stats.rating_stats.max, Some(5));
         assert_eq!(summary.stats.rating_stats.shared, None);
+        assert_eq!(summary.notes_present_count, 3);
+        assert_eq!(summary.shared_notes, None);
+        assert_eq!(summary.source_urls_present_count, 3);
+        assert_eq!(summary.shared_source_urls, None);
         assert_eq!(summary.shared_folders.len(), 1);
         assert_eq!(summary.revision, 2);
 
@@ -1855,12 +1928,24 @@ mod tests {
                     "INSERT INTO media_tag (media_item_id, tag_id) VALUES (12, 1)",
                     [],
                 )?;
+                transaction.execute(
+                    "UPDATE media_asset
+                     SET notes = 'shared note',
+                         source_urls_json = '[\"https://example.com/one\"]'
+                     WHERE item_id IN (1, 11, 12)",
+                    [],
+                )?;
                 Ok(())
             })
             .unwrap();
         let summary = selection_summary(&store, &target).unwrap();
         assert_eq!(summary.shared_tags[0].tag, "member-tag");
         assert_eq!(summary.shared_tags[0].count, 3);
+        assert_eq!(summary.shared_notes.as_deref(), Some("shared note"));
+        assert_eq!(
+            summary.shared_source_urls,
+            Some(vec!["https://example.com/one".to_string()])
+        );
     }
 
     #[test]

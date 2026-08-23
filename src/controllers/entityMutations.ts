@@ -46,6 +46,11 @@ export async function setTargetNotes(target: ItemTarget, notes: string): Promise
   maybeReloadSingleItem(target);
 }
 
+export async function setTargetSourceUrls(target: ItemTarget, urls: string[]): Promise<void> {
+  await patchMediaEntities(target, { source_urls: urls });
+  maybeReloadSingleItem(target);
+}
+
 export async function addTargetTags(target: ItemTarget, tags: string[]): Promise<void> {
   if (tags.length === 0) return;
   await applyEntityTags(target, 'add', tags);
@@ -100,6 +105,5 @@ export async function removeItemFromFolder(itemId: number, folderId: number): Pr
 }
 
 export async function setItemSourceUrls(itemId: number, urls: string[]): Promise<void> {
-  await patchMediaEntities(singleTarget(itemId), { source_urls: urls });
-  void loadInspectorData(itemId);
+  await setTargetSourceUrls(singleTarget(itemId), urls);
 }

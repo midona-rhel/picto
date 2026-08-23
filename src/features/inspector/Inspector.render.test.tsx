@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { getDefaultStore } from 'jotai';
 import { MantineProvider } from '@mantine/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -27,6 +27,7 @@ vi.mock('../../controllers/entityMutations', () => ({
   setEntitySourceUrls: vi.fn(),
   setTargetNotes: vi.fn(),
   setTargetRating: vi.fn(),
+  setTargetSourceUrls: vi.fn(),
   updateTargetFolderMembership: vi.fn(),
 }));
 
@@ -47,6 +48,7 @@ import {
   selectionTargetAtom,
 } from '../../state/selection';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
+import { confirmModalAtom } from '../../state/modals';
 
 const entity = {
   item_id: 1, kind: 'media', lifecycle: 'active', label: 'Example', cover_media_item_id: null,
@@ -115,9 +117,12 @@ describe('Inspector presentation branches', () => {
   beforeEach(() => {
     useAtomValue.mockReset();
     vi.mocked(entityMutations.getTargetSelectionSummary).mockReset();
+    vi.mocked(entityMutations.setTargetNotes).mockReset();
+    vi.mocked(entityMutations.setTargetSourceUrls).mockReset();
     const store = getDefaultStore();
     store.set(tagSelectPortalAtom, { open: false, anchor: null });
     store.set(folderPickerPortalAtom, { open: false, anchor: null });
+    store.set(confirmModalAtom, { open: false, title: '', message: '', onConfirm: () => {} });
   });
 
   it('uses item identity fields only when the target has item identity', () => {
@@ -132,7 +137,7 @@ describe('Inspector presentation branches', () => {
       const view = renderInspector(entry);
       assertStableAnchors(
         entry.data ? ['Items', 'Dimensions', 'Size', 'Type', 'Date added', 'Date created'] : [],
-        entry.target.kind === 'multi' ? [] : undefined,
+        entry.target.kind === 'multi' ? ['notes', 'source'] : undefined,
       );
       const sections = [...document.querySelectorAll('[data-inspector-section]')].map((node) => node.getAttribute('data-inspector-section'));
       if (entry.data || entry.target.kind === 'multi') {
@@ -197,6 +202,10 @@ describe('Inspector presentation branches', () => {
         shared_tags: [{ tag: 'general:shared', count: 2 }],
         top_tags: [{ tag: 'general:shared', count: 2 }],
         shared_folders: [{ folder_id: 7, name: 'Shared folder' }],
+        shared_notes: 'Shared note',
+        notes_present_count: 2,
+        shared_source_urls: ['https://example.com/shared'],
+        source_urls_present_count: 2,
         stats: {
           total_size_bytes: 300,
           mime_counts: { 'image/jpeg': 2 },
@@ -210,9 +219,73 @@ describe('Inspector presentation branches', () => {
     expect(document.querySelectorAll('[data-inspector-summary-loading]')).toHaveLength(0);
     expect(screen.getByText('shared')).toBeInTheDocument();
     expect(screen.getByText('Shared folder')).toBeInTheDocument();
+    expect(screen.getByText('Shared note')).toBeInTheDocument();
+    expect(screen.getByText('example.com')).toBeInTheDocument();
     expect(document.querySelector('[data-inspector-core-property="Size"]')).toHaveTextContent('300 B');
     view.unmount();
     vi.useRealTimers();
+  });
+
+  it('confirms before replacing existing notes or sources across a selection', async () => {
+    const summary = {
+      total_count: 2,
+      selected_count: 2,
+      sample_hashes: ['file-1', 'file-2'],
+      shared_tags: [],
+      top_tags: [],
+      shared_folders: [],
+      shared_notes: 'Existing note',
+      notes_present_count: 2,
+      shared_source_urls: ['https://example.com/old'],
+      source_urls_present_count: 2,
+      stats: {
+        total_size_bytes: 300,
+        mime_counts: { 'image/jpeg': 2 },
+        rating_stats: { min: null, max: null, shared: null },
+      },
+      revision: 4,
+    };
+    vi.mocked(entityMutations.getTargetSelectionSummary).mockResolvedValue(summary as never);
+    const selectionTarget = { kind: 'explicit', item_ids: [1, 2] };
+    const view = renderInspector({
+      target: { kind: 'multi', count: 2, selectionMode: 'explicit' },
+      selectionTarget,
+      selectionCount: 2,
+    });
+
+    await screen.findByText('Existing note');
+    const notes = document.querySelector('[data-inspector-anchor="notes"]')!;
+    fireEvent.click(within(notes as HTMLElement).getByRole('button'));
+    const textarea = notes.querySelector('textarea')!;
+    fireEvent.change(textarea, { target: { value: 'Replacement note' } });
+    fireEvent.keyDown(textarea, { key: 'Enter' });
+
+    let confirm = getDefaultStore().get(confirmModalAtom);
+    expect(confirm).toMatchObject({
+      open: true,
+      title: 'Overwrite notes?',
+      confirmLabel: 'Overwrite Notes',
+    });
+    expect(confirm.message).toContain('all 2 selected items');
+    expect(entityMutations.setTargetNotes).not.toHaveBeenCalled();
+    confirm.onConfirm();
+    expect(entityMutations.setTargetNotes).toHaveBeenCalledWith(selectionTarget, 'Replacement note');
+
+    getDefaultStore().set(confirmModalAtom, { open: false, title: '', message: '', onConfirm: () => {} });
+    const source = document.querySelector('[data-inspector-anchor="source"]')!;
+    fireEvent.click(within(source as HTMLElement).getByRole('button'));
+    fireEvent.click(within(source as HTMLElement).getByTitle('Remove'));
+
+    confirm = getDefaultStore().get(confirmModalAtom);
+    expect(confirm).toMatchObject({
+      open: true,
+      title: 'Overwrite sources?',
+      confirmLabel: 'Overwrite Sources',
+    });
+    expect(entityMutations.setTargetSourceUrls).not.toHaveBeenCalled();
+    confirm.onConfirm();
+    expect(entityMutations.setTargetSourceUrls).toHaveBeenCalledWith(selectionTarget, []);
+    view.unmount();
   });
 
   it('renders a collection from ordered replacement media details', () => {

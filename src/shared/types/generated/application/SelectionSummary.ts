@@ -4,4 +4,4 @@ import type { SelectionFolderInfo } from "./SelectionFolderInfo";
 import type { SelectionSummaryStats } from "./SelectionSummaryStats";
 import type { SelectionTagCount } from "./SelectionTagCount";
 
-export type SelectionSummary = { total_count: number, selected_count: number, sample_hashes: Array<FileHash>, shared_tags: Array<SelectionTagCount>, top_tags: Array<SelectionTagCount>, shared_folders: Array<SelectionFolderInfo>, stats: SelectionSummaryStats, revision: number, };
+export type SelectionSummary = { total_count: number, selected_count: number, sample_hashes: Array<FileHash>, shared_tags: Array<SelectionTagCount>, top_tags: Array<SelectionTagCount>, shared_folders: Array<SelectionFolderInfo>, shared_notes: string | null, notes_present_count: number, shared_source_urls: Array<string> | null, source_urls_present_count: number, stats: SelectionSummaryStats, revision: number, };

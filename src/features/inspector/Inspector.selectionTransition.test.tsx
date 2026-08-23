@@ -14,6 +14,7 @@ vi.mock('../../controllers/entityMutations', () => ({
   setItemSourceUrls: vi.fn(),
   setTargetNotes: vi.fn(),
   setTargetRating: vi.fn(),
+  setTargetSourceUrls: vi.fn(),
   updateTargetFolderMembership: vi.fn(),
 }));
 
@@ -69,6 +70,10 @@ const summary = {
   shared_tags: [],
   top_tags: [],
   shared_folders: [],
+  shared_notes: null,
+  notes_present_count: 0,
+  shared_source_urls: [],
+  source_urls_present_count: 0,
   stats: {
     total_size_bytes: 300,
     mime_counts: { 'image/jpeg': 2 },
