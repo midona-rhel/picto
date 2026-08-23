@@ -9,7 +9,7 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 use crate::app::{Application, ItemId, ItemQuery, ItemTarget, Lifecycle, MutationReceipt};
 use crate::duplicates_v2::{DuplicateCandidate, ResolutionChoice};
-use crate::folders_v2::{FolderId, FolderMutationReceipt};
+use crate::folders_v2::{FolderId, FolderMutationReceipt, FolderWatchInput};
 use crate::navigation_v2::{CreateSmartFolderInput, SmartFolderMutationReceipt};
 use crate::operations_v2::MediaMetadataPatch;
 use crate::query_v2::ItemPageRequest;
@@ -77,6 +77,10 @@ pub fn dispatch(
             )?)
         }
         "tasks.get" => read(crate::tasks_v2::snapshot(application)?),
+        "items.record_view" => {
+            let input: ItemInput = parse(args_json)?;
+            publish(application, application.record_recent_view(input.item_id)?)
+        }
 
         "items.set_lifecycle" => {
             let input: LifecycleInput = parse(args_json)?;
@@ -162,6 +166,17 @@ pub fn dispatch(
         "folders.delete" => {
             let input: FolderInput = parse(args_json)?;
             publish_folder(application, application.delete_folder(input.folder_id)?)
+        }
+        "folders.watch.set" => {
+            let input: FolderWatchInput = parse(args_json)?;
+            publish_folder(application, application.set_folder_watch(&input)?)
+        }
+        "folders.watch.clear" => {
+            let input: FolderInput = parse(args_json)?;
+            publish_folder(
+                application,
+                application.clear_folder_watch(input.folder_id)?,
+            )
         }
 
         "smart_folders.create" => {
@@ -372,6 +387,18 @@ pub fn dispatch(
         }
         _ => Err(format!("Unknown replacement command: {command}")),
     }
+}
+
+pub async fn dispatch_async(
+    application: &Application,
+    command: &str,
+    args_json: &str,
+) -> Result<String, String> {
+    if command == "imports.enqueue" {
+        let input: crate::import_v2::ManualImportInput = parse(args_json)?;
+        return read(application.enqueue_manual_import(&input).await?);
+    }
+    dispatch(application, command, args_json)
 }
 
 fn parse<T: DeserializeOwned>(json: &str) -> Result<T, String> {

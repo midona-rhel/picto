@@ -36,6 +36,15 @@ pub struct ReorderFolderChildrenInput {
     pub folder_ids: Vec<FolderId>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct FolderWatchInput {
+    pub folder_id: FolderId,
+    pub path: String,
+    #[serde(default)]
+    pub include_subfolders: bool,
+}
+
 /// Folder IDs are explicit because `MutationReceipt.item_ids` is reserved for
 /// media/library roots. This keeps folder invalidation truthful and typed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -208,6 +217,70 @@ impl Application {
             fallback_folder_id.map(FolderId),
         ))
     }
+
+    pub fn set_folder_watch(
+        &self,
+        input: &FolderWatchInput,
+    ) -> Result<FolderMutationReceipt, String> {
+        let path = std::fs::canonicalize(input.path.trim())
+            .map_err(|error| format!("Failed to resolve watched folder: {error}"))?;
+        if !path.is_dir() {
+            return Err(format!(
+                "Watched path is not a directory: {}",
+                path.display()
+            ));
+        }
+        let library_root = std::fs::canonicalize(self.store().library_root())
+            .unwrap_or_else(|_| self.store().library_root().to_path_buf());
+        if path.starts_with(&library_root) {
+            return Err("A watched folder cannot be inside the Picto library".to_string());
+        }
+        let path = path.to_string_lossy().into_owned();
+        let now = Utc::now().to_rfc3339();
+        let (_, revision, _) = self.store().transaction_if_changed(|transaction| {
+            require_folder(transaction, input.folder_id.0)?;
+            let previous: (Option<String>, bool, bool) = transaction.query_row(
+                "SELECT watch_path, watch_enabled, watch_subfolders
+                 FROM folder WHERE folder_id = ?1",
+                [input.folder_id.0],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            let changed = previous != (Some(path.clone()), true, input.include_subfolders);
+            if changed {
+                transaction.execute(
+                    "UPDATE folder
+                     SET watch_path = ?1, watch_enabled = 1,
+                         watch_subfolders = ?2, updated_at = ?3
+                     WHERE folder_id = ?4",
+                    params![path, input.include_subfolders, now, input.folder_id.0],
+                )?;
+            }
+            Ok(((), changed))
+        })?;
+        Ok(folder_receipt(
+            revision,
+            vec![input.folder_id],
+            Vec::new(),
+            None,
+        ))
+    }
+
+    pub fn clear_folder_watch(&self, folder_id: FolderId) -> Result<FolderMutationReceipt, String> {
+        let now = Utc::now().to_rfc3339();
+        let (_, revision, _) = self.store().transaction_if_changed(|transaction| {
+            require_folder(transaction, folder_id.0)?;
+            let changed = transaction.execute(
+                "UPDATE folder
+                 SET watch_path = NULL, watch_enabled = 0,
+                     watch_subfolders = 0, updated_at = ?1
+                 WHERE folder_id = ?2
+                   AND (watch_path IS NOT NULL OR watch_enabled != 0 OR watch_subfolders != 0)",
+                params![now, folder_id.0],
+            )? != 0;
+            Ok(((), changed))
+        })?;
+        Ok(folder_receipt(revision, vec![folder_id], Vec::new(), None))
+    }
 }
 
 fn folder_receipt(
@@ -371,7 +444,7 @@ fn invalid(message: impl Into<String>) -> rusqlite::Error {
 mod tests {
     use std::sync::Arc;
 
-    use super::{CreateFolderInput, FolderId, ReorderFolderChildrenInput};
+    use super::{CreateFolderInput, FolderId, FolderWatchInput, ReorderFolderChildrenInput};
     use crate::app::Application;
     use crate::store::Store;
 
@@ -529,5 +602,55 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn watch_configuration_is_external_idempotent_and_clearable() {
+        let (library, app, _media_id) = fixture();
+        let watched = tempfile::tempdir().unwrap();
+        let folder = create(&app, "Watched", None);
+        let input = FolderWatchInput {
+            folder_id: folder,
+            path: watched.path().display().to_string(),
+            include_subfolders: true,
+        };
+
+        let first = app.set_folder_watch(&input).unwrap();
+        let repeated = app.set_folder_watch(&input).unwrap();
+        assert_eq!(first.receipt.revision, repeated.receipt.revision);
+        app.store()
+            .read(|connection| {
+                let value: (Option<String>, bool, bool) = connection.query_row(
+                    "SELECT watch_path, watch_enabled, watch_subfolders
+                     FROM folder WHERE folder_id = ?1",
+                    [folder.0],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                assert_eq!(
+                    value,
+                    (
+                        Some(
+                            std::fs::canonicalize(watched.path())
+                                .unwrap()
+                                .display()
+                                .to_string()
+                        ),
+                        true,
+                        true,
+                    )
+                );
+                Ok(())
+            })
+            .unwrap();
+
+        app.clear_folder_watch(folder).unwrap();
+        let rejected = app
+            .set_folder_watch(&FolderWatchInput {
+                folder_id: folder,
+                path: library.path().display().to_string(),
+                include_subfolders: false,
+            })
+            .unwrap_err();
+        assert!(rejected.contains("inside the Picto library"));
     }
 }

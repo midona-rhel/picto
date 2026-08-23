@@ -9,7 +9,7 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, Lifecycle, MutationReceipt};
 use crate::projection_v2::{
-    ItemProjectionChange, MembershipProjectionChange, RootProjectionChange,
+    FolderProjectionChange, ItemProjectionChange, MembershipProjectionChange, RootProjectionChange,
     StructureProjectionDelta, TagProjectionChange,
 };
 
@@ -51,6 +51,8 @@ pub struct PreparedMediaInput {
     pub lifecycle: Lifecycle,
     pub captured_at: Option<String>,
     pub source: Option<SourcePostInput>,
+    #[serde(default)]
+    pub target_folder_id: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -58,7 +60,7 @@ pub struct PreparedMediaInput {
 pub struct IngestMediaResult {
     pub media_item_id: ItemId,
     pub root_item_id: ItemId,
-    pub reused_source_item: bool,
+    pub reused_existing_item: bool,
     pub promoted_to_collection: bool,
     pub receipt: Option<MutationReceipt>,
 }
@@ -69,6 +71,7 @@ impl Application {
         input: &PreparedMediaInput,
     ) -> Result<IngestMediaResult, String> {
         validate_input(input)?;
+        let enqueue_ai = should_enqueue_ai(self, input)?;
         let now = chrono::Utc::now().to_rfc3339();
         let ((media_item_id, root_item_id, reused, promoted), revision, changed) = self
             .transaction_if_changed(
@@ -94,13 +97,49 @@ impl Application {
                             ExistingSourceItem::Pending => {}
                         }
                     }
+                } else if let Some((media_item_id, root_item_id)) =
+                    existing_manual_item(transaction, &input.file_hash)?
+                {
+                    let mut delta = StructureProjectionDelta::default();
+                    let tag_ids = insert_tags(
+                        transaction,
+                        media_item_id,
+                        &input.tags,
+                        input.provenance_mask,
+                        false,
+                    )?;
+                    delta.tags.extend(tag_ids.into_iter().map(|tag_id| TagProjectionChange {
+                        media_id: media_item_id,
+                        tag_id,
+                        present: true,
+                    }));
+                    let folder_changed = attach_target_folder(
+                        transaction,
+                        input.target_folder_id,
+                        root_item_id,
+                        &mut delta,
+                    )?;
+                    let changed = folder_changed || !delta.tags.is_empty();
+                    return Ok(((media_item_id, root_item_id, true, false), delta, changed));
                 }
 
                 let file_id = upsert_file(transaction, input, &now)?;
                 let media_item_id = insert_media_asset(transaction, file_id, input, &now)?;
-                let tag_ids =
-                    insert_tags(transaction, media_item_id, &input.tags, input.provenance_mask)?;
-                enqueue_derivatives(transaction, media_item_id, file_id, input, &now)?;
+                let tag_ids = insert_tags(
+                    transaction,
+                    media_item_id,
+                    &input.tags,
+                    input.provenance_mask,
+                    input.source.is_some(),
+                )?;
+                enqueue_derivatives(
+                    transaction,
+                    media_item_id,
+                    file_id,
+                    input,
+                    enqueue_ai,
+                    &now,
+                )?;
 
                 let (root_item_id, promoted) = if let Some(source) = &input.source {
                     attach_source_item(transaction, source, media_item_id, &now)?;
@@ -144,6 +183,27 @@ impl Application {
                         .query_map([root_item_id], |row| row.get::<_, i64>(0))?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
                     drop(statement);
+                    let mut folder_statement = transaction.prepare(
+                        "SELECT folder_id FROM folder_item WHERE item_id = ?1",
+                    )?;
+                    let folder_ids = folder_statement
+                        .query_map([root_item_id], |row| row.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    drop(folder_statement);
+                    for folder_id in folder_ids {
+                        delta.folders.push(FolderProjectionChange {
+                            folder_id,
+                            item_id: root_item_id,
+                            present: true,
+                        });
+                        for member_id in &members {
+                            delta.folders.push(FolderProjectionChange {
+                                folder_id,
+                                item_id: *member_id,
+                                present: false,
+                            });
+                        }
+                    }
                     for member_id in members {
                         delta.roots.push(RootProjectionChange {
                             item_id: member_id,
@@ -162,6 +222,12 @@ impl Application {
                         present: true,
                     });
                 }
+                attach_target_folder(
+                    transaction,
+                    input.target_folder_id,
+                    root_item_id,
+                    &mut delta,
+                )?;
                 delta.tags.extend(tag_ids.into_iter().map(|tag_id| TagProjectionChange {
                     media_id: media_item_id,
                     tag_id,
@@ -174,12 +240,18 @@ impl Application {
 
         let receipt = changed.then(|| MutationReceipt {
             revision,
-            resources: vec![
-                resources::LIBRARY.to_string(),
-                resources::SIDEBAR.to_string(),
-                resources::DUPLICATES.to_string(),
-                resources::TASKS.to_string(),
-            ],
+            resources: {
+                let mut changed_resources = vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                    resources::DUPLICATES.to_string(),
+                    resources::TASKS.to_string(),
+                ];
+                if input.target_folder_id.is_some() {
+                    changed_resources.push(resources::FOLDERS.to_string());
+                }
+                changed_resources
+            },
             item_ids: if media_item_id == root_item_id {
                 vec![ItemId(root_item_id)]
             } else {
@@ -190,7 +262,7 @@ impl Application {
         Ok(IngestMediaResult {
             media_item_id: ItemId(media_item_id),
             root_item_id: ItemId(root_item_id),
-            reused_source_item: reused,
+            reused_existing_item: reused,
             promoted_to_collection: promoted,
             receipt,
         })
@@ -204,6 +276,59 @@ enum ExistingSourceItem {
     },
     Pending,
     Deleted,
+}
+
+fn existing_manual_item(
+    transaction: &Transaction<'_>,
+    file_hash: &str,
+) -> rusqlite::Result<Option<(i64, i64)>> {
+    transaction
+        .query_row(
+            "SELECT ma.item_id, COALESCE(cm.collection_id, lr.item_id)
+             FROM media_asset ma
+             JOIN media_file mf ON mf.file_id = ma.file_id
+             LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
+             LEFT JOIN library_root lr ON lr.item_id = ma.item_id
+             WHERE mf.file_hash = ?1
+               AND COALESCE(cm.collection_id, lr.item_id) IS NOT NULL
+             ORDER BY cm.collection_id IS NOT NULL, ma.item_id
+             LIMIT 1",
+            [file_hash],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+}
+
+fn attach_target_folder(
+    transaction: &Transaction<'_>,
+    folder_id: Option<i64>,
+    root_item_id: i64,
+    delta: &mut StructureProjectionDelta,
+) -> rusqlite::Result<bool> {
+    let Some(folder_id) = folder_id else {
+        return Ok(false);
+    };
+    let exists: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM folder WHERE folder_id = ?1)",
+        [folder_id],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Err(invalid(format!("Folder {folder_id} does not exist")));
+    }
+    let changed = transaction.execute(
+        "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)
+         ON CONFLICT(folder_id, item_id) DO NOTHING",
+        params![folder_id, root_item_id],
+    )? != 0;
+    if changed {
+        delta.folders.push(FolderProjectionChange {
+            folder_id,
+            item_id: root_item_id,
+            present: true,
+        });
+    }
+    Ok(changed)
 }
 
 fn validate_input(input: &PreparedMediaInput) -> Result<(), String> {
@@ -460,6 +585,11 @@ fn settle_source_post_root(
             )?;
             let collection_id = transaction.last_insert_rowid();
             insert_root(transaction, collection_id, lifecycle)?;
+            transaction.execute(
+                "INSERT INTO folder_item (folder_id, item_id, position_rank)
+                 SELECT folder_id, ?1, position_rank FROM folder_item WHERE item_id = ?2",
+                params![collection_id, root_id],
+            )?;
             for (index, media_id) in media_ids.iter().enumerate() {
                 transaction.execute("DELETE FROM library_root WHERE item_id = ?1", [media_id])?;
                 transaction.execute(
@@ -509,10 +639,16 @@ fn insert_tags(
     media_item_id: i64,
     tags: &[String],
     provenance_mask: i64,
+    external: bool,
 ) -> rusqlite::Result<Vec<i64>> {
     let mut tag_ids = BTreeSet::new();
     for tag in tags {
-        let Some((namespace, subtag)) = parse_tag(tag) else {
+        let parsed = if external {
+            crate::tag_name_v2::parse_external(tag)
+        } else {
+            crate::tag_name_v2::parse_local(tag)
+        };
+        let Ok((namespace, subtag)) = parsed else {
             continue;
         };
         transaction.execute(
@@ -525,12 +661,22 @@ fn insert_tags(
             params![namespace, subtag],
             |row| row.get(0),
         )?;
-        transaction.execute(
+        let changed = transaction.execute(
             "INSERT INTO media_tag (media_item_id, tag_id, source, provenance_mask)
-             VALUES (?1, ?2, 'remote', ?3)",
-            params![media_item_id, tag_id, provenance_mask],
+             VALUES (?1, ?2, ?4, ?3)
+             ON CONFLICT(media_item_id, tag_id, source) DO UPDATE SET
+                 provenance_mask = media_tag.provenance_mask | excluded.provenance_mask
+             WHERE media_tag.provenance_mask <> (media_tag.provenance_mask | excluded.provenance_mask)",
+            params![
+                media_item_id,
+                tag_id,
+                provenance_mask,
+                if external { "remote" } else { "local" }
+            ],
         )?;
-        tag_ids.insert(tag_id);
+        if changed != 0 {
+            tag_ids.insert(tag_id);
+        }
     }
     Ok(tag_ids.into_iter().collect())
 }
@@ -540,11 +686,15 @@ fn enqueue_derivatives(
     media_item_id: i64,
     file_id: i64,
     input: &PreparedMediaInput,
+    enqueue_ai: bool,
     now: &str,
 ) -> rusqlite::Result<()> {
     let mut work = BTreeSet::from(["thumbnail", "dominant_colors"]);
     if input.mime_type.starts_with("image/") {
         work.insert("perceptual_hash");
+        if enqueue_ai {
+            work.insert("ai_tag");
+        }
     }
     for work_type in work {
         transaction.execute(
@@ -559,18 +709,31 @@ fn enqueue_derivatives(
     Ok(())
 }
 
-fn parse_tag(value: &str) -> Option<(String, String)> {
-    let value = value.trim();
-    if value.is_empty() {
-        return None;
+fn should_enqueue_ai(
+    application: &Application,
+    input: &PreparedMediaInput,
+) -> Result<bool, String> {
+    if !input.mime_type.starts_with("image/") {
+        return Ok(false);
     }
-    let (namespace, subtag) = value.split_once(':').unwrap_or(("general", value));
-    let namespace = namespace.trim();
-    let subtag = subtag.trim();
-    if namespace.is_empty() || subtag.is_empty() {
-        return None;
-    }
-    Some((namespace.to_lowercase(), subtag.to_lowercase()))
+    let settings = crate::settings_v2::application_settings(application)?.value;
+    let auto = settings
+        .get("aiTaggerAutoOnImport")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    let has_model = [
+        "aiTaggerWd14Enabled",
+        "aiTaggerE621Enabled",
+        "aiTaggerEva02Enabled",
+    ]
+    .iter()
+    .any(|key| {
+        settings
+            .get(*key)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+    });
+    Ok(auto && has_model)
 }
 
 fn invalid(message: impl Into<String>) -> rusqlite::Error {
@@ -622,6 +785,7 @@ mod tests {
                 captured_at: None,
                 metadata_json: None,
             }),
+            target_folder_id: None,
         }
     }
 
@@ -686,7 +850,7 @@ mod tests {
         let input = input("hash", "post", "item", 0);
         let first = app.ingest_prepared(&input).unwrap();
         let repeated = app.ingest_prepared(&input).unwrap();
-        assert!(repeated.reused_source_item);
+        assert!(repeated.reused_existing_item);
         assert!(repeated.receipt.is_none());
         assert_eq!(first.media_item_id, repeated.media_item_id);
 
@@ -696,5 +860,134 @@ mod tests {
         .unwrap();
         let error = app.ingest_prepared(&input).unwrap_err();
         assert!(error.contains("cannot be resurrected"));
+    }
+
+    #[test]
+    fn repeated_manual_bytes_reuse_item_preserve_lifecycle_and_add_folders() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        let first_folder = app
+            .create_folder(&crate::folders_v2::CreateFolderInput {
+                name: "First".to_string(),
+                parent_id: None,
+                folder_key: None,
+            })
+            .unwrap()
+            .0;
+        let second_folder = app
+            .create_folder(&crate::folders_v2::CreateFolderInput {
+                name: "Second".to_string(),
+                parent_id: None,
+                folder_key: None,
+            })
+            .unwrap()
+            .0;
+        let mut manual = input("manual-hash", "unused", "manual", 0);
+        manual.source = None;
+        manual.target_folder_id = Some(first_folder.0);
+        let first = app.ingest_prepared(&manual).unwrap();
+
+        manual.lifecycle = Lifecycle::Active;
+        manual.target_folder_id = Some(second_folder.0);
+        let repeated = app.ingest_prepared(&manual).unwrap();
+        assert!(repeated.reused_existing_item);
+        assert_eq!(first.media_item_id, repeated.media_item_id);
+        assert!(app
+            .projections()
+            .inbox_bitmap()
+            .contains(first.root_item_id.0 as u32));
+        app.store()
+            .read(|connection| {
+                let media: i64 =
+                    connection
+                        .query_row("SELECT COUNT(*) FROM media_asset", [], |row| row.get(0))?;
+                let folders: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM folder_item WHERE item_id = ?1",
+                    [first.root_item_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(media, 1);
+                assert_eq!(folders, 2);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn source_collection_promotion_inherits_existing_folder_membership() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        let folder = app
+            .create_folder(&crate::folders_v2::CreateFolderInput {
+                name: "Source".to_string(),
+                parent_id: None,
+                folder_key: None,
+            })
+            .unwrap()
+            .0;
+        let mut first_input = input("first", "post", "first", 0);
+        first_input.target_folder_id = Some(folder.0);
+        let first = app.ingest_prepared(&first_input).unwrap();
+        let mut second_input = input("second", "post", "second", 1);
+        second_input.target_folder_id = Some(folder.0);
+        let second = app.ingest_prepared(&second_input).unwrap();
+        assert!(second.promoted_to_collection);
+
+        app.store()
+            .read(|connection| {
+                let collection_memberships: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1 AND item_id = ?2",
+                    rusqlite::params![folder.0, second.root_item_id.0],
+                    |row| row.get(0),
+                )?;
+                let old_memberships: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM folder_item WHERE item_id = ?1",
+                    [first.media_item_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(collection_memberships, 1);
+                assert_eq!(old_memberships, 0);
+                Ok(())
+            })
+            .unwrap();
+        app.set_lifecycle(
+            &ItemTarget::Explicit {
+                item_ids: vec![second.root_item_id],
+            },
+            Lifecycle::Active,
+        )
+        .unwrap();
+        assert!(app
+            .projections()
+            .folder_bitmap(folder.0)
+            .contains(second.root_item_id.0 as u32));
+    }
+
+    #[test]
+    fn automatic_ai_work_is_only_enqueued_when_enabled_with_a_model() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        app.patch_application_settings(&serde_json::json!({
+            "aiTaggerAutoOnImport": true,
+            "aiTaggerWd14Enabled": true
+        }))
+        .unwrap();
+        app.ingest_prepared(&input("ai-hash", "post", "item", 0))
+            .unwrap();
+        let work_types = app
+            .store()
+            .read(|connection| {
+                let mut statement =
+                    connection.prepare("SELECT work_type FROM work_item ORDER BY work_type")?;
+                let rows = statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap();
+        assert_eq!(
+            work_types,
+            ["ai_tag", "dominant_colors", "perceptual_hash", "thumbnail"]
+        );
     }
 }

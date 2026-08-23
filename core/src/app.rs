@@ -183,6 +183,7 @@ pub struct Application {
     store: Arc<Store>,
     blobs: Arc<BlobStore>,
     projections: Arc<ProjectionStore>,
+    ai_sessions: crate::ai_tagger::inference::SharedTaggerSessions,
 }
 
 impl Application {
@@ -200,6 +201,7 @@ impl Application {
             store,
             blobs,
             projections,
+            ai_sessions: crate::ai_tagger::inference::new_shared_sessions(),
         })
     }
 
@@ -213,6 +215,10 @@ impl Application {
 
     pub fn blobs(&self) -> &BlobStore {
         &self.blobs
+    }
+
+    pub(crate) fn ai_sessions(&self) -> &crate::ai_tagger::inference::SharedTaggerSessions {
+        &self.ai_sessions
     }
 
     pub fn transaction<T, D>(

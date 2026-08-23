@@ -5,13 +5,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::app::{resources, ItemId, MutationReceipt};
+use crate::app::{resources, Application, ItemId, MutationReceipt};
 use crate::media_processing_v2::{self, BlobSource};
 use crate::store::Store;
 use crate::workers_v2::{self, WorkItem, WorkKind, WorkSpec, Worker, DEFAULT_BATCH_SIZE};
-
-const AI_UNSUPPORTED: &str =
-    "AI tagging is unsupported by background_runtime_v2; the work item is retryable";
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DrainBatchResult {
@@ -22,19 +19,17 @@ pub struct DrainBatchResult {
 }
 
 /// Durable executor for one bounded batch of replacement-backend work.
-pub struct BackgroundRuntime<'a, B> {
-    store: &'a Store,
+pub struct BackgroundRuntime<'a> {
+    application: &'a Application,
     queue: Worker<'a>,
-    blobs: B,
 }
 
-impl<'a, B: BlobSource> BackgroundRuntime<'a, B> {
+impl<'a> BackgroundRuntime<'a> {
     /// Recover work interrupted by a previous process before accepting claims.
-    pub fn start(store: &'a Store, blobs: B) -> Result<Self, String> {
+    pub fn start(application: &'a Application) -> Result<Self, String> {
         Ok(Self {
-            store,
-            queue: Worker::start(store)?,
-            blobs,
+            application,
+            queue: Worker::start(application.store())?,
         })
     }
 
@@ -45,24 +40,23 @@ impl<'a, B: BlobSource> BackgroundRuntime<'a, B> {
     /// Claim and execute at most `limit` items. The queue applies its own
     /// hard batch bound, so callers cannot accidentally drain unbounded work.
     pub async fn drain_batch(&self, limit: usize) -> Result<DrainBatchResult, String> {
-        drain_claimed_batch(self.store, &self.blobs, limit).await
+        drain_claimed_batch(self.application, self.application.blobs(), limit).await
     }
 }
 
-/// Execute one bounded batch without constructing a long-lived runtime.
-pub async fn drain_batch<B: BlobSource>(
-    store: &Store,
-    blobs: &B,
+pub async fn drain_batch(
+    application: &Application,
     limit: usize,
 ) -> Result<DrainBatchResult, String> {
-    drain_claimed_batch(store, blobs, limit).await
+    drain_claimed_batch(application, application.blobs(), limit).await
 }
 
 async fn drain_claimed_batch<B: BlobSource>(
-    store: &Store,
+    application: &Application,
     blobs: &B,
     limit: usize,
 ) -> Result<DrainBatchResult, String> {
+    let store = application.store();
     let items = workers_v2::claim(store, limit.min(DEFAULT_BATCH_SIZE))?;
     let mut result = DrainBatchResult {
         claimed: items.len(),
@@ -72,15 +66,21 @@ async fn drain_claimed_batch<B: BlobSource>(
     let mut affected_resources = BTreeSet::from([resources::TASKS.to_string()]);
 
     for item in items {
-        match execute_item(store, blobs, &item).await {
-            Ok(()) => {
-                let (item_ids, file_hash) = affected_targets(store, &item)?;
-                affected_item_ids.extend(item_ids);
-                if let Some(file_hash) = file_hash {
-                    affected_resources.insert(file_resource(&file_hash));
+        match execute_item(application, blobs, &item).await {
+            Ok(operation_receipt) => {
+                if item.kind != WorkKind::AiTag {
+                    let (item_ids, file_hash) = affected_targets(store, &item)?;
+                    affected_item_ids.extend(item_ids);
+                    if let Some(file_hash) = file_hash {
+                        affected_resources.insert(file_resource(&file_hash));
+                    }
+                    if item.kind != WorkKind::BlobDelete {
+                        affected_resources.insert(resources::LIBRARY.to_string());
+                    }
                 }
-                if item.kind != WorkKind::BlobDelete {
-                    affected_resources.insert(resources::LIBRARY.to_string());
+                if let Some(receipt) = operation_receipt {
+                    affected_resources.extend(receipt.resources);
+                    affected_item_ids.extend(receipt.item_ids.into_iter().map(|id| id.0));
                 }
                 if !workers_v2::complete(store, item.work_id)? {
                     return Err(format!(
@@ -114,18 +114,25 @@ async fn drain_claimed_batch<B: BlobSource>(
 }
 
 async fn execute_item<B: BlobSource>(
-    store: &Store,
+    application: &Application,
     blobs: &B,
     item: &WorkItem,
-) -> Result<(), String> {
+) -> Result<Option<MutationReceipt>, String> {
     match item.kind {
-        WorkKind::BlobDelete => media_processing_v2::execute_blob_delete(blobs, item),
+        WorkKind::BlobDelete => media_processing_v2::execute_blob_delete(blobs, item).map(|_| None),
         WorkKind::Thumbnail | WorkKind::DominantColors | WorkKind::PerceptualHash => {
-            media_processing_v2::execute_work(store, blobs, item)
+            media_processing_v2::execute_work(application.store(), blobs, item)
                 .await
-                .map(|_| ())
+                .map(|_| None)
         }
-        WorkKind::AiTag => Err(AI_UNSUPPORTED.to_string()),
+        WorkKind::AiTag => {
+            let media_item_id = item
+                .media_item_id
+                .ok_or_else(|| "AI tagging work is missing its media item ID".to_string())?;
+            crate::ai_runtime_v2::execute_ai_tagging(application, ItemId(media_item_id))
+                .await
+                .map(|result| result.receipt)
+        }
     }
 }
 
@@ -169,8 +176,8 @@ fn file_resource(file_hash: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{BackgroundRuntime, DrainBatchResult, AI_UNSUPPORTED};
-    use crate::app::{resources, ItemId};
+    use super::{drain_claimed_batch, DrainBatchResult};
+    use crate::app::{resources, Application, ItemId};
     use crate::media_processing_v2::BlobSource;
     use crate::store::Store;
     use crate::workers_v2::{self, WorkKind, WorkSpec};
@@ -213,7 +220,7 @@ mod tests {
         }
     }
 
-    fn fixture() -> (TempDir, Store, FakeBlobSource) {
+    fn fixture() -> (TempDir, Application, FakeBlobSource) {
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
         store
@@ -236,10 +243,16 @@ mod tests {
                      VALUES (9, 7, ?1, ?1), (10, 7, ?1, ?1)",
                     [NOW],
                 )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle)
+                     VALUES (9, 'active'), (10, 'active')",
+                    [],
+                )?;
                 Ok(())
             })
             .unwrap();
-        (directory, store, FakeBlobSource::default())
+        let application = Application::new(Arc::new(store));
+        (directory, application, FakeBlobSource::default())
     }
 
     fn enqueue(store: &Store, spec: WorkSpec) -> i64 {
@@ -248,12 +261,11 @@ mod tests {
 
     #[tokio::test]
     async fn derivative_batch_is_bounded_and_receipt_is_exact() {
-        let (_directory, store, blobs) = fixture();
-        enqueue(&store, WorkSpec::file(7, WorkKind::Thumbnail));
-        enqueue(&store, WorkSpec::blob("orphan-hash"));
+        let (_directory, application, blobs) = fixture();
+        enqueue(application.store(), WorkSpec::file(7, WorkKind::Thumbnail));
+        enqueue(application.store(), WorkSpec::blob("orphan-hash"));
 
-        let runtime = BackgroundRuntime::start(&store, blobs).unwrap();
-        let result = runtime.drain_batch(1).await.unwrap();
+        let result = drain_claimed_batch(&application, &blobs, 1).await.unwrap();
 
         assert_eq!(
             result,
@@ -273,7 +285,8 @@ mod tests {
             }
         );
         assert_eq!(
-            store
+            application
+                .store()
                 .read(|connection| {
                     connection.query_row(
                         "SELECT status FROM work_item WHERE work_id = 2",
@@ -287,61 +300,59 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn blob_delete_succeeds_and_ai_is_requeued_as_unsupported() {
-        let (_directory, store, blobs) = fixture();
-        enqueue(&store, WorkSpec::blob("orphan-hash"));
-        let ai_id = enqueue(&store, WorkSpec::media_only(9, WorkKind::AiTag));
+    async fn blob_delete_and_unconfigured_ai_complete() {
+        let (_directory, application, blobs) = fixture();
+        enqueue(application.store(), WorkSpec::blob("orphan-hash"));
+        let ai_id = enqueue(
+            application.store(),
+            WorkSpec::media_only(9, WorkKind::AiTag),
+        );
         let deleted = blobs.deleted.clone();
 
-        let runtime = BackgroundRuntime::start(&store, blobs).unwrap();
-        let result = runtime.drain_batch(2).await.unwrap();
+        let result = drain_claimed_batch(&application, &blobs, 2).await.unwrap();
 
         assert_eq!(result.claimed, 2);
-        assert_eq!(result.succeeded, 1);
-        assert_eq!(result.retried, 1);
+        assert_eq!(result.succeeded, 2);
+        assert_eq!(result.retried, 0);
         assert_eq!(
             result.receipt.unwrap().resources,
             vec!["file:orphan-hash".to_string(), resources::TASKS.to_string()]
         );
         assert_eq!(deleted.lock().unwrap().as_slice(), &["orphan-hash"]);
 
-        let ai = store
+        let ai = application
+            .store()
             .read(|connection| {
                 connection.query_row(
-                    "SELECT status, attempt_count, last_error FROM work_item WHERE work_id = ?1",
+                    "SELECT COUNT(*) FROM work_item WHERE work_id = ?1",
                     [ai_id],
-                    |row| {
-                        Ok((
-                            row.get::<_, String>(0)?,
-                            row.get::<_, i64>(1)?,
-                            row.get::<_, String>(2)?,
-                        ))
-                    },
+                    |row| row.get::<_, i64>(0),
                 )
             })
             .unwrap();
-        assert_eq!(ai.0, "pending");
-        assert_eq!(ai.1, 1);
-        assert_eq!(ai.2, AI_UNSUPPORTED);
+        assert_eq!(ai, 0);
     }
 
     #[tokio::test]
     async fn blob_failure_is_retried_and_empty_batch_has_no_receipt() {
-        let (_directory, store, _) = fixture();
-        enqueue(&store, WorkSpec::blob("orphan-hash"));
+        let (_directory, application, _) = fixture();
+        enqueue(application.store(), WorkSpec::blob("orphan-hash"));
         let failing = FakeBlobSource {
             fail_delete: true,
             ..FakeBlobSource::default()
         };
 
-        let runtime = BackgroundRuntime::start(&store, failing).unwrap();
-        let result = runtime.drain_batch(1).await.unwrap();
+        let result = drain_claimed_batch(&application, &failing, 1)
+            .await
+            .unwrap();
         assert_eq!(result.claimed, 1);
         assert_eq!(result.succeeded, 0);
         assert_eq!(result.retried, 1);
         assert_eq!(result.receipt.unwrap().resources, vec![resources::TASKS]);
 
-        let empty = runtime.drain_batch(1).await.unwrap();
+        let empty = drain_claimed_batch(&application, &failing, 1)
+            .await
+            .unwrap();
         assert_eq!(empty, DrainBatchResult::default());
     }
 }

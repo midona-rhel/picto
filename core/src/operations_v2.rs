@@ -428,55 +428,27 @@ impl Application {
     ) -> Result<MutationReceipt, String> {
         let tags = tags
             .iter()
-            .filter_map(|tag| parse_tag(tag))
+            .filter_map(|tag| crate::tag_name_v2::parse_local(tag).ok())
             .collect::<Vec<_>>();
         if tags.is_empty() {
             return Err("No valid tags were provided".to_string());
         }
-        let (item_ids, revision) = self.transaction(
+        let (item_ids, revision, _) = self.transaction_if_changed(
             |transaction| {
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
                 let media_ids = media_items_for_roots(transaction, &item_ids)?;
-                let mut changed_tags = Vec::new();
-                for (namespace, subtag) in &tags {
-                    transaction.execute(
-                        "INSERT INTO tag (namespace, subtag) VALUES (?1, ?2)
-                     ON CONFLICT(namespace, subtag) DO NOTHING",
-                        params![namespace, subtag],
-                    )?;
-                    let tag_id: i64 = transaction.query_row(
-                        "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
-                        params![namespace, subtag],
-                        |row| row.get(0),
-                    )?;
-                    for media_id in &media_ids {
-                        if add {
-                            transaction.execute(
-                                "INSERT INTO media_tag
-                                 (media_item_id, tag_id, source, provenance_mask)
-                             VALUES (?1, ?2, 'local', ?3)
-                             ON CONFLICT(media_item_id, tag_id, source)
-                             DO UPDATE SET provenance_mask =
-                                 media_tag.provenance_mask | excluded.provenance_mask",
-                                params![media_id, tag_id, provenance_mask],
-                            )?;
-                        } else {
-                            transaction.execute(
-                                "DELETE FROM media_tag WHERE media_item_id = ?1 AND tag_id = ?2",
-                                params![media_id, tag_id],
-                            )?;
-                        }
-                        changed_tags.push((*media_id, tag_id));
-                    }
-                }
-                Ok((item_ids, changed_tags))
+                let changed_tags = apply_tags_in(
+                    transaction,
+                    &media_ids,
+                    &tags,
+                    add,
+                    provenance_mask,
+                    "local",
+                )?;
+                let changed = !changed_tags.is_empty();
+                Ok((item_ids, changed_tags, changed))
             },
-            |projections, changed_tags| {
-                for (media_id, tag_id) in changed_tags {
-                    projections.apply_tag_delta(media_id, tag_id, add)?;
-                }
-                Ok(())
-            },
+            |projections, changed_tags| projections.apply_tag_changes(&changed_tags, add),
         )?;
         Ok(receipt(
             revision,
@@ -487,6 +459,49 @@ impl Application {
                 resources::SMART_FOLDERS,
             ],
             &item_ids,
+        ))
+    }
+
+    /// Internal media-owned write used by per-media workers. User collection
+    /// writes continue to use `apply_tags`, which intentionally fans out.
+    pub(crate) fn apply_media_tags(
+        &self,
+        media_item_id: ItemId,
+        tags: &[String],
+        provenance_mask: i64,
+    ) -> Result<MutationReceipt, String> {
+        let tags = tags
+            .iter()
+            .filter_map(|tag| crate::tag_name_v2::parse_external(tag).ok())
+            .collect::<Vec<_>>();
+        if tags.is_empty() {
+            return Err("No valid tags were provided".to_string());
+        }
+        let (root_id, revision, _) = self.transaction_if_changed(
+            |transaction| {
+                let root_id = root_for_media(transaction, media_item_id.0)?;
+                let changed_tags = apply_tags_in(
+                    transaction,
+                    &[media_item_id.0],
+                    &tags,
+                    true,
+                    provenance_mask,
+                    "ai",
+                )?;
+                let changed = !changed_tags.is_empty();
+                Ok((root_id, changed_tags, changed))
+            },
+            |projections, changed_tags| projections.apply_tag_changes(&changed_tags, true),
+        )?;
+        Ok(receipt(
+            revision,
+            &[
+                resources::LIBRARY,
+                resources::SIDEBAR,
+                resources::TAGS,
+                resources::SMART_FOLDERS,
+            ],
+            &[root_id],
         ))
     }
 
@@ -592,6 +607,25 @@ impl Application {
                     }));
                 }
                 let affected_item_ids = delete_items.iter().copied().collect::<Vec<_>>();
+                let affected_json = serde_json::to_string(&affected_item_ids).map_err(|error| {
+                    invalid(format!("Could not encode deleted item IDs: {error}"))
+                })?;
+                let candidate_files = {
+                    let mut statement = transaction.prepare(
+                        "SELECT DISTINCT mf.file_id, mf.file_hash
+                         FROM media_asset ma
+                         JOIN media_file mf ON mf.file_id = ma.file_id
+                         WHERE ma.item_id IN (
+                             SELECT CAST(value AS INTEGER) FROM json_each(?1)
+                         )",
+                    )?;
+                    let files = statement
+                        .query_map([affected_json], |row| {
+                            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    files
+                };
                 for item_id in delete_items {
                     transaction.execute(
                         "UPDATE source_item
@@ -602,28 +636,23 @@ impl Application {
                     transaction
                         .execute("DELETE FROM library_item WHERE item_id = ?1", [item_id])?;
                 }
-                let mut stmt = transaction.prepare(
-                    "SELECT mf.file_hash
-                 FROM media_file mf
-                 WHERE NOT EXISTS (
-                     SELECT 1 FROM media_asset ma WHERE ma.file_id = mf.file_id
-                 )",
-                )?;
-                let hashes = stmt
-                    .query_map([], |row| row.get::<_, String>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                drop(stmt);
                 let now = chrono::Utc::now().to_rfc3339();
-                for hash in &hashes {
-                    crate::workers_v2::enqueue_blob_delete_in(transaction, hash, &now)?;
+                let mut hashes = Vec::new();
+                for (file_id, hash) in candidate_files {
+                    let referenced: bool = transaction.query_row(
+                        "SELECT EXISTS(
+                             SELECT 1 FROM media_asset WHERE file_id = ?1
+                         )",
+                        [file_id],
+                        |row| row.get(0),
+                    )?;
+                    if !referenced {
+                        crate::workers_v2::enqueue_blob_delete_in(transaction, &hash, &now)?;
+                        transaction
+                            .execute("DELETE FROM media_file WHERE file_id = ?1", [file_id])?;
+                        hashes.push(hash);
+                    }
                 }
-                transaction.execute(
-                    "DELETE FROM media_file
-                 WHERE NOT EXISTS (
-                     SELECT 1 FROM media_asset ma WHERE ma.file_id = media_file.file_id
-                 )",
-                    [],
-                )?;
                 Ok(((hashes, affected_item_ids), delta))
             },
             |projections, delta| projections.apply_structure_delta(delta),
@@ -882,19 +911,74 @@ fn media_items_for_roots(
     Ok(media_ids.into_iter().collect())
 }
 
-fn parse_tag(value: &str) -> Option<(String, String)> {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return None;
+fn apply_tags_in(
+    transaction: &Transaction<'_>,
+    media_ids: &[i64],
+    tags: &[(String, String)],
+    add: bool,
+    provenance_mask: i64,
+    source: &str,
+) -> rusqlite::Result<Vec<(i64, i64)>> {
+    let mut changed_tags = Vec::new();
+    let media_ids_json = serde_json::to_string(media_ids)
+        .map_err(|error| invalid(format!("Could not encode tag targets: {error}")))?;
+    for (namespace, subtag) in tags {
+        transaction.execute(
+            "INSERT INTO tag (namespace, subtag) VALUES (?1, ?2)
+             ON CONFLICT(namespace, subtag) DO NOTHING",
+            params![namespace, subtag],
+        )?;
+        let tag_id: i64 = transaction.query_row(
+            "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
+            params![namespace, subtag],
+            |row| row.get(0),
+        )?;
+        let changed_media = if add {
+            let mut statement = transaction.prepare(
+                "INSERT INTO media_tag (media_item_id, tag_id, source, provenance_mask)
+                 SELECT CAST(value AS INTEGER), ?2, ?3, ?4 FROM json_each(?1) WHERE 1
+                 ON CONFLICT(media_item_id, tag_id, source) DO UPDATE SET
+                     provenance_mask = media_tag.provenance_mask | excluded.provenance_mask
+                 WHERE media_tag.provenance_mask <>
+                     (media_tag.provenance_mask | excluded.provenance_mask)
+                 RETURNING media_item_id",
+            )?;
+            let media_ids = statement
+                .query_map(
+                    params![media_ids_json, tag_id, source, provenance_mask],
+                    |row| row.get::<_, i64>(0),
+                )?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            media_ids
+        } else {
+            let mut statement = transaction.prepare(
+                "DELETE FROM media_tag
+                 WHERE tag_id = ?2
+                   AND media_item_id IN (
+                       SELECT CAST(value AS INTEGER) FROM json_each(?1)
+                   )
+                 RETURNING media_item_id",
+            )?;
+            let media_ids = statement
+                .query_map(params![media_ids_json, tag_id], |row| row.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            media_ids
+        };
+        changed_tags.extend(changed_media.into_iter().map(|media_id| (media_id, tag_id)));
     }
-    let (namespace, subtag) = trimmed
-        .split_once(':')
-        .map(|(namespace, subtag)| (namespace.trim(), subtag.trim()))
-        .unwrap_or(("general", trimmed));
-    if namespace.is_empty() || subtag.is_empty() {
-        return None;
-    }
-    Some((namespace.to_lowercase(), subtag.to_lowercase()))
+    Ok(changed_tags)
+}
+
+fn root_for_media(transaction: &Transaction<'_>, media_item_id: i64) -> rusqlite::Result<i64> {
+    transaction.query_row(
+        "SELECT COALESCE(cm.collection_id, lr.item_id)
+         FROM media_asset ma
+         LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
+         LEFT JOIN library_root lr ON lr.item_id = ma.item_id
+         WHERE ma.item_id = ?1 AND (cm.collection_id IS NOT NULL OR lr.item_id IS NOT NULL)",
+        [media_item_id],
+        |row| row.get(0),
+    )
 }
 
 fn parse_lifecycle(value: &str) -> rusqlite::Result<Lifecycle> {
@@ -1047,8 +1131,101 @@ mod tests {
     }
 
     #[test]
+    fn worker_tags_only_the_analyzed_collection_member() {
+        let (_directory, app, ids) = fixture();
+        let grouped = app
+            .group_items(GroupItemsInput {
+                item_ids: ids[..2].to_vec(),
+                label: None,
+            })
+            .unwrap();
+        let first = app
+            .apply_media_tags(ids[0], &["general:predicted".to_string()], 2)
+            .unwrap();
+        let repeated = app
+            .apply_media_tags(ids[0], &["general:predicted".to_string()], 2)
+            .unwrap();
+        assert_eq!(first.item_ids, vec![grouped.collection_id]);
+        assert_eq!(first.revision, repeated.revision);
+        app.store()
+            .read(|connection| {
+                let tagged: Vec<i64> = {
+                    let mut statement = connection.prepare(
+                        "SELECT mt.media_item_id FROM media_tag mt
+                         JOIN tag t ON t.tag_id = mt.tag_id
+                         WHERE t.namespace = 'general' AND t.subtag = 'predicted'
+                         ORDER BY mt.media_item_id",
+                    )?;
+                    let rows = statement
+                        .query_map([], |row| row.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    rows
+                };
+                assert_eq!(tagged, vec![ids[0].0]);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn collection_tag_write_updates_members_with_one_projection_batch() {
+        let (_directory, app, ids) = fixture();
+        let grouped = app
+            .group_items(GroupItemsInput {
+                item_ids: ids[..2].to_vec(),
+                label: None,
+            })
+            .unwrap();
+        let target = ItemTarget::Explicit {
+            item_ids: vec![grouped.collection_id],
+        };
+        app.apply_tags(&target, &["general:shared".to_string()], true, 1)
+            .unwrap();
+        let tag_id = app
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT tag_id FROM tag WHERE namespace = 'general' AND subtag = 'shared'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            app.projections().direct_tag_bitmap(tag_id),
+            roaring::RoaringBitmap::from_iter([grouped.collection_id.0 as u32])
+        );
+        app.store()
+            .read(|connection| {
+                let count: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM media_tag WHERE tag_id = ?1",
+                    [tag_id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(count, 2);
+                Ok(())
+            })
+            .unwrap();
+
+        app.apply_tags(&target, &["general:shared".to_string()], false, 1)
+            .unwrap();
+        assert!(app.projections().direct_tag_bitmap(tag_id).is_empty());
+    }
+
+    #[test]
     fn deleting_collection_deletes_members_but_only_unreferenced_files() {
         let (_directory, app, ids) = fixture();
+        app.store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO media_file
+                         (file_hash, mime_type, size_bytes, created_at)
+                     VALUES ('preexisting-orphan', 'image/png', 1, 'now')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
         let grouped = app
             .group_items(GroupItemsInput {
                 item_ids: ids[..2].to_vec(),
@@ -1091,8 +1268,14 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 assert_eq!(items, 1);
-                assert_eq!(files, 1);
+                assert_eq!(files, 2);
                 assert_eq!(blob_deletes, 2);
+                let unrelated_orphan: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM media_file WHERE file_hash = 'preexisting-orphan'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(unrelated_orphan, 1);
                 Ok(())
             })
             .unwrap();

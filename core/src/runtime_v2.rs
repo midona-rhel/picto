@@ -18,6 +18,7 @@ use crate::subscriptions_v2::{self, RecoveryCounts};
 
 const SUBSCRIPTION_TICK: StdDuration = StdDuration::from_secs(1);
 const MAINTENANCE_TICK: StdDuration = StdDuration::from_millis(250);
+const WATCH_TICK: StdDuration = StdDuration::from_secs(30);
 const INGEST_BATCH_SIZE: usize = 8;
 const WORK_BATCH_SIZE: usize = 8;
 
@@ -80,12 +81,7 @@ pub async fn subscription_tick<R: SourceRunner>(
 
 pub async fn maintenance_tick(application: &Application) -> Result<MaintenanceTickResult, String> {
     let ingest = ingest_queue_v2::run_batch(application, INGEST_BATCH_SIZE)?;
-    let work = background_runtime_v2::drain_batch(
-        application.store(),
-        application.blobs(),
-        WORK_BATCH_SIZE,
-    )
-    .await?;
+    let work = background_runtime_v2::drain_batch(application, WORK_BATCH_SIZE).await?;
     if let Some(receipt) = &work.receipt {
         application.publish(receipt);
     }
@@ -104,7 +100,11 @@ pub fn start(
     let subscription_application = Arc::clone(&application);
     let subscription_cancel = cancel.clone();
     let subscription_handle = tokio::spawn(async move {
-        let mut worker = SubscriptionWorker::new(&subscription_application, runner);
+        let mut worker = SubscriptionWorker::with_cancellation(
+            &subscription_application,
+            runner,
+            subscription_cancel.clone(),
+        );
         let mut interval = tokio::time::interval(SUBSCRIPTION_TICK);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
@@ -124,7 +124,8 @@ pub fn start(
         }
     });
 
-    let maintenance_cancel = cancel;
+    let maintenance_application = Arc::clone(&application);
+    let maintenance_cancel = cancel.clone();
     let maintenance_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(MAINTENANCE_TICK);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -132,8 +133,25 @@ pub fn start(
             tokio::select! {
                 _ = maintenance_cancel.cancelled() => return,
                 _ = interval.tick() => {
-                    if let Err(error) = maintenance_tick(&application).await {
+                    if let Err(error) = maintenance_tick(&maintenance_application).await {
                         tracing::warn!(error = %error, "Replacement maintenance tick failed");
+                    }
+                }
+            }
+        }
+    });
+
+    let watch_application = Arc::clone(&application);
+    let watch_cancel = cancel.clone();
+    let watch_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(WATCH_TICK);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = watch_cancel.cancelled() => return,
+                _ = interval.tick() => {
+                    if let Err(error) = crate::import_v2::scan_watched_folders(&watch_application).await {
+                        tracing::warn!(error = %error, "Replacement watched-folder scan failed");
                     }
                 }
             }
@@ -143,6 +161,7 @@ pub fn start(
     Ok(vec![
         ("replacement_subscriptions", subscription_handle),
         ("replacement_maintenance", maintenance_handle),
+        ("replacement_folder_watches", watch_handle),
     ])
 }
 
@@ -166,6 +185,7 @@ mod tests {
             &'a self,
             _query: &'a crate::subscriptions_v2::ClaimedQueryRun,
             _output: mpsc::Sender<DownloadedItem>,
+            _cancel: CancellationToken,
         ) -> Pin<Box<dyn Future<Output = Result<RunnerSuccess, RunnerFailure>> + Send + 'a>>
         {
             Box::pin(async { Ok(RunnerSuccess::default()) })

@@ -44,6 +44,7 @@ impl GalleryDlSourceRunner {
         &self,
         query: &ClaimedQueryRun,
         output: mpsc::Sender<DownloadedItem>,
+        cancel: CancellationToken,
     ) -> Result<RunnerSuccess, RunnerFailure> {
         source_adapter::validate_query_kind(&query.site_id, &query.query_kind)
             .map_err(|error| RunnerFailure::terminal(RunnerFailureKind::InvalidQuery, error))?;
@@ -89,7 +90,7 @@ impl GalleryDlSourceRunner {
                     query.query_id,
                 ),
             ),
-            cancel: CancellationToken::new(),
+            cancel,
         };
 
         let (legacy_output, mut legacy_input) = mpsc::channel(CHANNEL_CAPACITY);
@@ -157,8 +158,9 @@ impl SourceRunner for GalleryDlSourceRunner {
         &'a self,
         query: &'a ClaimedQueryRun,
         output: mpsc::Sender<DownloadedItem>,
+        cancel: CancellationToken,
     ) -> RunnerFuture<'a> {
-        Box::pin(async move { self.execute(query, output).await })
+        Box::pin(async move { self.execute(query, output, cancel).await })
     }
 }
 
@@ -275,6 +277,7 @@ async fn normalize_download(
             lifecycle: Lifecycle::Inbox,
             captured_at: prepared.created_at,
             source: Some(source),
+            target_folder_id: None,
         },
         delete_after_ingest: true,
     })

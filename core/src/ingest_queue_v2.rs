@@ -69,6 +69,13 @@ pub struct EnqueueResult {
     pub revision: u64,
 }
 
+#[derive(Debug, Clone)]
+struct ExistingJob {
+    ingest_job_id: i64,
+    source_path: String,
+    status: String,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IngestRunReport {
     pub claimed: usize,
@@ -125,8 +132,15 @@ pub fn enqueue(application: &Application, spec: &IngestJobSpec) -> Result<Enqueu
     validate_spec(spec)?;
     reject_deleted_source_item(application, &spec.input)?;
     if let Some(existing) = existing_job(application, &spec.job_key)? {
+        if existing.status == "failed" {
+            return replace_failed_job(application, spec, &existing);
+        }
         remove_owned_source(spec);
-        return Ok(existing);
+        return Ok(EnqueueResult {
+            ingest_job_id: existing.ingest_job_id,
+            inserted: false,
+            revision: application.store().revision()?,
+        });
     }
 
     let staged_path = stage_source(application, spec)?;
@@ -141,6 +155,59 @@ pub fn enqueue(application: &Application, spec: &IngestJobSpec) -> Result<Enqueu
             }
             remove_owned_source(spec);
             Ok(result)
+        }
+        Err(error) => {
+            let _ = fs::remove_file(staged_path);
+            Err(error)
+        }
+    }
+}
+
+fn replace_failed_job(
+    application: &Application,
+    spec: &IngestJobSpec,
+    existing: &ExistingJob,
+) -> Result<EnqueueResult, String> {
+    let staged_path = stage_source(application, spec)?;
+    let payload = serde_json::to_string(&spec.input).map_err(|error| error.to_string())?;
+    let now = Utc::now().to_rfc3339();
+    let result = application.store().transaction_if_changed(|transaction| {
+        let changed = transaction.execute(
+            "UPDATE ingest_job
+             SET source_path = ?1, payload_json = ?2, lifecycle = ?3,
+                 delete_after_ingest = 1, status = 'pending', attempt_count = 0,
+                 available_at = ?4, last_error = NULL, updated_at = ?4
+             WHERE ingest_job_id = ?5 AND status = 'failed'",
+            params![
+                staged_path.display().to_string(),
+                payload,
+                spec.input.lifecycle.as_str(),
+                now,
+                existing.ingest_job_id,
+            ],
+        )?;
+        Ok((changed == 1, changed == 1))
+    });
+    match result {
+        Ok((true, revision, _)) => {
+            let _ = fs::remove_file(&existing.source_path);
+            remove_owned_source(spec);
+            Ok(EnqueueResult {
+                ingest_job_id: existing.ingest_job_id,
+                inserted: true,
+                revision,
+            })
+        }
+        Ok((false, _, _)) => {
+            let _ = fs::remove_file(staged_path);
+            remove_owned_source(spec);
+            let current = existing_job(application, &spec.job_key)?
+                .ok_or_else(|| "Ingest job disappeared while retrying it".to_string())?;
+            Ok(EnqueueResult {
+                ingest_job_id: current.ingest_job_id,
+                inserted: false,
+                revision: application.store().revision()?,
+            })
         }
         Err(error) => {
             let _ = fs::remove_file(staged_path);
@@ -271,22 +338,22 @@ fn validate_spec(spec: &IngestJobSpec) -> Result<(), String> {
     Ok(())
 }
 
-fn existing_job(application: &Application, job_key: &str) -> Result<Option<EnqueueResult>, String> {
+fn existing_job(application: &Application, job_key: &str) -> Result<Option<ExistingJob>, String> {
     application.store().read(|connection| {
         connection
             .query_row(
-                "SELECT ingest_job_id FROM ingest_job WHERE job_key = ?1",
+                "SELECT ingest_job_id, source_path, status
+                 FROM ingest_job WHERE job_key = ?1",
                 [job_key],
-                |row| row.get::<_, i64>(0),
+                |row| {
+                    Ok(ExistingJob {
+                        ingest_job_id: row.get(0)?,
+                        source_path: row.get(1)?,
+                        status: row.get(2)?,
+                    })
+                },
             )
             .optional()
-            .map(|job| {
-                job.map(|ingest_job_id| EnqueueResult {
-                    ingest_job_id,
-                    inserted: false,
-                    revision: 0,
-                })
-            })
     })
 }
 
@@ -414,6 +481,7 @@ pub fn run_batch(application: &Application, limit: usize) -> Result<IngestRunRep
         match process_job(application, &job) {
             Ok(result) => {
                 mark_succeeded(application, job.ingest_job_id)?;
+                cleanup_staged_source(&job);
                 report.ingested += 1;
                 item_ids.insert(result.root_item_id.0);
                 if let Some(receipt) = result.receipt {
@@ -458,18 +526,36 @@ fn process_job(application: &Application, job: &IngestJob) -> Result<IngestMedia
         .write_original(&job.input.file_hash, &bytes, Some(extension))
         .map_err(|error| format!("Failed to persist original blob: {error}"))?;
     let result = application.ingest_prepared(&job.input)?;
+    Ok(result)
+}
+
+fn cleanup_staged_source(job: &IngestJob) {
     if job.delete_after_ingest {
-        match fs::remove_file(&job.source_path) {
-            Ok(()) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!(
-                    "Imported media but could not remove source: {error}"
-                ))
+        if let Err(error) = fs::remove_file(&job.source_path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    path = %job.source_path,
+                    error = %error,
+                    "Could not remove completed ingest staging file"
+                );
             }
         }
     }
-    Ok(result)
+}
+
+pub(crate) fn existing_watch_job_keys(
+    application: &Application,
+) -> Result<std::collections::HashSet<String>, String> {
+    application.store().read(|connection| {
+        let mut statement = connection.prepare(
+            "SELECT job_key FROM ingest_job
+             WHERE source_kind = 'watch' AND status <> 'failed'",
+        )?;
+        let keys = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
+        Ok(keys)
+    })
 }
 
 fn mark_succeeded(application: &Application, ingest_job_id: i64) -> Result<(), String> {
@@ -561,6 +647,7 @@ mod tests {
                 captured_at: None,
                 metadata_json: None,
             }),
+            target_folder_id: None,
         }
     }
 
@@ -587,6 +674,46 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(reset_running_at(&app, "2026-01-01T00:01:00Z").unwrap(), 1);
         assert_eq!(claim_at(&app, 8, "2026-01-01T00:01:00Z").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn enqueue_reactivates_a_terminal_failed_job_with_fresh_staging() {
+        let (directory, app) = application();
+        let source = directory.path().join("retry.png");
+        fs::write(&source, MEDIA_BYTES).unwrap();
+        let queue = IngestQueue::start(&app).unwrap();
+        let first = queue.enqueue(&spec(source.to_str().unwrap())).unwrap();
+        app.store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE ingest_job
+                     SET status = 'failed', attempt_count = 8, last_error = 'broken'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let retried = queue.enqueue(&spec(source.to_str().unwrap())).unwrap();
+        assert!(retried.inserted);
+        assert_eq!(retried.ingest_job_id, first.ingest_job_id);
+        app.store()
+            .read(|connection| {
+                let state: (String, i64, Option<String>) = connection.query_row(
+                    "SELECT status, attempt_count, last_error FROM ingest_job",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                assert_eq!(state, ("pending".to_string(), 0, None));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            fs::read_dir(directory.path().join("ingest-staging"))
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     #[test]

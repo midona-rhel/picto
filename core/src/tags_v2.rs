@@ -377,18 +377,7 @@ fn require_tag(connection: &rusqlite::Connection, tag_id: i64) -> rusqlite::Resu
 }
 
 fn parse_tag(value: &str) -> Result<(String, String), String> {
-    let value = value.trim();
-    if value.is_empty() {
-        return Err("Tag name is required".to_string());
-    }
-    let (namespace, subtag) = value
-        .split_once(':')
-        .map(|(namespace, subtag)| (namespace.trim(), subtag.trim()))
-        .unwrap_or(("general", value));
-    if namespace.is_empty() || subtag.is_empty() {
-        return Err("Tag namespace and subtag must not be empty".to_string());
-    }
-    Ok((namespace.to_lowercase(), subtag.to_lowercase()))
+    crate::tag_name_v2::parse_local(value)
 }
 
 fn normalize_search(value: &str) -> String {
@@ -495,6 +484,7 @@ mod tests {
                 lifecycle: Lifecycle::Active,
                 captured_at: None,
                 source: None,
+                target_folder_id: None,
             })
             .unwrap()
             .root_item_id;

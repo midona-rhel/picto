@@ -523,18 +523,27 @@ impl ProjectionStore {
 
     /// Apply a direct media tag change and project it to the media's root.
     pub fn apply_tag_delta(&self, media_id: i64, tag_id: i64, present: bool) -> Result<(), String> {
-        validate_id(media_id)?;
+        self.apply_tag_changes(&[(media_id, tag_id)], present)
+    }
+
+    /// Apply a batch under one lock and rebuild each affected root once.
+    pub fn apply_tag_changes(&self, changes: &[(i64, i64)], present: bool) -> Result<(), String> {
         let mut state = self.state.write().unwrap();
-        let tags = state.direct_tags.entry(media_id).or_default();
-        if present {
-            tags.insert(tag_id);
-        } else {
-            tags.remove(&tag_id);
+        let mut roots = HashSet::new();
+        for (media_id, tag_id) in changes {
+            validate_id(*media_id)?;
+            let tags = state.direct_tags.entry(*media_id).or_default();
+            if present {
+                tags.insert(*tag_id);
+            } else {
+                tags.remove(tag_id);
+            }
+            recompute_effective_tags(&mut state, *media_id);
+            if let Some(root_id) = state.media_to_root.get(media_id).copied() {
+                roots.insert(root_id);
+            }
         }
-        recompute_effective_tags(&mut state, media_id);
-        if let Some(root_id) = state.media_to_root.get(&media_id).copied() {
-            rebuild_tag_bitmaps_for_roots(&mut state, &[root_id]);
-        }
+        rebuild_tag_bitmaps_for_roots(&mut state, &roots.into_iter().collect::<Vec<_>>());
         Ok(())
     }
 

@@ -4,7 +4,6 @@
 //! boundary: every downloaded item is recorded and queued before the source
 //! query can be marked successful.
 
-use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -13,8 +12,9 @@ use std::pin::Pin;
 
 use chrono::{DateTime, Duration, Utc};
 use tokio::sync::mpsc::{self, Sender};
+use tokio_util::sync::CancellationToken;
 
-use crate::app::{resources, Application, ItemId, MutationReceipt};
+use crate::app::{resources, Application, MutationReceipt};
 use crate::ingest_queue_v2::{self, IngestJobSpec};
 use crate::ingest_v2::PreparedMediaInput;
 use crate::subscriptions_v2::{self, ClaimedQueryRun, DomainSchedule, NormalizedPost};
@@ -106,6 +106,7 @@ pub trait SourceRunner: Send + Sync {
         &'a self,
         query: &'a ClaimedQueryRun,
         output: Sender<DownloadedItem>,
+        cancel: CancellationToken,
     ) -> RunnerFuture<'a>;
 }
 
@@ -114,14 +115,24 @@ pub struct SubscriptionWorker<'a, R> {
     application: &'a Application,
     runner: R,
     schedule: DomainSchedule,
+    cancel: CancellationToken,
 }
 
 impl<'a, R: SourceRunner> SubscriptionWorker<'a, R> {
     pub fn new(application: &'a Application, runner: R) -> Self {
+        Self::with_cancellation(application, runner, CancellationToken::new())
+    }
+
+    pub fn with_cancellation(
+        application: &'a Application,
+        runner: R,
+        cancel: CancellationToken,
+    ) -> Self {
         Self {
             application,
             runner,
             schedule: DomainSchedule::new(),
+            cancel,
         }
     }
 
@@ -130,7 +141,14 @@ impl<'a, R: SourceRunner> SubscriptionWorker<'a, R> {
     }
 
     pub async fn tick(&mut self, now: &str) -> Result<Option<MutationReceipt>, String> {
-        tick(self.application, &mut self.schedule, &self.runner, now).await
+        tick_with_cancellation(
+            self.application,
+            &mut self.schedule,
+            &self.runner,
+            &self.cancel,
+            now,
+        )
+        .await
     }
 }
 
@@ -141,13 +159,29 @@ pub async fn tick<R: SourceRunner>(
     runner: &R,
     now: &str,
 ) -> Result<Option<MutationReceipt>, String> {
+    tick_with_cancellation(
+        application,
+        schedule,
+        runner,
+        &CancellationToken::new(),
+        now,
+    )
+    .await
+}
+
+async fn tick_with_cancellation<R: SourceRunner>(
+    application: &Application,
+    schedule: &mut DomainSchedule,
+    runner: &R,
+    cancel: &CancellationToken,
+    now: &str,
+) -> Result<Option<MutationReceipt>, String> {
     let Some(query) = subscriptions_v2::claim_next_query_run(application.store(), schedule, now)?
     else {
         return Ok(None);
     };
 
-    let mut item_ids = BTreeSet::new();
-    let runner_result = run_stream(application, &query, runner, &mut item_ids).await;
+    let runner_result = run_stream(application, &query, runner, cancel).await;
     match runner_result {
         Ok(Ok(success)) => {
             subscriptions_v2::complete_query_run_with_cursor(
@@ -170,15 +204,13 @@ pub async fn tick<R: SourceRunner>(
         }
     }
 
-    let mut changed_resources = BTreeSet::from([
-        resources::SUBSCRIPTIONS.to_string(),
-        resources::TASKS.to_string(),
-    ]);
-    changed_resources.extend(item_ids.iter().map(|item_id| resources::item(*item_id)));
     let receipt = MutationReceipt {
         revision: application.store().revision()?,
-        resources: changed_resources.into_iter().collect(),
-        item_ids: item_ids.into_iter().map(ItemId).collect(),
+        resources: vec![
+            resources::SUBSCRIPTIONS.to_string(),
+            resources::TASKS.to_string(),
+        ],
+        item_ids: Vec::new(),
     };
     application.publish(&receipt);
     Ok(Some(receipt))
@@ -188,20 +220,26 @@ async fn run_stream<R: SourceRunner>(
     application: &Application,
     query: &ClaimedQueryRun,
     runner: &R,
-    item_ids: &mut BTreeSet<i64>,
+    cancel: &CancellationToken,
 ) -> Result<Result<RunnerSuccess, RunnerFailure>, String> {
     let (output, mut input) = mpsc::channel(CHANNEL_CAPACITY);
-    let runner_future = runner.run(query, output);
+    let runner_future = runner.run(query, output, cancel.child_token());
     tokio::pin!(runner_future);
 
     let runner_result = loop {
         tokio::select! {
+            _ = cancel.cancelled() => {
+                return Ok(Err(RunnerFailure::retryable(
+                    RunnerFailureKind::Runtime,
+                    "Subscription run interrupted",
+                )));
+            }
             result = &mut runner_future => {
                 break result;
             }
             item = input.recv() => match item {
                 Some(item) => {
-                    if let Err(error) = process_item(application, query, &item, item_ids) {
+                    if let Err(error) = process_item(application, query, &item) {
                         release_post_archive(application, query, &item.post.post_key).await;
                         return Err(error);
                     }
@@ -214,7 +252,7 @@ async fn run_stream<R: SourceRunner>(
     };
 
     while let Some(item) = input.recv().await {
-        if let Err(error) = process_item(application, query, &item, item_ids) {
+        if let Err(error) = process_item(application, query, &item) {
             release_post_archive(application, query, &item.post.post_key).await;
             return Err(error);
         }
@@ -239,7 +277,6 @@ fn process_item(
     application: &Application,
     query: &ClaimedQueryRun,
     item: &DownloadedItem,
-    item_ids: &mut BTreeSet<i64>,
 ) -> Result<(), String> {
     let source = item
         .input
@@ -274,28 +311,8 @@ fn process_item(
 
     // A streamed download should become visible while the source run is still
     // active. The durable queue remains authoritative if processing retries.
-    let report = ingest_queue_v2::run_batch(application, STREAM_INGEST_BATCH_SIZE)
+    ingest_queue_v2::run_batch(application, STREAM_INGEST_BATCH_SIZE)
         .map_err(|error| format!("processing subscription ingest failed: {error}"))?;
-    item_ids.extend(report.item_ids.into_iter().map(|item_id| item_id.0));
-
-    let visible_ids = application.store().read(|connection| {
-        let mut statement = connection.prepare(
-            "SELECT si.media_item_id, sp.root_item_id
-             FROM source_item si
-             JOIN source_post sp ON sp.source_post_id = si.source_post_id
-             WHERE sp.site_id = ?1 AND sp.post_key = ?2 AND si.item_key = ?3",
-        )?;
-        let ids = statement
-            .query_map(
-                rusqlite::params![source.site_id, source.post_key, source.item_key],
-                |row| Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?)),
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(ids)
-    })?;
-    for (media_item_id, root_item_id) in visible_ids {
-        item_ids.extend(media_item_id.into_iter().chain(root_item_id));
-    }
     Ok(())
 }
 
@@ -356,11 +373,31 @@ mod tests {
         runs: Mutex<VecDeque<FakeRun>>,
     }
 
+    struct CancellationAwareRunner;
+
+    impl SourceRunner for CancellationAwareRunner {
+        fn run<'a>(
+            &'a self,
+            _query: &'a ClaimedQueryRun,
+            _output: Sender<DownloadedItem>,
+            cancel: CancellationToken,
+        ) -> RunnerFuture<'a> {
+            Box::pin(async move {
+                assert!(cancel.is_cancelled());
+                Err(RunnerFailure::retryable(
+                    RunnerFailureKind::Runtime,
+                    "cancelled",
+                ))
+            })
+        }
+    }
+
     impl SourceRunner for FakeRunner {
         fn run<'a>(
             &'a self,
             _query: &'a ClaimedQueryRun,
             output: Sender<DownloadedItem>,
+            _cancel: CancellationToken,
         ) -> RunnerFuture<'a> {
             Box::pin(async move {
                 let run = self.runs.lock().unwrap().pop_front().unwrap();
@@ -464,6 +501,7 @@ mod tests {
                     captured_at: None,
                     metadata_json: None,
                 }),
+                target_folder_id: None,
             },
             delete_after_ingest: false,
         }
@@ -485,7 +523,12 @@ mod tests {
         };
         let mut worker = SubscriptionWorker::new(&application, runner);
 
-        worker.tick(FIRST_NOW).await.unwrap().unwrap();
+        let receipt = worker.tick(FIRST_NOW).await.unwrap().unwrap();
+        assert!(receipt.item_ids.is_empty());
+        assert_eq!(
+            receipt.resources,
+            vec![resources::SUBSCRIPTIONS, resources::TASKS]
+        );
 
         let (posts, jobs, state, cursor): (i64, i64, String, String) = application
             .store()
@@ -512,6 +555,31 @@ mod tests {
             (posts, jobs, state, cursor),
             (2, 2, "succeeded".to_string(), "cursor-2".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn cancellation_reaches_the_source_and_persists_retry_state() {
+        let (_directory, application, _subscription) = fixture();
+        let cancel = CancellationToken::new();
+        let mut worker = SubscriptionWorker::with_cancellation(
+            &application,
+            CancellationAwareRunner,
+            cancel.clone(),
+        );
+        cancel.cancel();
+
+        worker.tick(FIRST_NOW).await.unwrap();
+        let state: (String, String) = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT status, failure_kind FROM subscription_run_query",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(state, ("pending".to_string(), "runtime".to_string()));
     }
 
     #[tokio::test]
