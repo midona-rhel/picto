@@ -2,7 +2,6 @@ export function createLibraryHostService({
   fs,
   path,
   dialog,
-  initialize,
   openLibrary,
   closeLibrary,
   addLibraryToHistory,
@@ -19,15 +18,10 @@ export function createLibraryHostService({
 }) {
   async function isValidLibrary(libraryPath) {
     try {
-      await fs.access(path.join(libraryPath, 'db', 'library.sqlite'));
+      await fs.access(path.join(libraryPath, 'library.sqlite'));
       return true;
     } catch {
-      try {
-        await fs.access(libraryPath);
-        return true;
-      } catch {
-        return false;
-      }
+      return false;
     }
   }
 
@@ -107,7 +101,7 @@ export function createLibraryHostService({
 
   async function createLibrary({ name, savePath }) {
     const libraryPath = path.join(savePath, `${name}.library`);
-    await fs.mkdir(path.join(libraryPath, 'db'), { recursive: true });
+    await fs.mkdir(libraryPath, { recursive: true });
     await fs.mkdir(path.join(libraryPath, 'blobs'), { recursive: true });
     await switchLibrary(libraryPath);
     return libraryPath;
@@ -302,7 +296,7 @@ export function createLibraryHostService({
 
   async function initializeInitialLibrary(libraryPath) {
     setCurrentLibraryRoot(libraryPath);
-    await initialize(libraryPath);
+    await openLibrary(libraryPath);
     await addLibraryToHistory(libraryPath);
   }
 

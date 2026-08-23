@@ -4,7 +4,7 @@ import fsModule from 'node:fs';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { initRuntime, initialize, invoke, onNativeEvent, openLibrary, closeLibrary, startNativeDrag } from './nativeClient.mjs';
+import { initRuntime, invoke, onNativeEvent, openLibrary, closeLibrary, startNativeDrag } from './nativeClient.mjs';
 import {
   addLibraryToHistory,
   getCachedConfig,
@@ -302,7 +302,6 @@ const libraryHost = createLibraryHostService({
   fs,
   path,
   dialog,
-  initialize,
   openLibrary,
   closeLibrary,
   addLibraryToHistory,

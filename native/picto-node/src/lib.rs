@@ -86,7 +86,7 @@ static EVENT_CB: OnceLock<Mutex<ThreadsafeFunction<EventData>>> = OnceLock::new(
 /// Initialize tracing and runtime. Called once at process startup.
 #[napi]
 pub fn init_runtime() {
-    picto_core::state::init_tracing();
+    picto_core::state_v2::init_tracing();
 }
 
 #[napi]
@@ -98,22 +98,16 @@ pub async fn healthcheck() -> String {
 #[napi]
 pub async fn open_library(library_path: String) -> Result<()> {
     let path = PathBuf::from(library_path);
-    picto_core::state::open_library(path)
+    picto_core::state_v2::open_library(path)
         .await
         .map_err(|e| Error::from_reason(e))?;
     Ok(())
 }
 
-/// Backward-compatible alias for `open_library`.
-#[napi]
-pub async fn initialize(library_path: String) -> Result<()> {
-    open_library(library_path).await
-}
-
 /// Close the currently open library, stopping all background tasks.
 #[napi]
 pub async fn close_library() -> Result<()> {
-    picto_core::state::close_library()
+    picto_core::state_v2::close_library()
         .await
         .map_err(|e| Error::from_reason(e))?;
     Ok(())
@@ -124,7 +118,7 @@ pub async fn close_library() -> Result<()> {
 /// Returns a JSON-encoded result string.
 #[napi]
 pub async fn invoke(command: String, args_json: String) -> Result<String> {
-    picto_core::dispatch::dispatch(&command, &args_json)
+    picto_core::state_v2::invoke(&command, &args_json)
         .await
         .map_err(|e| Error::from_reason(e))
 }

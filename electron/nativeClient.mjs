@@ -16,10 +16,6 @@ export function initRuntime() {
   binding.initRuntime();
 }
 
-export async function initialize(libraryPath) {
-  return binding.initialize(libraryPath);
-}
-
 export async function openLibrary(libraryPath) {
   return binding.openLibrary(libraryPath);
 }
