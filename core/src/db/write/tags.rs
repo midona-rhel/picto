@@ -324,20 +324,10 @@ mod tests {
     fn add_tags_persists_and_ors_provenance_mask() {
         let conn = setup_conn();
 
-        add_tags(
-            &conn,
-            &[1],
-            &["tag_a".to_string()],
-            TAG_PROVENANCE_MANUAL,
-        )
-        .expect("add manual tag");
-        add_tags(
-            &conn,
-            &[1],
-            &["tag_a".to_string()],
-            TAG_PROVENANCE_AI,
-        )
-        .expect("add ai provenance");
+        add_tags(&conn, &[1], &["tag_a".to_string()], TAG_PROVENANCE_MANUAL)
+            .expect("add manual tag");
+        add_tags(&conn, &[1], &["tag_a".to_string()], TAG_PROVENANCE_AI)
+            .expect("add ai provenance");
 
         let mask: i64 = conn
             .query_row(
@@ -362,20 +352,8 @@ mod tests {
         let child = ensure_tag(&conn, "child").unwrap();
         let parent = ensure_tag(&conn, "parent").unwrap();
 
-        add_tags(
-            &conn,
-            &[1],
-            &["from".to_string()],
-            TAG_PROVENANCE_AI,
-        )
-        .unwrap();
-        add_tags(
-            &conn,
-            &[1],
-            &["into".to_string()],
-            TAG_PROVENANCE_MANUAL,
-        )
-        .unwrap();
+        add_tags(&conn, &[1], &["from".to_string()], TAG_PROVENANCE_AI).unwrap();
+        add_tags(&conn, &[1], &["into".to_string()], TAG_PROVENANCE_MANUAL).unwrap();
         manage_alias(&conn, alias_in, Some(from)).unwrap();
         manage_alias(&conn, from, Some(alias_out)).unwrap();
         manage_implication(&conn, child, from, true).unwrap();
@@ -429,13 +407,7 @@ mod tests {
     fn merge_rejects_the_same_tag_without_mutating_it() {
         let conn = setup_conn();
         let tag_id = ensure_tag(&conn, "same").unwrap();
-        add_tags(
-            &conn,
-            &[1],
-            &["same".to_string()],
-            TAG_PROVENANCE_MANUAL,
-        )
-        .unwrap();
+        add_tags(&conn, &[1], &["same".to_string()], TAG_PROVENANCE_MANUAL).unwrap();
 
         assert!(merge_tags(&conn, tag_id, tag_id).is_err());
         assert_eq!(

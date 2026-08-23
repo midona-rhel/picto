@@ -33,15 +33,11 @@ impl ApplicationEngine {
                 view_query,
                 exclusions,
             } => match operation {
-                TagOperation::Add => self.db.add_tags_bulk(
-                    &view_query,
-                    &exclusions,
-                    tags,
-                    provenance_mask,
-                )?,
-                TagOperation::Remove => {
-                    self.db.remove_tags_bulk(&view_query, &exclusions, tags)?
+                TagOperation::Add => {
+                    self.db
+                        .add_tags_bulk(&view_query, &exclusions, tags, provenance_mask)?
                 }
+                TagOperation::Remove => self.db.remove_tags_bulk(&view_query, &exclusions, tags)?,
             },
         };
         let write = self.tag_write_change(&change, "apply_entity_tags")?;

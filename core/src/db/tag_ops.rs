@@ -40,12 +40,7 @@ impl LibraryDatabase {
                     [entity_hash],
                     |row| row.get(0),
                 )?;
-                let change = write::tags::add_tags(
-                    conn,
-                    &[entity_id],
-                    tags,
-                    TAG_PROVENANCE_AI,
-                )?;
+                let change = write::tags::add_tags(conn, &[entity_id], tags, TAG_PROVENANCE_AI)?;
                 if !change.tags_added.is_empty() {
                     let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
                     emit_per_entity(

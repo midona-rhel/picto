@@ -658,9 +658,7 @@ fn validate_credential_fields(
         CredentialType::OAuthToken if !present(oauth_token) => {
             Err("OAuth credentials require an access or refresh token".to_string())
         }
-        CredentialType::OAuthToken
-            if site_category == "tumblr" && !present(password) =>
-        {
+        CredentialType::OAuthToken if site_category == "tumblr" && !present(password) => {
             Err("Tumblr OAuth credentials require an access token secret".to_string())
         }
         CredentialType::Cookies

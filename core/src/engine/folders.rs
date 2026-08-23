@@ -23,27 +23,21 @@ impl ApplicationEngine {
         let resolved = target::resolve(&self.db, &target)?;
         let change = match resolved {
             target::ResolvedTarget::Ids(ids) => match operation {
-                MembershipOperation::Add => {
-                    self.db.add_folder_members(folder_id, &ids)?
-                }
-                MembershipOperation::Remove => {
-                    self.db.remove_folder_members(folder_id, &ids)?
-                }
+                MembershipOperation::Add => self.db.add_folder_members(folder_id, &ids)?,
+                MembershipOperation::Remove => self.db.remove_folder_members(folder_id, &ids)?,
             },
             target::ResolvedTarget::Query {
                 view_query,
                 exclusions,
             } => match operation {
-                MembershipOperation::Add => self.db.add_folder_members_bulk(
-                    folder_id,
-                    &view_query,
-                    &exclusions,
-                )?,
-                MembershipOperation::Remove => self.db.remove_folder_members_bulk(
-                    folder_id,
-                    &view_query,
-                    &exclusions,
-                )?,
+                MembershipOperation::Add => {
+                    self.db
+                        .add_folder_members_bulk(folder_id, &view_query, &exclusions)?
+                }
+                MembershipOperation::Remove => {
+                    self.db
+                        .remove_folder_members_bulk(folder_id, &view_query, &exclusions)?
+                }
             },
         };
         self.commit_write(&WriteChange::from_folder(&change));

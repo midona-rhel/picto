@@ -1542,12 +1542,7 @@ impl LibraryDatabase {
         self.with_write(move |conn| {
             let left = query::duplicates::get_duplicate_single_ref_by_hash(conn, &hash_a)?;
             let right = query::duplicates::get_duplicate_single_ref_by_hash(conn, &hash_b)?;
-            let result = write::duplicates::resolve_duplicate_pair(
-                conn,
-                &action,
-                left,
-                right,
-            )?;
+            let result = write::duplicates::resolve_duplicate_pair(conn, &action, left, right)?;
             if matches!(result.status, types::DuplicateResolveStatus::Resolved) {
                 // The detected pair is recomputable; the user's decision is truth.
                 let (a, b) = if hash_a <= hash_b {
