@@ -57,23 +57,27 @@ pub struct ItemSummary {
     pub lifecycle: Lifecycle,
     pub label: Option<String>,
     pub name: Option<String>,
-    pub mime_type: Option<String>,
-    pub file_hash: Option<FileHash>,
+    pub display_media_item_id: ItemId,
+    pub display_file_hash: FileHash,
+    pub display_mime_type: String,
+    #[ts(type = "number | null")]
+    pub pixel_width: Option<i64>,
+    #[ts(type = "number | null")]
+    pub pixel_height: Option<i64>,
+    #[ts(type = "number | null")]
+    pub duration_ms: Option<i64>,
+    #[ts(type = "number | null")]
+    pub frame_count: Option<i64>,
+    pub has_audio: bool,
+    pub dominant_color_hex: Option<String>,
     #[ts(type = "number")]
     pub size_bytes: i64,
     #[ts(type = "number | null")]
     pub rating: Option<i64>,
     pub captured_at: Option<String>,
     pub imported_at: Option<String>,
-    pub cover_media_item_id: Option<ItemId>,
-    pub cover_mime_type: Option<String>,
-    pub cover_file_hash: Option<FileHash>,
-    #[ts(type = "number | null")]
-    pub cover_size_bytes: Option<i64>,
     #[ts(type = "number")]
-    pub collection_member_count: i64,
-    #[ts(type = "number")]
-    pub total_size_bytes: i64,
+    pub media_count: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -712,21 +716,19 @@ fn resolve_connection(
          paged AS (
              SELECT
                  fr.*,
-                 root_asset.name AS root_name,
-                 root_file.mime_type AS root_mime_type,
-                 root_file.file_hash AS root_file_hash,
-                 root_file.size_bytes AS root_size_bytes,
-                 root_asset.rating AS root_rating,
-                 cover_file.mime_type AS cover_mime_type,
-                 cover_file.file_hash AS cover_file_hash,
-                 cover_file.size_bytes AS cover_size_bytes
+                 display_asset.name AS display_name,
+                 display_file.mime_type AS display_mime_type,
+                 display_file.file_hash AS display_file_hash,
+                 display_file.pixel_width,
+                 display_file.pixel_height,
+                 display_file.duration_ms,
+                 display_file.frame_count,
+                 display_file.has_audio,
+                 display_file.dominant_color_hex
              FROM filtered_roots fr
-             LEFT JOIN media_asset root_asset
-               ON root_asset.item_id = fr.item_id AND fr.kind = 'media'
-             LEFT JOIN media_file root_file ON root_file.file_id = root_asset.file_id
-             LEFT JOIN media_asset cover_asset
-               ON cover_asset.item_id = fr.resolved_cover_media_item_id
-             LEFT JOIN media_file cover_file ON cover_file.file_id = cover_asset.file_id
+             JOIN media_asset display_asset
+               ON display_asset.item_id = fr.resolved_cover_media_item_id
+             JOIN media_file display_file ON display_file.file_id = display_asset.file_id
              ORDER BY {order_by}, fr.item_id ASC
              LIMIT ?{limit_index} OFFSET ?{offset_index}
          )
@@ -738,19 +740,21 @@ fn resolve_connection(
              paged.kind,
              paged.lifecycle,
              paged.label,
-             paged.root_name,
-             paged.root_mime_type,
-             paged.root_file_hash,
-             paged.root_size_bytes,
-             paged.root_rating,
+             COALESCE(paged.label, paged.display_name),
+             paged.resolved_cover_media_item_id,
+             paged.display_file_hash,
+             paged.display_mime_type,
+             paged.pixel_width,
+             paged.pixel_height,
+             paged.duration_ms,
+             paged.frame_count,
+             paged.has_audio,
+             paged.dominant_color_hex,
+             paged.total_size_bytes,
+             paged.sort_rating,
              paged.captured_at,
              paged.imported_at,
-             paged.resolved_cover_media_item_id,
-             paged.cover_mime_type,
-             paged.cover_file_hash,
-             paged.cover_size_bytes,
-             paged.collection_member_count,
-             paged.total_size_bytes
+             paged.collection_member_count
          FROM metrics
          LEFT JOIN paged ON TRUE"
     );
@@ -816,26 +820,26 @@ fn read_summary(row: &rusqlite::Row<'_>, item_id: i64) -> rusqlite::Result<ItemS
         }
     };
 
-    let root_size_bytes: Option<i64> = row.get(10)?;
-    let total_size_bytes: i64 = row.get(19)?;
     Ok(ItemSummary {
         item_id: ItemId(item_id),
         kind,
         lifecycle,
         label: row.get(6)?,
         name: row.get(7)?,
-        mime_type: row.get(8)?,
-        file_hash: row.get::<_, Option<String>>(9)?.map(FileHash),
-        size_bytes: root_size_bytes.unwrap_or(total_size_bytes),
-        rating: row.get(11)?,
-        captured_at: row.get(12)?,
-        imported_at: row.get(13)?,
-        cover_media_item_id: row.get::<_, Option<i64>>(14)?.map(ItemId),
-        cover_mime_type: row.get(15)?,
-        cover_file_hash: row.get::<_, Option<String>>(16)?.map(FileHash),
-        cover_size_bytes: row.get(17)?,
-        collection_member_count: row.get(18)?,
-        total_size_bytes,
+        display_media_item_id: ItemId(row.get(8)?),
+        display_file_hash: FileHash(row.get(9)?),
+        display_mime_type: row.get(10)?,
+        pixel_width: row.get(11)?,
+        pixel_height: row.get(12)?,
+        duration_ms: row.get(13)?,
+        frame_count: row.get(14)?,
+        has_audio: row.get(15)?,
+        dominant_color_hex: row.get(16)?,
+        size_bytes: row.get(17)?,
+        rating: row.get(18)?,
+        captured_at: row.get(19)?,
+        imported_at: row.get(20)?,
+        media_count: row.get(21)?,
     })
 }
 
@@ -1148,8 +1152,8 @@ mod tests {
             .find(|item| item.item_id == ItemId(10))
             .unwrap();
         assert_eq!(collection.kind, ItemKind::Collection);
-        assert_eq!(collection.collection_member_count, 2);
-        assert_eq!(collection.total_size_bytes, 90);
+        assert_eq!(collection.media_count, 2);
+        assert_eq!(collection.size_bytes, 90);
         assert_eq!(page.visible_item_count, 2);
         assert_eq!(page.visible_media_count, 3);
         assert!(!page.items.iter().any(|item| item.item_id == ItemId(11)));
