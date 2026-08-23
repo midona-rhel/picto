@@ -2,7 +2,6 @@ import { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, 
 import fs from 'node:fs/promises';
 import fsModule from 'node:fs';
 import path from 'node:path';
-import { createHash } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { initRuntime, invoke, onNativeEvent, openLibrary, closeLibrary, startNativeDrag } from './nativeClient.mjs';
 import {
@@ -53,7 +52,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:8080';
 const SMOKE_SETTLE_MS = 1500;
-const PACKAGED_SYNC_SMOKE_LIBRARY = 'packaged-sync-smoke';
 let nativeClosePromise = null;
 let nativeShutdownSettled = false;
 let nativeQuitPromise = null;
@@ -68,105 +66,6 @@ function reportPackagedSmoke(event, details = {}) {
 function closeNativeLibraryOnce() {
   nativeClosePromise ??= closeLibrary();
   return nativeClosePromise;
-}
-
-async function waitForSmokeMedia(hash, timeoutMs = 10_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    try {
-      const mediaPath = await invoke('resolve_file_path', { hash });
-      const bytes = await fs.readFile(mediaPath);
-      if (createHash('sha256').update(bytes).digest('hex') !== hash) {
-        throw new Error('resolved smoke media failed its SHA-256 check');
-      }
-      return mediaPath;
-    } catch (error) {
-      if (String(error).includes('SHA-256')) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-  }
-  throw new Error(`smoke media ${hash} did not become available within ${timeoutMs}ms`);
-}
-
-async function runPackagedSyncSmoke() {
-  const shareRoot = process.env.PICTO_SMOKE_SYNC_ROOT;
-  const phase = process.env.PICTO_SMOKE_SYNC_PHASE;
-  const mediaPath = process.env.PICTO_SMOKE_MEDIA_PATH;
-  const mediaHash = process.env.PICTO_SMOKE_MEDIA_HASH;
-  if (!shareRoot || !phase || !mediaPath || !mediaHash) return;
-
-  if (phase === 'publish') {
-    await invoke('add_media', { paths: [mediaPath], initial_status: 1 });
-    await waitForSmokeMedia(mediaHash);
-    const created = await invoke('create_folder', { name: 'From device A' });
-    const result = await invoke('sync_create_remote_library', {
-      share_root: shareRoot,
-      name: PACKAGED_SYNC_SMOKE_LIBRARY,
-    });
-    const status = await invoke('sync_get_status', {});
-    reportPackagedSmoke('sync-device-a-published', {
-      device_id: status.device_id,
-      source_folder_id: created.folder_id,
-      segments_uploaded: result.report.segments_uploaded,
-    });
-    return;
-  }
-
-  if (phase === 'peer') {
-    const result = await invoke('sync_connect_remote_library', {
-      share_root: shareRoot,
-      name: PACKAGED_SYNC_SMOKE_LIBRARY,
-    });
-    const peerTree = await invoke('get_sidebar_tree', {});
-    const peerFolder = peerTree.nodes.find(
-      (node) => node.kind === 'folder' && node.name === 'From device A',
-    );
-    if (!peerFolder) throw new Error('device B did not receive the folder created on device A');
-    await waitForSmokeMedia(mediaHash);
-
-    const peerFolderId = Number(peerFolder.id.replace(/^folder:/, ''));
-    if (!Number.isSafeInteger(peerFolderId)) throw new Error('device B received an invalid folder identity');
-    await invoke('update_folder', { folder_id: peerFolderId, name: 'Renamed on device B' });
-    const publish = await invoke('sync_now', {});
-    const status = await invoke('sync_get_status', {});
-    reportPackagedSmoke('sync-device-b-published', {
-      device_id: status.device_id,
-      initial_ops_applied: result.report.ops_applied,
-      segments_uploaded: publish.report.segments_uploaded,
-    });
-    return;
-  }
-
-  if (phase === 'verify') {
-    const startupStatus = await invoke('sync_get_status', {});
-    const result = await invoke('sync_now', {});
-    await waitForSmokeMedia(mediaHash);
-    const sourceTree = await invoke('get_sidebar_tree', {});
-    const converged = sourceTree.nodes.some(
-      (node) => node.kind === 'folder' && node.name === 'Renamed on device B',
-    );
-    if (!converged) throw new Error('device A did not receive the folder rename from device B');
-    const finalStatus = await invoke('sync_get_status', {});
-    if (
-      finalStatus.waiting_for_prerequisites
-      || finalStatus.more_remote_work
-      || finalStatus.pending_remote_ops !== 0
-      || finalStatus.missing_blobs !== 0
-      || finalStatus.failed_blobs !== 0
-      || !finalStatus.last_success_at
-    ) {
-      throw new Error(`sync did not settle cleanly: ${JSON.stringify(finalStatus)}`);
-    }
-    reportPackagedSmoke('two-device-sync-complete', {
-      device_id: startupStatus.device_id,
-      startup_ops_applied: startupStatus.last_report?.ops_applied ?? 0,
-      return_ops_applied: result.report.ops_applied,
-      media_hash: mediaHash,
-    });
-    return;
-  }
-
-  throw new Error(`unknown packaged sync smoke phase: ${phase}`);
 }
 
 function failPackagedSmoke(event, details = {}, closeNative = true) {
@@ -192,14 +91,13 @@ async function completePackagedSmoke() {
   if (!isPackagedSmoke || smokeExitRequested) return;
   smokeExitRequested = true;
   try {
-    await runPackagedSyncSmoke();
     await closeNativeLibraryOnce();
     nativeShutdownSettled = true;
     if (smokeFailureReported) return;
     reportPackagedSmoke('native-library-closed');
     app.exit(0);
   } catch (error) {
-    failPackagedSmoke('sync-smoke-failed', { message: error?.message ?? String(error) });
+    failPackagedSmoke('packaged-smoke-failed', { message: error?.message ?? String(error) });
   }
 }
 

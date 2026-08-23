@@ -8,12 +8,11 @@
  */
 
 import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { IconSettings2, IconCommand, IconPalette, IconX, IconSearch, IconBorderAll, IconLayoutBoard, IconSortAscending, IconSortDescending, IconCloud, IconSparkles } from '@tabler/icons-react';
+import { IconSettings2, IconCommand, IconPalette, IconX, IconSearch, IconBorderAll, IconLayoutBoard, IconSortAscending, IconSortDescending, IconSparkles } from '@tabler/icons-react';
 import { getKeyboardPreset, setKeyboardPreset, type KeyboardPreset } from '../../shared/lib/shortcuts';
 import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { ShortcutsPanel } from './ShortcutsPanel';
-import { CloudSyncPanel } from './CloudSyncPanel';
 import { AiTaggingPanel } from './AiTaggingPanel';
 import { appController } from '../../controllers/appController';
 import { settingsController, type AppSettings, type ViewPrefsDto, type ViewPrefsPatch } from '../../controllers/settingsController';
@@ -64,12 +63,6 @@ const PANELS: PanelDef[] = [
     keywords: 'ai tagging tagger models model download threshold confidence auto tag rating',
     description: 'Local models, confidence thresholds, and auto-tag behavior.',
     custom: () => <AiTaggingPanel />,
-  },
-  {
-    id: 'cloudsync', label: 'Cloud Sync', icon: IconCloud,
-    keywords: 'cloud sync remote library upload download device disconnect',
-    description: 'Cloud library status and synchronization actions.',
-    custom: () => <CloudSyncPanel />,
   },
 ];
 

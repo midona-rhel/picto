@@ -1,13 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { IconX, IconCloud, IconBooks } from '@tabler/icons-react';
+import { IconX, IconBooks } from '@tabler/icons-react';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
 import { IconPicker } from '../../shared/ui/IconPicker';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
-import {
-  cloudSyncController,
-  type RemoteLibraryInfo,
-  type ShareRootCandidate,
-} from '../../controllers/cloudSyncController';
 import styles from './LibraryManager.module.css';
 
 interface LibraryConfigResult {
@@ -20,17 +15,6 @@ interface LibraryConfigResult {
 }
 
 const pictoLibrary = () => (window as any).picto.library;
-
-const PROVIDER_NAMES: Record<string, string> = {
-  'google-drive': 'Google Drive',
-  dropbox: 'Dropbox',
-  icloud: 'iCloud',
-  onedrive: 'OneDrive',
-};
-
-function shortServiceName(service: ShareRootCandidate): string {
-  return PROVIDER_NAMES[service.provider] ?? service.label;
-}
 
 function baseName(path: string): string {
   const last = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -46,9 +30,6 @@ function parentDir(path: string): string {
 
 export function LibraryManager() {
   const [config, setConfig] = useState<LibraryConfigResult | null>(null);
-  const [services, setServices] = useState<ShareRootCandidate[]>([]);
-  const [cloudLibraries, setCloudLibraries] = useState<Record<string, RemoteLibraryInfo[]>>({});
-  const [cloudNames, setCloudNames] = useState<Record<string, string>>({});
   const [showLocalCreate, setShowLocalCreate] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [showIconEditor, setShowIconEditor] = useState(false);
@@ -65,29 +46,9 @@ export function LibraryManager() {
     }
   }, []);
 
-  const refreshCloud = useCallback(async () => {
-    try {
-      const detected = await cloudSyncController.detectShareRoots();
-      setServices(detected);
-      const byService: Record<string, RemoteLibraryInfo[]> = {};
-      for (const service of detected) {
-        try {
-          byService[service.path] = await cloudSyncController.listRemoteLibraries(service.path);
-        } catch {
-          byService[service.path] = [];
-        }
-      }
-      setCloudLibraries(byService);
-    } catch (e) {
-      setServices([]);
-      setError(String(e));
-    }
-  }, []);
-
   useEffect(() => {
     refresh();
-    refreshCloud();
-  }, [refresh, refreshCloud]);
+  }, [refresh]);
 
   const localEntries = useMemo(() => {
     if (!config) return [];
@@ -143,60 +104,6 @@ export function LibraryManager() {
       setLocalName('');
       setShowLocalCreate(false);
       setMessage(`Created "${name}".`);
-    });
-
-  /// Where to put a local copy of a cloud library: next to the current
-  /// library if there is one, otherwise ask.
-  const defaultLocalDir = useCallback(async (): Promise<string | null> => {
-    const anchor = config?.currentPath ?? config?.lastLibrary ?? config?.libraryHistory?.[0];
-    if (anchor) return parentDir(anchor);
-    const result = await (window as any).picto.dialog.open({
-      properties: ['openDirectory'],
-      multiple: false,
-      title: 'Choose where to keep this library on this device',
-    });
-    const dir = Array.isArray(result) ? result[0] : result;
-    return dir ?? null;
-  }, [config]);
-
-  const openCloudLibrary = (service: ShareRootCandidate, remote: RemoteLibraryInfo) =>
-    run(`cloud-open:${service.path}:${remote.name}`, async () => {
-      // Already materialized on this device? Just switch to it.
-      const local = localEntries.find((entry) => entry.name === remote.name && entry.exists);
-      if (local) {
-        if (!local.current) await pictoLibrary().switch(local.path);
-        await cloudSyncController.connectRemoteLibrary(service.path, remote.name);
-        setMessage(`Opened "${remote.name}" — synced with ${service.label}.`);
-        return;
-      }
-      const dir = await defaultLocalDir();
-      if (!dir) return;
-      await pictoLibrary().create(remote.name, dir);
-      await cloudSyncController.connectRemoteLibrary(service.path, remote.name);
-      setMessage(`Opened "${remote.name}" from ${service.label}. Syncing…`);
-    });
-
-  /// One click on a local library: publish it to a cloud service and keep
-  /// it synced. Switches to the library first (sync binds to the open one).
-  const publishLibrary = (entry: { path: string; name: string; current: boolean }, service: ShareRootCandidate) =>
-    run(`publish:${entry.path}`, async () => {
-      if (!entry.current) await pictoLibrary().switch(entry.path);
-      await cloudSyncController.createRemoteLibrary(service.path, entry.name);
-      setMessage(`"${entry.name}" now syncs to ${service.label}.`);
-      await refreshCloud();
-    });
-
-  const createCloudLibrary = (service: ShareRootCandidate) =>
-    run(`cloud-create:${service.path}`, async () => {
-      const name = (cloudNames[service.path] ?? '').trim();
-      if (!name) return;
-      const dir = await defaultLocalDir();
-      if (!dir) return;
-      await pictoLibrary().create(name, dir);
-      await cloudSyncController.createRemoteLibrary(service.path, name);
-      setCloudNames((prev) => ({ ...prev, [service.path]: '' }));
-      setMessage(`Created "${name}" on ${service.label}.`);
-      await refreshCloud();
     });
 
   return (
@@ -287,20 +194,6 @@ export function LibraryManager() {
                       </button>
                     </div>
                     <div className={styles.detailGrid}>
-                      <span className={styles.detailLabel}>Sync to</span>
-                      <span className={styles.detailControls}>
-                        {services.map((service) => (
-                          <button
-                            key={service.path}
-                            className={styles.btn}
-                            title={service.label}
-                            onClick={() => publishLibrary(entry, service)}
-                            disabled={busy !== null || !entry.exists}
-                          >
-                            {shortServiceName(service)}
-                          </button>
-                        ))}
-                      </span>
                       <span className={styles.detailLabel}>Color</span>
                       <span className={styles.detailControls}>
                         <span className={styles.colorConstraint}>
@@ -373,87 +266,6 @@ export function LibraryManager() {
               </button>
             </div>
           ) : null}
-        </div>
-
-        <div>
-          <div className={styles.sectionTitle}>Cloud</div>
-          {services.length === 0 ? (
-            <div className={styles.empty}>
-              No sync service detected on this computer. Picto syncs through the Google Drive or
-              Dropbox app you already use — there is nothing to sign into inside Picto. Install
-              Google Drive for Desktop or Dropbox and libraries can sync automatically.
-            </div>
-          ) : (
-          <div className={styles.cloudList}>
-            {services.map((service) => {
-              const libraries = cloudLibraries[service.path] ?? [];
-              return (
-                <div key={service.path} className={styles.serviceBlock}>
-                  <div className={styles.serviceHeader}>
-                    <IconCloud size={14} />
-                    {service.label}
-                  </div>
-                  {libraries.length === 0 ? (
-                    <div className={styles.empty}>No Picto libraries here yet.</div>
-                  ) : (
-                    <div className={styles.list}>
-                      {libraries.map((remote) => {
-                        const local = localEntries.find(
-                          (entry) => entry.name === remote.name && entry.exists,
-                        );
-                        return (
-                          <div key={remote.name} className={styles.row}>
-                            <div className={styles.rowMain}>
-                              <span className={styles.rowName}>{remote.name}</span>
-                              <span className={styles.rowPath}>
-                                {remote.valid
-                                  ? `Created ${remote.created_at?.slice(0, 10) ?? '—'}${local ? ' · on this device' : ''}`
-                                  : 'Invalid library data'}
-                              </span>
-                            </div>
-                            <button
-                              className={styles.btn}
-                              onClick={() => openCloudLibrary(service, remote)}
-                              disabled={busy !== null || !remote.valid}
-                            >
-                              {busy === `cloud-open:${service.path}:${remote.name}`
-                                ? 'Opening…'
-                                : local?.current
-                                  ? 'Sync'
-                                  : 'Open'}
-                            </button>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                  <div className={styles.inlineForm}>
-                    <input
-                      className={styles.nameInput}
-                      placeholder={`New library on ${service.label}`}
-                      value={cloudNames[service.path] ?? ''}
-                      onChange={(e) =>
-                        setCloudNames((prev) => ({ ...prev, [service.path]: e.target.value }))
-                      }
-                    />
-                    <button
-                      className={styles.btn}
-                      onClick={() => createCloudLibrary(service)}
-                      disabled={busy !== null || !(cloudNames[service.path] ?? '').trim()}
-                    >
-                      {busy === `cloud-create:${service.path}` ? 'Creating…' : 'Create'}
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          )}
-          <div className={styles.hint}>
-            No sign-in needed — Picto syncs through the cloud app already on this computer.
-            Cloud libraries live under a Picto folder on the service and stay in sync on every
-            device that opens them. Picto never deletes or overwrites a library on the share.
-          </div>
         </div>
 
         {message ? <div className={styles.message}>{message}</div> : null}

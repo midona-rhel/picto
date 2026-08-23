@@ -2,7 +2,7 @@
  * AI Tagging settings panel — local tagger models, hardware-aware
  * recommendation, download management, confidence cutoffs, and behavior.
  *
- * Changes apply immediately (CloudSyncPanel pattern) — no dirty tracking.
+ * Changes apply immediately; model operations own their persisted state.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
