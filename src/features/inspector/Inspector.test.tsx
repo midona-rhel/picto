@@ -21,6 +21,7 @@ function renderState(state: 'entity' | 'multi' | 'folder' | 'smart-folder' | 'sy
     <InspectorSkeleton
       preview={<div />}
       palette={[]}
+      selectionCount={state === 'multi' ? 2 : undefined}
       name={{ value: state === 'multi' ? '2 items selected' : state === 'loading' || state === 'error' ? '—' : 'Example' }}
       notes={{ value: state === 'entity' ? 'Notes' : '—', readOnly: unavailable }}
       source={{ urls: state === 'entity' ? ['https://example.com/item'] : [], unavailable }}
@@ -28,7 +29,7 @@ function renderState(state: 'entity' | 'multi' | 'folder' | 'smart-folder' | 'sy
       rating={{ value: 0 }}
       coreProperties={coreLabels.map((label, index) => ({
         label: label as 'Items' | 'Dimensions' | 'Size' | 'Type' | 'Duration' | 'Date added' | 'Date created' | 'Date modified',
-        value: index === 0 ? '1' : '—',
+        value: index === 0 && state !== 'multi' ? '1' : '—',
         mono: label !== 'Type',
       }))}
       tags={[]}
@@ -47,11 +48,12 @@ describe('InspectorSkeleton', () => {
 
       const expectedAnchors = ['folder', 'smart-folder', 'system'].includes(state)
         ? ['name', 'notes']
-        : ['name', 'notes', 'source'];
+        : state === 'multi' ? [] : ['name', 'notes', 'source'];
       expect([...document.querySelectorAll('[data-inspector-anchor]')].map((node) => node.getAttribute('data-inspector-anchor')))
         .toEqual(expectedAnchors);
       expect([...document.querySelectorAll('[data-inspector-core-property]')].map((node) => node.getAttribute('data-inspector-core-property')))
-        .toEqual(['Items']);
+        .toEqual(state === 'multi' ? [] : ['Items']);
+      if (state === 'multi') expect(screen.getByText('2 items selected')).toBeInTheDocument();
       expect(screen.getByText('Properties')).toBeInTheDocument();
 
       const applicable = state === 'entity' || state === 'multi';

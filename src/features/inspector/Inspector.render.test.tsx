@@ -98,9 +98,9 @@ function renderInspector({
   return render(<MantineProvider><Inspector /></MantineProvider>);
 }
 
-function assertStableAnchors(expectedCoreLabels: string[]) {
+function assertStableAnchors(expectedCoreLabels: string[], expectedIdentityAnchors = ['name', 'notes', 'source']) {
   expect([...document.querySelectorAll('[data-inspector-anchor]')].map((node) => node.getAttribute('data-inspector-anchor')))
-    .toEqual(['name', 'notes', 'source']);
+    .toEqual(expectedIdentityAnchors);
   expect([...document.querySelectorAll('[data-inspector-core-property]')].map((node) => node.getAttribute('data-inspector-core-property')))
     .toEqual(expectedCoreLabels);
 }
@@ -120,7 +120,7 @@ describe('Inspector presentation branches', () => {
     store.set(folderPickerPortalAtom, { open: false, anchor: null });
   });
 
-  it('keeps identity and core anchors for entity, multi, loading, and error', () => {
+  it('uses item identity fields only when the target has item identity', () => {
     const cases = [
       { target: { kind: 'item', itemId: 1 }, data: entity, unavailableSource: false },
       { target: { kind: 'multi', count: 2, selectionMode: 'explicit' }, data: null, unavailableSource: true },
@@ -130,16 +130,22 @@ describe('Inspector presentation branches', () => {
 
     for (const entry of cases) {
       const view = renderInspector(entry);
-      assertStableAnchors(entry.data
-        ? ['Items', 'Dimensions', 'Size', 'Type', 'Date added', 'Date created']
-        : entry.target.kind === 'multi' ? ['Items'] : []);
+      assertStableAnchors(
+        entry.data ? ['Items', 'Dimensions', 'Size', 'Type', 'Date added', 'Date created'] : [],
+        entry.target.kind === 'multi' ? [] : undefined,
+      );
       const sections = [...document.querySelectorAll('[data-inspector-section]')].map((node) => node.getAttribute('data-inspector-section'));
       if (entry.data || entry.target.kind === 'multi') {
         expect(sections.slice(0, 3)).toEqual(['tags', 'folders', 'properties']);
       } else {
         expect(sections).toEqual(['properties']);
       }
-      if (entry.unavailableSource) expect(document.querySelector('[data-inspector-anchor="source"]')).toHaveTextContent('—');
+      if (entry.unavailableSource && entry.target.kind !== 'multi') {
+        expect(document.querySelector('[data-inspector-anchor="source"]')).toHaveTextContent('—');
+      }
+      if (entry.target.kind === 'multi') {
+        expect(document.querySelector('[data-inspector-selection-count]')).toHaveTextContent('2 items selected');
+      }
       view.unmount();
     }
   });

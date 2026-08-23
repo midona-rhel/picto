@@ -331,9 +331,10 @@ type SourceFieldModel = {
 type InspectorSkeletonProps = {
   preview: React.ReactNode;
   palette: string[];
-  name: TextFieldModel;
-  notes: TextFieldModel;
-  source: SourceFieldModel;
+  name?: TextFieldModel;
+  notes?: TextFieldModel;
+  source?: SourceFieldModel;
+  selectionCount?: number;
   showSource?: boolean;
   rating: { value: number; onChange?: (rating: number) => void };
   coreProperties: CoreProperty[];
@@ -358,6 +359,7 @@ export function InspectorSkeleton({
   name,
   notes,
   source,
+  selectionCount,
   showSource = true,
   rating,
   coreProperties,
@@ -379,19 +381,25 @@ export function InspectorSkeleton({
       {preview}
       <ColorPalette colors={palette} />
 
-      <div className={styles.fieldStack} data-inspector-identity="">
-        <div data-inspector-anchor="name">
-          <InspectorField value={name.value} placeholder="Name" readOnly={name.readOnly} onCommit={name.onCommit} />
+      {selectionCount != null ? (
+        <div className={styles.selectionCount} data-inspector-selection-count="">
+          {selectionCount.toLocaleString()} items selected
         </div>
-        <div data-inspector-anchor="notes">
-          <InspectorField value={notes.value} placeholder="Notes" readOnly={notes.readOnly} onCommit={notes.onCommit} />
-        </div>
-        {showSource && (
-          <div data-inspector-anchor="source">
-            <InspectorSourceField urls={source.urls} onChange={source.onChange} unavailable={source.unavailable} />
+      ) : name && notes && source ? (
+        <div className={styles.fieldStack} data-inspector-identity="">
+          <div data-inspector-anchor="name">
+            <InspectorField value={name.value} placeholder="Name" readOnly={name.readOnly} onCommit={name.onCommit} />
           </div>
-        )}
-      </div>
+          <div data-inspector-anchor="notes">
+            <InspectorField value={notes.value} placeholder="Notes" readOnly={notes.readOnly} onCommit={notes.onCommit} />
+          </div>
+          {showSource && (
+            <div data-inspector-anchor="source">
+              <InspectorSourceField urls={source.urls} onChange={source.onChange} unavailable={source.unavailable} />
+            </div>
+          )}
+        </div>
+      ) : null}
 
       {showTags && (
         <div data-inspector-section="tags">
@@ -539,12 +547,9 @@ export function Inspector() {
     return <InspectorSkeleton
       preview={<Preview hashes={previewHashes} type="stacked" />}
       palette={[]}
-      name={{ value: `${count.toLocaleString()} items selected`, readOnly: true }}
-      notes={{ value: '', onCommit: selTarget ? (value) => { void entityMutations.setTargetNotes(selTarget, value); } : undefined }}
-      source={{ urls: [], unavailable: true }}
+      selectionCount={count}
       rating={{ value: summary?.stats?.rating_stats?.shared ?? 0, onChange: selTarget ? (rating) => { void entityMutations.setTargetRating(selTarget, rating); } : undefined }}
       coreProperties={normalizedCoreProperties({
-        Items: { value: count.toLocaleString() },
         Size: summaryPending
           ? { value: '', loading: true, showLoading: showSummaryLoading }
           : { value: summary?.stats?.total_size_bytes != null ? fmtSize(summary.stats.total_size_bytes) : '—' },

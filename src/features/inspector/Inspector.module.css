@@ -362,6 +362,14 @@
   flex-direction: column;
 }
 
+.selectionCount {
+  padding: 10px 14px;
+  color: var(--inspector-text-primary, var(--color-text-primary));
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 18px;
+}
+
 
 /* Tags — namespace:subtag chips with namespace coloring */
 .tagsWrap {
