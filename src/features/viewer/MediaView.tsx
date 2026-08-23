@@ -27,6 +27,7 @@ export interface MediaViewProps {
   items: CanonicalEntityGridItem[];
   currentIndex: number;
   totalCount?: number | null;
+  backLabel?: string;
   /** Root recorded as recently viewed. Use null for no history write. */
   recordItemId?: number | null;
   /** Root that receives keyboard rating writes. Use null for read-only member detail. */
@@ -39,7 +40,7 @@ export interface MediaViewProps {
 const NAV_SIZE = 120;
 
 export function MediaView({
-  items, currentIndex, totalCount, recordItemId, ratingItemId, onNavigate, onClose, onLoadMore,
+  items, currentIndex, totalCount, backLabel, recordItemId, ratingItemId, onNavigate, onClose, onLoadMore,
 }: MediaViewProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentItemId = currentItem?.item_id ?? 0;
@@ -143,6 +144,7 @@ export function MediaView({
   useEffect(() => {
     setDisplayControls({
       close: () => onClose(currentItemId),
+      backLabel,
       navigate,
       zoom: {
         fitToWindow: zoom.fitToWindow,
@@ -153,7 +155,7 @@ export function MediaView({
         subscribeZoomScale: zoom.subscribeLiveScale,
       },
     });
-  }, [currentItemId, navigate, onClose, zoom, setDisplayControls]);
+  }, [backLabel, currentItemId, navigate, onClose, zoom, setDisplayControls]);
 
   useEffect(() => () => { setDisplayState(null); setDisplayControls(null); }, [setDisplayState, setDisplayControls]);
 

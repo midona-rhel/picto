@@ -323,6 +323,7 @@ export function CollectionSurface({
           items={members}
           currentIndex={viewerIndex}
           totalCount={members.length}
+          backLabel="Back to collection"
           recordItemId={collectionId}
           ratingItemId={null}
           onNavigate={(delta) => setViewerIndex((index) => Math.max(

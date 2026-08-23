@@ -24,8 +24,8 @@ vi.mock('../../runtime/libraryInvalidation', () => ({
   libraryInvalidation: { register: vi.fn(() => () => {}) },
 }));
 vi.mock('../viewer/MediaView', () => ({
-  MediaView: ({ currentIndex }: { currentIndex: number }) => (
-    <div data-testid="media-view">Viewing {currentIndex}</div>
+  MediaView: ({ currentIndex, backLabel }: { currentIndex: number; backLabel?: string }) => (
+    <div data-testid="media-view" data-back-label={backLabel}>Viewing {currentIndex}</div>
   ),
 }));
 vi.mock('../grid/canvas/CanvasGrid', () => ({
@@ -154,7 +154,9 @@ describe('CollectionSurface', () => {
     render(<CollectionSurface collectionId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
     await screen.findByLabelText('Ordered set');
     fireEvent.doubleClick(document.querySelector('[data-collection-member="2"]')!);
-    expect(await screen.findByTestId('media-view')).toHaveTextContent('Viewing 1');
+    const mediaView = await screen.findByTestId('media-view');
+    expect(mediaView).toHaveTextContent('Viewing 1');
+    expect(mediaView).toHaveAttribute('data-back-label', 'Back to collection');
   });
 
   it('uses the same inline detail viewer for video members', async () => {
