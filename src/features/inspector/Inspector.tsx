@@ -422,7 +422,7 @@ export function Inspector() {
       const n = sidebarNodes.find((s) => s.id === `folder:${folderId}`);
       return { id: folderId, name: n?.name ?? `Folder ${folderId}`, color: n?.color ?? null };
     });
-    const palette = primary?.dominant_color_hex ? [primary.dominant_color_hex] : [];
+    const palette = primary?.dominant_colors ?? [];
     return <InspectorSkeleton
       preview={<Preview hashes={primary ? [primary.file_hash] : []} type="single" />}
       palette={palette}

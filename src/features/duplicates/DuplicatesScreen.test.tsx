@@ -60,6 +60,7 @@ function details(itemId: number, hash: string, name: string): ItemDetails {
       file_hash: hash,
       mime_type: 'image/png',
       dominant_color_hex: null,
+      dominant_colors: [],
       size_bytes: 1_024,
       pixel_width: 100,
       pixel_height: 100,

@@ -101,6 +101,7 @@ pub struct MediaDetails {
     pub file_hash: FileHash,
     pub mime_type: String,
     pub dominant_color_hex: Option<String>,
+    pub dominant_colors: Vec<String>,
     #[ts(type = "number")]
     pub size_bytes: i64,
     #[ts(type = "number | null")]
@@ -575,40 +576,53 @@ fn details_connection(connection: &Connection, item_id: i64) -> rusqlite::Result
                  SELECT media_item_id, position_rank FROM collection_member
                  WHERE collection_id = ?1 AND ?2 = 'collection'
              )
-             SELECT ma.item_id, mf.file_hash, mf.mime_type, mf.dominant_color_hex, mf.size_bytes,
-                    mf.pixel_width, mf.pixel_height, mf.duration_ms, mf.frame_count,
-                    mf.has_audio, ma.name, ma.notes, ma.rating, ma.source_urls_json,
-                    ma.captured_at, ma.imported_at, rm.position
+             SELECT ma.item_id, mf.file_hash, mf.mime_type, mf.dominant_color_hex,
+                    mf.dominant_palette_blob, mf.size_bytes, mf.pixel_width, mf.pixel_height,
+                    mf.duration_ms, mf.frame_count, mf.has_audio, ma.name, ma.notes, ma.rating,
+                    ma.source_urls_json, ma.captured_at, ma.imported_at, rm.position
              FROM root_media rm
              JOIN media_asset ma ON ma.item_id = rm.media_item_id
              JOIN media_file mf ON mf.file_id = ma.file_id
              ORDER BY rm.position, ma.item_id",
         )?
         .query_map(params![item_id, kind_string(kind)], |row| {
+            let dominant_color_hex: Option<String> = row.get(3)?;
+            let palette_blob: Option<Vec<u8>> = row.get(4)?;
+            let mut dominant_colors: Vec<String> = palette_blob
+                .as_deref()
+                .and_then(|blob| {
+                    crate::media_processing::colors::deserialize_dominant_palette_blob(blob).ok()
+                })
+                .map(|palette| palette.into_iter().map(|color| color.hex).collect())
+                .unwrap_or_default();
+            if dominant_colors.is_empty() {
+                dominant_colors.extend(dominant_color_hex.iter().cloned());
+            }
             Ok(MediaDetails {
                 media_item_id: ItemId(row.get(0)?),
                 file_hash: FileHash(row.get(1)?),
                 mime_type: row.get(2)?,
-                dominant_color_hex: row.get(3)?,
-                size_bytes: row.get(4)?,
-                pixel_width: row.get(5)?,
-                pixel_height: row.get(6)?,
-                duration_ms: row.get(7)?,
-                frame_count: row.get(8)?,
-                has_audio: row.get(9)?,
-                name: row.get(10)?,
-                notes: row.get(11)?,
-                rating: row.get(12)?,
+                dominant_color_hex,
+                dominant_colors,
+                size_bytes: row.get(5)?,
+                pixel_width: row.get(6)?,
+                pixel_height: row.get(7)?,
+                duration_ms: row.get(8)?,
+                frame_count: row.get(9)?,
+                has_audio: row.get(10)?,
+                name: row.get(11)?,
+                notes: row.get(12)?,
+                rating: row.get(13)?,
                 source_urls: {
-                    let source_urls_json: Option<String> = row.get(13)?;
+                    let source_urls_json: Option<String> = row.get(14)?;
                     source_urls_json
                         .as_deref()
                         .and_then(|json| serde_json::from_str(json).ok())
                         .unwrap_or_default()
                 },
-                captured_at: row.get(14)?,
-                imported_at: row.get(15)?,
-                position: row.get(16)?,
+                captured_at: row.get(15)?,
+                imported_at: row.get(16)?,
+                position: row.get(17)?,
                 tags: Vec::new(),
             })
         })?
@@ -1292,7 +1306,13 @@ mod tests {
                 tx.execute("INSERT INTO tag (tag_id, namespace, subtag) VALUES (1, 'general', 'member-tag')", [])?;
                 tx.execute("INSERT INTO media_tag (media_item_id, tag_id) VALUES (11, 1)", [])?;
                 tx.execute(
-                    "UPDATE media_file SET dominant_color_hex = '#123456' WHERE file_id = 11",
+                    "UPDATE media_file
+                     SET dominant_color_hex = '#123456',
+                         dominant_palette_blob = CAST(
+                             '[{\"hex\":\"#123456\",\"l\":12.0,\"a\":1.0,\"b\":2.0},{\"hex\":\"#abcdef\",\"l\":80.0,\"a\":3.0,\"b\":4.0}]'
+                             AS BLOB
+                         )
+                     WHERE file_id = 11",
                     [],
                 )?;
                 tx.execute("INSERT INTO media_view (item_id, viewed_at) VALUES (1, '2026-02-01')", [])?;
@@ -1658,6 +1678,7 @@ mod tests {
             details.media[0].dominant_color_hex.as_deref(),
             Some("#123456")
         );
+        assert_eq!(details.media[0].dominant_colors, vec!["#123456", "#abcdef"]);
         assert_eq!(details.media[0].tags, vec!["member-tag"]);
         assert!(details.media[1].tags.is_empty());
     }

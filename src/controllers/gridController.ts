@@ -81,6 +81,12 @@ function preferenceSortDirection(value: string | null): SortDirection {
   return value === 'ascending' ? 'ascending' : 'descending';
 }
 
+function defaultSort(scope: BaseScope): { field: SortField; direction: SortDirection } {
+  return scope.kind === 'folder'
+    ? { field: 'folder_order', direction: 'ascending' }
+    : { field: 'imported_at', direction: 'descending' };
+}
+
 class GridSessionController {
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
   private preferenceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -111,11 +117,15 @@ class GridSessionController {
     if (store.get(gridSessionAtom).generation !== generation) return;
     const sortField = prefs?.sort_field ?? null;
     const sortOrder = prefs?.sort_order ?? null;
+    const fallbackSort = defaultSort(scope);
+    const field = sortField == null ? fallbackSort.field : preferenceSortField(sortField);
     updateSession((current) => ({
       ...current,
       sort: {
-        field: preferenceSortField(sortField),
-        direction: preferenceSortDirection(sortOrder),
+        field,
+        direction: sortOrder == null
+          ? (field === 'folder_order' ? 'ascending' : fallbackSort.direction)
+          : preferenceSortDirection(sortOrder),
       },
       view: viewFromPreferences(scope, prefs),
     }));
@@ -254,6 +264,10 @@ class GridSessionController {
   async reconcile(_metadataOnly: boolean): Promise<boolean> {
     await this.loadFirstPage({ preserveItems: true });
     return true;
+  }
+
+  useManualFolderOrder(): void {
+    this.setSortNow('folder_order', 'ascending');
   }
 
   private setFiltersNow(filters: QueryFilters): void {

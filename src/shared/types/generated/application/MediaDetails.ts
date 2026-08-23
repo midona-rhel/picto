@@ -2,4 +2,4 @@
 import type { FileHash } from "./FileHash";
 import type { ItemId } from "./ItemId";
 
-export type MediaDetails = { media_item_id: ItemId, file_hash: FileHash, mime_type: string, dominant_color_hex: string | null, size_bytes: number, pixel_width: number | null, pixel_height: number | null, duration_ms: number | null, frame_count: number | null, has_audio: boolean, name: string | null, notes: string | null, rating: number | null, source_urls: Array<string>, captured_at: string | null, imported_at: string, position: number, tags: Array<string>, };
+export type MediaDetails = { media_item_id: ItemId, file_hash: FileHash, mime_type: string, dominant_color_hex: string | null, dominant_colors: Array<string>, size_bytes: number, pixel_width: number | null, pixel_height: number | null, duration_ms: number | null, frame_count: number | null, has_audio: boolean, name: string | null, notes: string | null, rating: number | null, source_urls: Array<string>, captured_at: string | null, imported_at: string, position: number, tags: Array<string>, };

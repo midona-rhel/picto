@@ -1,5 +1,6 @@
 import { setItemLifecycle } from '../platform/entityApi';
 import { reorderFolderMembers, updateFolderMembership } from '../platform/folderApi';
+import { gridController } from './gridController';
 import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 import type { DropTarget, GridDragState } from '../features/grid/dragState';
 
@@ -30,6 +31,7 @@ export const dragController = {
 
     if (target.kind === 'reorder' && sourceScope?.kind === 'folder') {
       await reorderFolderMembers(sourceScope.folder_id, target.orderedItemIds);
+      gridController.useManualFolderOrder();
       return;
     }
   },

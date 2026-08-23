@@ -69,6 +69,8 @@ describe('gridController pagination', () => {
     getViewPrefsMock.mockResolvedValue(null);
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
+      scope: { kind: 'all' },
+      sort: { field: 'imported_at', direction: 'descending' },
       items: [item(1)],
       cursor: 1,
       totalCount: 2,
@@ -86,6 +88,18 @@ describe('gridController pagination', () => {
 
     expect(getViewPrefsMock).toHaveBeenCalledOnce();
     expect(getViewPrefsMock).toHaveBeenCalledWith('system:active');
+  });
+
+  it('uses persisted manual order as the default folder presentation', async () => {
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+
+    await gridController.navigateTo({ kind: 'folder', folder_id: 7 });
+
+    expect(queryItemsMock.mock.calls[0][0].sort).toEqual({
+      field: 'folder_order',
+      direction: 'ascending',
+      random_seed: null,
+    });
   });
 
   it('queries the replacement page contract and appends by item_id', async () => {

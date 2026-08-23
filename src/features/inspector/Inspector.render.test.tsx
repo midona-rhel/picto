@@ -50,7 +50,7 @@ import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals
 const entity = {
   item_id: 1, kind: 'media', lifecycle: 'active', label: 'Example', cover_media_item_id: null,
   folder_ids: [], aggregate_tags: [], revision: 1,
-  media: [{ media_item_id: 1, file_hash: 'file-1', mime_type: 'image/jpeg', dominant_color_hex: null,
+  media: [{ media_item_id: 1, file_hash: 'file-1', mime_type: 'image/jpeg', dominant_color_hex: '#123456', dominant_colors: ['#123456', '#abcdef'],
     size_bytes: 100, pixel_width: 20, pixel_height: 10, duration_ms: null, frame_count: null,
     has_audio: false, name: 'Example', notes: null, rating: null, source_urls: [],
     captured_at: '2026-01-01', imported_at: '2026-01-02', position: 0, tags: [] }],
@@ -134,6 +134,14 @@ describe('Inspector presentation branches', () => {
     expect(addTags).toHaveTextContent('Add Tags');
     expect(addTags).toHaveAttribute('data-inspector-button-primitive', 'action');
     expect(autoTag).toHaveAttribute('data-inspector-button-primitive', 'action');
+    view.unmount();
+  });
+
+  it('renders the complete persisted dominant-color palette', () => {
+    const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
+
+    expect(document.querySelector('[title="#123456 · Click to copy"]')).toBeInTheDocument();
+    expect(document.querySelector('[title="#abcdef · Click to copy"]')).toBeInTheDocument();
     view.unmount();
   });
 
