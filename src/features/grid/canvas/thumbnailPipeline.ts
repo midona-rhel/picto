@@ -1,10 +1,10 @@
 /**
  * Thumbnail pipeline — thin main-thread layer over the decode worker.
  *
- * The worker owns loading, caching, concurrency, and reveal staggering.
+ * The worker owns loading, cancellation, and decoding.
  * This class just:
  *  1. Sends the plan (visible hashes) to the worker each frame.
- *  2. Receives revealed bitmaps and stores them for drawing.
+ *  2. Receives decoded bitmaps and stores them for drawing.
  *  3. Handles eviction of transferred bitmaps.
  *
  * The main thread never waits on the decoder. Reveal identity is owned
@@ -14,7 +14,7 @@
 import {
   sendThumbnailPlan,
   clearThumbnailWorker,
-  setThumbnailRevealCallback,
+  setThumbnailBitmapCallback,
   setThumbnailErrorCallback,
   terminateThumbnailWorker,
 } from './thumbnailDecodeClient';
@@ -54,7 +54,7 @@ export class ThumbnailPipeline {
   constructor(onDirty: () => void = () => {}, onBitmapAvailable: (hash: string) => void = () => {}) {
     this.onDirty = onDirty;
     this.onBitmapAvailable = onBitmapAvailable;
-    setThumbnailRevealCallback((hash, bitmap) => this.handleReveal(hash, bitmap));
+    setThumbnailBitmapCallback((hash, bitmap) => this.handleBitmap(hash, bitmap));
     setThumbnailErrorCallback((hash) => this.handleError(hash));
   }
 
@@ -139,7 +139,7 @@ export class ThumbnailPipeline {
 
   // ── Worker callbacks ────────────────────────────────────────────
 
-  private handleReveal(hash: string, bitmap: ImageBitmap): void {
+  private handleBitmap(hash: string, bitmap: ImageBitmap): void {
     if (this.destroyed) { bitmap.close(); return; }
 
     let entry = this.cache.get(hash);

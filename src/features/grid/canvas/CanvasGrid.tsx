@@ -9,28 +9,17 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { GridViewMode, LayoutResult } from '../layout/types';
-import { computeLayout, safeAspectRatio } from '../layout/layoutMath';
-import { buildTileSpatialIndex } from '../layout/spatialIndex';
 import { HoverPreviewPortal } from './HoverPreviewPortal';
 import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 
 import { ThumbnailPipeline, type PlanTile } from './thumbnailPipeline';
 import { ThumbnailRevealTracker } from './thumbnailRevealTracker';
 import { zoomController } from '../../../controllers/zoomController';
-import { adaptGridItem } from './renderItemAdapter';
+import { GridLayoutRuntime } from './gridLayoutModel';
 import { startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive, startNativeDrag as startNativeDragFn, setInternalDragOrigin } from '../dragState';
 import { hitTestTile, computeReorderTarget } from './hitTesting';
 import { DragGhost } from '../DragGhost';
-import {
-  DRAG_GHOST_BADGE_HEIGHT,
-  DRAG_GHOST_BADGE_MIN_WIDTH,
-  DRAG_GHOST_BORDER,
-  DRAG_GHOST_RADIUS,
-  DRAG_GHOST_STACK_OFFSET,
-  DRAG_GHOST_THUMB_SIZE,
-  dragGhostStackCount,
-  formatDragGhostCount,
-} from '../dragGhostSpec';
+import { createNativeDragImageUrl } from '../dragGhostSpec';
 import { GlassInput } from '../../../shared/ui/GlassInput/GlassInput';
 import { resolveGridScrollAnchor } from './gridScrollAnchor';
 import { planFolderReorder } from './folderReorder';
@@ -63,7 +52,6 @@ function toLayoutCoords(clientX: number, clientY: number, container: HTMLDivElem
     zoom: zoomX,
   };
 }
-const LOAD_MORE_THRESHOLD_PX = 400;
 const ZOOM_BTN_SIZE = 24;
 const HOVER_PREVIEW_DELAY_MS = 200;
 const HOVER_HIDE_DELAY_MS = 90;
@@ -78,8 +66,6 @@ export interface CanvasGridProps {
   showExtensionLabel?: boolean;
   showResolution?: boolean;
   fitThumbnails?: boolean;
-  /** Total item count for the current scope (from backend). Used to estimate scroll height before all items are loaded. */
-  totalCount?: number | null;
   onTileClick?: (index: number, item: CanonicalEntityGridItem, event?: React.MouseEvent) => void;
   onTileDoubleClick?: (index: number, item: CanonicalEntityGridItem) => void;
   onEmptyClick?: () => void;
@@ -118,7 +104,6 @@ export function CanvasGrid({
   showExtensionLabel = false,
   showResolution = false,
   fitThumbnails = false,
-  totalCount = null,
   onTileClick,
   onTileDoubleClick,
   onEmptyClick,
@@ -148,6 +133,7 @@ export function CanvasGrid({
   const headerRef = useRef<HTMLDivElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const viewportLayerRef = useRef<HTMLDivElement>(null);
   const pipelineRef = useRef<ThumbnailPipeline | null>(null);
   const revealTrackerRef = useRef(new ThumbnailRevealTracker());
   const suppressTileRevealRef = useRef(suppressTileReveal);
@@ -192,7 +178,7 @@ export function CanvasGrid({
   const lastScrollTopRef = useRef(0);
   const lastScrollTimeRef = useRef(0);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const prevLayoutRef = useRef<typeof layout | null>(null);
+  const prevLayoutRef = useRef<ReturnType<GridLayoutRuntime['update']> | null>(null);
   const prevItemsRef = useRef(items);
   const hoveredTileRef = useRef<number | null>(null);
   const isScrollingRef = useRef(false);
@@ -221,52 +207,29 @@ export function CanvasGrid({
   onLoadMoreRef.current = onLoadMore;
   onScrollTopChangeRef.current = onScrollTopChange;
 
-  // Debounced container dimensions for layout — prevents jitter during resize
-  const [containerSize, setContainerSize] = useState({
-    width: 0,
-    height: 0,
-    scrollbarWidth: 0,
-  });
-  const {
-    width: containerWidth,
-    height: containerHeight,
-    scrollbarWidth,
-  } = containerSize;
+  // Width changes settle before layout; height changes size the sticky canvas
+  // imperatively and never enter React state.
+  const [layoutWidth, setLayoutWidth] = useState({ width: 0, scrollbarWidth: 0 });
   const [headerHeight, setHeaderHeight] = useState(0);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const effectiveViewMode = viewMode;
   const textHeight = (showName ? TEXT_NAME_ROW_H : 0) + (showResolution ? TEXT_NAME_ROW_H : 0);
 
-  // ── Render items (adapted from entities) ──
-  const renderItems = useMemo(
-    () => items.map(adaptGridItem),
-    [items],
-  );
-
-  const aspectRatios = useMemo(
-    () => items.map((item) =>
-      safeAspectRatio(item.pixel_width && item.pixel_height ? item.pixel_width / item.pixel_height : 1.5),
-    ),
-    [items],
-  );
-
-  // ── Layout (recomputed on width/targetSize/viewMode change, NOT on scroll) ──
-  const layout = useMemo(
-    () => computeLayout(aspectRatios, containerWidth, targetSize, GAP, effectiveViewMode, textHeight, 0, scrollbarWidth),
-    [aspectRatios, containerWidth, targetSize, GAP, effectiveViewMode, textHeight, scrollbarWidth],
-  );
+  const layoutRuntimeRef = useRef(new GridLayoutRuntime());
+  const layoutModel = useMemo(() => layoutRuntimeRef.current.update(items, {
+    width: layoutWidth.width,
+    targetSize,
+    gap: GAP,
+    viewMode,
+    textHeight,
+    scrollbarWidth: layoutWidth.scrollbarWidth,
+  }), [items, layoutWidth, targetSize, viewMode, textHeight]);
 
   const onLayoutChangeRef = useRef(onLayoutChange);
   onLayoutChangeRef.current = onLayoutChange;
-  useEffect(() => { onLayoutChangeRef.current?.(layout); }, [layout]);
-
-  // ── Spatial index over layout positions (Y-binned) ──
-  // Rebuilt atomically with the layout; consumed by the activation-zone scan
-  // and marquee hit-testing instead of full position scans.
-  const spatialIndex = useMemo(() => buildTileSpatialIndex(layout.positions), [layout]);
-  const spatialIndexRef = useRef(spatialIndex);
-  spatialIndexRef.current = spatialIndex;
+  useEffect(() => { onLayoutChangeRef.current?.(layoutModel); }, [layoutModel]);
+  const spatialIndexRef = useRef(layoutModel.spatialIndex);
+  spatialIndexRef.current = layoutModel.spatialIndex;
   // Reusable query output buffer — avoids per-frame allocation.
   const candidateBufRef = useRef<number[]>([]);
 
@@ -284,13 +247,13 @@ export function CanvasGrid({
 
   useLayoutEffect(() => {
     const prev = prevLayoutRef.current;
-    prevLayoutRef.current = layout;
+    prevLayoutRef.current = layoutModel;
     const prevItems = prevItemsRef.current;
     prevItemsRef.current = items;
 
     // No previous layout (first mount / first resize) or same layout object.
-    if (!prev || prev === layout) return;
-    if (prev.positions.length === 0 || layout.positions.length === 0) return;
+    if (!prev || prev === layoutModel) return;
+    if (prev.positions.length === 0 || layoutModel.positions.length === 0) return;
 
     const container = containerRef.current;
     if (!container) return;
@@ -299,7 +262,7 @@ export function CanvasGrid({
 
     const next = resolveGridScrollAnchor({
       previousPositions: prev.positions,
-      nextPositions: layout.positions,
+      nextPositions: layoutModel.positions,
       previousItems: prevItems,
       nextItems: items,
       selectedHashes: selectedHashesRef.current,
@@ -310,20 +273,7 @@ export function CanvasGrid({
 
     container.scrollTop = next;
     lastScrollTopRef.current = next;
-  }, [layout, items]);
-
-  // ── Estimated total scroll height ──
-  // When totalCount > loaded items, estimate from average height per item.
-  // First page loads 500 items — enough for a good estimate.
-  // As more 100-item batches load, the estimate refines imperceptibly.
-  const estimatedTotalHeight = useMemo(() => {
-    const loadedCount = items.length;
-    const total = totalCount ?? loadedCount;
-    const mediaHeight = (total <= loadedCount || loadedCount === 0)
-      ? layout.totalHeight
-      : Math.round((layout.totalHeight / loadedCount) * total);
-    return mediaHeight + headerHeight;
-  }, [items.length, totalCount, layout.totalHeight, headerHeight]);
+  }, [layoutModel, items]);
 
   // ── Thumbnail pipeline lifecycle ──
   useEffect(() => {
@@ -338,15 +288,10 @@ export function CanvasGrid({
       );
     });
     pipelineRef.current = pipeline;
-    // Cache theme values on mount and observe theme attribute changes
-    refreshTheme();
-    const observer = new MutationObserver(() => refreshTheme());
-    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-mantine-color-scheme'] });
     return () => {
       pipeline.clear();
       revealTrackerRef.current.clear();
       pipelineRef.current = null;
-      observer.disconnect();
       if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null; }
     };
   }, []);
@@ -425,11 +370,11 @@ export function CanvasGrid({
     // and get a precise re-test here.
     const candidates = candidateBufRef.current;
     candidates.length = 0;
-    spatialIndex.queryYRange(zoneTop, zoneBottom, candidates);
+    layoutModel.spatialIndex.queryYRange(zoneTop, zoneBottom, candidates);
     collectThumbnailActivation(
       candidates,
-      layout.positions,
-      renderItems,
+      layoutModel.positions,
+      layoutModel.items,
       zoneTop,
       zoneBottom,
       scrollTop,
@@ -456,14 +401,14 @@ export function CanvasGrid({
 
     const hasActiveRevealFromDraw = drawCanvasBaseLayer({
       ctx,
-      positions: layout.positions,
-      items: renderItems,
+      positions: layoutModel.positions,
+      items: layoutModel.items,
       atlasGet: (hash) => pipeline.get(hash),
       revealProgress: (hash) => revealTrackerRef.current.getProgress(hash, now),
       activeTiles,
       draw: drawCtx,
       theme: cachedThemeRef.current,
-      viewMode: effectiveViewMode,
+      viewMode,
       fitThumbnails,
       showTileName: showName,
       showResolution,
@@ -487,7 +432,7 @@ export function CanvasGrid({
       firstPaintRef.current = true;
       onFirstPaint?.();
     }
-  }, [layout, spatialIndex, renderItems, effectiveViewMode, fitThumbnails, showName, showExtension, showExtensionLabel, showResolution, suppressTileReveal, textHeight, headerHeight]);
+  }, [layoutModel, viewMode, fitThumbnails, showName, showExtension, showExtensionLabel, showResolution, suppressTileReveal, textHeight, headerHeight]);
 
   const drawOverlay = useCallback(() => {
     const container = containerRef.current;
@@ -510,9 +455,11 @@ export function CanvasGrid({
       ctx.strokeStyle = '#3297FF';
       ctx.lineWidth = 2;
       ctx.beginPath();
-      for (let i = 0; i < items.length; i++) {
-        if (!selectedEntityHashes.has(items[i].entity_hash)) continue;
-        const pos = layout.positions[i];
+      const visible = activeTilesRef.current;
+      for (let k = 0; k < visible.length; k++) {
+        const i = visible[k];
+        if (!selectedEntityHashes.has(layoutModel.items[i]?.hash)) continue;
+        const pos = layoutModel.positions[i];
         if (!pos) continue;
         const drawY = pos.y - scrollTop;
         if (drawY + pos.h < -100 || drawY > vp.viewportHeight + 100) continue;
@@ -526,7 +473,7 @@ export function CanvasGrid({
     const hovIdx = hoveredTileRef.current;
     if (hovIdx != null && !isScrollingRef.current) {
       const hovItem = items[hovIdx];
-      const hovPos = layout.positions[hovIdx];
+      const hovPos = layoutModel.positions[hovIdx];
       if (hovItem && hovPos && !hovItem.mime_type.startsWith('video/')) {
         const drawY = hovPos.y - scrollTop;
         if (drawY + hovPos.h >= 0 && drawY <= vp.viewportHeight) {
@@ -575,7 +522,7 @@ export function CanvasGrid({
     // Draw reorder drop indicator (blue vertical line + triangle)
     const rd = reorderDropRef.current;
     if (rd) {
-      const rdPos = layout.positions[rd.dropIndex];
+      const rdPos = layoutModel.positions[rd.dropIndex];
       if (rdPos) {
         const rdDrawY = rdPos.y - scrollTop;
         const rdImgH = rdPos.h - textHeight;
@@ -611,7 +558,7 @@ export function CanvasGrid({
       reorderDropRef.current == null;
 
     ctx.restore();
-  }, [layout, items, selectedEntityHashes, textHeight, headerHeight]);
+  }, [layoutModel, items, selectedEntityHashes, textHeight, headerHeight]);
 
   // ── Shared RAF scheduler ──
   const drawBaseRef = useRef(drawBase);
@@ -626,32 +573,37 @@ export function CanvasGrid({
   // ── Resize observer ──
   useEffect(() => {
     const container = containerRef.current;
-    if (!container || !interactive) return;
+    if (!container) return;
 
-    const measure = () => {
+    const sizeViewport = () => {
+      if (viewportLayerRef.current) viewportLayerRef.current.style.height = `${container.clientHeight}px`;
+      markDirty('both');
+    };
+    const settleWidth = () => {
       const w = container.clientWidth;
-      const h = container.clientHeight;
       const sbw = container.offsetWidth - w;
-      setContainerSize((current) => (
-        current.width === w && current.height === h && current.scrollbarWidth === sbw
+      setLayoutWidth((current) => (
+        current.width === w && current.scrollbarWidth === sbw
           ? current
-          : { width: w, height: h, scrollbarWidth: sbw }
+          : { width: w, scrollbarWidth: sbw }
       ));
     };
 
-    measure();
+    sizeViewport();
+    settleWidth();
     const observer = new ResizeObserver(() => {
+      sizeViewport();
       if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
       resizeTimerRef.current = setTimeout(() => {
         resizeTimerRef.current = null;
-        measure();
+        settleWidth();
       }, GRID_RESIZE_SETTLE_MS);
     });
     observer.observe(container);
 
     // Re-measure when page zoom changes (Cmd+/Cmd-) — DPR changes with zoom
     const dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-    const handleDprChange = () => measure();
+    const handleDprChange = sizeViewport;
     dprQuery.addEventListener('change', handleDprChange);
 
     return () => {
@@ -659,7 +611,7 @@ export function CanvasGrid({
       dprQuery.removeEventListener('change', handleDprChange);
       if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
     };
-  }, [interactive]);
+  }, [markDirty]);
 
   // ── Header height observer ──
   useEffect(() => {
@@ -673,8 +625,8 @@ export function CanvasGrid({
   }, [headerContent]);
 
   // ── Redraw on layout/prop changes ──
-  useEffect(() => { markDirty('both'); }, [layout, markDirty]);
-  useEffect(() => { markDirty('base'); }, [showName, showExtension, showResolution, effectiveViewMode, fitThumbnails, suppressTileReveal, markDirty]);
+  useEffect(() => { markDirty('both'); }, [layoutModel, markDirty]);
+  useEffect(() => { markDirty('base'); }, [showName, showExtension, showResolution, viewMode, fitThumbnails, suppressTileReveal, markDirty]);
   useEffect(() => { markDirty('overlay'); }, [selectedEntityHashes, markDirty]);
   useEffect(() => { markDirty('both'); }, [headerHeight, markDirty]);
 
@@ -684,7 +636,11 @@ export function CanvasGrid({
   // (covered by the ResizeObserver), and zoom redraws come from the
   // explicit zoomController subscription below.
   useEffect(() => {
-    const observer = new MutationObserver(() => markDirty('both'));
+    refreshTheme();
+    const observer = new MutationObserver(() => {
+      refreshTheme();
+      markDirty('both');
+    });
     observer.observe(document.documentElement, {
       attributes: true,
       attributeFilter: ['data-theme', 'data-mantine-color-scheme'],
@@ -694,14 +650,14 @@ export function CanvasGrid({
       observer.disconnect();
       unsubZoom();
     };
-  }, [markDirty]);
+  }, [markDirty, refreshTheme]);
 
   // ── Global pointer tracking during drag ──
   // Uses refs to avoid effect re-runs on every ghost position update.
   const itemsRef = useRef(items);
   itemsRef.current = items;
-  const layoutPosRef = useRef(layout.positions);
-  layoutPosRef.current = layout.positions;
+  const layoutModelRef = useRef(layoutModel);
+  layoutModelRef.current = layoutModel;
   const textHeightRef = useRef(textHeight);
   textHeightRef.current = textHeight;
   const headerHeightRef = useRef(headerHeight);
@@ -721,48 +677,11 @@ export function CanvasGrid({
         reorderDropRef.current = null;
         setDragGhost(null);
 
-        // Generate stacked icon matching DragGhost style
-        let iconUrl = '';
-        try {
-          const thumbSize = DRAG_GHOST_THUMB_SIZE;
-          const so = DRAG_GHOST_STACK_OFFSET;
-          const curItems = itemsRef.current;
-          const ths = state.hashes.slice(0, 3).map((h) => {
-            const it = curItems.find((x) => x.entity_hash === h);
-            return it?.entity_hash ?? h;
-          });
-          const sc = dragGhostStackCount(ths.length);
-          const tw = thumbSize + (sc - 1) * so + 14;
-          const th = thumbSize + (sc - 1) * so + 8;
-          const cv = document.createElement('canvas');
-          cv.width = tw; cv.height = th;
-          const cx = cv.getContext('2d');
-          if (cx) {
-            for (let i = 0; i < sc; i++) {
-              const en = pipelineRef.current?.get(ths[i]);
-              if (en?.thumb) {
-                const ox = i * so, oy = i * so + 6;
-                cx.save();
-                cx.beginPath(); cx.roundRect(ox, oy, thumbSize, thumbSize, DRAG_GHOST_RADIUS); cx.clip();
-                cx.drawImage(en.thumb, ox, oy, thumbSize, thumbSize);
-                cx.restore();
-                cx.strokeStyle = DRAG_GHOST_BORDER; cx.lineWidth = 1;
-                cx.beginPath(); cx.roundRect(ox + 0.5, oy + 0.5, thumbSize - 1, thumbSize - 1, DRAG_GHOST_RADIUS); cx.stroke();
-              }
-            }
-            if (state.hashes.length > 1) {
-              const lb = formatDragGhostCount(state.hashes.length);
-              cx.font = 'bold 10px -apple-system, BlinkMacSystemFont, sans-serif';
-              const mw = cx.measureText(lb).width;
-              const bw = Math.max(DRAG_GHOST_BADGE_MIN_WIDTH, mw + 10);
-              cx.fillStyle = '#3297FF';
-              cx.beginPath(); cx.roundRect(tw - bw, 0, bw, DRAG_GHOST_BADGE_HEIGHT, DRAG_GHOST_BADGE_HEIGHT / 2); cx.fill();
-              cx.fillStyle = 'white'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
-              cx.fillText(lb, tw - bw / 2, DRAG_GHOST_BADGE_HEIGHT / 2);
-            }
-            iconUrl = cv.toDataURL('image/png');
-          }
-        } catch { /* fallback */ }
+        const iconUrl = createNativeDragImageUrl(
+          state.hashes.slice(0, 3),
+          state.hashes.length,
+          (hash) => pipelineRef.current?.get(hash)?.thumb ?? null,
+        );
 
         setInternalDragOrigin(true);
         startNativeDragFn(state.hashes, iconUrl);
@@ -781,11 +700,12 @@ export function CanvasGrid({
           // Build skip set from dragged item indices
           const draggedHashes = new Set(getDragState().hashes);
           const skipIdx = new Set<number>();
-          const curItems = itemsRef.current;
-          for (let i = 0; i < curItems.length; i++) {
-            if (draggedHashes.has(curItems[i].entity_hash)) skipIdx.add(i);
+          const model = layoutModelRef.current;
+          for (const hash of draggedHashes) {
+            const index = model.hashToIndex.get(hash);
+            if (index != null) skipIdx.add(index);
           }
-          const tgt = computeReorderTarget(layoutPosRef.current, cx, cy, textHeightRef.current, skipIdx);
+          const tgt = computeReorderTarget(model.positions, cx, cy, textHeightRef.current, skipIdx);
           reorderDropRef.current = tgt ? { dropIndex: tgt.index, dropSide: tgt.side } : null;
           markDirtyRef.current('overlay');
         }
@@ -886,7 +806,7 @@ export function CanvasGrid({
 
     // Load more trigger
     const distanceFromBottom = container.scrollHeight - scrollTop - container.clientHeight;
-    if (distanceFromBottom < LOAD_MORE_THRESHOLD_PX) {
+    if (distanceFromBottom < container.clientHeight * 3) {
       onLoadMoreRef.current?.();
     }
   }, [interactive, markDirty]);
@@ -917,14 +837,14 @@ export function CanvasGrid({
     if (!container) return;
 
     const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
-    const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
+    const idx = hitTestTile(layoutModel.positions, x, y, textHeight, 0, layoutModel.positions.length);
 
     if (idx != null && items[idx]) {
       onTileClick?.(idx, items[idx], e);
     } else {
       onEmptyClick?.();
     }
-  }, [items, layout.positions, onTileClick, onEmptyClick, textHeight, isOnHeaderInteractive, headerHeight]);
+  }, [items, layoutModel.positions, onTileClick, onEmptyClick, textHeight, isOnHeaderInteractive, headerHeight]);
 
   // ── Double-click handler ──
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
@@ -933,18 +853,18 @@ export function CanvasGrid({
     const container = containerRef.current;
     if (!container) return;
     const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
-    const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
+    const idx = hitTestTile(layoutModel.positions, x, y, textHeight, 0, layoutModel.positions.length);
     if (idx != null && items[idx]) {
       onTileDoubleClick(idx, items[idx]);
     }
-  }, [items, layout.positions, onTileDoubleClick, textHeight, isOnHeaderInteractive, headerHeight]);
+  }, [items, layoutModel.positions, onTileDoubleClick, textHeight, isOnHeaderInteractive, headerHeight]);
 
   // ── Zoom button hit test (bottom-right corner of tile image area) ──
   const isZoomButtonHit = useCallback((clientX: number, clientY: number, tileIdx: number): boolean => {
     const container = containerRef.current;
     if (!container) return false;
     const { x: mx, y: my } = toLayoutCoords(clientX, clientY, container, headerHeight);
-    const pos = layout.positions[tileIdx];
+    const pos = layoutModel.positions[tileIdx];
     if (!pos) return false;
     const imgH = pos.h - textHeight;
     const bgW = ZOOM_BTN_SIZE + 4;
@@ -952,7 +872,7 @@ export function CanvasGrid({
     const zx = pos.x + pos.w - bgW;
     const zy = pos.y + imgH - bgH;
     return mx >= zx && mx < zx + bgW && my >= zy && my < zy + bgH;
-  }, [layout.positions, textHeight, headerHeight]);
+  }, [layoutModel.positions, textHeight, headerHeight]);
 
   // ── Clear hover timers helper ──
   const clearHoverTimers = useCallback(() => {
@@ -966,7 +886,7 @@ export function CanvasGrid({
     const container = containerRef.current;
     if (!container) return;
     const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
-    const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
+    const idx = hitTestTile(layoutModel.positions, x, y, textHeight, 0, layoutModel.positions.length);
 
     if (idx !== hoveredTileRef.current) {
       hoveredTileRef.current = idx;
@@ -1008,7 +928,7 @@ export function CanvasGrid({
         }, HOVER_HIDE_DELAY_MS);
       }
     }
-  }, [layout.positions, textHeight, items, isZoomButtonHit, hoverPreview, markDirty, headerHeight]);
+  }, [layoutModel.positions, textHeight, items, isZoomButtonHit, hoverPreview, markDirty, headerHeight]);
 
   const handleMouseLeave = useCallback(() => {
     // Don't cancel drag when cursor moves to sidebar — ghost follows globally
@@ -1036,13 +956,13 @@ export function CanvasGrid({
     const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
     const pos = { x: e.clientX, y: e.clientY };
 
-    const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
+    const idx = hitTestTile(layoutModel.positions, x, y, textHeight, 0, layoutModel.positions.length);
     if (idx != null && items[idx]) {
       onTileContextMenu?.(idx, items[idx], pos);
     } else {
       onEmptyContextMenu?.(pos);
     }
-  }, [items, layout.positions, onTileContextMenu, onEmptyContextMenu, textHeight, headerHeight]);
+  }, [items, layoutModel.positions, onTileContextMenu, onEmptyContextMenu, textHeight, headerHeight]);
 
   // ── Folder tile marquee hit-testing ──
   const hitTestFolderTiles = useCallback((left: number, top: number, width: number, height: number, hitSet: Set<string>) => {
@@ -1070,7 +990,7 @@ export function CanvasGrid({
   // DOM tiles). Reads refs so the auto-scroll RAF tick never goes stale.
   const collectMarqueeHits = useCallback((left: number, top: number, width: number, height: number): Set<string> => {
     const hits = new Set(marqueeBaseSelectionRef.current);
-    const positions = layoutPosRef.current;
+    const positions = layoutModelRef.current.positions;
     const curItems = itemsRef.current;
     const th = textHeightRef.current;
     const candidates = candidateBufRef.current;
@@ -1101,7 +1021,7 @@ export function CanvasGrid({
 
     // If clicking on a tile, set up potential tile drag (not marquee)
     // Also position the invisible drag helper over this tile for HTML5 native drag-out
-    const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
+    const idx = hitTestTile(layoutModel.positions, x, y, textHeight, 0, layoutModel.positions.length);
     if (idx != null) {
       tileDragRef.current = { tileIdx: idx, startClientX: e.clientX, startClientY: e.clientY };
       return;
@@ -1144,7 +1064,7 @@ export function CanvasGrid({
       };
       autoScrollRef.current = requestAnimationFrame(tick);
     }
-  }, [layout.positions, textHeight, selectedEntityHashes, headerHeight, collectMarqueeHits, markDirty]);
+  }, [layoutModel.positions, textHeight, selectedEntityHashes, headerHeight, collectMarqueeHits, markDirty]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     // Check for tile drag initiation (5px threshold)
@@ -1254,20 +1174,15 @@ export function CanvasGrid({
       >
         {headerContent && <div ref={headerRef}>{headerContent}</div>}
         {marqueeVisual && (
-          <div style={{
-            position: 'absolute',
+          <div className={styles.marquee} style={{
             left: marqueeVisual.left,
             top: marqueeVisual.top,
             width: marqueeVisual.width,
             height: marqueeVisual.height,
-            background: 'rgba(51, 154, 240, 0.12)',
-            border: '1px solid rgba(51, 154, 240, 0.5)',
-            pointerEvents: 'none',
-            zIndex: 100,
           }} />
         )}
         {renamingIndex != null && (() => {
-          const pos = layout.positions[renamingIndex];
+          const pos = layoutModel.positions[renamingIndex];
           const item = items[renamingIndex];
           if (!pos || !item) return null;
           const imageH = pos.h - textHeight;
@@ -1310,25 +1225,19 @@ export function CanvasGrid({
         <div
           className={styles.canvasWrap}
           data-grid-layout
-          style={{ height: `${estimatedTotalHeight - headerHeight}px` }}
+          style={{ height: `${layoutModel.totalHeight}px` }}
         >
           <div
+            ref={viewportLayerRef}
             className={styles.viewportLayer}
-            style={{ height: `${Math.min(containerHeight, estimatedTotalHeight - headerHeight)}px` }}
           >
             <canvas
               ref={baseCanvasRef}
-              style={{ display: 'block', width: '100%' }}
+              className={styles.baseCanvas}
             />
             <canvas
               ref={overlayCanvasRef}
-              style={{
-                position: 'absolute',
-                inset: 0,
-                display: 'block',
-                width: '100%',
-                pointerEvents: 'none',
-              }}
+              className={styles.overlayCanvas}
             />
           </div>
         </div>
