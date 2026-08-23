@@ -169,6 +169,32 @@ function ScopeTitle() {
   return <span className={styles.scopeTitle}>{label}</span>;
 }
 
+function CollectionScopeTitle() {
+  const chrome = useAtomValue(collectionChromeAtom);
+  if (!chrome) return null;
+
+  const separator = <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>;
+  return (
+    <span className={styles.scopeTitle}>
+      <button type="button" className={styles.scopeCrumbLink} onClick={chrome.close}>
+        {chrome.parentLabel}
+      </button>
+      {separator}
+      {chrome.mode === 'editor' ? (
+        <>
+          <button type="button" className={styles.scopeCrumbLink} onClick={chrome.showReader}>
+            {chrome.label}
+          </button>
+          {separator}
+          <span>Edit</span>
+        </>
+      ) : (
+        <span>{chrome.label}</span>
+      )}
+    </span>
+  );
+}
+
 export function AppShell() {
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const inspectorCollapsed = useAtomValue(inspectorCollapsedAtom);
@@ -393,7 +419,10 @@ export function AppShell() {
           {viewerSession || collectionChrome?.memberViewerOpen ? (
             <ViewerToolbar />
           ) : collectionChrome ? (
-            <CollectionToolbar />
+            <>
+              <CollectionToolbar />
+              <CollectionScopeTitle />
+            </>
           ) : (
             <>
               <KbdTooltip label="Back" shortcut="Alt+ArrowLeft">

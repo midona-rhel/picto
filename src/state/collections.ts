@@ -6,8 +6,8 @@ export interface CollectionChromeState {
   mode: 'reader' | 'editor';
   memberViewerOpen: boolean;
   close: () => void;
+  showReader: () => void;
   edit: () => void;
-  finishEditing: () => void;
 }
 
 /** Published by the active collection surface and rendered by AppShell. */

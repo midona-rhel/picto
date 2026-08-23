@@ -145,11 +145,11 @@ export function CollectionSurface({
       mode,
       memberViewerOpen: viewerIndex !== null,
       close: onClose,
-      edit: () => setMode('editor'),
-      finishEditing: () => {
+      showReader: () => {
         setMode('reader');
         setSelectedItemIds(new Set());
       },
+      edit: () => setMode('editor'),
     });
     return () => setCollectionChrome(null);
   }, [details, mode, onClose, parentLabel, setCollectionChrome, viewerIndex]);
