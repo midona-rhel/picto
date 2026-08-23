@@ -104,6 +104,7 @@ impl GalleryDlSourceRunner {
         let run = runner.run(&options, legacy_output);
         tokio::pin!(run);
         let mut downloaded = 0usize;
+        let mut pending_item = None;
         let summary = loop {
             tokio::select! {
                 result = &mut run => break result.map_err(|error| {
@@ -112,9 +113,7 @@ impl GalleryDlSourceRunner {
                 item = legacy_input.recv() => match item {
                     Some(item) => {
                         let normalized = self.normalize_item(query, item).await?;
-                        output.send(normalized).await.map_err(|_| {
-                            RunnerFailure::terminal(RunnerFailureKind::Runtime, "subscription receiver closed")
-                        })?;
+                        queue_download(&output, &mut pending_item, normalized).await?;
                         downloaded += 1;
                     }
                     None => break run.await.map_err(|error| {
@@ -125,12 +124,15 @@ impl GalleryDlSourceRunner {
         };
         while let Some(item) = legacy_input.recv().await {
             let normalized = self.normalize_item(query, item).await?;
-            output.send(normalized).await.map_err(|_| {
-                RunnerFailure::terminal(RunnerFailureKind::Runtime, "subscription receiver closed")
-            })?;
+            queue_download(&output, &mut pending_item, normalized).await?;
             downloaded += 1;
         }
-        settle_summary(summary, downloaded)
+        let result = settle_summary(summary, downloaded);
+        if let Some(mut item) = pending_item {
+            set_post_complete(&mut item, result.is_ok());
+            send_download(&output, item).await?;
+        }
+        result
     }
 
     async fn normalize_item(
@@ -158,6 +160,35 @@ impl GalleryDlSourceRunner {
             }
         }
     }
+}
+
+async fn queue_download(
+    output: &mpsc::Sender<DownloadedItem>,
+    pending: &mut Option<DownloadedItem>,
+    next: DownloadedItem,
+) -> Result<(), RunnerFailure> {
+    if let Some(mut previous) = pending.take() {
+        let post_complete = previous.post.post_key != next.post.post_key;
+        set_post_complete(&mut previous, post_complete);
+        send_download(output, previous).await?;
+    }
+    *pending = Some(next);
+    Ok(())
+}
+
+fn set_post_complete(item: &mut DownloadedItem, complete: bool) {
+    if let Some(source) = item.input.source.as_mut() {
+        source.post_complete = complete;
+    }
+}
+
+async fn send_download(
+    output: &mpsc::Sender<DownloadedItem>,
+    item: DownloadedItem,
+) -> Result<(), RunnerFailure> {
+    output.send(item).await.map_err(|_| {
+        RunnerFailure::terminal(RunnerFailureKind::Runtime, "subscription receiver closed")
+    })
 }
 
 impl SourceRunner for GalleryDlSourceRunner {
@@ -262,6 +293,7 @@ async fn normalize_download(
         post_key: post_key.clone(),
         item_key: item_key.clone(),
         position,
+        post_complete: false,
         canonical_post_url: metadata.canonical_post_url.clone(),
         canonical_media_url: metadata.media_url.clone(),
         creator_name: creator_name.clone(),
@@ -413,6 +445,43 @@ mod tests {
         assert_eq!(item.input.notes.as_deref(), Some("Description"));
         assert_eq!(item.input.source.as_ref().unwrap().item_key, "pixiv:42:1");
         assert!(item.delete_after_ingest);
+
+        let (output, mut input) = mpsc::channel(4);
+        let mut pending = None;
+        queue_download(&output, &mut pending, item.clone())
+            .await
+            .unwrap();
+        assert!(input.try_recv().is_err());
+        queue_download(&output, &mut pending, item.clone())
+            .await
+            .unwrap();
+        assert!(
+            !input
+                .recv()
+                .await
+                .unwrap()
+                .input
+                .source
+                .unwrap()
+                .post_complete
+        );
+
+        let mut next_post = item;
+        next_post.post.post_key = "43".to_string();
+        next_post.input.source.as_mut().unwrap().post_key = "43".to_string();
+        queue_download(&output, &mut pending, next_post)
+            .await
+            .unwrap();
+        assert!(
+            input
+                .recv()
+                .await
+                .unwrap()
+                .input
+                .source
+                .unwrap()
+                .post_complete
+        );
     }
 
     #[test]

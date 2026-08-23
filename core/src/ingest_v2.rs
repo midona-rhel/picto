@@ -29,6 +29,8 @@ pub struct SourcePostInput {
     pub post_key: String,
     pub item_key: String,
     pub position: i64,
+    #[serde(default)]
+    pub post_complete: bool,
     pub canonical_post_url: Option<String>,
     pub canonical_media_url: Option<String>,
     pub creator_name: Option<String>,
@@ -146,7 +148,7 @@ impl Application {
                     &now,
                 )?;
 
-                let (root_item_id, promoted) = if let Some(source) = &input.source {
+                let (root_item_id, promoted, root_visible) = if let Some(source) = &input.source {
                     attach_source_item(transaction, source, media_item_id, &now)?;
                     settle_source_post_root(
                         transaction,
@@ -157,7 +159,7 @@ impl Application {
                     )?
                 } else {
                     insert_root(transaction, media_item_id, input.lifecycle)?;
-                    (media_item_id, false)
+                    (media_item_id, false, true)
                 };
                 let mut delta = StructureProjectionDelta::default();
                 delta.items.push(ItemProjectionChange {
@@ -227,12 +229,14 @@ impl Application {
                         present: true,
                     });
                 }
-                attach_target_folder(
-                    transaction,
-                    input.target_folder_id,
-                    root_item_id,
-                    &mut delta,
-                )?;
+                if root_visible {
+                    attach_target_folder(
+                        transaction,
+                        input.target_folder_id,
+                        root_item_id,
+                        &mut delta,
+                    )?;
+                }
                 delta.tags.extend(tag_ids.into_iter().map(|tag_id| TagProjectionChange {
                     media_id: media_item_id,
                     tag_id,
@@ -549,7 +553,7 @@ fn settle_source_post_root(
     new_media_item_id: i64,
     lifecycle: Lifecycle,
     now: &str,
-) -> rusqlite::Result<(i64, bool)> {
+) -> rusqlite::Result<(i64, bool, bool)> {
     let (source_post_id, current_root): (i64, Option<i64>) = transaction.query_row(
         "SELECT source_post_id, root_item_id FROM source_post
          WHERE site_id = ?1 AND post_key = ?2",
@@ -567,6 +571,45 @@ fn settle_source_post_root(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
 
+    let provisional_collection = provisional_source_collection(transaction, source_post_id)?;
+    if current_root.is_none() && (provisional_collection.is_some() || !source.post_complete) {
+        let collection_id = if let Some(collection_id) = provisional_collection {
+            collection_id
+        } else {
+            transaction.execute(
+                "INSERT INTO library_item (item_key, kind, created_at, updated_at)
+                 VALUES (?1, 'collection', ?2, ?2)",
+                params![new_key("collection"), now],
+            )?;
+            let collection_id = transaction.last_insert_rowid();
+            transaction.execute(
+                "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
+                params![media_ids[0], collection_id],
+            )?;
+            collection_id
+        };
+        for media_id in &media_ids {
+            transaction.execute(
+                "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
+                 SELECT ?1, si.media_item_id, (si.position + 1) * ?2
+                 FROM source_item si
+                 WHERE si.source_post_id = ?3 AND si.media_item_id = ?4
+                 ON CONFLICT(collection_id, media_item_id) DO NOTHING",
+                params![collection_id, RANK_GAP, source_post_id, media_id],
+            )?;
+        }
+        if source.post_complete {
+            insert_root(transaction, collection_id, lifecycle)?;
+            transaction.execute(
+                "UPDATE source_post SET root_item_id = ?1, updated_at = ?2
+                 WHERE source_post_id = ?3",
+                params![collection_id, now, source_post_id],
+            )?;
+            return Ok((collection_id, true, true));
+        }
+        return Ok((collection_id, false, false));
+    }
+
     match (current_root, media_ids.len()) {
         (None, 1) => {
             insert_root(transaction, new_media_item_id, lifecycle)?;
@@ -575,7 +618,7 @@ fn settle_source_post_root(
                  WHERE source_post_id = ?3",
                 params![new_media_item_id, now, source_post_id],
             )?;
-            Ok((new_media_item_id, false))
+            Ok((new_media_item_id, false, true))
         }
         (Some(root_id), 2) if root_kind(transaction, root_id)? == "media" => {
             let existing_lifecycle: String = transaction.query_row(
@@ -616,7 +659,7 @@ fn settle_source_post_root(
                  WHERE source_post_id = ?3",
                 params![collection_id, now, source_post_id],
             )?;
-            Ok((collection_id, true))
+            Ok((collection_id, true, true))
         }
         (Some(root_id), _) if root_kind(transaction, root_id)? == "collection" => {
             transaction.execute(
@@ -625,11 +668,30 @@ fn settle_source_post_root(
                  VALUES (?1, ?2, ?3)",
                 params![root_id, new_media_item_id, (source.position + 1) * RANK_GAP],
             )?;
-            Ok((root_id, false))
+            Ok((root_id, false, true))
         }
-        (Some(root_id), _) => Ok((root_id, false)),
+        (Some(root_id), _) => Ok((root_id, false, true)),
         (None, _) => Err(invalid("Source post has media without a visible root")),
     }
+}
+
+fn provisional_source_collection(
+    transaction: &Transaction<'_>,
+    source_post_id: i64,
+) -> rusqlite::Result<Option<i64>> {
+    transaction
+        .query_row(
+            "SELECT cm.collection_id
+             FROM source_item si
+             JOIN collection_member cm ON cm.media_item_id = si.media_item_id
+             LEFT JOIN library_root lr ON lr.item_id = cm.collection_id
+             WHERE si.source_post_id = ?1 AND lr.item_id IS NULL
+             ORDER BY cm.collection_id
+             LIMIT 1",
+            [source_post_id],
+            |row| row.get(0),
+        )
+        .optional()
 }
 
 fn root_kind(transaction: &Transaction<'_>, root_id: i64) -> rusqlite::Result<String> {
@@ -785,6 +847,7 @@ mod tests {
                 post_key: post.to_string(),
                 item_key: item.to_string(),
                 position,
+                post_complete: true,
                 canonical_post_url: None,
                 canonical_media_url: None,
                 creator_name: None,
@@ -849,6 +912,38 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn source_collection_is_hidden_until_the_source_post_is_complete() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        let mut first_input = input("first", "post", "a", 0);
+        first_input.source.as_mut().unwrap().post_complete = false;
+        let first = app.ingest_prepared(&first_input).unwrap();
+
+        assert_ne!(first.media_item_id, first.root_item_id);
+        assert!(!first.promoted_to_collection);
+        assert!(app.projections().inbox_bitmap().is_empty());
+        let roots_after_first: i64 = app
+            .store()
+            .read(|connection| {
+                connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(roots_after_first, 0);
+
+        let mut second_input = input("second", "post", "b", 1);
+        second_input.source.as_mut().unwrap().post_complete = true;
+        let second = app.ingest_prepared(&second_input).unwrap();
+
+        assert_eq!(second.root_item_id, first.root_item_id);
+        assert!(second.promoted_to_collection);
+        assert_eq!(app.projections().inbox_bitmap().len(), 1);
+        assert!(app
+            .projections()
+            .inbox_bitmap()
+            .contains(second.root_item_id.0 as u32));
     }
 
     #[test]

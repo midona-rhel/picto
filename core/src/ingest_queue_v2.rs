@@ -639,6 +639,7 @@ mod tests {
                 post_key: "post".to_string(),
                 item_key: "item".to_string(),
                 position: 0,
+                post_complete: true,
                 canonical_post_url: None,
                 canonical_media_url: None,
                 creator_name: None,

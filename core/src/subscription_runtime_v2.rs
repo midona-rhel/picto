@@ -519,6 +519,7 @@ mod tests {
                     post_key: post_key.to_string(),
                     item_key: item_key.to_string(),
                     position,
+                    post_complete: true,
                     canonical_post_url: None,
                     canonical_media_url: None,
                     creator_name: None,
