@@ -360,6 +360,7 @@ export function GridScreen({
   viewerSessionRef.current = viewerSession;
   const quickLookSessionRef = useRef(quickLookSession);
   quickLookSessionRef.current = quickLookSession;
+  const pendingDetailNavigationRef = useRef<number | null>(null);
   const gridScopeRef = useRef(gridScope);
   gridScopeRef.current = gridScope;
 
@@ -544,15 +545,41 @@ export function GridScreen({
     if (!viewerSession) return;
     const next = navigateViewerSession(viewerSession, items, delta);
     if (!next) {
-      if (delta > 0 && cursor) void gridController.loadNextPage();
+      if (delta > 0 && cursor && pendingDetailNavigationRef.current == null) {
+        const anchorItemId = viewerSession.currentItemId;
+        pendingDetailNavigationRef.current = anchorItemId;
+        void gridController.loadNextPage().catch(() => {
+          pendingDetailNavigationRef.current = null;
+        });
+      }
       return;
     }
+    pendingDetailNavigationRef.current = null;
     setCollectionInitialMode('reader');
     setViewerSession(next);
     dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
   }, [cursor, dispatchSelection, items, setViewerSession, viewerSession]);
 
+  useEffect(() => {
+    const anchorItemId = pendingDetailNavigationRef.current;
+    if (anchorItemId == null || !viewerSession || viewerSession.currentItemId !== anchorItemId) return;
+    const loadedNext = navigateViewerSession(viewerSession, items, 1);
+    if (!loadedNext) {
+      if (!cursor) pendingDetailNavigationRef.current = null;
+      return;
+    }
+    pendingDetailNavigationRef.current = null;
+    setCollectionInitialMode('reader');
+    setViewerSession(loadedNext);
+    dispatchSelection({
+      type: 'replace_items',
+      itemIds: new Set([loadedNext.currentItemId]),
+      anchor: loadedNext.currentItemId,
+    });
+  }, [cursor, dispatchSelection, items, setViewerSession, viewerSession]);
+
   const closeRootDetail = useCallback((exitItemId?: number) => {
+    pendingDetailNavigationRef.current = null;
     setViewerSession(null);
     setCollectionInitialMode('reader');
     if (exitItemId == null) return;

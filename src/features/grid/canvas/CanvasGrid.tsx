@@ -766,6 +766,9 @@ export function CanvasGrid({
       }
 
       moveDrag(e.clientX, e.clientY);
+      // A reusable grid with an onReorder owner is not a library-root drag
+      // source. Never let sidebar lifecycle/folder targets reinterpret its IDs.
+      if (onReorderRef.current) setDropTarget(null);
       setDragGhost((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
       const scope = getDragState().sourceScope;
       if (scope?.kind === 'folder' || onReorderRef.current) {
