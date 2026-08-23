@@ -38,6 +38,24 @@ fn lifecycle_lock() -> &'static tokio::sync::Mutex<()> {
     LIFECYCLE.get_or_init(|| tokio::sync::Mutex::new(()))
 }
 
+/// Initialize process logging and native event forwarding once.
+pub fn init_tracing() {
+    use std::sync::Once;
+    use tracing_subscriber::prelude::*;
+
+    static TRACING_INIT: Once = Once::new();
+    TRACING_INIT.call_once(|| {
+        let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "picto=info".parse().expect("valid default tracing filter"));
+        let _ = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(tracing_subscriber::fmt::layer())
+            .with(crate::events::EventEmitLayer)
+            .try_init();
+        crate::events::enable_log_forwarding();
+    });
+}
+
 pub async fn open_library(library_root: PathBuf) -> Result<Arc<BackendState>, String> {
     let _lifecycle = lifecycle_lock().lock().await;
     close_library_inner().await?;
