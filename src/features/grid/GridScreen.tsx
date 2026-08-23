@@ -79,6 +79,7 @@ import { ApplicationMenuButton } from '../../shared/ui/ApplicationMenuButton/App
 import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
 import { hasSameEntityOrder } from './gridItemIdentity';
 import { GridTransitionCoordinator } from './gridTransitionCoordinator';
+import { resolveContextMenuTarget } from './gridMenuSelection';
 import styles from './GridScreen.module.css';
 
 const store = getDefaultStore();
@@ -453,26 +454,26 @@ export function GridScreen() {
     setFolderPickerModal({ open: true });
   }, [selectionTarget, setFolderPickerModal]);
 
-  const removeSelectionFromCurrentFolder = useCallback(async () => {
-    if (!selectionTarget || gridScope.kind !== 'folder' || gridScope.id == null) return;
-    await entityMutations.updateTargetFolderMembership(selectionTarget, gridScope.id, 'remove');
+  const removeSelectionFromCurrentFolder = useCallback(async (target = selectionTarget) => {
+    if (!target || gridScope.kind !== 'folder' || gridScope.id == null) return;
+    await entityMutations.updateTargetFolderMembership(target, gridScope.id, 'remove');
   }, [gridScope, selectionTarget]);
 
-  const setSelectionStatus = useCallback(async (status: number) => {
-    if (!selectionTarget) return;
-    await entityMutations.setTargetStatus(selectionTarget, status);
+  const setSelectionStatus = useCallback(async (status: number, target = selectionTarget) => {
+    if (!target) return;
+    await entityMutations.setTargetStatus(target, status);
   }, [selectionTarget]);
 
-  const permanentlyDeleteSelection = useCallback(() => {
-    if (!selectionTarget) return;
+  const permanentlyDeleteSelection = useCallback((target = selectionTarget, count = selectionCount) => {
+    if (!target) return;
     store.set(confirmModalAtom, {
       open: true,
       title: 'Delete Permanently',
-      message: `This will permanently delete ${selectionCount} item${selectionCount !== 1 ? 's' : ''}. This cannot be undone.`,
+      message: `This will permanently delete ${count} item${count !== 1 ? 's' : ''}. This cannot be undone.`,
       confirmLabel: 'Delete',
       danger: true,
       onConfirm: () => {
-        void entityMutations.permanentlyDeleteTarget(selectionTarget);
+        void entityMutations.permanentlyDeleteTarget(target);
         clearSelection();
       },
     });
@@ -895,6 +896,11 @@ export function GridScreen() {
           const canAutoTag = effectiveSelectionMode === 'explicit'
             && selectedItems.length === effectiveHashes.size
             && selectedItems.every((selected) => selected.mime_type.startsWith('image/'));
+          const effectiveTarget = resolveContextMenuTarget(
+            effectiveQuerySelectionActive,
+            selectionTarget,
+            effectiveHashes,
+          );
           const scopeKind = gridScope.kind === 'system' ? 'system'
             : gridScope.kind === 'folder' ? 'folder'
             : gridScope.kind === 'smart_folder' ? 'smart_folder'
@@ -958,23 +964,19 @@ export function GridScreen() {
             },
             onPasteTags: () => {
               const tags = (window as any).__pictoClipboardTags as string[] | undefined;
-              if (!tags?.length) return;
-              void entityMutations.addTargetTags(selectionTarget!, tags);
+              if (!tags?.length || !effectiveTarget) return;
+              void entityMutations.addTargetTags(effectiveTarget, tags);
             },
             hasClipboardTags: !!((window as any).__pictoClipboardTags as string[] | undefined)?.length,
             onAddToFolder: () => { setFolderPickerModal({ open: true }); },
-            onNewFolderWithSelection: selectionTarget ? () => {
+            onNewFolderWithSelection: effectiveTarget ? () => {
               void (async () => {
                 const name = 'New Folder';
                 const nodeId = await foldersController.create(name);
                 if (!nodeId) return;
                 const folderId = parseInt(nodeId.replace('folder:', ''), 10);
                 if (isNaN(folderId)) return;
-                for (const hash of effectiveHashes) {
-                  void entityMutations.updateTargetFolderMembership(
-                    { kind: 'entity_hashes', entity_hashes: [hash] }, folderId, 'add',
-                  );
-                }
+                await entityMutations.updateTargetFolderMembership(effectiveTarget, folderId, 'add');
               })();
             } : undefined,
             onSearchByImage: (engine, hash) => {
@@ -990,28 +992,24 @@ export function GridScreen() {
               if (url) void (window as any).picto?.shell?.openExternal(url + encodeURIComponent(thumbUrl));
             },
             onSetRating: (rating) => {
-              void entityMutations.setTargetRating(
-                { kind: 'entity_hashes', entity_hashes: [...effectiveHashes] },
-                rating,
-              );
+              if (effectiveTarget) void entityMutations.setTargetRating(effectiveTarget, rating);
             },
             onExport: () => {
+              if (!effectiveTarget) return;
               store.set(exportModalAtom, {
-                open: true,
-                fileCount: effectiveHashes.size,
-                target: { kind: 'entity_hashes', entity_hashes: [...effectiveHashes] },
+                open: true, fileCount: selCount, target: effectiveTarget,
               });
             },
-            onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
+            onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(effectiveTarget); },
             onOpenTagSelect: () => { setTagSelectModal({ open: true }); },
             onOpenAiTagger: canAutoTag
               ? () => { setAiTaggerPortal({ open: true, anchor: inspectorAnchor() }); }
               : undefined,
-            onMoveToTrash: () => { void setSelectionStatus(STATUS_TRASH); },
-            onRestore: () => { void setSelectionStatus(STATUS_ACTIVE); },
-            onPermanentDelete: () => { void permanentlyDeleteSelection(); },
-            onAccept: () => { void setSelectionStatus(STATUS_ACTIVE); },
-            onReject: () => { void setSelectionStatus(STATUS_TRASH); },
+            onMoveToTrash: () => { void setSelectionStatus(STATUS_TRASH, effectiveTarget); },
+            onRestore: () => { void setSelectionStatus(STATUS_ACTIVE, effectiveTarget); },
+            onPermanentDelete: () => { permanentlyDeleteSelection(effectiveTarget, selCount); },
+            onAccept: () => { void setSelectionStatus(STATUS_ACTIVE, effectiveTarget); },
+            onReject: () => { void setSelectionStatus(STATUS_TRASH, effectiveTarget); },
           });
           contextMenu.openAt(pos, entries);
         }}
