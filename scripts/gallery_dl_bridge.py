@@ -220,8 +220,37 @@ def _install_patreon_attachment_adapter() -> None:
     from gallery_dl.extractor import patreon
 
     extractor = patreon.PatreonExtractor
-    if getattr(extractor, "_picto_lazy_attachments", False):
+    if getattr(extractor, "_picto_subscription_adapter", False):
         return
+
+    original_finalize = extractor.finalize
+
+    def pagination_in_source_batches(self, url):
+        headers = {"Content-Type": "application/vnd.api+json"}
+        limit = max(0, int(self.config("picto-post-limit") or 0))
+        skip = max(0, int(self.config("picto-post-skip") or 0))
+        emitted = 0
+
+        while url:
+            self._update_cursor(url)
+            url = text.ensure_http_scheme(url)
+            page = self.request_json(url, headers=headers)
+            included = self._transform(page.get("included") or ())
+            for post in page.get("data") or ():
+                if skip:
+                    skip -= 1
+                    continue
+                yield self._process(post, included)
+                emitted += 1
+
+            url = (page.get("links") or {}).get("next")
+            if limit and emitted >= limit:
+                # Persist the API's next page, not the page that contained the
+                # final post in this batch.
+                self._update_cursor(url or "")
+                return
+
+        self._update_cursor("")
 
     def attachments_without_preflight(self, post):
         for attachment in post.get("attachments") or ():
@@ -235,9 +264,18 @@ def _install_patreon_attachment_adapter() -> None:
     def filename_without_preflight(self, url):
         return text.filename_from_url(url)
 
+    def finalize_with_cursor(self, status):
+        # Patreon updates this cursor before each API page. A bounded gallery-dl
+        # post range stops with the next page cursor still available.
+        _emit("source_cursor", cursor=self._cursor or "")
+        return original_finalize(self, status)
+
     extractor._attachments = attachments_without_preflight
     extractor._filename = filename_without_preflight
+    extractor._pagination = pagination_in_source_batches
+    extractor.finalize = finalize_with_cursor
     extractor._picto_lazy_attachments = True
+    extractor._picto_subscription_adapter = True
 
 
 def _emit(event_type: str, **payload: Any) -> None:
@@ -389,10 +427,12 @@ def main() -> int:
         _install_rule34_tag_info_adapter()
         _install_deviantart_deviation_adapter()
         _install_tumblr_post_adapter()
+        _install_patreon_attachment_adapter()
         import gallery_dl
         import yt_dlp
         from gallery_dl.extractor import deviantart
         from gallery_dl.extractor import gelbooru_v02
+        from gallery_dl.extractor import patreon
         from gallery_dl.extractor import tumblr
 
         _emit(
@@ -414,6 +454,11 @@ def main() -> int:
             tumblr_adapter_initialized=bool(getattr(
                 tumblr.TumblrAPI,
                 "_picto_post_cursor",
+                False,
+            )),
+            patreon_adapter_initialized=bool(getattr(
+                patreon.PatreonExtractor,
+                "_picto_subscription_adapter",
                 False,
             )),
         )

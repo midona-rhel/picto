@@ -39,6 +39,29 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
             }
         }
     }
+    if opts.site_id == "patreon" {
+        let site = extractor
+            .entry("patreon")
+            .or_insert_with(|| serde_json::json!({}));
+        if let Some(site) = site.as_object_mut() {
+            if let Some(limit) = opts.post_limit.filter(|limit| *limit > 0) {
+                site.insert("picto-post-limit".into(), serde_json::json!(limit));
+            }
+            if opts.range_start > 1 {
+                site.insert(
+                    "picto-post-skip".into(),
+                    serde_json::json!(opts.range_start - 1),
+                );
+            }
+            if let Some(cursor) = opts
+                .source_cursor
+                .as_ref()
+                .filter(|cursor| !cursor.is_empty())
+            {
+                site.insert("cursor".into(), serde_json::json!(cursor));
+            }
+        }
+    }
     // The release source is deliberately public-only. Exclude mature/private
     // stubs that DeviantArt lists to anonymous API clients but whose CDN URLs
     // reject downloads, and preserve the quality authorized by signed URLs.
@@ -447,6 +470,59 @@ mod tests {
         assert_eq!(
             config["extractor"]["sankaku"]["picto-next"].as_str(),
             Some("opaque-next")
+        );
+    }
+
+    #[test]
+    fn patreon_resumes_from_its_persisted_api_cursor() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "patreon".to_string(),
+            url: "https://www.patreon.com/creator/posts".to_string(),
+            post_limit: Some(100),
+            range_start: 1,
+            source_cursor: Some("next-page".to_string()),
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        assert_eq!(
+            config["extractor"]["patreon"]["cursor"].as_str(),
+            Some("next-page")
+        );
+        assert_eq!(
+            config["extractor"]["patreon"]["picto-post-limit"].as_u64(),
+            Some(100)
+        );
+        assert!(config["extractor"]["patreon"].get("picto-post-skip").is_none());
+    }
+
+    #[test]
+    fn patreon_legacy_query_skips_its_already_completed_first_batch() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "patreon".to_string(),
+            url: "https://www.patreon.com/creator/posts".to_string(),
+            post_limit: Some(100),
+            range_start: 101,
+            source_cursor: None,
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        assert_eq!(
+            config["extractor"]["patreon"]["picto-post-skip"].as_u64(),
+            Some(100)
         );
     }
 }

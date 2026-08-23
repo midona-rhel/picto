@@ -167,7 +167,7 @@ fn bridge_ranges_for_site(
     if site_id == "artstation" {
         return (None, None);
     }
-    if site_id == "tumblr" {
+    if matches!(site_id, "patreon" | "tumblr") {
         return (None, None);
     }
     if matches!(site_id, "idolcomplex" | "sankaku") {
@@ -431,7 +431,7 @@ impl GalleryDlRunner {
                             }
                         }
                         "source_cursor" => {
-                            stats.source_cursor = event.cursor.filter(|cursor| !cursor.is_empty());
+                            stats.source_cursor = event.cursor;
                             stats.source_page_items = event.item_count.unwrap_or_default();
                         }
                         _ => {}
@@ -761,5 +761,10 @@ mod tests {
     fn tumblr_uses_native_whole_post_limits() {
         assert_eq!(bridge_ranges_for_site("tumblr", 5, Some(2)), (None, None));
         assert_eq!(bridge_ranges_for_site("tumblr", 1, None), (None, None));
+    }
+
+    #[test]
+    fn patreon_uses_native_cursor_batches() {
+        assert_eq!(bridge_ranges_for_site("patreon", 101, Some(100)), (None, None));
     }
 }

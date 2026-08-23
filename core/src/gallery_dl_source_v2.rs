@@ -18,6 +18,7 @@ use crate::subscriptions::source_adapter::{self, ParsedMetadata};
 use crate::subscriptions_v2::{ClaimedQueryRun, NormalizedItem, NormalizedPost};
 
 const CHANNEL_CAPACITY: usize = 32;
+const SOURCE_POST_BATCH_SIZE: u32 = 100;
 const PERIODIC_ABORT_THRESHOLD: u32 = 25;
 
 pub struct GalleryDlSourceRunner {
@@ -77,16 +78,17 @@ impl GalleryDlSourceRunner {
             .map(Ok)
             .unwrap_or_else(|| crate::media_processing::gallery_dl_path::gallery_dl_path().cloned())
             .map_err(|error| RunnerFailure::terminal(RunnerFailureKind::Runtime, error))?;
+        let batch = BatchPosition::for_query(query);
         let options = RunOptions {
             subscription_id: Some(query.subscription_id),
             query_id: Some(query.query_id),
             site_id: query.site_id.clone(),
             url,
-            post_limit: None,
-            range_start: 1,
-            source_cursor: query.resume_cursor.clone(),
-            abort_threshold: query
-                .initial_run_complete
+            post_limit: Some(SOURCE_POST_BATCH_SIZE),
+            range_start: batch.range_start,
+            source_cursor: batch.source_cursor.clone(),
+            abort_threshold: batch
+                .history_complete
                 .then_some(PERIODIC_ABORT_THRESHOLD),
             auth,
             archive_path: self.library_root.join("gdl-archive.sqlite3"),
@@ -127,7 +129,7 @@ impl GalleryDlSourceRunner {
             queue_download(&output, &mut pending_item, normalized).await?;
             downloaded += 1;
         }
-        let result = settle_summary(summary, downloaded);
+        let result = settle_summary(summary, downloaded, &batch);
         if let Some(mut item) = pending_item {
             set_post_complete(&mut item, result.is_ok());
             send_download(&output, item).await?;
@@ -333,7 +335,64 @@ async fn normalize_download(
     })
 }
 
-fn settle_summary(summary: RunSummary, downloaded: usize) -> Result<RunnerSuccess, RunnerFailure> {
+#[derive(Debug, PartialEq, Eq)]
+struct BatchPosition {
+    range_start: u32,
+    source_cursor: Option<String>,
+    history_complete: bool,
+}
+
+impl BatchPosition {
+    fn for_query(query: &ClaimedQueryRun) -> Self {
+        match query.resume_cursor.as_deref() {
+            Some("") => Self {
+                range_start: 1,
+                source_cursor: None,
+                history_complete: true,
+            },
+            Some(cursor) if cursor.starts_with("range:") => Self {
+                range_start: cursor[6..].parse().unwrap_or(1),
+                source_cursor: None,
+                history_complete: false,
+            },
+            Some(cursor) => Self {
+                range_start: 1,
+                source_cursor: Some(cursor.to_string()),
+                history_complete: false,
+            },
+            None => Self {
+                // Existing queries completed before cursors were persisted. Their first
+                // batch is already archived, so continue with the second batch.
+                range_start: if query.initial_run_complete {
+                    SOURCE_POST_BATCH_SIZE + 1
+                } else {
+                    1
+                },
+                source_cursor: None,
+                history_complete: false,
+            },
+        }
+    }
+
+    fn next_cursor(&self, summary: &RunSummary) -> String {
+        if let Some(cursor) = &summary.source_cursor {
+            return cursor.clone();
+        }
+        if self.history_complete || summary.discovered_items == 0 {
+            return String::new();
+        }
+        format!(
+            "range:{}",
+            self.range_start.saturating_add(SOURCE_POST_BATCH_SIZE)
+        )
+    }
+}
+
+fn settle_summary(
+    summary: RunSummary,
+    downloaded: usize,
+    batch: &BatchPosition,
+) -> Result<RunnerSuccess, RunnerFailure> {
     if summary.exit_code != 0 {
         let kind = gallery_dl_runner::classify_failure(&summary.stderr_output);
         let message = gallery_dl_runner::final_error_line(&summary.stderr_output)
@@ -360,7 +419,7 @@ fn settle_summary(summary: RunSummary, downloaded: usize) -> Result<RunnerSucces
         ));
     }
     Ok(RunnerSuccess {
-        resume_cursor: summary.source_cursor,
+        resume_cursor: Some(batch.next_cursor(&summary)),
     })
 }
 
@@ -475,12 +534,43 @@ mod tests {
 
     #[test]
     fn summary_distinguishes_up_to_date_from_broken_output() {
+        let complete = BatchPosition {
+            range_start: 1,
+            source_cursor: None,
+            history_complete: true,
+        };
         let up_to_date = summary(0, 10, 10);
-        assert_eq!(settle_summary(up_to_date, 0).unwrap().resume_cursor, None);
+        assert_eq!(
+            settle_summary(up_to_date, 0, &complete)
+                .unwrap()
+                .resume_cursor,
+            Some(String::new())
+        );
 
-        let broken = settle_summary(summary(0, 10, 0), 0).unwrap_err();
+        let broken = settle_summary(summary(0, 10, 0), 0, &complete).unwrap_err();
         assert_eq!(broken.kind, RunnerFailureKind::InvalidOutput);
         assert!(!broken.retryable);
+    }
+
+    #[test]
+    fn subscription_batches_continue_instead_of_rescanning_the_first_page() {
+        let mut query = claimed_query();
+        assert_eq!(BatchPosition::for_query(&query).range_start, 1);
+
+        query.initial_run_complete = true;
+        assert_eq!(BatchPosition::for_query(&query).range_start, 101);
+
+        query.resume_cursor = Some("range:201".into());
+        assert_eq!(BatchPosition::for_query(&query).range_start, 201);
+
+        query.resume_cursor = Some("opaque-patreon-cursor".into());
+        assert_eq!(
+            BatchPosition::for_query(&query).source_cursor.as_deref(),
+            Some("opaque-patreon-cursor")
+        );
+
+        query.resume_cursor = Some(String::new());
+        assert!(BatchPosition::for_query(&query).history_complete);
     }
 
     #[test]
@@ -503,6 +593,24 @@ mod tests {
             skipped_archive_items: skipped,
             source_cursor: None,
             source_page_items: discovered,
+        }
+    }
+
+    fn claimed_query() -> ClaimedQueryRun {
+        ClaimedQueryRun {
+            run_query_id: 1,
+            run_id: 1,
+            query_id: 1,
+            subscription_id: 1,
+            site_id: "patreon".into(),
+            domain_key: "patreon.com".into(),
+            query_kind: "creator".into(),
+            query_text: "creator".into(),
+            initial_post_limit: None,
+            periodic_post_limit: None,
+            initial_run_complete: false,
+            resume_cursor: None,
+            attempt_count: 0,
         }
     }
 

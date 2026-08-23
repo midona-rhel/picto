@@ -24,7 +24,7 @@ Options:
   -h, --help           show this help
 
 The sidecar must accept --self-test and emit this JSON event on stdout:
-  {"event":"${SELF_TEST_EVENT}","gallery_dl_imported":true,"yt_dlp_imported":true,"rule34_adapter_initialized":true,"deviantart_adapter_initialized":true,"tumblr_adapter_initialized":true}
+  {"event":"${SELF_TEST_EVENT}","gallery_dl_imported":true,"yt_dlp_imported":true,"rule34_adapter_initialized":true,"deviantart_adapter_initialized":true,"tumblr_adapter_initialized":true,"patreon_adapter_initialized":true}
 `;
 }
 
@@ -100,7 +100,8 @@ export function isValidSelfTestEvent(event) {
     && event.yt_dlp_imported === true
     && event.rule34_adapter_initialized === true
     && event.deviantart_adapter_initialized === true
-    && event.tumblr_adapter_initialized === true;
+    && event.tumblr_adapter_initialized === true
+    && event.patreon_adapter_initialized === true;
 }
 
 function appendOutput(current, chunk) {
