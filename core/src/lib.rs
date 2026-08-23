@@ -22,6 +22,7 @@ pub mod ingest;
 pub mod ingest_queue;
 pub mod ingest_queue_v2;
 pub mod ingest_v2;
+pub mod ipc_v2;
 pub mod media_analysis;
 pub mod media_capabilities;
 pub mod scope;
