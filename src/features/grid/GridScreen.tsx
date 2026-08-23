@@ -635,6 +635,7 @@ export function GridScreen({
         showExtensionLabel={showExtensionLabel}
         showResolution={showResolution}
         fitThumbnails={fitThumbnails}
+        totalCount={totalCount}
         interactive={!viewerSession && !quickLookSession}
         suppressTileReveal={transitionPhase === 'fading_out' || transitionPhase === 'waiting'}
         selectedEntityHashes={selectedHashes}
