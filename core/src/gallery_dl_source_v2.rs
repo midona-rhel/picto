@@ -24,19 +24,21 @@ const PERIODIC_ABORT_THRESHOLD: u32 = 25;
 
 pub struct GalleryDlSourceRunner {
     library_root: PathBuf,
-    runner: GalleryDlRunner,
+    binary_override: Option<PathBuf>,
 }
 
 impl GalleryDlSourceRunner {
-    pub fn open(library_root: &Path) -> Result<Self, String> {
-        let binary = crate::media_processing::gallery_dl_path::gallery_dl_path()?.clone();
-        Ok(Self::new(library_root.to_path_buf(), binary))
+    pub fn open(library_root: &Path) -> Self {
+        Self {
+            library_root: library_root.to_path_buf(),
+            binary_override: None,
+        }
     }
 
     pub fn new(library_root: PathBuf, binary: PathBuf) -> Self {
         Self {
             library_root,
-            runner: GalleryDlRunner::new(binary),
+            binary_override: Some(binary),
         }
     }
 
@@ -71,6 +73,12 @@ impl GalleryDlSourceRunner {
             ));
         }
 
+        let binary = self
+            .binary_override
+            .clone()
+            .map(Ok)
+            .unwrap_or_else(|| crate::media_processing::gallery_dl_path::gallery_dl_path().cloned())
+            .map_err(|error| RunnerFailure::terminal(RunnerFailureKind::Runtime, error))?;
         let options = RunOptions {
             subscription_id: Some(query.subscription_id),
             query_id: Some(query.query_id),
@@ -94,7 +102,8 @@ impl GalleryDlSourceRunner {
         };
 
         let (legacy_output, mut legacy_input) = mpsc::channel(CHANNEL_CAPACITY);
-        let run = self.runner.run(&options, legacy_output);
+        let runner = GalleryDlRunner::new(binary);
+        let run = runner.run(&options, legacy_output);
         tokio::pin!(run);
         let mut downloaded = 0usize;
         let summary = loop {

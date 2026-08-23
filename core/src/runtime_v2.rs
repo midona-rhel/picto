@@ -95,7 +95,7 @@ pub fn start(
     cancel: CancellationToken,
 ) -> Result<Vec<(&'static str, tokio::task::JoinHandle<()>)>, String> {
     recover(&application, &Utc::now().to_rfc3339())?;
-    let runner = GalleryDlSourceRunner::open(application.store().library_root())?;
+    let runner = GalleryDlSourceRunner::open(application.store().library_root());
 
     let subscription_application = Arc::clone(&application);
     let subscription_cancel = cancel.clone();

@@ -68,6 +68,7 @@ pub mod runtime_v2;
 pub mod scheduler;
 pub mod settings_v2;
 pub mod state;
+pub mod state_v2;
 pub mod store;
 pub mod types;
 pub mod workers;

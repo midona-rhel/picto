@@ -45,6 +45,20 @@ impl Store {
         &self.root
     }
 
+    pub fn checkpoint(&self) -> Result<(), String> {
+        let _guard = self
+            .consistency
+            .write()
+            .map_err(|_| "Store consistency lock poisoned".to_string())?;
+        let connection = self
+            .writer
+            .lock()
+            .map_err(|_| "Store writer lock poisoned".to_string())?;
+        connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")
+            .map_err(|error| error.to_string())
+    }
+
     pub fn read<T>(
         &self,
         operation: impl FnOnce(&Connection) -> rusqlite::Result<T>,
