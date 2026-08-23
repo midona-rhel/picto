@@ -17,6 +17,7 @@ import {
   gridTargetSizeAtom,
   gridShowNameAtom,
   gridShowExtensionAtom,
+  gridShowExtensionLabelAtom,
   gridShowResolutionAtom,
   gridFitThumbnailsAtom,
   gridSearchTextAtom,
@@ -77,6 +78,7 @@ import { nodeIdToGridScope } from '../../shared/lib/gridScope';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { ApplicationMenuButton } from '../../shared/ui/ApplicationMenuButton/ApplicationMenuButton';
 import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
+import { hasSameEntityOrder } from './gridItemIdentity';
 import styles from './GridScreen.module.css';
 
 const store = getDefaultStore();
@@ -112,6 +114,7 @@ export function GridScreen() {
   const targetSize = useAtomValue(gridTargetSizeAtom);
   const showName = useAtomValue(gridShowNameAtom);
   const showExtension = useAtomValue(gridShowExtensionAtom);
+  const showExtensionLabel = useAtomValue(gridShowExtensionLabelAtom);
   const showResolution = useAtomValue(gridShowResolutionAtom);
   const fitThumbnails = useAtomValue(gridFitThumbnailsAtom);
   const softTransitionAction = useAtomValue(gridSoftTransitionActionAtom);
@@ -237,8 +240,15 @@ export function GridScreen() {
     return () => { cancelled = true; };
   }, [selectedSubfolderNodeIds, setSubfolderPreview]);
 
-  // Reset range anchor when items change (scope nav, sort, search, reload)
-  useEffect(() => { lastClickedIndexRef.current = null; }, [items]);
+  // Metadata reconciliation replaces item objects without changing selection
+  // order. Preserve the range anchor unless membership or order truly changes.
+  const previousItemOrderRef = useRef<string[]>([]);
+  useEffect(() => {
+    const nextOrder = items.map((item) => item.entity_hash);
+    const previousOrder = previousItemOrderRef.current;
+    if (!hasSameEntityOrder(previousOrder, items)) lastClickedIndexRef.current = null;
+    previousItemOrderRef.current = nextOrder;
+  }, [items]);
   const setDisplayedGridSnapshot = useSetAtom(displayedGridSnapshotAtom);
   const setDisplayedInspectorTarget = useSetAtom(displayedInspectorTargetAtom);
   const setDisplayedEntityData = useSetAtom(displayedInspectorEntityDataAtom);
@@ -870,6 +880,7 @@ export function GridScreen() {
         targetSize={targetSize}
         showName={showName}
         showExtension={showExtension}
+        showExtensionLabel={showExtensionLabel}
         showResolution={showResolution}
         fitThumbnails={fitThumbnails}
         totalCount={totalCount}

@@ -22,6 +22,18 @@ import { startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, 
 import { hitTestTile, computeReorderTarget } from './hitTesting';
 import { DragGhost } from '../DragGhost';
 import {
+  DRAG_GHOST_BADGE_HEIGHT,
+  DRAG_GHOST_BADGE_MIN_WIDTH,
+  DRAG_GHOST_BORDER,
+  DRAG_GHOST_RADIUS,
+  DRAG_GHOST_STACK_OFFSET,
+  DRAG_GHOST_THUMB_SIZE,
+  dragGhostStackCount,
+  formatDragGhostCount,
+} from '../dragGhostSpec';
+import { GlassInput } from '../../../shared/ui/GlassInput/GlassInput';
+import { resolveGridScrollAnchor } from './gridScrollAnchor';
+import {
   type CanvasScrollState,
   createIdleCanvasScrollState,
   classifyCanvasScrollPhase,
@@ -61,6 +73,7 @@ export interface CanvasGridProps {
   targetSize: number;
   showName: boolean;
   showExtension: boolean;
+  showExtensionLabel?: boolean;
   showResolution?: boolean;
   fitThumbnails?: boolean;
   /** Total item count for the current scope (from backend). Used to estimate scroll height before all items are loaded. */
@@ -100,6 +113,7 @@ export function CanvasGrid({
   targetSize,
   showName,
   showExtension,
+  showExtensionLabel = false,
   showResolution = false,
   fitThumbnails = false,
   totalCount = null,
@@ -266,8 +280,6 @@ export function CanvasGrid({
     const prevItems = prevItemsRef.current;
     prevItemsRef.current = items;
 
-    // Items changed → scope transition handles its own scroll. Skip.
-    if (prevItems !== items) return;
     // No previous layout (first mount / first resize) or same layout object.
     if (!prev || prev === layout) return;
     if (prev.positions.length === 0 || layout.positions.length === 0) return;
@@ -277,42 +289,16 @@ export function CanvasGrid({
     const vh = container.clientHeight;
     if (vh === 0) return;
 
-    const scrollTop = lastScrollTopRef.current;
-    const vpTop = scrollTop;
-    const vpBot = scrollTop + vh;
-
-    let anchorIdx = -1;
-    let bestTop = Infinity;
-    const sel = selectedHashesRef.current;
-
-    // 1) Prefer a selected tile that is at least partially visible
-    if (sel.size > 0) {
-      for (let i = 0; i < prev.positions.length; i++) {
-        const p = prev.positions[i];
-        if (!p || !items[i] || !sel.has(items[i].entity_hash)) continue;
-        if (p.y + p.h < vpTop || p.y > vpBot) continue;
-        if (p.y < bestTop) { bestTop = p.y; anchorIdx = i; }
-      }
-    }
-
-    // 2) Fall back to the topmost tile that overlaps the viewport
-    if (anchorIdx < 0) {
-      bestTop = Infinity;
-      for (let i = 0; i < prev.positions.length; i++) {
-        const p = prev.positions[i];
-        if (!p) continue;
-        if (p.y + p.h < vpTop || p.y > vpBot) continue;
-        if (p.y < bestTop) { bestTop = p.y; anchorIdx = i; }
-      }
-    }
-
-    if (anchorIdx < 0 || anchorIdx >= layout.positions.length) return;
-
-    // Anchor on the tile's top edge — stable when text height changes
-    const oldTop = prev.positions[anchorIdx].y;
-    const newTop = layout.positions[anchorIdx].y;
-    const offset = oldTop - scrollTop;
-    const next = Math.max(0, newTop - offset);
+    const next = resolveGridScrollAnchor({
+      previousPositions: prev.positions,
+      nextPositions: layout.positions,
+      previousItems: prevItems,
+      nextItems: items,
+      selectedHashes: selectedHashesRef.current,
+      scrollTop: lastScrollTopRef.current,
+      viewportHeight: vh,
+    });
+    if (next == null) return;
 
     container.scrollTop = next;
     lastScrollTopRef.current = next;
@@ -496,7 +482,7 @@ export function CanvasGrid({
       showTileName: showName,
       showResolution,
       showExtension,
-      showExtensionLabel: showExtension,
+      showExtensionLabel,
     });
 
     ctx.restore();
@@ -515,7 +501,7 @@ export function CanvasGrid({
       firstPaintRef.current = true;
       onFirstPaint?.();
     }
-  }, [layout, spatialIndex, renderItems, effectiveViewMode, fitThumbnails, showName, showExtension, showResolution, suppressTileReveal, textHeight, headerHeight]);
+  }, [layout, spatialIndex, renderItems, effectiveViewMode, fitThumbnails, showName, showExtension, showExtensionLabel, showResolution, suppressTileReveal, textHeight, headerHeight]);
 
   const drawOverlay = useCallback(() => {
     const container = containerRef.current;
@@ -641,15 +627,12 @@ export function CanvasGrid({
     ctx.restore();
   }, [layout, items, selectedEntityHashes, textHeight, headerHeight]);
 
-  // ── RAF scheduler (legacy pattern) ──
-  const frozenRef = useRef(!interactive);
-  frozenRef.current = !interactive;
+  // ── Shared RAF scheduler ──
   const drawBaseRef = useRef(drawBase);
   drawBaseRef.current = drawBase;
   const drawOverlayRef = useRef(drawOverlay);
   drawOverlayRef.current = drawOverlay;
   const { markDirty } = useCanvasRedrawScheduler({
-    frozenRef,
     drawBaseRef,
     drawOverlayRef,
   });
@@ -755,14 +738,14 @@ export function CanvasGrid({
         // Generate stacked icon matching DragGhost style
         let iconUrl = '';
         try {
-          const thumbSize = 44;
-          const so = 3;
+          const thumbSize = DRAG_GHOST_THUMB_SIZE;
+          const so = DRAG_GHOST_STACK_OFFSET;
           const curItems = itemsRef.current;
           const ths = state.hashes.slice(0, 3).map((h) => {
             const it = curItems.find((x) => x.entity_hash === h);
             return it?.entity_hash ?? h;
           });
-          const sc = ths.length;
+          const sc = dragGhostStackCount(ths.length);
           const tw = thumbSize + (sc - 1) * so + 14;
           const th = thumbSize + (sc - 1) * so + 8;
           const cv = document.createElement('canvas');
@@ -774,22 +757,22 @@ export function CanvasGrid({
               if (en?.thumb) {
                 const ox = i * so, oy = i * so + 6;
                 cx.save();
-                cx.beginPath(); cx.roundRect(ox, oy, thumbSize, thumbSize, 4); cx.clip();
+                cx.beginPath(); cx.roundRect(ox, oy, thumbSize, thumbSize, DRAG_GHOST_RADIUS); cx.clip();
                 cx.drawImage(en.thumb, ox, oy, thumbSize, thumbSize);
                 cx.restore();
-                cx.strokeStyle = 'rgba(255,255,255,0.25)'; cx.lineWidth = 1;
-                cx.beginPath(); cx.roundRect(ox + 0.5, oy + 0.5, thumbSize - 1, thumbSize - 1, 4); cx.stroke();
+                cx.strokeStyle = DRAG_GHOST_BORDER; cx.lineWidth = 1;
+                cx.beginPath(); cx.roundRect(ox + 0.5, oy + 0.5, thumbSize - 1, thumbSize - 1, DRAG_GHOST_RADIUS); cx.stroke();
               }
             }
             if (state.hashes.length > 1) {
-              const lb = state.hashes.length > 999 ? '999+' : String(state.hashes.length);
+              const lb = formatDragGhostCount(state.hashes.length);
               cx.font = 'bold 10px -apple-system, BlinkMacSystemFont, sans-serif';
               const mw = cx.measureText(lb).width;
-              const bw = Math.max(20, mw + 10);
+              const bw = Math.max(DRAG_GHOST_BADGE_MIN_WIDTH, mw + 10);
               cx.fillStyle = '#3297FF';
-              cx.beginPath(); cx.roundRect(tw - bw, 0, bw, 18, 9); cx.fill();
+              cx.beginPath(); cx.roundRect(tw - bw, 0, bw, DRAG_GHOST_BADGE_HEIGHT, DRAG_GHOST_BADGE_HEIGHT / 2); cx.fill();
               cx.fillStyle = 'white'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
-              cx.fillText(lb, tw - bw / 2, 9);
+              cx.fillText(lb, tw - bw / 2, DRAG_GHOST_BADGE_HEIGHT / 2);
             }
             iconUrl = cv.toDataURL('image/png');
           }
@@ -939,10 +922,10 @@ export function CanvasGrid({
   /** Check if the event target is on an interactive element inside the header (folder tile, button, etc.) */
   const isOnHeaderInteractive = useCallback((target: EventTarget) => {
     const el = target as HTMLElement;
-    if (!headerRef.current?.contains(el)) return false;
+    if (!isInHeader(target)) return false;
     // Check if the click is on a folder tile or its children
     return !!el.closest('[data-folder-hash]') || !!el.closest('button');
-  }, []);
+  }, [isInHeader]);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
     // Suppress click that fires after a marquee drag ends
@@ -964,7 +947,7 @@ export function CanvasGrid({
     } else {
       onEmptyClick?.();
     }
-  }, [items, layout.positions, onTileClick, onEmptyClick, textHeight, isInHeader, headerHeight]);
+  }, [items, layout.positions, onTileClick, onEmptyClick, textHeight, isOnHeaderInteractive, headerHeight]);
 
   // ── Double-click handler ──
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
@@ -977,7 +960,7 @@ export function CanvasGrid({
     if (idx != null && items[idx]) {
       onTileDoubleClick(idx, items[idx]);
     }
-  }, [items, layout.positions, onTileDoubleClick, textHeight, isInHeader, headerHeight]);
+  }, [items, layout.positions, onTileDoubleClick, textHeight, isOnHeaderInteractive, headerHeight]);
 
   // ── Zoom button hit test (bottom-right corner of tile image area) ──
   const isZoomButtonHit = useCallback((clientX: number, clientY: number, tileIdx: number): boolean => {
@@ -1312,7 +1295,7 @@ export function CanvasGrid({
           if (!pos || !item) return null;
           const imageH = pos.h - textHeight;
           return (
-            <input
+            <GlassInput
               key={`rename-${renamingIndex}`}
               autoFocus
               defaultValue={item.name ?? ''}
@@ -1323,16 +1306,9 @@ export function CanvasGrid({
                 width: pos.w,
                 height: textHeight,
                 zIndex: 200,
-                background: 'var(--color-surface-1)',
-                border: '1px solid var(--color-primary)',
-                borderRadius: 4,
-                color: 'var(--color-text-primary)',
-                fontSize: 13,
-                fontFamily: 'var(--font-family)',
                 textAlign: 'center',
-                outline: 'none',
                 padding: '0 4px',
-                boxSizing: 'border-box',
+                borderRadius: 4,
               }}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') {

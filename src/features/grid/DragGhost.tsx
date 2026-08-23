@@ -5,6 +5,17 @@
  */
 
 import { createPortal } from 'react-dom';
+import {
+  DRAG_GHOST_BADGE_HEIGHT,
+  DRAG_GHOST_BADGE_MIN_WIDTH,
+  DRAG_GHOST_BORDER,
+  DRAG_GHOST_RADIUS,
+  DRAG_GHOST_SHADOW,
+  DRAG_GHOST_STACK_OFFSET,
+  DRAG_GHOST_THUMB_SIZE,
+  dragGhostStackCount,
+  formatDragGhostCount,
+} from './dragGhostSpec';
 
 interface DragGhostProps {
   x: number;
@@ -14,7 +25,7 @@ interface DragGhostProps {
 }
 
 export function DragGhost({ x, y, thumbnailHashes, count }: DragGhostProps) {
-  const stackCount = Math.min(thumbnailHashes.length, 3);
+  const stackCount = dragGhostStackCount(thumbnailHashes.length);
   const thumbs = thumbnailHashes.slice(0, 3);
 
   return createPortal(
@@ -26,7 +37,7 @@ export function DragGhost({ x, y, thumbnailHashes, count }: DragGhostProps) {
       pointerEvents: 'none',
       opacity: 0.85,
     }}>
-      <div style={{ position: 'relative', width: 48 + (stackCount - 1) * 3, height: 48 + (stackCount - 1) * 3 }}>
+      <div style={{ position: 'relative', width: 48 + (stackCount - 1) * DRAG_GHOST_STACK_OFFSET, height: 48 + (stackCount - 1) * DRAG_GHOST_STACK_OFFSET }}>
         {thumbs.map((hash, i) => (
           <img
             key={hash}
@@ -34,14 +45,14 @@ export function DragGhost({ x, y, thumbnailHashes, count }: DragGhostProps) {
             draggable={false}
             style={{
               position: 'absolute',
-              top: i * 3,
-              left: i * 3,
-              width: 44,
-              height: 44,
+              top: i * DRAG_GHOST_STACK_OFFSET,
+              left: i * DRAG_GHOST_STACK_OFFSET,
+              width: DRAG_GHOST_THUMB_SIZE,
+              height: DRAG_GHOST_THUMB_SIZE,
               objectFit: 'cover',
-              borderRadius: 4,
-              border: '1px solid rgba(255, 255, 255, 0.2)',
-              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+              borderRadius: DRAG_GHOST_RADIUS,
+              border: `1px solid ${DRAG_GHOST_BORDER}`,
+              boxShadow: DRAG_GHOST_SHADOW,
             }}
           />
         ))}
@@ -53,8 +64,8 @@ export function DragGhost({ x, y, thumbnailHashes, count }: DragGhostProps) {
             background: 'var(--color-primary)',
             color: '#fff',
             borderRadius: 10,
-            minWidth: 20,
-            height: 20,
+            minWidth: DRAG_GHOST_BADGE_MIN_WIDTH,
+            height: DRAG_GHOST_BADGE_HEIGHT,
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
@@ -62,7 +73,7 @@ export function DragGhost({ x, y, thumbnailHashes, count }: DragGhostProps) {
             fontWeight: 600,
             padding: '0 5px',
           }}>
-            {count}
+            {formatDragGhostCount(count)}
           </div>
         )}
       </div>
