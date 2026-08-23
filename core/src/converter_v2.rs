@@ -386,7 +386,13 @@ impl Audit {
         audit.counts.subscriptions = count(connection, "subscription")?;
         audit.counts.subscription_queries = count(connection, "subscription_query")?;
         audit.counts.subscription_runs = count(connection, "subscription_run")?;
-        audit.counts.subscription_query_runs = count(connection, "subscription_query_run")?;
+        audit.counts.subscription_query_runs = connection
+            .query_row(
+                "SELECT COUNT(*) FROM (SELECT run_id, query_id FROM subscription_query_run WHERE run_id IS NOT NULL AND query_id IS NOT NULL GROUP BY run_id, query_id)",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| format!("Failed to count normalized subscription query runs: {error}"))?;
         audit.counts.subscription_issues = count(connection, "subscription_issue")?;
         audit.counts.source_posts = connection
             .query_row(
@@ -499,6 +505,16 @@ impl Audit {
             connection,
             "subscription_query_job",
             "SELECT COUNT(*) FROM subscription_query_job",
+        )?;
+        self.discarded_warning(
+            connection,
+            "superseded subscription query-run attempts",
+            "SELECT COALESCE(SUM(run_count - 1), 0) FROM (SELECT COUNT(*) AS run_count FROM subscription_query_run GROUP BY run_id, query_id HAVING run_count > 1)",
+        )?;
+        self.discarded_warning(
+            connection,
+            "orphan subscription query-run rows",
+            "SELECT COUNT(*) FROM subscription_query_run WHERE run_id IS NULL OR query_id IS NULL",
         )?;
         self.discarded_warning(
             connection,
@@ -1169,7 +1185,7 @@ fn source_snapshot(connection: &Connection) -> Result<Snapshot, String> {
             })
         })?,
         runs: rows(connection, "SELECT run_id,subscription_id,'legacy',status,started_at,finished_at,failure_kind,error_message,started_at FROM subscription_run ORDER BY run_id", |r| Ok(RunRow { id:get!(r,0), subscription_id:get!(r,1), requested_by:get!(r,2), status:get!(r,3), started:get!(r,4), finished:get!(r,5), failure_kind:get!(r,6), error:get!(r,7), created:get!(r,8) }))?,
-        query_runs: rows(connection, "SELECT query_run_id,run_id,query_id,status,started_at,finished_at,failure_kind,error_message FROM subscription_query_run ORDER BY query_run_id", |r| Ok(QueryRunRow { id:get!(r,0), run_id:get!(r,1), query_id:get!(r,2), status:get!(r,3), cursor:None, attempts:0, available:get!(r,4), started:get!(r,4), finished:get!(r,5), failure_kind:get!(r,6), error:get!(r,7) }))?,
+        query_runs: rows(connection, "SELECT query_run_id,run_id,query_id,status,started_at,finished_at,failure_kind,error_message,(SELECT COUNT(*) - 1 FROM subscription_query_run attempts WHERE attempts.run_id = current.run_id AND attempts.query_id = current.query_id) FROM subscription_query_run current WHERE query_run_id = (SELECT MAX(latest.query_run_id) FROM subscription_query_run latest WHERE latest.run_id = current.run_id AND latest.query_id = current.query_id) ORDER BY query_run_id", |r| Ok(QueryRunRow { id:get!(r,0), run_id:get!(r,1), query_id:get!(r,2), status:get!(r,3), cursor:None, attempts:get!(r,8), available:get!(r,4), started:get!(r,4), finished:get!(r,5), failure_kind:get!(r,6), error:get!(r,7) }))?,
         issues: rows(connection, "SELECT issue_id,issue_key,subscription_id,query_id,issue_kind,message,detail,status,first_seen_at,last_seen_at,resolved_at FROM subscription_issue ORDER BY issue_id", |r| Ok(IssueRow { id:get!(r,0), key:get!(r,1), subscription_id:get!(r,2), query_id:get!(r,3), kind:get!(r,4), message:get!(r,5), detail:get!(r,6), status:get!(r,7), first:get!(r,8), last:get!(r,9), resolved:get!(r,10) }))?,
         posts: Vec::new(), source_items: Vec::new(), post_links: Vec::new(), run_source_items: Vec::new(),
         ingest_jobs: rows(connection, "SELECT item_id, 'legacy-ingest-' || item_id, 'legacy', source_path, NULL, payload_json, 'inbox', delete_after_ingest, CASE status WHEN 'processing' THEN 'running' WHEN 'complete' THEN 'succeeded' ELSE status END, 0, created_at, last_error, created_at, updated_at FROM ingest_queue_item ORDER BY item_id", |r| Ok(IngestJobRow { id:get!(r,0), key:get!(r,1), source_kind:get!(r,2), source_path:get!(r,3), source_item_id:get!(r,4), payload:get!(r,5), lifecycle:get!(r,6), delete_after:get!(r,7), status:get!(r,8), attempts:get!(r,9), available:get!(r,10), error:get!(r,11), created:get!(r,12), modified:get!(r,13) }))?,
@@ -1357,7 +1373,7 @@ fn populate_provenance(connection: &Connection, snapshot: &mut Snapshot) -> Resu
 
     let attempts = rows(
         connection,
-        "SELECT query_run_id,subscription_id,COALESCE(site_category,''),post_id,item_key FROM subscription_download_attempt WHERE query_run_id IS NOT NULL AND post_id IS NOT NULL",
+        "SELECT (SELECT MAX(latest.query_run_id) FROM subscription_query_run latest WHERE latest.run_id = current.run_id AND latest.query_id = current.query_id),attempt.subscription_id,COALESCE(attempt.site_category,''),attempt.post_id,attempt.item_key FROM subscription_download_attempt attempt JOIN subscription_query_run current ON current.query_run_id = attempt.query_run_id WHERE attempt.query_run_id IS NOT NULL AND attempt.post_id IS NOT NULL",
         |row| {
             let query_run_id: i64 = get!(row, 0);
             let subscription_id: i64 = get!(row, 1);
