@@ -10,6 +10,7 @@ import { useRef, useState, useEffect, useCallback } from 'react';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import {
   IconSearch,
+  IconEdit,
 } from '@tabler/icons-react';
 import {
   gridTransitionPhaseAtom,
@@ -129,8 +130,8 @@ export function ViewerToolbar() {
   const zoomLabelRef = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
-    if (!controls) return;
-    return controls.subscribeZoomScale((scale) => {
+    if (!controls?.zoom) return;
+    return controls.zoom.subscribeZoomScale((scale) => {
       const percent = Math.round(scale * 100);
       if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${percent}%`;
       if (sliderRef.current && !sliderDraggingRef.current) {
@@ -141,34 +142,35 @@ export function ViewerToolbar() {
 
   if (!state || !controls) return null;
 
-  const canPrev = state.currentIndex > 0;
-  const canNext = state.currentIndex < state.total - 1;
+  const canPrev = !!controls.navigate && state.currentIndex > 0;
+  const canNext = !!controls.navigate && state.currentIndex < state.total - 1;
+  const zoom = controls.zoom;
 
   return (
     <TitlebarControls
       left={(
         <>
-        <KbdTooltip label="Back to grid" shortcut="Escape">
-          <TitlebarControlButton onClick={controls.close}>
+        <KbdTooltip label={controls.backLabel ?? 'Back to grid'} shortcut="Escape">
+          <TitlebarControlButton onClick={controls.close} aria-label={controls.backLabel ?? 'Back to grid'}>
             <ToolbarHistoryIcon direction="back" />
           </TitlebarControlButton>
         </KbdTooltip>
-        <TitlebarCounter current={state.currentIndex + 1} total={state.total} />
+        {controls.navigate ? <TitlebarCounter current={state.currentIndex + 1} total={state.total} /> : null}
         </>
       )}
-      center={(
+      center={zoom ? (
         <div className={styles.sliderSection}>
-          <span ref={zoomLabelRef} className={styles.zoomLabel}>{state.zoomPercent}%</span>
+          <span ref={zoomLabelRef} className={styles.zoomLabel}>{state.zoomPercent ?? 100}%</span>
           <TitlebarRangeSlider
             ref={sliderRef}
             aria-label="Zoom"
             min={0}
             max={100}
             step={0.5}
-            defaultValue={zoomToSlider(state.zoomPercent)}
+            defaultValue={zoomToSlider(state.zoomPercent ?? 100)}
             onValueChange={(value) => {
               sliderDraggingRef.current = true;
-              controls.setZoomScale(sliderToZoom(value) / 100);
+              zoom.setZoomScale(sliderToZoom(value) / 100);
             }}
             onMouseUp={() => { sliderDraggingRef.current = false; }}
             onTouchEnd={() => { sliderDraggingRef.current = false; }}
@@ -177,24 +179,36 @@ export function ViewerToolbar() {
             onBlur={() => { sliderDraggingRef.current = false; }}
           />
         </div>
-      )}
+      ) : null}
       right={(
         <>
-        <KbdTooltip label="Fit to window" shortcut="`">
-          <TitlebarControlButton onClick={controls.fitToWindow}>
-            <ToolbarFitIcon />
-          </TitlebarControlButton>
-        </KbdTooltip>
-        <KbdTooltip label="Actual size" shortcut="Mod+0">
-          <TitlebarControlButton onClick={controls.fitActual}>
-            <ToolbarActualSizeIcon />
-          </TitlebarControlButton>
-        </KbdTooltip>
-        <TitlebarControlGroup>
+        {zoom ? (
+          <>
+            <KbdTooltip label="Fit to window" shortcut="`">
+              <TitlebarControlButton onClick={zoom.fitToWindow} aria-label="Fit to window">
+                <ToolbarFitIcon />
+              </TitlebarControlButton>
+            </KbdTooltip>
+            <KbdTooltip label="Actual size" shortcut="Mod+0">
+              <TitlebarControlButton onClick={zoom.fitActual} aria-label="Actual size">
+                <ToolbarActualSizeIcon />
+              </TitlebarControlButton>
+            </KbdTooltip>
+          </>
+        ) : null}
+        {controls.edit ? (
+          <KbdTooltip label="Edit collection">
+            <TitlebarControlButton onClick={controls.edit} aria-label="Edit collection">
+              <IconEdit size={16} stroke={1.5} />
+            </TitlebarControlButton>
+          </KbdTooltip>
+        ) : null}
+        {controls.navigate ? <TitlebarControlGroup>
           <KbdTooltip label="Previous" shortcut="ArrowLeft">
             <TitlebarControlButton
               disabled={!canPrev}
-              onClick={canPrev ? () => controls.navigate(-1) : undefined}
+              onClick={canPrev ? () => controls.navigate?.(-1) : undefined}
+              aria-label="Previous"
             >
               <ToolbarChevronIcon direction="left" />
             </TitlebarControlButton>
@@ -202,12 +216,13 @@ export function ViewerToolbar() {
           <KbdTooltip label="Next" shortcut="ArrowRight">
             <TitlebarControlButton
               disabled={!canNext}
-              onClick={canNext ? () => controls.navigate(1) : undefined}
+              onClick={canNext ? () => controls.navigate?.(1) : undefined}
+              aria-label="Next"
             >
               <ToolbarChevronIcon direction="right" />
             </TitlebarControlButton>
           </KbdTooltip>
-        </TitlebarControlGroup>
+        </TitlebarControlGroup> : null}
         </>
       )}
     />

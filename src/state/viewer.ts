@@ -28,18 +28,24 @@ export const quickLookSessionAtom = atom<ViewerSession | null>(null);
 export interface ViewerDisplayState {
   currentIndex: number;
   total: number;
-  zoomPercent: number;
+  zoomPercent?: number;
 }
 
-export interface ViewerDisplayControls {
-  close: () => void;
-  navigate: (delta: number) => void;
+export interface ViewerZoomControls {
   fitToWindow: () => void;
   fitActual: () => void;
   zoomIn: () => void;
   zoomOut: () => void;
   setZoomScale: (scale: number) => void;
   subscribeZoomScale: (listener: (scale: number) => void) => () => void;
+}
+
+export interface ViewerDisplayControls {
+  close: () => void;
+  navigate?: (delta: number) => void;
+  zoom?: ViewerZoomControls;
+  edit?: () => void;
+  backLabel?: string;
 }
 
 /** Written by MediaView, read by GridToolbar. */

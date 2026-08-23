@@ -934,7 +934,6 @@ export function GridScreen({
         <CollectionSurface
           key={`${viewerItem.item_id}:${collectionInitialMode}`}
           collectionId={viewerItem.item_id}
-          parentNodeId={displayedNodeId}
           initialMode={collectionInitialMode}
           rootCurrentIndex={viewerIndex}
           rootTotal={totalCount ?? items.length}

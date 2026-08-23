@@ -15,7 +15,6 @@ import { WorkspaceSurface } from '../features/workspace/WorkspaceSurface';
 import { GridToolbar, ViewerToolbar } from '../features/grid/GridToolbar';
 import { TagsToolbar } from '../features/tags/TagManagerScreen';
 import { DuplicatesToolbar } from '../features/duplicates/DuplicatesScreen';
-import { CollectionToolbar } from '../features/collections/CollectionToolbar';
 import { Inspector } from '../features/inspector/Inspector';
 import { ModalLayer } from '../features/modals/ModalLayer';
 import {
@@ -30,8 +29,7 @@ import {
 import { sidebarNodesAtom } from '../state/sidebar';
 import { gridActiveAtom, gridScopeLabelAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
-import { viewerCurrentItemAtom, viewerSessionAtom } from '../state/viewer';
-import { collectionChromeAtom } from '../state/collections';
+import { viewerSessionAtom } from '../state/viewer';
 import { startAppRuntime } from '../runtime/appRuntime';
 import { registerAppSettingsReload } from '../runtime/appSettingsSettle';
 import { zoomController } from '../controllers/zoomController';
@@ -169,52 +167,6 @@ function ScopeTitle() {
   return <span className={styles.scopeTitle}>{label}</span>;
 }
 
-function CollectionScopeTitle() {
-  const chrome = useAtomValue(collectionChromeAtom);
-  const nodes = useAtomValue(sidebarNodesAtom);
-  const setActiveNodeId = useSetAtom(activeNodeIdAtom);
-  if (!chrome) return null;
-
-  const parentPath = buildBreadcrumbPath(chrome.parentNodeId, nodes);
-  const resolvedParentPath = parentPath.length > 0
-    ? parentPath
-    : [{ id: chrome.parentNodeId, name: chrome.parentLabel }];
-  const separator = <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>;
-  const navigateToParent = (nodeId: string) => {
-    chrome.close();
-    setActiveNodeId(nodeId);
-    pushHistory(nodeId);
-  };
-  return (
-    <span className={styles.scopeTitle}>
-      {resolvedParentPath.map((segment, index) => (
-        <span key={segment.id}>
-          {index > 0 ? separator : null}
-          <button
-            type="button"
-            className={styles.scopeCrumbLink}
-            onClick={() => navigateToParent(segment.id)}
-          >
-            {segment.name}
-          </button>
-        </span>
-      ))}
-      {separator}
-      {chrome.mode === 'editor' ? (
-        <>
-          <button type="button" className={styles.scopeCrumbLink} onClick={chrome.showReader}>
-            {chrome.label}
-          </button>
-          {separator}
-          <span>Edit</span>
-        </>
-      ) : (
-        <span>{chrome.label}</span>
-      )}
-    </span>
-  );
-}
-
 export function AppShell() {
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const inspectorCollapsed = useAtomValue(inspectorCollapsedAtom);
@@ -222,8 +174,6 @@ export function AppShell() {
   const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
   const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
   const viewerSession = useAtomValue(viewerSessionAtom);
-  const viewerItem = useAtomValue(viewerCurrentItemAtom);
-  const collectionChrome = useAtomValue(collectionChromeAtom);
   const canBack = useAtomValue(canGoBackAtom);
   const canForward = useAtomValue(canGoForwardAtom);
   const inspectorWidth = useAtomValue(inspectorWidthAtom);
@@ -437,14 +387,7 @@ export function AppShell() {
           </div>
         </div>
         <div className={styles.titlebarCenter}>
-          {collectionChrome?.memberViewerOpen ? (
-            <ViewerToolbar />
-          ) : viewerItem?.kind === 'collection' ? (
-            <>
-              {collectionChrome ? <CollectionToolbar /> : null}
-              {collectionChrome ? <CollectionScopeTitle /> : null}
-            </>
-          ) : viewerSession ? (
+          {viewerSession ? (
             <ViewerToolbar />
           ) : (
             <>

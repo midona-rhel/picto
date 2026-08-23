@@ -17,15 +17,17 @@ describe('ViewerToolbar live zoom display', () => {
     store.set(viewerDisplayControlsAtom, {
       close: vi.fn(),
       navigate: vi.fn(),
-      fitToWindow: vi.fn(),
-      fitActual: vi.fn(),
-      zoomIn: vi.fn(),
-      zoomOut: vi.fn(),
-      setZoomScale: vi.fn(),
-      subscribeZoomScale: (listener) => {
-        liveListener = listener;
-        listener(1);
-        return vi.fn();
+      zoom: {
+        fitToWindow: vi.fn(),
+        fitActual: vi.fn(),
+        zoomIn: vi.fn(),
+        zoomOut: vi.fn(),
+        setZoomScale: vi.fn(),
+        subscribeZoomScale: (listener) => {
+          liveListener = listener;
+          listener(1);
+          return vi.fn();
+        },
       },
     });
 
@@ -39,5 +41,28 @@ describe('ViewerToolbar live zoom display', () => {
     expect(screen.getByText('25%')).toBeInTheDocument();
     expect(Number(slider.value)).toBeLessThan(50);
     expect(store.get(viewerDisplayStateAtom)?.zoomPercent).toBe(100);
+  });
+
+  it('uses the same detail toolbar for collections without media-only controls', () => {
+    const store = createStore();
+    const navigate = vi.fn();
+    const edit = vi.fn();
+    store.set(viewerDisplayStateAtom, { currentIndex: 1, total: 3 });
+    store.set(viewerDisplayControlsAtom, {
+      close: vi.fn(),
+      navigate,
+      edit,
+    });
+
+    render(<Provider store={store}><ViewerToolbar /></Provider>);
+    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+    expect(screen.queryByRole('slider', { name: 'Zoom' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Fit to window' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Actual size' })).not.toBeInTheDocument();
+    screen.getByRole('button', { name: 'Edit collection' }).click();
+    screen.getByRole('button', { name: 'Previous' }).click();
+    screen.getByRole('button', { name: 'Next' }).click();
+    expect(edit).toHaveBeenCalledOnce();
+    expect(navigate.mock.calls).toEqual([[-1], [1]]);
   });
 });

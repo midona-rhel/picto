@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { IconPhoto, IconX } from '@tabler/icons-react';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useSetAtom } from 'jotai';
 import { viewerController } from '../../controllers/viewerController';
 import { MediaView } from '../viewer/MediaView';
 import { CanvasGrid } from '../grid/canvas/CanvasGrid';
@@ -11,13 +11,11 @@ import type { MediaDetails } from '../../shared/types/generated/application/Medi
 import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import { detachItems, reorderCollection, setCollectionCover } from '../../platform/entityApi';
-import { displayedScopeLabelAtom } from '../../state/inspector';
-import { collectionChromeAtom } from '../../state/collections';
+import { viewerDisplayControlsAtom, viewerDisplayStateAtom } from '../../state/viewer';
 import styles from './CollectionSurface.module.css';
 
 export interface CollectionSurfaceProps {
   collectionId: number;
-  parentNodeId?: string;
   initialMode?: 'reader' | 'editor';
   rootCurrentIndex: number;
   rootTotal: number;
@@ -102,7 +100,6 @@ function CollectionImage({ item }: { item: CanonicalEntityGridItem }) {
 
 export function CollectionSurface({
   collectionId,
-  parentNodeId = 'system:all',
   initialMode = 'reader',
   rootCurrentIndex,
   rootTotal,
@@ -116,8 +113,8 @@ export function CollectionSurface({
   const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(new Set());
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const contextMenu = useContextMenu();
-  const parentLabel = useAtomValue(displayedScopeLabelAtom) || 'All';
-  const setCollectionChrome = useSetAtom(collectionChromeAtom);
+  const setDisplayState = useSetAtom(viewerDisplayStateAtom);
+  const setDisplayControls = useSetAtom(viewerDisplayControlsAtom);
 
   const refresh = useCallback(async () => {
     try {
@@ -146,25 +143,24 @@ export function CollectionSurface({
   );
 
   useEffect(() => {
-    if (!details) return;
-    setCollectionChrome({
-      label: details.label ?? 'Collection',
-      parentLabel,
-      parentNodeId,
-      mode,
-      memberViewerOpen: viewerIndex !== null,
-      currentIndex: rootCurrentIndex,
-      total: rootTotal,
+    if (!details || viewerIndex !== null) return;
+    setDisplayState({ currentIndex: rootCurrentIndex, total: rootTotal });
+    setDisplayControls(mode === 'reader' ? {
       close: onClose,
       navigate: onNavigateRoot,
-      showReader: () => {
+      edit: () => setMode('editor'),
+    } : {
+      close: () => {
         setMode('reader');
         setSelectedItemIds(new Set());
       },
-      edit: () => setMode('editor'),
+      backLabel: 'Back to collection',
     });
-    return () => setCollectionChrome(null);
-  }, [details, mode, onClose, onNavigateRoot, parentLabel, parentNodeId, rootCurrentIndex, rootTotal, setCollectionChrome, viewerIndex]);
+    return () => {
+      setDisplayState(null);
+      setDisplayControls(null);
+    };
+  }, [details, mode, onClose, onNavigateRoot, rootCurrentIndex, rootTotal, setDisplayControls, setDisplayState, viewerIndex]);
 
   useEffect(() => {
     if (viewerIndex !== null) return;

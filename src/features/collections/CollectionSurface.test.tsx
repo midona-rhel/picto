@@ -3,7 +3,7 @@ import { getDefaultStore } from 'jotai';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { CollectionSurface } from './CollectionSurface';
-import { collectionChromeAtom } from '../../state/collections';
+import { viewerDisplayControlsAtom, viewerDisplayStateAtom } from '../../state/viewer';
 
 const mocks = vi.hoisted(() => ({
   getItemDetails: vi.fn(),
@@ -128,7 +128,8 @@ function media(itemId: number, hash: string, mimeType: string, position: number)
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getDefaultStore().set(collectionChromeAtom, null);
+  getDefaultStore().set(viewerDisplayControlsAtom, null);
+  getDefaultStore().set(viewerDisplayStateAtom, null);
   mocks.getItemDetails.mockResolvedValue(details());
   mocks.detachItems.mockResolvedValue({});
   mocks.reorderCollection.mockResolvedValue({});
@@ -136,8 +137,8 @@ beforeEach(() => {
 });
 
 async function enterEditor() {
-  await waitFor(() => expect(getDefaultStore().get(collectionChromeAtom)).not.toBeNull());
-  act(() => getDefaultStore().get(collectionChromeAtom)?.edit());
+  await waitFor(() => expect(getDefaultStore().get(viewerDisplayControlsAtom)?.edit).toBeTypeOf('function'));
+  act(() => getDefaultStore().get(viewerDisplayControlsAtom)?.edit?.());
 }
 
 describe('CollectionSurface', () => {

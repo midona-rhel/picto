@@ -144,12 +144,14 @@ export function MediaView({
     setDisplayControls({
       close: () => onClose(currentItemId),
       navigate,
-      fitToWindow: zoom.fitToWindow,
-      fitActual: zoom.fitActual,
-      zoomIn: () => zoom.animateZoomTo(zoom.state.scale * 1.25),
-      zoomOut: () => zoom.animateZoomTo(zoom.state.scale / 1.25),
-      setZoomScale: (s) => zoom.zoomTo(s),
-      subscribeZoomScale: zoom.subscribeLiveScale,
+      zoom: {
+        fitToWindow: zoom.fitToWindow,
+        fitActual: zoom.fitActual,
+        zoomIn: () => zoom.animateZoomTo(zoom.state.scale * 1.25),
+        zoomOut: () => zoom.animateZoomTo(zoom.state.scale / 1.25),
+        setZoomScale: (s) => zoom.zoomTo(s),
+        subscribeZoomScale: zoom.subscribeLiveScale,
+      },
     });
   }, [currentItemId, navigate, onClose, zoom, setDisplayControls]);
 
