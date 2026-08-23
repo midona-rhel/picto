@@ -1,14 +1,18 @@
 import { getDefaultStore } from 'jotai';
 import { listen } from '../platform/ipc';
-import { loadInspectorData } from '../controllers/inspectorController';
 import {
+  commitInspectorTarget,
+  loadInspectorData,
+  loadSubfolderInspectorPreview,
+} from '../controllers/inspectorController';
+import {
+  displayedGridSnapshotAtom,
   displayedInspectorEntityDataAtom,
   displayedInspectorTargetAtom,
-  inspectorErrorAtom,
-  inspectorLoadingAtom,
   inspectorPinnedAtom,
   liveInspectorTargetAtom,
 } from '../state/inspector';
+import { selectedSubfolderNodeIdAtom } from '../state/selection';
 
 const store = getDefaultStore();
 
@@ -29,16 +33,26 @@ export function startInspectorSettle(): () => void {
       return;
     }
 
+    const selectedSubfolderNodeId = store.get(selectedSubfolderNodeIdAtom);
+    if (target.kind === 'scope' && selectedSubfolderNodeId === target.nodeId) {
+      lastEntityHash = '';
+      void loadSubfolderInspectorPreview(target.nodeId);
+      return;
+    }
+
     // For scope/multi/none targets: only commit immediately for entity→scope transitions.
     // Scope→scope transitions are handled by GridScreen's snapshot commit to avoid
     // flashing partial data (the inspector would show the new scope node before the
     // grid query returns size/count).
-    if (lastEntityHash) {
+    const displayedTarget = store.get(displayedInspectorTargetAtom);
+    const displayedSnapshot = store.get(displayedGridSnapshotAtom);
+    const returningToDisplayedScope = target.kind === 'scope'
+      && displayedSnapshot?.nodeId === target.nodeId
+      && displayedTarget.kind === 'scope'
+      && displayedTarget.nodeId !== target.nodeId;
+    if (lastEntityHash || returningToDisplayedScope) {
       lastEntityHash = '';
-      store.set(displayedInspectorEntityDataAtom, null);
-      store.set(displayedInspectorTargetAtom, target);
-      store.set(inspectorLoadingAtom, false);
-      store.set(inspectorErrorAtom, null);
+      commitInspectorTarget(target);
     }
   });
 

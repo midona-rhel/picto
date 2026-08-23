@@ -52,7 +52,6 @@ import {
   inspectorLoadingAtom,
   inspectorErrorAtom,
   liveInspectorTargetAtom,
-  subfolderPreviewAtom,
 } from '../../state/inspector';
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { CanvasGrid } from './canvas/CanvasGrid';
@@ -214,32 +213,7 @@ export function GridScreen() {
 
   const showSubfolders = useAtomValue(gridShowSubfoldersAtom);
   const childFolders = useAtomValue(gridChildFoldersAtom);
-  const setSubfolderPreview = useSetAtom(subfolderPreviewAtom);
   const contextMenu = useContextMenu();
-
-  // Fetch preview data when a subfolder tile is selected
-  useEffect(() => {
-    // Find the single selected folder hash
-    const hashes = [...selectedSubfolderNodeIds];
-    const folderHash = hashes.length === 1 ? hashes[0] : null;
-    if (!folderHash) {
-      setSubfolderPreview(null);
-      return;
-    }
-    const folderId = parseInt(folderHash.replace('folder:', ''), 10);
-    if (isNaN(folderId)) return;
-    let cancelled = false;
-    void gridController.loadSubfolderPreview(folderId, 4).then((page) => {
-      if (cancelled) return;
-      setSubfolderPreview({
-        nodeId: folderHash,
-        items: page.items.slice(0, 4),
-        totalCount: page.total_count,
-        totalSizeBytes: page.total_size_bytes ?? null,
-      });
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [selectedSubfolderNodeIds, setSubfolderPreview]);
 
   // Metadata reconciliation replaces item objects without changing selection
   // order. Preserve the range anchor unless membership or order truly changes.

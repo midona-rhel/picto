@@ -291,10 +291,4 @@ export const gridController = {
     }
   },
 
-  async loadSubfolderPreview(folderId: number, limit = 4) {
-    return queryEntityView({
-      base_scope: { kind: 'folder', id: folderId },
-      page: { limit },
-    });
-  },
 };
