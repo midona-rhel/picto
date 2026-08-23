@@ -438,35 +438,29 @@ pub(crate) fn resolve_target_ids(
 ) -> rusqlite::Result<Vec<i64>> {
     match target {
         ItemTarget::Explicit { item_ids } => {
-            let ids = item_ids
+            let unique_ids = item_ids
                 .iter()
                 .map(|item_id| item_id.0)
-                .collect::<std::collections::BTreeSet<_>>();
-            if ids.is_empty() || ids.len() != item_ids.len() {
+                .collect::<std::collections::HashSet<_>>();
+            if unique_ids.is_empty() || unique_ids.len() != item_ids.len() {
                 return Err(invalid_target(
                     "An explicit target must contain unique library root IDs",
                 ));
             }
-            let mut arguments: Vec<Box<dyn ToSql>> = Vec::with_capacity(ids.len());
-            let placeholders = ids
-                .iter()
-                .map(|item_id| {
-                    let index = push_argument(&mut arguments, *item_id);
-                    format!("?{index}")
-                })
-                .collect::<Vec<_>>()
-                .join(", ");
-            let sql = format!(
-                "SELECT item_id FROM library_root
-                 WHERE item_id IN ({placeholders}) ORDER BY item_id"
-            );
-            let references: Vec<&dyn ToSql> =
-                arguments.iter().map(|value| value.as_ref()).collect();
-            let mut statement = connection.prepare(&sql)?;
+            let encoded = serde_json::to_string(
+                &item_ids.iter().map(|item_id| item_id.0).collect::<Vec<_>>(),
+            )
+            .map_err(|error| invalid_target(format!("Could not encode item target: {error}")))?;
+            let mut statement = connection.prepare(
+                "SELECT lr.item_id
+                 FROM json_each(?1) target
+                 JOIN library_root lr ON lr.item_id = CAST(target.value AS INTEGER)
+                 ORDER BY CAST(target.key AS INTEGER)",
+            )?;
             let resolved = statement
-                .query_map(references.as_slice(), |row| row.get::<_, i64>(0))?
+                .query_map([encoded], |row| row.get::<_, i64>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            if resolved.len() != ids.len() {
+            if resolved.len() != unique_ids.len() {
                 return Err(invalid_target("A targeted item is not a library root"));
             }
             Ok(resolved)
@@ -1355,6 +1349,25 @@ mod tests {
             .read(|connection| resolve_target_ids(connection, &target))
             .unwrap();
         assert_eq!(ids, vec![10]);
+    }
+
+    #[test]
+    fn explicit_target_preserves_order_without_sql_parameter_expansion() {
+        let (_directory, store) = seed_store();
+        let target = ItemTarget::Explicit {
+            item_ids: vec![ItemId(10), ItemId(1), ItemId(3), ItemId(2)],
+        };
+        let ids = store
+            .read(|connection| resolve_target_ids(connection, &target))
+            .unwrap();
+        assert_eq!(ids, vec![10, 1, 3, 2]);
+
+        let duplicate = ItemTarget::Explicit {
+            item_ids: vec![ItemId(1), ItemId(1)],
+        };
+        assert!(store
+            .read(|connection| resolve_target_ids(connection, &duplicate))
+            .is_err());
     }
 
     #[test]

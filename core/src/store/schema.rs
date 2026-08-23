@@ -2,7 +2,7 @@
 
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 122;
+pub const CURRENT_SCHEMA_VERSION: i64 = 123;
 
 pub const LIBRARY_DDL: &str = r#"
 CREATE TABLE library_meta (
@@ -290,9 +290,12 @@ CREATE TABLE work_item (
     CHECK (media_item_id IS NOT NULL OR file_id IS NOT NULL OR file_hash IS NOT NULL)
 );
 CREATE INDEX idx_work_ready ON work_item(status, available_at, work_id);
-CREATE UNIQUE INDEX idx_work_entity_target
+CREATE UNIQUE INDEX idx_work_media_target
     ON work_item(media_item_id, file_id, work_type)
-    WHERE media_item_id IS NOT NULL OR file_id IS NOT NULL;
+    WHERE media_item_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_work_file_target
+    ON work_item(file_id, work_type)
+    WHERE media_item_id IS NULL AND file_id IS NOT NULL;
 CREATE UNIQUE INDEX idx_work_hash_target
     ON work_item(file_hash, work_type) WHERE file_hash IS NOT NULL;
 
@@ -466,7 +469,7 @@ mod tests {
                 "retained {removed}"
             );
         }
-        assert_eq!(CURRENT_SCHEMA_VERSION, 122);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 123);
     }
 
     #[test]

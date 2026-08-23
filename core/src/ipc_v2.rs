@@ -7,7 +7,9 @@
 use chrono::Utc;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
-use crate::app::{Application, ItemId, ItemQuery, ItemTarget, Lifecycle, MutationReceipt};
+use crate::app::{
+    Application, FileHash, ItemId, ItemQuery, ItemTarget, Lifecycle, MutationReceipt,
+};
 use crate::duplicates_v2::{DuplicateCandidate, ResolutionChoice};
 use crate::folders_v2::{FolderId, FolderMutationReceipt, FolderWatchInput};
 use crate::navigation_v2::{CreateSmartFolderInput, SmartFolderMutationReceipt};
@@ -80,6 +82,31 @@ pub fn dispatch(
             )?)
         }
         "tasks.get" => read(crate::tasks_v2::snapshot(application)?),
+        "media.resolve_paths" => {
+            let input: FileHashesInput = parse(args_json)?;
+            read(crate::media_io_v2::resolve_file_paths(
+                application.store(),
+                application.blobs(),
+                &input.file_hashes,
+            )?)
+        }
+        "media.regenerate_thumbnails" => {
+            let input: FileHashesInput = parse(args_json)?;
+            let output = crate::media_io_v2::enqueue_thumbnail_regeneration(
+                application,
+                &input.file_hashes,
+            )?;
+            publish_nested(application, output, |output| &output.receipt)
+        }
+        "media.export" => {
+            let input: crate::media_io_v2::ExportRequest = parse(args_json)?;
+            read(crate::media_io_v2::export(
+                application.store(),
+                application.blobs(),
+                application.store().library_root(),
+                &input,
+            )?)
+        }
         "items.record_view" => {
             let input: ItemInput = parse(args_json)?;
             publish(application, application.record_recent_view(input.item_id)?)
@@ -408,6 +435,17 @@ pub async fn dispatch_async(
     command: &str,
     args_json: &str,
 ) -> Result<String, String> {
+    if command == "media.ensure_thumbnail" {
+        let input: FileHashInput = parse(args_json)?;
+        return read(
+            crate::media_io_v2::ensure_thumbnail(
+                application.store(),
+                application.blobs(),
+                &input.file_hash,
+            )
+            .await?,
+        );
+    }
     if command == "imports.enqueue" {
         let input: crate::import_v2::ManualImportInput = parse(args_json)?;
         return read(application.enqueue_manual_import(&input).await?);
@@ -546,6 +584,14 @@ struct QueryItemsInput {
 #[derive(Deserialize)]
 struct ItemInput {
     item_id: ItemId,
+}
+#[derive(Deserialize)]
+struct FileHashInput {
+    file_hash: FileHash,
+}
+#[derive(Deserialize)]
+struct FileHashesInput {
+    file_hashes: Vec<FileHash>,
 }
 #[derive(Deserialize)]
 struct TargetInput {

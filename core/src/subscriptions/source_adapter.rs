@@ -41,27 +41,6 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
     if site_id == "webtoons" && query_kind == "user" {
         return normalize_webtoons_url(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
-    if site_id == "artstation" && query_kind == "user" {
-        if let Ok(url) = Url::parse(trimmed) {
-            let is_artstation_host = url
-                .host_str()
-                .is_some_and(|host| host == "artstation.com" || host.ends_with(".artstation.com"));
-            let segments: Vec<_> = url
-                .path_segments()
-                .into_iter()
-                .flatten()
-                .filter(|segment| !segment.is_empty())
-                .collect();
-            if is_artstation_host
-                && segments.len() == 1
-                && url.query().is_none()
-                && url.fragment().is_none()
-            {
-                return segments[0].to_string();
-            }
-        }
-        return trimmed.strip_prefix('@').unwrap_or(trimmed).to_string();
-    }
     if site_id == "hentaifoundry" && query_kind == "user" {
         return build_url("hentaifoundry", trimmed)
             .and_then(|url| {
@@ -144,14 +123,6 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
             .all(|character| character.is_ascii_digit())
     {
         return Err("Pixiv user subscriptions require a numeric user ID".to_string());
-    }
-    if site_id == "artstation"
-        && (!query_text
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-            || matches!(query_text, "artwork" | "projects" | "search"))
-    {
-        return Err("ArtStation subscriptions require a profile slug".to_string());
     }
     if site_id == "hentaifoundry" {
         if build_url("hentaifoundry", query_text).is_none() {
@@ -302,18 +273,6 @@ mod tests {
         );
         assert_eq!(
             normalize_query_text(
-                "artstation",
-                "user",
-                "https://www.artstation.com/artist-name"
-            ),
-            "artist-name"
-        );
-        assert_eq!(
-            normalize_query_text("artstation", "user", "@artist-name"),
-            "artist-name"
-        );
-        assert_eq!(
-            normalize_query_text(
                 "hentaifoundry",
                 "user",
                 "https://www.hentai-foundry.com/user/artist-name/profile"
@@ -380,9 +339,6 @@ mod tests {
         assert!(validate_query_text("sankaku", "solo order:random").is_err());
         assert!(validate_query_text("pixivuser", "173530").is_ok());
         assert!(validate_query_text("pixivuser", "artist-name").is_err());
-        assert!(validate_query_text("artstation", "artist-name").is_ok());
-        assert!(validate_query_text("artstation", "artist/name").is_err());
-        assert!(validate_query_text("artstation", "projects").is_err());
         assert!(validate_query_text("hentaifoundry", "artist-name").is_ok());
         assert!(validate_query_text(
             "hentaifoundry",
@@ -503,12 +459,9 @@ mod tests {
     #[test]
     fn unsupported_sites_have_no_descriptor() {
         assert_eq!(infer_query_kind("danbooru"), "search");
-        assert_eq!(infer_query_kind("artstation"), "user");
-        assert!(describe_site("artstation")
-            .expect("ArtStation descriptor")
-            .query_kinds
-            .iter()
-            .any(|kind| kind.id == "user"));
+        assert_eq!(infer_query_kind("artstation"), "search");
+        assert!(describe_site("artstation").is_none());
+        assert!(validate_query_kind("artstation", "user").is_err());
         assert_eq!(infer_query_kind("webtoons"), "user");
         assert_eq!(describe_site("webtoons").unwrap().display_name, "Webtoons");
     }

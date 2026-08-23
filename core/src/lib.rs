@@ -28,6 +28,7 @@ pub mod ingest_v2;
 pub mod ipc_v2;
 pub mod media_analysis;
 pub mod media_capabilities;
+pub mod media_io_v2;
 pub mod scope;
 pub mod selection;
 pub mod settings;
