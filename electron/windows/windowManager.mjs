@@ -110,6 +110,7 @@ export function createWindowManager({
   BrowserWindow,
   screen,
   path,
+  invoke,
   __dirname,
   DEV_URL,
   isDev,
@@ -119,7 +120,13 @@ export function createWindowManager({
 }) {
   const windowsByLabel = new Map();
   const shouldOpenDevTools = isDev && process.env.PICTO_OPEN_DEVTOOLS === '1';
-  const authSessions = createAuthSessions({ BrowserWindow, getMainWindow });
+  const authSessions = createAuthSessions({
+    BrowserWindow,
+    getMainWindow,
+    persistCredential: (credential) => invoke('auth.credentials.set', credential),
+    beginPixivOAuth: () => invoke('pixiv_oauth_start'),
+    completePixivOAuth: (input) => invoke('pixiv_oauth_exchange', input),
+  });
   function getMainWindow() {
     const win = windowsByLabel.get('main');
     return win && !win.isDestroyed() ? win : null;

@@ -13,7 +13,6 @@ const IDLE_SESSION: AuthSessionState = {
   title: null,
   current_url: null,
   message: null,
-  credential: null,
 };
 
 export function AuthWorkspace({
@@ -32,7 +31,6 @@ export function AuthWorkspace({
   const [session, setSession] = useState<AuthSessionState>(IDLE_SESSION);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const [pixivVerifier, setPixivVerifier] = useState<string | null>(null);
 
   // Sync external selection when provided
   useEffect(() => {
@@ -92,132 +90,22 @@ export function AuthWorkspace({
   useEffect(() => registerAuthWorkspaceRefresh(() => { void refresh(); }), [refresh]);
 
   useEffect(() => {
-    if (session.status !== 'completed' || !session.credential) return;
-
-    const credential = session.credential;
-    if (credential.site_category === 'pixiv' && credential.oauth_code && pixivVerifier) {
-      setBusy(true);
-      void authController.pixivOAuthExchange(
-        credential.oauth_code,
-        pixivVerifier,
-        credential.phpsessid ?? null,
-      ).then(async () => {
-        await refresh();
-        await authController.cancelSession();
-        setMessage('Pixiv login completed.');
-      }).catch((err) => {
-        setMessage(err instanceof Error ? err.message : String(err));
-      }).finally(() => {
-        setBusy(false);
-        setPixivVerifier(null);
-        setSession(IDLE_SESSION);
-      });
-      return;
-    }
-
-    const selectedCredentialOwner = selectedEntry?.site.credential_owner_site_id;
-    const oauthToken = credential.oauth_token?.trim();
-    const oauthTokenSecret = credential.password?.trim();
-    const isApprovedOAuthPayload = Boolean(
-      selectedCredentialOwner
-      && credential.site_category === selectedCredentialOwner
-      && (credential.site_category === 'baraag' || credential.site_category === 'tumblr')
-      && credential.credential_type === 'oauth_token'
-      && oauthToken
-      && (credential.site_category !== 'tumblr' || oauthTokenSecret),
-    );
-    if (isApprovedOAuthPayload) {
-      setBusy(true);
-      void authController.setCredential({
-        site_category: credential.site_category,
-        credential_type: 'oauth_token',
-        display_name: selectedEntry?.site.name ?? credential.site_category,
-        oauth_token: oauthToken,
-        password: credential.site_category === 'tumblr' ? oauthTokenSecret : undefined,
-      }).then(async () => {
-        await refresh();
-        await authController.cancelSession();
-        setMessage('OAuth credential saved in the system credential store.');
-      }).catch((err) => {
-        setMessage(err instanceof Error ? err.message : String(err));
-      }).finally(() => {
-        setBusy(false);
-        setSession(IDLE_SESSION);
-      });
-      return;
-    }
-
-    const cookies = credential.cookies ?? null;
-    const isApprovedCookiePayload = Boolean(
-      selectedCredentialOwner
-      && credential.site_category === selectedCredentialOwner
-      && credential.credential_type === 'cookies'
-      && cookies
-      && Object.keys(cookies).length > 0,
-    );
-    if (isApprovedCookiePayload) {
-      setBusy(true);
-      void authController.setCredential({
-        site_category: credential.site_category,
-        credential_type: 'cookies',
-        display_name: selectedEntry?.site.name ?? credential.site_category,
-        cookies,
-      }).then(async () => {
-        await refresh();
-        await authController.cancelSession();
-        setMessage('Login session saved in the system credential store.');
-      }).catch((err) => {
-        setMessage(err instanceof Error ? err.message : String(err));
-      }).finally(() => {
-        setBusy(false);
-        setSession(IDLE_SESSION);
-      });
-      return;
-    }
-    const username = credential.username?.trim();
-    const password = credential.password?.trim();
-    const isApprovedApiKeyPayload = Boolean(
-      selectedCredentialOwner
-      && credential.site_category === selectedCredentialOwner
-      && credential.credential_type === 'api_key'
-      && username
-      && password,
-    );
-    if (isApprovedApiKeyPayload) {
-      setBusy(true);
-      void authController.setCredential({
-        site_category: credential.site_category,
-        credential_type: 'api_key',
-        display_name: selectedEntry?.site.name ?? credential.site_category,
-        username,
-        password,
-      }).then(async () => {
-        await refresh();
-        await authController.cancelSession();
-        setMessage('Credential saved from the login window.');
-      }).catch((err) => {
-        setMessage(err instanceof Error ? err.message : String(err));
-      }).finally(() => {
-        setBusy(false);
-        setSession(IDLE_SESSION);
-      });
-    }
-  }, [pixivVerifier, selectedEntry?.site.credential_owner_site_id, selectedEntry?.site.name, session]);
+    if (session.status !== 'completed') return;
+    void refresh().then(() => authController.cancelSession()).then(() => {
+      setMessage('Login saved in the system credential store.');
+      setSession(IDLE_SESSION);
+    }).catch((err) => {
+      setMessage(err instanceof Error ? err.message : String(err));
+    });
+  }, [refresh, session.status]);
 
   async function startLogin() {
     if (!selectedEntry) return;
     setBusy(true);
     setMessage(null);
     try {
-      if (selectedEntry.site.id === 'pixiv') {
-        const challenge = await authController.pixivOAuthStart();
-        setPixivVerifier(challenge.code_verifier);
-        const next = await authController.startSession(selectedEntry.site.id, challenge.login_url);
-        setSession(next);
-      } else {
-        const next = await authController.startSession(selectedEntry.site.id, null);
-        setSession(next);
-      }
+      const next = await authController.startSession(selectedEntry.site.id);
+      setSession(next);
     } catch (err) {
       setMessage(err instanceof Error ? err.message : String(err));
     } finally {
@@ -228,7 +116,6 @@ export function AuthWorkspace({
   async function cancelLogin() {
     await authController.cancelSession();
     setSession(IDLE_SESSION);
-    setPixivVerifier(null);
   }
 
   async function removeCredential() {

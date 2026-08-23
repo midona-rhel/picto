@@ -15,7 +15,6 @@ import {
   listSubscriptionRuns,
   pauseSubscriptionQuery,
   runSubscription,
-  setCredential,
   stopSubscription,
 } from './subscriptionApi';
 
@@ -177,20 +176,17 @@ describe('replacement subscription API', () => {
     ]);
   });
 
-  it('uses replacement source credential persistence while leaving browser auth commands separate', async () => {
+  it('reads credential status without exposing credential writes to the renderer', async () => {
     invoke
       .mockResolvedValueOnce([{ site_id: 'pixiv', credential_type: 'cookies', display_name: 'Pixiv', created_at: 'now' }])
-      .mockResolvedValueOnce([{ site_id: 'pixiv', status: 'valid', checked_at: 'now', last_error: null }])
-      .mockResolvedValueOnce({ revision: 2, resources: ['subscriptions'], item_ids: [] });
+      .mockResolvedValueOnce([{ site_id: 'pixiv', status: 'valid', checked_at: 'now', last_error: null }]);
 
     await listCredentials();
     await listCredentialHealth();
-    await setCredential({ site_category: 'pixiv', credential_type: 'cookies', cookies: { PHPSESSID: 'x' } });
 
     expect(invoke.mock.calls).toEqual([
       ['auth.credentials.list', {}],
       ['auth.health.list', {}],
-      ['auth.credentials.set', expect.objectContaining({ site_id: 'pixiv', credential_type: 'cookies' })],
     ]);
   });
 });

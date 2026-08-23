@@ -183,7 +183,7 @@ export function registerIpcHandlers({
       return null;
     }
     if (command === 'auth_session_start') {
-      return windowManager.startAuthSession(args?.site_category, args?.start_url ?? null);
+      return windowManager.startAuthSession(args?.site_category);
     }
     if (command === 'auth_session_cancel') {
       return windowManager.cancelAuthSession();

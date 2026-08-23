@@ -11,7 +11,6 @@ import type { SubscriptionRunActivity } from '../shared/types/generated/applicat
 import type { CurrentSubscriptionProgress } from '../shared/types/generated/application/CurrentSubscriptionProgress';
 import type { CredentialRecord } from '../shared/types/generated/application/CredentialRecord';
 import type { CredentialHealthRecord } from '../shared/types/generated/application/CredentialHealthRecord';
-import type { SetCredentialInput } from '../shared/types/generated/application/SetCredentialInput';
 import type { NewSubscriptionQuery } from '../shared/types/generated/application/NewSubscriptionQuery';
 import type { NewSubscription } from '../shared/types/generated/application/NewSubscription';
 import type { CreatedSubscription } from '../shared/types/generated/application/CreatedSubscription';
@@ -22,8 +21,6 @@ import type {
   AuthSessionState,
   CredentialDomain,
   CredentialHealth,
-  PixivOAuthExchangeResult,
-  PixivOAuthStartResult,
   SubscriptionInfo,
   SubscriptionIssuePage,
   SubscriptionProgressEvent,
@@ -368,41 +365,13 @@ export function listCredentialHealth(): Promise<CredentialHealth[]> {
   })));
 }
 
-export function setCredential(input: {
-  site_category: string;
-  credential_type: string;
-  display_name?: string | null;
-  username?: string | null;
-  password?: string | null;
-  cookies?: Record<string, string> | null;
-  oauth_token?: string | null;
-}): Promise<void> {
-  const replacement: SetCredentialInput = {
-    site_id: input.site_category,
-    credential_type: input.credential_type,
-    display_name: input.display_name ?? null,
-    username: input.username ?? null,
-    password: input.password ?? null,
-    cookies: input.cookies ?? null,
-    oauth_token: input.oauth_token ?? null,
-  };
-  return invoke<MutationReceipt>('auth.credentials.set', replacement).then(() => undefined);
-}
-
 export function deleteCredential(siteCategory: string): Promise<void> {
   return invoke<MutationReceipt>('auth.credentials.delete', { site_id: siteCategory }).then(() => undefined);
 }
 
-// Auth browser/OAuth commands remain host-owned. They are intentionally not
-// routed through the replacement subscription catalog.
-export function pixivOAuthStart(): Promise<PixivOAuthStartResult> {
-  return invoke<PixivOAuthStartResult>('pixiv_oauth_start');
-}
-
-export function startAuthSession(siteCategory: string, startUrl?: string | null): Promise<AuthSessionState> {
+export function startAuthSession(siteCategory: string): Promise<AuthSessionState> {
   return invoke<AuthSessionState>('auth_session_start', {
     site_category: siteCategory,
-    start_url: startUrl ?? null,
   });
 }
 
@@ -412,16 +381,4 @@ export function cancelAuthSession(): Promise<void> {
 
 export function getAuthSessionState(): Promise<AuthSessionState> {
   return invoke<AuthSessionState>('auth_session_state');
-}
-
-export function pixivOAuthExchange(
-  code: string,
-  codeVerifier: string,
-  phpsessid?: string | null,
-): Promise<PixivOAuthExchangeResult> {
-  return invoke<PixivOAuthExchangeResult>('pixiv_oauth_exchange', {
-    code,
-    code_verifier: codeVerifier,
-    phpsessid: phpsessid ?? null,
-  });
 }

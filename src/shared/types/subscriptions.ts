@@ -178,36 +178,10 @@ export interface CredentialHealth {
   last_error: string | null;
 }
 
-export interface PixivOAuthStartResult {
-  login_url: string;
-  code_verifier: string;
-}
-
-export interface PixivOAuthPopupResult {
-  code: string;
-  phpsessid: string | null;
-}
-
-export interface PixivOAuthExchangeResult {
-  ok: boolean;
-}
-
-export interface AuthSessionCredentialPayload {
-  site_category: string;
-  credential_type: CredentialType | string;
-  username?: string | null;
-  password?: string | null;
-  cookies?: Record<string, string> | null;
-  oauth_token?: string | null;
-  oauth_code?: string | null;
-  phpsessid?: string | null;
-}
-
 export interface AuthSessionState {
   site_category: string | null;
   status: 'idle' | 'starting' | 'active' | 'loading' | 'completed' | 'error' | 'cancelled';
   title: string | null;
   current_url: string | null;
   message: string | null;
-  credential: AuthSessionCredentialPayload | null;
 }

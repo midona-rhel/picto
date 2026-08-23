@@ -7,9 +7,6 @@ import {
   listCredentialHealth,
   listCredentials,
   listSubscriptionIssues,
-  pixivOAuthExchange,
-  pixivOAuthStart,
-  setCredential,
   startAuthSession,
 } from '../platform/subscriptionApi';
 import { listen } from '../platform/ipc';
@@ -122,8 +119,8 @@ export const authController = {
     return { sites: sitesWithState };
   },
 
-  startSession(siteCategory: string, startUrl?: string | null): Promise<AuthSessionState> {
-    return startAuthSession(siteCategory, startUrl);
+  startSession(siteCategory: string): Promise<AuthSessionState> {
+    return startAuthSession(siteCategory);
   },
 
   cancelSession(): Promise<void> {
@@ -140,8 +137,5 @@ export const authController = {
     });
   },
 
-  setCredential,
   deleteCredential,
-  pixivOAuthStart,
-  pixivOAuthExchange,
 };

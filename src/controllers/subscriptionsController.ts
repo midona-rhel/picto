@@ -17,11 +17,8 @@ import {
   listSubscriptionRuns,
   pauseSubscription,
   pauseSubscriptionQuery,
-  pixivOAuthExchange,
-  pixivOAuthStart,
   renameSubscription,
   runSubscription,
-  setCredential,
   setSubscriptionSchedule,
   stopSubscription,
 } from '../platform/subscriptionApi';
@@ -29,9 +26,6 @@ import type { IssueCursor } from '../shared/types/generated/application/IssueCur
 import type {
   CredentialDomain,
   CredentialHealth,
-  CredentialType,
-  PixivOAuthExchangeResult,
-  PixivOAuthStartResult,
   SubscriptionInfo,
   SubscriptionProgressEvent,
   SubscriptionRunRecord,
@@ -185,28 +179,8 @@ export const subscriptionsController = {
     return listCredentialHealth();
   },
 
-  setCredential(input: {
-    site_category: string;
-    credential_type: CredentialType;
-    display_name?: string | null;
-    username?: string | null;
-    password?: string | null;
-    cookies?: Record<string, string> | null;
-    oauth_token?: string | null;
-  }): Promise<void> {
-    return setCredential(input);
-  },
-
   deleteCredential(siteCategory: string): Promise<void> {
     return deleteCredential(siteCategory);
-  },
-
-  pixivOAuthStart(): Promise<PixivOAuthStartResult> {
-    return pixivOAuthStart();
-  },
-
-  pixivOAuthExchange(code: string, codeVerifier: string, phpsessid?: string | null): Promise<PixivOAuthExchangeResult> {
-    return pixivOAuthExchange(code, codeVerifier, phpsessid);
   },
 
   openExternalUrl(url: string): Promise<void> {

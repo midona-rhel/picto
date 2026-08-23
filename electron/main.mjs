@@ -169,6 +169,7 @@ const windowManager = createWindowManager({
   WebContentsView,
   screen,
   path,
+  invoke,
   __dirname,
   DEV_URL,
   isDev,
