@@ -17,6 +17,7 @@ import styles from './CollectionSurface.module.css';
 
 export interface CollectionSurfaceProps {
   collectionId: number;
+  parentNodeId?: string;
   initialMode?: 'reader' | 'editor';
   onClose: () => void;
 }
@@ -98,6 +99,7 @@ function CollectionImage({ item }: { item: CanonicalEntityGridItem }) {
 
 export function CollectionSurface({
   collectionId,
+  parentNodeId = 'system:all',
   initialMode = 'reader',
   onClose,
 }: CollectionSurfaceProps) {
@@ -142,6 +144,7 @@ export function CollectionSurface({
     setCollectionChrome({
       label: details.label ?? 'Collection',
       parentLabel,
+      parentNodeId,
       mode,
       memberViewerOpen: viewerIndex !== null,
       close: onClose,
@@ -152,7 +155,7 @@ export function CollectionSurface({
       edit: () => setMode('editor'),
     });
     return () => setCollectionChrome(null);
-  }, [details, mode, onClose, parentLabel, setCollectionChrome, viewerIndex]);
+  }, [details, mode, onClose, parentLabel, parentNodeId, setCollectionChrome, viewerIndex]);
 
   useEffect(() => {
     if (viewerIndex !== null) return;

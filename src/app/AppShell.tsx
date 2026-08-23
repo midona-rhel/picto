@@ -171,14 +171,34 @@ function ScopeTitle() {
 
 function CollectionScopeTitle() {
   const chrome = useAtomValue(collectionChromeAtom);
+  const nodes = useAtomValue(sidebarNodesAtom);
+  const setActiveNodeId = useSetAtom(activeNodeIdAtom);
   if (!chrome) return null;
 
+  const parentPath = buildBreadcrumbPath(chrome.parentNodeId, nodes);
+  const resolvedParentPath = parentPath.length > 0
+    ? parentPath
+    : [{ id: chrome.parentNodeId, name: chrome.parentLabel }];
   const separator = <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>;
+  const navigateToParent = (nodeId: string) => {
+    chrome.close();
+    setActiveNodeId(nodeId);
+    pushHistory(nodeId);
+  };
   return (
     <span className={styles.scopeTitle}>
-      <button type="button" className={styles.scopeCrumbLink} onClick={chrome.close}>
-        {chrome.parentLabel}
-      </button>
+      {resolvedParentPath.map((segment, index) => (
+        <span key={segment.id}>
+          {index > 0 ? separator : null}
+          <button
+            type="button"
+            className={styles.scopeCrumbLink}
+            onClick={() => navigateToParent(segment.id)}
+          >
+            {segment.name}
+          </button>
+        </span>
+      ))}
       {separator}
       {chrome.mode === 'editor' ? (
         <>

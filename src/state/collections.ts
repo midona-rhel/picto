@@ -3,6 +3,7 @@ import { atom } from 'jotai';
 export interface CollectionChromeState {
   label: string;
   parentLabel: string;
+  parentNodeId: string;
   mode: 'reader' | 'editor';
   memberViewerOpen: boolean;
   close: () => void;

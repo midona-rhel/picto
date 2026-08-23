@@ -919,6 +919,7 @@ export function GridScreen({
         <CollectionSurface
           key={`${collectionSurface.collectionId}:${collectionSurface.mode}`}
           collectionId={collectionSurface.collectionId}
+          parentNodeId={displayedNodeId}
           initialMode={collectionSurface.mode}
           onClose={() => setCollectionSurface(null)}
         />

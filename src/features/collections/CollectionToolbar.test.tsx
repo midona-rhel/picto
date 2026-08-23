@@ -14,6 +14,7 @@ describe('CollectionToolbar', () => {
     store.set(collectionChromeAtom, {
       label: 'Morning set',
       parentLabel: 'All',
+      parentNodeId: 'system:all',
       mode: 'reader',
       memberViewerOpen: false,
       close,
@@ -41,6 +42,7 @@ describe('CollectionToolbar', () => {
     store.set(collectionChromeAtom, {
       label: 'Morning set',
       parentLabel: 'All',
+      parentNodeId: 'system:all',
       mode: 'editor',
       memberViewerOpen: false,
       close,
