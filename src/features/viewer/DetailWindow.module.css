@@ -10,6 +10,9 @@
   user-select: none;
   -webkit-user-select: none;
   -webkit-app-region: no-drag;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-ui);
+  font-weight: var(--font-weight-regular);
 }
 
 /* ── Toolbar ─────────────────────────────────────────────── */
@@ -31,6 +34,9 @@
   -webkit-app-region: drag;
   opacity: 1;
   transition: opacity 250ms ease;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-ui);
+  font-weight: var(--font-weight-regular);
 }
 
 .toolbarHidden {
@@ -53,7 +59,8 @@
 }
 
 .titleName {
-  font-size: 13px;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -62,13 +69,15 @@
 }
 
 .counter {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-tertiary);
   white-space: nowrap;
 }
 
 .zoomRatio {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-secondary);
   min-width: 38px;
   text-align: right;

@@ -45,6 +45,8 @@ export function useImageZoom(
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
   const liveStateRef = useRef(state);
+  const transformTargetsRef = useRef(transformTargets);
+  transformTargetsRef.current = transformTargets;
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameRef = useRef<number | null>(null);
 
@@ -55,13 +57,22 @@ export function useImageZoom(
 
   const applyTransform = useCallback((next: ZoomState) => {
     const transform = `translate(calc(-50% + ${next.tx}px), calc(-50% + ${next.ty}px)) scale(${next.scale})`;
-    for (const targetRef of transformTargets) {
+    for (const targetRef of transformTargetsRef.current) {
       const el = targetRef.current;
       if (el) el.style.transform = transform;
     }
     onLiveFrameRef.current?.(next);
     onLiveScaleRef.current?.(next);
-  }, [transformTargets]);
+  }, []);
+
+  const subscribeLiveScale = useCallback((listener: (scale: number) => void) => {
+    const callback = (next: ZoomState) => listener(next.scale);
+    onLiveScaleRef.current = callback;
+    listener(liveStateRef.current.scale);
+    return () => {
+      if (onLiveScaleRef.current === callback) onLiveScaleRef.current = null;
+    };
+  }, []);
 
   const flushCommittedState = useCallback((next?: ZoomState) => {
     const resolved = next ?? liveStateRef.current;
@@ -85,7 +96,11 @@ export function useImageZoom(
   }, [applyTransform]);
 
   const updateZoomState = useCallback(
-    (nextOrUpdater: ZoomState | ((prev: ZoomState) => ZoomState), interactive = false) => {
+    (
+      nextOrUpdater: ZoomState | ((prev: ZoomState) => ZoomState),
+      interactive = false,
+      alreadyInAnimationFrame = false,
+    ) => {
       const prev = liveStateRef.current;
       const next = typeof nextOrUpdater === 'function' ? nextOrUpdater(prev) : nextOrUpdater;
       liveStateRef.current = next;
@@ -96,7 +111,8 @@ export function useImageZoom(
         return;
       }
 
-      scheduleInteractiveTransform();
+      if (alreadyInAnimationFrame) applyTransform(next);
+      else scheduleInteractiveTransform();
       if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
       commitTimerRef.current = setTimeout(() => {
         commitTimerRef.current = null;
@@ -221,7 +237,9 @@ export function useImageZoom(
           ty: start.ty + (end.ty - start.ty) * ease,
         };
 
-        updateZoomState(s, true);
+        // The animation tick already runs inside RAF; apply on this frame
+        // instead of scheduling a second RAF and displaying one frame late.
+        updateZoomState(s, true, true);
 
         if (t < 1) {
           animRafRef.current = requestAnimationFrame(tick);
@@ -371,7 +389,7 @@ export function useImageZoom(
     navigatorRect,
     panToNormalized,
     onLiveFrameRef,
-    onLiveScaleRef,
+    subscribeLiveScale,
     handlers: { onMouseDown },
   };
 }

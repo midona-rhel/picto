@@ -4,7 +4,7 @@
  */
 
 import type { ReactNode } from 'react';
-import { IconX } from '@tabler/icons-react';
+import { InspectorRemoveIcon } from '../icons/toolbar-icons';
 import styles from './TagChip.module.css';
 
 const NS_COLORS: Record<string, [number, number, number]> = {
@@ -58,7 +58,7 @@ export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick, 
           type="button"
           title="Remove"
         >
-          <IconX size={10} stroke={2} />
+          <InspectorRemoveIcon />
         </button>
       )}
     </span>

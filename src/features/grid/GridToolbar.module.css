@@ -8,48 +8,26 @@
   height: 100%;
   padding: 0 8px 0 0;
   gap: 0;
+  color: #f8f9fb;
+  font-family: var(--font-family-ui);
 }
 
-
-/* ── Icon button base — matches AppShell titlebarBtn ────────── */
-
-.icBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--color-text-primary);
-  opacity: 0.8;
-  cursor: pointer;
-  outline: none;
-  flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  margin: 0 1px;
-  -webkit-app-region: no-drag;
-  transition: opacity 150ms var(--ease-default), background 150ms var(--ease-default);
+.toolbar[data-chrome-transition='leaving_grid'] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 170ms var(--ease-default);
 }
 
-.icBtn:hover {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.08);
-}
-
-.icBtn:active,
-.icBtnActive {
-  opacity: 1;
-  background: rgba(255, 255, 255, 0.12);
-}
-
-.icBtn:disabled {
-  opacity: 0.2;
-  cursor: default;
+.toolbar[data-chrome-transition='entering_grid'][data-transition-phase='waiting'] {
+  opacity: 0;
   pointer-events: none;
 }
+
+.toolbar[data-chrome-transition='entering_grid'][data-transition-phase='fading_in'] {
+  opacity: 1;
+  transition: opacity 170ms var(--ease-default);
+}
+
 
 /* ── Title (absolutely positioned, fade mask at right) ── */
 
@@ -99,66 +77,14 @@
   pointer-events: none;
 }
 
-.zoomSlider {
-  width: 80px;
-  height: 3px;
-  appearance: none;
-  background: var(--color-border-primary);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-
-.zoomSlider::-webkit-slider-thumb {
-  appearance: none;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: var(--color-text-primary);
-  cursor: pointer;
-}
-
-.zoomSlider::-webkit-slider-thumb:hover {
-  background: var(--color-text-primary);
-}
-
-/* ── Left section (viewer mode) ─────────────────────── */
-
-.leftSection {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-}
-
-.counter {
-  font-size: 12px;
-  font-family: var(--font-family-mono, monospace);
-  color: var(--color-text-secondary);
-  margin-left: 4px;
-  white-space: nowrap;
-  -webkit-app-region: no-drag;
-}
-
 .zoomLabel {
   font-size: 12px;
-  font-family: var(--font-family-mono, monospace);
+  font-family: var(--font-family-ui);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-secondary);
   min-width: 40px;
   text-align: center;
   -webkit-app-region: no-drag;
-}
-
-.navGroup {
-  display: flex;
-  align-items: center;
-  margin-left: 4px;
-}
-
-.icBtnDisabled {
-  opacity: 0.2;
-  cursor: default;
-  pointer-events: none;
 }
 
 /* ── Right section ───────────────────────────────────── */
@@ -230,12 +156,27 @@
   border-radius: 5px;
   background: rgba(255, 255, 255, 0.06);
   color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   font-family: inherit;
   outline: none;
   box-sizing: border-box;
   transition: border-color 200ms var(--ease-default),
               background-color 200ms var(--ease-default);
+}
+
+.filterBadge {
+  position: absolute;
+  top: 1px;
+  right: 1px;
+  min-width: 12px;
+  height: 12px;
+  padding: 0 3px;
+  border-radius: 6px;
+  box-sizing: border-box;
+  background: var(--color-primary);
+  color: white;
+  font: 700 9px/12px var(--font-family-ui);
+  text-align: center;
 }
 
 .searchInput::placeholder {

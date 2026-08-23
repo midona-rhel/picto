@@ -5,11 +5,10 @@
 import { useCallback, useRef, type RefObject } from 'react';
 
 export function useCanvasRedrawScheduler(args: {
-  frozenRef: RefObject<boolean>;
   drawBaseRef: RefObject<() => void>;
   drawOverlayRef: RefObject<() => void>;
 }) {
-  const { frozenRef, drawBaseRef, drawOverlayRef } = args;
+  const { drawBaseRef, drawOverlayRef } = args;
   const dirtyRef = useRef<{ base: boolean; overlay: boolean }>({ base: false, overlay: false });
   const rafScheduledRef = useRef(false);
 
@@ -31,7 +30,7 @@ export function useCanvasRedrawScheduler(args: {
         drawOverlayRef.current?.();
       }
     });
-  }, [drawBaseRef, drawOverlayRef, frozenRef]);
+  }, [drawBaseRef, drawOverlayRef]);
 
   return {
     dirtyRef,

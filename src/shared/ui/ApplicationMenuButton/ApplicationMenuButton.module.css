@@ -5,7 +5,7 @@
   right: 10px;
   z-index: var(--layer-menu);
   width: 28px;
-  height: 28px;
+  height: var(--control-height-md);
   color: var(--color-text-secondary);
   background: var(--color-surface-1);
   border: 1px solid var(--color-border-secondary);

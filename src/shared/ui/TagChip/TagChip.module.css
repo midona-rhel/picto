@@ -4,14 +4,16 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  height: 26px;
+  height: var(--control-height-sm);
   box-sizing: border-box;
   padding: 0 8px 0 8px;
-  border-radius: 6px;
-  font-size: 12px;
-  color: var(--color-text-primary);
+  border-radius: var(--radius-md);
+  font-size: var(--font-size-sm);
+  font-family: var(--inspector-font-family, var(--font-family-ui));
+  font-weight: var(--font-weight-regular);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   white-space: nowrap;
-  user-select: text;
+  user-select: none;
   background-color: var(--chip-bg);
   border: 1px solid var(--chip-border);
   transition: background-color 200ms var(--ease-default),
@@ -29,7 +31,6 @@
 }
 
 .namespace {
-  opacity: 0.6;
   margin-right: 0;
 }
 
@@ -59,7 +60,7 @@
   border: none;
   border-radius: 4px;
   background: transparent;
-  color: var(--color-text-tertiary);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   cursor: pointer;
   opacity: 0.5;
   transition: all var(--ease-default) 200ms;

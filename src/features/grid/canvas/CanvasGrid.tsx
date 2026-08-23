@@ -126,7 +126,7 @@ export function CanvasGrid({
   onFirstPaint,
   onScrollTopChange,
   interactive = true,
-  frozenScrollTop = 0,
+  frozenScrollTop,
   suppressTileReveal = false,
   initialScrollTop = null,
   selectedItemIds = EMPTY_ITEM_ID_SET,
@@ -403,7 +403,7 @@ export function CanvasGrid({
 
     ensureCanvasSize(canvas, vp.containerWidth, vp.viewportHeight, vp.dpr);
 
-    const rawScrollTop = interactive ? vp.scrollTop : frozenScrollTop;
+    const rawScrollTop = interactive ? vp.scrollTop : (frozenScrollTop ?? vp.scrollTop);
     // Offset by header height — tile positions start at Y=0 but the header pushes canvas content down
     const scrollTop = Math.max(0, rawScrollTop - headerHeight);
     const now = performance.now();
@@ -518,7 +518,7 @@ export function CanvasGrid({
 
     ctx.save();
     ctx.scale(vp.dpr, vp.dpr);
-    const scrollTop = Math.max(0, (interactive ? vp.scrollTop : frozenScrollTop) - headerHeight);
+    const scrollTop = Math.max(0, (interactive ? vp.scrollTop : (frozenScrollTop ?? vp.scrollTop)) - headerHeight);
 
     // Draw selection borders on all selected tiles
     if (selectedItemIds.size > 0) {
@@ -629,14 +629,11 @@ export function CanvasGrid({
   }, [layout, items, selectedItemIds, textHeight, interactive, frozenScrollTop, headerHeight]);
 
   // ── RAF scheduler (legacy pattern) ──
-  const frozenRef = useRef(!interactive);
-  frozenRef.current = !interactive;
   const drawBaseRef = useRef(drawBase);
   drawBaseRef.current = drawBase;
   const drawOverlayRef = useRef(drawOverlay);
   drawOverlayRef.current = drawOverlay;
   const { markDirty } = useCanvasRedrawScheduler({
-    frozenRef,
     drawBaseRef,
     drawOverlayRef,
   });
@@ -914,7 +911,7 @@ export function CanvasGrid({
 
   // ── Frozen scroll ──
   useEffect(() => {
-    if (!interactive && containerRef.current) {
+    if (!interactive && frozenScrollTop != null && containerRef.current) {
       containerRef.current.scrollTop = frozenScrollTop;
       markDirty('both');
     }

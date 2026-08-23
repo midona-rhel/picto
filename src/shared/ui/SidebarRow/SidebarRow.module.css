@@ -168,7 +168,7 @@
   z-index: 1;
   flex-shrink: 0;
   min-width: 36px;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--sidebar-count-color, var(--color-text-tertiary));
   font-variant-numeric: tabular-nums slashed-zero;
   font-family: 'Roboto Mono', 'Monaco', 'Consolas', monospace;
@@ -229,7 +229,7 @@
 }
 
 .sectionTitle {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: var(--font-weight-regular);
   color: var(--sidebar-section-text, var(--color-text-tertiary));
   white-space: pre;
@@ -242,7 +242,7 @@
 }
 
 .sectionCount {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--sidebar-section-text, var(--color-text-tertiary));
 }
 

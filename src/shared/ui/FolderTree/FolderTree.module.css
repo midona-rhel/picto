@@ -10,12 +10,12 @@
 .row {
   display: flex;
   align-items: center;
-  height: 28px;
+  height: var(--control-height-md);
   padding: 0 6px;
   gap: 4px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--color-text-primary);
   white-space: nowrap;
   margin: 0 4px;
@@ -70,7 +70,7 @@
 }
 
 .count {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-family: var(--font-family-mono);
   color: var(--color-text-tertiary);
   flex-shrink: 0;

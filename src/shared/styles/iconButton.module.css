@@ -2,6 +2,7 @@
  * Used in titlebar, detail window toolbar, grid toolbar, etc. */
 
 .iconBtn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -14,11 +15,17 @@
   cursor: pointer;
   outline: none;
   flex-shrink: 0;
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
+  width: var(--icon-button-size);
+  height: var(--icon-button-size);
+  min-width: var(--icon-button-size);
   -webkit-app-region: no-drag;
   transition: opacity 150ms var(--ease-default), background 150ms var(--ease-default);
+}
+
+.iconBtn > svg {
+  display: block;
+  flex: none;
+  shape-rendering: geometricPrecision;
 }
 
 .iconBtn:hover {

@@ -1,0 +1,93 @@
+.toolbar {
+  min-width: 0;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  padding-right: 8px;
+  -webkit-app-region: no-drag;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-ui);
+  font-weight: var(--font-weight-regular);
+}
+
+.left,
+.center,
+.right,
+.group {
+  display: flex;
+  align-items: center;
+}
+
+.left,
+.right { flex-shrink: 0; }
+.left,
+.group { gap: 4px; }
+.center {
+  flex: 1;
+  justify-content: center;
+  min-width: 0;
+}
+.right { gap: 4px; }
+
+.button { composes: iconBtn from '../styles/iconButton.module.css'; }
+.button > svg {
+  display: block;
+  flex: none;
+  overflow: visible;
+  shape-rendering: geometricPrecision;
+}
+
+.button > svg :is(path, rect, circle, line, polyline) {
+  vector-effect: non-scaling-stroke;
+}
+.buttonActive { composes: iconBtnActive from '../styles/iconButton.module.css'; }
+.buttonDisabled { composes: iconBtnDisabled from '../styles/iconButton.module.css'; }
+
+.counter,
+.value {
+  color: var(--color-text-secondary);
+  font-family: inherit;
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.counter {
+  margin-left: 4px;
+  font-size: var(--font-size-sm);
+}
+
+.value {
+  min-width: 42px;
+  font-size: var(--font-size-caption);
+  text-align: center;
+}
+
+.zoomControl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.zoomSlider {
+  width: 80px;
+  height: 3px;
+  appearance: none;
+  background: var(--color-border-primary);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.zoomSlider::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-text-primary);
+  cursor: pointer;
+}

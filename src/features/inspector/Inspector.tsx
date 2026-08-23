@@ -8,7 +8,7 @@
 
 import { forwardRef, useEffect, useState } from 'react';
 import { useAtomValue, getDefaultStore } from 'jotai';
-import { IconAlertCircle, IconFolder, IconPlus, IconSparkles } from '@tabler/icons-react';
+import { IconAlertCircle, IconFolder, IconSparkles } from '@tabler/icons-react';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ColorPalette } from '../../shared/ui/ColorPalette';
@@ -40,6 +40,7 @@ import { tagSelectPortalAtom, folderPickerPortalAtom, aiTaggerPortalAtom } from 
 import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
 import { activeNodeIdAtom } from '../../state/navigation';
 import { pushHistory } from '../../state/navigationHistory';
+import { InspectorAddIcon } from '../../shared/ui/icons/toolbar-icons';
 import styles from './Inspector.module.css';
 
 const store = getDefaultStore();
@@ -243,12 +244,11 @@ const CORE_PROPERTIES: Array<Pick<CoreProperty, 'label' | 'mono'>> = [
 type CorePropertyValues = Partial<Record<CorePropertyLabel, Pick<CoreProperty, 'value' | 'title'>>>;
 
 function normalizedCoreProperties(values: CorePropertyValues): CoreProperty[] {
-  return CORE_PROPERTIES.map(({ label, mono }) => ({
-    label,
-    mono,
-    value: values[label]?.value ?? '—',
-    title: values[label]?.title,
-  }));
+  return CORE_PROPERTIES.flatMap(({ label, mono }) => {
+    const property = values[label];
+    if (!property || property.value === '' || property.value === '—') return [];
+    return [{ label, mono, value: property.value, title: property.title }];
+  });
 }
 
 type TextFieldModel = {
@@ -269,11 +269,14 @@ type InspectorSkeletonProps = {
   name: TextFieldModel;
   notes: TextFieldModel;
   source: SourceFieldModel;
+  showSource?: boolean;
   rating: { value: number; onChange?: (rating: number) => void };
   coreProperties: CoreProperty[];
   tags: Array<{ ns: string; sub: string; raw: string }>;
+  showTags?: boolean;
   onRemoveTag?: (raw: string) => void;
   folders: Array<{ id: number; name: string; color: string | null }>;
+  showFolders?: boolean;
   onRemoveFolder?: (folderId: number) => void;
   onNavigateFolder?: (folderId: number) => void;
   extras?: Array<{ label: string; value: string }>;
@@ -288,11 +291,14 @@ export function InspectorSkeleton({
   name,
   notes,
   source,
+  showSource = true,
   rating,
   coreProperties,
   tags,
+  showTags = true,
   onRemoveTag,
   folders,
+  showFolders = true,
   onRemoveFolder,
   onNavigateFolder,
   extras = [],
@@ -311,22 +317,28 @@ export function InspectorSkeleton({
         <div data-inspector-anchor="notes">
           <InspectorField value={notes.value} placeholder="Notes" readOnly={notes.readOnly} onCommit={notes.onCommit} />
         </div>
-        <div data-inspector-anchor="source">
-          <InspectorSourceField urls={source.urls} onChange={source.onChange} unavailable={source.unavailable} />
-        </div>
+        {showSource && (
+          <div data-inspector-anchor="source">
+            <InspectorSourceField urls={source.urls} onChange={source.onChange} unavailable={source.unavailable} />
+          </div>
+        )}
       </div>
 
-      <div data-inspector-section="tags">
-        <TagsSection tags={tags} onRemove={onRemoveTag} editable={Boolean(onRemoveTag)} />
-      </div>
-      <div data-inspector-section="folders">
-        <FoldersSection folders={folders} onRemove={onRemoveFolder} onNavigate={onNavigateFolder} editable={Boolean(onRemoveFolder)} />
-      </div>
+      {showTags && (
+        <div data-inspector-section="tags">
+          <TagsSection tags={tags} onRemove={onRemoveTag} editable={Boolean(onRemoveTag)} />
+        </div>
+      )}
+      {showFolders && (
+        <div data-inspector-section="folders">
+          <FoldersSection folders={folders} onRemove={onRemoveFolder} onNavigate={onNavigateFolder} editable={Boolean(onRemoveFolder)} />
+        </div>
+      )}
       <div data-inspector-section="properties">
         <InspectorSection title="Properties">
           <div className={styles.propsStack} data-inspector-core-properties="">
             <StarRating value={rating.value} onChange={rating.onChange} />
-            {coreProperties.map((property) => (
+            {coreProperties.filter((property) => property.value !== '' && property.value !== '—').map((property) => (
               <div key={property.label} data-inspector-core-property={property.label}>
                 <PropertyRow {...property} />
               </div>
@@ -357,7 +369,7 @@ export function InspectorSkeleton({
   );
 }
 
-function UnavailableInspectorSkeleton({ status }: { status?: InspectorSkeletonProps['status'] }) {
+function UnavailableInspectorSkeleton({ status, showSource = true }: { status?: InspectorSkeletonProps['status']; showSource?: boolean }) {
   return (
     <InspectorSkeleton
       preview={<div className={styles.preview} aria-hidden="true" />}
@@ -365,10 +377,13 @@ function UnavailableInspectorSkeleton({ status }: { status?: InspectorSkeletonPr
       name={{ value: '—', readOnly: true }}
       notes={{ value: '—', readOnly: true }}
       source={{ urls: [], unavailable: true }}
+      showSource={showSource}
       rating={{ value: 0 }}
       coreProperties={normalizedCoreProperties({})}
       tags={[]}
+      showTags={false}
       folders={[]}
+      showFolders={false}
       status={status}
     />
   );
@@ -465,7 +480,7 @@ export function Inspector() {
   }
 
   // ── Scope (nothing selected — show current view) ──────────────
-  if (!scopeVM) return <UnavailableInspectorSkeleton status={error ? { kind: 'error', message: error } : loading ? { kind: 'loading', message: 'Loading...' } : undefined} />;
+  if (!scopeVM) return <UnavailableInspectorSkeleton showSource={false} status={error ? { kind: 'error', message: error } : loading ? { kind: 'loading', message: 'Loading...' } : undefined} />;
   const node = scopeVM.node;
   const isSystem = node.kind === 'system';
   const canEdit = !isSystem;
@@ -500,13 +515,16 @@ export function Inspector() {
     name={{ value: node.name, readOnly: isSystem, onCommit: canEdit ? (value) => { void saveName(value); } : undefined }}
     notes={{ value: (isSystem ? scopeVM.description : scopeVM.folder?.notes ?? scopeVM.smartFolder?.notes) ?? '', readOnly: isSystem, onCommit: canEdit ? (value) => { void saveNotes(value); } : undefined }}
     source={{ urls: [], unavailable: true }}
+    showSource={false}
     rating={{ value: 0 }}
     coreProperties={normalizedCoreProperties({
       Items: { value: scopeVM.totalCount.toLocaleString() },
       Size: { value: scopeSize ?? '—' },
     })}
     tags={[]}
+    showTags={false}
     folders={[]}
+    showFolders={false}
     extras={extras}
   />;
 }
@@ -599,18 +617,23 @@ function TagsSection({ tags, onRemove, onNavigate, editable = true }: {
         ))}
         {editable && !hasTags && <KbdTooltip label="Add Tags" shortcut="T">
           <InspectorActionButton action="add-tags" variant="empty-section" onClick={(e) => openPortal(e, tagSelectPortalAtom)}>
-            <IconPlus size={14} stroke={1.5} />
+            <InspectorAddIcon />
             <span>Add Tags</span>
           </InspectorActionButton>
         </KbdTooltip>}
         {editable && hasTags && <KbdTooltip label="Add Tags" shortcut="T">
-          <InspectorActionButton action="add-tags" className={styles.tagActionBtn} onClick={(e) => openPortal(e, tagSelectPortalAtom)}>
-            <IconPlus size={14} stroke={1.5} />
-            <span>Add Tags</span>
-          </InspectorActionButton>
+          <button
+            aria-label="Add Tags"
+            className={styles.tagAddBtn}
+            data-inspector-action="add-tags"
+            onClick={(e) => openPortal(e, tagSelectPortalAtom)}
+            type="button"
+          >
+            <InspectorAddIcon />
+          </button>
         </KbdTooltip>}
       </div> : null}
-      {chipMenu.state && <ContextMenu entries={chipMenu.state.entries} position={chipMenu.state.position} onClose={chipMenu.close} searchable={false} />}
+      {chipMenu.state && <ContextMenu entries={chipMenu.state.entries} position={chipMenu.state.position} onClose={chipMenu.close} />}
     </InspectorSection>
   );
 }
@@ -641,17 +664,17 @@ function FoldersSection({ folders, onRemove, onNavigate, editable = true }: {
         ))}
         {editable && !hasFolders && <KbdTooltip label="Add to Folder" shortcut="F">
           <InspectorActionButton action="add-folder" variant="empty-section" onClick={(e) => openPortal(e, folderPickerPortalAtom)}>
-            <IconPlus size={14} stroke={1.5} />
+            <InspectorAddIcon />
             <span>Add to Folder</span>
           </InspectorActionButton>
         </KbdTooltip>}
         {editable && hasFolders && <KbdTooltip label="Add to Folder" shortcut="F">
-          <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button">
-            <IconPlus size={14} stroke={1.5} />
+          <button aria-label="Add to Folder" className={styles.tagAddBtn} data-inspector-action="add-folder" onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button">
+            <InspectorAddIcon />
           </button>
         </KbdTooltip>}
       </div> : null}
-      {chipMenu.state && <ContextMenu entries={chipMenu.state.entries} position={chipMenu.state.position} onClose={chipMenu.close} searchable={false} />}
+      {chipMenu.state && <ContextMenu entries={chipMenu.state.entries} position={chipMenu.state.position} onClose={chipMenu.close} />}
     </InspectorSection>
   );
 }

@@ -204,15 +204,3 @@ function layoutJustified(
 
   return { positions, totalHeight: Math.max(0, y - gap) };
 }
-
-/** Binary search: find first index where positions[i].y + h >= target. */
-export function lowerBound(positions: LayoutItem[], targetY: number): number {
-  let lo = 0;
-  let hi = positions.length;
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1;
-    if (positions[mid].y + positions[mid].h < targetY) lo = mid + 1;
-    else hi = mid;
-  }
-  return lo;
-}

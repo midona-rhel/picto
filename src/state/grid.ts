@@ -4,6 +4,7 @@
 
 import { atom } from 'jotai';
 import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
+import type { ItemFilters } from '../shared/types/generated/application/ItemFilters';
 import type { ItemScope } from '../shared/types/generated/application/ItemScope';
 import type { ItemSortField } from '../shared/types/generated/application/ItemSortField';
 import type { ItemSummary } from '../shared/types/generated/application/ItemSummary';
@@ -24,16 +25,21 @@ export type SortDirection = BackendSortDirection;
 export const gridSortFieldAtom = atom<SortField>('imported_at');
 export const gridSortDirectionAtom = atom<SortDirection>('descending');
 export const gridSearchTextAtom = atom<string>('');
+export const gridFiltersAtom = atom<ItemFilters>({
+  include_tags: [],
+  exclude_tags: [],
+  minimum_rating: null,
+  mime_prefix: null,
+  text: null,
+});
 
 export const currentGridQueryAtom = atom<ItemQuery>((get) => {
   const searchText = get(gridSearchTextAtom).trim();
+  const filters = get(gridFiltersAtom);
   return {
     scope: get(gridScopeAtom),
     filters: {
-      include_tags: [],
-      exclude_tags: [],
-      minimum_rating: null,
-      mime_prefix: null,
+      ...filters,
       text: searchText || null,
     },
     sort: {
@@ -76,6 +82,10 @@ export const gridActiveAtom = atom(true);
 /** Grid transition phase — inspector/toolbar freeze when not 'idle'. */
 export type GridTransitionPhase = 'idle' | 'fading_out' | 'waiting' | 'fading_in';
 export const gridTransitionPhaseAtom = atom<GridTransitionPhase>('idle');
+
+/** Whether grid-only chrome is entering or leaving a manager surface. */
+export type GridChromeTransition = 'stable' | 'leaving_grid' | 'entering_grid';
+export const gridChromeTransitionAtom = atom<GridChromeTransition>('stable');
 
 /** Pending action to execute at the midpoint of a soft fade transition. */
 export const gridSoftTransitionActionAtom = atom<(() => void) | null>(null);

@@ -124,6 +124,13 @@ export const foldersController = {
     return getFolderCoverHash(folderId);
   },
 
+  async getCoverHashes(folderIds: number[]): Promise<Array<{ folder_id: number; entity_hash: string | null }>> {
+    return Promise.all(folderIds.map(async (folderId) => ({
+      folder_id: folderId,
+      entity_hash: await getFolderCoverHash(folderId),
+    })));
+  },
+
   async setWatchConfig(folderId: number, config: {
     watchPath: string;
     enabled: boolean;

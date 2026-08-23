@@ -367,7 +367,7 @@ export function Sidebar() {
         result.push(node);
       } else if (id === 'system:tag_manager') {
         // Placeholder — not from backend
-        result.push({ id, name: 'Tag Manager', count: null, selectable: true, sort_order: 0 } as SidebarNodeDto);
+        result.push({ id, name: 'Tags', count: null, selectable: true, sort_order: 0 } as SidebarNodeDto);
       }
     }
     return result;

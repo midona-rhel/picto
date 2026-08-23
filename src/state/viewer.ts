@@ -39,6 +39,7 @@ export interface ViewerDisplayControls {
   zoomIn: () => void;
   zoomOut: () => void;
   setZoomScale: (scale: number) => void;
+  subscribeZoomScale: (listener: (scale: number) => void) => () => void;
 }
 
 /** Written by MediaView, read by GridToolbar. */

@@ -69,6 +69,7 @@
   --font-weight-medium: 500;
   --font-weight-bold: 600;
   --font-size-xs: 10px;
+  --font-size-caption: 11px;
   --font-size-sm: 12px;
   --font-size-md: 13px;
   --font-size-lg: 14px;
@@ -83,6 +84,12 @@
   --space-6: 24px;
   --space-8: 32px;
 
+  /* ── Controls ────────────────────────────────────────────── */
+  --control-height-sm: 26px;
+  --control-height-md: 28px;
+  --control-height-lg: 32px;
+  --icon-button-size: var(--control-height-md);
+
   /* ── Radius ──────────────────────────────────────────────── */
   --radius-sm: 4px;
   --radius-md: 6px;
@@ -94,11 +101,11 @@
   --shadow-panel: 0 12px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.5);
 
   /* ── Glass panel surface ────────────────────────────────── */
-  --glass-bg: color-mix(in srgb, var(--color-surface-1) 92%, transparent);
+  --glass-bg: color-mix(in srgb, var(--color-bg-app) 92%, transparent);
   --glass-blur: blur(13px) brightness(0.7);
   --glass-border-top: 1px solid rgba(255, 255, 255, 0.25);
   --glass-border-side: 1px solid rgba(255, 255, 255, 0.15);
-  --glass-border-bottom: 1px solid rgba(0, 0, 0, 0.10);
+  --glass-border-bottom: 1px solid rgba(255, 255, 255, 0.10);
 
   /* ── Interaction overlays (theme-aware hover/active tints) ─ */
   --color-hover-overlay: rgba(255, 255, 255, 0.08);
@@ -191,7 +198,6 @@
   --color-menu-hover: var(--color-hover-overlay);
   --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
   --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
-  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
 /* ── Purple theme ────────────────────────────────────────────── */
@@ -204,7 +210,6 @@
   --color-menu-hover: var(--color-hover-overlay);
   --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
   --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
-  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
 /* ── Gray theme ──────────────────────────────────────────────── */
@@ -217,7 +222,6 @@
   --color-menu-hover: var(--color-hover-overlay);
   --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
   --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
-  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
 /* ── Light theme ─────────────────────────────────────────────── */
@@ -258,11 +262,14 @@
   --color-subtle-overlay: rgba(0, 0, 0, 0.08);
   --color-strong-overlay: rgba(0, 0, 0, 0.20);
 
-  --glass-bg: color-mix(in srgb, var(--color-surface-1) 95%, transparent);
-  --glass-blur: blur(16px) brightness(1.1);
+  --glass-bg: color-mix(in srgb, var(--color-bg-app) 90%, transparent);
+  --glass-blur: blur(25px) brightness(3);
+  --glass-border-top: 1px solid rgba(255, 255, 255, 1);
+  --glass-border-side: 1px solid rgba(255, 255, 255, 0.50);
+  --glass-border-bottom: 1px solid rgba(255, 255, 255, 0.25);
 
   --color-menu-hover: var(--color-hover-overlay);
-  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.15);
+  --shadow-panel: 0 12px 24px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.15);
 }
 
 /* ── Native transparency themes ── */
@@ -287,7 +294,6 @@
   --color-border-secondary: rgba(255, 255, 255, 0.03);
   --sidebar-item-hover-bg: rgba(255, 255, 255, 0.05);
   --sidebar-item-active-bg: rgba(255, 255, 255, 0.08);
-  --shadow-panel: none;
 }
 
 /* ── Light Gray theme ────────────────────────────────────────── */

@@ -3,12 +3,12 @@
   border-top: 1px solid var(--inspector-separator, var(--color-border-secondary));
   padding-top: 10px;
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .header {
   display: flex;
-  height: 26px;
+  height: var(--control-height-sm);
   align-items: center;
   cursor: pointer;
   user-select: none;
@@ -21,11 +21,11 @@
 
 .title {
   font-weight: 700;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .count {
-  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
+  font-family: var(--font-family-mono);
   margin-left: 2px;
 }
 

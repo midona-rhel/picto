@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { atom, useAtomValue, useSetAtom } from 'jotai';
 import {
   IconArrowLeft,
   IconArrowRight,
@@ -7,8 +8,6 @@ import {
   IconCheck,
   IconCopy,
   IconLayersDifference,
-  IconMinus,
-  IconPlus,
   IconRefresh,
   IconX,
 } from '@tabler/icons-react';
@@ -29,15 +28,97 @@ import { showErrorNotification, showInfoNotification, showWarningNotification } 
 import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import btnStyles from '../../shared/styles/actionButton.module.css';
-import iconStyles from '../../shared/styles/iconButton.module.css';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { ProgressBar } from '../../shared/ui/ProgressBar';
 import { PropertyRow } from '../../shared/ui/PropertyRow/PropertyRow';
+import {
+  TitlebarControlButton,
+  TitlebarControls,
+  TitlebarCounter,
+  TitlebarZoomSlider,
+} from '../../shared/ui/TitlebarControls';
 import { useLinkedComparisonZoom } from './useLinkedComparisonZoom';
 import styles from './DuplicatesScreen.module.css';
 
 const LOADING_MESSAGE_DELAY_MS = 200;
+
+interface DuplicateToolbarModel {
+  index: number;
+  total: number;
+  canPrevious: boolean;
+  canNext: boolean;
+  disabled: boolean;
+  zoomPercent: number;
+  isFit: boolean;
+  differenceAvailable: boolean;
+  differenceActive: boolean;
+  previous: () => void;
+  next: () => void;
+  zoomOut: () => void;
+  zoomIn: () => void;
+  setZoomPercent: (value: number) => void;
+  fit: () => void;
+  setDifferenceHovered: (active: boolean) => void;
+  setDifferenceFocused: (active: boolean) => void;
+}
+
+const duplicateToolbarAtom = atom<DuplicateToolbarModel | null>(null);
+
+export function DuplicatesToolbar() {
+  const model = useAtomValue(duplicateToolbarAtom);
+  if (!model) return null;
+
+  return (
+    <TitlebarControls
+      label="Duplicate review controls"
+      center={(
+        <TitlebarZoomSlider
+          min={10}
+          max={800}
+          value={model.zoomPercent}
+          onChange={model.setZoomPercent}
+          onZoomOut={model.zoomOut}
+          onZoomIn={model.zoomIn}
+        />
+      )}
+      right={(
+        <>
+          <KbdTooltip label="Previous pair" shortcut="ArrowLeft">
+            <TitlebarControlButton onClick={model.previous} disabled={!model.canPrevious || model.disabled} aria-label="Previous pair">
+              <IconArrowLeft size={17} />
+            </TitlebarControlButton>
+          </KbdTooltip>
+          <TitlebarCounter current={model.index + 1} total={model.total} />
+          <KbdTooltip label="Next pair" shortcut="ArrowRight">
+            <TitlebarControlButton onClick={model.next} disabled={!model.canNext || model.disabled} aria-label="Next pair">
+              <IconArrowRight size={17} />
+            </TitlebarControlButton>
+          </KbdTooltip>
+          <KbdTooltip label="Fit both images">
+            <TitlebarControlButton active={model.isFit} onClick={model.fit} aria-label="Fit both images" aria-pressed={model.isFit}>
+              <IconAspectRatio size={16} />
+            </TitlebarControlButton>
+          </KbdTooltip>
+          <KbdTooltip label="Hold to highlight differences">
+            <TitlebarControlButton
+              active={model.differenceActive}
+              onMouseEnter={() => model.setDifferenceHovered(true)}
+              onMouseLeave={() => model.setDifferenceHovered(false)}
+              onFocus={() => model.setDifferenceFocused(true)}
+              onBlur={() => model.setDifferenceFocused(false)}
+              disabled={model.disabled || !model.differenceAvailable}
+              aria-label="Highlight differences"
+              aria-pressed={model.differenceActive}
+            >
+              <IconLayersDifference size={16} />
+            </TitlebarControlButton>
+          </KbdTooltip>
+        </>
+      )}
+    />
+  );
+}
 
 interface LoadPairsOptions {
   showLoading?: boolean;
@@ -219,6 +300,7 @@ function MediaCard({
 }
 
 export function DuplicatesScreen() {
+  const setDuplicateToolbar = useSetAtom(duplicateToolbarAtom);
   const [pairs, setPairs] = useState<DuplicatePair[]>([]);
   const [index, setIndex] = useState(0);
   const [total, setTotal] = useState(0);
@@ -367,6 +449,53 @@ export function DuplicatesScreen() {
     setIndex((current) => Math.min(Math.max(0, pairs.length - 1), current + 1));
   }, [pairs.length]);
 
+  useEffect(() => () => setDuplicateToolbar(null), [setDuplicateToolbar]);
+
+  useEffect(() => {
+    if (loading || !currentPair) {
+      setDuplicateToolbar(null);
+      return;
+    }
+    setDuplicateToolbar({
+      index,
+      total,
+      canPrevious: index > 0,
+      canNext: index < pairs.length - 1,
+      disabled: resolving || metadataLoading,
+      zoomPercent: zoom.zoomPercent,
+      isFit: zoom.isFit,
+      differenceAvailable: differenceFiles != null,
+      differenceActive,
+      previous: goPrevious,
+      next: goNext,
+      zoomOut: zoom.zoomOut,
+      zoomIn: zoom.zoomIn,
+      setZoomPercent: zoom.setZoomPercent,
+      fit: zoom.fit,
+      setDifferenceHovered,
+      setDifferenceFocused,
+    });
+  }, [
+    currentPair,
+    differenceActive,
+    differenceFiles,
+    goNext,
+    goPrevious,
+    index,
+    loading,
+    metadataLoading,
+    pairs.length,
+    resolving,
+    setDuplicateToolbar,
+    total,
+    zoom.fit,
+    zoom.isFit,
+    zoom.setZoomPercent,
+    zoom.zoomIn,
+    zoom.zoomOut,
+    zoom.zoomPercent,
+  ]);
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -421,51 +550,6 @@ export function DuplicatesScreen() {
 
   return (
     <section className={styles.root} aria-label="Duplicate review">
-      <header className={styles.comparisonHeader}>
-        <div className={styles.headerNav}>
-          <KbdTooltip label="Previous pair" shortcut="ArrowLeft">
-            <button className={`${iconStyles.iconBtn} ${index === 0 || resolving ? iconStyles.iconBtnDisabled : ''}`} onClick={goPrevious} disabled={index === 0 || resolving} aria-label="Previous pair">
-              <IconArrowLeft size={17} />
-            </button>
-          </KbdTooltip>
-          <span className={styles.position}>{index + 1} / {total}</span>
-          <KbdTooltip label="Next pair" shortcut="ArrowRight">
-            <button className={`${iconStyles.iconBtn} ${index >= pairs.length - 1 || resolving ? iconStyles.iconBtnDisabled : ''}`} onClick={goNext} disabled={index >= pairs.length - 1 || resolving} aria-label="Next pair">
-              <IconArrowRight size={17} />
-            </button>
-          </KbdTooltip>
-        </div>
-        <div className={styles.zoomControls}>
-          <KbdTooltip label="Zoom out">
-            <button className={iconStyles.iconBtn} onClick={zoom.zoomOut} aria-label="Zoom out"><IconMinus size={16} /></button>
-          </KbdTooltip>
-          <span className={styles.zoomPercent}>{zoom.zoomPercent}%</span>
-          <KbdTooltip label="Zoom in">
-            <button className={iconStyles.iconBtn} onClick={zoom.zoomIn} aria-label="Zoom in"><IconPlus size={16} /></button>
-          </KbdTooltip>
-          <KbdTooltip label="Fit both images">
-            <button className={`${iconStyles.iconBtn} ${zoom.isFit ? iconStyles.iconBtnFilled : ''}`} onClick={zoom.fit} aria-label="Fit both images" aria-pressed={zoom.isFit}><IconAspectRatio size={16} /></button>
-          </KbdTooltip>
-          <KbdTooltip label="Hold to highlight differences">
-            <button
-              className={`${iconStyles.iconBtn} ${differenceActive ? iconStyles.iconBtnActive : ''}`}
-              onMouseEnter={() => setDifferenceHovered(true)}
-              onMouseLeave={() => setDifferenceHovered(false)}
-              onFocus={() => setDifferenceFocused(true)}
-              onBlur={() => setDifferenceFocused(false)}
-              disabled={metadataLoading || !differenceFiles}
-              aria-label="Highlight differences"
-              aria-pressed={differenceActive}
-            >
-              <IconLayersDifference size={16} />
-            </button>
-          </KbdTooltip>
-        </div>
-        <KbdTooltip label="Re-scan library">
-          <button className={`${iconStyles.iconBtn} ${scanning || resolving ? iconStyles.iconBtnDisabled : ''}`} onClick={scan} disabled={scanning || resolving} aria-label="Re-scan library"><IconRefresh size={17} /></button>
-        </KbdTooltip>
-      </header>
-
       {showScanProgress && (
         <div className={styles.scanProgress} role="status" aria-label="Scanning duplicate pairs"><ProgressBar indeterminate height={2} /></div>
       )}

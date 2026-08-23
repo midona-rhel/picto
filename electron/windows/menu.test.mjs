@@ -1,5 +1,4 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
+import { expect, test } from 'vitest';
 import { createMenuManager } from './menu.mjs';
 
 function buildMenuTemplate() {
@@ -34,13 +33,13 @@ test('groups existing Picto actions into library, file, and organize menus', () 
   const template = buildMenuTemplate();
   const labels = template.map((item) => item.label);
 
-  assert.ok(labels.includes('Library'));
-  assert.ok(labels.includes('File'));
-  assert.ok(labels.includes('Organize'));
+  expect(labels).toContain('Library');
+  expect(labels).toContain('File');
+  expect(labels).toContain('Organize');
 
   const byLabel = new Map(template.map((item) => [item.label, item]));
-  assert.ok(byLabel.get('Library').submenu.some((item) => item.label === 'Subscriptions…'));
-  assert.ok(byLabel.get('File').submenu.some((item) => item.label === 'Import Files…'));
-  assert.ok(byLabel.get('Organize').submenu.some((item) => item.label === 'Tag Manager'));
-  assert.ok(!byLabel.get('View').submenu.some((item) => item.label === 'Tag Manager'));
+  expect(byLabel.get('Library').submenu.some((item) => item.label === 'Subscriptions…')).toBe(true);
+  expect(byLabel.get('File').submenu.some((item) => item.label === 'Import Files…')).toBe(true);
+  expect(byLabel.get('Organize').submenu.some((item) => item.label === 'Tags')).toBe(true);
+  expect(byLabel.get('View').submenu.some((item) => item.label === 'Tags')).toBe(false);
 });

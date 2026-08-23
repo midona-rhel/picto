@@ -11,7 +11,7 @@ import {
   type DuplicatePair,
 } from '../../platform/duplicateApi';
 import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
-import { DuplicatesScreen } from './DuplicatesScreen';
+import { DuplicatesScreen, DuplicatesToolbar } from './DuplicatesScreen';
 
 vi.mock('../../platform/duplicateApi', () => ({
   getDuplicateItemDetails: vi.fn(),
@@ -84,6 +84,7 @@ function renderScreen(withNotifications = false) {
   return render(
     <MantineProvider forceColorScheme="dark">
       {withNotifications && <Notifications />}
+      <DuplicatesToolbar />
       <DuplicatesScreen />
     </MantineProvider>,
   );
@@ -169,7 +170,7 @@ describe('DuplicatesScreen', () => {
 
     await user.click(screen.getByRole('button', { name: 'Zoom out' }));
 
-    expect(screen.getByText('80%')).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Zoom' })).toHaveValue('80');
     expect(screen.getByTestId('left-preview-layers').style.transform).toContain('scale(0.8)');
     expect(screen.getByTestId('right-preview-layers').style.transform).toContain('scale(0.8)');
   });

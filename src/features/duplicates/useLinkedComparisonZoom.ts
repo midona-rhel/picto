@@ -109,6 +109,9 @@ export function useLinkedComparisonZoom({
   const zoomTo = useCallback((nextZoom: number) => {
     setZoom(clamp(nextZoom, MIN_ZOOM, MAX_ZOOM));
   }, []);
+  const setZoomPercent = useCallback((nextPercent: number) => {
+    zoomTo(nextPercent / 100);
+  }, [zoomTo]);
   const zoomIn = useCallback(() => zoomTo(zoom * 1.25), [zoom, zoomTo]);
   const zoomOut = useCallback(() => zoomTo(zoom / 1.25), [zoom, zoomTo]);
   const fit = useCallback(() => {
@@ -225,6 +228,7 @@ export function useLinkedComparisonZoom({
     draggingSide,
     zoomIn,
     zoomOut,
+    setZoomPercent,
     fit,
     frameStyle,
     differenceFrameStyle,

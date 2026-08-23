@@ -143,6 +143,7 @@ export function MediaView({
       zoomIn: () => zoom.animateZoomTo(zoom.state.scale * 1.25),
       zoomOut: () => zoom.animateZoomTo(zoom.state.scale / 1.25),
       setZoomScale: (s) => zoom.zoomTo(s),
+      subscribeZoomScale: zoom.subscribeLiveScale,
     });
   }, [currentItemId, navigate, onClose, zoom, setDisplayControls]);
 

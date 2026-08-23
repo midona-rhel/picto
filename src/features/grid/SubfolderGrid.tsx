@@ -30,25 +30,23 @@ export function SubfolderGrid({
   const [expanded, setExpanded] = useState(true);
   const [coverHashes, setCoverHashes] = useState<Map<number, string | null>>(new Map());
 
-  // Lazily fetch cover hashes
+  // Fetch all child covers through one backend read instead of one IPC per tile.
   useEffect(() => {
     let cancelled = false;
-    const toFetch = childFolders.filter((f) => {
-      const id = parseFolderId(f.id);
-      return id != null && !coverHashes.has(id);
-    });
-    if (toFetch.length === 0) return;
-    void Promise.all(toFetch.map(async (f) => {
-      const id = parseFolderId(f.id)!;
-      const hash = await foldersController.getCoverHash(id).catch(() => null);
-      return [id, hash] as [number, string | null];
-    })).then((results) => {
+    const folderIds = childFolders
+      .map((folder) => parseFolderId(folder.id))
+      .filter((folderId): folderId is number => folderId != null);
+    if (folderIds.length === 0) {
+      setCoverHashes(new Map());
+      return;
+    }
+    void foldersController.getCoverHashes(folderIds).then((results) => {
       if (cancelled) return;
-      setCoverHashes((prev) => {
-        const next = new Map(prev);
-        for (const [id, hash] of results) next.set(id, hash);
-        return next;
-      });
+      const next = new Map<number, string | null>(folderIds.map((folderId) => [folderId, null]));
+      for (const result of results) next.set(result.folder_id, result.entity_hash);
+      setCoverHashes(next);
+    }).catch(() => {
+      if (!cancelled) setCoverHashes(new Map());
     });
     return () => { cancelled = true; };
   }, [childFolders]);

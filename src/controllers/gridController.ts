@@ -9,6 +9,7 @@ import {
   queryItems,
 } from '../platform/entityApi';
 import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
+import type { ItemFilters } from '../shared/types/generated/application/ItemFilters';
 import type { ItemScope } from '../shared/types/generated/application/ItemScope';
 import {
   getViewPrefs,
@@ -21,6 +22,7 @@ import {
   gridScopeAtom, gridActiveAtom, gridItemsAtom, gridCursorAtom,
   gridTotalCountAtom, gridTotalSizeBytesAtom, gridLoadingAtom, gridErrorAtom,
   gridSortFieldAtom, gridSortDirectionAtom, gridSearchTextAtom,
+  gridFiltersAtom,
   gridViewModeAtom, gridTargetSizeAtom,
   gridShowNameAtom, gridShowExtensionAtom, gridShowResolutionAtom,
   gridShowExtensionLabelAtom, gridFitThumbnailsAtom,
@@ -60,6 +62,34 @@ function scopeToKey(scope: ItemScope): string {
 
 function currentQuery(): ItemQuery {
   return store.get(currentGridQueryAtom);
+}
+
+type PageAppendResult = 'appended' | 'unavailable' | 'stale' | 'failed';
+
+async function appendNextPage(reportError: boolean): Promise<PageAppendResult> {
+  const offset = store.get(gridCursorAtom);
+  if (offset == null || paginationInFlight === offset) return 'unavailable';
+
+  paginationInFlight = offset;
+  const version = gridVersion;
+  if (reportError) store.set(gridLoadingAtom, true);
+  try {
+    const result = await queryItems(currentQuery(), { offset, limit: PREFETCH_BATCH_SIZE });
+    if (version !== gridVersion || paginationInFlight !== offset) return 'stale';
+    store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
+    const loaded = store.get(gridItemsAtom).length;
+    store.set(gridCursorAtom, loaded < result.visible_item_count ? loaded : null);
+    store.set(gridTotalCountAtom, result.visible_item_count);
+    store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
+    return 'appended';
+  } catch (error) {
+    if (version !== gridVersion) return 'stale';
+    if (reportError) store.set(gridErrorAtom, error instanceof Error ? error.message : String(error));
+    return 'failed';
+  } finally {
+    if (paginationInFlight === offset) paginationInFlight = null;
+    if (reportError && version === gridVersion) store.set(gridLoadingAtom, false);
+  }
 }
 
 export const gridController = {
@@ -114,6 +144,11 @@ export const gridController = {
     }, SEARCH_DEBOUNCE_MS);
   },
 
+  setFilters(filters: ItemFilters) {
+    store.set(gridFiltersAtom, filters);
+    void this.loadFirstPage({ preserveItems: true });
+  },
+
   /** Change sort — deferred to soft fade midpoint. */
   setSort(field: SortField, direction: SortDirection) {
     store.set(gridSoftTransitionActionAtom, () => {
@@ -165,30 +200,8 @@ export const gridController = {
   },
 
   async loadNextPage() {
-    const cursor = store.get(gridCursorAtom);
-    if (cursor == null) return;
-    if (paginationInFlight === cursor) return;
-    paginationInFlight = cursor;
-    const v = gridVersion;
-    store.set(gridLoadingAtom, true);
-    try {
-      const result = await queryItems(currentQuery(), { offset: cursor, limit: PREFETCH_BATCH_SIZE });
-      if (v !== gridVersion || paginationInFlight !== cursor) return;
-      paginationInFlight = null;
-      store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
-      const loaded = store.get(gridItemsAtom).length;
-      store.set(gridCursorAtom, loaded < result.visible_item_count ? loaded : null);
-      store.set(gridTotalCountAtom, result.visible_item_count);
-      store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
-      // After each scroll-triggered fetch, check if we need more
-      void this.prefetchToMinimum();
-    } catch (err) {
-      if (v !== gridVersion) return;
-      paginationInFlight = null;
-      store.set(gridErrorAtom, err instanceof Error ? err.message : String(err));
-    } finally {
-      if (v === gridVersion) store.set(gridLoadingAtom, false);
-    }
+    const result = await appendNextPage(true);
+    if (result === 'appended') void this.prefetchToMinimum();
   },
 
   /**
@@ -209,21 +222,8 @@ export const gridController = {
       if (loaded >= PREFETCH_MIN_ITEMS && remaining > PREFETCH_RUNWAY_ITEMS) break;
       // Also stop if loaded >= total (everything fetched)
       if (loaded >= total) break;
-      if (paginationInFlight === cursor) break; // another fetch is handling this cursor
-      paginationInFlight = cursor;
-      try {
-        const result = await queryItems(currentQuery(), { offset: cursor, limit: PREFETCH_BATCH_SIZE });
-        if (v !== gridVersion || paginationInFlight !== cursor) return;
-        paginationInFlight = null;
-        store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
-        const nextLoaded = store.get(gridItemsAtom).length;
-        store.set(gridCursorAtom, nextLoaded < result.visible_item_count ? nextLoaded : null);
-        store.set(gridTotalCountAtom, result.visible_item_count);
-        store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
-      } catch {
-        paginationInFlight = null;
-        break; // stop prefetching on error, scroll-triggered fetch will retry
-      }
+      const result = await appendNextPage(false);
+      if (result !== 'appended') break;
     }
   },
 

@@ -81,11 +81,9 @@ interface ContextMenuProps {
   entries: MenuEntry[];
   position: { x: number; y: number };
   onClose: () => void;
-  searchable?: boolean;
-  width?: number;
 }
 
-export function ContextMenu({ entries, position, onClose, searchable = true, width }: ContextMenuProps) {
+export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
@@ -95,6 +93,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
   const [openSubmenuLabel, setOpenSubmenuLabel] = useState<string | null>(null);
   const submenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [closing, setClosing] = useState(false);
+  const hasSearchableEntries = entries.some((entry) => !isSeparator(entry) && !isCustom(entry));
 
   const startClose = useCallback(() => {
     if (closing) return;
@@ -168,7 +167,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
     return () => window.removeEventListener('resize', placeMenu);
   }, [position, cleaned.length]);
 
-  useEffect(() => { if (searchable) searchRef.current?.focus(); }, [searchable]);
+  useEffect(() => { if (hasSearchableEntries) searchRef.current?.focus(); }, [hasSearchableEntries]);
 
   // Keyboard
   useEffect(() => {
@@ -221,13 +220,13 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
         role="menu"
         aria-label="Context menu"
         style={pos
-          ? { left: pos.x, top: pos.y, width: width ?? undefined, transformOrigin: origin }
-          : { left: -9999, top: -9999, width: width ?? undefined, visibility: 'hidden' as const }
+          ? { left: pos.x, top: pos.y, transformOrigin: origin }
+          : { left: -9999, top: -9999, visibility: 'hidden' as const }
         }
         onPointerDown={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.preventDefault()}
       >
-        {searchable && (
+        {hasSearchableEntries && (
           <div className={styles.searchArea}>
             <div className={styles.searchRow}>
               <IconSearch size={16} stroke={1.5} className={styles.searchIcon} />

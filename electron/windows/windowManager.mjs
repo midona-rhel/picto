@@ -63,6 +63,10 @@ const MAIN_WINDOW_MIN_WIDTH = 700;
 const MAIN_WINDOW_MIN_HEIGHT = 500;
 const WINDOW_STATE_SAVE_DEBOUNCE_MS = 180;
 
+export function windowResizePersistenceEvent(platform = process.platform) {
+  return platform === 'darwin' || platform === 'win32' ? 'resized' : 'resize';
+}
+
 // The 2x reference requires a 26px horizontal and 34px vertical rendered
 // inset. Account for the native frame's 2px/4px physical offsets.
 const MAC_TRAFFIC_LIGHT_POSITION = { x: 12, y: 15 };
@@ -348,11 +352,14 @@ export function createWindowManager({
     });
 
     const persistMainBoundsTimer = { value: null };
-    win.on('resize', () => {
-      const [w, h] = win.getSize();
-      win.webContents.send('picto:window-resized', { width: w, height: h });
-      if (isMain) queueSaveMainWindowState(win, persistMainBoundsTimer);
-    });
+    if (isMain) {
+      // macOS and Windows expose a settled event, so keep all JavaScript and
+      // persistence work out of the native live-resize loop. Linux has no
+      // `resized` event and retains the debounced continuous-event fallback.
+      win.on(windowResizePersistenceEvent(), () => {
+        queueSaveMainWindowState(win, persistMainBoundsTimer);
+      });
+    }
 
     win.on('move', () => {
       win.webContents.send('picto:window-moved');

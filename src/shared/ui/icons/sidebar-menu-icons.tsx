@@ -53,6 +53,36 @@ export function IconRename(props: IconProps) {
   );
 }
 
+function BookmarkActionIcon(props: IconProps & { action: 'auto-tag' | 'paste-tags' }) {
+  const { size, stroke, color } = defaults(props);
+  return (
+    <svg data-icon={props.action} xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+      fill="none" stroke={color} strokeWidth={stroke}
+      strokeLinecap="round" strokeLinejoin="round" className={props.className}>
+      {/* Bookmark with its bottom-right quarter cut back by one full stroke gap. */}
+      <path d="M12 16l-6 4v-13a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v2" />
+      {props.action === 'paste-tags' ? (
+        <>
+          <path d="M15.5 22v-3.5a4 4 0 0 1 4 -4h3" />
+          <path d="M20 12l2.5 2.5l-2.5 2.5" />
+        </>
+      ) : (
+        <path d="M19 12l1.2 3.8l3.8 1.2l-3.8 1.2l-1.2 3.8l-1.2 -3.8l-3.8 -1.2l3.8 -1.2z" />
+      )}
+    </svg>
+  );
+}
+
+/** Paste Tags — cutaway bookmark with a bottom-right turn arrow. */
+export function IconPasteTags(props: IconProps) {
+  return <BookmarkActionIcon {...props} action="paste-tags" />;
+}
+
+/** Auto Tag — cutaway bookmark with a single bottom-right sparkle. */
+export function IconAutoTag(props: IconProps) {
+  return <BookmarkActionIcon {...props} action="auto-tag" />;
+}
+
 /** Sort — descending lines with arrow. */
 export function IconSort(props: IconProps) {
   const { size, stroke, color } = defaults(props);

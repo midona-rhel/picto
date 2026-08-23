@@ -19,30 +19,13 @@ import { tagsController } from '../../controllers/tagsController';
 import type { CanonicalTagRecord, CanonicalNamespaceSummary } from '../../shared/types/canonical';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import btnStyles from '../../shared/styles/actionButton.module.css';
+import { tagGroupColor, tagGroupOrder } from './tagGroupPresentation';
 import styles from './TagSelectPanel.module.css';
 import { commonItemTags } from '../../shared/lib/itemDetails';
-
-// Namespace → RGB color (same as TagChip)
-const NS_COLORS: Record<string, [number, number, number]> = {
-  creator: [170, 0, 0], studio: [128, 0, 0], character: [0, 170, 0],
-  person: [0, 128, 0], series: [170, 0, 170], species: [0, 130, 170],
-  meta: [160, 160, 160], system: [153, 101, 21], '': [114, 160, 193], default: [114, 160, 193],
-};
-
-function nsColor(ns: string): string {
-  const [r, g, b] = NS_COLORS[(ns ?? '').toLowerCase()] ?? NS_COLORS.default;
-  return `rgb(${r}, ${g}, ${b})`;
-}
 
 type SidebarMode = 'selected' | 'all' | 'namespace';
 const PAGE_SIZE = 100;
 
-// Namespace display order — matches inspector sorting
-const NS_ORDER: Record<string, number> = {
-  creator: 0, studio: 1, series: 2, character: 3, person: 4,
-  species: 5, photoset: 6, rating: 7, meta: 8, system: 9, general: 10, '': 10,
-};
-function nsOrder(ns: string): number { return NS_ORDER[ns.toLowerCase()] ?? 9; }
 
 function tagRecord(name: string): CanonicalTagRecord {
   const separator = name.indexOf(':');
@@ -168,7 +151,7 @@ export function TagSelectPanel() {
 
   // Namespace groups for sidebar
   const nsGroups = useMemo(() => {
-    return [...namespaces].sort((a, b) => nsOrder(a.namespace) - nsOrder(b.namespace));
+    return [...namespaces].sort((a, b) => tagGroupOrder(a.namespace) - tagGroupOrder(b.namespace));
   }, [namespaces]);
 
   // Estimated total count for the current view (for scroll height estimation)
@@ -350,7 +333,7 @@ export function TagSelectPanel() {
               className={`${styles.sidebarItem} ${sidebarMode === 'namespace' && activeNamespace === ns.namespace ? styles.sidebarItemActive : ''}`}
               onClick={() => { setSidebarMode('namespace'); setActiveNamespace(ns.namespace); }}
             >
-              <span className={styles.sidebarDot} style={{ background: nsColor(ns.namespace) }} />
+              <span className={styles.sidebarDot} style={{ background: tagGroupColor(ns.namespace) }} />
               <span className={styles.sidebarName}>{ns.namespace || 'general'}</span>
               <span className={styles.sidebarBadge}>{ns.count.toLocaleString()}</span>
             </div>
@@ -390,7 +373,7 @@ export function TagSelectPanel() {
                       <div className={`${shellStyles.checkBox} ${showChecked ? shellStyles.checkBoxChecked : ''}`}>
                         {showChecked && <IconCheck size={10} />}
                       </div>
-                      <span className={styles.tagDot} style={{ background: nsColor(tag.namespace) }} />
+                      <span className={styles.tagDot} style={{ background: tagGroupColor(tag.namespace) }} />
                       <span className={styles.tagName}>
                         {query.trim() ? highlightMatch(tag.subtag ?? fullTag, query.trim()) : (tag.subtag || fullTag)}
                       </span>

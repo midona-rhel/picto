@@ -11,6 +11,9 @@ import { atom } from 'jotai';
 /** The sidebar node ID that is currently active (e.g. "system:active", "folder:5"). */
 export const activeNodeIdAtom = atom<string>('system:active');
 
+/** Node currently committed to the visible content surface during navigation transitions. */
+export const displayedSurfaceNodeIdAtom = atom<string>('system:active');
+
 /** When true, the next grid scope transition skips the fade-out phase. */
 export const skipFadeOutAtom = atom(false);
 

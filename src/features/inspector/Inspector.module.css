@@ -28,7 +28,7 @@
 
 .actionBtn {
   flex: 1;
-  height: 28px;
+  height: var(--control-height-md);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -73,91 +73,60 @@
   margin-top: 12px;
 }
 
-.flowActionBtn {
-  width: 100%;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 0 24px 0 16px;
-  border: none;
-  border-radius: 6px;
-  background: rgba(248, 249, 251, 0.05);
-  color: var(--inspector-text-primary, #f8f9fb);
-  font-family: var(--inspector-font-family, var(--font-family-ui));
-  font-size: 12px;
-  font-weight: 400;
-  cursor: pointer;
-  transition: background 150ms var(--ease-default), outline-color 150ms var(--ease-default);
-}
-
-.flowActionBtn svg {
-  opacity: 0.8;
-  transition: opacity 200ms var(--ease-default);
-}
-
-.flowActionBtn:hover,
-.flowActionBtn:active {
-  background: rgba(248, 249, 251, 0.10);
-}
-
-.flowActionBtn:hover svg,
-.flowActionBtn:active svg {
-  opacity: 1;
-}
-
-.flowActionBtn:focus-visible {
-  outline: 1px solid var(--inspector-field-focus, var(--color-primary));
-  outline-offset: 1px;
-}
-
-.flowActionBtn:disabled {
-  background: transparent;
-  cursor: default;
-  opacity: 0.25;
-}
-
-/* reference application's expanded empty Tags/Folders control is full-width but compact. */
+.flowActionBtn,
 .emptySectionActionBtn {
   width: 100%;
-  height: 26px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   padding: 0 24px 0 16px;
   border: none;
-  border-radius: 6px;
-  background: rgba(248, 249, 251, 0.05);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-hover);
   color: var(--inspector-text-primary, #f8f9fb);
   font-family: var(--inspector-font-family, var(--font-family-ui));
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-weight: 400;
   cursor: pointer;
   transition: background 150ms var(--ease-default), outline-color 150ms var(--ease-default);
 }
 
+.flowActionBtn {
+  height: var(--control-height-md);
+}
+
+.emptySectionActionBtn {
+  height: var(--control-height-sm);
+}
+
+.flowActionBtn svg,
 .emptySectionActionBtn svg {
   opacity: 0.8;
   transition: opacity 200ms var(--ease-default);
 }
 
+.flowActionBtn:hover,
+.flowActionBtn:active,
 .emptySectionActionBtn:hover,
 .emptySectionActionBtn:active {
-  background: rgba(248, 249, 251, 0.10);
+  background: var(--color-surface-active);
 }
 
+.flowActionBtn:hover svg,
+.flowActionBtn:active svg,
 .emptySectionActionBtn:hover svg,
 .emptySectionActionBtn:active svg {
   opacity: 1;
 }
 
+.flowActionBtn:focus-visible,
 .emptySectionActionBtn:focus-visible {
   outline: 1px solid var(--inspector-field-focus, var(--color-primary));
   outline-offset: 1px;
 }
 
+.flowActionBtn:disabled,
 .emptySectionActionBtn:disabled {
   background: transparent;
   cursor: default;
@@ -331,14 +300,14 @@
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
   gap: 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 
 .collageCell {
   overflow: hidden;
   background: var(--color-white-05, rgba(255, 255, 255, 0.05));
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 
 .collageCell img {
@@ -365,7 +334,7 @@
   position: relative;
   max-width: 200px;
   max-height: 200px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   overflow: hidden;
 }
 
@@ -374,7 +343,7 @@
   max-width: 200px;
   max-height: 200px;
   object-fit: contain;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   user-select: none;
   -webkit-user-drag: none;
 }
@@ -382,7 +351,7 @@
 .previewGlass {
   position: absolute;
   inset: 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   border: 1px solid rgba(255, 255, 255, 0.2);
   pointer-events: none;
 }
@@ -411,10 +380,10 @@
   align-items: center;
   justify-content: center;
   width: 26px;
-  height: 26px;
+  height: var(--control-height-sm);
   padding: 0;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: none;
   color: var(--inspector-text-primary, var(--color-text-primary));
   cursor: pointer;
@@ -426,21 +395,15 @@
   opacity: 1;
 }
 
-.tagActionBtn {
-  composes: actionBtn;
-  flex: 0 0 auto;
-  gap: 6px;
-}
-
 .tagInput {
   width: 80px;
-  height: 26px;
+  height: var(--control-height-sm);
   padding: 0 8px;
   border: 1px solid var(--color-border-focus);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: rgba(0, 0, 0, 0.2);
   color: var(--color-text-primary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-family: var(--font-family);
   outline: none;
   box-sizing: border-box;
@@ -469,13 +432,13 @@
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  min-height: 28px;
+  min-height: var(--control-height-md);
   padding: 0 10px;
   border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: rgba(255, 255, 255, 0.03);
   color: var(--color-text-primary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
