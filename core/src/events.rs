@@ -61,66 +61,7 @@ pub fn emit_empty(name: &str) {
     emit_event(name, "null");
 }
 
-// SEQ counter lives in runtime_state — single source of truth.
-use crate::runtime_contract::change_builder::ChangeImpact;
-
-/// Emit a `runtime/state_changed` event with a `StateChangedEvent`.
-///
-/// Builds `StateChanges` from the impact and emits the event.
-/// The frontend derives stale resources from `changes` directly.
-pub fn emit_state_changed(origin: &str, impact: ChangeImpact) {
-    use crate::runtime_contract::state_change::{StateChangedEvent, StateChanges};
-
-    let seq = crate::runtime_state::next_seq();
-    let ts = chrono::Utc::now().to_rfc3339();
-
-    let changes = StateChanges {
-        domains: impact.domains,
-        entity_hashes: impact.entity_hashes,
-        member_hashes: impact.member_hashes,
-        folder_ids: impact.folder_ids,
-        smart_folder_ids: impact.smart_folder_ids,
-        compiler_batch_done: impact.compiler_batch_done,
-        status_changed: impact.status_changed,
-        tags_changed: impact.tags_changed,
-        tag_changes: impact.tag_changes,
-        tag_structure_changed: impact.tag_structure_changed,
-        folder_membership_changed: impact.folder_membership_changed,
-        view_prefs_changed: impact.view_prefs_changed,
-        media_metadata_changed: impact.media_metadata_changed,
-        media_fields_changed: impact.media_fields_changed,
-        media_derivatives_changed: impact.media_derivatives_changed,
-        derivative_fields_changed: impact.derivative_fields_changed,
-        extra_grid_scopes: impact.extra_grid_scopes,
-        subscription_ids: impact.subscription_ids,
-        query_ids: impact.query_ids,
-        credential_categories: impact.credential_categories,
-        folder_parent_changes: impact.folder_parent_changes,
-        folder_order_changes: impact.folder_order_changes,
-        smart_folder_parent_changes: impact.smart_folder_parent_changes,
-        smart_folder_order_changes: impact.smart_folder_order_changes,
-        sidebar_node_patches: impact.sidebar_node_patches,
-        smart_folder_counts: impact.smart_folder_counts,
-        grid_reorder: impact.grid_reorder,
-    };
-
-    let event = StateChangedEvent {
-        seq,
-        ts,
-        origin: origin.to_string(),
-        changes,
-        sidebar_counts: impact.sidebar_counts,
-    };
-
-    emit(event_names::RUNTIME_STATE_CHANGED, &event);
-}
-
 pub mod event_names {
-    // --- Runtime contract (authoritative) ---
-    pub const RUNTIME_STATE_CHANGED: &str = "runtime/state_changed";
-    pub const RUNTIME_TASK_UPSERTED: &str = "runtime/task_upserted";
-    pub const RUNTIME_TASK_REMOVED: &str = "runtime/task_removed";
-
     pub const LOG: &str = "log";
 }
 

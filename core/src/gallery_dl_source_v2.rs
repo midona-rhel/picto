@@ -11,9 +11,8 @@ use crate::ingest_v2::{PreparedMediaInput, SourcePostInput};
 use crate::subscription_runtime_v2::{
     DownloadedItem, RunnerFailure, RunnerFailureKind, RunnerFuture, RunnerSuccess, SourceRunner,
 };
-use crate::subscriptions::credential_service::GalleryDlAuthConfig;
 use crate::subscriptions::gallery_dl_runner::{
-    self, FailureKind, GalleryDlRunner, RunOptions, RunSummary,
+    self, FailureKind, GalleryDlAuthConfig, GalleryDlRunner, RunOptions, RunSummary,
 };
 use crate::subscriptions::import_policy::preferred_import_name;
 use crate::subscriptions::source_adapter::{self, ParsedMetadata};

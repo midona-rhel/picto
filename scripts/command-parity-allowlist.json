@@ -1,14 +1,14 @@
 {
   "_comment": "Intentional transport asymmetries only. Electron host and release scripts call rust_only commands directly; ts_only commands terminate in Electron and never reach Rust dispatch.",
   "rust_only": [
-    "ensure_thumbnail",
-    "resolve_file_paths_batch"
   ],
   "ts_only": [
     "open_settings_window",
     "auth_session_start",
     "auth_session_state",
     "auth_session_cancel",
-    "open_in_new_window"
+    "open_in_new_window",
+    "open_external_url",
+    "open_library_manager"
   ]
 }

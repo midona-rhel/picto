@@ -2,8 +2,8 @@ import ts from 'typescript';
 
 // Match ALL command string literals on a match arm line.
 // Handles "cmd_a" | "cmd_b" => patterns by extracting every quoted identifier.
-const RUST_CMD_LINE_RE = /^\s*"[a-z_]+"\s*(?:\||\s*=>)/;
-const RUST_CMD_TOKEN_RE = /"([a-z_]+)"/g;
+const RUST_CMD_LINE_RE = /^\s*"[a-z_][a-z0-9_.]*"\s*(?:\||\s*=>)/;
+const RUST_CMD_TOKEN_RE = /"([a-z_][a-z0-9_.]*)"/g;
 
 /**
  * @param {string} content
@@ -43,7 +43,7 @@ export function extractTsCommandsFromText(content, fileName = 'api.ts') {
   const visit = (node) => {
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && (node.expression.text === 'invoke' || node.expression.text === 'invokeTyped')) {
       const [firstArg] = node.arguments;
-      if (firstArg && ts.isStringLiteral(firstArg) && /^[a-z_]+$/.test(firstArg.text)) {
+      if (firstArg && ts.isStringLiteral(firstArg) && /^[a-z_][a-z0-9_.]*$/.test(firstArg.text)) {
         commands.add(firstArg.text);
       }
     }

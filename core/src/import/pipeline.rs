@@ -7,7 +7,6 @@ use std::path::Path;
 
 use crate::blob_store::BlobStore;
 use crate::media_processing::{self, PreparedMediaSource};
-use crate::tags::normalize as tags;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ImportError {
@@ -119,9 +118,9 @@ impl ImportPipeline {
 
         let mut tags_applied = Vec::new();
         for (ns, st) in &options.tags {
-            let full_tag = tags::combine_tag(ns, st);
-            if let Some((ns, st)) = tags::parse_tag(&full_tag) {
-                tags_applied.push(tags::combine_tag(&ns, &st));
+            let full_tag = crate::tag_name_v2::format(ns, st);
+            if let Ok((ns, st)) = crate::tag_name_v2::parse_external(&full_tag) {
+                tags_applied.push(crate::tag_name_v2::format(&ns, &st));
             }
         }
 

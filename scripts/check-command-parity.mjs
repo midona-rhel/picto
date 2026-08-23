@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 /**
- * Command parity checker — validates that Rust dispatch commands and
+ * Command parity checker — validates that replacement IPC commands and
  * TypeScript API commands are kept in sync.
  *
  * Parses:
- * - core/src/dispatch/*.rs — match arm string literals ("command_name" =>)
+ * - core/src/ipc_v2.rs — match arm string literals ("command.name" =>)
  * - src/platform/*.ts — invoke('command_name', ...) calls (per-domain API files)
  *
  * Reports any drift between the two surfaces, minus an explicit allowlist.
@@ -14,44 +14,16 @@ import path from 'node:path';
 import { extractRustCommandsFromText, extractTsCommandsFromText } from './check-command-parity-lib.mjs';
 
 const ROOT = process.cwd();
-const DISPATCH_DIR = path.join(ROOT, 'core/src/dispatch');
-const PLATFORM_DIR = path.join(ROOT, 'src/platform');
+const IPC_FILE = path.join(ROOT, 'core/src/ipc_v2.rs');
+const CALLER_DIRS = [path.join(ROOT, 'src'), path.join(ROOT, 'electron')];
 const ALLOWLIST_FILE = path.join(ROOT, 'scripts/command-parity-allowlist.json');
 
 async function extractRustCommands() {
-  const commands = new Set();
-
-  // Recursively collect .rs files from dispatch directory (including typed/ subdirs)
-  async function scanDir(dir) {
-    const entries = await fs.readdir(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        await scanDir(fullPath);
-      } else if (entry.name.endsWith('.rs') && entry.name !== 'common.rs') {
-        const content = await fs.readFile(fullPath, 'utf8');
-        // Match-arm command names only exist in mod.rs's dispatch match; typed
-        // handler files contain unrelated string matches (sort keys, statuses)
-        // that would pollute the command set.
-        if (entry.name === 'mod.rs') {
-          for (const cmd of extractRustCommandsFromText(content)) commands.add(cmd);
-        }
-        // Also match TypedCommand const NAME patterns: const NAME: &'static str = "cmd";
-        const TYPED_CMD_RE = /const\s+NAME:\s*&'static\s+str\s*=\s*"([a-z_]+)"/g;
-        let m;
-        while ((m = TYPED_CMD_RE.exec(content)) !== null) {
-          commands.add(m[1]);
-        }
-      }
-    }
-  }
-  await scanDir(DISPATCH_DIR);
-
-  // Also catch inline commands in mod.rs dispatch fn (e.g., close_library)
-  const modContent = await fs.readFile(path.join(DISPATCH_DIR, 'mod.rs'), 'utf8');
-  const MOD_CMD_RE = /command\s*==\s*"([a-z_]+)"/g;
+  const content = await fs.readFile(IPC_FILE, 'utf8');
+  const commands = extractRustCommandsFromText(content);
+  const MOD_CMD_RE = /command\s*==\s*"([a-z_][a-z0-9_.]*)"/g;
   let match;
-  while ((match = MOD_CMD_RE.exec(modContent)) !== null) {
+  while ((match = MOD_CMD_RE.exec(content)) !== null) {
     commands.add(match[1]);
   }
   return commands;
@@ -59,13 +31,18 @@ async function extractRustCommands() {
 
 async function extractTsCommands() {
   const commands = new Set();
-  const entries = await fs.readdir(PLATFORM_DIR, { withFileTypes: true });
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.ts') || entry.name === 'ipc.ts') continue;
-    const fullPath = path.join(PLATFORM_DIR, entry.name);
-    const content = await fs.readFile(fullPath, 'utf8');
-    for (const cmd of extractTsCommandsFromText(content, fullPath)) commands.add(cmd);
+  async function scan(dir) {
+    for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await scan(fullPath);
+      } else if (/\.(?:ts|tsx|mjs|js)$/.test(entry.name) && !/\.test\.[^.]+$/.test(entry.name)) {
+        const content = await fs.readFile(fullPath, 'utf8');
+        for (const cmd of extractTsCommandsFromText(content, fullPath)) commands.add(cmd);
+      }
+    }
   }
+  for (const dir of CALLER_DIRS) await scan(dir);
   return commands;
 }
 

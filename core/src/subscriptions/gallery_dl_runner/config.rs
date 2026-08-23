@@ -1,8 +1,6 @@
 use std::path::Path;
 
-use crate::subscriptions::credential_service::GalleryDlAuthConfig;
-
-use super::RunOptions;
+use super::{GalleryDlAuthConfig, RunOptions};
 
 pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
     let mut extractor = serde_json::Map::new();
@@ -175,10 +173,7 @@ fn apply_credential_auth(
 
 #[cfg(test)]
 mod tests {
-    use crate::subscriptions::credential_service::GalleryDlAuthConfig;
-
-    use super::build_config;
-    use super::RunOptions;
+    use super::{build_config, GalleryDlAuthConfig, RunOptions};
 
     #[test]
     fn build_config_paces_requests_and_keeps_booru_tags_with_credentials() {

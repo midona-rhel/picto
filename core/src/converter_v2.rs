@@ -80,13 +80,15 @@ pub struct ConversionReport {
     pub destination_counts: Option<ConversionCounts>,
     pub copied_blob_files: u64,
     pub copied_blob_bytes: u64,
+    pub copied_gallery_dl_archive: bool,
+    pub discarded_fields: Vec<String>,
     pub unmapped_fields: Vec<String>,
     pub mismatches: Vec<CountMismatch>,
 }
 
 impl ConversionReport {
     pub fn is_success(&self) -> bool {
-        self.mismatches.is_empty()
+        self.mismatches.is_empty() && self.unmapped_fields.is_empty()
     }
 }
 
@@ -135,14 +137,25 @@ pub fn convert(request: ConversionRequest) -> Result<ConversionReport, String> {
             destination_counts: None,
             copied_blob_files: 0,
             copied_blob_bytes: 0,
+            copied_gallery_dl_archive: false,
+            discarded_fields: audit.discarded,
             unmapped_fields: audit.unmapped,
             mismatches: Vec::new(),
         });
     }
 
+    if !audit.unmapped.is_empty() {
+        return Err(format!(
+            "Replacement conversion has unmapped state: {}",
+            audit.unmapped.join(", ")
+        ));
+    }
+
     let mut prepared = PreparedDestination::prepare(&request.destination_root)?;
     verify_source_blob_references(&source, &source_root)?;
     let blob_stats = copy_blob_tree(&source_root, &prepared.staging_root)?;
+    let copied_gallery_dl_archive =
+        copy_optional_root_file(&source_root, &prepared.staging_root, "gdl-archive.sqlite3")?;
     let destination = Store::open(&prepared.staging_root)?;
 
     let mappings = source_snapshot(&source)?;
@@ -173,6 +186,8 @@ pub fn convert(request: ConversionRequest) -> Result<ConversionReport, String> {
         destination_counts: Some(destination_counts),
         copied_blob_files: blob_stats.files,
         copied_blob_bytes: blob_stats.bytes,
+        copied_gallery_dl_archive,
+        discarded_fields: audit.discarded,
         unmapped_fields: audit.unmapped,
         mismatches,
     })
@@ -351,6 +366,7 @@ fn validate_query_sites(connection: &Connection) -> Result<(), String> {
 #[derive(Debug, Clone, Default)]
 struct Audit {
     counts: ConversionCounts,
+    discarded: Vec<String>,
     unmapped: Vec<String>,
 }
 
@@ -439,57 +455,57 @@ impl Audit {
             if table_exists(connection, table)? {
                 let rows = count(connection, table)?;
                 if rows > 0 {
-                    self.unmapped.push(format!("{label} ({rows} row(s))"));
+                    self.discarded.push(format!("{label} ({rows} row(s))"));
                 }
             }
         }
-        self.non_null_warning(
+        self.discarded_warning(
             connection,
             "folder.auto_tags",
             "SELECT COUNT(*) FROM folder WHERE auto_tags IS NOT NULL",
         )?;
-        self.non_null_warning(connection, "folder.watch_import_status_mode", "SELECT COUNT(*) FROM folder WHERE watch_import_status_mode IS NOT NULL AND watch_import_status_mode != 'inherit'")?;
-        self.non_null_warning(
+        self.discarded_warning(connection, "folder.watch_import_status_mode", "SELECT COUNT(*) FROM folder WHERE watch_import_status_mode IS NOT NULL AND watch_import_status_mode != 'inherit'")?;
+        self.discarded_warning(
             connection,
             "folder derived/pin fields",
             "SELECT COUNT(*) FROM folder WHERE total_size_bytes != 0 OR pinned != 0 OR pin_order != 0",
         )?;
-        self.non_null_warning(
+        self.discarded_warning(
             connection,
             "smart_folder derived/pin fields",
             "SELECT COUNT(*) FROM smart_folder WHERE total_size_bytes != 0 OR pinned != 0 OR pin_order != 0",
         )?;
-        self.non_null_warning(
+        self.discarded_warning(
             connection,
             "subscription_entity",
             "SELECT COUNT(*) FROM subscription_entity",
         )?;
-        self.non_null_warning(
+        self.discarded_warning(
             connection,
             "ingest_queue metadata",
             "SELECT COUNT(*) FROM ingest_queue WHERE cleanup_root IS NOT NULL OR post_id IS NOT NULL OR category IS NOT NULL",
         )?;
-        self.non_null_warning(
+        self.discarded_warning(
             connection,
             "subscription query counters/check fields",
             "SELECT COUNT(*) FROM subscription_query WHERE last_check_time IS NOT NULL OR files_found != 0 OR posts_found != 0 OR resume_strategy IS NOT NULL",
         )?;
-        self.non_null_warning(
+        self.discarded_warning(
             connection,
             "subscription run aggregate counters",
             "SELECT COUNT(*) FROM subscription_run WHERE files_downloaded != 0 OR files_skipped != 0 OR metadata_validated != 0 OR metadata_invalid != 0",
         )?;
-        self.non_null_warning(
+        self.discarded_warning(
             connection,
             "subscription_query_job",
             "SELECT COUNT(*) FROM subscription_query_job",
         )?;
-        self.non_null_warning(
+        self.discarded_warning(
             connection,
             "subscription_download_attempt",
             "SELECT COUNT(*) FROM subscription_download_attempt",
         )?;
-        self.non_null_warning(connection, "legacy duplicate decision fields", "SELECT COUNT(*) FROM duplicate WHERE decision_source IS NOT NULL OR decision_reason IS NOT NULL OR loser_file_id IS NOT NULL")?;
+        self.discarded_warning(connection, "legacy duplicate decision fields", "SELECT COUNT(*) FROM duplicate WHERE decision_source IS NOT NULL OR decision_reason IS NOT NULL OR loser_file_id IS NOT NULL")?;
         self.non_null_warning(
             connection,
             "unknown media lifecycle values",
@@ -523,32 +539,27 @@ impl Audit {
         self.non_null_warning(
             connection,
             "unknown source item statuses",
-            "SELECT COUNT(*) FROM subscription_post_member WHERE status NOT IN ('pending','downloaded','ingested','imported','complete','succeeded','failed','error','deleted')",
+            "SELECT COUNT(*) FROM subscription_post_member WHERE status NOT IN ('pending','downloaded','ingested','imported','complete','succeeded','reused','failed','error','deleted')",
         )?;
         self.non_null_warning(
             connection,
             "source items without a replacement query link",
             "SELECT COUNT(*) FROM subscription_post_member member WHERE NOT EXISTS (SELECT 1 FROM subscription_query query WHERE query.subscription_id = member.subscription_id)",
         )?;
-        for (label, sql) in [
-            (
-                "folders without legacy UUID (replacement key generated)",
-                "SELECT COUNT(*) FROM folder WHERE uuid IS NULL",
-            ),
-            (
-                "smart folders without legacy UUID (replacement key generated)",
-                "SELECT COUNT(*) FROM smart_folder WHERE uuid IS NULL",
-            ),
-            (
-                "subscriptions without legacy UUID (replacement key generated)",
-                "SELECT COUNT(*) FROM subscription WHERE uuid IS NULL",
-            ),
-            (
-                "queries without legacy UUID (replacement key generated)",
-                "SELECT COUNT(*) FROM subscription_query WHERE uuid IS NULL",
-            ),
-        ] {
-            self.non_null_warning(connection, label, sql)?;
+        Ok(())
+    }
+
+    fn discarded_warning(
+        &mut self,
+        connection: &Connection,
+        label: &str,
+        sql: &str,
+    ) -> Result<(), String> {
+        let rows: i64 = connection
+            .query_row(sql, [], |row| row.get(0))
+            .map_err(|error| format!("Failed to inspect discarded field {label}: {error}"))?;
+        if rows > 0 {
+            self.discarded.push(format!("{label} ({rows} row(s))"));
         }
         Ok(())
     }
@@ -639,6 +650,25 @@ fn copy_blob_tree(source_root: &Path, destination_root: &Path) -> Result<BlobSta
         }
     }
     Ok(stats)
+}
+
+fn copy_optional_root_file(
+    source_root: &Path,
+    destination_root: &Path,
+    name: &str,
+) -> Result<bool, String> {
+    let source = source_root.join(name);
+    if !source.is_file() {
+        return Ok(false);
+    }
+    let destination = destination_root.join(name);
+    fs::copy(&source, &destination).map_err(|error| {
+        format!(
+            "Failed to copy auxiliary library file {}: {error}",
+            source.display()
+        )
+    })?;
+    Ok(true)
 }
 
 fn verify_source_blob_references(
@@ -1397,7 +1427,7 @@ fn source_item_state(status: &str) -> Option<&'static str> {
         "deleted" => Some("deleted"),
         "failed" | "error" => Some("failed"),
         "downloaded" => Some("downloaded"),
-        "ingested" | "imported" | "complete" | "succeeded" => Some("ingested"),
+        "ingested" | "imported" | "complete" | "succeeded" | "reused" => Some("ingested"),
         "pending" => Some("pending"),
         _ => None,
     }
@@ -1733,8 +1763,9 @@ fn format_mismatches(mismatches: &[CountMismatch]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::core::schema::LIBRARY_DDL;
     use crate::store::DATABASE_FILE;
+
+    const LIBRARY_DDL: &str = include_str!("converter_schema117.sql");
 
     #[test]
     fn dry_run_rejects_non_117_without_mutating_source() {

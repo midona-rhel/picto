@@ -1,22 +1,9 @@
-//! Model download with progress tracking via RuntimeTask events.
+//! Atomic model download and activation.
 
 use std::path::{Path, PathBuf};
 
-use crate::runtime_contract::task::{RuntimeTask, TaskKind, TaskProgress, TaskStatus};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
-
-/// Download a tagger model (ONNX + labels CSV) to the given directory.
-///
-/// Emits `runtime/task_upserted` events for progress tracking.
-pub async fn download_model(
-    slug: &str,
-    models_root: &Path,
-    cancel: &CancellationToken,
-    lifecycle: &tokio::sync::Mutex<()>,
-) -> Result<(), String> {
-    download_model_inner(slug, models_root, cancel, lifecycle, true).await
-}
 
 pub async fn download_model_quiet(
     slug: &str,
@@ -24,7 +11,7 @@ pub async fn download_model_quiet(
     cancel: &CancellationToken,
     lifecycle: &tokio::sync::Mutex<()>,
 ) -> Result<(), String> {
-    download_model_inner(slug, models_root, cancel, lifecycle, false).await
+    download_model_inner(slug, models_root, cancel, lifecycle).await
 }
 
 async fn download_model_inner(
@@ -32,7 +19,6 @@ async fn download_model_inner(
     models_root: &Path,
     cancel: &CancellationToken,
     lifecycle: &tokio::sync::Mutex<()>,
-    report_legacy_task: bool,
 ) -> Result<(), String> {
     let model_info =
         super::models::find_model(slug).ok_or_else(|| format!("Unknown model: {slug}"))?;
@@ -43,13 +29,6 @@ async fn download_model_inner(
     recover_interrupted_download(models_root, &model_info.slug, &model_dir)?;
     let temp_dir = create_temp_bundle_dir(models_root, slug)?;
 
-    let task_id = format!("model_download:{slug}");
-
-    // Publish start
-    if report_legacy_task {
-        emit_task(&task_id, slug, TaskStatus::Running, None);
-    }
-
     // Download ONNX model
     let onnx_path = temp_dir.join("model.onnx");
 
@@ -58,10 +37,7 @@ async fn download_model_inner(
             &model_info.onnx_url,
             &model_info.onnx_sha256,
             &onnx_path,
-            &task_id,
-            slug,
             cancel,
-            report_legacy_task,
         )
         .await
         .map_err(|e| format!("Failed to download model ONNX: {e}"))?;
@@ -73,10 +49,7 @@ async fn download_model_inner(
             &model_info.labels_url,
             &model_info.labels_sha256,
             &labels_path,
-            &task_id,
-            slug,
             cancel,
-            report_legacy_task,
         )
         .await
         .map_err(|e| format!("Failed to download labels CSV: {e}"))?;
@@ -113,30 +86,11 @@ async fn download_model_inner(
 
     match result {
         Ok(()) => {
-            if report_legacy_task {
-                emit_task(&task_id, slug, TaskStatus::Finished, None);
-                crate::runtime_state::remove_task(&task_id);
-            }
             tracing::info!(slug, "Model download complete");
             Ok(())
         }
         Err(error) => {
             let _ = std::fs::remove_dir_all(&temp_dir);
-            if report_legacy_task && cancel.is_cancelled() {
-                crate::runtime_state::remove_task(&task_id);
-            } else if report_legacy_task {
-                emit_task(
-                    &task_id,
-                    slug,
-                    TaskStatus::Failed,
-                    Some(TaskProgress {
-                        done: 0,
-                        total: 0,
-                        status_text: Some(error.clone()),
-                    }),
-                );
-                crate::runtime_state::remove_task(&task_id);
-            }
             Err(error)
         }
     }
@@ -257,15 +211,12 @@ fn activate_bundle(
     Ok(())
 }
 
-/// Stream-download a URL to a file, reporting progress.
+/// Stream-download a URL to a file and verify its digest.
 async fn download_file(
     url: &str,
     expected_sha256: &str,
     dest: &Path,
-    task_id: &str,
-    slug: &str,
     cancel: &CancellationToken,
-    report_legacy_task: bool,
 ) -> Result<(), String> {
     cancelled(cancel)?;
     let client = reqwest::Client::new();
@@ -279,14 +230,11 @@ async fn download_file(
         return Err(format!("HTTP {}: {}", resp.status(), url));
     }
 
-    let total = resp.content_length().unwrap_or(0);
     let mut stream = resp.bytes_stream();
     let mut file = tokio::fs::File::create(dest)
         .await
         .map_err(|e| format!("Failed to create file: {e}"))?;
 
-    let mut downloaded: u64 = 0;
-    let mut last_progress_pct: u64 = 0;
     let mut hasher = Sha256::new();
 
     use futures_util::StreamExt;
@@ -305,29 +253,6 @@ async fn download_file(
             .await
             .map_err(|e| format!("Write error: {e}"))?;
         hasher.update(&chunk);
-        downloaded += chunk.len() as u64;
-
-        // Emit progress at most every 1%
-        if total > 0 {
-            let pct = (downloaded * 100) / total;
-            if report_legacy_task && pct > last_progress_pct {
-                last_progress_pct = pct;
-                emit_task(
-                    task_id,
-                    slug,
-                    TaskStatus::Running,
-                    Some(TaskProgress {
-                        done: downloaded,
-                        total,
-                        status_text: Some(format!(
-                            "{}MB / {}MB",
-                            downloaded / (1024 * 1024),
-                            total / (1024 * 1024)
-                        )),
-                    }),
-                );
-            }
-        }
     }
 
     file.flush()
@@ -351,21 +276,6 @@ fn cancelled(cancel: &CancellationToken) -> Result<(), String> {
     } else {
         Ok(())
     }
-}
-
-fn emit_task(task_id: &str, slug: &str, status: TaskStatus, progress: Option<TaskProgress>) {
-    let task = RuntimeTask {
-        task_id: task_id.to_string(),
-        kind: TaskKind::ModelDownload,
-        status,
-        label: format!("Downloading model: {slug}"),
-        parent_task_id: None,
-        progress,
-        detail: None,
-        started_at: chrono::Utc::now().to_rfc3339(),
-        updated_at: chrono::Utc::now().to_rfc3339(),
-    };
-    crate::runtime_state::upsert_task(task);
 }
 
 #[cfg(test)]

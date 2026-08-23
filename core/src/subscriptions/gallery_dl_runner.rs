@@ -26,9 +26,7 @@ use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
-use crate::subscriptions::credential_service::GalleryDlAuthConfig;
 use crate::subscriptions::source_adapter::{DownloadedItem, FailedDownloadedItem, ParsedMetadata};
-use crate::tags::logging::summarize_tag_pairs;
 
 use self::config::build_config;
 
@@ -40,6 +38,12 @@ pub use sites::{
     normalize_furaffinity_username, normalize_patreon_creator, normalize_subscribestar_creator,
     normalize_tumblr_blog, normalize_webtoons_url, site_by_id, SiteEntry, SITES,
 };
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GalleryDlAuthConfig {
+    pub site_category: String,
+    pub fragment: serde_json::Value,
+}
 
 pub struct RunOptions {
     /// Optional subscription identifier for structured diagnostics.
@@ -189,7 +193,18 @@ fn metadata_has_raw_key(metadata: &ParsedMetadata, key: &str) -> bool {
 }
 
 fn log_bridge_item_intake(metadata: &ParsedMetadata) {
-    let summary = summarize_tag_pairs(&metadata.tags);
+    let mut summary = [0usize; 7];
+    for (namespace, _) in &metadata.tags {
+        summary[0] += 1;
+        summary[match namespace.as_str() {
+            "creator" => 1,
+            "character" => 2,
+            "series" => 3,
+            "" | "general" => 4,
+            "meta" => 5,
+            _ => 6,
+        }] += 1;
+    }
     debug!(
         post_id = metadata.post_id.as_deref().unwrap_or("?"),
         category = metadata.category.as_deref().unwrap_or("?"),
@@ -197,13 +212,13 @@ fn log_bridge_item_intake(metadata: &ParsedMetadata) {
         raw_has_tags_artist = metadata_has_raw_key(metadata, "tags_artist"),
         raw_has_tags_character = metadata_has_raw_key(metadata, "tags_character"),
         raw_has_tags_copyright = metadata_has_raw_key(metadata, "tags_copyright"),
-        parsed_tag_count = summary.total,
-        creator_tag_count = summary.creator,
-        character_tag_count = summary.character,
-        series_tag_count = summary.series,
-        general_tag_count = summary.general,
-        meta_tag_count = summary.meta,
-        other_namespaced_tag_count = summary.other_namespaced,
+        parsed_tag_count = summary[0],
+        creator_tag_count = summary[1],
+        character_tag_count = summary[2],
+        series_tag_count = summary[3],
+        general_tag_count = summary[4],
+        meta_tag_count = summary[5],
+        other_namespaced_tag_count = summary[6],
         "gallery-dl bridge item intake"
     );
 }

@@ -492,6 +492,34 @@ pub async fn dispatch_async(
     args_json: &str,
 ) -> Result<String, String> {
     match command {
+        "pixiv_oauth_start" => {
+            return read(crate::subscriptions::pixiv_oauth::generate_challenge());
+        }
+        "pixiv_oauth_exchange" => {
+            let input: PixivOAuthExchangeInput = parse(args_json)?;
+            let refresh_token =
+                crate::subscriptions::pixiv_oauth::exchange_code(&input.code, &input.code_verifier)
+                    .await?;
+            let cookies = input
+                .phpsessid
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| std::collections::HashMap::from([("PHPSESSID".to_string(), value)]));
+            let receipt = crate::auth_v2::set_credential(
+                application,
+                crate::auth_v2::SetCredentialInput {
+                    site_id: "pixiv".to_string(),
+                    credential_type: "oauth_token".to_string(),
+                    display_name: Some("Pixiv".to_string()),
+                    username: None,
+                    password: None,
+                    cookies,
+                    oauth_token: Some(refresh_token),
+                },
+                &now(),
+            )?;
+            application.publish(&receipt);
+            return read(PixivOAuthExchangeOutput { ok: true });
+        }
         "ai.status" => return read(crate::ai_runtime_v2::model_status(application).await?),
         "ai.models.download" => {
             let input: ModelInput = parse(args_json)?;
@@ -545,6 +573,18 @@ pub async fn dispatch_async(
         return read(application.enqueue_manual_import(&input).await?);
     }
     dispatch(application, command, args_json)
+}
+
+#[derive(Deserialize)]
+struct PixivOAuthExchangeInput {
+    code: String,
+    code_verifier: String,
+    phpsessid: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PixivOAuthExchangeOutput {
+    ok: bool,
 }
 
 fn parse<T: DeserializeOwned>(json: &str) -> Result<T, String> {
