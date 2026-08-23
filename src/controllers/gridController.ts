@@ -48,9 +48,8 @@ function updateSession(
 function viewFromPreferences(
   scope: BaseScope,
   prefs: ViewPrefsDto | null,
-  globals: ViewPrefsDto | null,
 ): GridViewPreferences {
-  const value = (field: keyof ViewPrefsDto) => prefs?.[field] ?? globals?.[field] ?? null;
+  const value = (field: keyof ViewPrefsDto) => prefs?.[field] ?? null;
   return {
     mode: (value('view_mode') as GridViewPreferences['mode']) || initialGridView.mode,
     targetSize: (value('target_size') as number) ?? initialGridView.targetSize,
@@ -108,20 +107,17 @@ class GridSessionController {
       totalSizeBytes: null,
     });
 
-    const [prefs, globals] = await Promise.all([
-      getViewPrefs(key).catch(() => null),
-      getViewPrefs('').catch(() => null),
-    ]);
+    const prefs = await getViewPrefs(key).catch(() => null);
     if (store.get(gridSessionAtom).generation !== generation) return;
-    const sortField = prefs?.sort_field ?? globals?.sort_field ?? null;
-    const sortOrder = prefs?.sort_order ?? globals?.sort_order ?? null;
+    const sortField = prefs?.sort_field ?? null;
+    const sortOrder = prefs?.sort_order ?? null;
     updateSession((current) => ({
       ...current,
       sort: {
         field: preferenceSortField(sortField),
         direction: preferenceSortDirection(sortOrder),
       },
-      view: viewFromPreferences(scope, prefs, globals),
+      view: viewFromPreferences(scope, prefs),
     }));
     await this.loadFirstPage({ generation });
   }

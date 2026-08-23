@@ -13,11 +13,14 @@ import {
   gridTotalSizeBytesAtom,
 } from '../state/grid';
 
-const { queryItemsMock } = vi.hoisted(() => ({ queryItemsMock: vi.fn() }));
+const { queryItemsMock, getViewPrefsMock } = vi.hoisted(() => ({
+  queryItemsMock: vi.fn(),
+  getViewPrefsMock: vi.fn(),
+}));
 
 vi.mock('../platform/entityApi', () => ({ queryItems: queryItemsMock }));
 vi.mock('../platform/settingsApi', () => ({
-  getViewPrefs: vi.fn().mockResolvedValue(null),
+  getViewPrefs: getViewPrefsMock,
   setViewPrefs: vi.fn().mockResolvedValue(undefined),
 }));
 
@@ -62,6 +65,8 @@ function page(items: ItemSummary[], visibleCount: number): ItemPage {
 describe('gridController pagination', () => {
   beforeEach(() => {
     queryItemsMock.mockReset();
+    getViewPrefsMock.mockReset();
+    getViewPrefsMock.mockResolvedValue(null);
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
       items: [item(1)],
@@ -72,6 +77,15 @@ describe('gridController pagination', () => {
       error: null,
       generation: 0,
     });
+  });
+
+  it('loads only the canonical non-empty preference scope when navigating', async () => {
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+
+    await gridController.navigateTo({ kind: 'all' });
+
+    expect(getViewPrefsMock).toHaveBeenCalledOnce();
+    expect(getViewPrefsMock).toHaveBeenCalledWith('system:active');
   });
 
   it('queries the replacement page contract and appends by item_id', async () => {
