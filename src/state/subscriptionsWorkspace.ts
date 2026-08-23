@@ -45,7 +45,6 @@ export const subscriptionsDetailModeAtom = atom(
 
 export type SubscriptionDetailState = {
   loading: boolean;
-  error: string | null;
   subscriptionId: string | null;
   runs: SubscriptionRunRecord[];
   issues: SubscriptionIssueRecord[];
@@ -64,7 +63,6 @@ export type SubscriptionsWizardState = {
 
 export const EMPTY_SUBSCRIPTION_DETAIL_STATE: SubscriptionDetailState = {
   loading: false,
-  error: null,
   subscriptionId: null,
   runs: [],
   issues: [],
@@ -79,7 +77,6 @@ export const EMPTY_SUBSCRIPTION_DETAIL_STATE: SubscriptionDetailState = {
 
 export const subscriptionsWorkspaceSnapshotAtom = atom<SubscriptionWorkspaceSnapshot | null>(null);
 export const subscriptionsWorkspaceLoadingAtom = atom(true);
-export const subscriptionsWorkspaceErrorAtom = atom<string | null>(null);
 export const subscriptionsCoversAtom = atom<Map<string, string>>(new Map());
 export const subscriptionsSelectionAtom = atom<SubscriptionsSelection>(null);
 export const subscriptionsDetailTabAtom = atom<SubscriptionDetailTab>('queries');

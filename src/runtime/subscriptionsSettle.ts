@@ -4,10 +4,10 @@ import { libraryInvalidation } from './libraryInvalidation';
 import {
   subscriptionsCoversAtom,
   subscriptionsSelectionAtom,
-  subscriptionsWorkspaceErrorAtom,
   subscriptionsWorkspaceLoadingAtom,
   subscriptionsWorkspaceSnapshotAtom,
 } from '../state/subscriptionsWorkspace';
+import { showErrorNotification } from '../shared/lib/notifications';
 
 const authRefreshCallbacks = new Set<() => void>();
 const store = getDefaultStore();
@@ -40,7 +40,6 @@ export function registerAuthWorkspaceRefresh(callback: () => void): () => void {
 export function refreshSubscriptionsWorkspace(): Promise<void> {
   if (workspaceRefreshPromise) return workspaceRefreshPromise;
 
-  store.set(subscriptionsWorkspaceErrorAtom, null);
   workspaceRefreshPromise = (async () => {
     try {
       const [snapshot, covers] = await Promise.all([
@@ -56,7 +55,10 @@ export function refreshSubscriptionsWorkspace(): Promise<void> {
         return null;
       });
     } catch (error) {
-      store.set(subscriptionsWorkspaceErrorAtom, error instanceof Error ? error.message : String(error));
+      showErrorNotification({
+        title: 'Subscriptions unavailable',
+        message: error instanceof Error ? error.message : String(error),
+      });
     } finally {
       store.set(subscriptionsWorkspaceLoadingAtom, false);
       workspaceRefreshPromise = null;

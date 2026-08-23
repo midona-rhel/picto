@@ -27,12 +27,14 @@ const refreshRuntimeState = vi.hoisted(() => vi.fn().mockResolvedValue({
   runningProgress: [],
 }));
 const getCovers = vi.hoisted(() => vi.fn().mockResolvedValue(new Map()));
+const showErrorNotification = vi.hoisted(() => vi.fn());
 
 vi.mock('../controllers/subscriptionsController', () => ({
   subscriptionsController: { loadWorkspaceSnapshot, refreshRuntimeState, getCovers },
 }));
+vi.mock('../shared/lib/notifications', () => ({ showErrorNotification }));
 
-import { startSubscriptionsSettle } from './subscriptionsSettle';
+import { refreshSubscriptionsWorkspace, startSubscriptionsSettle } from './subscriptionsSettle';
 
 describe('subscription settlement', () => {
   afterEach(() => {
@@ -41,6 +43,7 @@ describe('subscription settlement', () => {
     loadWorkspaceSnapshot.mockClear();
     refreshRuntimeState.mockClear();
     getCovers.mockClear();
+    showErrorNotification.mockClear();
   });
 
   it('uses replacement resources and does not subscribe to legacy runtime events', () => {
@@ -70,5 +73,16 @@ describe('subscription settlement', () => {
 
     expect(refreshRuntimeState).toHaveBeenCalledOnce();
     stop();
+  });
+
+  it('reports workspace failures through the shared notification path', async () => {
+    loadWorkspaceSnapshot.mockRejectedValueOnce(new Error('backend unavailable'));
+
+    await refreshSubscriptionsWorkspace();
+
+    expect(showErrorNotification).toHaveBeenCalledWith({
+      title: 'Subscriptions unavailable',
+      message: 'backend unavailable',
+    });
   });
 });

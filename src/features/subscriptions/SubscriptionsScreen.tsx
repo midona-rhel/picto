@@ -16,6 +16,7 @@ import {
 } from '../../runtime/subscriptionsSettle';
 import type { SubscriptionInfo } from '../../shared/types/subscriptions';
 import { getCredentialOwnerSiteId } from '../../shared/lib/subscriptionHelpers';
+import { showErrorNotification } from '../../shared/lib/notifications';
 import { AccountsModal } from './components/AccountsModal';
 import { SubscriptionsGrid } from './components/SubscriptionsGrid';
 import { SubscriptionDetail } from './components/SubscriptionDetail';
@@ -33,7 +34,6 @@ import {
   subscriptionsSelectedSubscriptionAtom,
   subscriptionsSelectionAtom,
   subscriptionsWizardAtom,
-  subscriptionsWorkspaceErrorAtom,
   subscriptionsWorkspaceLoadingAtom,
   subscriptionsWorkspaceSnapshotAtom,
 } from '../../state/subscriptionsWorkspace';
@@ -42,7 +42,6 @@ import styles from './SubscriptionsScreen.module.css';
 export function SubscriptionsScreen() {
   const snapshot = useAtomValue(subscriptionsWorkspaceSnapshotAtom);
   const loading = useAtomValue(subscriptionsWorkspaceLoadingAtom);
-  const [error, setError] = useAtom(subscriptionsWorkspaceErrorAtom);
   const [selection, setSelection] = useAtom(subscriptionsSelectionAtom);
   const [activeTab, setActiveTab] = useAtom(subscriptionsDetailTabAtom);
   const [detail, setDetail] = useAtom(subscriptionsDetailAtom);
@@ -64,11 +63,8 @@ export function SubscriptionsScreen() {
     [setConfirmModal],
   );
 
-  // Errors persist until dismissed — blocked runs carry instructions the user
-  // needs time to read; workspace reloads clear them.
-
   const refreshDetail = useCallback(async (subscription: SubscriptionInfo) => {
-    setDetail((current) => ({ ...current, loading: true, error: null, subscriptionId: subscription.id }));
+    setDetail((current) => ({ ...current, loading: true, subscriptionId: subscription.id }));
     try {
       const [runs, issues] = await Promise.all([
         subscriptionsController.listRuns(subscription.id),
@@ -76,7 +72,6 @@ export function SubscriptionsScreen() {
       ]);
       setDetail({
         loading: false,
-        error: null,
         subscriptionId: subscription.id,
         runs,
         issues: issues.items,
@@ -91,8 +86,11 @@ export function SubscriptionsScreen() {
     } catch (err) {
       setDetail({
         ...EMPTY_SUBSCRIPTION_DETAIL_STATE,
-        error: err instanceof Error ? err.message : String(err),
         subscriptionId: subscription.id,
+      });
+      showErrorNotification({
+        title: 'Subscription details unavailable',
+        message: err instanceof Error ? err.message : String(err),
       });
     }
   }, [setDetail]);
@@ -116,16 +114,18 @@ export function SubscriptionsScreen() {
 
   const act = useCallback(async (key: string, action: () => Promise<unknown>, options?: { refresh?: boolean }) => {
     setBusyKey(key);
-    setError(null);
     try {
       await action();
       if (options?.refresh !== false) await refreshSubscriptionsWorkspace();
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      showErrorNotification({
+        title: 'Subscription action failed',
+        message: err instanceof Error ? err.message : String(err),
+      });
     } finally {
       setBusyKey(null);
     }
-  }, [setBusyKey, setError]);
+  }, [setBusyKey]);
 
   const loadMoreHealth = useCallback(async () => {
     if (!selectedSubscription || busyKey) return;
@@ -288,19 +288,6 @@ export function SubscriptionsScreen() {
   return (
     <div className={styles.root}>
       <main className={styles.detailPane}>
-        {error && (
-          <div className={styles.errorBanner}>
-            <span>{error}</span>
-            <button
-              type="button"
-              className={styles.errorBannerDismiss}
-              onClick={() => setError(null)}
-              aria-label="Dismiss error"
-            >
-              ×
-            </button>
-          </div>
-        )}
         {loading && !snapshot ? (
           <EmptyState title="Loading…" description="Fetching subscriptions." />
         ) : selection == null && snapshot ? (

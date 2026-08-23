@@ -12,8 +12,7 @@
 }
 
 .emptyState,
-.issueCard,
-.errorBanner {
+.issueCard {
   border: 1px solid var(--color-border-secondary);
   background: var(--color-surface-1);
   border-radius: 8px;
@@ -230,33 +229,6 @@
   padding: 0;
   font: inherit;
   text-align: left;
-}
-
-.errorBanner {
-  padding: var(--space-3);
-  color: #ffb4b4;
-  border-color: rgba(255, 71, 87, 0.35);
-  background: rgba(255, 71, 87, 0.08);
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.errorBannerDismiss {
-  flex-shrink: 0;
-  background: none;
-  border: none;
-  color: inherit;
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-  padding: 0 2px;
-  opacity: 0.7;
-}
-
-.errorBannerDismiss:hover {
-  opacity: 1;
 }
 
 .emptyState {
