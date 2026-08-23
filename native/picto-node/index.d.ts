@@ -13,8 +13,6 @@ export declare function initRuntime(): void
 export declare function healthcheck(): Promise<string>
 /** Open a library at the given path. Closes any previously open library first. */
 export declare function openLibrary(libraryPath: string): Promise<void>
-/** Backward-compatible alias for `open_library`. */
-export declare function initialize(libraryPath: string): Promise<void>
 /** Close the currently open library, stopping all background tasks. */
 export declare function closeLibrary(): Promise<void>
 /**
