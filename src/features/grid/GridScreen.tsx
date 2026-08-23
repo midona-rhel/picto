@@ -79,6 +79,7 @@ import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { ApplicationMenuButton } from '../../shared/ui/ApplicationMenuButton/ApplicationMenuButton';
 import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
 import { hasSameEntityOrder } from './gridItemIdentity';
+import { GridTransitionCoordinator } from './gridTransitionCoordinator';
 import styles from './GridScreen.module.css';
 
 const store = getDefaultStore();
@@ -270,8 +271,7 @@ export function GridScreen() {
   }, []);
   const lastScrollTopRef = useRef(0);
   const previousNodeIdRef = useRef(activeNodeId);
-  const transitionTimerRef = useRef<number | null>(null);
-  const fadeInFrameRef = useRef<number | null>(null);
+  const transitionCoordinatorRef = useRef(new GridTransitionCoordinator());
   const pendingNodeIdRef = useRef(activeNodeId);
   const itemsLengthRef = useRef(items.length);
   itemsLengthRef.current = items.length;
@@ -283,31 +283,15 @@ export function GridScreen() {
   const displayedIsGridScope = nodeIdToGridScope(displayedSurfaceNodeId) !== null;
 
   const clearTransition = useCallback(() => {
-    if (transitionTimerRef.current != null) {
-      window.clearTimeout(transitionTimerRef.current);
-      transitionTimerRef.current = null;
-    }
-    if (fadeInFrameRef.current != null) {
-      window.cancelAnimationFrame(fadeInFrameRef.current);
-      fadeInFrameRef.current = null;
-    }
+    transitionCoordinatorRef.current.cancel();
     setTransitionPhase('idle');
   }, []);
 
   const beginFadeIn = useCallback(() => {
-    if (fadeInFrameRef.current != null) {
-      window.cancelAnimationFrame(fadeInFrameRef.current);
-      fadeInFrameRef.current = null;
-    }
-    fadeInFrameRef.current = window.requestAnimationFrame(() => {
-      fadeInFrameRef.current = null;
+    transitionCoordinatorRef.current.scheduleFrame(() => {
       setTransitionPhase((phase) => {
         if (phase !== 'waiting') return phase;
-        if (transitionTimerRef.current != null) {
-          window.clearTimeout(transitionTimerRef.current);
-        }
-        transitionTimerRef.current = window.setTimeout(() => {
-          transitionTimerRef.current = null;
+        transitionCoordinatorRef.current.scheduleDelay(() => {
           setTransitionPhase('idle');
         }, SCOPE_TRANSITION_MS);
         return 'fading_in';
@@ -320,14 +304,7 @@ export function GridScreen() {
     const nextScope = activeGridScope;
     pendingNodeIdRef.current = activeNodeId;
 
-    if (transitionTimerRef.current != null) {
-      window.clearTimeout(transitionTimerRef.current);
-      transitionTimerRef.current = null;
-    }
-    if (fadeInFrameRef.current != null) {
-      window.cancelAnimationFrame(fadeInFrameRef.current);
-      fadeInFrameRef.current = null;
-    }
+    transitionCoordinatorRef.current.cancel();
 
     if (!nextScope) {
       // Managers share the grid's exit → commit → enter timeline. Keep the
@@ -342,8 +319,7 @@ export function GridScreen() {
 
       store.set(gridChromeTransitionAtom, previousScope ? 'leaving_grid' : 'stable');
       setTransitionPhase('fading_out');
-      transitionTimerRef.current = window.setTimeout(() => {
-        transitionTimerRef.current = null;
+      transitionCoordinatorRef.current.scheduleDelay(() => {
         const committedNodeId = pendingNodeIdRef.current;
         if (previousScope) saveScrollPosition(previousNodeIdRef.current, lastScrollTopRef.current);
         gridController.deactivate();
@@ -371,8 +347,7 @@ export function GridScreen() {
 
       // Grid-to-grid: fade out old → wait → load new → fade in
       setTransitionPhase('fading_out');
-      transitionTimerRef.current = window.setTimeout(() => {
-        transitionTimerRef.current = null;
+      transitionCoordinatorRef.current.scheduleDelay(() => {
         const committedNodeId = pendingNodeIdRef.current;
         restoredScrollTopRef.current = getScrollPosition(committedNodeId);
         setTransitionPhase('waiting');
@@ -385,8 +360,7 @@ export function GridScreen() {
     // Manager-to-grid uses the same fade-out midpoint before the grid mounts.
     store.set(gridChromeTransitionAtom, 'stable');
     setTransitionPhase('fading_out');
-    transitionTimerRef.current = window.setTimeout(() => {
-      transitionTimerRef.current = null;
+    transitionCoordinatorRef.current.scheduleDelay(() => {
       const committedNodeId = pendingNodeIdRef.current;
       const committedScope = nodeIdToGridScope(committedNodeId);
       if (!committedScope) return;
@@ -425,8 +399,7 @@ export function GridScreen() {
     const action = softTransitionAction;
     setSoftTransitionAction(null);
 
-    transitionTimerRef.current = window.setTimeout(() => {
-      transitionTimerRef.current = null;
+    transitionCoordinatorRef.current.scheduleDelay(() => {
       // Execute the deferred action (sort change, layout change, etc.)
       action();
       setTransitionPhase('waiting');
@@ -434,14 +407,7 @@ export function GridScreen() {
     }, SCOPE_TRANSITION_MS);
   }, [softTransitionAction, transitionPhase, setTransitionPhase, setSoftTransitionAction]);
 
-  useEffect(() => () => {
-    if (transitionTimerRef.current != null) {
-      window.clearTimeout(transitionTimerRef.current);
-    }
-    if (fadeInFrameRef.current != null) {
-      window.cancelAnimationFrame(fadeInFrameRef.current);
-    }
-  }, []);
+  useEffect(() => () => transitionCoordinatorRef.current.cancel(), []);
 
   // Commit the displayed scene — snapshot + inspector target — atomically.
   // ONLY commits during fading_in (new data arriving after transition).
