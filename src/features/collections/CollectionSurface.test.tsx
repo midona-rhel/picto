@@ -156,9 +156,17 @@ describe('CollectionSurface', () => {
     expect(await screen.findByTestId('media-view')).toHaveTextContent('Viewing 1');
   });
 
+  it('uses the same inline detail viewer for video members', async () => {
+    render(<CollectionSurface collectionId={7} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+    fireEvent.doubleClick(document.querySelector('[data-collection-member="3"]')!);
+    expect(await screen.findByTestId('media-view')).toHaveTextContent('Viewing 2');
+  });
+
   it('sends the complete reordered member list', async () => {
     render(<CollectionSurface collectionId={7} onClose={vi.fn()} />);
     await enterEditor();
+    expect(screen.queryByText(/Drag to reorder/i)).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Reorder' }));
     await waitFor(() => expect(mocks.reorderCollection).toHaveBeenCalledWith({
       collection_id: 7,

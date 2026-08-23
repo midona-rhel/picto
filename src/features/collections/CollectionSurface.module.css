@@ -13,24 +13,20 @@
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 24px 24px 56px;
+  padding: var(--space-4);
 }
 
 .memberStack {
-  width: min(100%, 980px);
-  margin: 0 auto;
+  width: 100%;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  gap: var(--space-4);
 }
 
 .member {
   margin: 0;
   display: flex;
   justify-content: center;
-  background: var(--color-surface-1);
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 8px;
   overflow: hidden;
   cursor: zoom-in;
 }
@@ -97,21 +93,6 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-
-.editorToolbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 18px;
-  border-bottom: 1px solid var(--color-border-secondary);
-  color: var(--color-text-secondary);
-  font-size: 13px;
-  flex: 0 0 auto;
-}
-
-.editorHint {
-  flex: 1;
 }
 
 .gridHost {

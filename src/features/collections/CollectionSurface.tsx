@@ -242,10 +242,6 @@ export function CollectionSurface({
 
       {mode === 'editor' ? (
         <div className={styles.editor}>
-          <div className={styles.editorToolbar}>
-            <span className={styles.editorHint}>Drag to reorder. Right-click selected items to remove them or choose a cover.</span>
-            <span>{selectedItems.length} selected</span>
-          </div>
           <div className={styles.gridHost}>
             <CanvasGrid
               items={members}
