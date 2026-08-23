@@ -137,6 +137,8 @@ export interface CanvasGridProps {
   headerContent?: React.ReactNode;
   /** Current scope for drag-and-drop context. */
   dragSourceScope?: ItemScope | null;
+  /** Optional local reorder owner for reusable grids such as collection editing. */
+  onReorder?: (orderedItemIds: number[]) => void;
   /** Expose the scroll container ref to parent. */
   onContainerRef?: (el: HTMLDivElement | null) => void;
   /** Notify parent when layout changes (for scroll-to-item). */
@@ -174,6 +176,7 @@ export function CanvasGrid({
   selectedFolderNodeIds = EMPTY_FOLDER_NODE_SET,
   headerContent,
   dragSourceScope = null,
+  onReorder,
   onContainerRef,
   onLayoutChange,
   renamingIndex = null,
@@ -732,6 +735,8 @@ export function CanvasGrid({
   markDirtyRef.current = markDirty;
   const onSelectionChangeRef = useRef(onSelectionChange);
   onSelectionChangeRef.current = onSelectionChange;
+  const onReorderRef = useRef(onReorder);
+  onReorderRef.current = onReorder;
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
@@ -762,7 +767,7 @@ export function CanvasGrid({
       moveDrag(e.clientX, e.clientY);
       setDragGhost((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
       const scope = getDragState().sourceScope;
-      if (scope?.kind === 'folder') {
+      if (scope?.kind === 'folder' || onReorderRef.current) {
         const ctr = containerRef.current;
         if (ctr) {
           const { x: cx, y: cy } = toLayoutCoords(e.clientX, e.clientY, ctr, headerHeightRef.current);
@@ -795,7 +800,10 @@ export function CanvasGrid({
             rd.dropIndex,
             rd.dropSide,
           );
-          if (orderedItemIds.length > 0) setDropTarget({ kind: 'reorder', orderedItemIds });
+          if (orderedItemIds.length > 0) {
+            if (onReorderRef.current) onReorderRef.current(orderedItemIds);
+            else setDropTarget({ kind: 'reorder', orderedItemIds });
+          }
         }
         reorderDropRef.current = null;
         // Preserve selection: re-select the dragged hashes after drop

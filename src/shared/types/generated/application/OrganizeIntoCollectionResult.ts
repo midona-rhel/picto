@@ -2,4 +2,4 @@
 import type { ItemId } from "./ItemId";
 import type { MutationReceipt } from "./MutationReceipt";
 
-export type GroupItemsResult = { collection_id: ItemId, receipt: MutationReceipt, };
+export type OrganizeIntoCollectionResult = { collection_id: ItemId, receipt: MutationReceipt, };

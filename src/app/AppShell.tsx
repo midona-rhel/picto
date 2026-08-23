@@ -15,6 +15,7 @@ import { WorkspaceSurface } from '../features/workspace/WorkspaceSurface';
 import { GridToolbar, ViewerToolbar } from '../features/grid/GridToolbar';
 import { TagsToolbar } from '../features/tags/TagManagerScreen';
 import { DuplicatesToolbar } from '../features/duplicates/DuplicatesScreen';
+import { CollectionToolbar } from '../features/collections/CollectionToolbar';
 import { Inspector } from '../features/inspector/Inspector';
 import { ModalLayer } from '../features/modals/ModalLayer';
 import {
@@ -30,6 +31,7 @@ import { sidebarNodesAtom } from '../state/sidebar';
 import { gridActiveAtom, gridScopeLabelAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
 import { viewerSessionAtom } from '../state/viewer';
+import { collectionChromeAtom } from '../state/collections';
 import { startAppRuntime } from '../runtime/appRuntime';
 import { registerAppSettingsReload } from '../runtime/appSettingsSettle';
 import { zoomController } from '../controllers/zoomController';
@@ -174,6 +176,7 @@ export function AppShell() {
   const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
   const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
   const viewerSession = useAtomValue(viewerSessionAtom);
+  const collectionChrome = useAtomValue(collectionChromeAtom);
   const canBack = useAtomValue(canGoBackAtom);
   const canForward = useAtomValue(canGoForwardAtom);
   const inspectorWidth = useAtomValue(inspectorWidthAtom);
@@ -387,8 +390,10 @@ export function AppShell() {
           </div>
         </div>
         <div className={styles.titlebarCenter}>
-          {viewerSession ? (
+          {viewerSession || collectionChrome?.memberViewerOpen ? (
             <ViewerToolbar />
+          ) : collectionChrome ? (
+            <CollectionToolbar />
           ) : (
             <>
               <KbdTooltip label="Back" shortcut="Alt+ArrowLeft">

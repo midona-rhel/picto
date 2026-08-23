@@ -157,6 +157,15 @@ pub struct SelectionFolderInfo {
     pub name: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SelectionCollectionCandidate {
+    pub collection_id: ItemId,
+    pub label: Option<String>,
+    #[ts(type = "number")]
+    pub member_count: i64,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SelectionRatingStats {
@@ -189,6 +198,7 @@ pub struct SelectionSummary {
     pub shared_tags: Vec<SelectionTagCount>,
     pub top_tags: Vec<SelectionTagCount>,
     pub shared_folders: Vec<SelectionFolderInfo>,
+    pub selected_collection_candidates: Vec<SelectionCollectionCandidate>,
     pub shared_notes: Option<String>,
     #[ts(type = "number")]
     pub notes_present_count: i64,
@@ -253,6 +263,7 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
         let mut mime_counts = BTreeMap::new();
         let mut tag_media_counts = BTreeMap::<String, i64>::new();
         let mut folder_root_counts = BTreeMap::<i64, (String, i64)>::new();
+        let mut selected_collection_candidates = Vec::new();
         let stats_sql = format!(
             "{}
              SELECT
@@ -409,6 +420,30 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
             folder_root_counts.insert(folder_id, (name, count));
         }
 
+        let candidates_sql = format!(
+            "{}
+             SELECT sr.item_id, li.label, COUNT(cm.media_item_id)
+             FROM selected_roots sr
+             JOIN library_item li ON li.item_id = sr.item_id
+             LEFT JOIN collection_member cm ON cm.collection_id = sr.item_id
+             WHERE li.kind = 'collection'
+             GROUP BY sr.item_id, li.label
+             ORDER BY sr.item_id",
+            selection.with_clause
+        );
+        for row in connection
+            .prepare(&candidates_sql)?
+            .query_map(parameters.as_slice(), |row| {
+                Ok(SelectionCollectionCandidate {
+                    collection_id: ItemId(row.get(0)?),
+                    label: row.get(1)?,
+                    member_count: row.get(2)?,
+                })
+            })?
+        {
+            selected_collection_candidates.push(row?);
+        }
+
         let samples_sql = format!(
             "{} SELECT item_id FROM selected_roots ORDER BY item_id LIMIT 3",
             selection.with_clause
@@ -463,6 +498,7 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
             shared_tags,
             top_tags,
             shared_folders,
+            selected_collection_candidates,
             shared_notes,
             notes_present_count,
             shared_source_urls,
@@ -1458,6 +1494,7 @@ fn stable_seed(value: &str) -> i64 {
 mod tests {
     use super::{
         details, query, resolve_target_ids, selection_summary, sidebar_counts, ItemPageRequest,
+        SelectionCollectionCandidate,
     };
     use crate::app::{ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope, ItemSort, ItemTarget};
     use crate::store::Store;
@@ -1909,6 +1946,14 @@ mod tests {
         assert_eq!(summary.shared_notes, None);
         assert_eq!(summary.source_urls_present_count, 3);
         assert_eq!(summary.shared_source_urls, None);
+        assert_eq!(
+            summary.selected_collection_candidates,
+            vec![SelectionCollectionCandidate {
+                collection_id: ItemId(10),
+                label: Some("Album".to_string()),
+                member_count: 2,
+            }]
+        );
         assert_eq!(summary.shared_folders.len(), 1);
         assert_eq!(summary.revision, 2);
 

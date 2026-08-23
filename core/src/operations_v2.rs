@@ -18,14 +18,15 @@ const MAX_RECEIPT_ITEM_IDS: usize = 256;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
-pub struct GroupItemsInput {
-    pub item_ids: Vec<ItemId>,
+pub struct OrganizeIntoCollectionInput {
+    pub target: ItemTarget,
     pub label: Option<String>,
+    pub winning_collection_id: Option<ItemId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
-pub struct GroupItemsResult {
+pub struct OrganizeIntoCollectionResult {
     pub collection_id: ItemId,
     pub receipt: MutationReceipt,
 }
@@ -181,90 +182,224 @@ impl Application {
         ))
     }
 
-    pub fn group_items(&self, input: GroupItemsInput) -> Result<GroupItemsResult, String> {
-        let item_ids = unique_ids(&input.item_ids)?;
-        if item_ids.len() < 2 {
-            return Err("A collection requires at least two media items".to_string());
-        }
+    pub fn organize_into_collection(
+        &self,
+        input: OrganizeIntoCollectionInput,
+    ) -> Result<OrganizeIntoCollectionResult, String> {
+        let label = input
+            .label
+            .as_deref()
+            .map(str::trim)
+            .filter(|label| !label.is_empty())
+            .map(str::to_owned);
         let now = chrono::Utc::now().to_rfc3339();
         let key = new_key("collection");
         let ((collection_id, affected), revision) = self.transaction(
             |transaction| {
+                let item_ids = crate::query_v2::resolve_target_ids(transaction, &input.target)?;
+                let mut collection_ids = Vec::new();
+                let mut standalone_media_ids = Vec::new();
+                let mut members_by_collection = Vec::new();
+                for item_id in &item_ids {
+                    let kind: String = transaction.query_row(
+                        "SELECT kind FROM library_item WHERE item_id = ?1",
+                        [item_id],
+                        |row| row.get(0),
+                    )?;
+                    match kind.as_str() {
+                        "media" => {
+                            require_standalone_media_root(transaction, *item_id)?;
+                            standalone_media_ids.push(*item_id);
+                        }
+                        "collection" => {
+                            let members = collection_members(transaction, *item_id)?;
+                            collection_ids.push(*item_id);
+                            members_by_collection.push((*item_id, members));
+                        }
+                        other => return Err(invalid(format!("Unsupported item kind '{other}'"))),
+                    }
+                }
+                if collection_ids.is_empty() && item_ids.len() < 2 {
+                    return Err(invalid(
+                        "Creating a collection requires at least two standalone media items",
+                    ));
+                }
+                if collection_ids.is_empty() && input.winning_collection_id.is_some() {
+                    return Err(invalid(
+                        "A winning collection can only be selected when the target contains a collection",
+                    ));
+                }
                 let lifecycle = require_same_root_lifecycle(transaction, &item_ids)?;
                 let projected_lifecycle = parse_lifecycle(&lifecycle)?;
-                let folders = folder_ids_for_roots(transaction, &item_ids)?;
-                for item_id in &item_ids {
-                    require_standalone_media_root(transaction, *item_id)?;
-                }
-
-                transaction.execute(
-                    "INSERT INTO library_item (item_key, kind, label, created_at, updated_at)
-                 VALUES (?1, 'collection', ?2, ?3, ?3)",
-                    params![key, input.label, now],
-                )?;
-                let collection_id = transaction.last_insert_rowid();
-                transaction.execute(
-                    "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
-                    params![collection_id, lifecycle],
-                )?;
-
-                for (index, item_id) in item_ids.iter().enumerate() {
-                    transaction
-                        .execute("DELETE FROM library_root WHERE item_id = ?1", [item_id])?;
-                    transaction.execute(
-                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                     VALUES (?1, ?2, ?3)",
-                    params![collection_id, item_id, (index as i64 + 1) * RANK_GAP],
-                )?;
-                }
-                for folder_id in &folders {
-                    transaction.execute(
-                        "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)",
-                        params![folder_id, collection_id],
-                    )?;
-                }
-                transaction.execute(
-                    "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
-                    params![item_ids[0], collection_id],
-                )?;
-
-                let mut affected = item_ids.clone();
-                affected.push(collection_id);
                 let mut delta = StructureProjectionDelta::default();
-                delta.items.push(ItemProjectionChange {
-                    item_id: collection_id,
-                    kind: crate::app::ItemKind::Collection,
-                    present: true,
-                });
-                delta.roots.push(RootProjectionChange {
-                    item_id: collection_id,
-                    lifecycle: Some(projected_lifecycle),
-                });
-                for item_id in &item_ids {
-                    delta.roots.push(RootProjectionChange {
-                        item_id: *item_id,
-                        lifecycle: None,
-                    });
-                    delta.memberships.push(MembershipProjectionChange {
-                        collection_id,
-                        media_id: *item_id,
-                        present: true,
-                    });
-                    delta
-                        .folders
-                        .extend(folders.iter().map(|folder_id| FolderProjectionChange {
-                            folder_id: *folder_id,
-                            item_id: *item_id,
-                            present: false,
-                        }));
-                }
-                delta
-                    .folders
-                    .extend(folders.iter().map(|folder_id| FolderProjectionChange {
-                        folder_id: *folder_id,
+                let collection_id = if collection_ids.is_empty() {
+                    let label = label.as_deref().ok_or_else(|| {
+                        invalid("A new collection requires a non-empty label")
+                    })?;
+                    let folders = folder_ids_for_roots(transaction, &item_ids)?;
+                    transaction.execute(
+                        "INSERT INTO library_item (item_key, kind, label, created_at, updated_at)
+                         VALUES (?1, 'collection', ?2, ?3, ?3)",
+                        params![key, label, now],
+                    )?;
+                    let collection_id = transaction.last_insert_rowid();
+                    transaction.execute(
+                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
+                        params![collection_id, lifecycle],
+                    )?;
+                    transaction.execute(
+                        "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
+                        params![item_ids[0], collection_id],
+                    )?;
+                    for folder_id in &folders {
+                        transaction.execute(
+                            "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)",
+                            params![folder_id, collection_id],
+                        )?;
+                    }
+                    delta.items.push(ItemProjectionChange {
                         item_id: collection_id,
+                        kind: crate::app::ItemKind::Collection,
                         present: true,
+                    });
+                    delta.roots.push(RootProjectionChange {
+                        item_id: collection_id,
+                        lifecycle: Some(projected_lifecycle),
+                    });
+                    delta.folders.extend(folders.into_iter().map(|folder_id| {
+                        FolderProjectionChange {
+                            folder_id,
+                            item_id: collection_id,
+                            present: true,
+                        }
                     }));
+                    collection_id
+                } else {
+                    let collection_id = match input.winning_collection_id {
+                        Some(winner) if !collection_ids.contains(&winner.0) => {
+                            return Err(invalid(
+                                "The winning collection must be one of the selected collections",
+                            ));
+                        }
+                        Some(winner) => winner.0,
+                        None if collection_ids.len() == 1 => collection_ids[0],
+                        None => {
+                            return Err(invalid(
+                                "Select which collection should own the merged members",
+                            ));
+                        }
+                    };
+                    if standalone_media_ids.is_empty()
+                        && collection_ids.iter().all(|id| *id == collection_id)
+                    {
+                        return Err(invalid(
+                            "Organizing a collection requires at least one additional item",
+                        ));
+                    }
+                    collection_id
+                };
+
+                let mut next_position: i64 = transaction.query_row(
+                    "SELECT COALESCE(MAX(position_rank), 0) + ?1
+                     FROM collection_member WHERE collection_id = ?2",
+                    params![RANK_GAP, collection_id],
+                    |row| row.get(0),
+                )?;
+                let mut affected = vec![collection_id];
+                for item_id in &item_ids {
+                    affected.push(*item_id);
+                    if *item_id == collection_id {
+                        continue;
+                    }
+                    let folders = folder_ids_for_roots(transaction, &[*item_id])?;
+                    let kind: String = transaction.query_row(
+                        "SELECT kind FROM library_item WHERE item_id = ?1",
+                        [item_id],
+                        |row| row.get(0),
+                    )?;
+                    if kind == "media" {
+                        transaction.execute(
+                            "DELETE FROM library_root WHERE item_id = ?1",
+                            [item_id],
+                        )?;
+                        transaction.execute(
+                            "INSERT INTO collection_member
+                             (collection_id, media_item_id, position_rank)
+                             VALUES (?1, ?2, ?3)",
+                            params![collection_id, item_id, next_position],
+                        )?;
+                        delta.roots.push(RootProjectionChange {
+                            item_id: *item_id,
+                            lifecycle: None,
+                        });
+                        delta.memberships.push(MembershipProjectionChange {
+                            collection_id,
+                            media_id: *item_id,
+                            present: true,
+                        });
+                        delta.folders.extend(folders.into_iter().map(|folder_id| {
+                            FolderProjectionChange {
+                                folder_id,
+                                item_id: *item_id,
+                                present: false,
+                            }
+                        }));
+                        affected.push(*item_id);
+                        next_position += RANK_GAP;
+                        continue;
+                    }
+
+                    let members = members_by_collection
+                        .iter()
+                        .find(|(id, _)| id == item_id)
+                        .map(|(_, members)| members.clone())
+                        .unwrap_or_default();
+                    if *item_id != collection_id {
+                        for media_id in members {
+                            transaction.execute(
+                                "UPDATE collection_member
+                                 SET collection_id = ?1, position_rank = ?2
+                                 WHERE collection_id = ?3 AND media_item_id = ?4",
+                                params![collection_id, next_position, item_id, media_id],
+                            )?;
+                            delta.memberships.push(MembershipProjectionChange {
+                                collection_id: *item_id,
+                                media_id,
+                                present: false,
+                            });
+                            delta.memberships.push(MembershipProjectionChange {
+                                collection_id,
+                                media_id,
+                                present: true,
+                            });
+                            affected.push(media_id);
+                            next_position += RANK_GAP;
+                        }
+                        transaction.execute(
+                            "DELETE FROM library_item WHERE item_id = ?1",
+                            [item_id],
+                        )?;
+                        delta.items.push(ItemProjectionChange {
+                            item_id: *item_id,
+                            kind: crate::app::ItemKind::Collection,
+                            present: false,
+                        });
+                        delta.roots.push(RootProjectionChange {
+                            item_id: *item_id,
+                            lifecycle: None,
+                        });
+                        delta.folders.extend(folders.into_iter().map(|folder_id| {
+                            FolderProjectionChange {
+                                folder_id,
+                                item_id: *item_id,
+                                present: false,
+                            }
+                        }));
+                    }
+                }
+
+                affected.sort_unstable();
+                affected.dedup();
                 Ok(((collection_id, affected), delta))
             },
             |projections, delta| projections.apply_structure_delta(delta),
@@ -274,7 +409,7 @@ impl Application {
             &[resources::LIBRARY, resources::SIDEBAR, resources::FOLDERS],
             &affected,
         );
-        Ok(GroupItemsResult {
+        Ok(OrganizeIntoCollectionResult {
             collection_id: ItemId(collection_id),
             receipt,
         })
@@ -1111,7 +1246,7 @@ mod tests {
 
     use rusqlite::params;
 
-    use super::{DetachItemsInput, GroupItemsInput};
+    use super::{DetachItemsInput, OrganizeIntoCollectionInput, OrganizeIntoCollectionResult};
     use crate::app::{
         Application, ItemFilters, ItemId, ItemQuery, ItemScope, ItemSort, ItemTarget, Lifecycle,
     };
@@ -1167,15 +1302,60 @@ mod tests {
         (directory, Application::new(store), ids)
     }
 
+    fn organize(
+        app: &Application,
+        item_ids: &[ItemId],
+        label: Option<&str>,
+        winning_collection_id: Option<ItemId>,
+    ) -> OrganizeIntoCollectionResult {
+        app.organize_into_collection(OrganizeIntoCollectionInput {
+            target: ItemTarget::Explicit {
+                item_ids: item_ids.to_vec(),
+            },
+            label: Some(label.unwrap_or("Test").to_string()),
+            winning_collection_id,
+        })
+        .unwrap()
+    }
+
+    fn add_media_root(app: &Application, key: &str) -> ItemId {
+        let (item_id, _) = app
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO media_file
+                         (file_hash, mime_type, size_bytes, created_at)
+                     VALUES (?1, 'image/png', 1, 'now')",
+                    [format!("hash-{key}")],
+                )?;
+                let file_id = transaction.last_insert_rowid();
+                transaction.execute(
+                    "INSERT INTO library_item
+                         (item_key, kind, created_at, updated_at)
+                     VALUES (?1, 'media', 'now', 'now')",
+                    [format!("item-{key}")],
+                )?;
+                let item_id = transaction.last_insert_rowid();
+                transaction.execute(
+                    "INSERT INTO media_asset
+                         (item_id, file_id, imported_at, updated_at)
+                     VALUES (?1, ?2, 'now', 'now')",
+                    params![item_id, file_id],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
+                    [item_id],
+                )?;
+                Ok(item_id)
+            })
+            .unwrap();
+        ItemId(item_id)
+    }
+
     #[test]
     fn grouping_replaces_roots_and_detach_inherits_state_and_folder() {
         let (_directory, app, ids) = fixture();
-        let grouped = app
-            .group_items(GroupItemsInput {
-                item_ids: ids[..2].to_vec(),
-                label: Some("Post".to_string()),
-            })
-            .unwrap();
+        let grouped = organize(&app, &ids[..2], Some("Post"), None);
 
         app.store()
             .read(|connection| {
@@ -1245,14 +1425,155 @@ mod tests {
     }
 
     #[test]
-    fn worker_tags_only_the_analyzed_collection_member() {
+    fn organizing_media_into_existing_collection_preserves_winner_structure() {
         let (_directory, app, ids) = fixture();
-        let grouped = app
-            .group_items(GroupItemsInput {
-                item_ids: ids[..2].to_vec(),
-                label: None,
+        let grouped = organize(&app, &ids[..2], Some("Post"), None);
+        let result = app
+            .organize_into_collection(OrganizeIntoCollectionInput {
+                target: ItemTarget::Explicit {
+                    item_ids: vec![grouped.collection_id, ids[2]],
+                },
+                label: Some("Ignored label".to_string()),
+                winning_collection_id: None,
             })
             .unwrap();
+
+        assert_eq!(result.collection_id, grouped.collection_id);
+        app.store()
+            .read(|connection| {
+                let label: String = connection.query_row(
+                    "SELECT label FROM library_item WHERE item_id = ?1",
+                    [grouped.collection_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(label, "Post");
+                let members: Vec<i64> = connection
+                    .prepare(
+                        "SELECT media_item_id FROM collection_member
+                         WHERE collection_id = ?1 ORDER BY position_rank",
+                    )?
+                    .query_map([grouped.collection_id.0], |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                assert_eq!(members, vec![ids[0].0, ids[1].0, ids[2].0]);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn organizing_multiple_collections_requires_winner_and_keeps_members_flat() {
+        let (_directory, app, ids) = fixture();
+        let extra = add_media_root(&app, "extra");
+        let left = organize(&app, &ids[..2], Some("Left"), None);
+        let right = organize(&app, &[ids[2], extra], Some("Right"), None);
+
+        let missing_winner = app.organize_into_collection(OrganizeIntoCollectionInput {
+            target: ItemTarget::Explicit {
+                item_ids: vec![left.collection_id, right.collection_id],
+            },
+            label: None,
+            winning_collection_id: None,
+        });
+        assert!(missing_winner
+            .unwrap_err()
+            .to_string()
+            .contains("which collection should own"));
+
+        let merged = app
+            .organize_into_collection(OrganizeIntoCollectionInput {
+                target: ItemTarget::Explicit {
+                    item_ids: vec![left.collection_id, right.collection_id],
+                },
+                label: Some("Ignored label".to_string()),
+                winning_collection_id: Some(right.collection_id),
+            })
+            .unwrap();
+        assert_eq!(merged.collection_id, right.collection_id);
+
+        app.store()
+            .read(|connection| {
+                let label: String = connection.query_row(
+                    "SELECT label FROM library_item WHERE item_id = ?1",
+                    [right.collection_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(label, "Right");
+                let members: Vec<i64> = connection
+                    .prepare(
+                        "SELECT cm.media_item_id FROM collection_member cm
+                         WHERE cm.collection_id = ?1 ORDER BY cm.position_rank",
+                    )?
+                    .query_map([right.collection_id.0], |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                assert_eq!(members, vec![ids[2].0, extra.0, ids[0].0, ids[1].0]);
+                let nested: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM collection_member cm
+                     JOIN library_item li ON li.item_id = cm.media_item_id
+                     WHERE cm.collection_id = ?1 AND li.kind = 'collection'",
+                    [right.collection_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(nested, 0);
+                let losing_root: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM library_root WHERE item_id = ?1",
+                    [left.collection_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(losing_root, 0);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn organizing_rejects_invalid_winner_and_lifecycle_mismatch() {
+        let (_directory, app, ids) = fixture();
+        let missing_label = app.organize_into_collection(OrganizeIntoCollectionInput {
+            target: ItemTarget::Explicit {
+                item_ids: ids[..2].to_vec(),
+            },
+            label: Some("  ".to_string()),
+            winning_collection_id: None,
+        });
+        assert!(missing_label
+            .unwrap_err()
+            .to_string()
+            .contains("non-empty label"));
+
+        let grouped = organize(&app, &ids[..2], Some("Post"), None);
+        let invalid_winner = app.organize_into_collection(OrganizeIntoCollectionInput {
+            target: ItemTarget::Explicit {
+                item_ids: vec![grouped.collection_id, ids[2]],
+            },
+            label: None,
+            winning_collection_id: Some(ItemId(9999)),
+        });
+        assert!(invalid_winner.unwrap_err().to_string().contains("selected"));
+
+        app.set_lifecycle(
+            &ItemTarget::Explicit {
+                item_ids: vec![ids[2]],
+            },
+            Lifecycle::Inbox,
+        )
+        .unwrap();
+        let mismatch = app.organize_into_collection(OrganizeIntoCollectionInput {
+            target: ItemTarget::Explicit {
+                item_ids: vec![grouped.collection_id, ids[2]],
+            },
+            label: None,
+            winning_collection_id: None,
+        });
+        assert!(mismatch
+            .unwrap_err()
+            .to_string()
+            .contains("share one lifecycle"));
+    }
+
+    #[test]
+    fn worker_tags_only_the_analyzed_collection_member() {
+        let (_directory, app, ids) = fixture();
+        let grouped = organize(&app, &ids[..2], None, None);
         let first = app
             .apply_media_tags(ids[0], &["general:predicted".to_string()], 2)
             .unwrap();
@@ -1284,12 +1605,7 @@ mod tests {
     #[test]
     fn ai_review_assignments_commit_once_and_report_affected_roots() {
         let (_directory, app, ids) = fixture();
-        let grouped = app
-            .group_items(GroupItemsInput {
-                item_ids: ids[..2].to_vec(),
-                label: None,
-            })
-            .unwrap();
+        let grouped = organize(&app, &ids[..2], None, None);
         let before = app.store().revision().unwrap();
 
         let receipt = app
@@ -1330,12 +1646,7 @@ mod tests {
     #[test]
     fn collection_tag_write_updates_members_with_one_projection_batch() {
         let (_directory, app, ids) = fixture();
-        let grouped = app
-            .group_items(GroupItemsInput {
-                item_ids: ids[..2].to_vec(),
-                label: None,
-            })
-            .unwrap();
+        let grouped = organize(&app, &ids[..2], None, None);
         let target = ItemTarget::Explicit {
             item_ids: vec![grouped.collection_id],
         };
@@ -1386,12 +1697,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        let grouped = app
-            .group_items(GroupItemsInput {
-                item_ids: ids[..2].to_vec(),
-                label: None,
-            })
-            .unwrap();
+        let grouped = organize(&app, &ids[..2], None, None);
         let result = app
             .delete_items(&ItemTarget::Explicit {
                 item_ids: vec![grouped.collection_id],

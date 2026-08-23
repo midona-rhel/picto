@@ -101,4 +101,54 @@ describe('buildTileContextMenu', () => {
     expect(renderToStaticMarkup(byLabel('Copy Tags')!.icon)).toContain('tabler-icon-bookmarks');
     expect(renderToStaticMarkup(byLabel('Paste Tags')!.icon)).toContain('data-icon="paste-tags"');
   });
+
+  it('offers collection organization for a multi-item selection', () => {
+    const onOrganizeCollection = vi.fn();
+    const entries = buildTileContextMenu({
+      selectionCount: 3,
+      querySelectionActive: false,
+      singleSelected: false,
+      singleHash: null,
+      scopeKind: 'system',
+      statusFilter: 'active',
+      loadedCount: 3,
+      onSelectAll: vi.fn(),
+      onDeselectAll: vi.fn(),
+      onOrganizeCollection,
+    });
+    const entry = entries.find(
+      (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Group into Collection...',
+    );
+
+    expect(entry).toBeDefined();
+    entry!.action();
+    expect(onOrganizeCollection).toHaveBeenCalledOnce();
+  });
+
+  it('treats a collection as a library item rather than its cover file', () => {
+    const entries = buildTileContextMenu({
+      selectionCount: 1,
+      querySelectionActive: false,
+      singleSelected: true,
+      singleHash: 'cover-hash',
+      singleKind: 'collection',
+      containsCollection: true,
+      scopeKind: 'system',
+      statusFilter: 'active',
+      loadedCount: 1,
+      onSelectAll: vi.fn(),
+      onDeselectAll: vi.fn(),
+      onOpen: vi.fn(),
+      onEditCollection: vi.fn(),
+      onOpenDefault: vi.fn(),
+      onRevealInFolder: vi.fn(),
+      onRegenerateThumbnails: vi.fn(),
+    });
+    const labels = entries.flatMap((entry) => ('label' in entry ? [entry.label] : []));
+
+    expect(labels).toContain('Open');
+    expect(labels).toContain('Edit Collection');
+    expect(labels).not.toContain('Open with Default App');
+    expect(labels).not.toContain('Regenerate Thumbnail');
+  });
 });

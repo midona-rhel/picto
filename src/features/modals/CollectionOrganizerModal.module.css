@@ -1,0 +1,54 @@
+.help {
+  margin: 0 0 12px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.45;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 38px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-2);
+  cursor: pointer;
+}
+
+.choice:hover {
+  background: var(--color-surface-hover);
+}
+
+.choiceName {
+  overflow: hidden;
+  color: var(--color-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.choiceCount {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.error {
+  margin: 10px 0 0;
+  color: var(--color-negative);
+  font-size: var(--font-size-sm);
+}

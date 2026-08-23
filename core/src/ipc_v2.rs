@@ -167,8 +167,8 @@ pub fn dispatch(
                 application.set_folder_membership(&input.target, input.folder_id, input.present)?,
             )
         }
-        "items.group" => {
-            let output = application.group_items(parse(args_json)?)?;
+        "items.organize_into_collection" => {
+            let output = application.organize_into_collection(parse(args_json)?)?;
             publish_nested(application, output, |output| &output.receipt)
         }
         "items.detach" => publish(application, application.detach_items(parse(args_json)?)?),

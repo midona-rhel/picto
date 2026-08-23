@@ -3,6 +3,7 @@
  */
 
 import { atom } from 'jotai';
+import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 
 // ── Confirm modal ──
 export interface ConfirmModalState {
@@ -82,3 +83,23 @@ export const tagSelectModalAtom = atom({ open: false });
 
 // ── Folder picker modal (wider modal version, opened from context menu / keyboard) ──
 export const folderPickerModalAtom = atom({ open: false });
+
+// ── Collection organizer modal ──
+export interface CollectionCandidate {
+  collection_id: number;
+  label: string | null;
+  member_count: number;
+}
+
+export interface CollectionOrganizerModalState {
+  open: boolean;
+  target: ItemTarget | null;
+  collections: CollectionCandidate[];
+  onComplete?: (collectionId: number) => void;
+}
+
+export const collectionOrganizerModalAtom = atom<CollectionOrganizerModalState>({
+  open: false,
+  target: null,
+  collections: [],
+});

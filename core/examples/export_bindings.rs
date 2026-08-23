@@ -79,12 +79,12 @@ fn main() {
         SmartFolderMutationReceipt, SmartFolderNavigationItem,
     };
     use picto_core::operations_v2::{
-        DeleteItemsResult, DetachItemsInput, GroupItemsInput, GroupItemsResult, MediaMetadataPatch,
-        ReorderCollectionInput,
+        DeleteItemsResult, DetachItemsInput, MediaMetadataPatch, OrganizeIntoCollectionInput,
+        OrganizeIntoCollectionResult, ReorderCollectionInput,
     };
     use picto_core::query_v2::{
         ItemDetails, ItemPage, ItemPageRequest, ItemSummary, MediaDetails, ScopeCount,
-        SelectionSummary, SidebarCounts,
+        SelectionCollectionCandidate, SelectionSummary, SidebarCounts,
     };
     use picto_core::settings_v2::SettingsSnapshot;
     use picto_core::smart_v2::{MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup};
@@ -107,8 +107,9 @@ fn main() {
         ItemSortField, SortDirection, ItemSort, ItemQuery, ItemTarget,
         MutationReceipt, LibraryChanged,
         ItemPageRequest, ItemSummary, ItemPage, MediaDetails, ItemDetails,
-        SelectionSummary, ScopeCount, SidebarCounts,
-        GroupItemsInput, GroupItemsResult, DetachItemsInput, ReorderCollectionInput,
+        SelectionSummary, SelectionCollectionCandidate, ScopeCount, SidebarCounts,
+        OrganizeIntoCollectionInput, OrganizeIntoCollectionResult, DetachItemsInput,
+        ReorderCollectionInput,
         MediaMetadataPatch, DeleteItemsResult,
         FolderId, CreateFolderInput, ReorderFolderChildrenInput, ReorderFolderItemsInput,
         FolderWatchInput, FolderMutationReceipt,

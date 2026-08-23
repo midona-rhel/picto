@@ -27,6 +27,10 @@ export interface MediaViewProps {
   items: CanonicalEntityGridItem[];
   currentIndex: number;
   totalCount?: number | null;
+  /** Root recorded as recently viewed. Use null for no history write. */
+  recordItemId?: number | null;
+  /** Root that receives keyboard rating writes. Use null for read-only member detail. */
+  ratingItemId?: number | null;
   onNavigate: (delta: number) => void;
   onClose: (exitItemId: number) => void;
   onLoadMore?: () => void;
@@ -35,12 +39,14 @@ export interface MediaViewProps {
 const NAV_SIZE = 120;
 
 export function MediaView({
-  items, currentIndex, totalCount, onNavigate, onClose, onLoadMore,
+  items, currentIndex, totalCount, recordItemId, ratingItemId, onNavigate, onClose, onLoadMore,
 }: MediaViewProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentItemId = currentItem?.item_id ?? 0;
   const currentHash = currentItem?.display_file_hash ?? '';
-  useRecordMediaView(currentItemId);
+  const effectiveRecordItemId = recordItemId === undefined ? currentItemId : recordItemId;
+  const effectiveRatingItemId = ratingItemId === undefined ? currentItemId : ratingItemId;
+  useRecordMediaView(effectiveRecordItemId);
   const currentMime = currentItem?.display_mime_type ?? '';
   const isVideo = currentMime.startsWith('video/');
   const total = totalCount ?? items.length;
@@ -173,14 +179,14 @@ export function MediaView({
       if (matchesShortcutDef(e, actualDef)) { e.preventDefault(); zoom.fitActual(); return; }
 
       // Rating: 0-5 (no modifiers)
-      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key >= '0' && e.key <= '5') {
+      if (effectiveRatingItemId != null && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key >= '0' && e.key <= '5') {
         e.preventDefault();
-        void entityMutations.setItemRating(currentItemId, parseInt(e.key, 10));
+        void entityMutations.setItemRating(effectiveRatingItemId, parseInt(e.key, 10));
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [currentItemId, navigate, onClose, zoom]);
+  }, [currentItemId, effectiveRatingItemId, navigate, onClose, zoom]);
 
   useEffect(() => () => { if (boundaryTimerRef.current) clearTimeout(boundaryTimerRef.current); }, []);
 

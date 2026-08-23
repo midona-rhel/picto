@@ -15,6 +15,7 @@ import {
   IconSelectAll, IconDeselect,
   IconSearch,
   IconFileExport, IconFolder, IconStar,
+  IconEdit, IconStack2,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconAutoTag, IconPasteTags, IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
@@ -66,11 +67,15 @@ interface GridMenuContext {
   hasClipboardTags?: boolean;
   singleName?: string | null;
   singleMime?: string | null;
+  singleKind?: 'media' | 'collection' | null;
+  containsCollection?: boolean;
   onCopyLink?: (hash: string, mime: string) => void;
   onNewFolderWithSelection?: () => void;
   onSearchByImage?: (engine: string, hash: string) => void;
   onSetRating?: (rating: number) => void;
   onExport?: () => void;
+  onOrganizeCollection?: () => void;
+  onEditCollection?: () => void;
 }
 
 function sep(): MenuSeparator {
@@ -136,21 +141,23 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   // ── Open actions ──
   if (singleSelected) {
     entries.push(item('Open', { icon: <IconArrowsMaximize size={15} />, shortcut: kbd('view.detailView'), action: ctx.onOpen }));
-    entries.push(item('Open with Default App', {
-      icon: <IconExternalLink size={15} />,
-      shortcut: kbd('file.openDefaultApp'),
-      action: singleHash && ctx.onOpenDefault ? () => ctx.onOpenDefault!(singleHash!) : undefined,
-    }));
-    entries.push(item(isMac ? 'Reveal in Finder' : 'Show in Explorer', {
-      icon: isMac ? <IconBrandFinder size={15} /> : <IconFolderSearch size={15} />,
-      shortcut: kbd('file.revealInFolder'),
-      action: singleHash && ctx.onRevealInFolder ? () => ctx.onRevealInFolder!(singleHash!) : undefined,
-    }));
-    entries.push(item('Open in New Window', {
-      icon: <IconAppWindow size={15} />,
-      shortcut: kbd('file.openNewWindow'),
-      action: singleHash && ctx.onOpenNewWindow ? () => ctx.onOpenNewWindow!(singleHash!) : undefined,
-    }));
+    if (ctx.singleKind !== 'collection') {
+      entries.push(item('Open with Default App', {
+        icon: <IconExternalLink size={15} />,
+        shortcut: kbd('file.openDefaultApp'),
+        action: singleHash && ctx.onOpenDefault ? () => ctx.onOpenDefault!(singleHash!) : undefined,
+      }));
+      entries.push(item(isMac ? 'Reveal in Finder' : 'Show in Explorer', {
+        icon: isMac ? <IconBrandFinder size={15} /> : <IconFolderSearch size={15} />,
+        shortcut: kbd('file.revealInFolder'),
+        action: singleHash && ctx.onRevealInFolder ? () => ctx.onRevealInFolder!(singleHash!) : undefined,
+      }));
+      entries.push(item('Open in New Window', {
+        icon: <IconAppWindow size={15} />,
+        shortcut: kbd('file.openNewWindow'),
+        action: singleHash && ctx.onOpenNewWindow ? () => ctx.onOpenNewWindow!(singleHash!) : undefined,
+      }));
+    }
     entries.push(sep());
   }
 
@@ -172,6 +179,18 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
         action: ctx.onNewFolderWithSelection,
       }));
     }
+    if (selectionCount > 1 && ctx.onOrganizeCollection) {
+      entries.push(item('Group into Collection...', {
+        icon: <IconStack2 size={15} />,
+        action: ctx.onOrganizeCollection,
+      }));
+    }
+    if (singleSelected && ctx.singleKind === 'collection') {
+      entries.push(item('Edit Collection', {
+        icon: <IconEdit size={15} />,
+        action: ctx.onEditCollection,
+      }));
+    }
     entries.push(sep());
   }
 
@@ -184,7 +203,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   }
 
   // ── Copy ──
-  if (singleSelected && singleHash) {
+  if (singleSelected && singleHash && ctx.singleKind !== 'collection') {
     entries.push(item('Copy', {
       icon: <IconCopy size={15} />,
       shortcut: kbd('edit.copy'),
@@ -244,7 +263,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   }
 
   // ── Search by Image ──
-  if (singleSelected && singleHash && ctx.onSearchByImage) {
+  if (singleSelected && singleHash && ctx.singleKind !== 'collection' && ctx.onSearchByImage) {
     const engines = [
       { key: 'tineye', label: 'TinEye' },
       { key: 'saucenao', label: 'SauceNAO' },
@@ -264,7 +283,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   }
 
   // ── Thumbnails ──
-  if (hasSelection) {
+  if (hasSelection && !ctx.containsCollection) {
     const thumbLabel = selectionCount > 1 ? `Regenerate ${selectionCount} Thumbnails` : 'Regenerate Thumbnail';
     entries.push(item(thumbLabel, { icon: <IconRefresh size={15} />, shortcut: kbd('file.regenerateThumbnail'), action: ctx.onRegenerateThumbnails }));
     entries.push(sep());

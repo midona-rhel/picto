@@ -56,7 +56,9 @@ import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import { pushHistory } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
 import { aiTaggerPortalAtom, inspectorAnchor } from '../../state/portals';
-import { confirmModalAtom, folderImportModalAtom, exportModalAtom, tagSelectModalAtom, folderPickerModalAtom } from '../../state/modals';
+import { collectionOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, tagSelectModalAtom, folderPickerModalAtom } from '../../state/modals';
+import { organizeIntoCollection } from '../../platform/entityApi';
+import { CollectionSurface } from '../collections/CollectionSurface';
 import { MediaView } from '../viewer/MediaView';
 import { QuickLook } from '../viewer/QuickLook';
 import { TagSelectPanel } from '../tags/TagSelectPanel';
@@ -73,6 +75,9 @@ import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
 import { resolveContextMenuTarget } from './gridMenuSelection';
 import styles from './GridScreen.module.css';
 import type { Lifecycle } from '../../shared/types/generated/application/Lifecycle';
+import type { ItemTarget } from '../../shared/types/generated/application/ItemTarget';
+import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
+import { showErrorNotification } from '../../shared/lib/notifications';
 
 const store = getDefaultStore();
 function supportsExplicitImageAutoTagging(
@@ -141,9 +146,14 @@ export function GridScreen({
   const setAiTaggerPortal = useSetAtom(aiTaggerPortalAtom);
   const setTagSelectModal = useSetAtom(tagSelectModalAtom);
   const setFolderPickerModal = useSetAtom(folderPickerModalAtom);
+  const setCollectionOrganizerModal = useSetAtom(collectionOrganizerModalAtom);
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const gridLayoutRef = useRef<LayoutResult | null>(null);
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
+  const [collectionSurface, setCollectionSurface] = useState<{
+    collectionId: number;
+    mode: 'reader' | 'editor';
+  } | null>(null);
   const subfolderGridRef = useRef<SubfolderGridHandle>(null);
 
   const scrollToItem = useCallback((index: number, alignment: GridScrollAlignment = 'nearest') => {
@@ -364,6 +374,47 @@ export function GridScreen({
   const setAiTaggerPortalRef = useRef(setAiTaggerPortal);
   setAiTaggerPortalRef.current = setAiTaggerPortal;
 
+  const openGridItem = useCallback((
+    item: CanonicalEntityGridItem,
+    sourceItems: CanonicalEntityGridItem[],
+    mode: 'reader' | 'editor' = 'reader',
+  ) => {
+    if (item.kind === 'collection') {
+      setViewerSession(null);
+      setQuickLookSession(null);
+      setCollectionSurface({ collectionId: item.item_id, mode });
+      return;
+    }
+    setViewerSession(createViewerSession(sourceItems, item.item_id));
+  }, [setQuickLookSession, setViewerSession]);
+
+  const organizeSelection = useCallback(async (target: ItemTarget) => {
+    try {
+      const summary = await entityMutations.getTargetSelectionSummary(target);
+      const collections = summary.selected_collection_candidates;
+      if (collections.length === 1) {
+        await organizeIntoCollection({
+          target,
+          label: null,
+          winning_collection_id: collections[0].collection_id,
+        });
+        clearSelection();
+        return;
+      }
+      setCollectionOrganizerModal({
+        open: true,
+        target,
+        collections,
+        onComplete: () => clearSelection(),
+      });
+    } catch (reason) {
+      showErrorNotification({
+        title: 'Could not organize collection',
+        message: reason instanceof Error ? reason.message : String(reason),
+      });
+    }
+  }, [clearSelection, setCollectionOrganizerModal]);
+
   useEffect(() => {
     const defs = {
       selectAll:       getShortcut('edit.selectAll')!,
@@ -384,6 +435,7 @@ export function GridScreen({
 
     function handleKeyDown(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (collectionSurface) return;
       // Don't handle grid shortcuts while a viewer is open — the viewer handles its own keys.
       // Exception: detailView/quicklook shortcuts to open viewers are checked below with their own guards.
       if (viewerSessionRef.current || quickLookSessionRef.current) {
@@ -410,22 +462,25 @@ export function GridScreen({
       if (matchesShortcutDef(e, defs.deselectAll) && count > 0) { clearSelection(); return; }
 
       if (matchesShortcutDef(e, defs.detailView) && singleItemId != null && !viewerSessionRef.current && !quickLookSessionRef.current) {
-        e.preventDefault(); setViewerSession(createViewerSession(curItems, singleItemId)); return;
+        e.preventDefault();
+        if (singleItem) openGridItem(singleItem, curItems);
+        return;
       }
       if (matchesShortcutDef(e, defs.quicklook) && !viewerSessionRef.current) {
         e.preventDefault();
         if (quickLookSessionRef.current) setQuickLookSession(null);
+        else if (singleItem?.kind === 'collection') openGridItem(singleItem, curItems);
         else if (singleItemId != null) setQuickLookSession(createViewerSession(curItems, singleItemId));
         return;
       }
 
-      if (matchesShortcutDef(e, defs.openDefault) && singleFileHash) {
+      if (matchesShortcutDef(e, defs.openDefault) && singleFileHash && singleItem?.kind !== 'collection') {
         e.preventDefault(); void filesController.openDefaultAppForHash(singleFileHash); return;
       }
-      if (matchesShortcutDef(e, defs.revealInFolder) && singleFileHash) {
+      if (matchesShortcutDef(e, defs.revealInFolder) && singleFileHash && singleItem?.kind !== 'collection') {
         e.preventDefault(); void filesController.revealHashInFolder(singleFileHash); return;
       }
-      if (matchesShortcutDef(e, defs.openNewWindow) && count > 0) {
+      if (matchesShortcutDef(e, defs.openNewWindow) && count > 0 && singleItem?.kind !== 'collection') {
         e.preventDefault();
         // Use first selected hash as the window identity
         const selectedArr = [...itemIds];
@@ -487,7 +542,7 @@ export function GridScreen({
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [clearSelection, selectAllResults, setViewerSession, setQuickLookSession, setSelectionLifecycle, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder]);
+  }, [clearSelection, selectAllResults, setQuickLookSession, setSelectionLifecycle, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder, openGridItem, collectionSurface]);
 
   const isEmpty = items.length === 0 && !loading;
 
@@ -677,7 +732,7 @@ export function GridScreen({
           }
         }}
         onTileDoubleClick={(_index, item) => {
-          setViewerSession(createViewerSession(items, item.item_id));
+          openGridItem(item, items);
         }}
         onEmptyClick={() => clearSelection()}
         onSelectionChange={(itemIds) => dispatchSelection({ type: 'replace_items', itemIds })}
@@ -705,7 +760,9 @@ export function GridScreen({
           const singleItem = effectiveSelectionMode === 'explicit' && selCount === 1 ? selectedItems[0] : null;
           const canAutoTag = effectiveSelectionMode === 'explicit'
             && selectedItems.length === effectiveItemIds.size
+            && selectedItems.every((selected) => selected.kind === 'media')
             && selectedItems.every((selected) => selected.display_mime_type.startsWith('image/'));
+          const containsCollection = selectedItems.some((selected) => selected.kind === 'collection');
           const effectiveTarget = resolveContextMenuTarget(
             effectiveQuerySelectionActive,
             selectionTarget,
@@ -725,12 +782,14 @@ export function GridScreen({
             aiTagEnabled: canAutoTag,
             singleSelected: effectiveSelectionMode === 'explicit' && selCount === 1,
             singleHash: singleItem?.display_file_hash ?? null,
+            singleKind: singleItem?.kind ?? null,
+            containsCollection,
             scopeKind,
             statusFilter,
             loadedCount: items.length,
             onSelectAll: () => selectAllResults(),
             onDeselectAll: () => clearSelection(),
-            onOpen: singleItem ? () => setViewerSession(createViewerSession(items, singleItem.item_id)) : undefined,
+            onOpen: singleItem ? () => openGridItem(singleItem, items) : undefined,
             onOpenNewWindow: (hash) => {
               const it = items.find((i) => i.display_file_hash === hash);
               const selectedArr = [...effectiveItemIds];
@@ -757,6 +816,12 @@ export function GridScreen({
               const idx = items.findIndex((i) => i.item_id === singleItem.item_id);
               if (idx >= 0) setRenamingIndex(idx);
             } : undefined,
+            onOrganizeCollection: effectiveTarget && selCount > 1
+              ? () => { void organizeSelection(effectiveTarget); }
+              : undefined,
+            onEditCollection: singleItem?.kind === 'collection'
+              ? () => openGridItem(singleItem, items, 'editor')
+              : undefined,
             onRegenerateThumbnails: () => {
               const hashes = selectedItems.map((selected) => selected.display_file_hash);
               void filesController.regenerateThumbnailsBatch(hashes);
@@ -846,9 +911,16 @@ export function GridScreen({
   return (
     <div className={styles.root}>
       <ApplicationMenuButton />
-      {renderIncomingSurface()}
+      {collectionSurface ? (
+        <CollectionSurface
+          key={`${collectionSurface.collectionId}:${collectionSurface.mode}`}
+          collectionId={collectionSurface.collectionId}
+          initialMode={collectionSurface.mode}
+          onClose={() => setCollectionSurface(null)}
+        />
+      ) : renderIncomingSurface()}
 
-      {fileDragOver && (
+      {!collectionSurface && fileDragOver && (
         <div className={styles.dropOverlay}>
           <div className={styles.dropOverlayBadge}>
             Drop files to import

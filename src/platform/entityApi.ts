@@ -5,8 +5,8 @@ import type { ItemQuery } from '../shared/types/generated/application/ItemQuery'
 import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 import type { CollectionCoverInput } from '../shared/types/generated/application/CollectionCoverInput';
 import type { DetachItemsInput } from '../shared/types/generated/application/DetachItemsInput';
-import type { GroupItemsInput } from '../shared/types/generated/application/GroupItemsInput';
-import type { GroupItemsResult } from '../shared/types/generated/application/GroupItemsResult';
+import type { OrganizeIntoCollectionInput } from '../shared/types/generated/application/OrganizeIntoCollectionInput';
+import type { OrganizeIntoCollectionResult } from '../shared/types/generated/application/OrganizeIntoCollectionResult';
 import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
 import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
 import type { QueryItemsInput } from '../shared/types/generated/application/QueryItemsInput';
@@ -57,8 +57,8 @@ export function getSelectionSummary(target: ItemTarget): Promise<ReplacementSele
   return invoke<ReplacementSelectionSummary>('items.selection_summary', { target });
 }
 
-export function groupItems(input: GroupItemsInput): Promise<GroupItemsResult> {
-  return invoke<GroupItemsResult>('items.group', input);
+export function organizeIntoCollection(input: OrganizeIntoCollectionInput): Promise<OrganizeIntoCollectionResult> {
+  return invoke<OrganizeIntoCollectionResult>('items.organize_into_collection', input);
 }
 
 export function detachItems(input: DetachItemsInput): Promise<MutationReceipt> {
