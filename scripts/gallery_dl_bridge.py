@@ -207,6 +207,39 @@ def _install_tumblr_post_adapter() -> None:
     api._picto_post_cursor = True
 
 
+def _install_patreon_attachment_adapter() -> None:
+    """Let the downloader resolve Patreon attachment redirects on demand.
+
+    gallery-dl normally resolves every attachment URL before checking its
+    archive. That turns a scan of already handled posts into one network
+    request per attachment. The downloader already follows redirects, so
+    yielding the original URL preserves downloads while archive hits remain
+    local.
+    """
+    from gallery_dl import text
+    from gallery_dl.extractor import patreon
+
+    extractor = patreon.PatreonExtractor
+    if getattr(extractor, "_picto_lazy_attachments", False):
+        return
+
+    def attachments_without_preflight(self, post):
+        for attachment in post.get("attachments") or ():
+            if url := attachment.get("url"):
+                yield "attachment", attachment, url, attachment["name"]
+
+        for attachment in post.get("attachments_media") or ():
+            if url := attachment.get("download_url"):
+                yield "attachment", attachment, url, attachment["file_name"]
+
+    def filename_without_preflight(self, url):
+        return text.filename_from_url(url)
+
+    extractor._attachments = attachments_without_preflight
+    extractor._filename = filename_without_preflight
+    extractor._picto_lazy_attachments = True
+
+
 def _emit(event_type: str, **payload: Any) -> None:
     record = {"event": event_type}
     record.update(payload)
@@ -395,6 +428,8 @@ def main() -> int:
         _install_deviantart_deviation_adapter()
     if request.get("site_id") == "tumblr":
         _install_tumblr_post_adapter()
+    if request.get("site_id") == "patreon":
+        _install_patreon_attachment_adapter()
 
     from gallery_dl import config
 
