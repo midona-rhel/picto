@@ -13,6 +13,13 @@ use crate::projection_v2::{
     StructureProjectionDelta, TagProjectionChange,
 };
 
+pub(crate) const DELETED_SOURCE_ITEM_ERROR: &str =
+    "This source item was deliberately deleted and cannot be resurrected";
+
+pub(crate) fn is_deleted_source_item_error(error: &str) -> bool {
+    error.contains(DELETED_SOURCE_ITEM_ERROR)
+}
+
 const RANK_GAP: i64 = 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -90,9 +97,7 @@ impl Application {
                                 ));
                             }
                             ExistingSourceItem::Deleted => {
-                                return Err(invalid(
-                                    "This source item was deliberately deleted and cannot be resurrected",
-                                ));
+                                return Err(invalid(DELETED_SOURCE_ITEM_ERROR));
                             }
                             ExistingSourceItem::Pending => {}
                         }
@@ -533,9 +538,7 @@ fn attach_source_item(
         ],
     )?;
     if changed != 1 {
-        return Err(invalid(
-            "This source item was deliberately deleted and cannot be resurrected",
-        ));
+        return Err(invalid(DELETED_SOURCE_ITEM_ERROR));
     }
     Ok(())
 }

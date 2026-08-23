@@ -311,8 +311,15 @@ fn process_item(
         item.delete_after_ingest,
         item.input.clone(),
     )?;
-    ingest_queue_v2::enqueue(application, &spec)
-        .map_err(|error| format!("enqueueing subscription item failed: {error}"))?;
+    if let Err(error) = ingest_queue_v2::enqueue(application, &spec) {
+        if crate::ingest_v2::is_deleted_source_item_error(&error) {
+            if item.delete_after_ingest {
+                let _ = std::fs::remove_file(&item.source_path);
+            }
+            return Ok(());
+        }
+        return Err(format!("enqueueing subscription item failed: {error}"));
+    }
 
     // A streamed download should become visible while the source run is still
     // active. The durable queue remains authoritative if processing retries.
@@ -368,6 +375,8 @@ mod tests {
     use std::collections::VecDeque;
     use std::path::Path;
     use std::sync::{Arc, Mutex};
+
+    use rusqlite::params;
 
     use super::*;
     use crate::app::{Application, Lifecycle};
@@ -662,6 +671,63 @@ mod tests {
             })
             .unwrap();
         assert_eq!(issue_status, "resolved");
+    }
+
+    #[tokio::test]
+    async fn deleted_source_item_is_skipped_without_failing_the_run() {
+        let (directory, application, _subscription) = fixture();
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO source_post (site_id, post_key, created_at, updated_at)
+                     VALUES ('example', 'deleted-post', ?1, ?1)",
+                    [FIRST_NOW],
+                )?;
+                transaction.execute(
+                    "INSERT INTO source_item (
+                         source_post_id, item_key, position, state, created_at, updated_at
+                     ) VALUES (?1, 'deleted-item', 0, 'deleted', ?2, ?2)",
+                    params![transaction.last_insert_rowid(), FIRST_NOW],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let mut deleted = item(directory.path(), "deleted-post", "deleted-item");
+        deleted.delete_after_ingest = true;
+        let deleted_path = deleted.source_path.clone();
+        let runner = FakeRunner {
+            runs: Mutex::new(VecDeque::from([FakeRun {
+                items: vec![deleted, item(directory.path(), "live-post", "live-item")],
+                result: Ok(RunnerSuccess::default()),
+            }])),
+        };
+        let mut worker = SubscriptionWorker::new(&application, runner);
+
+        worker.tick(FIRST_NOW).await.unwrap().unwrap();
+
+        assert!(!deleted_path.exists());
+        let state: (String, i64, i64, i64) = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT
+                         qr.status,
+                         SUM(CASE WHEN si.state = 'deleted' THEN 1 ELSE 0 END),
+                         SUM(CASE WHEN si.state = 'ingested' THEN 1 ELSE 0 END),
+                         (SELECT COUNT(*) FROM subscription_issue WHERE status = 'open')
+                     FROM subscription_run_query qr
+                     JOIN subscription_run_source_item rsi
+                       ON rsi.run_query_id = qr.run_query_id
+                     JOIN source_item si ON si.source_item_id = rsi.source_item_id
+                     GROUP BY qr.run_query_id",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(state, ("succeeded".to_string(), 1, 1, 0));
     }
 
     #[tokio::test]

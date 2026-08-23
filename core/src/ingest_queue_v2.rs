@@ -8,7 +8,7 @@ use chrono::{Duration, Utc};
 use rusqlite::{params, OptionalExtension};
 
 use crate::app::{resources, Application, ItemId, MutationReceipt};
-use crate::ingest_v2::{IngestMediaResult, PreparedMediaInput};
+use crate::ingest_v2::{IngestMediaResult, PreparedMediaInput, DELETED_SOURCE_ITEM_ERROR};
 
 const DEFAULT_BATCH_SIZE: usize = 8;
 const MAX_ATTEMPTS: i64 = 8;
@@ -237,7 +237,7 @@ fn reject_deleted_source_item(
             .map(|state| state.as_deref() == Some("deleted"))
     })?;
     if deleted {
-        return Err("This source item was deliberately deleted and cannot be resurrected".into());
+        return Err(DELETED_SOURCE_ITEM_ERROR.to_string());
     }
     Ok(())
 }
@@ -269,7 +269,7 @@ fn enqueue_at(
             .is_some_and(|(_, state)| state == "deleted")
         {
             return Err(rusqlite::Error::InvalidParameterName(
-                "This source item was deliberately deleted and cannot be resurrected".to_string(),
+                DELETED_SOURCE_ITEM_ERROR.to_string(),
             ));
         }
         let source_item_id = source_item.map(|(source_item_id, _)| source_item_id);
