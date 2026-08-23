@@ -2,7 +2,7 @@
 
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 121;
+pub const CURRENT_SCHEMA_VERSION: i64 = 122;
 
 pub const LIBRARY_DDL: &str = r#"
 CREATE TABLE library_meta (
@@ -310,8 +310,15 @@ CREATE TABLE subscription_issue (
     resolved_at TEXT
 );
 
-CREATE TABLE credential_health (
+CREATE TABLE credential (
     site_id TEXT PRIMARY KEY,
+    credential_type TEXT NOT NULL CHECK (credential_type IN ('api_key', 'cookies', 'oauth_token')),
+    display_name TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE credential_health (
+    site_id TEXT PRIMARY KEY REFERENCES credential(site_id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'unknown',
     checked_at TEXT,
     last_error TEXT
@@ -440,6 +447,8 @@ mod tests {
             "source_item",
             "ingest_job",
             "work_item",
+            "credential",
+            "credential_health",
         ] {
             assert!(
                 names.iter().any(|name| name == expected),
@@ -457,7 +466,7 @@ mod tests {
                 "retained {removed}"
             );
         }
-        assert_eq!(CURRENT_SCHEMA_VERSION, 121);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 122);
     }
 
     #[test]

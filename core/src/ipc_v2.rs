@@ -68,6 +68,9 @@ pub fn dispatch(
             )?)
         }
         "subscriptions.list" => read(crate::subscription_catalog_v2::list(application)?),
+        "sources.list" => read(crate::auth_v2::sources()),
+        "auth.credentials.list" => read(crate::auth_v2::list_credentials(application.store())?),
+        "auth.health.list" => read(crate::auth_v2::list_health(application.store())?),
         "settings.get" => read(crate::settings_v2::application_settings(application)?),
         "settings.view.get" => {
             let input: ScopeInput = parse(args_json)?;
@@ -361,6 +364,17 @@ pub fn dispatch(
             publish(
                 application,
                 application.cancel_subscription_run(input.subscription_id, &now())?,
+            )
+        }
+        "auth.credentials.set" => publish(
+            application,
+            crate::auth_v2::set_credential(application, parse(args_json)?, &now())?,
+        ),
+        "auth.credentials.delete" => {
+            let input: SiteInput = parse(args_json)?;
+            publish(
+                application,
+                crate::auth_v2::delete_credential(application, &input.site_id)?,
             )
         }
 
@@ -688,6 +702,11 @@ struct ScheduleSubscriptionInput {
 #[derive(Deserialize)]
 struct ScopeInput {
     scope: String,
+}
+
+#[derive(Deserialize)]
+struct SiteInput {
+    site_id: String,
 }
 #[derive(Deserialize)]
 struct ValueInput {

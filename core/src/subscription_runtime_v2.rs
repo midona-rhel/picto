@@ -190,6 +190,11 @@ async fn tick_with_cancellation<R: SourceRunner>(
                 success.resume_cursor.as_deref(),
                 now,
             )?;
+            if let Err(error) =
+                crate::auth_v2::mark_run_success(application.store(), &query.site_id, now)
+            {
+                tracing::warn!(site_id = %query.site_id, error = %error, "Failed to record credential health");
+            }
         }
         Ok(Err(failure)) => {
             settle_runner_failure(application, &query, failure, now)?;
@@ -322,6 +327,8 @@ fn settle_runner_failure(
     failure: RunnerFailure,
     now: &str,
 ) -> Result<(), String> {
+    let authentication_failed = failure.kind == RunnerFailureKind::Authentication;
+    let failure_message = failure.message.clone();
     let retry_at = if failure.retryable && query.attempt_count < MAX_ATTEMPTS {
         Some(next_retry_at(now, query.attempt_count)?)
     } else {
@@ -335,6 +342,16 @@ fn settle_runner_failure(
         retry_at.as_deref(),
         now,
     )?;
+    if authentication_failed {
+        if let Err(error) = crate::auth_v2::mark_auth_failure(
+            application.store(),
+            &query.site_id,
+            now,
+            &failure_message,
+        ) {
+            tracing::warn!(site_id = %query.site_id, error = %error, "Failed to record credential health");
+        }
+    }
     Ok(())
 }
 

@@ -310,7 +310,6 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "gelbooru" => build_booru_url("https://gelbooru.com/index.php?page=post&s=list", query),
         "rule34" => build_booru_url("https://rule34.xxx/index.php?page=post&s=list", query),
         "danbooru" => build_booru_url("https://danbooru.donmai.us/posts", query),
-        "artstation" => build_artstation_url(query),
         "webtoons" => normalize_webtoons_url(query).ok(),
         "hentaifoundry" => normalize_hentaifoundry_username(query)
             .ok()
@@ -876,22 +875,6 @@ pub fn normalize_webtoons_url(raw: &str) -> Result<String, String> {
     Ok(canonical.to_string())
 }
 
-fn build_artstation_url(query: &str) -> Option<String> {
-    let slug = query.trim().strip_prefix('@').unwrap_or(query.trim());
-    if slug.is_empty()
-        || matches!(slug, "artwork" | "projects" | "search")
-        || !slug
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
-    {
-        return None;
-    }
-
-    let mut url = Url::parse("https://www.artstation.com").ok()?;
-    url.path_segments_mut().ok()?.push(slug);
-    Some(url.to_string())
-}
-
 fn build_pixiv_url(kind: &str, query: &str) -> Option<String> {
     let mut url = Url::parse("https://www.pixiv.net/en").ok()?;
     {
@@ -1012,10 +995,6 @@ mod tests {
         assert_eq!(
             build_url("danbooru", "artist:name").as_deref(),
             Some("https://danbooru.donmai.us/posts?tags=artist%3Aname")
-        );
-        assert_eq!(
-            build_url("artstation", "artist-name").as_deref(),
-            Some("https://www.artstation.com/artist-name")
         );
         assert_eq!(
             build_url(
@@ -1192,13 +1171,6 @@ mod tests {
                 "accepted {value}"
             );
         }
-    }
-
-    #[test]
-    fn artstation_url_builder_rejects_path_injection() {
-        assert!(build_url("artstation", "artist/name").is_none());
-        assert!(build_url("artstation", "artist?preview=1").is_none());
-        assert!(build_url("artstation", "projects").is_none());
     }
 
     #[test]
