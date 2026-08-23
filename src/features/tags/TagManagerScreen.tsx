@@ -9,7 +9,7 @@ import {
   IconTrash,
   IconX,
 } from '@tabler/icons-react';
-import { listen } from '../../platform/ipc';
+import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import { tagsController } from '../../controllers/tagsController';
 import type {
   CanonicalNamespaceSummary,
@@ -321,13 +321,10 @@ export function TagManagerScreen() {
     }
     setDetailsLoading(true);
     try {
-      const [aliasResult, implicationResult] = await Promise.all([
-        tagsController.getRelations(tag.tag_id, 'aliases'),
-        tagsController.getRelations(tag.tag_id, 'implications'),
-      ]);
+      const relations = await tagsController.getRelations(tag.tag_id);
       if (generation !== relationGeneration.current) return;
-      setAliases(aliasResult);
-      setImplications(implicationResult);
+      setAliases(relations.aliases);
+      setImplications(relations.implications);
     } catch (reason: unknown) {
       if (generation === relationGeneration.current) setError(errorMessage(reason));
     } finally {
@@ -373,22 +370,15 @@ export function TagManagerScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    const unlistenPromise = listen<{ changes?: Record<string, unknown> }>('runtime/state_changed', ({ payload }) => {
+    const unregister = libraryInvalidation.register('tags', () => {
       if (cancelled) return;
-      const changes = payload?.changes ?? {};
-      if (changes.tags_changed || changes.tag_structure_changed) {
-        void refreshData();
-        if (selectedRef.current) void loadRelations(selectedRef.current);
-      }
-    }).catch((reason: unknown) => {
-      if (!cancelled) setError(errorMessage(reason));
-      return () => {};
+      void refreshData();
+      if (selectedRef.current) void loadRelations(selectedRef.current);
     });
+    libraryInvalidation.start();
     return () => {
       cancelled = true;
-      unlistenPromise.then((unlisten) => unlisten()).catch((reason: unknown) => {
-        if (!cancelled) setError(errorMessage(reason));
-      });
+      unregister();
     };
   }, [loadRelations, refreshData]);
 
@@ -469,33 +459,26 @@ export function TagManagerScreen() {
   const handleRelation = useCallback((mode: RelationMode, target: CanonicalTagRecord) => {
     const currentTag = selectedRef.current;
     if (!currentTag) return;
-    const currentKey = tagKey(currentTag);
-    const targetKey = tagKey(target);
     if (mode === 'alias') {
-      void runMutation(() => tagsController.setAlias(targetKey, currentKey));
+      void runMutation(() => tagsController.setAlias(target.tag_id, currentTag.tag_id));
     } else if (mode === 'parent') {
-      void runMutation(() => tagsController.setImplication(currentKey, targetKey, 'add'));
+      void runMutation(() => tagsController.setImplication(currentTag.tag_id, target.tag_id, true));
     } else {
-      void runMutation(() => tagsController.setImplication(targetKey, currentKey, 'add'));
+      void runMutation(() => tagsController.setImplication(target.tag_id, currentTag.tag_id, true));
     }
   }, [runMutation]);
 
   const removeRelation = useCallback((relation: CanonicalTagRelation) => {
     const currentTag = selectedRef.current;
     if (!currentTag) return;
-    const currentKey = tagKey(currentTag);
-    const targetKey = relationKey(relation);
-    if (relation.relation === 'to' || relation.relation === 'from') {
-      void runMutation(() => tagsController.setAlias(
-        relation.relation === 'to' ? currentKey : targetKey,
-        null,
-      ));
-    } else {
-      void runMutation(() => tagsController.setImplication(
-        relation.relation === 'parent' ? currentKey : targetKey,
-        relation.relation === 'parent' ? targetKey : currentKey,
-        'remove',
-      ));
+    if (relation.relation === 'alias_outgoing') {
+      void runMutation(() => tagsController.setAlias(currentTag.tag_id, null));
+    } else if (relation.relation === 'alias_incoming') {
+      void runMutation(() => tagsController.setAlias(relation.tag_id, null));
+    } else if (relation.relation === 'parent') {
+      void runMutation(() => tagsController.setImplication(currentTag.tag_id, relation.tag_id, false));
+    } else if (relation.relation === 'child') {
+      void runMutation(() => tagsController.setImplication(relation.tag_id, currentTag.tag_id, false));
     }
   }, [runMutation]);
 
@@ -610,7 +593,7 @@ export function TagManagerScreen() {
           onClose={() => setEditorAction(null)}
           onChoose={(target) => {
             setEditorAction(null);
-            void runMutation(() => tagsController.merge(tagKey(selected), tagKey(target)), true);
+            void runMutation(() => tagsController.merge(selected.tag_id, tagKey(target)), true);
           }}
         />
       )}

@@ -8,9 +8,9 @@ import {
   mergeTags,
   renameTag,
 } from '../platform/tagApi';
+import type { TagRelationGroups } from '../platform/tagApi';
 import type {
   CanonicalNamespaceSummary,
-  CanonicalTagRelation,
   TagPage,
 } from '../shared/types/canonical';
 
@@ -28,27 +28,27 @@ export const tagsController = {
     return getNamespaceSummary();
   },
 
-  getRelations(tagId: number, relationType: 'aliases' | 'implications'): Promise<CanonicalTagRelation[]> {
-    return getTagRelations(tagId, relationType);
+  getRelations(tagId: number): Promise<TagRelationGroups> {
+    return getTagRelations(tagId);
   },
 
   rename(tagId: number, newName: string): Promise<unknown> {
     return renameTag(tagId, newName);
   },
 
-  merge(fromTag: string, toTag: string): Promise<unknown> {
-    return mergeTags(fromTag, toTag);
+  merge(fromTagId: number, toTagName: string): Promise<unknown> {
+    return mergeTags(fromTagId, toTagName);
   },
 
   delete(tagId: number): Promise<unknown> {
     return deleteTag(tagId);
   },
 
-  setAlias(from: string, to?: string | null): Promise<void> {
-    return manageTagAlias(from, to);
+  setAlias(fromTagId: number, toTagId?: number | null): Promise<void> {
+    return manageTagAlias(fromTagId, toTagId).then(() => undefined);
   },
 
-  setImplication(child: string, parent: string, action: 'add' | 'remove'): Promise<void> {
-    return manageTagImplication(child, parent, action);
+  setImplication(childTagId: number, parentTagId: number, present: boolean): Promise<void> {
+    return manageTagImplication(childTagId, parentTagId, present).then(() => undefined);
   },
 };

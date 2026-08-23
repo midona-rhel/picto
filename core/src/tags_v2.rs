@@ -50,6 +50,7 @@ pub struct TagRelation {
     #[ts(type = "number")]
     pub tag_id: i64,
     pub name: String,
+    pub direction: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -147,7 +148,8 @@ pub fn relations(application: &Application, tag_id: i64) -> Result<TagRelations,
         Ok(TagRelations {
             aliases: relation_rows(
                 connection,
-                "SELECT t.tag_id, t.namespace, t.subtag
+                "SELECT t.tag_id, t.namespace, t.subtag,
+                        CASE WHEN a.from_tag_id = ?1 THEN 'outgoing' ELSE 'incoming' END
                  FROM tag_alias a
                  JOIN tag t ON t.tag_id = CASE
                      WHEN a.from_tag_id = ?1 THEN a.to_tag_id ELSE a.from_tag_id END
@@ -157,14 +159,14 @@ pub fn relations(application: &Application, tag_id: i64) -> Result<TagRelations,
             )?,
             parents: relation_rows(
                 connection,
-                "SELECT t.tag_id, t.namespace, t.subtag
+                "SELECT t.tag_id, t.namespace, t.subtag, 'parent'
                  FROM tag_implication i JOIN tag t ON t.tag_id = i.parent_tag_id
                  WHERE i.child_tag_id = ?1 ORDER BY t.namespace, t.subtag",
                 tag_id,
             )?,
             children: relation_rows(
                 connection,
-                "SELECT t.tag_id, t.namespace, t.subtag
+                "SELECT t.tag_id, t.namespace, t.subtag, 'child'
                  FROM tag_implication i JOIN tag t ON t.tag_id = i.child_tag_id
                  WHERE i.parent_tag_id = ?1 ORDER BY t.namespace, t.subtag",
                 tag_id,
@@ -352,6 +354,7 @@ fn relation_rows(
                 } else {
                     format!("{namespace}:{subtag}")
                 },
+                direction: row.get(3)?,
             })
         })?
         .collect()
@@ -520,6 +523,32 @@ mod tests {
             .projections()
             .effective_tag_bitmap(ids.1)
             .contains(media.0 as u32));
+    }
+
+    #[test]
+    fn alias_relations_report_direction_from_requested_tag() {
+        let (_directory, application, _) = fixture();
+        let (from, to) = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT
+                         (SELECT tag_id FROM tag WHERE subtag = 'melon'),
+                         (SELECT tag_id FROM tag WHERE subtag = 'one_girl')",
+                    [],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                )
+            })
+            .unwrap();
+        application.set_tag_alias(from, Some(to)).unwrap();
+
+        let outgoing = relations(&application, from).unwrap();
+        assert_eq!(outgoing.aliases[0].tag_id, to);
+        assert_eq!(outgoing.aliases[0].direction, "outgoing");
+
+        let incoming = relations(&application, to).unwrap();
+        assert_eq!(incoming.aliases[0].tag_id, from);
+        assert_eq!(incoming.aliases[0].direction, "incoming");
     }
 
     #[test]

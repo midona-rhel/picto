@@ -13,12 +13,17 @@ const mocks = vi.hoisted(() => ({
   delete: vi.fn(),
   setAlias: vi.fn(),
   setImplication: vi.fn(),
-  listen: vi.fn(),
-  unlisten: vi.fn(),
+  register: vi.fn(),
+  start: vi.fn(),
 }));
 
 vi.mock('../../controllers/tagsController', () => ({ tagsController: mocks }));
-vi.mock('../../platform/ipc', () => ({ listen: mocks.listen }));
+vi.mock('../../runtime/libraryInvalidation', () => ({
+  libraryInvalidation: {
+    register: mocks.register,
+    start: mocks.start,
+  },
+}));
 
 const firstTag: CanonicalTagRecord = {
   tag_id: 1,
@@ -45,25 +50,24 @@ const staleTag: CanonicalTagRecord = {
   file_count: 1,
 };
 
-let stateEvent: ((event: { payload: { changes: Record<string, unknown> } }) => void) | undefined;
+let tagInvalidation: (() => void) | undefined;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  stateEvent = undefined;
+  tagInvalidation = undefined;
   mocks.getNamespaceSummary.mockResolvedValue([
     { namespace: 'character', count: 2 },
     { namespace: 'creator', count: 1 },
   ]);
-  mocks.getRelations.mockResolvedValue([]);
+  mocks.getRelations.mockResolvedValue({ aliases: [], implications: [] });
   mocks.rename.mockResolvedValue(undefined);
   mocks.merge.mockResolvedValue(undefined);
   mocks.delete.mockResolvedValue(undefined);
   mocks.setAlias.mockResolvedValue(undefined);
   mocks.setImplication.mockResolvedValue(undefined);
-  mocks.unlisten.mockResolvedValue(undefined);
-  mocks.listen.mockImplementation(async (_name: string, handler: (event: { payload: { changes: Record<string, unknown> } }) => void) => {
-    stateEvent = handler;
-    return mocks.unlisten;
+  mocks.register.mockImplementation((_resource: string, callback: () => void) => {
+    tagInvalidation = callback;
+    return vi.fn();
   });
   mocks.getPaginated.mockImplementation(async ({ cursor, search }: { cursor?: string | null; search?: string | null }) => {
     if (search) return { items: [nextTag], next_cursor: null };
@@ -215,7 +219,7 @@ describe('TagManagerScreen', () => {
     await settle();
     await user.click(await screen.findByRole('button', { name: /bob/ }));
     await settle();
-    await waitFor(() => expect(mocks.setAlias).toHaveBeenCalledWith('creator:bob', 'character:alice'));
+    await waitFor(() => expect(mocks.setAlias).toHaveBeenCalledWith(3, 1));
 
     await user.click(screen.getByRole('button', { name: 'Add parent' }));
     await settle();
@@ -223,7 +227,7 @@ describe('TagManagerScreen', () => {
     await settle();
     await user.click(await screen.findByRole('button', { name: /bob/ }));
     await settle();
-    await waitFor(() => expect(mocks.setImplication).toHaveBeenCalledWith('character:alice', 'creator:bob', 'add'));
+    await waitFor(() => expect(mocks.setImplication).toHaveBeenCalledWith(1, 3, true));
     expect(mocks.getPaginated).not.toHaveBeenCalledWith(expect.objectContaining({ limit: 0 }));
   });
 
@@ -242,7 +246,7 @@ describe('TagManagerScreen', () => {
 
     const summaryCallsBeforeEvent = mocks.getNamespaceSummary.mock.calls.length;
     await act(async () => {
-      stateEvent?.({ payload: { changes: { tags_changed: true } } });
+      tagInvalidation?.();
     });
     await waitFor(() => expect(mocks.getNamespaceSummary.mock.calls.length).toBeGreaterThan(summaryCallsBeforeEvent));
   });
@@ -266,7 +270,29 @@ describe('TagManagerScreen', () => {
     await settle();
     await user.click(await screen.findByRole('button', { name: /bob/ }));
     await settle();
-    await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith('character:alice', 'creator:bob'));
+    await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith(1, 'creator:bob'));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit tag' })).not.toBeInTheDocument());
+  });
+
+  it('removes aliases using the directional source tag id', async () => {
+    const user = setupUser();
+    mocks.getRelations.mockResolvedValue({
+      aliases: [{ tag_id: 3, namespace: 'creator', subtag: 'bob', relation: 'alias_incoming' }],
+      implications: [],
+    });
+    const firstView = await renderScreen();
+    await user.click(await screen.findByRole('button', { name: /alice/ }));
+    await user.click(screen.getByRole('button', { name: 'Remove creator:bob' }));
+    await waitFor(() => expect(mocks.setAlias).toHaveBeenCalledWith(3, null));
+    firstView.unmount();
+
+    mocks.getRelations.mockResolvedValue({
+      aliases: [{ tag_id: 3, namespace: 'creator', subtag: 'bob', relation: 'alias_outgoing' }],
+      implications: [],
+    });
+    await renderScreen();
+    await user.click(await screen.findByRole('button', { name: /alice/ }));
+    await user.click(screen.getByRole('button', { name: 'Remove creator:bob' }));
+    await waitFor(() => expect(mocks.setAlias).toHaveBeenCalledWith(1, null));
   });
 });
