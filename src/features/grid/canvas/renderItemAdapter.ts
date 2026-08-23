@@ -39,3 +39,15 @@ export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
     numFrames: item.frame_count,
   };
 }
+
+/** Resolve an interaction against the item identity painted at this layout index. */
+export function resolveRenderedGridItem(
+  renderedItems: readonly CanvasRenderItem[],
+  sourceItems: readonly CanonicalEntityGridItem[],
+  renderedIndex: number,
+): { index: number; item: CanonicalEntityGridItem } | null {
+  const itemId = renderedItems[renderedIndex]?.itemId;
+  if (itemId == null) return null;
+  const index = sourceItems.findIndex((item) => item.item_id === itemId);
+  return index < 0 ? null : { index, item: sourceItems[index] };
+}

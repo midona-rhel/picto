@@ -1,10 +1,14 @@
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
-import { adaptGridItem } from './renderItemAdapter';
+import { adaptGridItem, resolveRenderedGridItem } from './renderItemAdapter';
 
-function item(itemId: number, displayFileHash: string): CanonicalEntityGridItem {
+function item(
+  itemId: number,
+  displayFileHash: string,
+  kind: CanonicalEntityGridItem['kind'] = 'media',
+): CanonicalEntityGridItem {
   return {
     item_id: itemId,
-    kind: 'media',
+    kind,
     lifecycle: 'active',
     label: null,
     name: null,
@@ -35,5 +39,20 @@ describe('adaptGridItem', () => {
     expect(first.displayFileHash).toBe('shared-file');
     expect(second.displayFileHash).toBe('shared-file');
     expect(first.mime).toBe('image/png');
+  });
+
+  it('resolves interactions from painted identity instead of source-array position', () => {
+    const media = item(10, 'media-file');
+    const collection = item(20, 'cover-file', 'collection');
+    const painted = [adaptGridItem(media), adaptGridItem(collection)];
+
+    expect(resolveRenderedGridItem(painted, [collection, media], 0)).toEqual({
+      index: 1,
+      item: media,
+    });
+    expect(resolveRenderedGridItem(painted, [collection, media], 1)).toEqual({
+      index: 0,
+      item: collection,
+    });
   });
 });

@@ -757,7 +757,11 @@ export function GridScreen({
           // Derive context for menu builder
           const selCount = effectiveSelectionCount;
           const selectedItems = items.filter((it) => effectiveItemIds.has(it.item_id));
-          const singleItem = effectiveSelectionMode === 'explicit' && selCount === 1 ? selectedItems[0] : null;
+          const singleItem = effectiveSelectionMode === 'explicit'
+            && selCount === 1
+            && effectiveItemIds.has(item.item_id)
+            ? item
+            : null;
           const canAutoTag = effectiveSelectionMode === 'explicit'
             && selectedItems.length === effectiveItemIds.size
             && selectedItems.every((selected) => selected.kind === 'media')

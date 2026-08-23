@@ -32,6 +32,7 @@ import { useCanvasRedrawScheduler } from './useCanvasRedrawScheduler';
 import { snapshotViewport, ensureCanvasSize } from './canvasViewportUtils';
 import styles from './CanvasGrid.module.css';
 import type { ItemScope } from '../../../shared/types/generated/application/ItemScope';
+import { resolveRenderedGridItem } from './renderItemAdapter';
 
 const GAP = 16;
 const TEXT_NAME_ROW_H = 20;
@@ -1046,12 +1047,13 @@ export function CanvasGrid({
     const pos = { x: e.clientX, y: e.clientY };
 
     const idx = hitTestTile(layoutModel.positions, x, y, textHeight, 0, layoutModel.positions.length);
-    if (idx != null && items[idx]) {
-      onTileContextMenu?.(idx, items[idx], pos);
+    const target = idx == null ? null : resolveRenderedGridItem(layoutModel.items, items, idx);
+    if (target) {
+      onTileContextMenu?.(target.index, target.item, pos);
     } else {
       onEmptyContextMenu?.(pos);
     }
-  }, [items, layoutModel.positions, onTileContextMenu, onEmptyContextMenu, textHeight, headerHeight]);
+  }, [items, layoutModel.items, layoutModel.positions, onTileContextMenu, onEmptyContextMenu, textHeight, headerHeight]);
 
   // Marquee rect → selected item IDs (canvas tiles via spatial index + folder
   // DOM tiles). Reads refs so the auto-scroll RAF tick never goes stale.
