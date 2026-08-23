@@ -2,101 +2,76 @@
 
 ## Goal
 
-Ship one understandable backend: command, application operation, SQLite transaction, synchronous
-projection settlement, compact resource invalidation. Delete each replaced path in the same cutover.
+Finish Picto around one understandable backend: SQLite truth, rebuildable bitmap projections, one
+application operation path, one compact invalidation contract, and one durable subscription worker.
+Collections are first-class library items. Cloud sync is deferred from this release.
 
 ## Release Rules
 
-- `All` is active roots only. Inbox and Trash are separate.
-- Library roots are standalone media or collections. Attached members have no independent lifecycle
-  or folder membership.
-- One ingest queue accepts manual, watched, and subscription media.
-- One persisted subscription state machine owns runs, retries, interruption, and progress.
-- SQLite is authoritative; projections are settled before readers and events observe a revision.
-- No pre-1.0 migration, dual writes, compatibility backend, cloud sync, or disabled release UI.
-- Preserve the current active test library until cutover. Then run one reviewed manual conversion,
-  verify the converted copy, and delete the conversion tool before release.
-- Retained tests prove behavior or persistence. Wrapper/parity/mock-only tests are deleted.
+1. Visible library items are standalone media or collections.
+2. Media assets are images or videos. Collection roots own lifecycle and folders; members inherit.
+3. `All` means active accepted roots only. Inbox and Trash stay outside All and library scopes.
+4. The durable ingest queue is the only entrypoint for manual, watch, subscription, and retry work.
+5. Before 1.0, there are no migrations. A library must match the current schema or fail untouched.
+6. Every mutation settles SQLite and projections before emitting one revision/resource invalidation.
+7. PBIs close only after focused tests and an application-level smoke; completed PBIs are deleted.
 
-## Phase 0: Integration Boundary
+## Phase 1: Backend Replacement
 
-- [x] Commit the prior subscription/frontend checkpoint.
-- [x] Isolate the replacement in `codex/backend-replacement`.
-- [x] Restore the collection/root product contract and remove cloud sync from release scope.
-- [ ] Keep one replacement PBI and delete it after the packaged smoke.
+- Replace the layered backend with direct application operations and a current exact schema.
+- Model library roots, media assets, physical files, collection membership, folders, tags, smart
+  folders, source provenance, ingest work, and subscriptions explicitly.
+- Make collection lifecycle and folder membership authoritative on the root; members inherit them.
+- Implement group, detach, ungroup, reorder, cover selection, collection metadata fan-out, and
+  destructive collection deletion.
+- Use one canonical item query for grid, outline, selection, export, details, and counts.
+- Keep projections incremental and rebuildable; never rebuild the whole library for ordinary writes.
 
-## Phase 1: Store and Application Core
+## Phase 2: Communication Cutover
 
-- [x] Create exact schema 124 and reject incompatible databases without mutation.
-- [x] Separate item, media, and physical file identity.
-- [x] Add direct Store read/transaction boundaries and monotonic library revision.
-- [x] Add compact mutation receipts and `LibraryChanged` resources.
-- [ ] Settle projection changes under the same read/write consistency boundary as SQLite commits.
+- Replace detailed state-change payloads with `revision`, affected resource keys, and item IDs.
+- Resources are `library`, `sidebar`, `folders`, `smart_folders`, `tags`, `duplicates`,
+  `subscriptions`, `settings`, `tasks`, and `item:{id}`.
+- Frontend consumers re-query canonical data after committed invalidation. No speculative grid
+  insertion or renderer-owned count patches remain.
+- Verify drag-to-Inbox, drag-to-All, drag-to-Trash, folder moves, imports, and deletion settle in
+  every open view without stale or ghost items.
 
-## Phase 2: Queries, Projections, and Core Operations
+## Phase 3: Subscriptions and Ingest
 
-- [x] Implement canonical All, Inbox, Trash, Recently Viewed, Untagged, Uncategorized, and folder
-  root queries with visible-item and underlying-media counts.
-- [ ] Implement smart-folder and search predicates through the same root resolver.
-- [ ] Use one query for pages, outline, selection, export, and sidebar counts.
-- [x] Implement lifecycle, folders, tags, metadata, group, detach, ungroup, reorder, cover, and
-  destructive delete as transaction-owned operations.
-- [ ] Prove incremental projection behavior at 100k and 1M representative assets.
+- Use one durable worker for scheduled and manual subscription runs, retry, stop, and restart.
+- Persist source posts, source items, downloads, ingest state, retries, and terminal outcomes.
+- Resume from non-terminal work; use source identity for idempotency and preserve deletion tombstones.
+- Stream source items through the durable ingest queue. A multi-file post promotes its first item
+  into a collection when the second item arrives, then appends later items in source order.
+- Normalize all adapters to one post/item contract, sanitize descriptions centrally, and retain
+  direct-site login through the OS credential store.
+- Certify the supported source registry only after login, metadata, pagination, restart, and
+  terminal-state behavior pass.
 
-## Phase 3: Ingest and Background Work
+## Phase 4: Remaining Product Work
 
-- [x] Implement physical-byte reuse with distinct logical media occurrences.
-- [x] Implement source-item idempotency, deletion tombstones, and second-item collection promotion.
-- [ ] Make the durable ingest queue the only manual/watch/subscription entrypoint.
-- [ ] Finish one durable worker for derivatives, AI tagging, and blob deletion.
+- Finish duplicates with deterministic quality comparison, metadata/provenance preservation, and
+  safe collection-aware merge behavior.
+- Finish tag management and durable automatic AI tagging.
+- Finish deletion, recently viewed, folder/smart-folder behavior, and measured 100k-1M performance.
+- Keep OnlyFans as a separate source runner using the same normalized subscription contract.
+- Defer cloud sync, oplog, replay, conflict handling, and sync UI until after this release.
 
-## Phase 4: Subscriptions
+## Phase 5: Release Gate and Cleanup
 
-- [ ] Replace transient run ownership with one persisted subscription/query-run state machine.
-- [ ] Resume from the first non-terminal source item after restart.
-- [ ] Derive all counters from persisted rows and serialize same-domain requests one second apart.
-- [ ] Normalize every adapter to ordered posts/items and sanitize descriptions centrally.
-- [ ] Reuse unchanged authentication/extraction evidence and recertify changed adapters.
+- Delete replaced engine, DB façade, compiler/change-impact, renderer patch, and duplicate paths.
+- Delete tests that only prove mocked forwarding; retain behavior and persistence tests.
+- Remove commands, dependencies, documentation, and PBIs without active callers or release value.
+- Run Rust formatting/tests, TypeScript/Vitest, command parity, native build, packaged Electron
+  smoke, fresh-library schema checks, restart recovery, and representative performance probes.
+- Delete this replacement PBI and other completed PBIs only after their focused smoke passes.
 
-## Phase 5: Duplicates and AI
+## Acceptance
 
-- [ ] Detect at physical-file level and present affected logical roots.
-- [ ] Resolve deterministic quality winners using decoded information, dimensions, format, alpha,
-  file size, and similarity.
-- [ ] Repoint logical occurrences without losing source provenance, ordering, folders, or tags.
-- [ ] Finish automatic tagging through the shared durable worker.
-
-## Phase 6: Atomic App Cutover
-
-- [x] Build a one-time development conversion for the current active library; dry-run and back it up
-  before mutation. Never ship or auto-run this conversion.
-- [x] Replace hash-based logical UI identity with item IDs.
-- [x] Replace detailed state-change settlement with the resource invalidation registry.
-- [x] Remove optimistic grid/count ownership and reconcile from canonical queries.
-- [x] Remove unused commands and switch IPC/backend/frontend contracts atomically.
-- [x] Delete old engine, DB facade, compiler/change-impact, old ingest/subscription paths, and cloud
-  sync immediately after the smoke passes.
-- [x] Delete the one-time conversion tool after the converted active library passes verification.
-
-## Phase 7: OnlyFans
-
-- [ ] Add a native source runner behind the same normalized post/item stream.
-- [ ] Prove direct-site auth, images, videos, mixed posts, pagination, restart, and expired sessions.
-
-## Phase 8: Release Gate
-
-- [ ] Remove production TODO/FIXME items by implementation or deletion.
-- [ ] Delete mock-only/pass-through tests and obsolete PBIs/docs.
-- [ ] Pass Rust, TypeScript, Vitest, native addon, packaged Electron, and behavior smokes.
-- [ ] Report production/test LOC and deleted modules.
-- [ ] Delete the replacement PBI.
-
-## User Verification
-
-1. Core: import, lifecycle drag, folders, group/reorder/detach/ungroup, destructive collection delete.
-2. Subscriptions: booru and multi-media creator run, interruption, restart, truthful progress/counts.
-3. Cutover: grids, sidebar, inspector, duplicates, tags, and subscriptions settle without refresh or
-   visual ghost items.
-4. OnlyFans: attended login and representative image/video/mixed posts.
-5. Packaged release: fresh library through import, acceptance, organization, subscription,
-   deduplication, tagging, AI tagging, restart, and deletion.
+- One production path exists for each user mutation, ingest path, query model, invalidation model,
+  and subscription worker.
+- Collections, All/Inbox/Trash, folders, smart folders, sidebar counts, grid counts, tags,
+  duplicates, subscriptions, and restart recovery agree on persisted state.
+- Cloud sync is absent from the release build and documentation.
+- No pre-1.0 migration code exists.
