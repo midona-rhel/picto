@@ -1,7 +1,7 @@
 import { getDefaultStore } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CanonicalEntityGridItem, EntityViewPage } from '../shared/types/canonical';
-import { gridActiveAtom } from '../state/grid';
+import { gridSessionAtom } from '../state/grid';
 import {
   displayedInspectorTargetAtom,
   subfolderPreviewAtom,
@@ -53,7 +53,7 @@ function page(): EntityViewPage {
 describe('subfolder inspector preview', () => {
   beforeEach(() => {
     entityApiMocks.queryEntityView.mockReset();
-    store.set(gridActiveAtom, true);
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: true });
     store.set(activeNodeIdAtom, 'folder:1');
     store.set(selectedSubfolderNodeIdsAtom, new Set(['folder:2']));
     store.set(displayedInspectorTargetAtom, { kind: 'scope', nodeId: 'folder:1' });

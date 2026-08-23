@@ -7,7 +7,7 @@ import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { IconPhoto, IconUpload, IconFolderPlus } from '@tabler/icons-react';
 import * as entityMutations from '../../controllers/entityMutations';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
-import { activeNodeIdAtom, displayedSurfaceNodeIdAtom, skipFadeOutAtom } from '../../state/navigation';
+import { activeNodeIdAtom } from '../../state/navigation';
 import {
   gridItemsAtom,
   gridLoadingAtom,
@@ -24,12 +24,9 @@ import {
   gridTotalCountAtom,
   gridTotalSizeBytesAtom,
   gridScopeAtom,
-  gridTransitionPhaseAtom,
-  gridChromeTransitionAtom,
-  gridSoftTransitionActionAtom,
   gridShowSubfoldersAtom,
   gridChildFoldersAtom,
-  activeGridScopeAtom,
+  type GridTransitionPhase,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import { foldersController } from '../../controllers/foldersController';
@@ -58,12 +55,11 @@ import { CanvasGrid } from './canvas/CanvasGrid';
 import { SubfolderGrid } from './SubfolderGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
-import { saveScrollPosition, getScrollPosition, pushHistory } from '../../state/navigationHistory';
+import { pushHistory } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
 import { aiTaggerPortalAtom, inspectorAnchor } from '../../state/portals';
 import { confirmModalAtom, folderImportModalAtom, exportModalAtom, tagSelectModalAtom, folderPickerModalAtom } from '../../state/modals';
 import { MediaView } from '../viewer/MediaView';
-import { ManagerSurface } from '../managers/ManagerSurface';
 import { QuickLook } from '../viewer/QuickLook';
 import { TagSelectPanel } from '../tags/TagSelectPanel';
 import { FolderPickerPanel } from '../folders/FolderPickerPanel';
@@ -73,17 +69,14 @@ import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
 import { filesController, manualImportParamsForScope } from '../../controllers/filesController';
 import { viewerController } from '../../controllers/viewerController';
-import { nodeIdToGridScope } from '../../shared/lib/gridScope';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { ApplicationMenuButton } from '../../shared/ui/ApplicationMenuButton/ApplicationMenuButton';
 import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
 import { hasSameEntityOrder } from './gridItemIdentity';
-import { GridTransitionCoordinator } from './gridTransitionCoordinator';
 import { resolveContextMenuTarget } from './gridMenuSelection';
 import styles from './GridScreen.module.css';
 
 const store = getDefaultStore();
-const SCOPE_TRANSITION_MS = 170;
 const STATUS_ACTIVE = 1;
 const STATUS_TRASH = 2;
 
@@ -102,10 +95,23 @@ function supportsExplicitImageAutoTagging(
   );
 }
 
-export function GridScreen() {
+interface GridScreenProps {
+  nodeId?: string;
+  transitionPhase?: GridTransitionPhase;
+  initialScrollTop?: number | null;
+  onFirstPaint?: () => void;
+  onScrollTopChange?: (scrollTop: number) => void;
+}
+
+export function GridScreen({
+  nodeId,
+  transitionPhase = 'idle',
+  initialScrollTop = null,
+  onFirstPaint,
+  onScrollTopChange,
+}: GridScreenProps) {
   const activeNodeId = useAtomValue(activeNodeIdAtom);
-  const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
-  const setDisplayedSurfaceNodeId = useSetAtom(displayedSurfaceNodeIdAtom);
+  const displayedNodeId = nodeId ?? activeNodeId;
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
   const items = useAtomValue(gridItemsAtom);
   const loading = useAtomValue(gridLoadingAtom);
@@ -118,13 +124,10 @@ export function GridScreen() {
   const showExtensionLabel = useAtomValue(gridShowExtensionLabelAtom);
   const showResolution = useAtomValue(gridShowResolutionAtom);
   const fitThumbnails = useAtomValue(gridFitThumbnailsAtom);
-  const softTransitionAction = useAtomValue(gridSoftTransitionActionAtom);
-  const setSoftTransitionAction = useSetAtom(gridSoftTransitionActionAtom);
   const searchText = useAtomValue(gridSearchTextAtom);
   const totalCount = useAtomValue(gridTotalCountAtom);
   const totalSizeBytes = useAtomValue(gridTotalSizeBytesAtom);
   const gridScope = useAtomValue(gridScopeAtom);
-  const activeGridScope = useAtomValue(activeGridScopeAtom);
   const sidebarNodes = useAtomValue(sidebarNodesAtom);
   const selectedHashes = useAtomValue(selectedEntityHashesAtom);
   const selectedSubfolderNodeIds = useAtomValue(selectedSubfolderNodeIdsAtom);
@@ -230,199 +233,37 @@ export function GridScreen() {
   const setInspectorError = useSetAtom(inspectorErrorAtom);
   const liveTarget = useAtomValue(liveInspectorTargetAtom);
 
-  type TransitionPhase = 'idle' | 'fading_out' | 'waiting' | 'fading_in';
-  const [transitionPhase, setTransitionPhaseRaw] = useState<TransitionPhase>('idle');
-  const transitionPhaseRef = useRef<TransitionPhase>('idle');
-  const setTransitionPhase = useCallback((phase: TransitionPhase | ((prev: TransitionPhase) => TransitionPhase)) => {
-    const resolved = typeof phase === 'function' ? phase(transitionPhaseRef.current) : phase;
-    if (resolved === transitionPhaseRef.current) return;
-    transitionPhaseRef.current = resolved;
-    // Synchronous atom update — gridSettle reads this immediately via store.get()
-    store.set(gridTransitionPhaseAtom, resolved);
-    // React state for component re-renders
-    setTransitionPhaseRaw(resolved);
-  }, []);
   const lastScrollTopRef = useRef(0);
-  const previousNodeIdRef = useRef(activeNodeId);
-  const transitionCoordinatorRef = useRef(new GridTransitionCoordinator());
-  const pendingNodeIdRef = useRef(activeNodeId);
-  const itemsLengthRef = useRef(items.length);
-  itemsLengthRef.current = items.length;
-  /** Scroll position to restore for the incoming scope (set during transition). */
-  const restoredScrollTopRef = useRef<number | null>(null);
-
-  const scope = activeGridScope;
-  const isGridScope = scope !== null;
-  const displayedIsGridScope = nodeIdToGridScope(displayedSurfaceNodeId) !== null;
-
-  const clearTransition = useCallback(() => {
-    transitionCoordinatorRef.current.cancel();
-    setTransitionPhase('idle');
-  }, []);
-
-  const beginFadeIn = useCallback(() => {
-    transitionCoordinatorRef.current.scheduleFrame(() => {
-      setTransitionPhase((phase) => {
-        if (phase !== 'waiting') return phase;
-        transitionCoordinatorRef.current.scheduleDelay(() => {
-          setTransitionPhase('idle');
-        }, SCOPE_TRANSITION_MS);
-        return 'fading_in';
-      });
-    });
-  }, []);
-
-  useEffect(() => {
-    const previousScope = nodeIdToGridScope(previousNodeIdRef.current);
-    const nextScope = activeGridScope;
-    pendingNodeIdRef.current = activeNodeId;
-
-    transitionCoordinatorRef.current.cancel();
-
-    if (!nextScope) {
-      // Managers share the grid's exit → commit → enter timeline. Keep the
-      // committed surface mounted until the fade-out midpoint.
-      if (activeNodeId === previousNodeIdRef.current && !previousScope) {
-        store.set(gridChromeTransitionAtom, 'stable');
-        gridController.deactivate();
-        setDisplayedSurfaceNodeId(activeNodeId);
-        clearTransition();
-        return;
-      }
-
-      store.set(gridChromeTransitionAtom, previousScope ? 'leaving_grid' : 'stable');
-      setTransitionPhase('fading_out');
-      transitionCoordinatorRef.current.scheduleDelay(() => {
-        const committedNodeId = pendingNodeIdRef.current;
-        if (previousScope) saveScrollPosition(previousNodeIdRef.current, lastScrollTopRef.current);
-        gridController.deactivate();
-        setDisplayedSurfaceNodeId(committedNodeId);
-        previousNodeIdRef.current = committedNodeId;
-        setTransitionPhase('waiting');
-        beginFadeIn();
-      }, SCOPE_TRANSITION_MS);
-      return;
-    }
-
-    if (previousScope) {
-      saveScrollPosition(previousNodeIdRef.current, lastScrollTopRef.current);
-
-          // Skip fade-out when a caller already performed the transition.
-      const skip = store.get(skipFadeOutAtom);
-      if (skip) {
-        store.set(skipFadeOutAtom, false);
-        restoredScrollTopRef.current = getScrollPosition(activeNodeId);
-        setTransitionPhase('waiting');
-        void gridController.navigateTo(nodeIdToGridScope(activeNodeId)!);
-        previousNodeIdRef.current = activeNodeId;
-        return;
-      }
-
-      // Grid-to-grid: fade out old → wait → load new → fade in
-      setTransitionPhase('fading_out');
-      transitionCoordinatorRef.current.scheduleDelay(() => {
-        const committedNodeId = pendingNodeIdRef.current;
-        restoredScrollTopRef.current = getScrollPosition(committedNodeId);
-        setTransitionPhase('waiting');
-        void gridController.navigateTo(nodeIdToGridScope(committedNodeId)!);
-        previousNodeIdRef.current = committedNodeId;
-      }, SCOPE_TRANSITION_MS);
-      return;
-    }
-
-    // Manager-to-grid uses the same fade-out midpoint before the grid mounts.
-    store.set(gridChromeTransitionAtom, 'stable');
-    setTransitionPhase('fading_out');
-    transitionCoordinatorRef.current.scheduleDelay(() => {
-      const committedNodeId = pendingNodeIdRef.current;
-      const committedScope = nodeIdToGridScope(committedNodeId);
-      if (!committedScope) return;
-      restoredScrollTopRef.current = getScrollPosition(committedNodeId);
-      store.set(gridChromeTransitionAtom, 'entering_grid');
-      setDisplayedSurfaceNodeId(committedNodeId);
-      setTransitionPhase('waiting');
-      void gridController.navigateTo(committedScope);
-      previousNodeIdRef.current = committedNodeId;
-    }, SCOPE_TRANSITION_MS);
-  }, [activeGridScope, activeNodeId, beginFadeIn, clearTransition, setDisplayedSurfaceNodeId]);
-
-  useEffect(() => {
-    if (transitionPhase === 'idle') store.set(gridChromeTransitionAtom, 'stable');
-  }, [transitionPhase]);
-
-  useEffect(() => {
-    if (transitionPhase !== 'waiting') return;
-    if (!loading) {
-      beginFadeIn();
-    }
-  }, [beginFadeIn, loading, transitionPhase]);
-
-  // Soft transition: sort/layout change within same scope.
-  // Fade out → execute deferred action at midpoint → fade in.
-  useEffect(() => {
-    if (!softTransitionAction) return;
-    if (transitionPhase !== 'idle') {
-      // Already transitioning — execute immediately, skip fade
-      softTransitionAction();
-      setSoftTransitionAction(null);
-      return;
-    }
-
-    setTransitionPhase('fading_out');
-    const action = softTransitionAction;
-    setSoftTransitionAction(null);
-
-    transitionCoordinatorRef.current.scheduleDelay(() => {
-      // Execute the deferred action (sort change, layout change, etc.)
-      action();
-      setTransitionPhase('waiting');
-      // waiting→fading_in effect will fire once loading completes
-    }, SCOPE_TRANSITION_MS);
-  }, [softTransitionAction, transitionPhase, setTransitionPhase, setSoftTransitionAction]);
-
-  useEffect(() => () => transitionCoordinatorRef.current.cancel(), []);
 
   // Commit the displayed scene — snapshot + inspector target — atomically.
   // ONLY commits during fading_in (new data arriving after transition).
   // During idle: only commits if data changed within the SAME scope (reconcile, sort, search).
-  const displayedNodeIdRef = useRef(activeNodeId);
+  const displayedNodeIdRef = useRef(displayedNodeId);
 
   useEffect(() => {
-    if (!isGridScope) {
-      if (transitionPhase === 'idle' || transitionPhase === 'fading_in') {
-        displayedNodeIdRef.current = activeNodeId;
-        setDisplayedGridSnapshot(null);
-        setDisplayedInspectorTarget({ kind: 'none' });
-        setDisplayedEntityData(null);
-        setInspectorLoading(false);
-        setInspectorError(null);
-      }
-      return;
-    }
-
     // During fading_in: commit only when data is loaded (not loading)
     // During idle: only commit if we're on the SAME scope (data update, not scope change)
-    const isSameScope = activeNodeId === displayedNodeIdRef.current;
+    const isSameScope = displayedNodeId === displayedNodeIdRef.current;
     const shouldCommit = (transitionPhase === 'fading_in' && !loading) || (transitionPhase === 'idle' && isSameScope);
 
     if (shouldCommit) {
-      displayedNodeIdRef.current = activeNodeId;
+      displayedNodeIdRef.current = displayedNodeId;
       setDisplayedGridSnapshot({
-        nodeId: activeNodeId,
+        nodeId: displayedNodeId,
         previewItems: items.slice(0, 4),
         totalCount,
         totalSizeBytes,
         searchText: searchText.trim(),
-        sidebarNode: sidebarNodes.find((n) => n.id === activeNodeId) ?? null,
+        sidebarNode: sidebarNodes.find((n) => n.id === displayedNodeId) ?? null,
       });
       // Don't overwrite inspector target when a subfolder tile is selected
       // (liveTarget points to the subfolder, not the current scope)
-      const isSubfolderSelected = liveTarget.kind === 'scope' && 'nodeId' in liveTarget && liveTarget.nodeId !== activeNodeId;
+      const isSubfolderSelected = liveTarget.kind === 'scope' && 'nodeId' in liveTarget && liveTarget.nodeId !== displayedNodeId;
       if (!isSubfolderSelected && (transitionPhase === 'fading_in' || liveTarget.kind === 'scope' || liveTarget.kind === 'none')) {
         setDisplayedInspectorTarget(
           liveTarget.kind === 'none'
             ? { kind: 'none' }
-            : { kind: 'scope', nodeId: activeNodeId },
+            : { kind: 'scope', nodeId: displayedNodeId },
         );
         setDisplayedEntityData(null);
         setInspectorLoading(false);
@@ -430,8 +271,7 @@ export function GridScreen() {
       }
     }
   }, [
-    activeNodeId,
-    isGridScope,
+    displayedNodeId,
     items,
     liveTarget,
     searchText,
@@ -659,16 +499,9 @@ export function GridScreen() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [clearSelection, selectAllResults, setViewerSession, setQuickLookSession, setSelectionStatus, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder]);
 
-  const incomingHidden = transitionPhase === 'waiting';
-  const incomingFadingOut = transitionPhase === 'fading_out';
-  const incomingFadingIn = transitionPhase === 'fading_in';
   const isEmpty = items.length === 0 && !loading;
 
   const renderIncomingSurface = () => {
-    if (!displayedIsGridScope) {
-      return <ManagerSurface nodeId={displayedSurfaceNodeId} />;
-    }
-
     if (error) {
       return (
         <div className={styles.error}>
@@ -822,7 +655,7 @@ export function GridScreen() {
         interactive={!viewerSession && !quickLookSession}
         suppressTileReveal={transitionPhase === 'fading_out' || transitionPhase === 'waiting'}
         selectedEntityHashes={selectedHashes}
-        initialScrollTop={restoredScrollTopRef.current}
+        initialScrollTop={initialScrollTop}
         onContainerRef={(el) => { gridContainerRef.current = el; }}
         onLayoutChange={(l) => { gridLayoutRef.current = l; }}
         renamingIndex={renamingIndex}
@@ -832,8 +665,8 @@ export function GridScreen() {
           if (item && name) void entityMutations.setEntityName(item.entity_hash, name);
         }}
         onRenameCancel={() => setRenamingIndex(null)}
-        onFirstPaint={() => { restoredScrollTopRef.current = null; beginFadeIn(); }}
-        onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; }}
+        onFirstPaint={onFirstPaint}
+        onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; onScrollTopChange?.(scrollTop); }}
         onTileClick={(index, item, event) => {
           const hash = item.entity_hash;
           if (event?.shiftKey && lastClickedIndexRef.current != null) {
@@ -1030,19 +863,7 @@ export function GridScreen() {
   return (
     <div className={styles.root}>
       <ApplicationMenuButton />
-      <div
-        className={`${styles.surface} ${
-          incomingHidden
-            ? styles.surfaceIncomingHidden
-            : incomingFadingOut
-              ? styles.surfaceFadeOut
-              : incomingFadingIn
-                ? styles.surfaceIncomingFadeIn
-                : styles.surfaceIncomingVisible
-        }`}
-      >
-        {renderIncomingSurface()}
-      </div>
+      {renderIncomingSurface()}
 
       {fileDragOver && (
         <div className={styles.dropOverlay}>

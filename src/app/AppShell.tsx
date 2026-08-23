@@ -11,7 +11,7 @@ import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { IconSettings, IconPin, IconPinFilled } from '@tabler/icons-react';
 import { ToolbarHistoryIcon, ToolbarPanelIcon } from '../shared/ui/icons/toolbar-icons';
 import { Sidebar } from '../features/sidebar/Sidebar';
-import { GridScreen } from '../features/grid/GridScreen';
+import { WorkspaceSurface } from '../features/workspace/WorkspaceSurface';
 import { GridToolbar, ViewerToolbar } from '../features/grid/GridToolbar';
 import { TagsToolbar } from '../features/tags/TagManagerScreen';
 import { DuplicatesToolbar } from '../features/duplicates/DuplicatesScreen';
@@ -27,7 +27,7 @@ import {
   showTreeGuidesAtom,
 } from '../state/navigation';
 import { sidebarNodesAtom } from '../state/sidebar';
-import { gridActiveAtom, gridChromeTransitionAtom, gridScopeLabelAtom, gridTransitionPhaseAtom } from '../state/grid';
+import { gridActiveAtom, gridScopeLabelAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
 import { viewerSessionAtom } from '../state/viewer';
 import { startAppRuntime } from '../runtime/appRuntime';
@@ -173,7 +173,6 @@ export function AppShell() {
   const gridActive = useAtomValue(gridActiveAtom);
   const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
   const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
-  const gridChromeTransition = useAtomValue(gridChromeTransitionAtom);
   const viewerSession = useAtomValue(viewerSessionAtom);
   const canBack = useAtomValue(canGoBackAtom);
   const canForward = useAtomValue(canGoForwardAtom);
@@ -435,14 +434,13 @@ export function AppShell() {
           </div>
         )}
         <div className={styles.main}>
-          <GridScreen />
+          <WorkspaceSurface />
         </div>
       </div>
       {showInspector && (
         <div
           ref={inspectorElRef}
           className={styles.inspector}
-          data-chrome-transition={gridChromeTransition}
           data-transition-phase={transitionPhase}
           style={{ width: inspectorWidth }}
         >

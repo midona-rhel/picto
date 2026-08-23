@@ -6,6 +6,7 @@ import {
   gridErrorAtom,
   gridItemsAtom,
   gridLoadingAtom,
+  gridSessionAtom,
   gridTotalCountAtom,
   gridTotalSizeBytesAtom,
 } from '../state/grid';
@@ -60,12 +61,11 @@ function page(items: CanonicalEntityGridItem[], nextCursor: string | null, total
 describe('gridController pagination', () => {
   beforeEach(() => {
     queryEntityViewMock.mockReset();
-    store.set(gridItemsAtom, [item(1)]);
-    store.set(gridCursorAtom, 'cursor-1');
-    store.set(gridTotalCountAtom, 2);
-    store.set(gridTotalSizeBytesAtom, 100);
-    store.set(gridLoadingAtom, false);
-    store.set(gridErrorAtom, null);
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      items: [item(1)], cursor: 'cursor-1', totalCount: 2,
+      totalSizeBytes: 100, status: 'idle', error: null, generation: 0,
+    });
   });
 
   it('appends a scroll-requested page and updates canonical page metadata', async () => {
@@ -82,13 +82,14 @@ describe('gridController pagination', () => {
     expect(store.get(gridLoadingAtom)).toBe(false);
   });
 
-  it('uses the same append path for each background-prefetch page', async () => {
-    store.set(gridTotalCountAtom, 3);
+  it('uses one guarded append path for sequential pages', async () => {
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), totalCount: 3 });
     queryEntityViewMock
       .mockResolvedValueOnce(page([item(2)], 'cursor-2', 3))
       .mockResolvedValueOnce(page([item(3)], null, 3));
 
-    await gridController.prefetchToMinimum();
+    await gridController.loadNextPage();
+    await gridController.loadNextPage();
 
     expect(queryEntityViewMock).toHaveBeenCalledTimes(2);
     expect(queryEntityViewMock.mock.calls.map((call) => call[0].page.cursor)).toEqual(['cursor-1', 'cursor-2']);
@@ -110,13 +111,13 @@ describe('gridController pagination', () => {
     expect(store.get(gridItemsAtom).map((entry) => entry.entity_hash)).toEqual(['hash-1', 'hash-2']);
   });
 
-  it('keeps background-prefetch failures silent so foreground pagination can retry', async () => {
+  it('keeps the cursor after an append failure so pagination can retry', async () => {
     queryEntityViewMock.mockRejectedValueOnce(new Error('prefetch failed'));
 
-    await gridController.prefetchToMinimum();
+    await gridController.loadNextPage();
 
     expect(store.get(gridCursorAtom)).toBe('cursor-1');
-    expect(store.get(gridErrorAtom)).toBeNull();
+    expect(store.get(gridErrorAtom)).toBe('prefetch failed');
     expect(store.get(gridLoadingAtom)).toBe(false);
 
     queryEntityViewMock.mockResolvedValueOnce(page([item(2)], null, 2));

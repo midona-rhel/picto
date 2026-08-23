@@ -3,11 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { CanonicalEntityGridItem } from '../shared/types/canonical';
 import {
   currentGridQueryAtom,
-  gridItemsAtom,
-  gridScopeAtom,
-  gridSortDirectionAtom,
-  gridSortFieldAtom,
-  gridTotalCountAtom,
+  gridSessionAtom,
 } from './grid';
 import {
   clearSelectionAtom,
@@ -44,11 +40,13 @@ function buildGridItem(entityHash: string): CanonicalEntityGridItem {
 describe('selection state', () => {
   it('builds query-results targets from canonical grid query state', () => {
     const store = createStore();
-    store.set(gridScopeAtom, { kind: 'folder', id: 4 });
-    store.set(gridSortFieldAtom, 'name');
-    store.set(gridSortDirectionAtom, 'asc');
-    store.set(gridItemsAtom, [buildGridItem('a'), buildGridItem('b')]);
-    store.set(gridTotalCountAtom, 12);
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      scope: { kind: 'folder', id: 4 },
+      sort: { field: 'name', direction: 'asc' },
+      items: [buildGridItem('a'), buildGridItem('b')],
+      totalCount: 12,
+    });
 
     store.set(selectAllResultsAtom);
 

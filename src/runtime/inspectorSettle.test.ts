@@ -6,7 +6,7 @@ import {
   displayedInspectorTargetAtom,
   inspectorPinnedAtom,
 } from '../state/inspector';
-import { gridActiveAtom } from '../state/grid';
+import { gridSessionAtom } from '../state/grid';
 import { activeNodeIdAtom } from '../state/navigation';
 import { selectedSubfolderNodeIdsAtom } from '../state/selection';
 
@@ -43,7 +43,7 @@ describe('inspector runtime settling', () => {
     store.set(displayedInspectorTargetAtom, { kind: 'none' });
     store.set(displayedGridSnapshotAtom, null);
     store.set(selectedSubfolderNodeIdsAtom, new Set());
-    store.set(gridActiveAtom, true);
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: true });
     store.set(inspectorPinnedAtom, false);
   });
 

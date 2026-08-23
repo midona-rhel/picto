@@ -1,294 +1,266 @@
-/**
- * Grid controller — owns grid data loading, sort changes, and reconciliation.
- *
- * All operations that mutate grid state check a monotonic gridVersion token.
- */
+/** Single command owner for the canonical grid session. */
 
 import { getDefaultStore } from 'jotai';
-import {
-  queryEntityView,
-  reconcileEntityView,
-} from '../platform/entityApi';
-import type { BaseScope, EntityViewQuery, QueryFilters } from '../shared/types/canonical';
-import {
-  getViewPrefs,
-  setViewPrefs,
-} from '../platform/settingsApi';
+import { queryEntityView, reconcileEntityView } from '../platform/entityApi';
+import { getViewPrefs, setViewPrefs } from '../platform/settingsApi';
 import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
-import type { GridViewMode } from '../shared/types/grid';
-import type { SortField, SortDirection } from '../state/grid';
-import {
-  gridScopeAtom, gridActiveAtom, gridItemsAtom, gridCursorAtom,
-  gridTotalCountAtom, gridTotalSizeBytesAtom, gridLoadingAtom, gridErrorAtom,
-  gridSortFieldAtom, gridSortDirectionAtom, gridSearchTextAtom, gridFiltersAtom,
-  gridViewModeAtom, gridTargetSizeAtom,
-  gridShowNameAtom, gridShowExtensionAtom, gridShowResolutionAtom,
-  gridShowExtensionLabelAtom, gridFitThumbnailsAtom,
-  currentGridQueryAtom,
-  gridSoftTransitionActionAtom,
-} from '../state/grid';
+import type { BaseScope, EntityViewQuery, QueryFilters } from '../shared/types/canonical';
 import { clearSelectionAtom } from '../state/selection';
+import {
+  currentGridQueryAtom,
+  gridSessionAtom,
+  initialGridView,
+  pendingGridIntentAtom,
+  type GridIntent,
+  type GridSessionSnapshot,
+  type GridViewPreferences,
+  type SortDirection,
+  type SortField,
+} from '../state/grid';
 
 const store = getDefaultStore();
-
-let gridVersion = 0;
-let paginationInFlight: string | null = null;
-let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const PAGE_SIZE = 500;
 const SEARCH_DEBOUNCE_MS = 300;
-
-// Prefetch: keep at least this many items loaded, and start fetching more
-// when remaining (unloaded) items drops below the runway threshold.
-const PREFETCH_MIN_ITEMS = 5000;
-const PREFETCH_RUNWAY_ITEMS = 1000;
-const PREFETCH_BATCH_SIZE = 500;
-let viewPrefsSaveTimer: ReturnType<typeof setTimeout> | null = null;
 const VIEW_PREFS_SAVE_DEBOUNCE_MS = 500;
-let currentScopeKey = '';
 
 function scopeToKey(scope: BaseScope): string {
   switch (scope.kind) {
     case 'system': return `system:${scope.key === 'all' ? 'active' : scope.key}`;
     case 'folder': return scope.id != null ? `folder:${scope.id}` : '';
     case 'smart_folder': return scope.id != null ? `smart:${scope.id}` : '';
-    default: return '';
+    case 'tag': return scope.key ? `tag:${scope.key}` : '';
+    case 'search': return scope.key ? `search:${scope.key}` : '';
   }
 }
 
-function currentQuery(limit: number): EntityViewQuery {
-  const q = store.get(currentGridQueryAtom);
-  return { ...q, page: { limit } };
+function updateSession(update: Partial<GridSessionSnapshot> | ((current: GridSessionSnapshot) => GridSessionSnapshot)): void {
+  const current = store.get(gridSessionAtom);
+  store.set(gridSessionAtom, typeof update === 'function' ? update(current) : { ...current, ...update });
 }
 
-type PageAppendResult = 'appended' | 'unavailable' | 'stale' | 'failed';
-
-/**
- * Fetch and append the current cursor exactly once.
- *
- * Scroll pagination and background prefetch intentionally share this path so
- * cursor locking, version checks, and page state cannot drift apart.
- */
-async function appendNextPage(reportError: boolean): Promise<PageAppendResult> {
-  const cursor = store.get(gridCursorAtom);
-  if (!cursor || paginationInFlight === cursor) return 'unavailable';
-
-  paginationInFlight = cursor;
-  const v = gridVersion;
-  if (reportError) store.set(gridLoadingAtom, true);
-
-  try {
-    const query = currentQuery(PREFETCH_BATCH_SIZE);
-    query.page = { limit: PREFETCH_BATCH_SIZE, cursor };
-    const result = await queryEntityView(query);
-    if (v !== gridVersion || paginationInFlight !== cursor) return 'stale';
-
-    store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
-    store.set(gridCursorAtom, result.next_cursor);
-    store.set(gridTotalCountAtom, result.total_count);
-    store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
-    return 'appended';
-  } catch (err) {
-    if (v !== gridVersion) return 'stale';
-    if (reportError) {
-      store.set(gridErrorAtom, err instanceof Error ? err.message : String(err));
-    }
-    return 'failed';
-  } finally {
-    if (paginationInFlight === cursor) paginationInFlight = null;
-    if (reportError && v === gridVersion) store.set(gridLoadingAtom, false);
-  }
+function currentQuery(limit = PAGE_SIZE, cursor?: string): EntityViewQuery {
+  return { ...store.get(currentGridQueryAtom), page: { limit, cursor } };
 }
 
-export const gridController = {
-  async navigateTo(scope: BaseScope) {
-    store.set(gridScopeAtom, scope);
-    store.set(gridSearchTextAtom, '');
+function viewFromPreferences(scope: BaseScope, prefs: ViewPrefsDto | null, globals: ViewPrefsDto | null): GridViewPreferences {
+  const value = (field: keyof ViewPrefsDto) => prefs?.[field] ?? globals?.[field] ?? null;
+  return {
+    mode: (value('view_mode') as GridViewPreferences['mode']) || initialGridView.mode,
+    targetSize: (value('target_size') as number) ?? initialGridView.targetSize,
+    showName: (value('show_name') as boolean) ?? initialGridView.showName,
+    showResolution: (value('show_resolution') as boolean) ?? initialGridView.showResolution,
+    showExtension: (value('show_extension') as boolean) ?? initialGridView.showExtension,
+    showExtensionLabel: (value('show_label') as boolean) ?? initialGridView.showExtensionLabel,
+    fitThumbnails: value('thumbnail_fit') === 'cover',
+    showSubfolders: scope.kind === 'folder' ? initialGridView.showSubfolders : false,
+  };
+}
+
+class GridSessionController {
+  private searchTimer: ReturnType<typeof setTimeout> | null = null;
+  private preferenceTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingPreferencePatch: ViewPrefsPatch = {};
+  private scopeKey = '';
+
+  async navigateTo(scope: BaseScope): Promise<void> {
+    this.cancelSearch();
     store.set(clearSelectionAtom);
-    store.set(gridActiveAtom, true);
-    if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
-
-    // Load persisted view prefs for this scope.
-    // Missing fields fall back to global defaults so the previous scope's
-    // settings don't bleed into the new one.
     const key = scopeToKey(scope);
-    currentScopeKey = key;
-    // Load per-scope prefs, then global defaults for any missing fields.
-    let prefs: ViewPrefsDto | null = null;
-    let globals: ViewPrefsDto | null = null;
-    if (key) {
-      try { prefs = await getViewPrefs(key); } catch { /* no saved prefs */ }
-    }
-    try { globals = await getViewPrefs(''); } catch { /* no global prefs */ }
-    const p = (field: keyof ViewPrefsDto) => prefs?.[field] ?? globals?.[field] ?? null;
-    store.set(gridSortFieldAtom, (p('sort_field') as SortField) || 'date_added');
-    store.set(gridSortDirectionAtom, (p('sort_order') as SortDirection) || 'desc');
-    store.set(gridViewModeAtom, (p('view_mode') as GridViewMode) || 'waterfall');
-    store.set(gridTargetSizeAtom, (p('target_size') as number) ?? 220);
-    store.set(gridShowNameAtom, (p('show_name') as boolean) ?? true);
-    store.set(gridShowResolutionAtom, (p('show_resolution') as boolean) ?? false);
-    store.set(gridShowExtensionAtom, (p('show_extension') as boolean) ?? false);
-    store.set(gridShowExtensionLabelAtom, (p('show_label') as boolean) ?? false);
-    store.set(gridFitThumbnailsAtom, p('thumbnail_fit') === 'cover');
+    this.scopeKey = key;
+    const generation = store.get(gridSessionAtom).generation + 1;
+    updateSession({ scope, searchText: '', filters: {}, active: true, generation, status: 'loading', error: null });
 
-    await this.loadFirstPage();
-  },
+    const [prefs, globals] = await Promise.all([
+      key ? getViewPrefs(key).catch(() => null) : Promise.resolve(null),
+      getViewPrefs('').catch(() => null),
+    ]);
+    if (store.get(gridSessionAtom).generation !== generation) return;
+    const value = (field: keyof ViewPrefsDto) => prefs?.[field] ?? globals?.[field] ?? null;
+    updateSession((current) => ({
+      ...current,
+      sort: {
+        field: (value('sort_field') as SortField) || 'date_added',
+        direction: (value('sort_order') as SortDirection) || 'desc',
+      },
+      view: viewFromPreferences(scope, prefs, globals),
+    }));
+    await this.loadFirstPage({ generation });
+  }
 
-  deactivate() {
-    gridVersion++;
-    paginationInFlight = null;
-    if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
+  deactivate(): void {
+    this.cancelSearch();
     store.set(clearSelectionAtom);
-    store.set(gridActiveAtom, false);
-  },
+    updateSession((current) => ({
+      ...current,
+      active: false,
+      generation: current.generation + 1,
+      status: 'idle',
+    }));
+  }
 
-  /** Update search text and reload with debounce. */
-  setSearchText(text: string) {
-    store.set(gridSearchTextAtom, text);
-    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
-    searchDebounceTimer = setTimeout(() => {
-      searchDebounceTimer = null;
-      void this.loadFirstPage();
+  setSearchText(text: string): void {
+    updateSession({ searchText: text });
+    this.cancelSearch();
+    this.searchTimer = setTimeout(() => {
+      this.searchTimer = null;
+      void this.loadFirstPage({ preserveItems: true });
     }, SEARCH_DEBOUNCE_MS);
-  },
+  }
 
-  /** Replace browse filters at the same soft-fade midpoint used by sorting. */
-  setFilters(filters: QueryFilters) {
-    store.set(gridSoftTransitionActionAtom, () => {
-      store.set(gridFiltersAtom, filters);
+  requestIntent(intent: GridIntent): void {
+    store.set(pendingGridIntentAtom, intent);
+  }
+
+  applyIntent(intent: GridIntent): void {
+    if (intent.type === 'filter') {
+      updateSession({ filters: intent.filters });
       void this.loadFirstPage({ preserveItems: true });
-    });
-  },
-
-  /** Change sort — deferred to soft fade midpoint. */
-  setSort(field: SortField, direction: SortDirection) {
-    store.set(gridSoftTransitionActionAtom, () => {
-      store.set(gridSortFieldAtom, field);
-      store.set(gridSortDirectionAtom, direction);
+      return;
+    }
+    if (intent.type === 'sort') {
+      updateSession({ sort: { field: intent.field, direction: intent.direction } });
+      this.saveViewPref({ sort_field: intent.field, sort_order: intent.direction });
       void this.loadFirstPage({ preserveItems: true });
-    });
-    this.saveViewPref({ sort_field: field, sort_order: direction });
-  },
+      return;
+    }
+    this.updateView(intent.patch);
+  }
 
-  /** Persist a view pref change for the current scope (debounced). */
-  saveViewPref(patch: ViewPrefsPatch) {
-    if (!currentScopeKey) return;
-    const key = currentScopeKey;
-    if (viewPrefsSaveTimer) clearTimeout(viewPrefsSaveTimer);
-    viewPrefsSaveTimer = setTimeout(() => {
-      viewPrefsSaveTimer = null;
-      void setViewPrefs(key, patch).catch(() => {});
+  setFilters(filters: QueryFilters): void {
+    this.requestIntent({ type: 'filter', filters });
+  }
+
+  setSort(field: SortField, direction: SortDirection): void {
+    this.requestIntent({ type: 'sort', field, direction });
+  }
+
+  updateView(patch: Partial<GridViewPreferences>, transition = false): void {
+    if (transition) {
+      this.requestIntent({ type: 'view', patch });
+      return;
+    }
+    updateSession((current) => ({ ...current, view: { ...current.view, ...patch } }));
+  }
+
+  saveViewPref(patch: ViewPrefsPatch): void {
+    if (!this.scopeKey) return;
+    this.pendingPreferencePatch = { ...this.pendingPreferencePatch, ...patch };
+    if (this.preferenceTimer) clearTimeout(this.preferenceTimer);
+    this.preferenceTimer = setTimeout(() => {
+      this.preferenceTimer = null;
+      const pending = this.pendingPreferencePatch;
+      this.pendingPreferencePatch = {};
+      void setViewPrefs(this.scopeKey, pending).catch(() => {});
     }, VIEW_PREFS_SAVE_DEBOUNCE_MS);
-  },
+  }
 
-  async loadFirstPage(options?: { preserveItems?: boolean }) {
-    paginationInFlight = null;
-    const v = ++gridVersion;
-    store.set(gridLoadingAtom, true);
-    store.set(gridErrorAtom, null);
-    if (!options?.preserveItems) {
-      store.set(gridItemsAtom, []);
-      store.set(gridCursorAtom, null);
-      store.set(gridTotalCountAtom, null);
-      // Don't clear totalSizeBytes — keep previous value visible until new query returns
-    }
+  async loadFirstPage(options?: { preserveItems?: boolean; generation?: number }): Promise<void> {
+    const generation = options?.generation ?? store.get(gridSessionAtom).generation + 1;
+    updateSession((current) => ({
+      ...current,
+      generation,
+      status: 'loading',
+      error: null,
+      items: options?.preserveItems ? current.items : [],
+      cursor: options?.preserveItems ? current.cursor : null,
+      totalCount: options?.preserveItems ? current.totalCount : null,
+    }));
     try {
-      const result = await queryEntityView(currentQuery(PREFETCH_BATCH_SIZE));
-      if (v !== gridVersion) return;
-      store.set(gridItemsAtom, result.items);
-      store.set(gridCursorAtom, result.next_cursor);
-      store.set(gridTotalCountAtom, result.total_count);
-      store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
-      // Kick off background prefetch to fill the buffer
-      void this.prefetchToMinimum();
-    } catch (err) {
-      if (v !== gridVersion) return;
-      store.set(gridErrorAtom, err instanceof Error ? err.message : String(err));
-    } finally {
-      if (v === gridVersion) store.set(gridLoadingAtom, false);
+      const result = await queryEntityView(currentQuery());
+      if (store.get(gridSessionAtom).generation !== generation) return;
+      updateSession({
+        items: result.items,
+        cursor: result.next_cursor,
+        totalCount: result.total_count,
+        totalSizeBytes: result.total_size_bytes,
+        status: 'idle',
+      });
+    } catch (error) {
+      if (store.get(gridSessionAtom).generation !== generation) return;
+      updateSession({ status: 'error', error: error instanceof Error ? error.message : String(error) });
     }
-  },
+  }
 
-  async loadNextPage() {
-    const result = await appendNextPage(true);
-    // After each scroll-triggered fetch, check if we need more.
-    if (result === 'appended') void this.prefetchToMinimum();
-  },
-
-  /**
-   * Background prefetch loop — keeps loading batches until at least
-   * PREFETCH_MIN_ITEMS are buffered or there are no more items.
-   * Re-triggered when remaining runway drops below PREFETCH_RUNWAY_ITEMS.
-   */
-  async prefetchToMinimum() {
-    const v = gridVersion;
-    while (v === gridVersion) {
-      const cursor = store.get(gridCursorAtom);
-      if (!cursor) break; // no more pages
-      const loaded = store.get(gridItemsAtom).length;
-      const total = store.get(gridTotalCountAtom) ?? loaded;
-      const remaining = total - loaded;
-      // Stop if we have enough loaded or the remaining unloaded items are
-      // above the runway (i.e. we're far from the edge)
-      if (loaded >= PREFETCH_MIN_ITEMS && remaining > PREFETCH_RUNWAY_ITEMS) break;
-      // Also stop if loaded >= total (everything fetched)
-      if (loaded >= total) break;
-      const result = await appendNextPage(false);
-      if (result !== 'appended') break;
+  async loadNextPage(): Promise<void> {
+    const before = store.get(gridSessionAtom);
+    if (!before.cursor || before.status === 'appending' || before.status === 'loading') return;
+    const { cursor, generation } = before;
+    updateSession({ status: 'appending', error: null });
+    try {
+      const result = await queryEntityView(currentQuery(PAGE_SIZE, cursor));
+      const current = store.get(gridSessionAtom);
+      if (current.generation !== generation || current.cursor !== cursor) return;
+      updateSession({
+        items: [...current.items, ...result.items],
+        cursor: result.next_cursor,
+        totalCount: result.total_count ?? current.totalCount,
+        totalSizeBytes: result.total_size_bytes ?? current.totalSizeBytes,
+        status: 'idle',
+      });
+    } catch (error) {
+      if (store.get(gridSessionAtom).generation !== generation) return;
+      updateSession({ status: 'error', error: error instanceof Error ? error.message : String(error) });
     }
-  },
+  }
 
-  /** Remove specific items from the grid (trash/delete). */
-  removeItems(entityHashes: string[]) {
-    const currentItems = store.get(gridItemsAtom);
-    const removeSet = new Set(entityHashes);
-    const filtered = currentItems.filter((i) => !removeSet.has(i.entity_hash));
-    const removedCount = currentItems.length - filtered.length;
-    if (removedCount === 0) return;
-    store.set(gridItemsAtom, filtered);
-    const prevTotal = store.get(gridTotalCountAtom);
-    if (prevTotal != null) store.set(gridTotalCountAtom, Math.max(0, prevTotal - removedCount));
-  },
+  removeItems(entityHashes: string[]): void {
+    const remove = new Set(entityHashes);
+    updateSession((current) => {
+      const items = current.items.filter((item) => !remove.has(item.entity_hash));
+      const removed = current.items.length - items.length;
+      return removed === 0 ? current : {
+        ...current,
+        items,
+        totalCount: current.totalCount == null ? null : Math.max(0, current.totalCount - removed),
+      };
+    });
+  }
 
   async reconcile(metadataOnly: boolean): Promise<boolean> {
-    const items = store.get(gridItemsAtom);
-    if (items.length === 0) {
-      await this.loadFirstPage({ preserveItems: false });
+    const before = store.get(gridSessionAtom);
+    if (before.items.length === 0) {
+      await this.loadFirstPage();
       return true;
     }
-
-    const v = ++gridVersion;
-    const query = currentQuery(items.length);
-    const visibleHashes = items.map((i) => i.entity_hash);
+    const generation = before.generation + 1;
+    updateSession({ generation });
     try {
-      const result = await reconcileEntityView(query, visibleHashes, metadataOnly);
-      if (v !== gridVersion) return false;
-
-      switch (result.kind) {
-        case 'no_change':
-          return false;
-        case 'patch_rows':
-          if (result.items) {
-            const currentItems = store.get(gridItemsAtom);
-            const updated = new Map(result.items.map((i) => [i.entity_hash, i]));
-            store.set(gridItemsAtom, currentItems.map((item) => updated.get(item.entity_hash) ?? item));
-          }
-          return false;
-        case 'replace_window':
-          if (result.page) {
-            store.set(gridItemsAtom, result.page.items);
-            store.set(gridCursorAtom, result.page.next_cursor);
-            store.set(gridTotalCountAtom, result.page.total_count);
-            store.set(gridTotalSizeBytesAtom, result.page.total_size_bytes);
-          }
-          return false;
-        case 'full_refresh_required':
-          await this.loadFirstPage({ preserveItems: true });
-          return true;
+      const result = await reconcileEntityView(
+        currentQuery(before.items.length),
+        before.items.map((item) => item.entity_hash),
+        metadataOnly,
+      );
+      if (store.get(gridSessionAtom).generation !== generation) return false;
+      if (result.kind === 'no_change') return false;
+      if (result.kind === 'patch_rows' && result.items) {
+        const updated = new Map(result.items.map((item) => [item.entity_hash, item]));
+        updateSession((current) => ({
+          ...current,
+          items: current.items.map((item) => updated.get(item.entity_hash) ?? item),
+        }));
+        return false;
+      }
+      if (result.kind === 'replace_window' && result.page) {
+        updateSession({
+          items: result.page.items,
+          cursor: result.page.next_cursor,
+          totalCount: result.page.total_count,
+          totalSizeBytes: result.page.total_size_bytes,
+        });
+        return false;
       }
     } catch {
-      if (v !== gridVersion) return false;
-      await this.loadFirstPage({ preserveItems: true });
-      return true;
+      // Canonical first-page query below is the only recovery path.
     }
-  },
+    await this.loadFirstPage({ preserveItems: true });
+    return true;
+  }
 
-};
+  private cancelSearch(): void {
+    if (!this.searchTimer) return;
+    clearTimeout(this.searchTimer);
+    this.searchTimer = null;
+  }
+}
+
+export const gridController = new GridSessionController();

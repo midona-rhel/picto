@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import { gridController } from '../controllers/gridController';
-import { gridActiveAtom, gridItemsAtom, gridScopeAtom, gridTransitionPhaseAtom } from '../state/grid';
+import { gridSessionAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { classifyGridAction, processStateChange, startGridSettle } from './gridSettle';
 
 const { stateChangedListeners } = vi.hoisted(() => ({
@@ -20,8 +20,7 @@ const store = getDefaultStore();
 describe('grid runtime settling', () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    store.set(gridItemsAtom, []);
-    store.set(gridActiveAtom, true);
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), items: [], active: true });
     store.set(gridTransitionPhaseAtom, 'idle');
     stateChangedListeners.length = 0;
   });
@@ -71,7 +70,7 @@ describe('grid runtime settling', () => {
     ['Inbox', { kind: 'system', key: 'inbox' }],
     ['All', { kind: 'system', key: 'all' }],
   ] as const)('reloads the canonical query after an import in %s', (_label, scope) => {
-    store.set(gridScopeAtom, scope);
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), scope });
     const reload = vi.spyOn(gridController, 'loadFirstPage').mockResolvedValue(undefined);
 
     processStateChange({
