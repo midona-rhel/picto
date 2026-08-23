@@ -1,14 +1,7 @@
 import { createStore } from 'jotai';
 import { describe, expect, it } from 'vitest';
-import type { CanonicalEntityGridItem } from '../shared/types/canonical';
-import {
-  currentGridQueryAtom,
-  gridItemsAtom,
-  gridScopeAtom,
-  gridSortDirectionAtom,
-  gridSortFieldAtom,
-  gridTotalCountAtom,
-} from './grid';
+import type { ItemSummary } from '../shared/types/generated/application/ItemSummary';
+import { currentGridQueryAtom, gridSessionAtom } from './grid';
 import {
   clearSelectionAtom,
   selectedItemIdsAtom,
@@ -19,7 +12,7 @@ import {
   selectAllResultsAtom,
 } from './selection';
 
-function buildGridItem(itemId: number, fileHash: string): CanonicalEntityGridItem {
+function buildGridItem(itemId: number, fileHash: string): ItemSummary {
   return {
     item_id: itemId,
     kind: 'media',
@@ -44,13 +37,15 @@ function buildGridItem(itemId: number, fileHash: string): CanonicalEntityGridIte
 }
 
 describe('selection state', () => {
-  it('builds query-results targets from canonical grid query state', () => {
+  it('builds query targets from the canonical grid session', () => {
     const store = createStore();
-    store.set(gridScopeAtom, { kind: 'folder', folder_id: 4 });
-    store.set(gridSortFieldAtom, 'name');
-    store.set(gridSortDirectionAtom, 'ascending');
-    store.set(gridItemsAtom, [buildGridItem(1, 'a'), buildGridItem(2, 'b')]);
-    store.set(gridTotalCountAtom, 12);
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      scope: { kind: 'folder', folder_id: 4 },
+      sort: { field: 'name', direction: 'ascending' },
+      items: [buildGridItem(1, 'a'), buildGridItem(2, 'b')],
+      totalCount: 12,
+    });
 
     store.set(selectAllResultsAtom);
 
@@ -62,7 +57,7 @@ describe('selection state', () => {
     });
   });
 
-  it('keeps subfolder tile selection out of entity selection targets', () => {
+  it('keeps subfolder selection out of item targets', () => {
     const store = createStore();
     store.set(selectedItemIdsAtom, new Set([1]));
     store.set(selectedSubfolderNodeIdsAtom, new Set(['folder:9']));

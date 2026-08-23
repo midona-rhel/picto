@@ -160,17 +160,16 @@ const LAYOUT_OPTIONS = [
   { value: 'justified', label: 'Justified', icon: <LayoutIcon mode="justified" /> },
 ];
 const SORT_FIELD_OPTIONS = [
-  { value: 'date_added', label: 'Date Added' },
-  { value: 'date_created', label: 'Date Created' },
-  { value: 'date_modified', label: 'Date Modified' },
+  { value: 'imported_at', label: 'Date Added' },
+  { value: 'captured_at', label: 'Date Created' },
   { value: 'name', label: 'Name' },
   { value: 'rating', label: 'Rating' },
-  { value: 'size_bytes', label: 'File Size' },
-  { value: 'duration', label: 'Duration' },
+  { value: 'size', label: 'File Size' },
+  { value: 'random', label: 'Random' },
 ];
 const SORT_DIR_OPTIONS = [
-  { value: 'asc', label: 'Ascending', icon: <IconSortAscending size={14} /> },
-  { value: 'desc', label: 'Descending', icon: <IconSortDescending size={14} /> },
+  { value: 'ascending', label: 'Ascending', icon: <IconSortAscending size={14} /> },
+  { value: 'descending', label: 'Descending', icon: <IconSortDescending size={14} /> },
 ];
 
 function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs }: {
@@ -311,14 +310,14 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
               <div className={styles.labelItem}>
                 <label className={styles.settingLabel}>Sort by</label>
                 <div className={styles.settingControl}>
-                  <CmSelect value={prefs.sort_field ?? 'date_added'} options={SORT_FIELD_OPTIONS} onChange={(v) => updateViewPref({ sort_field: v })} />
+                  <CmSelect value={prefs.sort_field ?? 'imported_at'} options={SORT_FIELD_OPTIONS} onChange={(v) => updateViewPref({ sort_field: v })} />
                 </div>
               </div>
               <div className={styles.labelItemsSep} />
               <div className={styles.labelItem}>
                 <label className={styles.settingLabel}>Order</label>
                 <div className={styles.settingControl}>
-                  <CmSelect value={prefs.sort_order ?? 'desc'} options={SORT_DIR_OPTIONS} onChange={(v) => updateViewPref({ sort_order: v })} />
+                  <CmSelect value={prefs.sort_order ?? 'descending'} options={SORT_DIR_OPTIONS} onChange={(v) => updateViewPref({ sort_order: v })} />
                 </div>
               </div>
             </div>
@@ -366,8 +365,8 @@ const DEFAULT_APP_SETTINGS: Partial<AppSettings> = {
 const DEFAULT_VIEW_PREFS: ViewPrefsPatch = {
   view_mode: 'waterfall',
   target_size: 220,
-  sort_field: 'date_added',
-  sort_order: 'desc',
+  sort_field: 'imported_at',
+  sort_order: 'descending',
   show_name: true,
   show_resolution: false,
   show_extension: false,

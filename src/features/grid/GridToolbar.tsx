@@ -5,21 +5,19 @@
  *   [title(abs)] [- slider +] [view btn][filter btn][search input] [perf] [loading]
  */
 
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue } from 'jotai';
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import {
   IconSearch,
 } from '@tabler/icons-react';
 import {
-  gridChromeTransitionAtom,
   gridTransitionPhaseAtom,
   gridTargetSizeAtom,
   gridSearchTextAtom,
   gridFiltersAtom,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
-import { gridPerfAtom } from '../../state/gridPerf';
 import { viewerDisplayStateAtom, viewerDisplayControlsAtom } from '../../state/viewer';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import {
@@ -50,12 +48,11 @@ const ZOOM_STEP = 50;
 
 function ZoomControls() {
   const targetSize = useAtomValue(gridTargetSizeAtom);
-  const setTargetSize = useSetAtom(gridTargetSizeAtom);
 
   const setAndSave = useCallback((v: number) => {
-    setTargetSize(v);
+    gridController.updateView({ targetSize: v });
     gridController.saveViewPref({ target_size: v });
-  }, [setTargetSize]);
+  }, []);
 
   const zoomIn = useCallback(() => {
     setAndSave(Math.min(ZOOM_MAX, targetSize + ZOOM_STEP));
@@ -108,21 +105,6 @@ function SearchInput() {
         value={searchText}
         onChange={(e) => gridController.setSearchText(e.target.value)}
       />
-    </div>
-  );
-}
-
-// ── Perf chip (dev only) ────────────────────────────────────────
-
-function PerfChip() {
-  const perf = useAtomValue(gridPerfAtom);
-  if (!perf) return null;
-  return (
-    <div
-      className={`${styles.perfChip} ${perf.missedFrames > 0 ? styles.perfChipWarn : ''}`}
-      title={`fps ${perf.fps} | missed ${perf.missedFrames} | draw ${perf.drawOverBudgetFrames} | gap ${perf.avgFrameGapMs.toFixed(1)}ms avg / ${perf.maxFrameGapMs.toFixed(1)}ms max | ${perf.inferredCause}`}
-    >
-      {perf.fps}fps · {perf.inferredCause}
     </div>
   );
 }
@@ -233,10 +215,7 @@ export function ViewerToolbar() {
 }
 
 export function GridToolbar() {
-  const chromeTransition = useAtomValue(gridChromeTransitionAtom);
   const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
-  const isDevHost = typeof window !== 'undefined'
-    && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
   const viewMenu = useContextMenu();
   const filterMenu = useContextMenu();
   const filters = useAtomValue(gridFiltersAtom);
@@ -274,7 +253,6 @@ export function GridToolbar() {
     <div
       ref={toolbarRef}
       className={styles.toolbar}
-      data-chrome-transition={chromeTransition}
       data-transition-phase={transitionPhase}
     >
       <div className={styles.centerGroup} style={showZoom ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}>
@@ -297,8 +275,6 @@ export function GridToolbar() {
 
         <SearchInput />
       </div>
-
-      {isDevHost && <PerfChip />}
 
       {viewMenu.state && (
         <ContextMenu

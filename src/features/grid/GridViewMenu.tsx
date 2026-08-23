@@ -12,8 +12,7 @@ import {
 import {
   gridViewModeAtom, gridSortFieldAtom, gridSortDirectionAtom,
   gridShowNameAtom, gridShowExtensionAtom, gridShowResolutionAtom,
-  gridShowExtensionLabelAtom, gridFitThumbnailsAtom,
-  gridSoftTransitionActionAtom, gridScopeAtom,
+  gridShowExtensionLabelAtom, gridFitThumbnailsAtom, gridScopeAtom,
   type SortField, type SortDirection, type GridViewMode,
 } from '../../state/grid';
 import { sidebarCollapsedAtom } from '../../state/navigation';
@@ -53,10 +52,8 @@ const SORT_OPTIONS: CmSelectOption[] = [
 
 function ViewPanel() {
   const viewMode = useAtomValue(gridViewModeAtom);
-  const setViewMode = useSetAtom(gridViewModeAtom);
   const sortField = useAtomValue(gridSortFieldAtom);
   const sortDir = useAtomValue(gridSortDirectionAtom);
-  const setSoftAction = useSetAtom(gridSoftTransitionActionAtom);
   const scope = useAtomValue(gridScopeAtom);
   const hasFixedOrder = scope.kind === 'folder' || scope.kind === 'recently_viewed';
 
@@ -70,7 +67,7 @@ function ViewPanel() {
           value={viewMode}
           options={LAYOUT_OPTIONS}
           onChange={(v) => {
-            setSoftAction(() => () => setViewMode(v as GridViewMode));
+            gridController.updateView({ mode: v as GridViewMode }, true);
             gridController.saveViewPref({ view_mode: v });
           }}
           width={130}
@@ -106,21 +103,15 @@ function ViewPanel() {
 function DisplayPanel() {
   const viewMode = useAtomValue(gridViewModeAtom);
   const showName = useAtomValue(gridShowNameAtom);
-  const setShowName = useSetAtom(gridShowNameAtom);
   const showRes = useAtomValue(gridShowResolutionAtom);
-  const setShowRes = useSetAtom(gridShowResolutionAtom);
   const showExt = useAtomValue(gridShowExtensionAtom);
-  const setShowExt = useSetAtom(gridShowExtensionAtom);
   const showExtLabel = useAtomValue(gridShowExtensionLabelAtom);
-  const setShowExtLabel = useSetAtom(gridShowExtensionLabelAtom);
   const fitThumbs = useAtomValue(gridFitThumbnailsAtom);
-  const setFitThumbs = useSetAtom(gridFitThumbnailsAtom);
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
   const inspectorCollapsed = useAtomValue(inspectorCollapsedAtom);
   const setInspectorCollapsed = useSetAtom(inspectorCollapsedAtom);
   const showSubfolders = useAtomValue(gridShowSubfoldersAtom);
-  const setShowSubfolders = useSetAtom(gridShowSubfoldersAtom);
 
   const toggle = (label: string, on: boolean, flip: () => void, disabled = false) => (
     <div className={`${s.toggleRow} ${disabled ? s.toggleRowDisabled : ''}`} onClick={disabled ? undefined : flip}>
@@ -131,12 +122,12 @@ function DisplayPanel() {
 
   return (
     <div className={s.panel}>
-      {toggle('Show Name', showName, () => { setShowName(!showName); gridController.saveViewPref({ show_name: !showName }); })}
-      {toggle('Show Resolution', showRes, () => { setShowRes(!showRes); gridController.saveViewPref({ show_resolution: !showRes }); })}
-      {toggle('Show Extension', showExt, () => { setShowExt(!showExt); gridController.saveViewPref({ show_extension: !showExt }); })}
-      {toggle('Show Label', showExtLabel, () => { setShowExtLabel(!showExtLabel); gridController.saveViewPref({ show_label: !showExtLabel }); })}
-      {toggle('Fit Thumbnails', fitThumbs, () => { setFitThumbs(!fitThumbs); gridController.saveViewPref({ thumbnail_fit: !fitThumbs ? 'cover' : 'contain' }); }, viewMode !== 'grid')}
-      {toggle('Show Subfolders', showSubfolders, () => setShowSubfolders(!showSubfolders))}
+      {toggle('Show Name', showName, () => { gridController.updateView({ showName: !showName }); gridController.saveViewPref({ show_name: !showName }); })}
+      {toggle('Show Resolution', showRes, () => { gridController.updateView({ showResolution: !showRes }); gridController.saveViewPref({ show_resolution: !showRes }); })}
+      {toggle('Show Extension', showExt, () => { gridController.updateView({ showExtension: !showExt }); gridController.saveViewPref({ show_extension: !showExt }); })}
+      {toggle('Show Label', showExtLabel, () => { gridController.updateView({ showExtensionLabel: !showExtLabel }); gridController.saveViewPref({ show_label: !showExtLabel }); })}
+      {toggle('Fit Thumbnails', fitThumbs, () => { gridController.updateView({ fitThumbnails: !fitThumbs }); gridController.saveViewPref({ thumbnail_fit: !fitThumbs ? 'cover' : 'contain' }); }, viewMode !== 'grid')}
+      {toggle('Show Subfolders', showSubfolders, () => gridController.updateView({ showSubfolders: !showSubfolders }))}
 
       <div className={s.sep} />
 

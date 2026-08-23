@@ -1,9 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
-import {
-  displayedInspectorItemDetailsAtom,
-  inspectorPinnedAtom,
-} from '../state/inspector';
+import { displayedInspectorItemDetailsAtom, inspectorPinnedAtom } from '../state/inspector';
 
 const { callbacks } = vi.hoisted(() => ({ callbacks: new Map<string, () => void>() }));
 vi.mock('./libraryInvalidation', () => ({
@@ -22,7 +19,7 @@ import { startInspectorSettle } from './inspectorSettle';
 
 const store = getDefaultStore();
 
-describe('inspector runtime settling', () => {
+describe('inspector invalidation', () => {
   afterEach(() => {
     callbacks.clear();
     loadInspectorData.mockReset();

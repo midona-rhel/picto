@@ -1,21 +1,18 @@
 import { setItemLifecycle } from '../platform/entityApi';
 import { reorderFolderMembers, updateFolderMembership } from '../platform/folderApi';
-import type { EntityTarget } from '../shared/types/canonical';
+import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 import type { DropTarget, GridDragState } from '../features/grid/dragState';
 
 const LIFECYCLE_BY_STATUS = ['inbox', 'active', 'trash'] as const;
 
 export const dragController = {
   async executeDrop(
-    itemIdKeys: string[],
+    itemIds: number[],
     target: DropTarget,
     sourceScope: GridDragState['sourceScope'],
   ): Promise<void> {
-    const itemIds = itemIdKeys
-      .map(Number)
-      .filter((itemId) => Number.isSafeInteger(itemId));
     if (itemIds.length === 0) return;
-    const entityTarget: EntityTarget = { kind: 'explicit', item_ids: itemIds };
+    const entityTarget: ItemTarget = { kind: 'explicit', item_ids: itemIds };
 
     if (target.kind === 'folder') {
       await updateFolderMembership(entityTarget, target.folderId, 'add');

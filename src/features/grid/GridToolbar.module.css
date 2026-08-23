@@ -187,23 +187,3 @@
   border-color: var(--color-primary-60);
   background: rgba(0, 0, 0, 0.2);
 }
-
-/* ── Perf chip (dev only) ────────────────────────────── */
-
-.perfChip {
-  font-family: var(--font-family-mono);
-  font-size: 10px;
-  line-height: 1;
-  color: var(--color-text-tertiary);
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--color-border-secondary);
-  border-radius: var(--radius-sm);
-  padding: 5px 7px;
-  white-space: nowrap;
-  margin-left: 4px;
-}
-
-.perfChipWarn {
-  color: var(--color-negative);
-  border-color: rgba(255, 107, 107, 0.35);
-}

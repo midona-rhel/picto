@@ -36,19 +36,6 @@ const GAP = 16;
 const TEXT_NAME_ROW_H = 20;
 const EMPTY_ITEM_ID_SET = new Set<number>();
 
-function itemIdDragKey(itemId: number): string {
-  return String(itemId);
-}
-
-function parseItemIdDragKeys(keys: readonly string[]): Set<number> {
-  const itemIds = new Set<number>();
-  for (const key of keys) {
-    const itemId = Number(key);
-    if (Number.isSafeInteger(itemId)) itemIds.add(itemId);
-  }
-  return itemIds;
-}
-
 /** Convert viewport (visual) coordinates to CSS layout coordinates.
  *  Uses shared zoom compensation for browser zoom support. */
 function toLayoutCoords(clientX: number, clientY: number, container: HTMLDivElement, headerHeight: number) {
@@ -740,8 +727,8 @@ export function CanvasGrid({
         try {
           const thumbSize = 44;
           const so = 3;
-          const ths = state.hashes.slice(0, 3).map((itemIdKey) => {
-            const it = curItems.find((x) => itemIdDragKey(x.item_id) === itemIdKey);
+          const ths = state.itemIds.slice(0, 3).map((itemId) => {
+            const it = curItems.find((x) => x.item_id === itemId);
             return it?.display_file_hash ?? '';
           });
           const sc = ths.length;
@@ -763,8 +750,8 @@ export function CanvasGrid({
                 cx.beginPath(); cx.roundRect(ox + 0.5, oy + 0.5, thumbSize - 1, thumbSize - 1, 4); cx.stroke();
               }
             }
-            if (state.hashes.length > 1) {
-              const lb = state.hashes.length > 999 ? '999+' : String(state.hashes.length);
+            if (state.itemIds.length > 1) {
+              const lb = state.itemIds.length > 999 ? '999+' : String(state.itemIds.length);
               cx.font = 'bold 10px -apple-system, BlinkMacSystemFont, sans-serif';
               const mw = cx.measureText(lb).width;
               const bw = Math.max(20, mw + 10);
@@ -778,8 +765,8 @@ export function CanvasGrid({
         } catch { /* fallback */ }
 
         setInternalDragOrigin(true);
-        const nativeFileHashes = state.hashes
-          .map((itemIdKey) => curItems.find((item) => itemIdDragKey(item.item_id) === itemIdKey)?.display_file_hash)
+        const nativeFileHashes = state.itemIds
+          .map((itemId) => curItems.find((item) => item.item_id === itemId)?.display_file_hash)
           .filter((fileHash): fileHash is string => !!fileHash);
         startNativeDragFn(nativeFileHashes, iconUrl);
         dragJustEndedRef.current = true;
@@ -795,7 +782,7 @@ export function CanvasGrid({
         if (ctr) {
           const { x: cx, y: cy } = toLayoutCoords(e.clientX, e.clientY, ctr, headerHeightRef.current);
           // Build skip set from dragged item indices
-          const draggedItemIds = parseItemIdDragKeys(getDragState().hashes);
+          const draggedItemIds = new Set(getDragState().itemIds);
           const skipIdx = new Set<number>();
           const curItems = itemsRef.current;
           for (let i = 0; i < curItems.length; i++) {
@@ -817,7 +804,7 @@ export function CanvasGrid({
         const existingTarget = getDragState().dropTarget;
         if (rd && !existingTarget) {
           const curItems = itemsRef.current;
-          const draggedItemIds = parseItemIdDragKeys(getDragState().hashes);
+          const draggedItemIds = new Set(getDragState().itemIds);
           const targetIdx = rd.dropSide === 'right' ? rd.dropIndex + 1 : rd.dropIndex;
           let offset = 0;
           for (let i = 0; i < targetIdx && i < curItems.length; i++) {
@@ -834,7 +821,7 @@ export function CanvasGrid({
         }
         reorderDropRef.current = null;
         // Preserve selection: re-select the dragged item IDs after drop.
-        const draggedItemIds = parseItemIdDragKeys(getDragState().hashes);
+        const draggedItemIds = new Set(getDragState().itemIds);
         endDrag();
         dragJustEndedRef.current = true; // suppress the click that follows mouseup
         onSelectionChangeRef.current?.(draggedItemIds);
@@ -1168,7 +1155,7 @@ export function CanvasGrid({
           const thumbnailHashes = itemIds.slice(0, 3).map((selectedItemId) => {
             return items.find((candidate) => candidate.item_id === selectedItemId)?.display_file_hash ?? '';
           });
-          startDrag(itemIds.map(itemIdDragKey), e.clientX, e.clientY, dragSourceScope);
+          startDrag(itemIds, e.clientX, e.clientY, dragSourceScope);
           setDragGhost({ x: e.clientX, y: e.clientY, count: itemIds.length, thumbnailHashes });
           reorderDropRef.current = null;
           tileDragRef.current = null;

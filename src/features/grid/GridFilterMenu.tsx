@@ -29,13 +29,13 @@ function FilterPanel({ onApply }: { onApply: () => void }) {
 
   const apply = () => {
     const parsedTags = tags.split(',').map((tag) => tag.trim()).filter(Boolean);
-    gridController.setFilters({
+    const nextFilters: ItemFilters = {
+      ...filters,
       minimum_rating: rating > 0 ? rating : null,
       mime_prefix: mediaType ? `${mediaType}/` : null,
       include_tags: parsedTags,
-      exclude_tags: [],
-      text: null,
-    });
+    };
+    gridController.setFilters(nextFilters);
     onApply();
   };
 

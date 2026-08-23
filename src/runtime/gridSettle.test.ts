@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import { gridController } from '../controllers/gridController';
-import { gridActiveAtom, gridTransitionPhaseAtom } from '../state/grid';
+import { gridSessionAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { startGridSettle } from './gridSettle';
 
 const { callbacks } = vi.hoisted(() => ({
@@ -23,7 +23,7 @@ describe('grid invalidation', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     callbacks.clear();
-    store.set(gridActiveAtom, true);
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: true });
     store.set(gridTransitionPhaseAtom, 'idle');
   });
 
@@ -54,7 +54,7 @@ describe('grid invalidation', () => {
 
   it('does not query while the grid is inactive', () => {
     const reload = vi.spyOn(gridController, 'loadFirstPage').mockResolvedValue(undefined);
-    store.set(gridActiveAtom, false);
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: false });
     const stop = startGridSettle();
 
     callbacks.get('library')?.();

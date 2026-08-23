@@ -57,7 +57,7 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   inspectorWidth: 280,
   colorScheme: 'dark',
   gridSortField: 'imported_at',
-  gridSortOrder: 'asc',
+  gridSortOrder: 'ascending',
   zoomFactor: null,
   showTreeGuides: true,
   aiTaggerWd14Enabled: false,
