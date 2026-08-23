@@ -58,7 +58,11 @@ impl BlobSource for BlobStore {
     }
 }
 
-pub fn execute_blob_delete<B: BlobSource>(blobs: &B, item: &WorkItem) -> Result<(), String> {
+pub fn execute_blob_delete<B: BlobSource>(
+    store: &Store,
+    blobs: &B,
+    item: &WorkItem,
+) -> Result<(), String> {
     if item.kind != WorkKind::BlobDelete {
         return Err("Blob deletion requires a blob_delete work item".to_string());
     }
@@ -66,7 +70,24 @@ pub fn execute_blob_delete<B: BlobSource>(blobs: &B, item: &WorkItem) -> Result<
         .file_hash
         .as_deref()
         .ok_or_else(|| "Blob deletion work is missing its persisted file hash".to_string())?;
-    blobs.delete(file_hash)
+    store.read_result(|connection| {
+        let referenced: bool = connection
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1
+                     FROM media_asset ma
+                     JOIN media_file mf ON mf.file_id = ma.file_id
+                     WHERE mf.file_hash = ?1
+                 )",
+                [file_hash],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if referenced {
+            return Ok(());
+        }
+        blobs.delete(file_hash)
+    })
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

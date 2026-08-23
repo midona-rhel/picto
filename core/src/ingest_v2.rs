@@ -392,6 +392,11 @@ fn upsert_file(
     now: &str,
 ) -> rusqlite::Result<i64> {
     transaction.execute(
+        "DELETE FROM work_item
+         WHERE file_hash = ?1 AND work_type = 'blob_delete' AND status = 'pending'",
+        [&input.file_hash],
+    )?;
+    transaction.execute(
         "INSERT INTO media_file (
              file_hash, mime_type, size_bytes, pixel_width, pixel_height,
              duration_ms, frame_count, has_audio, created_at
@@ -860,6 +865,40 @@ mod tests {
         .unwrap();
         let error = app.ingest_prepared(&input).unwrap_err();
         assert!(error.contains("cannot be resurrected"));
+    }
+
+    #[test]
+    fn ingest_cancels_pending_cleanup_for_the_same_physical_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        app.store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO work_item (
+                         file_hash, work_type, status, attempt_count,
+                         available_at, created_at, updated_at
+                     ) VALUES ('hash', 'blob_delete', 'pending', 0, ?1, ?1, ?1)",
+                    ["2026-01-01T00:00:00Z"],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        app.ingest_prepared(&input("hash", "post", "item", 0))
+            .unwrap();
+
+        let cleanup_jobs = app
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT COUNT(*) FROM work_item
+                     WHERE file_hash = 'hash' AND work_type = 'blob_delete'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(cleanup_jobs, 0);
     }
 
     #[test]

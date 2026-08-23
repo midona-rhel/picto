@@ -23,6 +23,7 @@ export function WorkspaceSurface() {
   const setPendingIntent = useSetAtom(pendingGridIntentAtom);
   const [phase, setPhaseState] = useState<GridTransitionPhase>('idle');
   const phaseRef = useRef<GridTransitionPhase>('idle');
+  const initializedRef = useRef(false);
   const previousNodeRef = useRef(activeNodeId);
   const pendingNodeRef = useRef(activeNodeId);
   const scrollTopRef = useRef(0);
@@ -63,7 +64,14 @@ export function WorkspaceSurface() {
     const previousScope = nodeIdToGridScope(previousNodeRef.current);
     const nextScope = activeGridScope;
 
-    if (activeNodeId === previousNodeRef.current) return;
+    if (activeNodeId === previousNodeRef.current) {
+      if (initializedRef.current) return;
+      initializedRef.current = true;
+      if (nextScope) void gridController.navigateTo(nextScope);
+      else gridController.deactivate();
+      return;
+    }
+    initializedRef.current = true;
     if (previousScope) saveScrollPosition(previousNodeRef.current, scrollTopRef.current);
 
     if (nextScope && previousScope && store.get(skipFadeOutAtom)) {

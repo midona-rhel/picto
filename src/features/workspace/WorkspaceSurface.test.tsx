@@ -3,6 +3,7 @@ import { Provider, getDefaultStore } from 'jotai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from '../../state/navigation';
 import { gridSessionAtom, gridTransitionPhaseAtom } from '../../state/grid';
+import { gridController } from '../../controllers/gridController';
 import { WorkspaceSurface } from './WorkspaceSurface';
 
 vi.mock('../../controllers/gridController', () => ({
@@ -20,8 +21,22 @@ vi.mock('../managers/ManagerSurface', () => ({
 }));
 
 describe('workspace surface coordinator', () => {
-  beforeEach(() => { vi.useFakeTimers(); });
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.mocked(gridController.navigateTo).mockClear();
+  });
   afterEach(() => { vi.useRealTimers(); });
+
+  it('loads the default All scope when the workspace first mounts', () => {
+    const store = getDefaultStore();
+    store.set(activeNodeIdAtom, 'system:active');
+    store.set(displayedSurfaceNodeIdAtom, 'system:active');
+
+    render(<Provider store={store}><WorkspaceSurface /></Provider>);
+
+    expect(gridController.navigateTo).toHaveBeenCalledOnce();
+    expect(gridController.navigateTo).toHaveBeenCalledWith({ kind: 'all' });
+  });
 
   it('keeps the outgoing surface mounted until the single midpoint commit', async () => {
     const store = getDefaultStore();

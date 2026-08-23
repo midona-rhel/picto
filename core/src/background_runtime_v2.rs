@@ -119,7 +119,9 @@ async fn execute_item<B: BlobSource>(
     item: &WorkItem,
 ) -> Result<Option<MutationReceipt>, String> {
     match item.kind {
-        WorkKind::BlobDelete => media_processing_v2::execute_blob_delete(blobs, item).map(|_| None),
+        WorkKind::BlobDelete => {
+            media_processing_v2::execute_blob_delete(application.store(), blobs, item).map(|_| None)
+        }
         WorkKind::Thumbnail | WorkKind::DominantColors | WorkKind::PerceptualHash => {
             media_processing_v2::execute_work(application.store(), blobs, item)
                 .await
@@ -331,6 +333,30 @@ mod tests {
             })
             .unwrap();
         assert_eq!(ai, 0);
+    }
+
+    #[tokio::test]
+    async fn stale_blob_delete_cannot_remove_a_referenced_file() {
+        let (_directory, application, blobs) = fixture();
+        enqueue(application.store(), WorkSpec::blob("hash-7"));
+        let deleted = blobs.deleted.clone();
+
+        let result = drain_claimed_batch(&application, &blobs, 1).await.unwrap();
+
+        assert_eq!(result.claimed, 1);
+        assert_eq!(result.succeeded, 1);
+        assert!(deleted.lock().unwrap().is_empty());
+        assert_eq!(
+            application
+                .store()
+                .read(|connection| {
+                    connection.query_row("SELECT COUNT(*) FROM work_item", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                })
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]
