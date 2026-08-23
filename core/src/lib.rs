@@ -15,6 +15,7 @@ pub mod ai_runtime_v2;
 pub mod ai_tagger;
 pub mod app;
 pub mod auth_v2;
+pub mod converter_v2;
 pub mod duplicates;
 pub mod duplicates_v2;
 pub mod folders;
