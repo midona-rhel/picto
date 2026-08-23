@@ -60,7 +60,7 @@ import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import { saveScrollPosition, getScrollPosition, pushHistory } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
-import { tagSelectOpenAtom, folderPickerOpenAtom, aiTaggerPortalAtom, inspectorAnchor } from '../../state/portals';
+import { aiTaggerPortalAtom, inspectorAnchor } from '../../state/portals';
 import { confirmModalAtom, folderImportModalAtom, exportModalAtom, tagSelectModalAtom, folderPickerModalAtom } from '../../state/modals';
 import { MediaView } from '../viewer/MediaView';
 import { ManagerSurface } from '../managers/ManagerSurface';
@@ -142,8 +142,6 @@ export function GridScreen() {
   const setViewerSession = useSetAtom(viewerSessionAtom);
   const quickLookSession = useAtomValue(quickLookSessionAtom);
   const setQuickLookSession = useSetAtom(quickLookSessionAtom);
-  const setTagSelectOpen = useSetAtom(tagSelectOpenAtom);
-  const setFolderPickerOpen = useSetAtom(folderPickerOpenAtom);
   const setAiTaggerPortal = useSetAtom(aiTaggerPortalAtom);
   const setTagSelectModal = useSetAtom(tagSelectModalAtom);
   const setFolderPickerModal = useSetAtom(folderPickerModalAtom);
@@ -534,10 +532,6 @@ export function GridScreen() {
   gridScopeRef.current = gridScope;
 
   // Refs for setters used in the keydown handler (avoid re-registering on every render)
-  const setTagSelectOpenRef = useRef(setTagSelectOpen);
-  setTagSelectOpenRef.current = setTagSelectOpen;
-  const setFolderPickerOpenRef = useRef(setFolderPickerOpen);
-  setFolderPickerOpenRef.current = setFolderPickerOpen;
   const setTagSelectModalRef = useRef(setTagSelectModal);
   setTagSelectModalRef.current = setTagSelectModal;
   const setFolderPickerModalRef = useRef(setFolderPickerModal);

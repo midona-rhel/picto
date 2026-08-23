@@ -42,16 +42,7 @@ let state: GridDragState = {
 let nativeDragPending = false;
 let nativeDragTimer: ReturnType<typeof setTimeout> | null = null;
 
-type DragEndHandler = (hashes: string[], target: DropTarget | null) => void;
-const dragEndHandlers: DragEndHandler[] = [];
-
-type DragChangeHandler = () => void;
-const dragChangeHandlers: DragChangeHandler[] = [];
 let highlightedDropElement: HTMLElement | null = null;
-
-function notifyChange() {
-  for (const h of dragChangeHandlers) h();
-}
 
 // ── Public API ──
 
@@ -83,7 +74,6 @@ export function startDrag(
     currentY: y,
     dropTarget: null,
   };
-  notifyChange();
 }
 
 export function moveDrag(x: number, y: number) {
@@ -100,7 +90,6 @@ export function moveDrag(x: number, y: number) {
   setHighlightedDropElement(resolved?.element ?? null);
   if (changed) {
     state = { ...state, dropTarget: newTarget };
-    notifyChange();
   }
 }
 
@@ -163,7 +152,6 @@ function setHighlightedDropElement(next: HTMLElement | null) {
 export function setDropTarget(target: DropTarget | null) {
   if (!state.active) return;
   state = { ...state, dropTarget: target };
-  notifyChange();
 }
 
 function clearDropHighlights() {
@@ -175,8 +163,6 @@ export function endDrag() {
   const { hashes, dropTarget, sourceScope } = state;
   state = { ...state, active: false, dropTarget: null };
   clearDropHighlights();
-  notifyChange();
-  for (const h of dragEndHandlers) h(hashes, dropTarget);
   if (dropTarget) {
     void dragController.executeDrop(hashes, dropTarget, sourceScope).catch((err) => console.error('[drag] drop failed:', err));
   }
@@ -185,25 +171,6 @@ export function endDrag() {
 export function cancelDrag() {
   state = { ...state, active: false, dropTarget: null };
   clearDropHighlights();
-  notifyChange();
-}
-
-/** Register a handler called when drag ends (with hashes + drop target). Returns unsubscribe. */
-export function onDragEnd(handler: DragEndHandler): () => void {
-  dragEndHandlers.push(handler);
-  return () => {
-    const idx = dragEndHandlers.indexOf(handler);
-    if (idx >= 0) dragEndHandlers.splice(idx, 1);
-  };
-}
-
-/** Subscribe to drag state changes (active/target changed). Returns unsubscribe. */
-export function onDragChange(handler: DragChangeHandler): () => void {
-  dragChangeHandlers.push(handler);
-  return () => {
-    const idx = dragChangeHandlers.indexOf(handler);
-    if (idx >= 0) dragChangeHandlers.splice(idx, 1);
-  };
 }
 
 // ── Internal drag origin tracking (prevents import overlay during app-originated drags) ──
@@ -215,9 +182,6 @@ export function isInternalDragOrigin() { return internalDragOrigin; }
 // Saved drag data for restoring internal drag when cursor re-enters
 let savedDragHashes: string[] = [];
 let savedDragScope: { kind: string; id?: number | null; key?: string | null } | null = null;
-
-export function getSavedDragHashes() { return savedDragHashes; }
-export function getSavedDragScope() { return savedDragScope; }
 
 // ── Native drag-out ──
 
@@ -250,10 +214,4 @@ export function restoreInternalDrag(x: number, y: number) {
   savedDragHashes = [];
   savedDragScope = null;
   return true;
-}
-
-export function clearNativeDragPending() {
-  nativeDragPending = false;
-  internalDragOrigin = false;
-  if (nativeDragTimer) { clearTimeout(nativeDragTimer); nativeDragTimer = null; }
 }
