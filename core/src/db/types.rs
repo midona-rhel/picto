@@ -70,6 +70,7 @@ pub struct FolderMembership {
 pub struct DuplicatePairRecord {
     pub hash_a: String,
     pub hash_b: String,
+    pub smart_winner_hash: Option<String>,
     pub distance: f64,
     pub similarity_pct: f64,
     pub status: String,

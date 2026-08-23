@@ -10,6 +10,7 @@ export type DuplicateAction =
 export interface DuplicatePair {
   hash_a: string;
   hash_b: string;
+  smart_winner_hash: string | null;
   distance: number;
   similarity_pct: number;
   status: string;

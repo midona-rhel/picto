@@ -208,10 +208,24 @@ pub fn get_duplicate_pairs_paginated(
              d.distance,
              d.status,
              d.file_id_a,
-             d.file_id_b
+             d.file_id_b,
+             mf_a.file_hash,
+             mf_a.mime_type,
+             mf_a.size_bytes,
+             mf_a.pixel_width,
+             mf_a.pixel_height,
+             mf_a.frame_count,
+             mf_b.file_hash,
+             mf_b.mime_type,
+             mf_b.size_bytes,
+             mf_b.pixel_width,
+             mf_b.pixel_height,
+             mf_b.frame_count
          FROM duplicate d
          JOIN media_entity me_a ON me_a.file_id = d.file_id_a
          JOIN media_entity me_b ON me_b.file_id = d.file_id_b
+         JOIN media_file mf_a ON mf_a.file_id = d.file_id_a
+         JOIN media_file mf_b ON mf_b.file_id = d.file_id_b
          WHERE d.status = ?1
            AND me_a.status IN (0, 1)
            AND me_b.status IN (0, 1){cursor_clause}{distance_clause}
@@ -221,10 +235,40 @@ pub fn get_duplicate_pairs_paginated(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
         let distance: i64 = row.get(2)?;
+        let hash_a: String = row.get(0)?;
+        let hash_b: String = row.get(1)?;
+        let file_hash_a: String = row.get(6)?;
+        let mime_a: String = row.get(7)?;
+        let file_hash_b: String = row.get(12)?;
+        let mime_b: String = row.get(13)?;
+        let decision = crate::duplicates::quality::smart_merge_quality_decision(
+            &crate::duplicates::quality::ComparableImageCandidate {
+                mime_type: &mime_a,
+                size_bytes: row.get(8)?,
+                pixel_width: row.get(9)?,
+                pixel_height: row.get(10)?,
+                frame_count: row.get(11)?,
+            },
+            &crate::duplicates::quality::ComparableImageCandidate {
+                mime_type: &mime_b,
+                size_bytes: row.get(14)?,
+                pixel_width: row.get(15)?,
+                pixel_height: row.get(16)?,
+                frame_count: row.get(17)?,
+            },
+            u32::try_from(distance).ok(),
+            file_hash_a == file_hash_b,
+        );
+        let smart_winner_hash = match decision {
+            crate::duplicates::quality::ImageQualityDecision::LeftBetter => Some(hash_a.clone()),
+            crate::duplicates::quality::ImageQualityDecision::RightBetter => Some(hash_b.clone()),
+            crate::duplicates::quality::ImageQualityDecision::Ambiguous => None,
+        };
         Ok((
             DuplicatePairRecord {
-                hash_a: row.get(0)?,
-                hash_b: row.get(1)?,
+                hash_a,
+                hash_b,
+                smart_winner_hash,
                 distance: distance as f64,
                 similarity_pct: ((1.0 - distance as f64 / 256.0) * 100.0).round(),
                 status: row.get(3)?,

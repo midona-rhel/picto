@@ -6,7 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getEntityDetails } from '../../platform/entityApi';
 import { getDuplicatePairs, resolveDuplicatePair, scanDuplicates } from '../../platform/duplicateApi';
 import type { CanonicalEntityDetails } from '../../shared/types/canonical';
-import { DuplicatesScreen } from './DuplicatesScreen';
+import { DuplicatesScreen, DuplicatesToolbar } from './DuplicatesScreen';
 
 vi.mock('../../platform/entityApi', () => ({ getEntityDetails: vi.fn() }));
 vi.mock('../../platform/duplicateApi', () => ({
@@ -41,12 +41,21 @@ function details(hash: string, name: string): CanonicalEntityDetails {
   };
 }
 
+function DuplicateTestSurface() {
+  return (
+    <>
+      <DuplicatesToolbar />
+      <DuplicatesScreen />
+    </>
+  );
+}
+
 describe('DuplicatesScreen', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     notifications.clean();
     vi.mocked(getDuplicatePairs).mockResolvedValue({
-      items: [{ hash_a: 'left', hash_b: 'right', distance: 1, similarity_pct: 98, status: 'detected' }],
+      items: [{ hash_a: 'left', hash_b: 'right', smart_winner_hash: 'left', distance: 1, similarity_pct: 98, status: 'detected' }],
       next_cursor: null,
       has_more: false,
       total: 1,
@@ -67,7 +76,7 @@ describe('DuplicatesScreen', () => {
   it('resolves a duplicate using direct media ownership', async () => {
     vi.mocked(getDuplicatePairs)
       .mockResolvedValueOnce({
-        items: [{ hash_a: 'left', hash_b: 'right', distance: 1, similarity_pct: 98, status: 'detected' }],
+        items: [{ hash_a: 'left', hash_b: 'right', smart_winner_hash: 'left', distance: 1, similarity_pct: 98, status: 'detected' }],
         next_cursor: null,
         has_more: false,
         total: 1,
@@ -86,17 +95,28 @@ describe('DuplicatesScreen', () => {
 
     const user = userEvent.setup();
     await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
+      render(<MantineProvider forceColorScheme="dark"><DuplicateTestSurface /></MantineProvider>);
     });
 
     await screen.findByText('Left image');
     expect(screen.queryByText('Duplicate review')).not.toBeInTheDocument();
     expect(screen.queryByText('VS')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Previous pair' })).toBeInTheDocument();
+    const toolbar = screen.getByLabelText('Duplicate review controls');
+    expect(toolbar).toContainElement(screen.getByRole('button', { name: 'Previous pair' }));
     expect(screen.getByRole('button', { name: 'Next pair' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Re-scan library' })).not.toBeInTheDocument();
     expect(screen.getByText('98% match')).toBeInTheDocument();
     expect(screen.getByRole('contentinfo')).toHaveTextContent('Not duplicates');
     expect(screen.getByRole('contentinfo')).toHaveTextContent('Smart merge');
+    await act(async () => {
+      await user.hover(screen.getByRole('button', { name: 'Smart merge' }));
+    });
+    expect(screen.getByText('Keep file · combine metadata')).toBeInTheDocument();
+    expect(screen.getByText('Transfer metadata · remove file')).toBeInTheDocument();
+    await act(async () => {
+      await user.unhover(screen.getByRole('button', { name: 'Smart merge' }));
+    });
+    expect(screen.queryByText('Keep file · combine metadata')).not.toBeInTheDocument();
     await act(async () => {
       await user.click(screen.getByRole('button', { name: 'Keep left' }));
     });
@@ -107,16 +127,12 @@ describe('DuplicatesScreen', () => {
     });
   });
 
-  it('keeps an ambiguous smart merge in review for an explicit choice', async () => {
-    vi.mocked(resolveDuplicatePair).mockResolvedValue({
-      status: 'quality_ambiguous',
-      winner_hash: null,
-      loser_hash: null,
-      action: 'smart_merge',
-      affected_folder_ids: [],
-      tags_merged: 0,
-      blob_cleanup_pending: false,
-      cleanup_error: null,
+  it('previews the earlier candidate when an older backend omits the smart winner', async () => {
+    vi.mocked(getDuplicatePairs).mockResolvedValue({
+      items: [{ hash_a: 'left', hash_b: 'right', smart_winner_hash: null, distance: 1, similarity_pct: 98, status: 'detected' }],
+      next_cursor: null,
+      has_more: false,
+      total: 1,
     });
 
     const user = userEvent.setup();
@@ -124,26 +140,23 @@ describe('DuplicatesScreen', () => {
       render(
         <MantineProvider forceColorScheme="dark">
           <Notifications />
-          <DuplicatesScreen />
+          <DuplicateTestSurface />
         </MantineProvider>,
       );
     });
 
     await screen.findByText('Left image');
     await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Smart merge' }));
+      await user.hover(screen.getByRole('button', { name: 'Smart merge' }));
     });
-
-    await waitFor(() => expect(resolveDuplicatePair).toHaveBeenCalledTimes(1));
-    expect(await screen.findByRole('alert')).toHaveTextContent('No clear quality winner. Choose left or right, or keep both.');
-    expect(screen.queryByText('Review complete')).not.toBeInTheDocument();
-    expect(getDuplicatePairs).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Left image').closest('article')).toHaveAttribute('data-merge-preview-role', 'winner');
+    expect(screen.getByText('Right image').closest('article')).toHaveAttribute('data-merge-preview-role', 'loser');
   });
 
   it('warns about pending blob cleanup without blocking resolution', async () => {
     vi.mocked(getDuplicatePairs)
       .mockResolvedValueOnce({
-        items: [{ hash_a: 'left', hash_b: 'right', distance: 1, similarity_pct: 98, status: 'detected' }],
+        items: [{ hash_a: 'left', hash_b: 'right', smart_winner_hash: 'left', distance: 1, similarity_pct: 98, status: 'detected' }],
         next_cursor: null,
         has_more: false,
         total: 1,
@@ -165,7 +178,7 @@ describe('DuplicatesScreen', () => {
       render(
         <MantineProvider forceColorScheme="dark">
           <Notifications />
-          <DuplicatesScreen />
+          <DuplicateTestSurface />
         </MantineProvider>,
       );
     });
@@ -188,7 +201,7 @@ describe('DuplicatesScreen', () => {
       render(
         <MantineProvider forceColorScheme="dark">
           <Notifications />
-          <DuplicatesScreen />
+          <DuplicateTestSurface />
         </MantineProvider>,
       );
     });
@@ -205,7 +218,7 @@ describe('DuplicatesScreen', () => {
   it('applies one zoom level to both comparison panes', async () => {
     const user = userEvent.setup();
     await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
+      render(<MantineProvider forceColorScheme="dark"><DuplicateTestSurface /></MantineProvider>);
     });
 
     await screen.findByText('Left image');
@@ -213,14 +226,14 @@ describe('DuplicatesScreen', () => {
       await user.click(screen.getByRole('button', { name: 'Zoom out' }));
     });
 
-    expect(screen.getByText('80%')).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Zoom' })).toHaveValue('80');
     expect(screen.getByTestId('left-preview-layers').style.transform).toContain('scale(0.8)');
     expect(screen.getByTestId('right-preview-layers').style.transform).toContain('scale(0.8)');
 
     await act(async () => {
       await user.click(screen.getByRole('button', { name: 'Fit both images' }));
     });
-    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Zoom' })).toHaveValue('100');
     expect(screen.getByRole('button', { name: 'Fit both images' })).toHaveAttribute('aria-pressed', 'true');
   });
 
@@ -234,11 +247,11 @@ describe('DuplicatesScreen', () => {
     }));
 
     await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
+      render(<MantineProvider forceColorScheme="dark"><DuplicateTestSurface /></MantineProvider>);
     });
     await screen.findByText('Left image');
 
-    expect(screen.getByText('100%')).toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: 'Zoom' })).toHaveValue('100');
     expect(screen.getByTestId('left-preview-layers').style.transform).toContain('scale(3)');
     expect(screen.getByTestId('right-preview-layers').style.transform).toContain('scale(2.5)');
     width.mockRestore();
@@ -247,7 +260,7 @@ describe('DuplicatesScreen', () => {
 
   it('uses a cancelable native wheel listener for linked zoom', async () => {
     await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
+      render(<MantineProvider forceColorScheme="dark"><DuplicateTestSurface /></MantineProvider>);
     });
     await screen.findByText('Left image');
     const event = new WheelEvent('wheel', {
@@ -269,7 +282,7 @@ describe('DuplicatesScreen', () => {
   it('shows an aligned difference composite only while the comparison control is held', async () => {
     const user = userEvent.setup();
     await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
+      render(<MantineProvider forceColorScheme="dark"><DuplicateTestSurface /></MantineProvider>);
     });
 
     await screen.findByText('Left image');
@@ -293,7 +306,7 @@ describe('DuplicatesScreen', () => {
     vi.mocked(getEntityDetails).mockImplementation(() => new Promise(() => {}));
 
     await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
+      render(<MantineProvider forceColorScheme="dark"><DuplicateTestSurface /></MantineProvider>);
     });
 
     expect(await screen.findByRole('button', { name: 'Keep left' })).toBeDisabled();
@@ -306,8 +319,8 @@ describe('DuplicatesScreen', () => {
   it('clears the previous pair metadata while the next pair loads', async () => {
     vi.mocked(getDuplicatePairs).mockResolvedValue({
       items: [
-        { hash_a: 'left', hash_b: 'right', distance: 1, similarity_pct: 98, status: 'detected' },
-        { hash_a: 'next-left', hash_b: 'next-right', distance: 2, similarity_pct: 97, status: 'detected' },
+        { hash_a: 'left', hash_b: 'right', smart_winner_hash: 'left', distance: 1, similarity_pct: 98, status: 'detected' },
+        { hash_a: 'next-left', hash_b: 'next-right', smart_winner_hash: 'next-right', distance: 2, similarity_pct: 97, status: 'detected' },
       ],
       next_cursor: null,
       has_more: false,
@@ -324,7 +337,7 @@ describe('DuplicatesScreen', () => {
 
     const user = userEvent.setup();
     await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
+      render(<MantineProvider forceColorScheme="dark"><DuplicateTestSurface /></MantineProvider>);
     });
     await screen.findByText('Left image');
 
@@ -362,7 +375,7 @@ describe('DuplicatesScreen', () => {
       render(
         <MantineProvider forceColorScheme="dark">
           <Notifications />
-          <DuplicatesScreen />
+          <DuplicateTestSurface />
         </MantineProvider>,
       );
     });
@@ -392,7 +405,7 @@ describe('DuplicatesScreen', () => {
       render(
         <MantineProvider forceColorScheme="dark">
           <Notifications />
-          <DuplicatesScreen />
+          <DuplicateTestSurface />
         </MantineProvider>,
       );
     });

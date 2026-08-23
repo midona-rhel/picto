@@ -155,6 +155,30 @@ pub fn compare_static_image_quality_with_distance(
     ImageQualityDecision::Ambiguous
 }
 
+/// Canonical Smart Merge winner decision used by both preview and mutation.
+/// Repaired libraries can contain two entities referencing identical physical
+/// content; keep the left candidate deterministically in that case.
+pub fn smart_merge_quality_decision(
+    left: &ComparableImageCandidate<'_>,
+    right: &ComparableImageCandidate<'_>,
+    distance: Option<u32>,
+    identical_physical_content: bool,
+) -> ImageQualityDecision {
+    if identical_physical_content {
+        return ImageQualityDecision::LeftBetter;
+    }
+    match compare_static_image_quality_with_distance(left, right, distance) {
+        ImageQualityDecision::Ambiguous => {
+            // Duplicate pairs are stored in file-id order, so the left side is
+            // the earlier library file. A quality tie should not turn Smart
+            // Merge into a manual operation: retain that stable original and
+            // merge the right candidate's metadata into it.
+            ImageQualityDecision::LeftBetter
+        }
+        decision => decision,
+    }
+}
+
 fn retained_information_score(pixel_count: i64, size_bytes: i64) -> f64 {
     let pixels = pixel_count as f64;
     let encoded_bits_per_pixel = (size_bytes.max(0) as f64 * 8.0) / pixels;
@@ -165,8 +189,42 @@ fn retained_information_score(pixel_count: i64, size_bytes: i64) -> f64 {
 mod tests {
     use super::{
         compare_static_image_quality, compare_static_image_quality_with_distance,
-        ComparableImageCandidate, ImageQualityDecision,
+        smart_merge_quality_decision, ComparableImageCandidate, ImageQualityDecision,
     };
+
+    #[test]
+    fn smart_merge_keeps_identical_physical_content_deterministically() {
+        let candidate = ComparableImageCandidate {
+            mime_type: "image/jpeg",
+            size_bytes: 1_000,
+            pixel_width: Some(100),
+            pixel_height: Some(100),
+            frame_count: Some(1),
+        };
+        assert_eq!(
+            smart_merge_quality_decision(&candidate, &candidate, Some(0), true),
+            ImageQualityDecision::LeftBetter,
+        );
+    }
+
+    #[test]
+    fn smart_merge_keeps_the_earlier_candidate_when_quality_is_tied() {
+        let left = ComparableImageCandidate {
+            mime_type: "image/jpeg",
+            size_bytes: 1_000_000,
+            pixel_width: Some(2000),
+            pixel_height: Some(1200),
+            frame_count: Some(1),
+        };
+        let right = ComparableImageCandidate {
+            size_bytes: 1_010_000,
+            ..left.clone()
+        };
+        assert_eq!(
+            smart_merge_quality_decision(&left, &right, Some(1), false),
+            ImageQualityDecision::LeftBetter,
+        );
+    }
 
     #[test]
     fn prefers_lossless_when_detail_is_comparable() {

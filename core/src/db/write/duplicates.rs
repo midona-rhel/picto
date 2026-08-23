@@ -152,13 +152,7 @@ fn choose_winner(
         "keep_left" => Ok(Some((left.clone(), right.clone()))),
         "keep_right" => Ok(Some((right.clone(), left.clone()))),
         "smart_merge" => {
-            // This is normally prevented by the unique media_file hash
-            // invariant, but keep exact physical content deterministic if a
-            // repaired/imported database ever presents it as a pair.
-            if left.file_hash == right.file_hash {
-                return Ok(Some((left.clone(), right.clone())));
-            }
-            let decision = crate::duplicates::quality::compare_static_image_quality_with_distance(
+            let decision = crate::duplicates::quality::smart_merge_quality_decision(
                 &crate::duplicates::quality::ComparableImageCandidate {
                     mime_type: &left.mime_type,
                     size_bytes: left.size_bytes,
@@ -174,6 +168,7 @@ fn choose_winner(
                     frame_count: right.frame_count,
                 },
                 distance,
+                left.file_hash == right.file_hash,
             );
             Ok(match decision {
                 crate::duplicates::quality::ImageQualityDecision::LeftBetter => {

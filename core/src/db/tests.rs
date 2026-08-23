@@ -2116,7 +2116,7 @@ fn duplicate_resolution_decisions_keep_both_and_mark_false_positives() {
 }
 
 #[test]
-fn smart_merge_preserves_both_files_when_quality_is_ambiguous() {
+fn smart_merge_keeps_the_earlier_file_when_quality_is_tied() {
     let db = open_test_db();
     db.with_write(|conn| {
         conn.execute_batch(LIBRARY_DDL)?;
@@ -2166,27 +2166,24 @@ fn smart_merge_preserves_both_files_when_quality_is_ambiguous() {
     let result = db
         .resolve_duplicate_pair("smart_merge", "left", "right")
         .unwrap();
-    assert!(matches!(
-        result.status,
-        DuplicateResolveStatus::QualityAmbiguous
-    ));
+    assert!(matches!(result.status, DuplicateResolveStatus::Resolved));
+    assert_eq!(result.winner_hash.as_deref(), Some("left"));
+    assert_eq!(result.loser_hash.as_deref(), Some("right"));
     db.with_read(|conn| {
         assert_eq!(
             conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row
                 .get::<_, i64>(0))?,
-            2
+            1
         );
         assert_eq!(
-            conn.query_row(
-                "SELECT COUNT(*) FROM duplicate WHERE status = 'detected'",
-                [],
-                |row| row.get::<_, i64>(0)
-            )?,
-            1
+            conn.query_row("SELECT COUNT(*) FROM duplicate", [], |row| {
+                row.get::<_, i64>(0)
+            })?,
+            0
         );
         Ok(())
     })
-    .expect("verify ambiguous pair remains");
+    .expect("verify tied pair resolved");
 }
 
 #[test]
