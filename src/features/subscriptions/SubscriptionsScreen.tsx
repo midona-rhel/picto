@@ -187,7 +187,7 @@ export function SubscriptionsScreen() {
       confirm(
         {
           title: 'Reset Sync History',
-          message: 'Picto will scan every query from the beginning on the next run. Imported media, the subscription, queries, and account login remain untouched.',
+          message: 'Picto will clear this subscription\'s handled-file history and scan every query from the beginning. Existing media and account login remain untouched; previously deleted source media can be downloaded again.',
           confirmLabel: 'Reset',
         },
         () => void act(`reset:${id}`, () => subscriptionsController.reset(id)),

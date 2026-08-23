@@ -423,11 +423,26 @@ impl Application {
             reject_active_subscription_edit(connection, subscription_id)
         })?;
 
-        // Pagination restarts, but handled files stay archived so reset does
-        // not redownload successful imports or deliberately deleted items.
+        crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
+            self.store().library_root(),
+            subscription_id,
+        )
+        .await?;
+
         let (_, revision) = self.store().transaction(|transaction| {
             require_subscription(transaction, subscription_id)?;
             reject_active_subscription_edit(transaction, subscription_id)?;
+            // Reset is the explicit user override for source tombstones. A
+            // normal retry can never resurrect deliberately deleted media.
+            transaction.execute(
+                "UPDATE source_item
+                 SET state = 'pending', last_error = NULL, updated_at = datetime('now')
+                 WHERE state = 'deleted' AND source_post_id IN (
+                     SELECT source_post_id FROM subscription_source_post
+                     WHERE subscription_id = ?1
+                 )",
+                [subscription_id],
+            )?;
             transaction.execute(
                 "UPDATE subscription_query
                  SET resume_cursor = NULL, initial_run_complete = 0,
@@ -795,6 +810,13 @@ mod tests {
                 )?;
                 let source_post_id = transaction.last_insert_rowid();
                 transaction.execute(
+                    "INSERT INTO source_item (
+                         source_post_id, item_key, position, state, last_error,
+                         created_at, updated_at
+                     ) VALUES (?1, 'image', 0, 'deleted', 'deleted by user', 'now', 'now')",
+                    [source_post_id],
+                )?;
+                transaction.execute(
                     "INSERT INTO subscription_source_post (
                          subscription_id, query_id, source_post_id, last_seen_run_id
                      ) VALUES (?1, ?2, ?3, ?4)",
@@ -863,6 +885,12 @@ mod tests {
                     connection
                         .query_row("SELECT COUNT(*) FROM source_post", [], |row| row.get(0))?;
                 assert_eq!(source_posts, 1);
+                let source_item: (String, Option<String>) = connection.query_row(
+                    "SELECT state, last_error FROM source_item",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(source_item, ("pending".to_string(), None));
                 Ok(())
             })
             .unwrap();
@@ -875,13 +903,7 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
-        assert_eq!(
-            entries,
-            vec![
-                format!("picto_s{subscription_id}_q{query_id}_post"),
-                "picto_s999_q1_post".to_string(),
-            ]
-        );
+        assert_eq!(entries, vec!["picto_s999_q1_post".to_string()]);
     }
 
     #[test]
