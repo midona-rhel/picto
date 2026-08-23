@@ -923,11 +923,11 @@ impl Application {
 }
 
 fn unique_ids(item_ids: &[ItemId]) -> Result<Vec<i64>, String> {
-    let ids = item_ids.iter().map(|id| id.0).collect::<BTreeSet<_>>();
-    if ids.len() != item_ids.len() {
+    let ids = item_ids.iter().map(|id| id.0).collect::<Vec<_>>();
+    if ids.iter().copied().collect::<BTreeSet<_>>().len() != ids.len() {
         return Err("Item selection contains duplicate IDs".to_string());
     }
-    Ok(ids.into_iter().collect())
+    Ok(ids)
 }
 
 fn receipt(revision: u64, resources: &[&str], item_ids: &[i64]) -> MutationReceipt {
@@ -1246,7 +1246,10 @@ mod tests {
 
     use rusqlite::params;
 
-    use super::{DetachItemsInput, OrganizeIntoCollectionInput, OrganizeIntoCollectionResult};
+    use super::{
+        DetachItemsInput, OrganizeIntoCollectionInput, OrganizeIntoCollectionResult,
+        ReorderCollectionInput,
+    };
     use crate::app::{
         Application, ItemFilters, ItemId, ItemQuery, ItemScope, ItemSort, ItemTarget, Lifecycle,
     };
@@ -1458,6 +1461,29 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn collection_reorder_persists_the_complete_member_order() {
+        let (_directory, app, ids) = fixture();
+        let grouped = organize(&app, &ids, Some("Post"), None);
+        let reordered = vec![ids[2], ids[0], ids[1]];
+
+        app.reorder_collection(ReorderCollectionInput {
+            collection_id: grouped.collection_id,
+            media_item_ids: reordered.clone(),
+        })
+        .unwrap();
+
+        let details = crate::query_v2::details(app.store(), grouped.collection_id).unwrap();
+        assert_eq!(
+            details
+                .media
+                .into_iter()
+                .map(|media| media.media_item_id)
+                .collect::<Vec<_>>(),
+            reordered
+        );
     }
 
     #[test]
