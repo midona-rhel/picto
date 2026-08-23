@@ -11,7 +11,9 @@ use crate::app::{
     Application, FileHash, ItemId, ItemQuery, ItemTarget, Lifecycle, MutationReceipt,
 };
 use crate::duplicates_v2::{DuplicateCandidate, ResolutionChoice};
-use crate::folders_v2::{FolderId, FolderMutationReceipt, FolderWatchInput};
+use crate::folders_v2::{
+    FolderId, FolderMutationReceipt, FolderWatchInput, ReorderFolderItemsInput,
+};
 use crate::navigation_v2::{CreateSmartFolderInput, SmartFolderMutationReceipt};
 use crate::operations_v2::MediaMetadataPatch;
 use crate::query_v2::ItemPageRequest;
@@ -222,6 +224,10 @@ pub fn dispatch(
         "folders.reorder" => publish_folder(
             application,
             application.reorder_folder_children(&parse(args_json)?)?,
+        ),
+        "folders.items.reorder" => publish_folder(
+            application,
+            application.reorder_folder_items(&parse::<ReorderFolderItemsInput>(args_json)?)?,
         ),
         "folders.delete" => {
             let input: FolderInput = parse(args_json)?;

@@ -11,7 +11,7 @@ use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::app::{resources, Application, MutationReceipt};
+use crate::app::{resources, Application, ItemId, MutationReceipt};
 
 const RANK_GAP: i64 = 1024;
 
@@ -34,6 +34,13 @@ pub struct CreateFolderInput {
 pub struct ReorderFolderChildrenInput {
     pub parent_id: Option<FolderId>,
     pub folder_ids: Vec<FolderId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ReorderFolderItemsInput {
+    pub folder_id: FolderId,
+    pub item_ids: Vec<ItemId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -185,6 +192,69 @@ impl Application {
         )?;
 
         Ok(folder_receipt(revision, folder_ids, Vec::new(), None))
+    }
+
+    pub fn reorder_folder_items(
+        &self,
+        input: &ReorderFolderItemsInput,
+    ) -> Result<FolderMutationReceipt, String> {
+        let requested = input
+            .item_ids
+            .iter()
+            .map(|item_id| item_id.0)
+            .collect::<BTreeSet<_>>();
+        if requested.len() != input.item_ids.len() {
+            return Err("Folder item reorder must contain unique item IDs".to_string());
+        }
+
+        let ((), revision) = self.transaction(
+            |transaction| {
+                require_folder(transaction, input.folder_id.0)?;
+                let visible = transaction
+                    .prepare(
+                        "SELECT fi.item_id
+                         FROM folder_item fi
+                         JOIN library_root lr ON lr.item_id = fi.item_id
+                         WHERE fi.folder_id = ?1 AND lr.lifecycle = 'active'
+                         ORDER BY fi.position_rank, fi.item_id",
+                    )?
+                    .query_map([input.folder_id.0], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<BTreeSet<_>>>()?;
+                if visible != requested {
+                    return Err(invalid(
+                        "Folder item reorder must contain every active folder item exactly once",
+                    ));
+                }
+                for (index, item_id) in input.item_ids.iter().enumerate() {
+                    transaction.execute(
+                        "UPDATE folder_item SET position_rank = ?1
+                         WHERE folder_id = ?2 AND item_id = ?3",
+                        params![(index as i64 + 1) * RANK_GAP, input.folder_id.0, item_id.0],
+                    )?;
+                }
+                transaction.execute(
+                    "WITH hidden AS (
+                         SELECT fi.item_id,
+                                ROW_NUMBER() OVER (ORDER BY fi.position_rank, fi.item_id) AS offset
+                         FROM folder_item fi
+                         JOIN library_root lr ON lr.item_id = fi.item_id
+                         WHERE fi.folder_id = ?1 AND lr.lifecycle != 'active'
+                     )
+                     UPDATE folder_item
+                     SET position_rank = (?2 + (
+                         SELECT offset FROM hidden WHERE hidden.item_id = folder_item.item_id
+                     )) * ?3
+                     WHERE folder_id = ?1
+                       AND item_id IN (SELECT item_id FROM hidden)",
+                    params![input.folder_id.0, input.item_ids.len() as i64, RANK_GAP],
+                )?;
+                Ok(((), ()))
+            },
+            |_, ()| Ok(()),
+        )?;
+        let mut receipt = folder_receipt(revision, vec![input.folder_id], Vec::new(), None);
+        receipt.receipt.item_ids = input.item_ids.clone();
+        Ok(receipt)
     }
 
     pub fn delete_folder(&self, folder_id: FolderId) -> Result<FolderMutationReceipt, String> {
@@ -444,8 +514,11 @@ fn invalid(message: impl Into<String>) -> rusqlite::Error {
 mod tests {
     use std::sync::Arc;
 
-    use super::{CreateFolderInput, FolderId, FolderWatchInput, ReorderFolderChildrenInput};
-    use crate::app::Application;
+    use super::{
+        CreateFolderInput, FolderId, FolderWatchInput, ReorderFolderChildrenInput,
+        ReorderFolderItemsInput, RANK_GAP,
+    };
+    use crate::app::{Application, ItemId};
     use crate::store::Store;
 
     fn fixture() -> (tempfile::TempDir, Application, i64) {
@@ -599,6 +672,99 @@ mod tests {
                     .query_map([], |row| row.get::<_, i64>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 assert_eq!(ids, vec![third.0, first.0, second.0]);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn reordering_folder_items_covers_active_items_and_leaves_hidden_items_last() {
+        let (_directory, app, first_id) = fixture();
+        let folder = create(&app, "Ordered", None);
+        let ((second_id, hidden_id), _) = app
+            .store()
+            .transaction(|transaction| {
+                let create_media = |key: &str, lifecycle: &str| {
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_hash, mime_type, size_bytes, created_at)
+                         VALUES (?1, 'image/png', 10, 'now')",
+                        [format!("{key}-hash")],
+                    )?;
+                    let file_id = transaction.last_insert_rowid();
+                    transaction.execute(
+                        "INSERT INTO library_item (item_key, kind, created_at, updated_at)
+                         VALUES (?1, 'media', 'now', 'now')",
+                        [key],
+                    )?;
+                    let item_id = transaction.last_insert_rowid();
+                    transaction.execute(
+                        "INSERT INTO media_asset
+                             (item_id, file_id, imported_at, updated_at)
+                         VALUES (?1, ?2, 'now', 'now')",
+                        rusqlite::params![item_id, file_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
+                        rusqlite::params![item_id, lifecycle],
+                    )?;
+                    Ok::<_, rusqlite::Error>(item_id)
+                };
+                let second_id = create_media("folder-second-item", "active")?;
+                let hidden_id = create_media("folder-hidden-item", "trash")?;
+                for (item_id, rank) in [(first_id, 100), (second_id, 200), (hidden_id, 50)] {
+                    transaction.execute(
+                        "INSERT INTO folder_item (folder_id, item_id, position_rank)
+                         VALUES (?1, ?2, ?3)",
+                        rusqlite::params![folder.0, item_id, rank],
+                    )?;
+                }
+                Ok((second_id, hidden_id))
+            })
+            .unwrap();
+
+        let incomplete = app
+            .reorder_folder_items(&ReorderFolderItemsInput {
+                folder_id: folder,
+                item_ids: vec![ItemId(first_id)],
+            })
+            .unwrap_err();
+        assert!(incomplete.contains("every active folder item"));
+
+        let receipt = app
+            .reorder_folder_items(&ReorderFolderItemsInput {
+                folder_id: folder,
+                item_ids: vec![ItemId(second_id), ItemId(first_id)],
+            })
+            .unwrap();
+        assert_eq!(
+            receipt.receipt.item_ids,
+            vec![ItemId(second_id), ItemId(first_id)]
+        );
+        assert!(receipt
+            .receipt
+            .resources
+            .contains(&format!("folder:{}", folder.0)));
+
+        app.store()
+            .read(|connection| {
+                let rows = connection
+                    .prepare(
+                        "SELECT item_id, position_rank FROM folder_item
+                         WHERE folder_id = ?1 ORDER BY position_rank, item_id",
+                    )?
+                    .query_map([folder.0], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                assert_eq!(
+                    rows,
+                    vec![
+                        (second_id, RANK_GAP),
+                        (first_id, RANK_GAP * 2),
+                        (hidden_id, RANK_GAP * 3),
+                    ]
+                );
                 Ok(())
             })
             .unwrap();
