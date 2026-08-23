@@ -33,6 +33,7 @@ import {
 } from '../dragGhostSpec';
 import { GlassInput } from '../../../shared/ui/GlassInput/GlassInput';
 import { resolveGridScrollAnchor } from './gridScrollAnchor';
+import { collectThumbnailActivation } from './thumbnailActivation';
 import {
   type CanvasScrollState,
   createIdleCanvasScrollState,
@@ -156,6 +157,12 @@ export function CanvasGrid({
   const activeHashesRef = useRef(new Set<string>());
   const viewportHashesRef = useRef(new Set<string>());
   const planTilesRef = useRef<PlanTile[]>([]);
+  const activationBuffersRef = useRef({
+    activeTiles: activeTilesRef.current,
+    activeHashes: activeHashesRef.current,
+    viewportHashes: viewportHashesRef.current,
+    planTiles: planTilesRef.current,
+  });
 
   // Cache theme CSS values — avoids getComputedStyle() on every draw frame
   const cachedThemeRef = useRef({
@@ -408,13 +415,9 @@ export function CanvasGrid({
 
     // Reuse arrays/sets across frames to avoid per-frame GC pressure.
     const activeTiles = activeTilesRef.current;
-    activeTiles.length = 0;
     const activeHashes = activeHashesRef.current;
-    activeHashes.clear();
     const viewportHashes = viewportHashesRef.current;
-    viewportHashes.clear();
     const planTiles = planTilesRef.current;
-    let planCount = 0;
 
     // Y-binned index lookup — masonry positions are NOT Y-sorted (tiles
     // placed in shortest column), so candidates come from the spatial index
@@ -422,34 +425,16 @@ export function CanvasGrid({
     const candidates = candidateBufRef.current;
     candidates.length = 0;
     spatialIndex.queryYRange(zoneTop, zoneBottom, candidates);
-    for (let k = 0; k < candidates.length; k++) {
-      const i = candidates[k];
-      const pos = layout.positions[i];
-      if (!pos) continue;
-
-      const inZone = pos.y + pos.h >= zoneTop && pos.y <= zoneBottom;
-      if (!inZone) continue;
-
-      activeTiles.push(i);
-      const item = renderItems[i];
-      if (!item) continue;
-
-      activeHashes.add(item.thumbnailHash);
-      if (pos.y + pos.h >= scrollTop && pos.y <= scrollTop + vp.viewportHeight) {
-        viewportHashes.add(item.hash);
-      }
-      if (planTiles[planCount]) {
-        planTiles[planCount].hash = item.thumbnailHash;
-        planTiles[planCount].mime = item.mime;
-        planTiles[planCount].w = pos.w;
-        planTiles[planCount].h = pos.h;
-        planTiles[planCount].cy = pos.y + pos.h / 2;
-      } else {
-        planTiles[planCount] = { hash: item.thumbnailHash, mime: item.mime, w: pos.w, h: pos.h, cy: pos.y + pos.h / 2 };
-      }
-      planCount++;
-    }
-    planTiles.length = planCount;
+    collectThumbnailActivation(
+      candidates,
+      layout.positions,
+      renderItems,
+      zoneTop,
+      zoneBottom,
+      scrollTop,
+      scrollTop + vp.viewportHeight,
+      activationBuffersRef.current,
+    );
 
     // Send plan to worker — deduplicates internally, only posts when visible set changes.
     pipeline.updatePlan(planTiles, scrollTop + vp.viewportHeight / 2);
