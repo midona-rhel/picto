@@ -1,12 +1,9 @@
 import { listen, type UnlistenFn } from '../platform/ipc';
+import type { LibraryChanged } from '../shared/types/generated/application/LibraryChanged';
 
 export const LIBRARY_CHANGED_EVENT = 'library/changed';
 
-export interface LibraryChangedPayload {
-  revision: number;
-  resources: string[];
-  item_ids: number[];
-}
+export type LibraryChangedPayload = LibraryChanged;
 
 export type LibraryInvalidationCallback = (payload: LibraryChangedPayload) => void;
 

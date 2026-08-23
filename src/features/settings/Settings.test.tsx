@@ -6,18 +6,20 @@ import { Settings } from './Settings';
 const mocks = vi.hoisted(() => ({
   getSettings: vi.fn(),
   saveSettings: vi.fn(),
+  replaceSettings: vi.fn(),
   getViewPrefs: vi.fn(),
   setViewPrefs: vi.fn(),
-  setZoomFactor: vi.fn(),
+  viewPrefsToPatch: (prefs: Record<string, unknown>) => prefs,
 }));
 
 vi.mock('../../controllers/settingsController', () => ({
   settingsController: {
     getSettings: mocks.getSettings,
     saveSettings: mocks.saveSettings,
+    replaceSettings: mocks.replaceSettings,
     getViewPrefs: mocks.getViewPrefs,
     setViewPrefs: mocks.setViewPrefs,
-    setZoomFactor: mocks.setZoomFactor,
+    viewPrefsToPatch: mocks.viewPrefsToPatch,
   },
 }));
 

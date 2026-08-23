@@ -195,6 +195,17 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
   const [zoom, setZoom] = useState('100');
   const previousThemeRef = useRef(activeTheme);
 
+  useEffect(() => {
+    if (appSettings?.zoomFactor == null) {
+      setZoom('100');
+      return;
+    }
+    const percentage = Math.round(appSettings.zoomFactor * 100);
+    if (ZOOM_OPTIONS.some((option) => option.value === String(percentage))) {
+      setZoom(String(percentage));
+    }
+  }, [appSettings?.zoomFactor]);
+
   const updateAppSetting = (patch: Partial<AppSettings>) => {
     setAppSettings((cur) => cur ? { ...cur, ...patch } : null);
     // Apply immediately for live preview in the main window
@@ -227,9 +238,6 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
 
   const handleZoomChange = (value: string) => {
     setZoom(value);
-    // Zoom preview is applied immediately
-    const factor = Number(value) / 100;
-    void settingsController.setZoomFactor(factor).catch(() => {});
     updateAppSetting({ zoomFactor: Number(value) / 100 });
   };
 
@@ -439,8 +447,8 @@ export function Settings() {
     if (!isDirty) return;
     const handler = () => {
       const snap = savedSnapshotRef.current;
-      if (snap.app) void settingsController.saveSettings(snap.app).catch(() => {});
-      if (snap.prefs) void settingsController.setViewPrefs('', snap.prefs as ViewPrefsPatch).catch(() => {});
+      if (snap.app) void settingsController.replaceSettings(snap.app).catch(() => {});
+      if (snap.prefs) void settingsController.setViewPrefs('', settingsController.viewPrefsToPatch(snap.prefs)).catch(() => {});
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
@@ -450,8 +458,8 @@ export function Settings() {
     if (isDirty) {
       // Revert to saved snapshot
       const snap = savedSnapshotRef.current;
-      if (snap.app) void settingsController.saveSettings(snap.app).catch(() => {});
-      if (snap.prefs) void settingsController.setViewPrefs('', snap.prefs as ViewPrefsPatch).catch(() => {});
+      if (snap.app) void settingsController.replaceSettings(snap.app).catch(() => {});
+      if (snap.prefs) void settingsController.setViewPrefs('', settingsController.viewPrefsToPatch(snap.prefs)).catch(() => {});
     }
     window.close();
   };
@@ -459,11 +467,11 @@ export function Settings() {
   const handleSave = () => {
     // Persist pending state to backend — this is now the saved baseline
     if (pendingAppSettings) {
-      void settingsController.saveSettings(pendingAppSettings).catch(() => {});
+      void settingsController.replaceSettings(pendingAppSettings).catch(() => {});
       savedSnapshotRef.current.app = structuredClone(pendingAppSettings);
     }
     if (pendingViewPrefs) {
-      void settingsController.setViewPrefs('', pendingViewPrefs as ViewPrefsPatch).catch(() => {});
+      void settingsController.setViewPrefs('', settingsController.viewPrefsToPatch(pendingViewPrefs)).catch(() => {});
       savedSnapshotRef.current.prefs = structuredClone(pendingViewPrefs);
     }
     setIsDirty(false);

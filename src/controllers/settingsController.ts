@@ -1,11 +1,20 @@
 import {
   getSettings,
+  getSettingsSnapshot,
   getViewPrefs,
+  getViewPrefsSnapshot,
+  patchSettings,
+  replaceSettings,
   saveSettings,
   setViewPrefs,
-  setZoomFactor,
+  viewPrefsToPatch,
 } from '../platform/settingsApi';
-import type { AppSettings, ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
+import type {
+  AppSettings,
+  ViewPrefsDto,
+  ViewPrefsPatch,
+} from '../platform/settingsApi';
+import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
 
 export type { AppSettings, ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 
@@ -14,19 +23,29 @@ export const settingsController = {
     return getSettings();
   },
 
-  saveSettings(settings: Partial<AppSettings>): Promise<void> {
+  getSettingsSnapshot,
+
+  saveSettings(settings: Partial<AppSettings>): Promise<MutationReceipt> {
     return saveSettings(settings);
   },
 
-  setZoomFactor(factor: number): Promise<void> {
-    return setZoomFactor(factor);
+  patchSettings(settings: Partial<AppSettings>): Promise<MutationReceipt> {
+    return patchSettings(settings);
+  },
+
+  replaceSettings(settings: AppSettings): Promise<MutationReceipt> {
+    return replaceSettings(settings);
   },
 
   getViewPrefs(scopeKey: string): Promise<ViewPrefsDto> {
     return getViewPrefs(scopeKey);
   },
 
-  setViewPrefs(scopeKey: string, patch: ViewPrefsPatch): Promise<ViewPrefsDto> {
+  getViewPrefsSnapshot,
+
+  viewPrefsToPatch,
+
+  setViewPrefs(scopeKey: string, patch: ViewPrefsPatch): Promise<MutationReceipt> {
     return setViewPrefs(scopeKey, patch);
   },
 };
