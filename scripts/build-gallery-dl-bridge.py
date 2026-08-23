@@ -55,6 +55,8 @@ def command_for(venv_dir: Path, output_dir: Path, platform_name: str | None = No
         "gallery_dl",
         "--collect-all",
         "requests",
+        "--collect-all",
+        "yt_dlp",
         str(BRIDGE),
     ]
 

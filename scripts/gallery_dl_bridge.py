@@ -390,6 +390,7 @@ def main() -> int:
         _install_deviantart_deviation_adapter()
         _install_tumblr_post_adapter()
         import gallery_dl
+        import yt_dlp
         from gallery_dl.extractor import deviantart
         from gallery_dl.extractor import gelbooru_v02
         from gallery_dl.extractor import tumblr
@@ -398,6 +399,8 @@ def main() -> int:
             "bridge_self_test",
             gallery_dl_version=gallery_dl.__version__,
             gallery_dl_imported=True,
+            yt_dlp_version=yt_dlp.version.__version__,
+            yt_dlp_imported=True,
             rule34_adapter_initialized=bool(getattr(
                 gelbooru_v02.GelbooruV02Extractor,
                 "_picto_rule34_tag_info",
