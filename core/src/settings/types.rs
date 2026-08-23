@@ -12,4 +12,5 @@ pub struct ViewPref {
     pub show_extension: Option<bool>,
     pub show_label: Option<bool>,
     pub thumbnail_fit: Option<String>,
+    pub show_subfolders: Option<bool>,
 }

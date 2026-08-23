@@ -20,8 +20,14 @@ describe('countActiveGridFilters', () => {
     const store = createStore();
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
-      searchText: 'portrait',
-      filters: { rating: { value: 4, op: 'gte' }, entity_types: ['image'] },
+      query: {
+        ...store.get(gridSessionAtom).query,
+        filters: {
+          search_text: 'portrait',
+          rating: { value: 4, op: 'gte' },
+          entity_types: ['image'],
+        },
+      },
     });
 
     expect(store.get(currentGridQueryAtom).filters).toEqual({

@@ -7,7 +7,8 @@ use crate::settings::types::ViewPref;
 pub fn get_view_pref(conn: &Connection, scope: &str) -> rusqlite::Result<Option<ViewPref>> {
     conn.query_row(
         "SELECT scope, sort_field, sort_dir, layout, tile_size,
-                show_name, show_resolution, show_extension, show_label, thumbnail_fit
+                show_name, show_resolution, show_extension, show_label, thumbnail_fit,
+                show_subfolders
          FROM view_pref
          WHERE scope = ?1",
         [scope],
@@ -23,6 +24,7 @@ pub fn get_view_pref(conn: &Connection, scope: &str) -> rusqlite::Result<Option<
                 show_extension: row.get(7)?,
                 show_label: row.get(8)?,
                 thumbnail_fit: row.get(9)?,
+                show_subfolders: row.get(10)?,
             })
         },
     )
@@ -46,8 +48,8 @@ pub fn set_view_pref(conn: &Connection, pref: &ViewPref) -> rusqlite::Result<()>
     conn.execute(
         "INSERT OR REPLACE INTO view_pref
          (scope, sort_field, sort_dir, layout, tile_size,
-          show_name, show_resolution, show_extension, show_label, thumbnail_fit)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+          show_name, show_resolution, show_extension, show_label, thumbnail_fit, show_subfolders)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             pref.scope,
             pref.sort_field,
@@ -59,6 +61,7 @@ pub fn set_view_pref(conn: &Connection, pref: &ViewPref) -> rusqlite::Result<()>
             pref.show_extension,
             pref.show_label,
             pref.thumbnail_fit,
+            pref.show_subfolders,
         ],
     )?;
     Ok(())

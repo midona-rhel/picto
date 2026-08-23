@@ -11,6 +11,7 @@ export interface ViewPrefsDto {
   show_extension: boolean | null;
   show_label: boolean | null;
   thumbnail_fit: string | null;
+  show_subfolders: boolean | null;
 }
 
 export interface ViewPrefsPatch {

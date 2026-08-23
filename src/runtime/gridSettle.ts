@@ -133,18 +133,18 @@ export function processStateChange(changes: StateChanges) {
     case 'ignore':
       break;
     case 'reconcile_metadata':
-      gridController.reconcile(true);
+      gridController.dispatch({ type: 'reconcile', impact: 'metadata' });
       break;
     case 'reconcile_membership':
       // Membership changes must be settled by the canonical query. Hash-only
       // insertion cannot know whether the current scope contains the entity.
-      gridController.loadFirstPage({ preserveItems: true });
+      gridController.dispatch({ type: 'reconcile', impact: 'membership' });
       break;
     case 'reorder':
-      gridController.reconcile(false);
+      gridController.dispatch({ type: 'reconcile', impact: 'order' });
       break;
     case 'refresh':
-      gridController.loadFirstPage({ preserveItems: true });
+      gridController.dispatch({ type: 'reconcile', impact: 'reload' });
       break;
   }
 }
@@ -165,7 +165,7 @@ export function startGridSettle(): () => void {
     if ((phase === 'idle' || phase === 'fading_in') && pendingReload) {
       pendingReload = false;
       if (store.get(gridActiveAtom)) {
-        gridController.loadFirstPage({ preserveItems: true });
+        gridController.dispatch({ type: 'reconcile', impact: 'reload' });
       }
     }
   });

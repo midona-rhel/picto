@@ -20,7 +20,7 @@ const store = getDefaultStore();
 describe('grid runtime settling', () => {
   afterEach(() => {
     vi.restoreAllMocks();
-    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), items: [], active: true });
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), pages: [], active: true });
     store.set(gridTransitionPhaseAtom, 'idle');
     stateChangedListeners.length = 0;
   });
@@ -70,19 +70,22 @@ describe('grid runtime settling', () => {
     ['Inbox', { kind: 'system', key: 'inbox' }],
     ['All', { kind: 'system', key: 'all' }],
   ] as const)('reloads the canonical query after an import in %s', (_label, scope) => {
-    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), scope });
-    const reload = vi.spyOn(gridController, 'loadFirstPage').mockResolvedValue(undefined);
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      query: { ...store.get(gridSessionAtom).query, base_scope: scope },
+    });
+    const dispatch = vi.spyOn(gridController, 'dispatch').mockReturnValue(undefined);
 
     processStateChange({
       entity_hashes: ['new-active-entity'],
       status_changed: true,
     });
 
-    expect(reload).toHaveBeenCalledWith({ preserveItems: true });
+    expect(dispatch).toHaveBeenCalledWith({ type: 'reconcile', impact: 'membership' });
   });
 
   it('coalesces all transition-time events into one canonical reload', async () => {
-    const reload = vi.spyOn(gridController, 'loadFirstPage').mockResolvedValue(undefined);
+    const dispatch = vi.spyOn(gridController, 'dispatch').mockReturnValue(undefined);
     store.set(gridTransitionPhaseAtom, 'waiting');
     const stop = startGridSettle();
     const listener = stateChangedListeners[stateChangedListeners.length - 1];
@@ -90,12 +93,12 @@ describe('grid runtime settling', () => {
 
     listener!({ payload: { changes: { status_changed: true } } });
     listener!({ payload: { changes: { media_derivatives_changed: true } } });
-    expect(reload).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
 
     store.set(gridTransitionPhaseAtom, 'idle');
     await Promise.resolve();
-    expect(reload).toHaveBeenCalledTimes(1);
-    expect(reload).toHaveBeenCalledWith({ preserveItems: true });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch).toHaveBeenCalledWith({ type: 'reconcile', impact: 'reload' });
 
     stop();
   });

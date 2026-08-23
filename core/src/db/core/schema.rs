@@ -4,7 +4,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 
 /// The latest canonical schema. Version 100 is the legacy-to-canonical boundary.
-pub const CURRENT_SCHEMA_VERSION: i64 = 117;
+pub const CURRENT_SCHEMA_VERSION: i64 = 118;
 
 /// Full DDL for a new library database.
 pub const LIBRARY_DDL: &str = r#"
@@ -448,7 +448,8 @@ CREATE TABLE IF NOT EXISTS view_pref (
     show_resolution INTEGER DEFAULT 0,
     show_extension  INTEGER DEFAULT 0,
     show_label      INTEGER DEFAULT 0,
-    thumbnail_fit   TEXT DEFAULT 'cover'
+    thumbnail_fit   TEXT DEFAULT 'cover',
+    show_subfolders INTEGER DEFAULT 1
 );
 
 CREATE TABLE IF NOT EXISTS kv_settings (
@@ -522,12 +523,12 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version)
-SELECT 117
+SELECT 118
 WHERE NOT EXISTS (SELECT 1 FROM schema_version);
 "#;
 
-/// Create a fresh pre-1.0 schema or validate an exact current-schema match.
-/// Schema conversion starts only after the 1.0 format is locked.
+/// Create a fresh schema, apply the small supported canonical migration, or
+/// validate an exact current-schema match.
 pub fn initialize_schema(conn: &Connection) -> Result<(), String> {
     let user_table_count = conn
         .query_row(
@@ -548,13 +549,29 @@ pub fn initialize_schema(conn: &Connection) -> Result<(), String> {
         );
     }
 
-    let version = read_schema_version(conn)?;
+    let mut version = read_schema_version(conn)?;
+    if version == 117 {
+        migrate_117_to_118(conn)?;
+        version = CURRENT_SCHEMA_VERSION;
+    }
     if version != CURRENT_SCHEMA_VERSION {
         return Err(format!(
             "Unsupported pre-1.0 library schema version {version}; this build requires exactly {CURRENT_SCHEMA_VERSION}. Create a new library."
         ));
     }
     validate_current_schema(conn)
+}
+
+fn migrate_117_to_118(conn: &Connection) -> Result<(), String> {
+    let migration = "BEGIN IMMEDIATE;
+        ALTER TABLE view_pref ADD COLUMN show_subfolders INTEGER DEFAULT 1;
+        UPDATE schema_version SET version = 118;
+        COMMIT;";
+    if let Err(error) = conn.execute_batch(migration) {
+        let _ = conn.execute_batch("ROLLBACK;");
+        return Err(format!("Failed to migrate library schema 117 to 118: {error}"));
+    }
+    Ok(())
 }
 
 pub(crate) fn has_schema_version_table(conn: &Connection) -> Result<bool, String> {
@@ -686,7 +703,10 @@ fn validate_current_schema(conn: &Connection) -> Result<(), String> {
         ),
         ("entity_fts", "SELECT rowid FROM entity_fts WHERE 0"),
         ("sidebar_node", "SELECT node_id FROM sidebar_node WHERE 0"),
-        ("view_pref", "SELECT scope FROM view_pref WHERE 0"),
+        (
+            "view_pref",
+            "SELECT scope, show_subfolders FROM view_pref WHERE 0",
+        ),
         ("kv_settings", "SELECT key FROM kv_settings WHERE 0"),
         ("manifest", "SELECT key FROM manifest WHERE 0"),
         (

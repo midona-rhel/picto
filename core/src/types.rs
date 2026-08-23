@@ -307,6 +307,7 @@ pub struct ViewPrefsDto {
     pub show_extension: Option<bool>,
     pub show_label: Option<bool>,
     pub thumbnail_fit: Option<String>,
+    pub show_subfolders: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
@@ -322,6 +323,7 @@ pub struct ViewPrefsPatch {
     pub show_extension: Option<bool>,
     pub show_label: Option<bool>,
     pub thumbnail_fit: Option<String>,
+    pub show_subfolders: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]

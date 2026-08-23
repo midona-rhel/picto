@@ -71,7 +71,7 @@ export function WorkspaceSurface() {
       restoreScrollTopRef.current = getScrollPosition(activeNodeId);
       previousNodeRef.current = activeNodeId;
       setPhase('waiting');
-      void gridController.navigateTo(nextScope);
+      void gridController.dispatch({ type: 'navigate', scope: nextScope }, true);
       return;
     }
 
@@ -85,7 +85,7 @@ export function WorkspaceSurface() {
       setPhase('waiting');
       if (committedScope) {
         restoreScrollTopRef.current = getScrollPosition(committedNode);
-        void gridController.navigateTo(committedScope);
+        void gridController.dispatch({ type: 'navigate', scope: committedScope }, true);
       } else {
         gridController.deactivate();
         fadeIn();
@@ -100,7 +100,7 @@ export function WorkspaceSurface() {
   useEffect(() => {
     if (!pendingIntent) return;
     if (phase !== 'idle') {
-      gridController.applyIntent(pendingIntent);
+      gridController.dispatch(pendingIntent, true);
       setPendingIntent(null);
       return;
     }
@@ -108,7 +108,7 @@ export function WorkspaceSurface() {
     setPhase('fading_out');
     delayRef.current = window.setTimeout(() => {
       delayRef.current = null;
-      gridController.applyIntent(pendingIntent);
+      gridController.dispatch(pendingIntent, true);
       setPhase('waiting');
     }, TRANSITION_MS);
   }, [pendingIntent, phase, setPendingIntent, setPhase]);

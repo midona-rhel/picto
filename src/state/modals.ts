@@ -40,8 +40,6 @@ export interface SmartFolderModalState {
     color?: string | null;
     notes?: string | null;
     predicate?: import('../shared/types/canonical').SmartFolderPredicate;
-    sort_field?: string | null;
-    sort_order?: string | null;
     display_order?: number | null;
   };
 }

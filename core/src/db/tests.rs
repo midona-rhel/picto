@@ -1283,6 +1283,41 @@ fn fresh_library_starts_at_current_canonical_schema_version() {
 }
 
 #[test]
+fn schema_117_migrates_subfolder_visibility_without_losing_preferences() {
+    let tmp = TempDir::new().expect("tempdir");
+    let db_path = tmp.path().join("library.db");
+    let old_ddl = LIBRARY_DDL
+        .replace(",\n    show_subfolders INTEGER DEFAULT 1", "")
+        .replace("SELECT 118", "SELECT 117");
+    let conn = rusqlite::Connection::open(&db_path).expect("open raw database");
+    conn.execute_batch(&old_ddl).expect("create schema 117");
+    conn.execute(
+        "INSERT INTO view_pref (scope, layout, tile_size) VALUES ('folder:7', 'grid', 180)",
+        [],
+    )
+    .expect("seed preference");
+    drop(conn);
+
+    let db = LibraryDatabase::open(tmp.path()).expect("migrate schema");
+    db.with_read(|conn| {
+        let (version, layout, tile_size, show_subfolders): (i64, String, i64, bool) = conn
+            .query_row(
+                "SELECT sv.version, vp.layout, vp.tile_size, vp.show_subfolders
+                 FROM schema_version sv CROSS JOIN view_pref vp
+                 WHERE vp.scope = 'folder:7'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        assert_eq!(layout, "grid");
+        assert_eq!(tile_size, 180);
+        assert!(show_subfolders);
+        Ok(())
+    })
+    .expect("verify migrated preference");
+}
+
+#[test]
 fn subscription_definitions_are_direct_and_have_no_group_schema() {
     let db = open_test_db();
     db.with_read(|conn| {

@@ -50,7 +50,7 @@ function ViewPanel() {
   const hasFixedOrder = scope.kind === 'folder'
     || (scope.kind === 'system' && scope.key === 'recent_viewed');
 
-  const setSort = (f: SortField, d: SortDirection) => { void gridController.setSort(f, d); };
+  const setSort = (f: SortField, d: SortDirection) => { gridController.dispatch({ type: 'sort', field: f, direction: d }); };
 
   return (
     <div className={s.panel}>
@@ -60,8 +60,7 @@ function ViewPanel() {
           value={viewMode}
           options={LAYOUT_OPTIONS}
           onChange={(v) => {
-            gridController.updateView({ mode: v as GridViewMode }, true);
-            gridController.saveViewPref({ view_mode: v });
+            gridController.dispatch({ type: 'view', patch: { mode: v as GridViewMode }, transition: true });
           }}
           width={130}
         />
@@ -114,12 +113,12 @@ function DisplayPanel() {
 
   return (
     <div className={s.panel}>
-      {toggle('Show Name', showName, () => { gridController.updateView({ showName: !showName }); gridController.saveViewPref({ show_name: !showName }); })}
-      {toggle('Show Resolution', showRes, () => { gridController.updateView({ showResolution: !showRes }); gridController.saveViewPref({ show_resolution: !showRes }); })}
-      {toggle('Show Extension', showExt, () => { gridController.updateView({ showExtension: !showExt }); gridController.saveViewPref({ show_extension: !showExt }); })}
-      {toggle('Show Label', showExtLabel, () => { gridController.updateView({ showExtensionLabel: !showExtLabel }); gridController.saveViewPref({ show_label: !showExtLabel }); })}
-      {toggle('Fit Thumbnails', fitThumbs, () => { gridController.updateView({ fitThumbnails: !fitThumbs }); gridController.saveViewPref({ thumbnail_fit: !fitThumbs ? 'cover' : 'contain' }); }, viewMode !== 'grid')}
-      {toggle('Show Subfolders', showSubfolders, () => gridController.updateView({ showSubfolders: !showSubfolders }))}
+      {toggle('Show Name', showName, () => gridController.dispatch({ type: 'view', patch: { showName: !showName } }))}
+      {toggle('Show Resolution', showRes, () => gridController.dispatch({ type: 'view', patch: { showResolution: !showRes } }))}
+      {toggle('Show Extension', showExt, () => gridController.dispatch({ type: 'view', patch: { showExtension: !showExt } }))}
+      {toggle('Show Label', showExtLabel, () => gridController.dispatch({ type: 'view', patch: { showExtensionLabel: !showExtLabel } }))}
+      {toggle('Fit Thumbnails', fitThumbs, () => gridController.dispatch({ type: 'view', patch: { fitThumbnails: !fitThumbs } }), viewMode !== 'grid')}
+      {toggle('Show Subfolders', showSubfolders, () => gridController.dispatch({ type: 'view', patch: { showSubfolders: !showSubfolders } }))}
 
       <div className={s.sep} />
 

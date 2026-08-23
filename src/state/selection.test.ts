@@ -44,10 +44,16 @@ describe('selection state', () => {
     const store = createStore();
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
-      scope: { kind: 'folder', id: 4 },
-      sort: { field: 'name', direction: 'asc' },
-      items: [buildGridItem('a'), buildGridItem('b')],
-      totalCount: 12,
+      query: {
+        base_scope: { kind: 'folder', id: 4 },
+        sort: { field: 'name', direction: 'asc' },
+      },
+      pages: [{
+        items: [buildGridItem('a'), buildGridItem('b')],
+        next_cursor: null,
+        total_count: 12,
+        total_size_bytes: 200,
+      }],
     });
 
     store.set(selectAllResultsAtom);

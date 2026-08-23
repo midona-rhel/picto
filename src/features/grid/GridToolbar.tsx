@@ -36,8 +36,7 @@ function ZoomControls() {
   const targetSize = useAtomValue(gridTargetSizeAtom);
 
   const setAndSave = useCallback((v: number) => {
-    gridController.updateView({ targetSize: v });
-    gridController.saveViewPref({ target_size: v });
+    gridController.dispatch({ type: 'view', patch: { targetSize: v } });
   }, []);
 
   const zoomIn = useCallback(() => {
@@ -87,7 +86,7 @@ function SearchInput() {
         className={styles.searchInput}
         placeholder="Search files, notes, sources..."
         value={searchText}
-        onChange={(e) => gridController.setSearchText(e.target.value)}
+        onChange={(e) => gridController.dispatch({ type: 'search', text: e.target.value })}
       />
     </div>
   );

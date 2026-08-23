@@ -7,9 +7,8 @@ import { WorkspaceSurface } from './WorkspaceSurface';
 
 vi.mock('../../controllers/gridController', () => ({
   gridController: {
-    navigateTo: vi.fn(async () => {}),
+    dispatch: vi.fn(async () => {}),
     deactivate: vi.fn(),
-    applyIntent: vi.fn(),
   },
 }));
 vi.mock('../grid/GridScreen', () => ({

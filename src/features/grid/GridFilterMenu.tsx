@@ -28,11 +28,11 @@ function FilterPanel({ onApply }: { onApply: () => void }) {
 
   const apply = () => {
     const parsedTags = tags.split(',').map((tag) => tag.trim()).filter(Boolean);
-    gridController.setFilters({
+    gridController.dispatch({ type: 'filter', filters: {
       rating: rating > 0 ? { value: rating, op: 'gte' } : undefined,
       entity_types: types.length > 0 ? types : undefined,
       tags: parsedTags.length > 0 ? parsedTags.map((tag) => ({ tag, match_mode: 'include' as const })) : undefined,
-    });
+    } });
     onApply();
   };
 

@@ -97,6 +97,7 @@ impl ApplicationEngine {
                 show_extension: pref.show_extension,
                 show_label: pref.show_label,
                 thumbnail_fit: pref.thumbnail_fit,
+                show_subfolders: pref.show_subfolders,
             }))
     }
 
@@ -135,6 +136,9 @@ impl ApplicationEngine {
             thumbnail_fit: patch
                 .thumbnail_fit
                 .or_else(|| current.as_ref().and_then(|pref| pref.thumbnail_fit.clone())),
+            show_subfolders: patch
+                .show_subfolders
+                .or_else(|| current.as_ref().and_then(|pref| pref.show_subfolders)),
         };
         self.db.set_view_pref(merged.clone())?;
         Ok(crate::types::ViewPrefsDto {
@@ -148,6 +152,7 @@ impl ApplicationEngine {
             show_extension: merged.show_extension,
             show_label: merged.show_label,
             thumbnail_fit: merged.thumbnail_fit,
+            show_subfolders: merged.show_subfolders,
         })
     }
 }

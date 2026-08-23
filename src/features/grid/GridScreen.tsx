@@ -5,8 +5,16 @@ import * as entityMutations from '../../controllers/entityMutations';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { activeNodeIdAtom } from '../../state/navigation';
 import {
-  gridSessionAtom,
   gridChildFoldersAtom,
+  gridItemsAtom,
+  gridCursorAtom,
+  gridTotalCountAtom,
+  gridTotalSizeBytesAtom,
+  gridSearchTextAtom,
+  gridScopeAtom,
+  gridViewAtom,
+  gridLoadingAtom,
+  gridErrorAtom,
   type GridTransitionPhase,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
@@ -104,11 +112,16 @@ export function GridScreen({
   const activeNodeId = useAtomValue(activeNodeIdAtom);
   const displayedNodeId = nodeId ?? activeNodeId;
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
-  const session = useAtomValue(gridSessionAtom);
-  const { items, cursor, totalCount, totalSizeBytes, searchText, scope: gridScope, error } = session;
+  const items = useAtomValue(gridItemsAtom);
+  const cursor = useAtomValue(gridCursorAtom);
+  const totalCount = useAtomValue(gridTotalCountAtom);
+  const totalSizeBytes = useAtomValue(gridTotalSizeBytesAtom);
+  const searchText = useAtomValue(gridSearchTextAtom);
+  const gridScope = useAtomValue(gridScopeAtom);
+  const error = useAtomValue(gridErrorAtom);
   const { mode: viewMode, targetSize, showName, showExtension, showExtensionLabel,
-    showResolution, fitThumbnails, showSubfolders } = session.view;
-  const loading = session.status === 'loading';
+    showResolution, fitThumbnails, showSubfolders } = useAtomValue(gridViewAtom);
+  const loading = useAtomValue(gridLoadingAtom);
   const sidebarNodes = useAtomValue(sidebarNodesAtom);
   const selection = useAtomValue(gridSelectionAtom);
   const selectedHashes = useAtomValue(loadedSelectedEntityHashesAtom);
@@ -478,7 +491,7 @@ export function GridScreen({
       return (
         <div className={styles.error}>
           <span>{error}</span>
-          <button className={styles.retryBtn} onClick={() => gridController.loadFirstPage()}>
+          <button className={styles.retryBtn} onClick={() => gridController.dispatch({ type: 'reconcile', impact: 'reload' })}>
             Retry
           </button>
         </div>
@@ -754,7 +767,7 @@ export function GridScreen({
           });
           contextMenu.openAt(pos, entries);
         }}
-        onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
+        onLoadMore={cursor ? () => gridController.dispatch({ type: 'load_next' }) : undefined}
       />
     );
   };
@@ -780,7 +793,7 @@ export function GridScreen({
           totalCount={totalCount}
           onNavigate={(delta) => navigateOverlay(viewerSession, setViewerSession, delta, false)}
           onClose={(exitHash) => closeOverlay(setViewerSession, exitHash)}
-          onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
+          onLoadMore={cursor ? () => gridController.dispatch({ type: 'load_next' }) : undefined}
         />
       )}
 
@@ -791,7 +804,7 @@ export function GridScreen({
           totalCount={totalCount}
           onNavigate={(delta) => navigateOverlay(quickLookSession, setQuickLookSession, delta, true)}
           onClose={(exitHash) => closeOverlay(setQuickLookSession, exitHash)}
-          onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
+          onLoadMore={cursor ? () => gridController.dispatch({ type: 'load_next' }) : undefined}
         />
       )}
 

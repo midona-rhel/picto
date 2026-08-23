@@ -385,8 +385,6 @@ export function Sidebar() {
     color?: string | null;
     notes?: string | null;
     predicate?: SmartFolderPredicate;
-    sort_field?: string | null;
-    sort_order?: string | null;
     display_order?: number | null;
   }) => {
     setSmartFolderModal({ open: true, mode, initial });
