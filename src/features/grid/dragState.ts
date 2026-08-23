@@ -6,18 +6,19 @@
  */
 
 import { dragController } from '../../controllers/dragController';
+import type { ItemScope } from '../../shared/types/generated/application/ItemScope';
 
 // ── Types ──
 
 export type DropTarget =
   | { kind: 'folder'; folderId: number; nodeId: string }
   | { kind: 'status'; status: number }
-  | { kind: 'reorder'; orderedEntityIds: [number, number][]; orderedHashes?: string[] };
+  | { kind: 'reorder'; orderedItemIds: number[] };
 
 export interface GridDragState {
   active: boolean;
   hashes: string[];
-  sourceScope: { kind: string; id?: number | null; key?: string | null } | null;
+  sourceScope: ItemScope | null;
   startX: number;
   startY: number;
   currentX: number;
@@ -184,7 +185,7 @@ export function isInternalDragOrigin() { return internalDragOrigin; }
 
 // Saved drag data for restoring internal drag when cursor re-enters
 let savedDragHashes: string[] = [];
-let savedDragScope: { kind: string; id?: number | null; key?: string | null } | null = null;
+let savedDragScope: ItemScope | null = null;
 
 export function getSavedDragHashes() { return savedDragHashes; }
 export function getSavedDragScope() { return savedDragScope; }

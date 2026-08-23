@@ -13,8 +13,8 @@ import { GlassModal } from '../../shared/ui/GlassModal';
 import { buildTree } from '../../shared/ui/FolderTree';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
 import { folderPickerModalAtom } from '../../state/modals';
-import { selectionTargetAtom } from '../../state/selection';
-import { displayedInspectorEntityDataAtom } from '../../state/inspector';
+import { selectionCountAtom, selectionTargetAtom } from '../../state/selection';
+import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
 import { folderNodesAtom } from '../../state/sidebar';
 import { useRecentItems } from '../../shared/hooks/useRecentItems';
 import * as entityMutations from '../../controllers/entityMutations';
@@ -29,8 +29,9 @@ export function FolderPickerModal() {
   const modalState = useAtomValue(folderPickerModalAtom);
   const setModalState = useSetAtom(folderPickerModalAtom);
   const target = useAtomValue(selectionTargetAtom);
+  const selectionCount = useAtomValue(selectionCountAtom);
   const folderNodes = useAtomValue(folderNodesAtom);
-  const entityData = useAtomValue(displayedInspectorEntityDataAtom);
+  const entityData = useAtomValue(displayedInspectorItemDetailsAtom);
   const open = modalState.open;
   const close = useCallback(() => setModalState({ open: false }), [setModalState]);
 
@@ -42,15 +43,8 @@ export function FolderPickerModal() {
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('all');
   const searchRef = useRef<HTMLInputElement>(null);
 
-  const selectionCount = useMemo(() => {
-    if (!target) return 0;
-    if (target.kind === 'entity_hashes') return target.entity_hashes?.length ?? 0;
-    return 0;
-  }, [target]);
-
   const memberOf = useMemo(() => {
-    if (!entityData?.folders) return new Set<number>();
-    return new Set(entityData.folders.map((f) => f.folder_id));
+    return new Set(entityData?.folder_ids ?? []);
   }, [entityData]);
 
   const tree = useMemo(() => buildTree(folderNodes), [folderNodes]);

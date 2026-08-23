@@ -19,10 +19,5 @@ export function startAppSettingsSettle(): () => void {
       }
     }
   });
-  libraryInvalidation.start();
-
-  return () => {
-    unregister();
-    libraryInvalidation.stop();
-  };
+  return unregister;
 }

@@ -36,17 +36,17 @@ import {
   clearSelectionAtom,
   querySelectionActiveAtom,
   selectAllResultsAtom,
-  selectedEntityHashesAtom,
+  selectedItemIdsAtom,
   selectedSubfolderNodeIdsAtom,
   selectionCountAtom,
   selectionModeAtom,
   selectionTargetAtom,
-  toggleQuerySelectionHashAtom,
+  toggleQuerySelectionItemIdAtom,
 } from '../../state/selection';
 import {
   displayedGridSnapshotAtom,
   displayedInspectorTargetAtom,
-  displayedInspectorEntityDataAtom,
+  displayedInspectorItemDetailsAtom,
   inspectorLoadingAtom,
   inspectorErrorAtom,
   liveInspectorTargetAtom,
@@ -79,21 +79,18 @@ import styles from './GridScreen.module.css';
 
 const store = getDefaultStore();
 const SCOPE_TRANSITION_MS = 170;
-const STATUS_ACTIVE = 1;
-const STATUS_TRASH = 2;
-
 function supportsExplicitImageAutoTagging(
   querySelectionActive: boolean,
-  hashes: Set<string>,
-  items: Array<{ entity_hash: string; mime_type: string }>,
+  itemIds: Set<number>,
+  items: Array<{ item_id: number; display_mime_type: string }>,
 ): boolean {
-  if (querySelectionActive || hashes.size === 0) {
+  if (querySelectionActive || itemIds.size === 0) {
     return false;
   }
-  const selectedItems = items.filter((item) => hashes.has(item.entity_hash));
+  const selectedItems = items.filter((item) => itemIds.has(item.item_id));
   return (
-    selectedItems.length === hashes.size &&
-    selectedItems.every((item) => item.mime_type.startsWith('image/'))
+    selectedItems.length === itemIds.size &&
+    selectedItems.every((item) => item.display_mime_type.startsWith('image/'))
   );
 }
 
@@ -118,17 +115,17 @@ export function GridScreen() {
   const gridScope = useAtomValue(gridScopeAtom);
   const activeGridScope = useAtomValue(activeGridScopeAtom);
   const sidebarNodes = useAtomValue(sidebarNodesAtom);
-  const selectedHashes = useAtomValue(selectedEntityHashesAtom);
+  const selectedItemIds = useAtomValue(selectedItemIdsAtom);
   const selectedSubfolderNodeIds = useAtomValue(selectedSubfolderNodeIdsAtom);
   const selectionMode = useAtomValue(selectionModeAtom);
   const querySelectionActive = useAtomValue(querySelectionActiveAtom);
   const selectionCount = useAtomValue(selectionCountAtom);
   const selectionTarget = useAtomValue(selectionTargetAtom);
-  const setSelectedHashes = useSetAtom(selectedEntityHashesAtom);
+  const setSelectedItemIds = useSetAtom(selectedItemIdsAtom);
   const setSelectedSubfolderNodeIds = useSetAtom(selectedSubfolderNodeIdsAtom);
   const clearSelection = useSetAtom(clearSelectionAtom);
   const selectAllResults = useSetAtom(selectAllResultsAtom);
-  const toggleQuerySelectionHash = useSetAtom(toggleQuerySelectionHashAtom);
+  const toggleQuerySelectionItemId = useSetAtom(toggleQuerySelectionItemIdAtom);
   const lastClickedIndexRef = useRef<number | null>(null);
   const viewerSession = useAtomValue(viewerSessionAtom);
   const setViewerSession = useSetAtom(viewerSessionAtom);
@@ -162,8 +159,8 @@ export function GridScreen() {
     items,
     layoutRef: gridLayoutRef,
     containerRef: gridContainerRef,
-    selectedHashes,
-    setSelectedHashes,
+    selectedItemIds,
+    setSelectedItemIds,
     lastClickedIndexRef,
     viewerOpen: !!(viewerSession || quickLookSession),
     containerWidth: gridContainerRef.current?.clientWidth ?? 0,
@@ -189,7 +186,7 @@ export function GridScreen() {
       setFileDragOver(false);
 
       const scope = gridScopeRef2.current;
-      const folderId = scope.kind === 'folder' ? scope.id : null;
+      const folderId = scope.kind === 'folder' ? scope.folder_id : null;
 
       // Detect folder drop (single path without media extension)
       const mediaExt = /\.(jpe?g|png|gif|webp|bmp|tiff?|svg|mp4|mkv|webm|avi|mov|wmv|flv|m4v|avif|jxl|ico|pdf)$/i;
@@ -233,8 +230,8 @@ export function GridScreen() {
       setSubfolderPreview({
         nodeId: folderHash,
         items: page.items.slice(0, 4),
-        totalCount: page.total_count,
-        totalSizeBytes: page.total_size_bytes ?? null,
+        totalCount: page.visible_item_count,
+        totalSizeBytes: page.total_size_bytes,
       });
     }).catch(() => {});
     return () => { cancelled = true; };
@@ -244,7 +241,7 @@ export function GridScreen() {
   useEffect(() => { lastClickedIndexRef.current = null; }, [items]);
   const setDisplayedGridSnapshot = useSetAtom(displayedGridSnapshotAtom);
   const setDisplayedInspectorTarget = useSetAtom(displayedInspectorTargetAtom);
-  const setDisplayedEntityData = useSetAtom(displayedInspectorEntityDataAtom);
+  const setDisplayedEntityData = useSetAtom(displayedInspectorItemDetailsAtom);
   const setInspectorLoading = useSetAtom(inspectorLoadingAtom);
   const setInspectorError = useSetAtom(inspectorErrorAtom);
   const liveTarget = useAtomValue(liveInspectorTargetAtom);
@@ -475,13 +472,13 @@ export function GridScreen() {
   }, [selectionTarget, setFolderPickerModal]);
 
   const removeSelectionFromCurrentFolder = useCallback(async () => {
-    if (!selectionTarget || gridScope.kind !== 'folder' || gridScope.id == null) return;
-    await entityMutations.updateTargetFolderMembership(selectionTarget, gridScope.id, 'remove');
+    if (!selectionTarget || gridScope.kind !== 'folder') return;
+    await entityMutations.updateTargetFolderMembership(selectionTarget, gridScope.folder_id, 'remove');
   }, [gridScope, selectionTarget]);
 
-  const setSelectionStatus = useCallback(async (status: number) => {
+  const setSelectionLifecycle = useCallback(async (lifecycle: 'inbox' | 'active' | 'trash') => {
     if (!selectionTarget) return;
-    await entityMutations.setTargetStatus(selectionTarget, status);
+    await entityMutations.setTargetLifecycle(selectionTarget, lifecycle);
   }, [selectionTarget]);
 
   const permanentlyDeleteSelection = useCallback(() => {
@@ -504,7 +501,7 @@ export function GridScreen() {
   // We respond with ONLY the selected images (not the entire grid).
   // Single selection → one image, no navigation in detail window.
   // Multi selection → those images as a navigable set.
-  const detailWindowSelectionRef = useRef(new Map<string, string[]>());
+  const detailWindowSelectionRef = useRef(new Map<string, number[]>());
   useEffect(() => {
     const picto = (window as any).picto;
     if (!picto?.events?.on) return;
@@ -515,18 +512,19 @@ export function GridScreen() {
       if (!readyHash) return;
       const label = `detail-${readyHash.slice(0, 12)}`;
       // Look up what we stored when Cmd+O was pressed
-      const selectedHashes = detailWindowSelectionRef.current.get(label);
-      if (!selectedHashes) return;
+      const detailItemIds = detailWindowSelectionRef.current.get(label);
+      if (!detailItemIds) return;
       const curItems = itemsRef.current;
-      const lightImages = selectedHashes
-        .map((h: string) => curItems.find((i: any) => i.entity_hash === h))
+      const lightImages = detailItemIds
+        .map((itemId) => curItems.find((item) => item.item_id === itemId))
         .filter(Boolean)
-        .map((i: any) => ({
-          hash: i.entity_hash,
-          name: i.name,
-          mime: i.mime_type,
-          width: i.pixel_width,
-          height: i.pixel_height,
+        .map((item) => ({
+          item_id: item!.item_id,
+          hash: item!.display_file_hash,
+          name: item!.name,
+          mime: item!.display_mime_type,
+          width: item!.pixel_width,
+          height: item!.pixel_height,
         }));
       picto.events.emitTo(label, 'detail-images', {
         images: lightImages,
@@ -540,8 +538,8 @@ export function GridScreen() {
   // Refs for values that change frequently — avoids re-registering the listener.
   const selectionCountRef = useRef(selectionCount);
   selectionCountRef.current = selectionCount;
-  const selectedHashesRef = useRef(selectedHashes);
-  selectedHashesRef.current = selectedHashes;
+  const selectedItemIdsRef = useRef(selectedItemIds);
+  selectedItemIdsRef.current = selectedItemIds;
   const itemsRef = useRef(items);
   itemsRef.current = items;
   const querySelectionActiveRef = useRef(querySelectionActive);
@@ -592,42 +590,46 @@ export function GridScreen() {
         if (!matchesShortcutDef(e, defs.detailView) && !matchesShortcutDef(e, defs.quicklook)) return;
       }
       const count = selectionCountRef.current;
-      const hashes = selectedHashesRef.current;
+      const itemIds = selectedItemIdsRef.current;
       const curItems = itemsRef.current;
       const scope = gridScopeRef.current;
-      const isTrash = scope.kind === 'system' && scope.key === 'trash';
-      const singleHash = count === 1 ? [...hashes][0] : null;
+      const isTrash = scope.kind === 'trash';
+      const singleItemId = count === 1 ? [...itemIds][0] : null;
+      const singleItem = singleItemId == null
+        ? null
+        : curItems.find((item) => item.item_id === singleItemId) ?? null;
       const canAutoTag = supportsExplicitImageAutoTagging(
         querySelectionActiveRef.current,
-        hashes,
+        itemIds,
         curItems,
       );
 
       if (matchesShortcutDef(e, defs.selectAll)) { e.preventDefault(); selectAllResults(); return; }
       if (matchesShortcutDef(e, defs.deselectAll) && count > 0) { clearSelection(); return; }
 
-      if (matchesShortcutDef(e, defs.detailView) && singleHash && !viewerSessionRef.current && !quickLookSessionRef.current) {
-        e.preventDefault(); setViewerSession(createViewerSession(curItems, singleHash)); return;
+      if (matchesShortcutDef(e, defs.detailView) && singleItemId != null && !viewerSessionRef.current && !quickLookSessionRef.current) {
+        e.preventDefault(); setViewerSession(createViewerSession(curItems, singleItemId)); return;
       }
       if (matchesShortcutDef(e, defs.quicklook) && !viewerSessionRef.current) {
         e.preventDefault();
         if (quickLookSessionRef.current) setQuickLookSession(null);
-        else if (singleHash) setQuickLookSession(createViewerSession(curItems, singleHash));
+        else if (singleItemId != null) setQuickLookSession(createViewerSession(curItems, singleItemId));
         return;
       }
 
-      if (matchesShortcutDef(e, defs.openDefault) && singleHash) {
-        e.preventDefault(); void filesController.openDefaultAppForHash(singleHash); return;
+      if (matchesShortcutDef(e, defs.openDefault) && singleItem) {
+        e.preventDefault(); void filesController.openDefaultAppForHash(singleItem.display_file_hash); return;
       }
-      if (matchesShortcutDef(e, defs.revealInFolder) && singleHash) {
-        e.preventDefault(); void filesController.revealHashInFolder(singleHash); return;
+      if (matchesShortcutDef(e, defs.revealInFolder) && singleItem) {
+        e.preventDefault(); void filesController.revealHashInFolder(singleItem.display_file_hash); return;
       }
       if (matchesShortcutDef(e, defs.openNewWindow) && count > 0) {
         e.preventDefault();
-        // Use first selected hash as the window identity
-        const selectedArr = [...hashes];
-        const primaryHash = singleHash ?? selectedArr[0];
-        const item = curItems.find((i) => i.entity_hash === primaryHash);
+        const selectedArr = [...itemIds];
+        const primaryItemId = singleItemId ?? selectedArr[0];
+        const item = curItems.find((candidate) => candidate.item_id === primaryItemId);
+        if (!item) return;
+        const primaryHash = item.display_file_hash;
         const label = `detail-${primaryHash.slice(0, 12)}`;
         detailWindowSelectionRef.current.set(label, selectedArr);
         void windowController.openDetailWindow({
@@ -642,13 +644,13 @@ export function GridScreen() {
       if (matchesShortcutDef(e, defs.delete_) && count > 0) {
         e.preventDefault();
         if (isTrash) void permanentlyDeleteSelection();
-        else void setSelectionStatus(STATUS_TRASH);
+        else void setSelectionLifecycle('trash');
         return;
       }
       // Mod+Shift+Backspace: context-dependent reverse action
       if (matchesShortcutDef(e, defs.restore) && count > 0) {
         e.preventDefault();
-        if (isTrash) void setSelectionStatus(STATUS_ACTIVE);
+        if (isTrash) void setSelectionLifecycle('active');
         else if (scope.kind === 'folder') void removeSelectionFromCurrentFolder();
         return;
       }
@@ -673,17 +675,15 @@ export function GridScreen() {
         const digit = parseInt(e.key, 10);
         if (digit >= 0 && digit <= 5) {
           e.preventDefault();
-          void entityMutations.setTargetRating(
-            { kind: 'entity_hashes', entity_hashes: [...hashes] },
-            digit,
-          );
+          const target = store.get(selectionTargetAtom);
+          if (target) void entityMutations.setTargetRating(target, digit);
           return;
         }
       }
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [clearSelection, selectAllResults, setViewerSession, setQuickLookSession, setSelectionStatus, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder]);
+  }, [clearSelection, selectAllResults, setViewerSession, setQuickLookSession, setSelectionLifecycle, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder]);
 
   const incomingHidden = transitionPhase === 'waiting';
   const incomingFadingOut = transitionPhase === 'fading_out';
@@ -707,7 +707,7 @@ export function GridScreen() {
     }
 
     if (isEmpty) {
-      const scopeKey = gridScope.kind === 'system' ? gridScope.key : gridScope.kind;
+      const scopeKey = gridScope.kind;
       const hasSearch = searchText.trim().length > 0;
       const emptyTitle = hasSearch ? 'No results found'
         : scopeKey === 'inbox' ? 'Inbox is empty'
@@ -742,7 +742,7 @@ export function GridScreen() {
                     if (result) {
                       const paths = Array.isArray(result) ? result : [result];
                       await filesController.addMedia(paths, manualImportParamsForScope(gridScope,
-                        gridScope.kind === 'folder' ? { parent_folder_id: gridScope.id } : {}));
+                        gridScope.kind === 'folder' ? { parent_folder_id: gridScope.folder_id } : {}));
                     }
                   } catch (err) {
                     console.error('[grid] import files failed:', err);
@@ -762,7 +762,7 @@ export function GridScreen() {
                       const folderPath = typeof result === 'string' ? result : result[0];
                       await filesController.addMedia([folderPath], manualImportParamsForScope(gridScope, {
                         preserve_structure: true,
-                        parent_folder_id: gridScope.kind === 'folder' ? gridScope.id : null,
+                        parent_folder_id: gridScope.kind === 'folder' ? gridScope.folder_id : null,
                       }));
                     }
                   } catch (err) {
@@ -845,7 +845,7 @@ export function GridScreen() {
         fitThumbnails={fitThumbnails}
         totalCount={totalCount}
         suppressTileReveal={transitionPhase === 'fading_out' || transitionPhase === 'waiting'}
-        selectedEntityHashes={selectedHashes}
+        selectedItemIds={selectedItemIds}
         initialScrollTop={restoredScrollTopRef.current}
         onContainerRef={(el) => { gridContainerRef.current = el; }}
         onLayoutChange={(l) => { gridLayoutRef.current = l; }}
@@ -853,54 +853,54 @@ export function GridScreen() {
         onRenameCommit={(idx, name) => {
           setRenamingIndex(null);
           const item = items[idx];
-          if (item && name) void entityMutations.setEntityName(item.entity_hash, name);
+          if (item && name) void entityMutations.setItemName(item.item_id, name);
         }}
         onRenameCancel={() => setRenamingIndex(null)}
         onFirstPaint={() => { restoredScrollTopRef.current = null; beginFadeIn(); }}
         onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; }}
         onTileClick={(index, item, event) => {
-          const hash = item.entity_hash;
+          const itemId = item.item_id;
           if (event?.shiftKey && lastClickedIndexRef.current != null) {
             const from = Math.min(lastClickedIndexRef.current, index);
             const to = Math.max(lastClickedIndexRef.current, index);
             const base = (event.metaKey || event.ctrlKey)
-              ? new Set(selectedHashes)
-              : new Set<string>();
+              ? new Set(selectedItemIds)
+              : new Set<number>();
             for (let i = from; i <= to; i++) {
-              if (items[i]) base.add(items[i].entity_hash);
+              if (items[i]) base.add(items[i].item_id);
             }
-            setSelectedHashes(base);
+            setSelectedItemIds(base);
           } else if (event?.metaKey || event?.ctrlKey) {
             if (selectionMode === 'query_results') {
-              toggleQuerySelectionHash(hash);
+              toggleQuerySelectionItemId(itemId);
             } else {
-              setSelectedHashes((prev) => {
+              setSelectedItemIds((prev) => {
                 const next = new Set(prev);
-                if (next.has(hash)) next.delete(hash);
-                else next.add(hash);
+                if (next.has(itemId)) next.delete(itemId);
+                else next.add(itemId);
                 return next;
               });
             }
             lastClickedIndexRef.current = index;
           } else {
-            setSelectedHashes(new Set([hash]));
+            setSelectedItemIds(new Set([itemId]));
             lastClickedIndexRef.current = index;
           }
         }}
         onTileDoubleClick={(_index, item) => {
-          setViewerSession(createViewerSession(items, item.entity_hash));
+          setViewerSession(createViewerSession(items, item.item_id));
         }}
         onEmptyClick={() => clearSelection()}
-        onSelectionChange={setSelectedHashes}
+        onSelectionChange={setSelectedItemIds}
         onTileContextMenu={(index, item, pos) => {
           // Ensure the right-clicked tile is selected
-          let effectiveHashes = selectedHashes;
+          let effectiveItemIds = selectedItemIds;
           let effectiveSelectionMode = selectionMode;
           let effectiveSelectionCount = selectionCount;
           let effectiveQuerySelectionActive = querySelectionActive;
-          if (!selectedHashes.has(item.entity_hash)) {
-            effectiveHashes = new Set([item.entity_hash]);
-            setSelectedHashes(effectiveHashes);
+          if (!selectedItemIds.has(item.item_id)) {
+            effectiveItemIds = new Set([item.item_id]);
+            setSelectedItemIds(effectiveItemIds);
             lastClickedIndexRef.current = index;
             effectiveSelectionMode = 'explicit';
             effectiveSelectionCount = 1;
@@ -909,17 +909,17 @@ export function GridScreen() {
 
           // Derive context for menu builder
           const selCount = effectiveSelectionCount;
-          const selectedItems = items.filter((it) => effectiveHashes.has(it.entity_hash));
+          const selectedItems = items.filter((candidate) => effectiveItemIds.has(candidate.item_id));
           const singleItem = effectiveSelectionMode === 'explicit' && selCount === 1 ? selectedItems[0] : null;
           const canAutoTag = effectiveSelectionMode === 'explicit'
-            && selectedItems.length === effectiveHashes.size
-            && selectedItems.every((selected) => selected.mime_type.startsWith('image/'));
-          const scopeKind = gridScope.kind === 'system' ? 'system'
-            : gridScope.kind === 'folder' ? 'folder'
+            && selectedItems.length === effectiveItemIds.size
+            && selectedItems.every((selected) => selected.display_mime_type.startsWith('image/'));
+          const scopeKind = gridScope.kind === 'folder' ? 'folder'
             : gridScope.kind === 'smart_folder' ? 'smart_folder'
-            : null;
-          const statusFilter = gridScope.kind === 'system'
-            ? (gridScope.key === 'inbox' ? 'inbox' : gridScope.key === 'trash' ? 'trash' : gridScope.key === 'all' ? 'active' : null)
+            : 'system';
+          const statusFilter = gridScope.kind === 'inbox' ? 'inbox'
+            : gridScope.kind === 'trash' ? 'trash'
+            : gridScope.kind === 'all' ? 'active'
             : null;
 
           const entries = buildTileContextMenu({
@@ -927,16 +927,16 @@ export function GridScreen() {
             querySelectionActive: effectiveQuerySelectionActive,
             aiTagEnabled: canAutoTag,
             singleSelected: effectiveSelectionMode === 'explicit' && selCount === 1,
-            singleHash: singleItem?.entity_hash ?? null,
+            singleHash: singleItem?.display_file_hash ?? null,
             scopeKind,
             statusFilter,
             loadedCount: items.length,
             onSelectAll: () => selectAllResults(),
             onDeselectAll: () => clearSelection(),
-            onOpen: singleItem ? () => setViewerSession(createViewerSession(items, singleItem.entity_hash)) : undefined,
+            onOpen: singleItem ? () => setViewerSession(createViewerSession(items, singleItem.item_id)) : undefined,
             onOpenNewWindow: (hash) => {
-              const it = items.find((i) => i.entity_hash === hash);
-              const selectedArr = [...effectiveHashes];
+              const it = items.find((candidate) => candidate.display_file_hash === hash);
+              const selectedArr = [...effectiveItemIds];
               const label = `detail-${hash.slice(0, 12)}`;
               detailWindowSelectionRef.current.set(label, selectedArr);
               void windowController.openDetailWindow({
@@ -951,26 +951,23 @@ export function GridScreen() {
             onCopyFile: (hash) => { void filesController.copyFileForHash(hash); },
             onCopyName: (name) => { filesController.copyText(name); },
             singleName: singleItem?.name ?? null,
-            singleMime: singleItem?.mime_type ?? null,
+            singleMime: singleItem?.display_mime_type ?? null,
             onCopyLink: (hash, mime) => {
               const ext: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm' };
               filesController.copyText(`media://localhost/file/${hash}.${ext[mime] ?? 'bin'}`);
             },
             onRename: singleItem ? () => {
-              const idx = items.findIndex((i) => i.entity_hash === singleItem.entity_hash);
+              const idx = items.findIndex((candidate) => candidate.item_id === singleItem.item_id);
               if (idx >= 0) setRenamingIndex(idx);
             } : undefined,
             onRegenerateThumbnails: () => {
-              const hashes = [...effectiveHashes];
+              const hashes = selectedItems.map((selected) => selected.display_file_hash);
               void filesController.regenerateThumbnailsBatch(hashes);
             },
             onCopyTags: () => {
               if (!singleItem) return;
-              void viewerController.getEntityDetails(singleItem.entity_hash).then((d) => {
-                if (!d?.tags) return;
-                const tagStrings = d.tags.map((t) =>
-                  t.namespace && t.namespace !== 'default' ? `${t.namespace}:${t.subtag}` : t.subtag,
-                );
+              void viewerController.getItemDetails(singleItem.item_id).then((details) => {
+                const tagStrings = details.aggregate_tags;
                 filesController.copyText(JSON.stringify(tagStrings));
                 (window as any).__pictoClipboardTags = tagStrings;
               });
@@ -989,9 +986,9 @@ export function GridScreen() {
                 if (!nodeId) return;
                 const folderId = parseInt(nodeId.replace('folder:', ''), 10);
                 if (isNaN(folderId)) return;
-                for (const hash of effectiveHashes) {
+                for (const itemId of effectiveItemIds) {
                   void entityMutations.updateTargetFolderMembership(
-                    { kind: 'entity_hashes', entity_hashes: [hash] }, folderId, 'add',
+                    { kind: 'explicit', item_ids: [itemId] }, folderId, 'add',
                   );
                 }
               })();
@@ -1010,15 +1007,15 @@ export function GridScreen() {
             },
             onSetRating: (rating) => {
               void entityMutations.setTargetRating(
-                { kind: 'entity_hashes', entity_hashes: [...effectiveHashes] },
+                { kind: 'explicit', item_ids: [...effectiveItemIds] },
                 rating,
               );
             },
             onExport: () => {
               store.set(exportModalAtom, {
                 open: true,
-                fileCount: effectiveHashes.size,
-                target: { kind: 'entity_hashes', entity_hashes: [...effectiveHashes] },
+                fileCount: effectiveItemIds.size,
+                target: { kind: 'explicit', item_ids: [...effectiveItemIds] },
               });
             },
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
@@ -1026,11 +1023,11 @@ export function GridScreen() {
             onOpenAiTagger: canAutoTag
               ? () => { setAiTaggerPortal({ open: true, anchor: inspectorAnchor() }); }
               : undefined,
-            onMoveToTrash: () => { void setSelectionStatus(STATUS_TRASH); },
-            onRestore: () => { void setSelectionStatus(STATUS_ACTIVE); },
+            onMoveToTrash: () => { void setSelectionLifecycle('trash'); },
+            onRestore: () => { void setSelectionLifecycle('active'); },
             onPermanentDelete: () => { void permanentlyDeleteSelection(); },
-            onAccept: () => { void setSelectionStatus(STATUS_ACTIVE); },
-            onReject: () => { void setSelectionStatus(STATUS_TRASH); },
+            onAccept: () => { void setSelectionLifecycle('active'); },
+            onReject: () => { void setSelectionLifecycle('trash'); },
           });
           contextMenu.openAt(pos, entries);
         }}
@@ -1040,7 +1037,9 @@ export function GridScreen() {
             selectionCount,
             querySelectionActive,
             singleSelected: selectionCount === 1,
-            singleHash: selectionCount === 1 ? [...selectedHashes][0] ?? null : null,
+            singleHash: selectionCount === 1
+              ? items.find((item) => selectedItemIds.has(item.item_id))?.display_file_hash ?? null
+              : null,
             scopeKind: null,
             statusFilter: null,
             loadedCount: items.length,
@@ -1089,14 +1088,14 @@ export function GridScreen() {
             const next = navigateViewerSession(viewerSession, items, delta);
             if (next) {
               setViewerSession(next);
-              setSelectedHashes(new Set([next.currentHash]));
+              setSelectedItemIds(new Set([next.currentItemId]));
             }
           }}
-          onClose={(exitHash) => {
+          onClose={(exitItemId) => {
             setViewerSession(null);
-            if (exitHash) {
-              setSelectedHashes(new Set([exitHash]));
-              const idx = items.findIndex((i) => i.entity_hash === exitHash);
+            if (exitItemId) {
+              setSelectedItemIds(new Set([exitItemId]));
+              const idx = items.findIndex((item) => item.item_id === exitItemId);
               if (idx >= 0) lastClickedIndexRef.current = idx;
               scrollToItem(idx);
             }
@@ -1114,14 +1113,14 @@ export function GridScreen() {
             const next = navigateViewerSession(quickLookSession, items, delta);
             if (next) {
               setQuickLookSession(next);
-              setSelectedHashes(new Set([next.currentHash]));
+              setSelectedItemIds(new Set([next.currentItemId]));
             }
           }}
-          onClose={(exitHash) => {
+          onClose={(exitItemId) => {
             setQuickLookSession(null);
-            if (exitHash) {
-              setSelectedHashes(new Set([exitHash]));
-              const idx = items.findIndex((i) => i.entity_hash === exitHash);
+            if (exitItemId) {
+              setSelectedItemIds(new Set([exitItemId]));
+              const idx = items.findIndex((item) => item.item_id === exitItemId);
               if (idx >= 0) lastClickedIndexRef.current = idx;
               scrollToItem(idx);
             }

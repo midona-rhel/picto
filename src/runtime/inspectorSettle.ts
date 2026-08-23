@@ -1,30 +1,36 @@
 import { getDefaultStore } from 'jotai';
-import { listen } from '../platform/ipc';
 import { loadInspectorData } from '../controllers/inspectorController';
 import {
-  displayedInspectorEntityDataAtom,
+  displayedInspectorItemDetailsAtom,
   displayedInspectorTargetAtom,
   inspectorErrorAtom,
   inspectorLoadingAtom,
   inspectorPinnedAtom,
   liveInspectorTargetAtom,
 } from '../state/inspector';
+import { libraryInvalidation } from './libraryInvalidation';
 
 const store = getDefaultStore();
 
 export function startInspectorSettle(): () => void {
   let cancelled = false;
-  let lastEntityHash = '';
+  let lastItemId: number | null = null;
+
+  const unregisterInvalidation = libraryInvalidation.register('library', () => {
+    if (cancelled) return;
+    const itemId = store.get(displayedInspectorItemDetailsAtom)?.item_id ?? lastItemId;
+    if (itemId != null) void loadInspectorData(itemId);
+  });
 
   const unsubTarget = store.sub(liveInspectorTargetAtom, () => {
     if (cancelled) return;
     if (store.get(inspectorPinnedAtom)) return;
 
     const target = store.get(liveInspectorTargetAtom);
-    if (target.kind === 'entity') {
-      if (target.entityHash !== lastEntityHash) {
-        lastEntityHash = target.entityHash;
-        void loadInspectorData(target.entityHash);
+    if (target.kind === 'item') {
+      if (target.itemId !== lastItemId) {
+        lastItemId = target.itemId;
+        void loadInspectorData(target.itemId);
       }
       return;
     }
@@ -33,43 +39,18 @@ export function startInspectorSettle(): () => void {
     // Scope→scope transitions are handled by GridScreen's snapshot commit to avoid
     // flashing partial data (the inspector would show the new scope node before the
     // grid query returns size/count).
-    if (lastEntityHash) {
-      lastEntityHash = '';
-      store.set(displayedInspectorEntityDataAtom, null);
+    if (lastItemId != null) {
+      lastItemId = null;
+      store.set(displayedInspectorItemDetailsAtom, null);
       store.set(displayedInspectorTargetAtom, target);
       store.set(inspectorLoadingAtom, false);
       store.set(inspectorErrorAtom, null);
     }
   });
 
-  const unlistenPromise = listen<{ changes: Record<string, unknown>; seq?: number }>(
-    'runtime/state_changed',
-    (event) => {
-      if (cancelled) return;
-
-      const changes = event.payload.changes;
-      const relevant = changes.tags_changed
-        || changes.tag_structure_changed
-        || changes.status_changed
-        || changes.folder_membership_changed
-        || changes.media_metadata_changed;
-      if (!relevant) return;
-
-      const data = store.get(displayedInspectorEntityDataAtom);
-      if (!data) return;
-
-      const hashes = changes.entity_hashes as string[] | undefined;
-      if (!changes.tag_structure_changed
-          && hashes?.length
-          && !hashes.includes(data.entity_hash)) return;
-
-      void loadInspectorData(data.entity_hash);
-    },
-  );
-
   return () => {
     cancelled = true;
     unsubTarget();
-    unlistenPromise.then((fn) => fn()).catch(() => {});
+    unregisterInvalidation();
   };
 }

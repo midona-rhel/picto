@@ -1,70 +1,60 @@
 import { invoke } from './ipc';
+import type { ItemPage } from '../shared/types/generated/application/ItemPage';
+import type { ItemPageRequest } from '../shared/types/generated/application/ItemPageRequest';
+import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
+import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
+import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
+import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
+import type { QueryItemsInput } from '../shared/types/generated/application/QueryItemsInput';
+import type { SelectionSummary as ReplacementSelectionSummary } from '../shared/types/generated/application/SelectionSummary';
 import type {
   CanonicalEntityDetails,
-  CanonicalEntityGridItem,
-  EntityTarget,
-  EntityViewPage,
-  EntityViewQuery,
   MediaEntityPatch,
-  SelectionSummary,
 } from '../shared/types/canonical';
 
-export interface ReconcileResult {
-  kind: 'no_change' | 'patch_rows' | 'replace_window' | 'full_refresh_required';
-  items?: CanonicalEntityGridItem[];
-  page?: EntityViewPage;
-}
-
-export function queryEntityView(query: EntityViewQuery): Promise<EntityViewPage> {
-  return invoke<EntityViewPage>('query_entity_view', query as unknown as Record<string, unknown>);
-}
-
-export function reconcileEntityView(
-  query: EntityViewQuery,
-  visibleHashes: string[],
-  metadataOnly: boolean,
-): Promise<ReconcileResult> {
-  return invoke<ReconcileResult>('reconcile_entity_view', {
-    query,
-    visible_hashes: visibleHashes,
-    metadata_only: metadataOnly,
-  } as unknown as Record<string, unknown>);
+export function queryItems(query: ItemQuery, page: ItemPageRequest): Promise<ItemPage> {
+  const input: QueryItemsInput = { query, page };
+  return invoke<ItemPage>('items.query', input);
 }
 
 export function getEntityDetails(entityHash: string): Promise<CanonicalEntityDetails | null> {
   return invoke<CanonicalEntityDetails | null>('get_entity_details', { entity_hash: entityHash });
 }
 
-export function recordMediaView(entityHash: string): Promise<void> {
-  return invoke<void>('record_media_view', { entity_hash: entityHash });
+export function recordMediaView(itemId: number): Promise<unknown> {
+  return invoke('items.record_view', { item_id: itemId });
 }
 
-export function patchMediaEntities(target: EntityTarget, patch: MediaEntityPatch): Promise<unknown> {
-  return invoke('patch_media_entities', { target, patch } as unknown as Record<string, unknown>);
+export function renameItem(itemId: number, name: string): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('items.rename', { item_id: itemId, name });
+}
+
+export function patchMediaEntities(target: ItemTarget, patch: MediaEntityPatch): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('items.patch_metadata', { target, patch });
 }
 
 export function applyEntityTags(
-  target: EntityTarget,
+  target: ItemTarget,
   operation: 'add' | 'remove',
   tags: string[],
-  provenanceMask?: string | null,
-): Promise<unknown> {
-  return invoke('apply_entity_tags', {
+  provenanceMask = 1,
+): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('items.apply_tags', {
     target,
-    operation,
     tags,
-    provenance_mask: provenanceMask ?? null,
-  } as unknown as Record<string, unknown>);
+    add: operation === 'add',
+    provenance_mask: provenanceMask,
+  });
 }
 
-export function setEntityStatus(target: EntityTarget, status: number): Promise<unknown> {
-  return invoke('set_entity_status', { target, status } as unknown as Record<string, unknown>);
+export function setItemLifecycle(target: ItemTarget, lifecycle: Lifecycle): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('items.set_lifecycle', { target, lifecycle });
 }
 
-export function deleteEntities(target: EntityTarget): Promise<unknown> {
-  return invoke('delete_entities', { target } as unknown as Record<string, unknown>);
+export function deleteItems(target: ItemTarget): Promise<unknown> {
+  return invoke('items.delete', { target });
 }
 
-export function getSelectionSummary(target: EntityTarget): Promise<SelectionSummary> {
-  return invoke<SelectionSummary>('get_selection_summary', { target } as unknown as Record<string, unknown>);
+export function getSelectionSummary(target: ItemTarget): Promise<ReplacementSelectionSummary> {
+  return invoke<ReplacementSelectionSummary>('items.selection_summary', { target });
 }

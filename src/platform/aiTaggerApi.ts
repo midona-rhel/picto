@@ -1,48 +1,55 @@
 import { invoke } from './ipc';
-import type { AiTaggerStatusOutput } from '../shared/types/generated/commands/AiTaggerStatusOutput';
-import type { AiTagPredictOutput } from '../shared/types/generated/commands/AiTagPredictOutput';
+import type { AiAssignmentsInput } from '../shared/types/generated/application/AiAssignmentsInput';
+import type { AiModelStatus } from '../shared/types/generated/application/AiModelStatus';
+import type { AiRuntimeStatus } from '../shared/types/generated/application/AiRuntimeStatus';
+import type { AiTagAssignment } from '../shared/types/generated/application/AiTagAssignment';
+import type { AiTagPrediction } from '../shared/types/generated/application/AiTagPrediction';
+import type { ManualPredictionResponse } from '../shared/types/generated/application/ManualPredictionResponse';
+import type { MediaPrediction } from '../shared/types/generated/application/MediaPrediction';
+import type { ModelInput } from '../shared/types/generated/application/ModelInput';
+import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
 
-export type { AiTaggerStatusOutput } from '../shared/types/generated/commands/AiTaggerStatusOutput';
-export type { AiTaggerModelStatus } from '../shared/types/generated/commands/AiTaggerModelStatus';
-export type { AiTaggerHardware } from '../shared/types/generated/commands/AiTaggerHardware';
-export type { AiTagPredictOutput } from '../shared/types/generated/commands/AiTagPredictOutput';
-export type { FilePrediction } from '../shared/types/generated/commands/FilePrediction';
-export type { TagPrediction } from '../shared/types/generated/commands/TagPrediction';
-export type { ModelInfo } from '../shared/types/generated/commands/ModelInfo';
+export type {
+  AiAssignmentsInput,
+  AiModelStatus,
+  AiRuntimeStatus,
+  AiTagAssignment,
+  AiTagPrediction,
+  ManualPredictionResponse,
+  MediaPrediction,
+};
 
-export function aiTaggerStatus(): Promise<AiTaggerStatusOutput> {
-  return invoke<AiTaggerStatusOutput>('ai_tagger_status', {});
+/** Read the backend-owned AI model and threshold state. */
+export function aiTaggerStatus(): Promise<AiRuntimeStatus> {
+  return invoke<AiRuntimeStatus>('ai.status');
 }
 
-export function aiTaggerDownloadModel(model: string): Promise<void> {
-  return invoke<void>('ai_tagger_download_model', { model });
+/** This completes when the model is downloaded or fails. */
+export function aiTaggerDownloadModel(slug: string): Promise<AiRuntimeStatus> {
+  const input: ModelInput = { slug };
+  return invoke<AiRuntimeStatus>('ai.models.download', input);
 }
 
-export function aiTaggerCancelDownload(model: string): Promise<void> {
-  return invoke<void>('ai_tagger_cancel_download', { model });
+export function aiTaggerCancelDownload(slug: string): Promise<void> {
+  const input: ModelInput = { slug };
+  return invoke<void>('ai.models.cancel', input);
 }
 
-export function aiTaggerDeleteModel(model: string): Promise<void> {
-  return invoke<void>('ai_tagger_delete_model', { model });
+export function aiTaggerDeleteModel(slug: string): Promise<AiRuntimeStatus> {
+  const input: ModelInput = { slug };
+  return invoke<AiRuntimeStatus>('ai.models.delete', input);
 }
 
-export function aiTagPredict(hashes: string[], models?: string[]): Promise<AiTagPredictOutput> {
-  return invoke<AiTagPredictOutput>('ai_tag_predict', {
-    hashes,
-    models: models ?? null,
+/** Predict tags for logical media items; physical file hashes stay backend-only. */
+export function aiTagPredict(itemIds: number[], models?: string[]): Promise<ManualPredictionResponse> {
+  return invoke<ManualPredictionResponse>('ai.review.predict', {
+    itemIds,
+    modelSlugs: models ?? null,
   });
 }
 
-export function aiTagCancel(): Promise<void> {
-  return invoke<void>('ai_tag_cancel', {});
-}
-
-export interface AiTagAssignment {
-  hash: string;
-  tags: string[];
-}
-
-/** Apply reviewed per-image tags atomically. */
-export function aiTagApply(assignments: AiTagAssignment[]): Promise<number> {
-  return invoke<number>('ai_tag_apply', { assignments });
+/** Apply reviewed suggestions through the canonical item mutation path. */
+export function aiTagApply(assignments: AiTagAssignment[]): Promise<MutationReceipt> {
+  const input: AiAssignmentsInput = { assignments };
+  return invoke<MutationReceipt>('ai.review.apply', input);
 }

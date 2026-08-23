@@ -15,7 +15,7 @@ export function deleteFolder(folderId: number): Promise<void> {
 }
 
 export function removeEntitiesFromFolder(folderId: number, target: EntityTarget): Promise<void> {
-  return invoke<void>('remove_entities_from_folder', { folder_id: folderId, target });
+  return invoke<void>('items.set_folder', { folder_id: folderId, target, present: false });
 }
 
 export function renameFolder(folderId: number, name: string): Promise<void> {
@@ -48,11 +48,11 @@ export function updateFolderMembership(
   folderId: number,
   operation: 'add' | 'remove',
 ): Promise<unknown> {
-  return invoke('update_folder_membership', {
+  return invoke('items.set_folder', {
     target,
     folder_id: folderId,
-    operation,
-  } as unknown as Record<string, unknown>);
+    present: operation === 'add',
+  });
 }
 
 export function setFolderWatchConfig(folderId: number, config: {
@@ -107,6 +107,6 @@ export function reorderFolderItems(folderId: number, params: {
   return invoke<void>('reorder_folder_items', { folder_id: folderId, ...params } as unknown as Record<string, unknown>);
 }
 
-export function reorderFolderMembers(folderId: number, moves: [number, number][]): Promise<void> {
-  return invoke<void>('reorder_folder_members', { folder_id: folderId, moves });
+export function reorderFolderMembers(folderId: number, itemIds: number[]): Promise<void> {
+  return invoke<void>('folders.items.reorder', { folder_id: folderId, item_ids: itemIds });
 }

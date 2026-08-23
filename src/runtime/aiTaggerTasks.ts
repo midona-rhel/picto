@@ -1,85 +1,78 @@
 /**
- * AI tagger runtime task tracking — auto-tag prediction progress and model
- * download progress, fed by `runtime/task_upserted` / `runtime/task_removed`.
+ * Reads persisted task state for AI surfaces.
  *
- * Listeners start lazily on first subscription so both the main window and
- * the settings window can consume this module independently.
+ * Task progress is owned by SQLite and queried through `tasks.get`. The
+ * renderer does not synthesize task rows or consume removed runtime task
+ * events. Library invalidation only tells this reader when to query again.
  */
 
 import { useSyncExternalStore } from 'react';
-import { listen } from '../platform/ipc';
-import type { RuntimeTask } from '../shared/types/generated/runtime-contract/RuntimeTask';
+import { invoke, listen, type UnlistenFn } from '../platform/ipc';
+import type { LibraryChanged } from '../shared/types/generated/application/LibraryChanged';
+import type { TaskSnapshot } from '../shared/types/generated/application/TaskSnapshot';
 
 export interface AiTaggerTaskState {
-  /** The singleton auto-tag prediction task, while one is running. */
-  autoTag: RuntimeTask | null;
-  /** Model download tasks keyed by model slug. */
-  downloads: Record<string, RuntimeTask>;
+  snapshot: TaskSnapshot | null;
+  refresh: () => Promise<void>;
 }
 
-let state: AiTaggerTaskState = { autoTag: null, downloads: {} };
+let snapshot: TaskSnapshot | null = null;
+let started = false;
+let refreshInFlight: Promise<void> | null = null;
+let unlisten: UnlistenFn | undefined;
 const subscribers = new Set<() => void>();
-let listenersStarted = false;
+let state: AiTaggerTaskState;
 
-const DOWNLOAD_PREFIX = 'model_download:';
-const AUTO_TAG_ID = 'auto_tag';
-
-function emit(next: AiTaggerTaskState) {
-  state = next;
-  for (const cb of subscribers) {
-    try {
-      cb();
-    } catch (error) {
-      console.error('aiTaggerTasks subscriber failed', error);
-    }
-  }
+function emit(next: TaskSnapshot | null) {
+  snapshot = next;
+  state = { snapshot, refresh };
+  for (const subscriber of subscribers) subscriber();
 }
 
-function startListeners() {
-  if (listenersStarted) return;
-  listenersStarted = true;
-
-  void listen<{ task?: RuntimeTask }>('runtime/task_upserted', ({ payload }) => {
-    const task = payload.task;
-    if (!task) return;
-    if (task.kind === 'auto_tag') {
-      emit({ ...state, autoTag: task });
-    } else if (task.kind === 'model_download') {
-      const slug = task.task_id.startsWith(DOWNLOAD_PREFIX)
-        ? task.task_id.slice(DOWNLOAD_PREFIX.length)
-        : task.task_id;
-      emit({ ...state, downloads: { ...state.downloads, [slug]: task } });
-    }
-  });
-
-  void listen<{ task_id?: string }>('runtime/task_removed', ({ payload }) => {
-    const id = payload.task_id ?? '';
-    if (id === AUTO_TAG_ID) {
-      emit({ ...state, autoTag: null });
-    } else if (id.startsWith(DOWNLOAD_PREFIX)) {
-      const slug = id.slice(DOWNLOAD_PREFIX.length);
-      if (slug in state.downloads) {
-        const downloads = { ...state.downloads };
-        delete downloads[slug];
-        emit({ ...state, downloads });
-      }
-    }
-  });
+async function refresh(): Promise<void> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = invoke<TaskSnapshot>('tasks.get')
+    .then((next) => emit(next))
+    .catch(() => {
+      // A closed library or shutting-down host is not a durable task error.
+    })
+    .finally(() => {
+      refreshInFlight = null;
+    });
+  return refreshInFlight;
 }
 
-function subscribe(cb: () => void): () => void {
-  startListeners();
-  subscribers.add(cb);
-  return () => {
-    subscribers.delete(cb);
-  };
+function start() {
+  if (started) return;
+  started = true;
+  void refresh();
+  void listen<LibraryChanged>('library/changed', ({ payload }) => {
+    if (payload.resources.includes('tasks')) void refresh();
+  }).then((remove) => {
+    if (!started) remove();
+    else unlisten = remove;
+  }).catch(() => {});
 }
 
-function getSnapshot(): AiTaggerTaskState {
-  return state;
+function subscribe(callback: () => void): () => void {
+  start();
+  subscribers.add(callback);
+  return () => subscribers.delete(callback);
 }
 
-/** Live auto-tag + model download task state. */
+function getSnapshot(): AiTaggerTaskState { return state; }
+
 export function useAiTaggerTasks(): AiTaggerTaskState {
-  return useSyncExternalStore(subscribe, getSnapshot);
+  return useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 }
+
+export function stopAiTaggerTasksForTests(): void {
+  started = false;
+  unlisten?.();
+  unlisten = undefined;
+  snapshot = null;
+  state = { snapshot, refresh };
+  refreshInFlight = null;
+}
+
+state = { snapshot, refresh };

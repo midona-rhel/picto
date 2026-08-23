@@ -15,6 +15,12 @@ vi.mock('../../controllers/entityMutations', () => ({
   removeEntityFromFolder: vi.fn(),
   removeEntityTags: vi.fn(),
   removeTargetTags: vi.fn(),
+  removeItemFromFolder: vi.fn(),
+  removeItemTags: vi.fn(),
+  setItemName: vi.fn(),
+  setItemNotes: vi.fn(),
+  setItemRating: vi.fn(),
+  setItemSourceUrls: vi.fn(),
   setEntityName: vi.fn(),
   setEntityNotes: vi.fn(),
   setEntityRating: vi.fn(),
@@ -26,7 +32,7 @@ vi.mock('../../controllers/entityMutations', () => ({
 
 import { Inspector } from './Inspector';
 import {
-  displayedInspectorEntityDataAtom,
+  displayedInspectorItemDetailsAtom,
   displayedInspectorTargetAtom,
   inspectorErrorAtom,
   inspectorLoadingAtom,
@@ -38,18 +44,24 @@ import {
   selectionCountAtom,
   selectionFingerprintAtom,
   selectionTargetAtom,
-  selectedEntityHashesAtom,
 } from '../../state/selection';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
 
 const coreLabels = ['Items', 'Dimensions', 'Size', 'Type', 'Duration', 'Date added', 'Date created', 'Date modified'];
 
 const entity = {
-  entity_hash: 'entity-1', name: 'Example', mime_type: 'image/jpeg', size_bytes: 100,
-  pixel_width: 20, pixel_height: 10, duration_ms: null, frame_count: null, has_audio: false,
-  status: 0, rating: null, notes: null, source_urls: [], date_created: '2026-01-01',
-  date_added: '2026-01-02', date_modified: '2026-01-03', dominant_color_hex: null,
-  dominant_colors: [], perceptual_hash: null, tags: [], folders: [],
+  item_id: 1, kind: 'media', lifecycle: 'active', label: 'Example', cover_media_item_id: null,
+  folder_ids: [], aggregate_tags: [], revision: 1,
+  media: [{ media_item_id: 1, file_hash: 'file-1', mime_type: 'image/jpeg', dominant_color_hex: null,
+    size_bytes: 100, pixel_width: 20, pixel_height: 10, duration_ms: null, frame_count: null,
+    has_audio: false, name: 'Example', notes: null, rating: null, source_urls: [],
+    captured_at: '2026-01-01', imported_at: '2026-01-02', position: 0, tags: [] }],
+};
+
+const collection = {
+  item_id: 10, kind: 'collection', lifecycle: 'active', label: 'Album', cover_media_item_id: 11,
+  folder_ids: [7], aggregate_tags: ['general:member-tag'], revision: 1,
+  media: [entity.media[0], { ...entity.media[0], media_item_id: 12, file_hash: 'file-2', mime_type: 'video/mp4', position: 1 }],
 };
 
 function renderInspector({ target, data = null, scope = null, loading = false, error = null }: {
@@ -59,12 +71,11 @@ function renderInspector({ target, data = null, scope = null, loading = false, e
     [displayedInspectorTargetAtom, target],
     [inspectorLoadingAtom, loading],
     [inspectorErrorAtom, error],
-    [displayedInspectorEntityDataAtom, data],
+    [displayedInspectorItemDetailsAtom, data],
     [scopeInspectorViewModelAtom, scope],
     [sidebarNodesAtom, []],
     [gridItemsAtom, []],
     [selectionTargetAtom, null],
-    [selectedEntityHashesAtom, new Set()],
     [selectionCountAtom, target && (target as { kind?: string }).kind === 'multi' ? 2 : 0],
     [selectionFingerprintAtom, 'test'],
   ]);
@@ -91,10 +102,10 @@ describe('Inspector presentation branches', () => {
 
   it('keeps identity and core anchors for entity, multi, loading, and error', () => {
     const cases = [
-      { target: { kind: 'entity', entityHash: 'entity-1' }, data: entity, unavailableSource: false },
+      { target: { kind: 'item', itemId: 1 }, data: entity, unavailableSource: false },
       { target: { kind: 'multi', count: 2, selectionMode: 'explicit' }, data: null, unavailableSource: true },
-      { target: { kind: 'entity', entityHash: 'entity-1' }, data: null, loading: true, unavailableSource: true },
-      { target: { kind: 'entity', entityHash: 'entity-1' }, data: null, error: 'Unavailable', unavailableSource: true },
+      { target: { kind: 'item', itemId: 1 }, data: null, loading: true, unavailableSource: true },
+      { target: { kind: 'item', itemId: 1 }, data: null, error: 'Unavailable', unavailableSource: true },
     ];
 
     for (const entry of cases) {
@@ -106,7 +117,7 @@ describe('Inspector presentation branches', () => {
   });
 
   it('uses the shared inspector action primitive for Add Tags', () => {
-    const view = renderInspector({ target: { kind: 'entity', entityHash: 'entity-1' }, data: entity });
+    const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
 
     const addTags = document.querySelector('[data-inspector-action="add-tags"]');
     const autoTag = document.querySelector('[data-inspector-action="auto-tag"]');
@@ -116,8 +127,16 @@ describe('Inspector presentation branches', () => {
     view.unmount();
   });
 
+  it('renders a collection from ordered replacement media details', () => {
+    renderInspector({ target: { kind: 'item', itemId: 10 }, data: collection });
+    expect(screen.getByText('Album')).toBeInTheDocument();
+    expect(document.querySelector('[data-inspector-core-property="Items"]')).toHaveTextContent('2');
+    expect(document.querySelector('[data-inspector-core-property="Type"]')).toHaveTextContent('Mixed');
+    expect(screen.getByText('member-tag')).toBeInTheDocument();
+  });
+
   it('renders full empty Tags/Folders controls and opens the existing selector portals', () => {
-    const view = renderInspector({ target: { kind: 'entity', entityHash: 'entity-1' }, data: entity });
+    const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
     const store = getDefaultStore();
     const addTags = document.querySelector('[data-inspector-empty-action="add-tags"]');
     const addFolder = document.querySelector('[data-inspector-empty-action="add-folder"]');
@@ -140,7 +159,7 @@ describe('Inspector presentation branches', () => {
   });
 
   it('keeps Auto Tag in inspector scroll flow with its local action variant', () => {
-    const entityView = renderInspector({ target: { kind: 'entity', entityHash: 'entity-1' }, data: entity });
+    const entityView = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
     const action = document.querySelector('[data-inspector-action="auto-tag"]');
     expect(action).toHaveAttribute('data-inspector-button-variant', 'flow');
     expect(action?.closest('[data-inspector-scroll-content]')).toBeInTheDocument();

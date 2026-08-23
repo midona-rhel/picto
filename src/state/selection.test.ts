@@ -11,7 +11,7 @@ import {
 } from './grid';
 import {
   clearSelectionAtom,
-  selectedEntityHashesAtom,
+  selectedItemIdsAtom,
   selectedSubfolderNodeIdAtom,
   selectedSubfolderNodeIdsAtom,
   selectionCountAtom,
@@ -19,54 +19,56 @@ import {
   selectAllResultsAtom,
 } from './selection';
 
-function buildGridItem(entityHash: string): CanonicalEntityGridItem {
+function buildGridItem(itemId: number, fileHash: string): CanonicalEntityGridItem {
   return {
-    entity_id: 1,
-    entity_hash: entityHash,
+    item_id: itemId,
+    kind: 'media',
+    lifecycle: 'active',
+    label: null,
     name: 'Item',
-    mime_type: 'image/jpeg',
+    display_media_item_id: itemId,
+    display_file_hash: fileHash,
+    display_mime_type: 'image/jpeg',
     pixel_width: 100,
     pixel_height: 100,
-    status: 1,
-    rating: null,
-    date_added: '2026-01-01T00:00:00Z',
-    date_created: '2026-01-01T00:00:00Z',
-    date_modified: '2026-01-01T00:00:00Z',
-    has_thumbnail: true,
     duration_ms: null,
     frame_count: null,
     has_audio: false,
     dominant_color_hex: null,
     size_bytes: 100,
+    rating: null,
+    captured_at: '2026-01-01T00:00:00Z',
+    imported_at: '2026-01-01T00:00:00Z',
+    media_count: 1,
   };
 }
 
 describe('selection state', () => {
   it('builds query-results targets from canonical grid query state', () => {
     const store = createStore();
-    store.set(gridScopeAtom, { kind: 'folder', id: 4 });
+    store.set(gridScopeAtom, { kind: 'folder', folder_id: 4 });
     store.set(gridSortFieldAtom, 'name');
-    store.set(gridSortDirectionAtom, 'asc');
-    store.set(gridItemsAtom, [buildGridItem('a'), buildGridItem('b')]);
+    store.set(gridSortDirectionAtom, 'ascending');
+    store.set(gridItemsAtom, [buildGridItem(1, 'a'), buildGridItem(2, 'b')]);
     store.set(gridTotalCountAtom, 12);
 
     store.set(selectAllResultsAtom);
 
     expect(store.get(selectionCountAtom)).toBe(12);
     expect(store.get(selectionTargetAtom)).toEqual({
-      kind: 'query_results',
+      kind: 'query',
       query: store.get(currentGridQueryAtom),
-      excluded_entity_hashes: [],
+      excluded_item_ids: [],
     });
   });
 
   it('keeps subfolder tile selection out of entity selection targets', () => {
     const store = createStore();
-    store.set(selectedEntityHashesAtom, new Set(['hash-1']));
+    store.set(selectedItemIdsAtom, new Set([1]));
     store.set(selectedSubfolderNodeIdsAtom, new Set(['folder:9']));
 
     expect(store.get(selectedSubfolderNodeIdAtom)).toBe('folder:9');
-    expect(store.get(selectedEntityHashesAtom).size).toBe(0);
+    expect(store.get(selectedItemIdsAtom).size).toBe(0);
     expect(store.get(selectionCountAtom)).toBe(0);
     expect(store.get(selectionTargetAtom)).toBeNull();
 

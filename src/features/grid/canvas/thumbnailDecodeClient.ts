@@ -2,14 +2,14 @@
  * Thin bridge to the thumbnail decode worker.
  *
  * The worker owns all loading, caching, and reveal staggering.
- * The main thread sends a plan (visible hashes) and receives
+ * The main thread sends a plan (visible physical file hashes) and receives
  * revealed bitmaps — it never waits on the worker.
  */
 
 import ThumbnailWorker from './thumbnailDecodeWorker?worker';
 
-type RevealCallback = (hash: string, bitmap: ImageBitmap) => void;
-type ErrorCallback = (hash: string) => void;
+type RevealCallback = (fileHash: string, bitmap: ImageBitmap) => void;
+type ErrorCallback = (fileHash: string) => void;
 
 let worker: Worker | null = null;
 let revealCb: RevealCallback | null = null;
@@ -21,8 +21,8 @@ function ensureWorker(): Worker | null {
     worker = new ThumbnailWorker();
     worker.onmessage = (event: MessageEvent) => {
       const msg = event.data;
-      if (msg.type === 'reveal') revealCb?.(msg.hash, msg.bitmap);
-      else if (msg.type === 'error') errorCb?.(msg.hash);
+      if (msg.type === 'reveal') revealCb?.(msg.fileHash, msg.bitmap);
+      else if (msg.type === 'error') errorCb?.(msg.fileHash);
     };
     worker.onerror = () => {
       worker?.terminate();
@@ -35,7 +35,7 @@ function ensureWorker(): Worker | null {
 }
 
 /** Send the current set of visible tiles to the worker. */
-export function sendThumbnailPlan(entries: Array<{ hash: string; url: string }>): void {
+export function sendThumbnailPlan(entries: Array<{ fileHash: string; url: string }>): void {
   ensureWorker()?.postMessage({ type: 'plan', entries });
 }
 

@@ -20,20 +20,20 @@ import { InspectorSection } from '../../shared/ui/InspectorSection/InspectorSect
 import { StarRating } from '../../shared/ui/StarRating/StarRating';
 import { InspectorField, InspectorSourceField } from '../../shared/ui/InspectorField/InspectorField';
 import { TagChip } from '../../shared/ui/TagChip/TagChip';
-import type { EntityTarget, SelectionSummary } from '../../shared/types/canonical';
+import type { ItemTarget } from '../../shared/types/generated/application/ItemTarget';
+import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
+import type { SelectionSummary } from '../../shared/types/generated/application/SelectionSummary';
 import {
-  displayedInspectorEntityDataAtom,
+  displayedInspectorItemDetailsAtom,
   displayedInspectorTargetAtom,
   inspectorErrorAtom,
   inspectorLoadingAtom,
   scopeInspectorViewModelAtom,
 } from '../../state/inspector';
-import { gridItemsAtom } from '../../state/grid';
 import {
   selectionCountAtom,
   selectionFingerprintAtom,
   selectionTargetAtom,
-  selectedEntityHashesAtom,
 } from '../../state/selection';
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { tagSelectPortalAtom, folderPickerPortalAtom, aiTaggerPortalAtom } from '../../state/portals';
@@ -90,16 +90,16 @@ function parseTag(t: string) {
 }
 
 function selectionSupportsAiTagging(
-  target: EntityTarget | null | undefined,
+  target: ItemTarget | null | undefined,
   summary: SelectionSummary | null,
 ): boolean {
-  if (target?.kind !== 'entity_hashes' || !summary || summary.pending) return false;
+  if (!target || !summary) return false;
   const mimeCounts = summary.stats.mime_counts;
-  if (!mimeCounts) return false;
   const imageCount = Object.entries(mimeCounts)
     .filter(([mime]) => mime.startsWith('image/'))
     .reduce((count, [, value]) => count + value, 0);
-  return imageCount === summary.selected_count;
+  const mediaCount = Object.values(mimeCounts).reduce((count, value) => count + value, 0);
+  return mediaCount > 0 && imageCount === mediaCount;
 }
 
 // ── Portal opener ───────────────────────────────────────────────
@@ -150,8 +150,7 @@ function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage
   }
 
   // Stacked
-  const items = useAtomValue(gridItemsAtom);
-  const previews = hashes.slice(0, 3).map((h) => items.find((it) => it.entity_hash === h)).filter(Boolean);
+  const previews = hashes.slice(0, 3);
   if (previews.length === 0) return null;
   const rots = [-4, 2, 0];
   const offs = [{ x: -8, y: 4 }, { x: 6, y: -3 }, { x: 0, y: 0 }];
@@ -159,13 +158,13 @@ function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage
   return (
     <div className={styles.preview}>
       <div className={styles.stackContainer}>
-        {previews.map((item, i) => (
-          <div key={item!.entity_hash} className={styles.stackItem} style={{
+        {previews.map((hash, i) => (
+          <div key={hash} className={styles.stackItem} style={{
             transform: `rotate(${rots[start + i]}deg) translate(${offs[start + i].x}px, ${offs[start + i].y}px)`,
             zIndex: i, filter: i === previews.length - 1 ? undefined : 'brightness(0.7)',
           }}>
             <div className={styles.previewFrame}>
-              <img src={`media://localhost/thumb/${item!.entity_hash}.jpg`} alt="" className={styles.previewImage} draggable={false} />
+              <img src={`media://localhost/thumb/${hash}.jpg`} alt="" className={styles.previewImage} draggable={false} />
               <div className={styles.previewGlass} />
             </div>
           </div>
@@ -179,7 +178,6 @@ function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage
 
 function useSelectionSummary() {
   const target = useAtomValue(selectionTargetAtom);
-  const selectedHashes = useAtomValue(selectedEntityHashesAtom);
   const selectionCount = useAtomValue(selectionCountAtom);
   const selectionFingerprint = useAtomValue(selectionFingerprintAtom);
   const [summary, setSummary] = useState<SelectionSummary | null>(null);
@@ -200,7 +198,18 @@ function useSelectionSummary() {
     return () => { stale = true; };
   }, [selectionCount, selectionFingerprint, target]);
 
-  return { target, selectedHashes, summary, ready };
+  return { target, summary, ready };
+}
+
+function itemDetailsDisplay(details: ItemDetails) {
+  const primary = details.media[0] ?? null;
+  const totalSize = details.media.reduce((total, media) => total + media.size_bytes, 0);
+  const mimeTypes = [...new Set(details.media.map((media) => media.mime_type))];
+  const ratings = details.media.map((media) => media.rating);
+  const sharedRating = ratings.length > 0 && ratings.every((rating) => rating === ratings[0])
+    ? ratings[0]
+    : null;
+  return { primary, totalSize, mimeTypes, sharedRating };
 }
 
 type CorePropertyLabel =
@@ -377,48 +386,50 @@ export function Inspector() {
   const inspectorTarget = useAtomValue(displayedInspectorTargetAtom);
   const loading = useAtomValue(inspectorLoadingAtom);
   const error = useAtomValue(inspectorErrorAtom);
-  const entityData = useAtomValue(displayedInspectorEntityDataAtom);
+  const entityData = useAtomValue(displayedInspectorItemDetailsAtom);
   const scopeVM = useAtomValue(scopeInspectorViewModelAtom);
   const sidebarNodes = useAtomValue(sidebarNodesAtom);
-  const { target: selTarget, selectedHashes, summary } = useSelectionSummary();
+  const { target: selTarget, summary } = useSelectionSummary();
 
   if (inspectorTarget.kind === 'none') return null;
 
   // ── Single entity ─────────────────────────────────────────────
-  if (inspectorTarget.kind === 'entity') {
+  if (inspectorTarget.kind === 'item') {
     if (!entityData) return <UnavailableInspectorSkeleton status={error ? { kind: 'error', message: error } : loading ? { kind: 'loading', message: 'Loading...' } : undefined} />;
 
     const d = entityData;
-    const tags = [...(d.tags ?? [])].sort((a, b) => tagKey(a.namespace, a.subtag).localeCompare(tagKey(b.namespace, b.subtag)));
-    const folders = (d.folders ?? []).map((f) => {
-      const n = sidebarNodes.find((s) => s.id === `folder:${f.folder_id}`);
-      return { id: f.folder_id, name: n?.name ?? f.name, color: n?.color ?? null };
+    const { primary, totalSize, mimeTypes, sharedRating } = itemDetailsDisplay(d);
+    const tags = [...(d.aggregate_tags ?? [])]
+      .map(parseTag)
+      .sort((a, b) => tagKey(a.ns, a.sub).localeCompare(tagKey(b.ns, b.sub)));
+    const folders = (d.folder_ids ?? []).map((folderId) => {
+      const n = sidebarNodes.find((s) => s.id === `folder:${folderId}`);
+      return { id: folderId, name: n?.name ?? `Folder ${folderId}`, color: n?.color ?? null };
     });
-    const palette = (d.dominant_colors ?? []).map((c) => c.hex).filter((h): h is string => !!h && h.length > 0);
-
+    const palette = primary?.dominant_color_hex ? [primary.dominant_color_hex] : [];
     return <InspectorSkeleton
-      preview={<Preview hashes={[d.entity_hash]} type="single" />}
-      palette={palette.length > 0 ? palette : d.dominant_color_hex ? [d.dominant_color_hex] : []}
-      name={{ value: d.name ?? '', onCommit: (value) => { void entityMutations.setEntityName(d.entity_hash, value); } }}
-      notes={{ value: d.notes ?? '', onCommit: (value) => { void entityMutations.setEntityNotes(d.entity_hash, value); } }}
-      source={{ urls: d.source_urls ?? [], onChange: (urls) => { void entityMutations.setEntitySourceUrls(d.entity_hash, urls); } }}
-      rating={{ value: d.rating ?? 0, onChange: (rating) => { void entityMutations.setEntityRating(d.entity_hash, rating); } }}
+      preview={<Preview hashes={primary ? [primary.file_hash] : []} type="single" />}
+      palette={palette}
+      name={{ value: d.label ?? primary?.name ?? '', onCommit: (value) => { void entityMutations.setItemName(d.item_id, value); } }}
+      notes={{ value: primary?.notes ?? '', onCommit: (value) => { void entityMutations.setItemNotes(d.item_id, value); } }}
+      source={{ urls: primary?.source_urls ?? [], onChange: (urls) => { void entityMutations.setItemSourceUrls(d.item_id, urls); } }}
+      rating={{ value: sharedRating ?? 0, onChange: (rating) => { void entityMutations.setItemRating(d.item_id, rating); } }}
       coreProperties={normalizedCoreProperties({
-        Items: { value: '1' },
-        Dimensions: { value: d.pixel_width && d.pixel_height ? `${d.pixel_width} × ${d.pixel_height}` : '—' },
-        Size: { value: fmtSize(d.size_bytes) },
-        Type: { value: fmtExt(d.mime_type), title: d.mime_type },
-        Duration: { value: d.duration_ms != null && d.duration_ms > 0 ? fmtDuration(d.duration_ms) : '—' },
-        'Date added': { value: fmtDate(d.date_added) ?? '—' },
-        'Date created': { value: fmtDate(d.date_created) ?? '—' },
-        'Date modified': { value: fmtDate(d.date_modified) ?? '—' },
+        Items: { value: d.media.length.toLocaleString() },
+        Dimensions: { value: primary?.pixel_width && primary.pixel_height ? `${primary.pixel_width} × ${primary.pixel_height}` : '—' },
+        Size: { value: fmtSize(totalSize) },
+        Type: { value: mimeTypes.length === 1 ? fmtExt(mimeTypes[0]) : 'Mixed', title: mimeTypes.join(', ') },
+        Duration: { value: primary?.duration_ms != null && primary.duration_ms > 0 ? fmtDuration(primary.duration_ms) : '—' },
+        'Date added': { value: fmtDate(primary?.imported_at) ?? '—' },
+        'Date created': { value: fmtDate(primary?.captured_at) ?? '—' },
+        'Date modified': { value: '—' },
       })}
-      tags={tags.map((t) => ({ ns: t.namespace, sub: t.subtag, raw: t.namespace && t.namespace !== 'default' ? `${t.namespace}:${t.subtag}` : t.subtag }))}
-      onRemoveTag={(raw) => { void entityMutations.removeEntityTags(d.entity_hash, [raw]); }}
+      tags={tags}
+      onRemoveTag={(raw) => { void entityMutations.removeItemTags(d.item_id, [raw]); }}
       folders={folders}
-      onRemoveFolder={(folderId) => { void entityMutations.removeEntityFromFolder(d.entity_hash, folderId); }}
+      onRemoveFolder={(folderId) => { void entityMutations.removeItemFromFolder(d.item_id, folderId); }}
       onNavigateFolder={navigateToFolder}
-      action={<InspectorAutoTagAction count={1} enabled={d.mime_type.startsWith('image/')} />}
+      action={<InspectorAutoTagAction count={d.media.length} enabled={d.media.length > 0 && d.media.every((media) => media.mime_type.startsWith('image/'))} />}
     />;
   }
 
@@ -431,7 +442,7 @@ export function Inspector() {
       const n = sidebarNodes.find((s) => s.id === `folder:${f.folder_id}`);
       return { id: f.folder_id, name: n?.name ?? f.name, color: n?.color ?? null };
     });
-    const previewHashes = summary?.sample_hashes ?? [...selectedHashes].slice(0, 3);
+    const previewHashes = summary?.sample_hashes ?? [];
 
     return <InspectorSkeleton
       preview={<Preview hashes={previewHashes} type="stacked" />}
@@ -484,7 +495,7 @@ export function Inspector() {
   ].filter((property): property is { label: string; value: string } => property !== null);
 
   return <InspectorSkeleton
-    preview={<Preview hashes={scopeVM.previewItems.map((item) => item.entity_hash)} type="collage" />}
+    preview={<Preview hashes={scopeVM.previewItems.map((item) => item.display_file_hash)} type="collage" />}
     palette={[]}
     name={{ value: node.name, readOnly: isSystem, onCommit: canEdit ? (value) => { void saveName(value); } : undefined }}
     notes={{ value: (isSystem ? scopeVM.description : scopeVM.folder?.notes ?? scopeVM.smartFolder?.notes) ?? '', readOnly: isSystem, onCommit: canEdit ? (value) => { void saveNotes(value); } : undefined }}

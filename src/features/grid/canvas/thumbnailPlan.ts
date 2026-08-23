@@ -5,7 +5,7 @@
  */
 
 export interface PlanTile {
-  hash: string;
+  fileHash: string;
   mime: string;
   w: number;
   h: number;
@@ -14,7 +14,7 @@ export interface PlanTile {
 }
 
 /**
- * FNV-1a 32-bit fingerprint over the plan: first 8 chars of each tile hash
+ * FNV-1a 32-bit fingerprint over the plan: first 8 chars of each file hash
  * plus its quality tier, folded with the tile count. Same tile set, order,
  * and tiers → same value. Always returns an unsigned 32-bit integer (>= 0),
  * so -1 is a safe "never computed" sentinel.
@@ -23,10 +23,10 @@ export function computePlanFingerprint(tiles: PlanTile[], fullQualityThresholdPx
   let h = 0x811c9dc5;
   for (let i = 0; i < tiles.length; i++) {
     const t = tiles[i];
-    const hash = t.hash;
-    const n = Math.min(8, hash.length);
+    const fileHash = t.fileHash;
+    const n = Math.min(8, fileHash.length);
     for (let j = 0; j < n; j++) {
-      h ^= hash.charCodeAt(j);
+      h ^= fileHash.charCodeAt(j);
       h = Math.imul(h, 0x01000193);
     }
     h ^= t.w > fullQualityThresholdPx || t.h > fullQualityThresholdPx ? 70 : 84;

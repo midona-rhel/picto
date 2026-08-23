@@ -1,8 +1,8 @@
 import type { CanonicalEntityGridItem, SidebarNodeDto } from '../../../shared/types/canonical';
 
 export interface CanvasRenderItem {
-  hash: string;
-  thumbnailHash: string;
+  itemId: number | null;
+  displayFileHash: string;
   kind: 'single' | 'folder';
   name: string | null;
   mime: string;
@@ -22,11 +22,7 @@ export interface CanvasRenderItem {
 
 export type GridItem =
   | { kind: 'entity'; data: CanonicalEntityGridItem }
-  | { kind: 'folder'; data: SidebarNodeDto; coverHash: string | null };
-
-export function getItemHash(item: GridItem): string {
-  return item.kind === 'entity' ? item.data.entity_hash : item.data.id;
-}
+  | { kind: 'folder'; data: SidebarNodeDto; coverFileHash: string | null };
 
 export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
   const aspectRatio = item.pixel_width && item.pixel_height
@@ -34,11 +30,11 @@ export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
     : null;
 
   return {
-    hash: item.entity_hash,
-    thumbnailHash: item.entity_hash,
+    itemId: item.item_id,
+    displayFileHash: item.display_file_hash,
     kind: 'single',
     name: item.name,
-    mime: item.mime_type,
+    mime: item.display_mime_type,
     width: item.pixel_width,
     height: item.pixel_height,
     rating: item.rating,
@@ -49,11 +45,11 @@ export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
   };
 }
 
-export function adaptFolderItem(folder: SidebarNodeDto, coverHash: string | null): CanvasRenderItem {
+export function adaptFolderItem(folder: SidebarNodeDto, coverFileHash: string | null): CanvasRenderItem {
   const numericId = parseInt(folder.id.replace('folder:', ''), 10);
   return {
-    hash: folder.id,
-    thumbnailHash: coverHash ?? '',
+    itemId: null,
+    displayFileHash: coverFileHash ?? '',
     kind: 'folder',
     name: folder.name,
     mime: 'application/x-folder',

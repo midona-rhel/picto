@@ -61,6 +61,52 @@ pub struct DeleteItemsResult {
 }
 
 impl Application {
+    /// Rename one visible root. Collection names are structural; standalone
+    /// media names remain media-owned.
+    pub fn rename_item(&self, item_id: ItemId, name: &str) -> Result<MutationReceipt, String> {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err("An item name cannot be empty".to_string());
+        }
+        let (_, revision) = self.transaction(
+            |transaction| {
+                let kind: String = transaction
+                    .query_row(
+                        "SELECT li.kind FROM library_root lr
+                         JOIN library_item li ON li.item_id = lr.item_id
+                         WHERE lr.item_id = ?1",
+                        [item_id.0],
+                        |row| row.get(0),
+                    )
+                    .optional()?
+                    .ok_or_else(|| invalid(format!("Item {} is not a library root", item_id.0)))?;
+                let now = chrono::Utc::now().to_rfc3339();
+                match kind.as_str() {
+                    "collection" => {
+                        transaction.execute(
+                            "UPDATE library_item SET label = ?1, updated_at = ?2 WHERE item_id = ?3",
+                            params![name, now, item_id.0],
+                        )?;
+                    }
+                    "media" => {
+                        transaction.execute(
+                            "UPDATE media_asset SET name = ?1, updated_at = ?2 WHERE item_id = ?3",
+                            params![name, now, item_id.0],
+                        )?;
+                    }
+                    other => return Err(invalid(format!("Unsupported item kind '{other}'"))),
+                }
+                Ok(((), ()))
+            },
+            |_, ()| Ok(()),
+        )?;
+        Ok(receipt(
+            revision,
+            &[resources::LIBRARY, &resources::item(item_id.0)],
+            &[item_id.0],
+        ))
+    }
+
     pub fn set_lifecycle(
         &self,
         target: &ItemTarget,

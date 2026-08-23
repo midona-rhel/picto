@@ -31,7 +31,7 @@ export function manualImportParamsForScope(
 ): Omit<MediaImportParams, 'initial_status'> & { initial_status: number } {
   return {
     ...params,
-    initial_status: scope.kind === 'system' && scope.key === 'inbox'
+    initial_status: scope.kind === 'inbox'
       ? MEDIA_STATUS_INBOX
       : MEDIA_STATUS_ACTIVE,
   };
@@ -63,7 +63,7 @@ export const filesController = {
     return exportMedia(target, config);
   },
 
-  resolveFilePath(hash: string): Promise<string | null> {
+  resolveFilePath(hash: string): Promise<string> {
     return resolveFilePath(hash);
   },
 
@@ -103,7 +103,7 @@ export const filesController = {
     if (path) clipboardCopyFile(path);
   },
 
-  regenerateThumbnailsBatch(hashes: string[]): Promise<{ total: number; regenerated: number; errors: number }> {
+  regenerateThumbnailsBatch(hashes: string[]) {
     return regenerateThumbnailsBatch(hashes);
   },
 };

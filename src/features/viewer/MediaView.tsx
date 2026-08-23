@@ -28,7 +28,7 @@ export interface MediaViewProps {
   currentIndex: number;
   totalCount?: number | null;
   onNavigate: (delta: number) => void;
-  onClose: (exitHash: string) => void;
+  onClose: (exitItemId: number) => void;
   onLoadMore?: () => void;
 }
 
@@ -38,12 +38,13 @@ export function MediaView({
   items, currentIndex, totalCount, onNavigate, onClose, onLoadMore,
 }: MediaViewProps) {
   const currentItem = items[currentIndex] ?? null;
-  const currentHash = currentItem?.entity_hash ?? '';
-  useRecordMediaView(currentHash);
-  const currentMime = currentItem?.mime_type ?? '';
+  const currentItemId = currentItem?.item_id ?? 0;
+  const currentHash = currentItem?.display_file_hash ?? '';
+  useRecordMediaView(currentItemId);
+  const currentMime = currentItem?.display_mime_type ?? '';
   const isVideo = currentMime.startsWith('video/');
   const total = totalCount ?? items.length;
-  const thumbHash = currentItem?.entity_hash ?? '';
+  const thumbHash = currentHash;
 
   const setDisplayState = useSetAtom(viewerDisplayStateAtom);
   const setDisplayControls = useSetAtom(viewerDisplayControlsAtom);
@@ -61,14 +62,14 @@ export function MediaView({
     const r: string[] = [];
     const prev = items[currentIndex - 1];
     const next = items[currentIndex + 1];
-    if (prev) r.push(prev.entity_hash);
-    if (next) r.push(next.entity_hash);
+    if (prev) r.push(prev.display_file_hash);
+    if (next) r.push(next.display_file_hash);
     return r;
   }, [items, currentIndex]);
 
   const pipeline = useMediaImagePipeline({
     hash: currentHash || null,
-    thumbnailHash: currentItem?.entity_hash ?? null,
+    thumbnailHash: currentItem?.display_file_hash ?? null,
     mime: currentMime,
     isVideo,
     imgRef: fullImgRef,
@@ -77,7 +78,7 @@ export function MediaView({
 
   // ── Image size — derived from the DISPLAYED item, not the requested one ──
   const displayedItem = pipeline.displayedHash
-    ? items.find((it) => it.entity_hash === pipeline.displayedHash) ?? currentItem
+    ? items.find((it) => it.display_file_hash === pipeline.displayedHash) ?? currentItem
     : currentItem;
   const imageSize = useMemo<ImageSize | null>(() => {
     if (!displayedItem?.pixel_width || !displayedItem?.pixel_height) return null;
@@ -135,7 +136,7 @@ export function MediaView({
 
   useEffect(() => {
     setDisplayControls({
-      close: () => onClose(currentHash),
+      close: () => onClose(currentItemId),
       navigate,
       fitToWindow: zoom.fitToWindow,
       fitActual: zoom.fitActual,
@@ -143,7 +144,7 @@ export function MediaView({
       zoomOut: () => zoom.animateZoomTo(zoom.state.scale / 1.25),
       setZoomScale: (s) => zoom.zoomTo(s),
     });
-  }, [currentHash, navigate, onClose, zoom, setDisplayControls]);
+  }, [currentItemId, navigate, onClose, zoom, setDisplayControls]);
 
   useEffect(() => () => { setDisplayState(null); setDisplayControls(null); }, [setDisplayState, setDisplayControls]);
 
@@ -162,7 +163,7 @@ export function MediaView({
     const handleKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-      if (matchesShortcutDef(e, closeDef) || matchesShortcutDef(e, detailDef) || matchesShortcutDef(e, quicklookDef)) { e.preventDefault(); onClose(currentHash); return; }
+      if (matchesShortcutDef(e, closeDef) || matchesShortcutDef(e, detailDef) || matchesShortcutDef(e, quicklookDef)) { e.preventDefault(); onClose(currentItemId); return; }
       if (matchesShortcutDef(e, prevDef)) { e.preventDefault(); navigate(-1); return; }
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
       if (matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }
@@ -173,12 +174,12 @@ export function MediaView({
       // Rating: 0-5 (no modifiers)
       if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key >= '0' && e.key <= '5') {
         e.preventDefault();
-        void entityMutations.setEntityRating(currentHash, parseInt(e.key, 10));
+        void entityMutations.setItemRating(currentItemId, parseInt(e.key, 10));
       }
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [currentHash, navigate, onClose, zoom]);
+  }, [currentItemId, navigate, onClose, zoom]);
 
   useEffect(() => () => { if (boundaryTimerRef.current) clearTimeout(boundaryTimerRef.current); }, []);
 

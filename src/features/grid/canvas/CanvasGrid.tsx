@@ -30,10 +30,24 @@ import {
 import { useCanvasRedrawScheduler } from './useCanvasRedrawScheduler';
 import { snapshotViewport, ensureCanvasSize } from './canvasViewportUtils';
 import styles from './CanvasGrid.module.css';
+import type { ItemScope } from '../../../shared/types/generated/application/ItemScope';
 
 const GAP = 16;
 const TEXT_NAME_ROW_H = 20;
-const EMPTY_HASH_SET = new Set<string>();
+const EMPTY_ITEM_ID_SET = new Set<number>();
+
+function itemIdDragKey(itemId: number): string {
+  return String(itemId);
+}
+
+function parseItemIdDragKeys(keys: readonly string[]): Set<number> {
+  const itemIds = new Set<number>();
+  for (const key of keys) {
+    const itemId = Number(key);
+    if (Number.isSafeInteger(itemId)) itemIds.add(itemId);
+  }
+  return itemIds;
+}
 
 /** Convert viewport (visual) coordinates to CSS layout coordinates.
  *  Uses shared zoom compensation for browser zoom support. */
@@ -76,12 +90,12 @@ export interface CanvasGridProps {
   suppressTileReveal?: boolean;
   /** Restore scroll position on first paint (e.g., after back/forward navigation). */
   initialScrollTop?: number | null;
-  selectedEntityHashes?: Set<string>;
-  onSelectionChange?: (hashes: Set<string>) => void;
+  selectedItemIds?: Set<number>;
+  onSelectionChange?: (itemIds: Set<number>) => void;
   /** DOM content rendered above the canvas inside the scroll container (e.g. SubfolderGrid). */
   headerContent?: React.ReactNode;
   /** Current scope for drag-and-drop context. */
-  dragSourceScope?: { kind: string; id?: number | null; key?: string | null } | null;
+  dragSourceScope?: ItemScope | null;
   /** Expose the scroll container ref to parent. */
   onContainerRef?: (el: HTMLDivElement | null) => void;
   /** Notify parent when layout changes (for scroll-to-item). */
@@ -115,7 +129,7 @@ export function CanvasGrid({
   frozenScrollTop = 0,
   suppressTileReveal = false,
   initialScrollTop = null,
-  selectedEntityHashes = EMPTY_HASH_SET,
+  selectedItemIds = EMPTY_ITEM_ID_SET,
   headerContent,
   dragSourceScope = null,
   onContainerRef,
@@ -136,7 +150,7 @@ export function CanvasGrid({
 
   // Reusable per-frame buffers — avoids allocating new arrays/sets every draw call.
   const activeTilesRef = useRef<number[]>([]);
-  const visibleHashesRef = useRef(new Set<string>());
+  const visibleFileHashesRef = useRef(new Set<string>());
   const planTilesRef = useRef<PlanTile[]>([]);
 
   // Cache theme CSS values — avoids getComputedStyle() on every draw frame
@@ -174,7 +188,7 @@ export function CanvasGrid({
     startX: 0, startY: 0, active: false, shiftKey: false, lastClientX: 0, lastClientY: 0,
   });
   const marqueeRectRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
-  const marqueeBaseSelectionRef = useRef<Set<string>>(new Set());
+  const marqueeBaseSelectionRef = useRef<Set<number>>(new Set());
   const dragJustEndedRef = useRef(false);
   const tileDragRef = useRef<{ tileIdx: number; startClientX: number; startClientY: number } | null>(null);
   const reorderDropRef = useRef<{ dropIndex: number; dropSide: 'left' | 'right' } | null>(null);
@@ -186,7 +200,7 @@ export function CanvasGrid({
   const autoScrollSpeedRef = useRef(0);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const [hoverPreview, setHoverPreview] = useState<{ hash: string; mime: string } | null>(null);
+  const [hoverPreview, setHoverPreview] = useState<{ fileHash: string; mime: string } | null>(null);
   const [marqueeVisual, setMarqueeVisual] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
   const [dragGhost, setDragGhost] = useState<{ x: number; y: number; count: number; thumbnailHashes: string[] } | null>(null);
   const firstPaintRef = useRef(false);
@@ -246,8 +260,8 @@ export function CanvasGrid({
   // useLayoutEffect so we run before the browser paints / clamps scrollTop.
   // lastScrollTopRef is the pre-layout scroll position (kept in sync by
   // handleScroll and the initialScrollTop restore).
-  const selectedHashesRef = useRef(selectedEntityHashes);
-  selectedHashesRef.current = selectedEntityHashes;
+  const selectedItemIdsRef = useRef(selectedItemIds);
+  selectedItemIdsRef.current = selectedItemIds;
 
   useLayoutEffect(() => {
     const prev = prevLayoutRef.current;
@@ -272,13 +286,13 @@ export function CanvasGrid({
 
     let anchorIdx = -1;
     let bestTop = Infinity;
-    const sel = selectedHashesRef.current;
+    const sel = selectedItemIdsRef.current;
 
     // 1) Prefer a selected tile that is at least partially visible
     if (sel.size > 0) {
       for (let i = 0; i < prev.positions.length; i++) {
         const p = prev.positions[i];
-        if (!p || !items[i] || !sel.has(items[i].entity_hash)) continue;
+        if (!p || !items[i] || !sel.has(items[i].item_id)) continue;
         if (p.y + p.h < vpTop || p.y > vpBot) continue;
         if (p.y < bestTop) { bestTop = p.y; anchorIdx = i; }
       }
@@ -408,8 +422,8 @@ export function CanvasGrid({
     // Reuse arrays/sets across frames to avoid per-frame GC pressure.
     const activeTiles = activeTilesRef.current;
     activeTiles.length = 0;
-    const visibleHashes = visibleHashesRef.current;
-    visibleHashes.clear();
+    const visibleFileHashes = visibleFileHashesRef.current;
+    visibleFileHashes.clear();
     const planTiles = planTilesRef.current;
     let planCount = 0;
 
@@ -431,15 +445,15 @@ export function CanvasGrid({
       const item = renderItems[i];
       if (!item) continue;
 
-      visibleHashes.add(item.thumbnailHash);
+      visibleFileHashes.add(item.displayFileHash);
       if (planTiles[planCount]) {
-        planTiles[planCount].hash = item.thumbnailHash;
+        planTiles[planCount].fileHash = item.displayFileHash;
         planTiles[planCount].mime = item.mime;
         planTiles[planCount].w = pos.w;
         planTiles[planCount].h = pos.h;
         planTiles[planCount].cy = pos.y + pos.h / 2;
       } else {
-        planTiles[planCount] = { hash: item.thumbnailHash, mime: item.mime, w: pos.w, h: pos.h, cy: pos.y + pos.h / 2 };
+        planTiles[planCount] = { fileHash: item.displayFileHash, mime: item.mime, w: pos.w, h: pos.h, cy: pos.y + pos.h / 2 };
       }
       planCount++;
     }
@@ -459,7 +473,7 @@ export function CanvasGrid({
       ctx,
       positions: layout.positions,
       items: renderItems,
-      atlasGet: (hash) => pipeline.get(hash),
+      atlasGet: (fileHash) => pipeline.get(fileHash),
       now,
       activeTiles,
       draw: drawCtx,
@@ -476,7 +490,7 @@ export function CanvasGrid({
 
     // Evict main-thread bitmaps outside the draw zone.
     // The worker handles load cancellation via the plan diff.
-    pipeline.evictOutsideVisible(visibleHashes);
+    pipeline.evictOutsideVisible(visibleFileHashes);
 
     // Continue animation loop for active reveals
     if (hasActiveRevealFromDraw) {
@@ -507,12 +521,12 @@ export function CanvasGrid({
     const scrollTop = Math.max(0, (interactive ? vp.scrollTop : frozenScrollTop) - headerHeight);
 
     // Draw selection borders on all selected tiles
-    if (selectedEntityHashes.size > 0) {
+    if (selectedItemIds.size > 0) {
       ctx.strokeStyle = '#3297FF';
       ctx.lineWidth = 2;
       ctx.beginPath();
       for (let i = 0; i < items.length; i++) {
-        if (!selectedEntityHashes.has(items[i].entity_hash)) continue;
+        if (!selectedItemIds.has(items[i].item_id)) continue;
         const pos = layout.positions[i];
         if (!pos) continue;
         const drawY = pos.y - scrollTop;
@@ -528,7 +542,7 @@ export function CanvasGrid({
     if (hovIdx != null && !isScrollingRef.current) {
       const hovItem = items[hovIdx];
       const hovPos = layout.positions[hovIdx];
-      if (hovItem && hovPos && !hovItem.mime_type.startsWith('video/')) {
+      if (hovItem && hovPos && !hovItem.display_mime_type.startsWith('video/')) {
         const drawY = hovPos.y - scrollTop;
         if (drawY + hovPos.h >= 0 && drawY <= vp.viewportHeight) {
           const imgH = hovPos.h - textHeight;
@@ -607,12 +621,12 @@ export function CanvasGrid({
     // Coarse blank flags — conservative: a selection that is offscreen still
     // counts as content so scrolling it into view redraws correctly.
     overlayBlankRef.current =
-      selectedEntityHashes.size === 0 &&
+      selectedItemIds.size === 0 &&
       hoveredTileRef.current == null &&
       reorderDropRef.current == null;
 
     ctx.restore();
-  }, [layout, items, selectedEntityHashes, textHeight, interactive, frozenScrollTop, headerHeight]);
+  }, [layout, items, selectedItemIds, textHeight, interactive, frozenScrollTop, headerHeight]);
 
   // ── RAF scheduler (legacy pattern) ──
   const frozenRef = useRef(!interactive);
@@ -677,7 +691,7 @@ export function CanvasGrid({
   // ── Redraw on layout/prop changes ──
   useEffect(() => { markDirty('both'); }, [layout, markDirty]);
   useEffect(() => { markDirty('base'); }, [showName, showExtension, showResolution, effectiveViewMode, fitThumbnails, suppressTileReveal, markDirty]);
-  useEffect(() => { markDirty('overlay'); }, [selectedEntityHashes, markDirty]);
+  useEffect(() => { markDirty('overlay'); }, [selectedItemIds, markDirty]);
   useEffect(() => { markDirty('both'); }, [headerHeight, markDirty]);
 
   // ── Redraw on theme change (canvas reads CSS variables, not reactive to theme) ──
@@ -725,13 +739,13 @@ export function CanvasGrid({
 
         // Generate stacked icon matching DragGhost style
         let iconUrl = '';
+        const curItems = itemsRef.current;
         try {
           const thumbSize = 44;
           const so = 3;
-          const curItems = itemsRef.current;
-          const ths = state.hashes.slice(0, 3).map((h) => {
-            const it = curItems.find((x) => x.entity_hash === h);
-            return it?.entity_hash ?? h;
+          const ths = state.hashes.slice(0, 3).map((itemIdKey) => {
+            const it = curItems.find((x) => itemIdDragKey(x.item_id) === itemIdKey);
+            return it?.display_file_hash ?? '';
           });
           const sc = ths.length;
           const tw = thumbSize + (sc - 1) * so + 14;
@@ -767,7 +781,10 @@ export function CanvasGrid({
         } catch { /* fallback */ }
 
         setInternalDragOrigin(true);
-        startNativeDragFn(state.hashes, iconUrl);
+        const nativeFileHashes = state.hashes
+          .map((itemIdKey) => curItems.find((item) => itemIdDragKey(item.item_id) === itemIdKey)?.display_file_hash)
+          .filter((fileHash): fileHash is string => !!fileHash);
+        startNativeDragFn(nativeFileHashes, iconUrl);
         dragJustEndedRef.current = true;
         markDirtyRef.current('overlay');
         return;
@@ -781,11 +798,11 @@ export function CanvasGrid({
         if (ctr) {
           const { x: cx, y: cy } = toLayoutCoords(e.clientX, e.clientY, ctr, headerHeightRef.current);
           // Build skip set from dragged item indices
-          const draggedHashes = new Set(getDragState().hashes);
+          const draggedItemIds = parseItemIdDragKeys(getDragState().hashes);
           const skipIdx = new Set<number>();
           const curItems = itemsRef.current;
           for (let i = 0; i < curItems.length; i++) {
-            if (draggedHashes.has(curItems[i].entity_hash)) skipIdx.add(i);
+            if (draggedItemIds.has(curItems[i].item_id)) skipIdx.add(i);
           }
           const tgt = computeReorderTarget(layoutPosRef.current, cx, cy, textHeightRef.current, skipIdx);
           reorderDropRef.current = tgt ? { dropIndex: tgt.index, dropSide: tgt.side } : null;
@@ -803,28 +820,27 @@ export function CanvasGrid({
         const existingTarget = getDragState().dropTarget;
         if (rd && !existingTarget) {
           const curItems = itemsRef.current;
-          const draggedSet = new Set(getDragState().hashes);
+          const draggedItemIds = parseItemIdDragKeys(getDragState().hashes);
           const targetIdx = rd.dropSide === 'right' ? rd.dropIndex + 1 : rd.dropIndex;
           let offset = 0;
           for (let i = 0; i < targetIdx && i < curItems.length; i++) {
-            if (draggedSet.has(curItems[i].entity_hash)) offset++;
+            if (draggedItemIds.has(curItems[i].item_id)) offset++;
           }
           const insertAt = targetIdx - offset;
-          const dragged = curItems.filter((it) => draggedSet.has(it.entity_hash));
-          const remaining = curItems.filter((it) => !draggedSet.has(it.entity_hash));
+          const dragged = curItems.filter((it) => draggedItemIds.has(it.item_id));
+          const remaining = curItems.filter((it) => !draggedItemIds.has(it.item_id));
           const reordered = [...remaining.slice(0, insertAt), ...dragged, ...remaining.slice(insertAt)];
-          const orderedEntityIds: [number, number][] = reordered.map((it, i) => [it.entity_id, i]);
-          const orderedHashes = reordered.map((it) => it.entity_hash);
-          if (orderedEntityIds.length > 0) {
-            setDropTarget({ kind: 'reorder', orderedEntityIds, orderedHashes });
+          const orderedItemIds = reordered.map((item) => item.item_id);
+          if (orderedItemIds.length > 0) {
+            setDropTarget({ kind: 'reorder', orderedItemIds });
           }
         }
         reorderDropRef.current = null;
-        // Preserve selection: re-select the dragged hashes after drop
-        const draggedHashes = new Set(getDragState().hashes);
+        // Preserve selection: re-select the dragged item IDs after drop.
+        const draggedItemIds = parseItemIdDragKeys(getDragState().hashes);
         endDrag();
         dragJustEndedRef.current = true; // suppress the click that follows mouseup
-        onSelectionChangeRef.current?.(draggedHashes);
+        onSelectionChangeRef.current?.(draggedItemIds);
         markDirtyRef.current('overlay');
       }
       setDragGhost(null);
@@ -876,7 +892,7 @@ export function CanvasGrid({
     // selection-free scrolling). The !overlayBlankRef term guarantees one
     // clearing redraw after content disappears (e.g. hover button above).
     const overlayNeedsRedraw =
-      selectedHashesRef.current.size > 0 ||
+      selectedItemIdsRef.current.size > 0 ||
       reorderDropRef.current != null ||
       !overlayBlankRef.current;
     markDirty(overlayNeedsRedraw ? 'both' : 'base');
@@ -989,7 +1005,7 @@ export function CanvasGrid({
     // Hover preview: triggered when cursor is over the zoom button area
     if (idx != null && isZoomButtonHit(e.clientX, e.clientY, idx)) {
       const item = items[idx];
-      const isPreviewable = item && !item.mime_type.startsWith('video/');
+      const isPreviewable = item && !item.display_mime_type.startsWith('video/');
 
       // Cancel any pending hide
       if (hoverHideTimerRef.current) {
@@ -1003,7 +1019,9 @@ export function CanvasGrid({
           hoverTimerRef.current = null;
           if (item) {
             setHoverPreview((prev) =>
-              prev?.hash === item.entity_hash ? prev : { hash: item.entity_hash, mime: item.mime_type },
+              prev?.fileHash === item.display_file_hash
+                ? prev
+                : { fileHash: item.display_file_hash, mime: item.display_mime_type },
             );
           }
         }, HOVER_PREVIEW_DELAY_MS);
@@ -1057,31 +1075,9 @@ export function CanvasGrid({
     }
   }, [items, layout.positions, onTileContextMenu, onEmptyContextMenu, textHeight, headerHeight]);
 
-  // ── Folder tile marquee hit-testing ──
-  const hitTestFolderTiles = useCallback((left: number, top: number, width: number, height: number, hitSet: Set<string>) => {
-    const header = headerRef.current;
-    if (!header) return;
-    const tiles = header.querySelectorAll<HTMLElement>('[data-folder-hash]');
-    const container = containerRef.current;
-    if (!container) return;
-    for (const tile of tiles) {
-      const hash = tile.dataset.folderHash;
-      if (!hash) continue;
-      // Tile offset in scroll-space → convert to content-space by subtracting headerHeight
-      const tileTop = tile.offsetTop - headerHeight;
-      const tileLeft = tile.offsetLeft;
-      const tileW = tile.offsetWidth;
-      const tileH = tile.offsetHeight;
-      if (tileLeft + tileW > left && tileLeft < left + width &&
-          tileTop + tileH > top && tileTop < top + height) {
-        hitSet.add(hash);
-      }
-    }
-  }, [headerHeight]);
-
-  // Marquee rect → selected hashes (canvas tiles via spatial index + folder
-  // DOM tiles). Reads refs so the auto-scroll RAF tick never goes stale.
-  const collectMarqueeHits = useCallback((left: number, top: number, width: number, height: number): Set<string> => {
+  // Marquee rect → selected item IDs. Folder tiles own their separate
+  // navigation selection and are intentionally not mixed into this set.
+  const collectMarqueeHits = useCallback((left: number, top: number, width: number, height: number): Set<number> => {
     const hits = new Set(marqueeBaseSelectionRef.current);
     const positions = layoutPosRef.current;
     const curItems = itemsRef.current;
@@ -1096,12 +1092,11 @@ export function CanvasGrid({
       const imgH = pos.h - th;
       if (pos.x + pos.w > left && pos.x < left + width &&
           pos.y + imgH > top && pos.y < top + height) {
-        hits.add(curItems[i].entity_hash);
+        hits.add(curItems[i].item_id);
       }
     }
-    hitTestFolderTiles(left, top, width, height, hits);
     return hits;
-  }, [hitTestFolderTiles]);
+  }, []);
 
   // ── Marquee drag handlers ──
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
@@ -1125,7 +1120,7 @@ export function CanvasGrid({
     const mZoomY = mRect.height / (container.offsetHeight || 1);
     marqueeRef.current = { startX: x, startY: y, active: true, shiftKey: e.shiftKey, lastClientX: x, lastClientY: (e.clientY - mRect.top) / mZoomY };
     marqueeBaseSelectionRef.current = e.shiftKey || e.metaKey || e.ctrlKey
-      ? new Set(selectedEntityHashes)
+      ? new Set(selectedItemIds)
       : new Set();
     marqueeRectRef.current = null;
     autoScrollSpeedRef.current = 0;
@@ -1157,7 +1152,7 @@ export function CanvasGrid({
       };
       autoScrollRef.current = requestAnimationFrame(tick);
     }
-  }, [layout.positions, textHeight, selectedEntityHashes, headerHeight, collectMarqueeHits, markDirty]);
+  }, [layout.positions, textHeight, selectedItemIds, headerHeight, collectMarqueeHits, markDirty]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     // Check for tile drag initiation (5px threshold)
@@ -1168,17 +1163,16 @@ export function CanvasGrid({
         const tileIdx = tileDragRef.current.tileIdx;
         const item = items[tileIdx];
         if (item) {
-          const hash = item.entity_hash;
-          const currentSelection = selectedHashesRef.current;
-          const hashes = currentSelection.has(hash)
+          const itemId = item.item_id;
+          const currentSelection = selectedItemIdsRef.current;
+          const itemIds = currentSelection.has(itemId)
             ? [...currentSelection]
-            : [hash];
-          const thumbHashes = hashes.slice(0, 3).map((h) => {
-            const it = items.find((i) => i.entity_hash === h);
-            return it?.entity_hash ?? h;
+            : [itemId];
+          const thumbnailHashes = itemIds.slice(0, 3).map((selectedItemId) => {
+            return items.find((candidate) => candidate.item_id === selectedItemId)?.display_file_hash ?? '';
           });
-          startDrag(hashes, e.clientX, e.clientY, dragSourceScope);
-          setDragGhost({ x: e.clientX, y: e.clientY, count: hashes.length, thumbnailHashes: thumbHashes });
+          startDrag(itemIds.map(itemIdDragKey), e.clientX, e.clientY, dragSourceScope);
+          setDragGhost({ x: e.clientX, y: e.clientY, count: itemIds.length, thumbnailHashes });
           reorderDropRef.current = null;
           tileDragRef.current = null;
         }
@@ -1352,7 +1346,7 @@ export function CanvasGrid({
           </div>
         </div>
       </div>
-      {hoverPreview && <HoverPreviewPortal hash={hoverPreview.hash} mime={hoverPreview.mime} />}
+      {hoverPreview && <HoverPreviewPortal fileHash={hoverPreview.fileHash} mime={hoverPreview.mime} />}
       {dragGhost && (
         <DragGhost
           x={dragGhost.x}

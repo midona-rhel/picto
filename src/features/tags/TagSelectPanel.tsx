@@ -13,13 +13,14 @@ import { IconSearch, IconCheck, IconLayoutSidebar } from '@tabler/icons-react';
 import { OverlayShell } from '../../shared/ui/OverlayShell';
 import { tagSelectPortalAtom } from '../../state/portals';
 import { selectionTargetAtom } from '../../state/selection';
-import { displayedInspectorEntityDataAtom } from '../../state/inspector';
+import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
 import * as entityMutations from '../../controllers/entityMutations';
 import { tagsController } from '../../controllers/tagsController';
 import type { CanonicalTagRecord, CanonicalNamespaceSummary } from '../../shared/types/canonical';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import btnStyles from '../../shared/styles/actionButton.module.css';
 import styles from './TagSelectPanel.module.css';
+import { commonItemTags } from '../../shared/lib/itemDetails';
 
 // Namespace → RGB color (same as TagChip)
 const NS_COLORS: Record<string, [number, number, number]> = {
@@ -43,11 +44,21 @@ const NS_ORDER: Record<string, number> = {
 };
 function nsOrder(ns: string): number { return NS_ORDER[ns.toLowerCase()] ?? 9; }
 
+function tagRecord(name: string): CanonicalTagRecord {
+  const separator = name.indexOf(':');
+  return {
+    tag_id: 0,
+    namespace: separator < 0 ? '' : name.slice(0, separator),
+    subtag: separator < 0 ? name : name.slice(separator + 1),
+    file_count: 0,
+  };
+}
+
 export function TagSelectPanel() {
   const portalState = useAtomValue(tagSelectPortalAtom);
   const setPortalState = useSetAtom(tagSelectPortalAtom);
   const target = useAtomValue(selectionTargetAtom);
-  const entityData = useAtomValue(displayedInspectorEntityDataAtom);
+  const entityData = useAtomValue(displayedInspectorItemDetailsAtom);
   const open = portalState.open;
   const anchorPosition = portalState.anchor ?? null;
   const closePortal = useCallback(() => setPortalState({ open: false }), [setPortalState]);
@@ -70,11 +81,7 @@ export function TagSelectPanel() {
 
   // Tags already on the selected entity (for "Selected" sidebar mode)
   const entityTagKeys = useMemo(() => {
-    if (!entityData?.tags) return new Set<string>();
-    return new Set(entityData.tags.map((t) => {
-      // Use the backend's namespace field — don't parse colons
-      return t.namespace ? `${t.namespace}:${t.subtag}` : t.subtag;
-    }));
+    return commonItemTags(entityData);
   }, [entityData]);
 
   // Load initial tags + namespaces
@@ -149,14 +156,7 @@ export function TagSelectPanel() {
   // Display tags — "selected" mode shows entity's tags directly (not from paginated search)
   const displayTags = useMemo(() => {
     if (sidebarMode === 'selected') {
-      if (!entityData?.tags) return [];
-      // Convert CanonicalTagInfo[] to CanonicalTagRecord-like objects
-      return entityData.tags.map((t) => ({
-        tag_id: t.tag_id,
-        namespace: t.namespace,
-        subtag: t.subtag,
-        file_count: 0,
-      } as CanonicalTagRecord)).sort((a, b) => {
+      return (entityData?.aggregate_tags ?? []).map(tagRecord).sort((a, b) => {
         const nsA = (a.namespace ?? '').toLowerCase();
         const nsB = (b.namespace ?? '').toLowerCase();
         if (nsA !== nsB) return nsA.localeCompare(nsB);

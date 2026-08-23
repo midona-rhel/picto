@@ -166,7 +166,7 @@ export function createMediaProtocolService({
     }
     const task = (async () => {
       try {
-        await invoke('ensure_thumbnail', { hash });
+        await invoke('media.ensure_thumbnail', { file_hash: hash });
       } catch {}
     })().finally(() => {
       thumbEnsureInFlight.delete(hash);

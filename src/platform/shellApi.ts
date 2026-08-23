@@ -1,4 +1,6 @@
 import { invoke } from './ipc';
+import type { ResolvedFilePath } from '../shared/types/generated/application/ResolvedFilePath';
+import type { ThumbnailQueueResult } from '../shared/types/generated/application/ThumbnailQueueResult';
 
 export function openExternalUrl(url: string): Promise<void> {
   return invoke<void>('open_external_url', { url });
@@ -8,8 +10,12 @@ export function openSettingsWindow(): Promise<void> {
   return invoke<void>('open_settings_window');
 }
 
-export function resolveFilePath(hash: string): Promise<string | null> {
-  return invoke<string | null>('resolve_file_path', { hash });
+export async function resolveFilePath(fileHash: string): Promise<string> {
+  const resolved = await invoke<ResolvedFilePath[]>('media.resolve_paths', {
+    file_hashes: [fileHash],
+  });
+  if (resolved.length !== 1) throw new Error(`Physical file not found: ${fileHash}`);
+  return resolved[0].path;
 }
 
 export function openDetailWindow(input: {
@@ -36,6 +42,8 @@ export function clipboardCopyFile(path: string): void {
   (window as any).picto?.clipboard?.copyFile(path);
 }
 
-export function regenerateThumbnailsBatch(hashes: string[]): Promise<{ total: number; regenerated: number; errors: number }> {
-  return invoke('regenerate_thumbnails_batch', { hashes } as unknown as Record<string, unknown>);
+export function regenerateThumbnailsBatch(fileHashes: string[]): Promise<ThumbnailQueueResult> {
+  return invoke<ThumbnailQueueResult>('media.regenerate_thumbnails', {
+    file_hashes: fileHashes,
+  });
 }

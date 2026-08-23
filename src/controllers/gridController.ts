@@ -6,10 +6,10 @@
 
 import { getDefaultStore } from 'jotai';
 import {
-  queryEntityView,
-  reconcileEntityView,
+  queryItems,
 } from '../platform/entityApi';
-import type { BaseScope, EntityViewQuery } from '../shared/types/canonical';
+import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
+import type { ItemScope } from '../shared/types/generated/application/ItemScope';
 import {
   getViewPrefs,
   setViewPrefs,
@@ -32,7 +32,7 @@ import { clearSelectionAtom } from '../state/selection';
 const store = getDefaultStore();
 
 let gridVersion = 0;
-let paginationInFlight: string | null = null;
+let paginationInFlight: number | null = null;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const SEARCH_DEBOUNCE_MS = 300;
 
@@ -45,22 +45,25 @@ let viewPrefsSaveTimer: ReturnType<typeof setTimeout> | null = null;
 const VIEW_PREFS_SAVE_DEBOUNCE_MS = 500;
 let currentScopeKey = '';
 
-function scopeToKey(scope: BaseScope): string {
+function scopeToKey(scope: ItemScope): string {
   switch (scope.kind) {
-    case 'system': return `system:${scope.key === 'all' ? 'active' : scope.key}`;
-    case 'folder': return scope.id != null ? `folder:${scope.id}` : '';
-    case 'smart_folder': return scope.id != null ? `smart:${scope.id}` : '';
-    default: return '';
+    case 'all': return 'system:active';
+    case 'inbox': return 'system:inbox';
+    case 'trash': return 'system:trash';
+    case 'recently_viewed': return 'system:recent_viewed';
+    case 'untagged': return 'system:untagged';
+    case 'uncategorized': return 'system:uncategorized';
+    case 'folder': return `folder:${scope.folder_id}`;
+    case 'smart_folder': return `smart:${scope.smart_folder_id}`;
   }
 }
 
-function currentQuery(limit: number): EntityViewQuery {
-  const q = store.get(currentGridQueryAtom);
-  return { ...q, page: { limit } };
+function currentQuery(): ItemQuery {
+  return store.get(currentGridQueryAtom);
 }
 
 export const gridController = {
-  async navigateTo(scope: BaseScope) {
+  async navigateTo(scope: ItemScope) {
     store.set(gridScopeAtom, scope);
     store.set(gridSearchTextAtom, '');
     store.set(clearSelectionAtom);
@@ -80,8 +83,8 @@ export const gridController = {
     }
     try { globals = await getViewPrefs(''); } catch { /* no global prefs */ }
     const p = (field: keyof ViewPrefsDto) => prefs?.[field] ?? globals?.[field] ?? null;
-    store.set(gridSortFieldAtom, (p('sort_field') as SortField) || 'date_added');
-    store.set(gridSortDirectionAtom, (p('sort_order') as SortDirection) || 'desc');
+    store.set(gridSortFieldAtom, (p('sort_field') as SortField) || 'imported_at');
+    store.set(gridSortDirectionAtom, (p('sort_order') as SortDirection) || 'descending');
     store.set(gridViewModeAtom, (p('view_mode') as GridViewMode) || 'waterfall');
     store.set(gridTargetSizeAtom, (p('target_size') as number) ?? 220);
     store.set(gridShowNameAtom, (p('show_name') as boolean) ?? true);
@@ -144,11 +147,12 @@ export const gridController = {
       // Don't clear totalSizeBytes — keep previous value visible until new query returns
     }
     try {
-      const result = await queryEntityView(currentQuery(PREFETCH_BATCH_SIZE));
+      const result = await queryItems(currentQuery(), { offset: 0, limit: PREFETCH_BATCH_SIZE });
       if (v !== gridVersion) return;
       store.set(gridItemsAtom, result.items);
-      store.set(gridCursorAtom, result.next_cursor);
-      store.set(gridTotalCountAtom, result.total_count);
+      const nextOffset = result.items.length < result.visible_item_count ? result.items.length : null;
+      store.set(gridCursorAtom, nextOffset);
+      store.set(gridTotalCountAtom, result.visible_item_count);
       store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
       // Kick off background prefetch to fill the buffer
       void this.prefetchToMinimum();
@@ -162,20 +166,19 @@ export const gridController = {
 
   async loadNextPage() {
     const cursor = store.get(gridCursorAtom);
-    if (!cursor) return;
+    if (cursor == null) return;
     if (paginationInFlight === cursor) return;
     paginationInFlight = cursor;
     const v = gridVersion;
     store.set(gridLoadingAtom, true);
     try {
-      const query = currentQuery(PREFETCH_BATCH_SIZE);
-      query.page = { limit: PREFETCH_BATCH_SIZE, cursor };
-      const result = await queryEntityView(query);
+      const result = await queryItems(currentQuery(), { offset: cursor, limit: PREFETCH_BATCH_SIZE });
       if (v !== gridVersion || paginationInFlight !== cursor) return;
       paginationInFlight = null;
       store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
-      store.set(gridCursorAtom, result.next_cursor);
-      store.set(gridTotalCountAtom, result.total_count);
+      const loaded = store.get(gridItemsAtom).length;
+      store.set(gridCursorAtom, loaded < result.visible_item_count ? loaded : null);
+      store.set(gridTotalCountAtom, result.visible_item_count);
       store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
       // After each scroll-triggered fetch, check if we need more
       void this.prefetchToMinimum();
@@ -197,7 +200,7 @@ export const gridController = {
     const v = gridVersion;
     while (v === gridVersion) {
       const cursor = store.get(gridCursorAtom);
-      if (!cursor) break; // no more pages
+      if (cursor == null) break; // no more pages
       const loaded = store.get(gridItemsAtom).length;
       const total = store.get(gridTotalCountAtom) ?? loaded;
       const remaining = total - loaded;
@@ -209,14 +212,13 @@ export const gridController = {
       if (paginationInFlight === cursor) break; // another fetch is handling this cursor
       paginationInFlight = cursor;
       try {
-        const query = currentQuery(PREFETCH_BATCH_SIZE);
-        query.page = { limit: PREFETCH_BATCH_SIZE, cursor };
-        const result = await queryEntityView(query);
+        const result = await queryItems(currentQuery(), { offset: cursor, limit: PREFETCH_BATCH_SIZE });
         if (v !== gridVersion || paginationInFlight !== cursor) return;
         paginationInFlight = null;
         store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
-        store.set(gridCursorAtom, result.next_cursor);
-        store.set(gridTotalCountAtom, result.total_count);
+        const nextLoaded = store.get(gridItemsAtom).length;
+        store.set(gridCursorAtom, nextLoaded < result.visible_item_count ? nextLoaded : null);
+        store.set(gridTotalCountAtom, result.visible_item_count);
         store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
       } catch {
         paginationInFlight = null;
@@ -226,10 +228,10 @@ export const gridController = {
   },
 
   /** Remove specific items from the grid (trash/delete). */
-  removeItems(entityHashes: string[]) {
+  removeItems(itemIds: number[]) {
     const currentItems = store.get(gridItemsAtom);
-    const removeSet = new Set(entityHashes);
-    const filtered = currentItems.filter((i) => !removeSet.has(i.entity_hash));
+    const removeSet = new Set(itemIds);
+    const filtered = currentItems.filter((item) => !removeSet.has(item.item_id));
     const removedCount = currentItems.length - filtered.length;
     if (removedCount === 0) return;
     store.set(gridItemsAtom, filtered);
@@ -237,53 +239,11 @@ export const gridController = {
     if (prevTotal != null) store.set(gridTotalCountAtom, Math.max(0, prevTotal - removedCount));
   },
 
-  async reconcile(metadataOnly: boolean): Promise<boolean> {
-    const items = store.get(gridItemsAtom);
-    if (items.length === 0) {
-      await this.loadFirstPage({ preserveItems: false });
-      return true;
-    }
-
-    const v = ++gridVersion;
-    const query = currentQuery(items.length);
-    const visibleHashes = items.map((i) => i.entity_hash);
-    try {
-      const result = await reconcileEntityView(query, visibleHashes, metadataOnly);
-      if (v !== gridVersion) return false;
-
-      switch (result.kind) {
-        case 'no_change':
-          return false;
-        case 'patch_rows':
-          if (result.items) {
-            const currentItems = store.get(gridItemsAtom);
-            const updated = new Map(result.items.map((i) => [i.entity_hash, i]));
-            store.set(gridItemsAtom, currentItems.map((item) => updated.get(item.entity_hash) ?? item));
-          }
-          return false;
-        case 'replace_window':
-          if (result.page) {
-            store.set(gridItemsAtom, result.page.items);
-            store.set(gridCursorAtom, result.page.next_cursor);
-            store.set(gridTotalCountAtom, result.page.total_count);
-            store.set(gridTotalSizeBytesAtom, result.page.total_size_bytes);
-          }
-          return false;
-        case 'full_refresh_required':
-          await this.loadFirstPage({ preserveItems: true });
-          return true;
-      }
-    } catch {
-      if (v !== gridVersion) return false;
-      await this.loadFirstPage({ preserveItems: true });
-      return true;
-    }
-  },
-
   async loadSubfolderPreview(folderId: number, limit = 4) {
-    return queryEntityView({
-      base_scope: { kind: 'folder', id: folderId },
-      page: { limit },
-    });
+    return queryItems({
+      scope: { kind: 'folder', folder_id: folderId },
+      filters: { include_tags: [], exclude_tags: [], minimum_rating: null, mime_prefix: null, text: null },
+      sort: { field: 'folder_order', direction: 'ascending', random_seed: null },
+    }, { offset: 0, limit });
   },
 };

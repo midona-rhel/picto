@@ -145,6 +145,11 @@ pub fn dispatch(
             publish(application, application.record_recent_view(input.item_id)?)
         }
 
+        "items.rename" => {
+            let input: ItemNameInput = parse(args_json)?;
+            publish(application, application.rename_item(input.item_id, &input.name)?)
+        }
+
         "items.set_lifecycle" => {
             let input: LifecycleInput = parse(args_json)?;
             publish(
@@ -670,6 +675,13 @@ pub struct QueryItemsInput {
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ItemInput {
     item_id: ItemId,
+}
+
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ItemNameInput {
+    item_id: ItemId,
+    name: String,
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]

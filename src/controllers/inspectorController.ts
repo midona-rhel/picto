@@ -7,9 +7,10 @@
  */
 
 import { getDefaultStore } from 'jotai';
-import { getEntityDetails } from '../platform/entityApi';
+import { invoke } from '../platform/ipc';
+import type { ItemDetails } from '../shared/types/generated/application/ItemDetails';
 import {
-  displayedInspectorEntityDataAtom,
+  displayedInspectorItemDetailsAtom,
   displayedInspectorTargetAtom,
   inspectorErrorAtom,
   inspectorLoadingAtom,
@@ -29,21 +30,22 @@ function preloadImage(src: string): Promise<void> {
   });
 }
 
-export async function loadInspectorData(entityHash: string | null) {
-  if (!entityHash) return;
+export async function loadInspectorData(itemId: number | null) {
+  if (itemId == null) return;
 
   const v = ++loadVersion;
   // Don't set loading or clear data — keep showing the current entity until new data arrives.
   // This prevents the inspector from flashing empty/partial state during navigation.
 
   try {
-    const result = await getEntityDetails(entityHash);
+    const result = await invoke<ItemDetails>('items.details', { item_id: itemId });
     if (v !== loadVersion || !result) return;
-    await preloadImage(`media://localhost/thumb/${result.entity_hash}.jpg`);
+    const displayHash = result.media[0]?.file_hash;
+    if (displayHash) await preloadImage(`media://localhost/thumb/${displayHash}.jpg`);
     if (v !== loadVersion) return;
     // Atomic swap — old data visible until this point
-    store.set(displayedInspectorEntityDataAtom, result);
-    store.set(displayedInspectorTargetAtom, { kind: 'entity', entityHash: result.entity_hash });
+    store.set(displayedInspectorItemDetailsAtom, result);
+    store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: result.item_id });
     store.set(inspectorLoadingAtom, false);
     store.set(inspectorErrorAtom, null);
   } catch (err) {

@@ -31,8 +31,8 @@ export function useGridArrowNav(opts: {
   items: CanonicalEntityGridItem[];
   layoutRef: RefObject<LayoutResult | null>;
   containerRef: RefObject<HTMLDivElement | null>;
-  selectedHashes: Set<string>;
-  setSelectedHashes: (update: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
+  selectedItemIds: Set<number>;
+  setSelectedItemIds: (update: Set<number> | ((prev: Set<number>) => Set<number>)) => void;
   lastClickedIndexRef: MutableRefObject<number | null>;
   viewerOpen: boolean;
   containerWidth: number;
@@ -43,7 +43,7 @@ export function useGridArrowNav(opts: {
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      const { items, layoutRef, containerRef, selectedHashes, setSelectedHashes, lastClickedIndexRef, viewerOpen, containerWidth, targetSize } = optsRef.current;
+      const { items, layoutRef, containerRef, selectedItemIds, setSelectedItemIds, lastClickedIndexRef, viewerOpen, containerWidth, targetSize } = optsRef.current;
 
       if (viewerOpen) return;
       if (items.length === 0) return;
@@ -72,7 +72,7 @@ export function useGridArrowNav(opts: {
       let current = lastClickedIndexRef.current;
       if (current == null || current < 0 || current >= items.length) {
         for (let i = 0; i < items.length; i++) {
-          if (selectedHashes.has(items[i].entity_hash)) { current = i; break; }
+          if (selectedItemIds.has(items[i].item_id)) { current = i; break; }
         }
         if (current == null) current = 0;
       }
@@ -100,15 +100,15 @@ export function useGridArrowNav(opts: {
         // Range select from anchor to target
         const anchor = lastClickedIndexRef.current ?? current;
         const [lo, hi] = [Math.min(anchor, target), Math.max(anchor, target)];
-        const next = new Set<string>();
+        const next = new Set<number>();
         for (let i = lo; i <= hi; i++) {
-          if (items[i]) next.add(items[i].entity_hash);
+          if (items[i]) next.add(items[i].item_id);
         }
-        setSelectedHashes(next);
+        setSelectedItemIds(next);
         // Don't update lastClickedIndexRef — keep anchor stable for shift ranges
       } else {
-        const hash = items[target]?.entity_hash;
-        if (hash) setSelectedHashes(new Set([hash]));
+        const itemId = items[target]?.item_id;
+        if (itemId != null) setSelectedItemIds(new Set([itemId]));
         lastClickedIndexRef.current = target;
       }
 

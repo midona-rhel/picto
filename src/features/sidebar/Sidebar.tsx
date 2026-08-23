@@ -44,6 +44,8 @@ import { DynamicIcon } from '../../shared/ui/DynamicIcon';
 import { useInlineRename } from '../../shared/hooks/useInlineRename';
 import { usePersistedSet } from '../../shared/hooks/usePersistedSet';
 import type { SidebarNodeDto, SmartFolderCommandPayload, SmartFolderPredicate } from '../../shared/types/canonical';
+import type { EntityTarget } from '../../shared/types/canonical';
+import type { ItemScope } from '../../shared/types/generated/application/ItemScope';
 import { filterSidebarTree } from './treeFilter';
 import styles from './Sidebar.module.css';
 
@@ -82,6 +84,24 @@ const LABEL_OVERRIDES: Record<string, string> = {
 };
 
 const EXPAND_FILTERED_TREE = new Set<string>();
+
+function queryTarget(scope: ItemScope): EntityTarget {
+  return {
+    kind: 'query',
+    query: {
+      scope,
+      filters: {
+        include_tags: [],
+        exclude_tags: [],
+        minimum_rating: null,
+        mime_prefix: null,
+        text: null,
+      },
+      sort: { field: 'imported_at', direction: 'descending', random_seed: null },
+    },
+    excluded_item_ids: [],
+  };
+}
 
 export function Sidebar() {
   const nodes = useAtomValue(sidebarNodesAtom);
@@ -548,7 +568,7 @@ export function Sidebar() {
       { label: 'Export...', icon: <IconUpload size={14} />, action: () => {
         store.set(exportModalAtom, {
           open: true, fileCount: node.count ?? 0,
-          target: { kind: 'query_results', query: { base_scope: { kind: 'folder', id: folderId } } },
+          target: queryTarget({ kind: 'folder', folder_id: folderId }),
         });
       } },
       { separator: true },
@@ -612,7 +632,7 @@ export function Sidebar() {
         if (sfIdNum != null) {
           store.set(exportModalAtom, {
             open: true, fileCount: node.count ?? 0,
-            target: { kind: 'query_results', query: { base_scope: { kind: 'smart_folder', id: sfIdNum } } },
+            target: queryTarget({ kind: 'smart_folder', smart_folder_id: sfIdNum }),
           });
         }
       } },
@@ -696,7 +716,7 @@ export function Sidebar() {
           if (fid != null) {
             store.set(exportModalAtom, {
               open: true, fileCount: 0,
-              target: { kind: 'query_results', query: { base_scope: { kind: 'folder', id: fid } } },
+              target: queryTarget({ kind: 'folder', folder_id: fid }),
             });
           }
         } else {
@@ -704,7 +724,7 @@ export function Sidebar() {
           if (sfid != null) {
             store.set(exportModalAtom, {
               open: true, fileCount: 0,
-              target: { kind: 'query_results', query: { base_scope: { kind: 'smart_folder', id: sfid } } },
+              target: queryTarget({ kind: 'smart_folder', smart_folder_id: sfid }),
             });
           }
         }

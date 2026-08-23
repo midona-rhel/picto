@@ -345,10 +345,11 @@ export function registerIpcHandlers({
     if (!hashes?.length) return;
 
 
-    // Batch-resolve all hashes to filesystem paths in one round-trip
+    // Drag payloads carry physical file hashes, never logical item identities.
     let filePaths;
     try {
-      filePaths = await invoke('resolve_file_paths_batch', { target: { kind: 'entity_hashes', entity_hashes: hashes } });
+      const resolved = await invoke('media.resolve_paths', { file_hashes: hashes });
+      filePaths = resolved.map((entry) => entry.path);
     } catch (err) {
       console.error('[drag:start] resolve failed:', err);
       filePaths = [];

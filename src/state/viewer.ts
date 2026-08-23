@@ -2,8 +2,8 @@
  * Viewer state — inline media view overlay.
  *
  * The viewer reads grid items from gridItemsAtom. Opening captures the
- * current entity hash + index. Navigation updates the session.
- * Closing restores grid scroll to the exit hash.
+ * current item ID + index. Navigation updates the session.
+ * Closing restores grid scroll to the exit item.
  */
 
 import { atom } from 'jotai';
@@ -12,7 +12,7 @@ import { gridItemsAtom } from './grid';
 
 export interface ViewerSession {
   currentIndex: number;
-  currentHash: string;
+  currentItemId: number;
 }
 
 /** null = viewer closed. */
@@ -47,7 +47,7 @@ export const viewerDisplayStateAtom = atom<ViewerDisplayState | null>(null);
 export const viewerDisplayControlsAtom = atom<ViewerDisplayControls | null>(null);
 
 /**
- * The session is anchored by entity hash — the stored index is only a hint.
+ * The session is anchored by item ID — the stored index is only a hint.
  * Items can be inserted ahead of the current position while a run ingests;
  * resolving by index alone would silently shift which image is shown.
  */
@@ -55,11 +55,11 @@ export function resolveViewerIndex(
   session: ViewerSession,
   items: CanonicalEntityGridItem[],
 ): number {
-  if (items[session.currentIndex]?.entity_hash === session.currentHash) {
+  if (items[session.currentIndex]?.item_id === session.currentItemId) {
     return session.currentIndex;
   }
-  const byHash = items.findIndex((item) => item.entity_hash === session.currentHash);
-  if (byHash >= 0) return byHash;
+  const byId = items.findIndex((item) => item.item_id === session.currentItemId);
+  if (byId >= 0) return byId;
   // Current entity vanished (deleted/moved out of scope): stay near position.
   return Math.min(session.currentIndex, Math.max(items.length - 1, 0));
 }
@@ -71,17 +71,17 @@ export const viewerCurrentItemAtom = atom<CanonicalEntityGridItem | null>((get) 
   return items[resolveViewerIndex(session, items)] ?? null;
 });
 
-/** Create a session from items + target hash. */
+/** Create a session from items + target item ID. */
 export function createViewerSession(
   items: CanonicalEntityGridItem[],
-  hash: string,
+  itemId: number,
 ): ViewerSession | null {
-  const index = items.findIndex((item) => item.entity_hash === hash);
+  const index = items.findIndex((item) => item.item_id === itemId);
   if (index < 0) return null;
-  return { currentIndex: index, currentHash: hash };
+  return { currentIndex: index, currentItemId: itemId };
 }
 
-/** Navigate by delta from the hash-anchored position, clamped to bounds. */
+/** Navigate by delta from the ID-anchored position, clamped to bounds. */
 export function navigateViewerSession(
   session: ViewerSession,
   items: CanonicalEntityGridItem[],
@@ -89,5 +89,5 @@ export function navigateViewerSession(
 ): ViewerSession | null {
   const nextIndex = resolveViewerIndex(session, items) + delta;
   if (nextIndex < 0 || nextIndex >= items.length) return null;
-  return { currentIndex: nextIndex, currentHash: items[nextIndex].entity_hash };
+  return { currentIndex: nextIndex, currentItemId: items[nextIndex].item_id };
 }

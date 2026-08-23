@@ -8,14 +8,14 @@
 
 import { atom } from 'jotai';
 import type {
-  CanonicalEntityDetails,
   CanonicalEntityGridItem,
   SidebarNodeDto,
 } from '../shared/types/canonical';
+import type { ItemDetails } from '../shared/types/generated/application/ItemDetails';
 import { gridActiveAtom } from './grid';
 import { activeNodeIdAtom } from './navigation';
 import {
-  selectedEntityHashAtom,
+  selectedItemIdAtom,
   selectionCountAtom,
   selectedSubfolderNodeIdAtom,
   selectionModeAtom,
@@ -25,7 +25,7 @@ import { sidebarNodesAtom } from './sidebar';
 export type InspectorTarget =
   | { kind: 'none' }
   | { kind: 'scope'; nodeId: string }
-  | { kind: 'entity'; entityHash: string }
+  | { kind: 'item'; itemId: number }
   | { kind: 'multi'; count: number; selectionMode: 'explicit' | 'query_results' };
 
 export type DisplayedGridSnapshot = {
@@ -52,9 +52,9 @@ export const liveInspectorTargetAtom = atom<InspectorTarget>((get) => {
   if (selectedSubfolderNodeId) {
     return { kind: 'scope', nodeId: selectedSubfolderNodeId };
   }
-  const selectedHash = get(selectedEntityHashAtom);
-  if (selectedHash) {
-    return { kind: 'entity', entityHash: selectedHash };
+  const selectedItemId = get(selectedItemIdAtom);
+  if (selectedItemId != null) {
+    return { kind: 'item', itemId: selectedItemId };
   }
   const activeNodeId = get(activeNodeIdAtom);
   return activeNodeId ? { kind: 'scope', nodeId: activeNodeId } : { kind: 'none' };
@@ -86,7 +86,7 @@ export const subfolderPreviewAtom = atom<{
   totalCount: number | null;
   totalSizeBytes: number | null;
 } | null>(null);
-export const displayedInspectorEntityDataAtom = atom<CanonicalEntityDetails | null>(null);
+export const displayedInspectorItemDetailsAtom = atom<ItemDetails | null>(null);
 export const inspectorLoadingAtom = atom(false);
 export const inspectorErrorAtom = atom<string | null>(null);
 

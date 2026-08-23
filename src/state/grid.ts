@@ -3,7 +3,11 @@
  */
 
 import { atom } from 'jotai';
-import type { CanonicalEntityGridItem, BaseScope, EntityViewQuery } from '../shared/types/canonical';
+import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
+import type { ItemScope } from '../shared/types/generated/application/ItemScope';
+import type { ItemSortField } from '../shared/types/generated/application/ItemSortField';
+import type { ItemSummary } from '../shared/types/generated/application/ItemSummary';
+import type { SortDirection as BackendSortDirection } from '../shared/types/generated/application/SortDirection';
 import type { GridViewMode } from '../shared/types/grid';
 import { activeNodeIdAtom } from './navigation';
 import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
@@ -11,24 +15,31 @@ import { nodeIdToGridScope } from '../shared/lib/gridScope';
 
 // ── Query inputs ─────────────────────────────────────────────────
 
-export const gridScopeAtom = atom<BaseScope>({ kind: 'system', key: 'all' });
+export const gridScopeAtom = atom<ItemScope>({ kind: 'all' });
 export const activeGridScopeAtom = atom((get) => nodeIdToGridScope(get(activeNodeIdAtom)));
 
-export type SortField = 'date_added' | 'date_created' | 'date_modified' | 'rating' | 'name' | 'size_bytes' | 'duration';
-export type SortDirection = 'asc' | 'desc';
+export type SortField = ItemSortField;
+export type SortDirection = BackendSortDirection;
 
-export const gridSortFieldAtom = atom<SortField>('date_added');
-export const gridSortDirectionAtom = atom<SortDirection>('desc');
+export const gridSortFieldAtom = atom<SortField>('imported_at');
+export const gridSortDirectionAtom = atom<SortDirection>('descending');
 export const gridSearchTextAtom = atom<string>('');
 
-export const currentGridQueryAtom = atom<EntityViewQuery>((get) => {
+export const currentGridQueryAtom = atom<ItemQuery>((get) => {
   const searchText = get(gridSearchTextAtom).trim();
   return {
-    base_scope: get(gridScopeAtom),
-    filters: searchText ? { search_text: searchText } : undefined,
+    scope: get(gridScopeAtom),
+    filters: {
+      include_tags: [],
+      exclude_tags: [],
+      minimum_rating: null,
+      mime_prefix: null,
+      text: searchText || null,
+    },
     sort: {
       field: get(gridSortFieldAtom),
       direction: get(gridSortDirectionAtom),
+      random_seed: null,
     },
   };
 });
@@ -46,17 +57,17 @@ export const gridShowSubfoldersAtom = atom(true);
 
 // ── Results ──────────────────────────────────────────────────────
 
-export const gridItemsAtom = atom<CanonicalEntityGridItem[]>([]);
-export const gridCursorAtom = atom<string | null>(null);
+export const gridItemsAtom = atom<ItemSummary[]>([]);
+export const gridCursorAtom = atom<number | null>(null);
 export const gridTotalCountAtom = atom<number | null>(null);
 export const gridTotalSizeBytesAtom = atom<number | null>(null);
 export const gridLoadingAtom = atom(false);
 export const gridErrorAtom = atom<string | null>(null);
-export const gridVisibleEntityHashesAtom = atom((get) => get(gridItemsAtom).map((item) => item.entity_hash));
+export const gridVisibleItemIdsAtom = atom((get) => get(gridItemsAtom).map((item) => item.item_id));
 export const gridReconcileContextAtom = atom((get) => ({
   scope: get(gridScopeAtom),
   query: get(currentGridQueryAtom),
-  visibleEntityHashes: get(gridVisibleEntityHashesAtom),
+  visibleItemIds: get(gridVisibleItemIdsAtom),
 }));
 
 /** Whether the grid is the active surface. */
@@ -92,8 +103,8 @@ export const gridScopeLabelAtom = atom((get) => {
 
 export const gridChildFoldersAtom = atom((get) => {
   const scope = get(gridScopeAtom);
-  if (scope.kind !== 'folder' || scope.id == null) return [];
-  const parentId = `folder:${scope.id}`;
+  if (scope.kind !== 'folder') return [];
+  const parentId = `folder:${scope.folder_id}`;
   return get(folderNodesAtom)
     .filter((n) => n.parent_id === parentId)
     .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));

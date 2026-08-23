@@ -90,6 +90,8 @@ pub struct ItemPage {
     pub visible_item_count: i64,
     #[ts(type = "number")]
     pub visible_media_count: i64,
+    #[ts(type = "number")]
+    pub total_size_bytes: i64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -98,6 +100,7 @@ pub struct MediaDetails {
     pub media_item_id: ItemId,
     pub file_hash: FileHash,
     pub mime_type: String,
+    pub dominant_color_hex: Option<String>,
     #[ts(type = "number")]
     pub size_bytes: i64,
     #[ts(type = "number | null")]
@@ -137,17 +140,90 @@ pub struct ItemDetails {
     pub revision: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SelectionTagCount {
+    pub tag: String,
+    #[ts(type = "number")]
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SelectionFolderInfo {
+    #[ts(type = "number")]
+    pub folder_id: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SelectionRatingStats {
+    #[ts(type = "number | null")]
+    pub min: Option<i64>,
+    #[ts(type = "number | null")]
+    pub max: Option<i64>,
+    #[ts(type = "number | null")]
+    pub shared: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SelectionSummaryStats {
+    #[ts(type = "number | null")]
+    pub total_size_bytes: Option<i64>,
+    #[ts(type = "Record<string, number>")]
+    pub mime_counts: BTreeMap<String, i64>,
+    pub rating_stats: SelectionRatingStats,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SelectionSummary {
     #[ts(type = "number")]
-    pub visible_item_count: i64,
+    pub total_count: i64,
     #[ts(type = "number")]
-    pub visible_media_count: i64,
-    #[ts(type = "number")]
-    pub total_size_bytes: i64,
+    pub selected_count: i64,
+    pub sample_hashes: Vec<FileHash>,
+    pub shared_tags: Vec<SelectionTagCount>,
+    pub top_tags: Vec<SelectionTagCount>,
+    pub shared_folders: Vec<SelectionFolderInfo>,
+    pub stats: SelectionSummaryStats,
     #[ts(type = "number")]
     pub revision: u64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct RatingAccumulator {
+    min: Option<i64>,
+    max: Option<i64>,
+    shared: Option<i64>,
+    saw_unrated: bool,
+}
+
+impl RatingAccumulator {
+    fn add(&mut self, rating: Option<i64>) {
+        let Some(rating) = rating else {
+            self.saw_unrated = true;
+            self.shared = None;
+            return;
+        };
+        self.min = Some(self.min.map_or(rating, |value| value.min(rating)));
+        self.max = Some(self.max.map_or(rating, |value| value.max(rating)));
+        if !self.saw_unrated && self.shared.is_none() {
+            self.shared = Some(rating);
+        } else if self.shared != Some(rating) {
+            self.shared = None;
+        }
+    }
+
+    fn finish(self) -> SelectionRatingStats {
+        SelectionRatingStats {
+            min: self.min,
+            max: self.max,
+            shared: self.shared,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -199,16 +275,18 @@ pub fn details(store: &Store, item_id: ItemId) -> Result<ItemDetails, String> {
 pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<SelectionSummary, String> {
     store.read(|connection| {
         let item_ids = resolve_target_ids(connection, target)?;
-        let mut summary = SelectionSummary {
-            visible_item_count: item_ids.len() as i64,
-            revision: crate::store::schema::revision(connection)?,
-            ..SelectionSummary::default()
-        };
+        let selected_count = item_ids.len() as i64;
+        let mut mime_counts = BTreeMap::new();
+        let mut tag_root_counts = BTreeMap::<String, i64>::new();
+        let mut folder_root_counts = BTreeMap::<i64, (String, i64)>::new();
+        let mut total_size_bytes = 0_i64;
+        let mut ratings = RatingAccumulator::default();
+
         for chunk in item_ids.chunks(400) {
             let placeholders = std::iter::repeat_n("?", chunk.len())
                 .collect::<Vec<_>>()
                 .join(", ");
-            let sql = format!(
+            let root_media = format!(
                 "WITH root_media(root_item_id, media_item_id) AS (
                      SELECT lr.item_id, lr.item_id
                      FROM library_root lr JOIN media_asset ma ON ma.item_id = lr.item_id
@@ -217,24 +295,156 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
                      SELECT cm.collection_id, cm.media_item_id
                      FROM collection_member cm
                      WHERE cm.collection_id IN ({placeholders})
-                 )
-                 SELECT COUNT(*), COALESCE(SUM(mf.size_bytes), 0)
+                 )"
+            );
+            let mut root_values = Vec::with_capacity(chunk.len() * 2);
+            root_values.extend(chunk.iter().copied());
+            root_values.extend(chunk.iter().copied());
+
+            let media_sql = format!(
+                "{root_media}
+                 SELECT mf.mime_type, mf.size_bytes, ma.rating
                  FROM root_media rm
                  JOIN media_asset ma ON ma.item_id = rm.media_item_id
                  JOIN media_file mf ON mf.file_id = ma.file_id"
             );
-            let mut values = Vec::with_capacity(chunk.len() * 2);
-            values.extend(chunk.iter().copied());
-            values.extend(chunk.iter().copied());
-            let (media_count, bytes): (i64, i64) =
-                connection.query_row(&sql, rusqlite::params_from_iter(values), |row| {
-                    Ok((row.get(0)?, row.get(1)?))
-                })?;
-            summary.visible_media_count += media_count;
-            summary.total_size_bytes += bytes;
+            for row in connection.prepare(&media_sql)?.query_map(
+                rusqlite::params_from_iter(root_values.iter()),
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                    ))
+                },
+            )? {
+                let (mime_type, size_bytes, rating) = row?;
+                *mime_counts.entry(mime_type).or_insert(0) += 1;
+                total_size_bytes += size_bytes;
+                ratings.add(rating);
+            }
+
+            let tag_sql = format!(
+                "{root_media}
+                 SELECT DISTINCT rm.root_item_id,
+                    CASE WHEN t.namespace IN ('', 'general') THEN t.subtag
+                         ELSE t.namespace || ':' || t.subtag END
+                 FROM root_media rm
+                 JOIN media_tag mt ON mt.media_item_id = rm.media_item_id
+                 JOIN tag t ON t.tag_id = mt.tag_id
+                 ORDER BY rm.root_item_id, 2"
+            );
+            for row in connection
+                .prepare(&tag_sql)?
+                .query_map(rusqlite::params_from_iter(root_values.iter()), |row| {
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+                })?
+            {
+                let (_, tag) = row?;
+                *tag_root_counts.entry(tag).or_insert(0) += 1;
+            }
+
+            let folder_sql = format!(
+                "SELECT fi.item_id, f.folder_id, f.name
+                 FROM folder_item fi JOIN folder f ON f.folder_id = fi.folder_id
+                 WHERE fi.item_id IN ({placeholders})
+                 ORDER BY f.folder_id"
+            );
+            for row in connection.prepare(&folder_sql)?.query_map(
+                rusqlite::params_from_iter(chunk.iter()),
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                },
+            )? {
+                let (_, folder_id, name) = row?;
+                let entry = folder_root_counts.entry(folder_id).or_insert((name, 0));
+                entry.1 += 1;
+            }
         }
-        Ok(summary)
+
+        let mut sample_hashes = Vec::new();
+        for item_id in item_ids.iter().take(3) {
+            if let Some(hash) = selection_display_hash(connection, *item_id)? {
+                sample_hashes.push(FileHash(hash));
+            }
+        }
+
+        let shared_tags = tag_root_counts
+            .iter()
+            .filter(|(_, count)| **count == selected_count)
+            .map(|(tag, count)| SelectionTagCount {
+                tag: tag.clone(),
+                count: *count,
+            })
+            .collect::<Vec<_>>();
+        let mut top_tags = tag_root_counts
+            .iter()
+            .map(|(tag, count)| SelectionTagCount {
+                tag: tag.clone(),
+                count: *count,
+            })
+            .collect::<Vec<_>>();
+        top_tags.sort_by(|left, right| {
+            right
+                .count
+                .cmp(&left.count)
+                .then_with(|| left.tag.cmp(&right.tag))
+        });
+        top_tags.truncate(20);
+
+        let shared_folders = folder_root_counts
+            .iter()
+            .filter(|(_, (_, count))| *count == selected_count)
+            .map(|(folder_id, (name, _))| SelectionFolderInfo {
+                folder_id: *folder_id,
+                name: name.clone(),
+            })
+            .collect::<Vec<_>>();
+
+        Ok(SelectionSummary {
+            total_count: selected_count,
+            selected_count,
+            sample_hashes,
+            shared_tags,
+            top_tags,
+            shared_folders,
+            stats: SelectionSummaryStats {
+                total_size_bytes: Some(total_size_bytes),
+                mime_counts,
+                rating_stats: ratings.finish(),
+            },
+            revision: crate::store::schema::revision(connection)?,
+        })
     })
+}
+
+fn selection_display_hash(
+    connection: &Connection,
+    item_id: i64,
+) -> rusqlite::Result<Option<String>> {
+    connection
+        .query_row(
+            "SELECT mf.file_hash
+             FROM library_item li
+             LEFT JOIN media_asset direct ON direct.item_id = li.item_id
+             LEFT JOIN media_asset cover ON cover.item_id = li.cover_media_item_id
+             LEFT JOIN media_asset first_member ON first_member.item_id = (
+                 SELECT cm.media_item_id FROM collection_member cm
+                 WHERE cm.collection_id = li.item_id
+                 ORDER BY cm.position_rank, cm.media_item_id LIMIT 1
+             )
+             LEFT JOIN media_file mf ON mf.file_id = COALESCE(
+                 direct.file_id, cover.file_id, first_member.file_id
+             )
+             WHERE li.item_id = ?1",
+            [item_id],
+            |row| row.get(0),
+        )
+        .optional()
 }
 
 pub fn sidebar_counts(store: &Store) -> Result<SidebarCounts, String> {
@@ -365,7 +575,7 @@ fn details_connection(connection: &Connection, item_id: i64) -> rusqlite::Result
                  SELECT media_item_id, position_rank FROM collection_member
                  WHERE collection_id = ?1 AND ?2 = 'collection'
              )
-             SELECT ma.item_id, mf.file_hash, mf.mime_type, mf.size_bytes,
+             SELECT ma.item_id, mf.file_hash, mf.mime_type, mf.dominant_color_hex, mf.size_bytes,
                     mf.pixel_width, mf.pixel_height, mf.duration_ms, mf.frame_count,
                     mf.has_audio, ma.name, ma.notes, ma.rating, ma.source_urls_json,
                     ma.captured_at, ma.imported_at, rm.position
@@ -375,27 +585,30 @@ fn details_connection(connection: &Connection, item_id: i64) -> rusqlite::Result
              ORDER BY rm.position, ma.item_id",
         )?
         .query_map(params![item_id, kind_string(kind)], |row| {
-            let source_urls_json: Option<String> = row.get(12)?;
             Ok(MediaDetails {
                 media_item_id: ItemId(row.get(0)?),
                 file_hash: FileHash(row.get(1)?),
                 mime_type: row.get(2)?,
-                size_bytes: row.get(3)?,
-                pixel_width: row.get(4)?,
-                pixel_height: row.get(5)?,
-                duration_ms: row.get(6)?,
-                frame_count: row.get(7)?,
-                has_audio: row.get(8)?,
-                name: row.get(9)?,
-                notes: row.get(10)?,
-                rating: row.get(11)?,
-                source_urls: source_urls_json
-                    .as_deref()
-                    .and_then(|json| serde_json::from_str(json).ok())
-                    .unwrap_or_default(),
-                captured_at: row.get(13)?,
-                imported_at: row.get(14)?,
-                position: row.get(15)?,
+                dominant_color_hex: row.get(3)?,
+                size_bytes: row.get(4)?,
+                pixel_width: row.get(5)?,
+                pixel_height: row.get(6)?,
+                duration_ms: row.get(7)?,
+                frame_count: row.get(8)?,
+                has_audio: row.get(9)?,
+                name: row.get(10)?,
+                notes: row.get(11)?,
+                rating: row.get(12)?,
+                source_urls: {
+                    let source_urls_json: Option<String> = row.get(13)?;
+                    source_urls_json
+                        .as_deref()
+                        .and_then(|json| serde_json::from_str(json).ok())
+                        .unwrap_or_default()
+                },
+                captured_at: row.get(14)?,
+                imported_at: row.get(15)?,
+                position: row.get(16)?,
                 tags: Vec::new(),
             })
         })?
@@ -710,7 +923,8 @@ fn resolve_connection(
              SELECT
                  (SELECT revision FROM library_meta WHERE singleton = 1) AS revision,
                  COUNT(*) AS visible_item_count,
-                 COALESCE(SUM(collection_member_count), 0) AS visible_media_count
+                 COALESCE(SUM(collection_member_count), 0) AS visible_media_count,
+                 COALESCE(SUM(total_size_bytes), 0) AS total_size_bytes
              FROM filtered_roots
          ),
          paged AS (
@@ -736,6 +950,7 @@ fn resolve_connection(
              metrics.revision,
              metrics.visible_item_count,
              metrics.visible_media_count,
+             metrics.total_size_bytes,
              paged.item_id,
              paged.kind,
              paged.lifecycle,
@@ -768,7 +983,8 @@ fn resolve_connection(
         let revision: u64 = row.get(0)?;
         let visible_item_count: i64 = row.get(1)?;
         let visible_media_count: i64 = row.get(2)?;
-        let item_id: Option<i64> = row.get(3)?;
+        let total_size_bytes: i64 = row.get(3)?;
+        let item_id: Option<i64> = row.get(4)?;
         let items = if let Some(item_id) = item_id {
             vec![read_summary(row, item_id)?]
         } else {
@@ -783,6 +999,7 @@ fn resolve_connection(
                 revision,
                 visible_item_count,
                 visible_media_count,
+                total_size_bytes,
             });
         }
     }
@@ -792,28 +1009,29 @@ fn resolve_connection(
         revision: 0,
         visible_item_count: 0,
         visible_media_count: 0,
+        total_size_bytes: 0,
     }))
 }
 
 fn read_summary(row: &rusqlite::Row<'_>, item_id: i64) -> rusqlite::Result<ItemSummary> {
-    let kind = match row.get::<_, String>(4)?.as_str() {
+    let kind = match row.get::<_, String>(5)?.as_str() {
         "media" => ItemKind::Media,
         "collection" => ItemKind::Collection,
         value => {
             return Err(rusqlite::Error::InvalidColumnType(
-                4,
+                5,
                 value.into(),
                 rusqlite::types::Type::Text,
             ))
         }
     };
-    let lifecycle = match row.get::<_, String>(5)?.as_str() {
+    let lifecycle = match row.get::<_, String>(6)?.as_str() {
         "inbox" => Lifecycle::Inbox,
         "active" => Lifecycle::Active,
         "trash" => Lifecycle::Trash,
         value => {
             return Err(rusqlite::Error::InvalidColumnType(
-                5,
+                6,
                 value.into(),
                 rusqlite::types::Type::Text,
             ))
@@ -824,22 +1042,22 @@ fn read_summary(row: &rusqlite::Row<'_>, item_id: i64) -> rusqlite::Result<ItemS
         item_id: ItemId(item_id),
         kind,
         lifecycle,
-        label: row.get(6)?,
-        name: row.get(7)?,
-        display_media_item_id: ItemId(row.get(8)?),
-        display_file_hash: FileHash(row.get(9)?),
-        display_mime_type: row.get(10)?,
-        pixel_width: row.get(11)?,
-        pixel_height: row.get(12)?,
-        duration_ms: row.get(13)?,
-        frame_count: row.get(14)?,
-        has_audio: row.get(15)?,
-        dominant_color_hex: row.get(16)?,
-        size_bytes: row.get(17)?,
-        rating: row.get(18)?,
-        captured_at: row.get(19)?,
-        imported_at: row.get(20)?,
-        media_count: row.get(21)?,
+        label: row.get(7)?,
+        name: row.get(8)?,
+        display_media_item_id: ItemId(row.get(9)?),
+        display_file_hash: FileHash(row.get(10)?),
+        display_mime_type: row.get(11)?,
+        pixel_width: row.get(12)?,
+        pixel_height: row.get(13)?,
+        duration_ms: row.get(14)?,
+        frame_count: row.get(15)?,
+        has_audio: row.get(16)?,
+        dominant_color_hex: row.get(17)?,
+        size_bytes: row.get(18)?,
+        rating: row.get(19)?,
+        captured_at: row.get(20)?,
+        imported_at: row.get(21)?,
+        media_count: row.get(22)?,
     })
 }
 
@@ -1073,6 +1291,10 @@ mod tests {
                 tx.execute("INSERT INTO folder_item (folder_id, item_id, position_rank) VALUES (7, 10, 0), (7, 1, 1)", [])?;
                 tx.execute("INSERT INTO tag (tag_id, namespace, subtag) VALUES (1, 'general', 'member-tag')", [])?;
                 tx.execute("INSERT INTO media_tag (media_item_id, tag_id) VALUES (11, 1)", [])?;
+                tx.execute(
+                    "UPDATE media_file SET dominant_color_hex = '#123456' WHERE file_id = 11",
+                    [],
+                )?;
                 tx.execute("INSERT INTO media_view (item_id, viewed_at) VALUES (1, '2026-02-01')", [])?;
                 Ok(())
             })
@@ -1432,6 +1654,10 @@ mod tests {
             vec![ItemId(11), ItemId(12)]
         );
         assert_eq!(details.aggregate_tags, vec!["member-tag"]);
+        assert_eq!(
+            details.media[0].dominant_color_hex.as_deref(),
+            Some("#123456")
+        );
         assert_eq!(details.media[0].tags, vec!["member-tag"]);
         assert!(details.media[1].tags.is_empty());
     }
@@ -1439,16 +1665,31 @@ mod tests {
     #[test]
     fn selection_summary_uses_the_same_root_and_media_counts_as_grid() {
         let (_directory, store) = seed_store();
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO media_tag (media_item_id, tag_id) VALUES (1, 1)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
         let target = ItemTarget::Query {
             query: query_for(ItemScope::All),
             excluded_item_ids: Vec::new(),
         };
         let summary = selection_summary(&store, &target).unwrap();
 
-        assert_eq!(summary.visible_item_count, 2);
-        assert_eq!(summary.visible_media_count, 3);
-        assert_eq!(summary.total_size_bytes, 100);
-        assert_eq!(summary.revision, 1);
+        assert_eq!(summary.selected_count, 2);
+        assert_eq!(summary.stats.mime_counts["image/jpeg"], 2);
+        assert_eq!(summary.stats.mime_counts["video/mp4"], 1);
+        assert_eq!(summary.stats.total_size_bytes, Some(100));
+        assert_eq!(summary.shared_tags[0].tag, "member-tag");
+        assert_eq!(summary.shared_tags[0].count, 2);
+        assert_eq!(summary.stats.rating_stats.min, Some(2));
+        assert_eq!(summary.stats.rating_stats.max, Some(5));
+        assert_eq!(summary.shared_folders.len(), 1);
+        assert_eq!(summary.revision, 2);
     }
 
     #[test]

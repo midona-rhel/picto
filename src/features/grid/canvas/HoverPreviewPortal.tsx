@@ -15,12 +15,12 @@ const PREVIEW_INSET = 48;
 const MIN_WAIT_MS = 150;
 
 interface Props {
-  hash: string;
+  fileHash: string;
   mime: string;
 }
 
-export function HoverPreviewPortal({ hash, mime }: Props) {
-  const fullUrl = mediaFileUrl(hash, mime);
+export function HoverPreviewPortal({ fileHash, mime }: Props) {
+  const fullUrl = mediaFileUrl(fileHash, mime);
   const [decoded, setDecoded] = useState(false);
   const [minWaitPassed, setMinWaitPassed] = useState(false);
 

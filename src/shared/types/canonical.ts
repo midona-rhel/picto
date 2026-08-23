@@ -4,28 +4,15 @@
  * These types match the Rust backend serialization exactly (PBI-572 naming).
  * They are the contract for all rebuilt frontend slices.
  */
+import type { ItemPage } from './generated/application/ItemPage';
+import type { ItemQuery } from './generated/application/ItemQuery';
+import type { ItemScope } from './generated/application/ItemScope';
+import type { ItemSummary } from './generated/application/ItemSummary';
+import type { ItemTarget } from './generated/application/ItemTarget';
 
 // ── Entity types ─────────────────────────────────────────────────
 
-export interface CanonicalEntityGridItem {
-  entity_id: number;
-  entity_hash: string;
-  name: string | null;
-  mime_type: string;
-  pixel_width: number | null;
-  pixel_height: number | null;
-  status: number;
-  rating: number | null;
-  date_added: string;
-  date_created: string;
-  date_modified: string;
-  has_thumbnail: boolean;
-  duration_ms: number | null;
-  frame_count: number | null;
-  has_audio: boolean;
-  dominant_color_hex: string | null;
-  size_bytes: number;
-}
+export type CanonicalEntityGridItem = ItemSummary;
 
 export interface CanonicalTagInfo {
   tag_id: number;
@@ -103,18 +90,7 @@ export interface CanonicalEntityDetails {
 
 // ── Query types ──────────────────────────────────────────────────
 
-export type ScopeKind =
-  | 'system'
-  | 'folder'
-  | 'smart_folder'
-  | 'search'
-  | 'tag';
-
-export interface BaseScope {
-  kind: ScopeKind;
-  key?: string | null;
-  id?: number | null;
-}
+export type BaseScope = ItemScope;
 
 export type FilterOp = 'eq' | 'gte' | 'lte' | 'gt' | 'lt';
 
@@ -157,19 +133,8 @@ export interface QueryPage {
   cursor?: string | null;
 }
 
-export interface EntityViewQuery {
-  base_scope: BaseScope;
-  filters?: QueryFilters;
-  sort?: QuerySort;
-  page?: QueryPage;
-}
-
-export interface EntityViewPage {
-  items: CanonicalEntityGridItem[];
-  next_cursor: string | null;
-  total_count: number | null;
-  total_size_bytes: number | null;
-}
+export type EntityViewQuery = ItemQuery;
+export type EntityViewPage = ItemPage;
 
 // ── Sidebar types ────────────────────────────────────────────────
 
@@ -266,14 +231,7 @@ export interface SelectionSummary {
 
 // ── Bulk target types ────────────────────────────────────────────
 
-export type EntityTargetKind = 'entity_hashes' | 'query_results';
-
-export interface EntityTarget {
-  kind: EntityTargetKind;
-  entity_hashes?: string[] | null;
-  query?: EntityViewQuery | null;
-  excluded_entity_hashes?: string[] | null;
-}
+export type EntityTarget = ItemTarget;
 
 export interface MediaEntityPatch {
   name?: string | null;

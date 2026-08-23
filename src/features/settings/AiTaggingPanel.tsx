@@ -1,6 +1,6 @@
 /**
- * AI Tagging settings panel — local tagger models, hardware-aware
- * recommendation, download management, confidence cutoffs, and behavior.
+ * AI Tagging settings panel — local model management, confidence cutoffs,
+ * and behavior.
  *
  * Changes apply immediately; model operations own their persisted state.
  */
@@ -12,11 +12,9 @@ import {
   aiTaggerDeleteModel,
   aiTaggerDownloadModel,
   aiTaggerStatus,
-  type AiTaggerStatusOutput,
+  type AiRuntimeStatus,
 } from '../../platform/aiTaggerApi';
 import { settingsController, type AppSettings } from '../../controllers/settingsController';
-import { useAiTaggerTasks } from '../../runtime/aiTaggerTasks';
-import { ProgressBar } from '../../shared/ui/ProgressBar';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import styles from './AiTaggingPanel.module.css';
 
@@ -37,22 +35,16 @@ const THRESHOLDS: Array<{ key: string; label: string; color: string }> = [
   { key: 'aiThresholdRating', label: 'Rating', color: 'rgb(153, 101, 21)' },
 ];
 
-const HEAVY_RAM_BYTES = 16e9;
-
 function fmtSize(bytes: number): string {
   if (bytes >= 1e9) return `${(bytes / 1e9).toFixed(2).replace(/\.?0+$/, '')} GB`;
   return `${Math.round(bytes / 1e6)} MB`;
 }
 
-function fmtMb(bytes: number): string {
-  return `${Math.round(bytes / (1024 * 1024))} MB`;
-}
-
 export function AiTaggingPanel() {
-  const [status, setStatus] = useState<AiTaggerStatusOutput | null>(null);
+  const [status, setStatus] = useState<AiRuntimeStatus | null>(null);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const { downloads } = useAiTaggerTasks();
+  const [downloading, setDownloading] = useState<Set<string>>(new Set());
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(() => {
@@ -61,25 +53,27 @@ export function AiTaggingPanel() {
 
   const startDownload = useCallback((slug: string) => {
     setError(null);
+    setDownloading((previous) => new Set(previous).add(slug));
     void aiTaggerDownloadModel(slug)
+      .then(setStatus)
       .catch((e) => {
         const message = String(e);
         if (!message.toLowerCase().includes('cancelled')) setError(message);
       })
-      .finally(refresh);
+      .finally(() => {
+        setDownloading((previous) => {
+          const next = new Set(previous);
+          next.delete(slug);
+          return next;
+        });
+        refresh();
+      });
   }, [refresh]);
 
   useEffect(() => {
     refresh();
     settingsController.getSettings().then(setSettings).catch((e) => setError(String(e)));
   }, [refresh]);
-
-  // When the set of active downloads changes (a download finished or failed),
-  // re-read status so downloaded/enabled flags are fresh.
-  const downloadKeys = Object.keys(downloads).sort().join(',');
-  useEffect(() => {
-    refresh();
-  }, [downloadKeys, refresh]);
 
   const patchSettings = useCallback((patch: Partial<AppSettings>) => {
     setSettings((prev) => (prev ? { ...prev, ...patch } : prev));
@@ -98,10 +92,6 @@ export function AiTaggingPanel() {
     [],
   );
 
-  const hardware = status?.hardware ?? null;
-  const memGb = hardware?.memoryBytes != null ? Math.round(hardware.memoryBytes / 1e9) : null;
-  const modestHardware = hardware?.memoryBytes != null && hardware.memoryBytes < HEAVY_RAM_BYTES;
-
   const recommendedLabels = useMemo(
     () => (status?.models ?? []).filter((m) => m.recommended).map((m) => m.label).join(' + '),
     [status],
@@ -119,36 +109,13 @@ export function AiTaggingPanel() {
     <div className={styles.panel}>
       {error && <div className={styles.error}>{error}</div>}
 
-      <div className={styles.block}>
-        <div className={styles.blockTitle}>This Machine</div>
-        <div className={styles.hwCard}>
-          <div>
-            <div className={styles.hwName}>
-              {hardware?.cpuModel ?? 'Unknown CPU'}
-              {memGb != null ? ` · ${memGb} GB memory` : ''}
-            </div>
-            <div className={styles.hwDetail}>
-              {hardware?.logicalCores ?? '?'} cores · ONNX Runtime · {hardware?.executionProvider ?? 'CPU'} execution
-            </div>
-          </div>
-          {recommendedLabels && (
-            <div className={styles.hwReco}>
-              <div className={styles.hwRecoLabel}>Recommended for this hardware</div>
-              <div className={styles.hwRecoValue}>{recommendedLabels}</div>
-            </div>
-          )}
-        </div>
-        <div className={styles.hint}>
-          Models run entirely on this machine — images are never uploaded.
-        </div>
-      </div>
+      {recommendedLabels && <div className={styles.hint}>Recommended models: {recommendedLabels}. Models run locally; images are never uploaded.</div>}
 
       <div className={styles.block}>
         <div className={styles.blockTitle}>Models</div>
         <div className={styles.modelTable}>
           {status.models.map((m) => {
-            const task = downloads[m.slug];
-            const downloading = task != null && (task.status === 'running' || task.status === 'cancelling');
+            const modelDownloading = downloading.has(m.slug);
             const enableKey = ENABLE_KEYS[m.slug];
             const enabled = enableKey ? Boolean(settings[enableKey]) : false;
             return (
@@ -159,7 +126,7 @@ export function AiTaggingPanel() {
                     {m.recommended && <span className={styles.badgeReco}>Recommended</span>}
                     {m.heavy && (
                       <span className={styles.badgeHeavy}>
-                        {modestHardware ? 'Heavy on this machine' : 'Accuracy over speed'}
+                        Accuracy over speed
                       </span>
                     )}
                   </div>
@@ -168,20 +135,11 @@ export function AiTaggingPanel() {
                   </div>
                 </div>
                 <div className={styles.modelState}>
-                  {downloading ? (
+                  {modelDownloading ? (
                     <div className={styles.downloadWrap}>
                       <div className={styles.downloadMeta}>
                         <span>Downloading…</span>
-                        <span>
-                          {task?.progress
-                            ? `${fmtMb(Number(task.progress.done))} / ${fmtMb(Number(task.progress.total))}`
-                            : ''}
-                        </span>
                       </div>
-                      <ProgressBar
-                        done={Number(task?.progress?.done ?? 0)}
-                        total={Number(task?.progress?.total ?? 1)}
-                      />
                       <button
                         className={styles.btnGhost}
                         type="button"

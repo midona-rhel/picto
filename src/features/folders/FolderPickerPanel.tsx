@@ -12,7 +12,7 @@ import { OverlayShell } from '../../shared/ui/OverlayShell';
 import { FolderTree, buildTree, flattenVisibleIds } from '../../shared/ui/FolderTree';
 import { folderPickerPortalAtom } from '../../state/portals';
 import { selectionTargetAtom } from '../../state/selection';
-import { displayedInspectorEntityDataAtom } from '../../state/inspector';
+import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
 import { folderNodesAtom } from '../../state/sidebar';
 import * as entityMutations from '../../controllers/entityMutations';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
@@ -23,7 +23,7 @@ export function FolderPickerPanel() {
   const setPortalState = useSetAtom(folderPickerPortalAtom);
   const target = useAtomValue(selectionTargetAtom);
   const folderNodes = useAtomValue(folderNodesAtom);
-  const entityData = useAtomValue(displayedInspectorEntityDataAtom);
+  const entityData = useAtomValue(displayedInspectorItemDetailsAtom);
   const open = portalState.open;
   const anchor = portalState.anchor ?? null;
   const close = useCallback(() => setPortalState({ open: false }), [setPortalState]);
@@ -36,8 +36,7 @@ export function FolderPickerPanel() {
   const lastClickedRef = useRef<number | null>(null);
 
   const memberOf = useMemo(() => {
-    if (!entityData?.folders) return new Set<number>();
-    return new Set(entityData.folders.map((f) => f.folder_id));
+    return new Set(entityData?.folder_ids ?? []);
   }, [entityData]);
 
   // Build tree + flat visible IDs for range selection

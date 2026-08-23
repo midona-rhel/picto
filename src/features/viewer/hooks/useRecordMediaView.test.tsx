@@ -11,20 +11,20 @@ vi.mock('../../../controllers/viewerController', () => ({
 
 import { useRecordMediaView } from './useRecordMediaView';
 
-function Viewer({ entityHash }: { entityHash: string | null }) {
-  useRecordMediaView(entityHash);
+function Viewer({ itemId }: { itemId: number | null }) {
+  useRecordMediaView(itemId);
   return null;
 }
 
 describe('useRecordMediaView', () => {
   it('records each logical entity as the viewer changes', () => {
-    const view = render(<Viewer entityHash="one" />);
-    view.rerender(<Viewer entityHash="one" />);
-    view.rerender(<Viewer entityHash="two" />);
-    view.rerender(<Viewer entityHash={null} />);
+    const view = render(<Viewer itemId={1} />);
+    view.rerender(<Viewer itemId={1} />);
+    view.rerender(<Viewer itemId={2} />);
+    view.rerender(<Viewer itemId={null} />);
 
     expect(recordMediaView).toHaveBeenCalledTimes(2);
-    expect(recordMediaView).toHaveBeenNthCalledWith(1, 'one');
-    expect(recordMediaView).toHaveBeenNthCalledWith(2, 'two');
+    expect(recordMediaView).toHaveBeenNthCalledWith(1, 1);
+    expect(recordMediaView).toHaveBeenNthCalledWith(2, 2);
   });
 });

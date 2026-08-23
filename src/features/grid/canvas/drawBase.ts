@@ -44,7 +44,7 @@ export interface BaseLayerArgs {
   ctx: CanvasRenderingContext2D;
   positions: LayoutItem[];
   items: CanvasRenderItem[];
-  atlasGet: (hash: string) => ThumbnailPipelineEntry | null;
+  atlasGet: (fileHash: string) => ThumbnailPipelineEntry | null;
   now: number;
   /** Indices of tiles in the activation zone — the ONLY tiles to draw. */
   activeTiles: number[];
@@ -124,7 +124,7 @@ export function drawCanvasBaseLayer({
     const imageHeight = pos.h - th;
     if (drawY + pos.h < 0 || drawY > cssH) continue;
 
-    const entry = atlasGet(item.thumbnailHash);
+    const entry = atlasGet(item.displayFileHash);
     const isVideo = item.mime.startsWith('video/');
     const useContain = effectiveFit === 'contain' || isVideo;
     const drawThumb = useContain ? drawImageContain : drawImageCover;

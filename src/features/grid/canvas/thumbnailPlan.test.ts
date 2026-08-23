@@ -3,8 +3,8 @@ import { computePlanFingerprint, sortPlanTilesByViewportDistance, type PlanTile 
 
 const THRESHOLD = 752;
 
-function tile(hash: string, overrides: Partial<PlanTile> = {}): PlanTile {
-  return { hash, mime: 'image/png', w: 200, h: 200, cy: 100, ...overrides };
+function tile(fileHash: string, overrides: Partial<PlanTile> = {}): PlanTile {
+  return { fileHash, mime: 'image/png', w: 200, h: 200, cy: 100, ...overrides };
 }
 
 describe('computePlanFingerprint', () => {
@@ -54,13 +54,13 @@ describe('sortPlanTilesByViewportDistance', () => {
   it('orders tiles nearest the viewport center first', () => {
     const tiles = [tile('far', { cy: 2000 }), tile('near', { cy: 510 }), tile('mid', { cy: 900 })];
     sortPlanTilesByViewportDistance(tiles, 500);
-    expect(tiles.map((t) => t.hash)).toEqual(['near', 'mid', 'far']);
+    expect(tiles.map((t) => t.fileHash)).toEqual(['near', 'mid', 'far']);
   });
 
   it('keeps input order on distance ties', () => {
     const tiles = [tile('above', { cy: 400 }), tile('below', { cy: 600 })];
     sortPlanTilesByViewportDistance(tiles, 500);
-    expect(tiles.map((t) => t.hash)).toEqual(['above', 'below']);
+    expect(tiles.map((t) => t.fileHash)).toEqual(['above', 'below']);
   });
 
   it('sorts in place', () => {
@@ -68,7 +68,7 @@ describe('sortPlanTilesByViewportDistance', () => {
     const ref = tiles;
     sortPlanTilesByViewportDistance(tiles, 0);
     expect(ref).toBe(tiles);
-    expect(tiles[0].hash).toBe('a');
+    expect(tiles[0].fileHash).toBe('a');
   });
 
   it('handles an empty array', () => {

@@ -1,12 +1,12 @@
-import type { BaseScope } from '../types/canonical';
+import type { ItemScope } from '../types/generated/application/ItemScope';
 
-const GRID_SYSTEM_SCOPES: Record<string, string> = {
-  'system:active': 'all',
-  'system:inbox': 'inbox',
-  'system:trash': 'trash',
-  'system:uncategorized': 'uncategorized',
-  'system:untagged': 'untagged',
-  'system:recent_viewed': 'recent_viewed',
+const GRID_SYSTEM_SCOPES: Record<string, ItemScope> = {
+  'system:active': { kind: 'all' },
+  'system:inbox': { kind: 'inbox' },
+  'system:trash': { kind: 'trash' },
+  'system:uncategorized': { kind: 'uncategorized' },
+  'system:untagged': { kind: 'untagged' },
+  'system:recent_viewed': { kind: 'recently_viewed' },
 };
 
 const NON_GRID_NODES = new Set([
@@ -19,30 +19,32 @@ export function isNonGridNodeId(nodeId: string): boolean {
   return NON_GRID_NODES.has(nodeId);
 }
 
-export function nodeIdToGridScope(nodeId: string): BaseScope | null {
+export function nodeIdToGridScope(nodeId: string): ItemScope | null {
   if (nodeId.startsWith('folder:')) {
     const id = parseInt(nodeId.slice(7), 10);
-    return { kind: 'folder', id: isNaN(id) ? 0 : id };
+    return { kind: 'folder', folder_id: isNaN(id) ? 0 : id };
   }
   if (nodeId.startsWith('smart:')) {
     const id = parseInt(nodeId.slice(6), 10);
-    return { kind: 'smart_folder', id: isNaN(id) ? 0 : id };
+    return { kind: 'smart_folder', smart_folder_id: isNaN(id) ? 0 : id };
   }
   if (NON_GRID_NODES.has(nodeId)) return null;
-  const scopeKey = GRID_SYSTEM_SCOPES[nodeId];
-  if (scopeKey) return { kind: 'system', key: scopeKey };
+  const scope = GRID_SYSTEM_SCOPES[nodeId];
+  if (scope) return scope;
   return null;
 }
 
-export function scopeToGridNodeId(scope: BaseScope): string | null {
+export function scopeToGridNodeId(scope: ItemScope): string | null {
   switch (scope.kind) {
-    case 'system':
-      return `system:${scope.key === 'all' ? 'active' : scope.key}`;
+    case 'all': return 'system:active';
+    case 'inbox': return 'system:inbox';
+    case 'trash': return 'system:trash';
+    case 'uncategorized': return 'system:uncategorized';
+    case 'untagged': return 'system:untagged';
+    case 'recently_viewed': return 'system:recent_viewed';
     case 'folder':
-      return scope.id != null ? `folder:${scope.id}` : null;
+      return `folder:${scope.folder_id}`;
     case 'smart_folder':
-      return scope.id != null ? `smart:${scope.id}` : null;
-    default:
-      return null;
+      return `smart:${scope.smart_folder_id}`;
   }
 }

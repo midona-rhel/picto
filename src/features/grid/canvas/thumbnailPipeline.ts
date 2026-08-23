@@ -34,8 +34,8 @@ export type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
 /** If a tile exceeds this size in either axis, load the full original instead of the 512px thumb. */
 const FULL_QUALITY_THRESHOLD_PX = 752;
 
-function mediaThumbnailUrl(hash: string): string {
-  return `media://localhost/thumb/${hash}.jpg`;
+function mediaThumbnailUrl(fileHash: string): string {
+  return `media://localhost/thumb/${fileHash}.jpg`;
 }
 
 export class ThumbnailPipeline {
@@ -49,16 +49,16 @@ export class ThumbnailPipeline {
   private suppressUntil = 0;
 
   // ── Plan deduplication ──
-  // Only send plan to worker when the visible hash set actually changes.
+  // Only send the plan when the visible physical-file set actually changes.
   // -1 = never computed; computePlanFingerprint always returns >= 0.
   private lastPlanFingerprint = -1;
   // Reusable array for building plan entries — avoids per-frame allocation.
-  private planBuffer: Array<{ hash: string; url: string }> = [];
+  private planBuffer: Array<{ fileHash: string; url: string }> = [];
 
   constructor(onDirty: () => void = () => {}) {
     this.onDirty = onDirty;
-    setThumbnailRevealCallback((hash, bitmap) => this.handleReveal(hash, bitmap));
-    setThumbnailErrorCallback((hash) => this.handleError(hash));
+    setThumbnailRevealCallback((fileHash, bitmap) => this.handleReveal(fileHash, bitmap));
+    setThumbnailErrorCallback((fileHash) => this.handleError(fileHash));
   }
 
   setOnDirty(onDirty: () => void): void {
@@ -72,7 +72,7 @@ export class ThumbnailPipeline {
 
   /**
    * Send the current set of visible tiles to the worker.
-   * Call once per frame with all hashes in the activation zone.
+   * Call once per frame with all physical file hashes in the activation zone.
    * Deduplicates — only posts to the worker when the set actually changes.
    */
   updatePlan(tiles: PlanTile[], viewportCenterY: number): void {
@@ -99,26 +99,26 @@ export class ThumbnailPipeline {
       const t = tiles[i];
       const isImage = t.mime.startsWith('image/') && t.mime !== 'image/gif';
       const needsFull = isImage && (t.w > FULL_QUALITY_THRESHOLD_PX || t.h > FULL_QUALITY_THRESHOLD_PX);
-      const url = needsFull ? mediaFileUrl(t.hash, t.mime) : mediaThumbnailUrl(t.hash);
+      const url = needsFull ? mediaFileUrl(t.fileHash, t.mime) : mediaThumbnailUrl(t.fileHash);
       if (buf[i]) {
-        buf[i].hash = t.hash;
+        buf[i].fileHash = t.fileHash;
         buf[i].url = url;
       } else {
-        buf[i] = { hash: t.hash, url };
+        buf[i] = { fileHash: t.fileHash, url };
       }
     }
     sendThumbnailPlan(buf);
   }
 
   /** Get a cached entry for drawing. Returns null if no bitmap received yet. */
-  get(hash: string): ThumbnailPipelineEntry | null {
-    return this.cache.get(hash) ?? null;
+  get(fileHash: string): ThumbnailPipelineEntry | null {
+    return this.cache.get(fileHash) ?? null;
   }
 
   /** Close bitmaps for tiles no longer in the visible set. */
-  evictOutsideVisible(visibleHashes: Set<string>): void {
-    for (const [hash, entry] of this.cache) {
-      if (visibleHashes.has(hash)) continue;
+  evictOutsideVisible(visibleFileHashes: Set<string>): void {
+    for (const [fileHash, entry] of this.cache) {
+      if (visibleFileHashes.has(fileHash)) continue;
       if (entry.thumb) {
         this.totalBytes -= entry.bytes;
         entry.thumb.close();
@@ -149,13 +149,13 @@ export class ThumbnailPipeline {
 
   // ── Worker callbacks ────────────────────────────────────────────
 
-  private handleReveal(hash: string, bitmap: ImageBitmap): void {
+  private handleReveal(fileHash: string, bitmap: ImageBitmap): void {
     if (this.destroyed) { bitmap.close(); return; }
 
-    let entry = this.cache.get(hash);
+    let entry = this.cache.get(fileHash);
     if (!entry) {
       entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0, animateIn: false, revealStartedAt: 0 };
-      this.cache.set(hash, entry);
+      this.cache.set(fileHash, entry);
     }
 
     const isUpgrade = entry.thumb != null;
@@ -179,11 +179,11 @@ export class ThumbnailPipeline {
     this.onDirty();
   }
 
-  private handleError(hash: string): void {
-    let entry = this.cache.get(hash);
+  private handleError(fileHash: string): void {
+    let entry = this.cache.get(fileHash);
     if (!entry) {
       entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0, animateIn: false, revealStartedAt: 0 };
-      this.cache.set(hash, entry);
+      this.cache.set(fileHash, entry);
     }
     entry.state = 'error';
   }

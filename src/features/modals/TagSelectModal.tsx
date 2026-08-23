@@ -14,8 +14,8 @@ import { useVirtualizer } from '@tanstack/react-virtual';
 import { IconSearch, IconCheck } from '@tabler/icons-react';
 import { GlassModal } from '../../shared/ui/GlassModal';
 import { tagSelectModalAtom } from '../../state/modals';
-import { selectionTargetAtom } from '../../state/selection';
-import { displayedInspectorEntityDataAtom } from '../../state/inspector';
+import { selectionCountAtom, selectionTargetAtom } from '../../state/selection';
+import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
 import { useRecentItems } from '../../shared/hooks/useRecentItems';
 import * as entityMutations from '../../controllers/entityMutations';
 import { tagsController } from '../../controllers/tagsController';
@@ -23,6 +23,7 @@ import type { CanonicalTagRecord, CanonicalNamespaceSummary } from '../../shared
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import btnStyles from '../../shared/styles/actionButton.module.css';
 import styles from './TagSelectModal.module.css';
+import { commonItemTags } from '../../shared/lib/itemDetails';
 
 const NS_COLORS: Record<string, [number, number, number]> = {
   creator: [170, 0, 0], studio: [128, 0, 0], character: [0, 170, 0],
@@ -44,11 +45,22 @@ const NS_ORDER: Record<string, number> = {
 };
 function nsOrder(ns: string): number { return NS_ORDER[ns.toLowerCase()] ?? 9; }
 
+function tagRecord(name: string): CanonicalTagRecord {
+  const separator = name.indexOf(':');
+  return {
+    tag_id: 0,
+    namespace: separator < 0 ? '' : name.slice(0, separator),
+    subtag: separator < 0 ? name : name.slice(separator + 1),
+    file_count: 0,
+  };
+}
+
 export function TagSelectModal() {
   const modalState = useAtomValue(tagSelectModalAtom);
   const setModalState = useSetAtom(tagSelectModalAtom);
   const target = useAtomValue(selectionTargetAtom);
-  const entityData = useAtomValue(displayedInspectorEntityDataAtom);
+  const selectionCount = useAtomValue(selectionCountAtom);
+  const entityData = useAtomValue(displayedInspectorItemDetailsAtom);
   const open = modalState.open;
   const close = useCallback(() => setModalState({ open: false }), [setModalState]);
 
@@ -68,17 +80,8 @@ export function TagSelectModal() {
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const entityTagKeys = useMemo(() => {
-    if (!entityData?.tags) return new Set<string>();
-    return new Set(entityData.tags.map((t) =>
-      t.namespace ? `${t.namespace}:${t.subtag}` : t.subtag,
-    ));
+    return commonItemTags(entityData);
   }, [entityData]);
-
-  const selectionCount = useMemo(() => {
-    if (!target) return 0;
-    if (target.kind === 'entity_hashes') return target.entity_hashes?.length ?? 0;
-    return 0;
-  }, [target]);
 
   const loadTags = useCallback((search: string, ns?: string | null) => {
     void tagsController.getPaginated({
@@ -145,11 +148,7 @@ export function TagSelectModal() {
 
   const displayTags = useMemo(() => {
     if (sidebarMode === 'selected') {
-      if (!entityData?.tags) return [];
-      return entityData.tags.map((t) => ({
-        tag_id: t.tag_id, namespace: t.namespace, subtag: t.subtag,
-        file_count: 0,
-      } as CanonicalTagRecord)).sort((a, b) => {
+      return (entityData?.aggregate_tags ?? []).map(tagRecord).sort((a, b) => {
         const nsA = (a.namespace ?? '').toLowerCase();
         const nsB = (b.namespace ?? '').toLowerCase();
         if (nsA !== nsB) return nsA.localeCompare(nsB);

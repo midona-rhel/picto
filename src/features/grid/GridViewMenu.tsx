@@ -41,13 +41,12 @@ const LAYOUT_OPTIONS: CmSelectOption[] = [
 ];
 
 const SORT_OPTIONS: CmSelectOption[] = [
-  { value: 'date_added', label: 'Date Added' },
-  { value: 'date_created', label: 'Date Created' },
-  { value: 'date_modified', label: 'Date Modified' },
+  { value: 'imported_at', label: 'Date Added' },
+  { value: 'captured_at', label: 'Date Created' },
   { value: 'name', label: 'Name' },
-  { value: 'size_bytes', label: 'File Size' },
+  { value: 'size', label: 'File Size' },
   { value: 'rating', label: 'Rating' },
-  { value: 'duration', label: 'Duration' },
+  { value: 'random', label: 'Random' },
 ];
 
 // ── Panel ────────────────────────────────────────────────────────
@@ -59,8 +58,7 @@ function ViewPanel() {
   const sortDir = useAtomValue(gridSortDirectionAtom);
   const setSoftAction = useSetAtom(gridSoftTransitionActionAtom);
   const scope = useAtomValue(gridScopeAtom);
-  const hasFixedOrder = scope.kind === 'folder'
-    || (scope.kind === 'system' && scope.key === 'recent_viewed');
+  const hasFixedOrder = scope.kind === 'folder' || scope.kind === 'recently_viewed';
 
   const setSort = (f: SortField, d: SortDirection) => { void gridController.setSort(f, d); };
 
@@ -90,10 +88,10 @@ function ViewPanel() {
               width={130}
             />
             <div className={s.dirPill}>
-              <button className={`${s.dirBtn} ${sortDir === 'asc' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'asc')} type="button">
+              <button className={`${s.dirBtn} ${sortDir === 'ascending' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'ascending')} type="button">
                 <IconSortAscending size={14} />
               </button>
-              <button className={`${s.dirBtn} ${sortDir === 'desc' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'desc')} type="button">
+              <button className={`${s.dirBtn} ${sortDir === 'descending' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'descending')} type="button">
                 <IconSortDescending size={14} />
               </button>
             </div>

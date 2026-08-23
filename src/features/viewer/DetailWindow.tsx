@@ -27,7 +27,6 @@ import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
 import { VideoPlayer } from './video/VideoPlayer';
 import { filesController } from '../../controllers/filesController';
-import { viewerController } from '../../controllers/viewerController';
 import { windowController } from '../../controllers/windowController';
 import styles from './DetailWindow.module.css';
 import viewerStyles from './MediaView.module.css';
@@ -35,6 +34,7 @@ import viewerStyles from './MediaView.module.css';
 // ── Types ────────────────────────────────────────────────────────
 
 interface LightImage {
+  item_id: number;
   hash: string;
   name: string | null;
   mime: string;
@@ -77,21 +77,6 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
 
-  // ── Initial entity fetch ──
-  const [initialImage, setInitialImage] = useState<LightImage | null>(null);
-  useEffect(() => {
-    viewerController.getEntityDetails(hash).then((d) => {
-      if (!d) return;
-      setInitialImage({
-        hash: d.entity_hash,
-        name: d.name ?? null,
-        mime: d.mime_type,
-        width: d.pixel_width ?? null,
-        height: d.pixel_height ?? null,
-      });
-    }).catch(() => {});
-  }, [hash]);
-
   // ── IPC: receive image list from main window ──
   useEffect(() => {
     let cancelled = false;
@@ -119,9 +104,9 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   // ── Current image ──
   const currentImage = useMemo(() => {
     if (images.length > 0 && images[currentIndex]) return images[currentIndex];
-    return initialImage;
-  }, [images, currentIndex, initialImage]);
-  useRecordMediaView(currentImage?.hash);
+    return null;
+  }, [images, currentIndex]);
+  useRecordMediaView(currentImage?.item_id);
 
   const isVideo = currentImage?.mime?.startsWith('video/') ?? false;
   const thumbHash = currentImage?.hash ?? hash;
