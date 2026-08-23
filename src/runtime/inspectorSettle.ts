@@ -36,11 +36,16 @@ export function startInspectorSettle(): () => void {
       return;
     }
 
-    // For scope/multi/none targets: only commit immediately for entity→scope transitions.
-    // Scope→scope transitions are handled by GridScreen's snapshot commit to avoid
-    // flashing partial data (the inspector would show the new scope node before the
-    // grid query returns size/count).
-    if (lastItemId != null) {
+    const displayedTarget = store.get(displayedInspectorTargetAtom);
+    // Selection changes do not wait for a grid snapshot: their target already refers
+    // to the displayed query. Scope→scope navigation still waits for GridScreen's
+    // snapshot commit so the scope inspector cannot get ahead of its grid data.
+    const commitImmediately = target.kind === 'multi'
+      || target.kind === 'none'
+      || lastItemId != null
+      || displayedTarget.kind === 'item'
+      || displayedTarget.kind === 'multi';
+    if (commitImmediately) {
       lastItemId = null;
       cancelInspectorLoad();
       store.set(displayedInspectorItemDetailsAtom, null);
