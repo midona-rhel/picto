@@ -423,12 +423,8 @@ impl Application {
             reject_active_subscription_edit(connection, subscription_id)
         })?;
 
-        crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
-            self.store().library_root(),
-            subscription_id,
-        )
-        .await?;
-
+        // Pagination restarts, but handled files stay archived so reset does
+        // not redownload successful imports or deliberately deleted items.
         let (_, revision) = self.store().transaction(|transaction| {
             require_subscription(transaction, subscription_id)?;
             reject_active_subscription_edit(transaction, subscription_id)?;
@@ -879,7 +875,13 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
-        assert_eq!(entries, vec!["picto_s999_q1_post"]);
+        assert_eq!(
+            entries,
+            vec![
+                format!("picto_s{subscription_id}_q{query_id}_post"),
+                "picto_s999_q1_post".to_string(),
+            ]
+        );
     }
 
     #[test]
