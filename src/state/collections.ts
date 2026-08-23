@@ -6,7 +6,10 @@ export interface CollectionChromeState {
   parentNodeId: string;
   mode: 'reader' | 'editor';
   memberViewerOpen: boolean;
+  currentIndex: number;
+  total: number;
   close: () => void;
+  navigate: (delta: number) => void;
   showReader: () => void;
   edit: () => void;
 }

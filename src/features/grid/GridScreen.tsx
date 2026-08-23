@@ -150,10 +150,7 @@ export function GridScreen({
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const gridLayoutRef = useRef<LayoutResult | null>(null);
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
-  const [collectionSurface, setCollectionSurface] = useState<{
-    collectionId: number;
-    mode: 'reader' | 'editor';
-  } | null>(null);
+  const [collectionInitialMode, setCollectionInitialMode] = useState<'reader' | 'editor'>('reader');
   const subfolderGridRef = useRef<SubfolderGridHandle>(null);
 
   const scrollToItem = useCallback((index: number, alignment: GridScrollAlignment = 'nearest') => {
@@ -379,12 +376,8 @@ export function GridScreen({
     sourceItems: CanonicalEntityGridItem[],
     mode: 'reader' | 'editor' = 'reader',
   ) => {
-    if (item.kind === 'collection') {
-      setViewerSession(null);
-      setQuickLookSession(null);
-      setCollectionSurface({ collectionId: item.item_id, mode });
-      return;
-    }
+    setCollectionInitialMode(item.kind === 'collection' ? mode : 'reader');
+    setQuickLookSession(null);
     setViewerSession(createViewerSession(sourceItems, item.item_id));
   }, [setQuickLookSession, setViewerSession]);
 
@@ -435,7 +428,6 @@ export function GridScreen({
 
     function handleKeyDown(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (collectionSurface) return;
       // Don't handle grid shortcuts while a viewer is open — the viewer handles its own keys.
       // Exception: detailView/quicklook shortcuts to open viewers are checked below with their own guards.
       if (viewerSessionRef.current || quickLookSessionRef.current) {
@@ -542,9 +534,31 @@ export function GridScreen({
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [clearSelection, selectAllResults, setQuickLookSession, setSelectionLifecycle, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder, openGridItem, collectionSurface]);
+  }, [clearSelection, selectAllResults, setQuickLookSession, setSelectionLifecycle, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder, openGridItem]);
 
   const isEmpty = items.length === 0 && !loading;
+  const viewerIndex = viewerSession ? resolveViewerIndex(viewerSession, items) : -1;
+  const viewerItem = viewerIndex >= 0 ? items[viewerIndex] ?? null : null;
+
+  const navigateRootDetail = useCallback((delta: number) => {
+    if (!viewerSession) return;
+    const next = navigateViewerSession(viewerSession, items, delta);
+    if (!next) {
+      if (delta > 0 && cursor) void gridController.loadNextPage();
+      return;
+    }
+    setCollectionInitialMode('reader');
+    setViewerSession(next);
+    dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
+  }, [cursor, dispatchSelection, items, setViewerSession, viewerSession]);
+
+  const closeRootDetail = useCallback((exitItemId?: number) => {
+    setViewerSession(null);
+    setCollectionInitialMode('reader');
+    if (exitItemId == null) return;
+    dispatchSelection({ type: 'replace_items', itemIds: new Set([exitItemId]), anchor: exitItemId });
+    scrollToItem(items.findIndex((item) => item.item_id === exitItemId));
+  }, [dispatchSelection, items, scrollToItem, setViewerSession]);
 
   const renderIncomingSurface = () => {
     if (error) {
@@ -915,17 +929,21 @@ export function GridScreen({
   return (
     <div className={styles.root}>
       <ApplicationMenuButton />
-      {collectionSurface ? (
+      {renderIncomingSurface()}
+      {viewerSession && viewerItem?.kind === 'collection' ? (
         <CollectionSurface
-          key={`${collectionSurface.collectionId}:${collectionSurface.mode}`}
-          collectionId={collectionSurface.collectionId}
+          key={`${viewerItem.item_id}:${collectionInitialMode}`}
+          collectionId={viewerItem.item_id}
           parentNodeId={displayedNodeId}
-          initialMode={collectionSurface.mode}
-          onClose={() => setCollectionSurface(null)}
+          initialMode={collectionInitialMode}
+          rootCurrentIndex={viewerIndex}
+          rootTotal={totalCount ?? items.length}
+          onNavigateRoot={navigateRootDetail}
+          onClose={() => closeRootDetail(viewerItem.item_id)}
         />
-      ) : renderIncomingSurface()}
+      ) : null}
 
-      {!collectionSurface && fileDragOver && (
+      {!viewerSession && fileDragOver && (
         <div className={styles.dropOverlay}>
           <div className={styles.dropOverlayBadge}>
             Drop files to import
@@ -934,26 +952,13 @@ export function GridScreen({
         </div>
       )}
 
-      {viewerSession && (
+      {viewerSession && viewerItem?.kind !== 'collection' && (
         <MediaView
           items={items}
-          currentIndex={resolveViewerIndex(viewerSession, items)}
+          currentIndex={viewerIndex}
           totalCount={totalCount}
-          onNavigate={(delta) => {
-            const next = navigateViewerSession(viewerSession, items, delta);
-            if (next) {
-              setViewerSession(next);
-              dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
-            }
-          }}
-          onClose={(exitItemId) => {
-            setViewerSession(null);
-            if (exitItemId != null) {
-              dispatchSelection({ type: 'replace_items', itemIds: new Set([exitItemId]), anchor: exitItemId });
-              const idx = items.findIndex((i) => i.item_id === exitItemId);
-              scrollToItem(idx);
-            }
-          }}
+          onNavigate={navigateRootDetail}
+          onClose={closeRootDetail}
           onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
         />
       )}

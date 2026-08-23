@@ -17,7 +17,10 @@ describe('CollectionToolbar', () => {
       parentNodeId: 'system:all',
       mode: 'reader',
       memberViewerOpen: false,
+      currentIndex: 1,
+      total: 3,
       close,
+      navigate: vi.fn(),
       showReader,
       edit,
     });
@@ -45,7 +48,10 @@ describe('CollectionToolbar', () => {
       parentNodeId: 'system:all',
       mode: 'editor',
       memberViewerOpen: false,
+      currentIndex: 1,
+      total: 3,
       close,
+      navigate: vi.fn(),
       showReader,
       edit: vi.fn(),
     });
@@ -60,5 +66,33 @@ describe('CollectionToolbar', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back to collection' }));
     expect(showReader).toHaveBeenCalledOnce();
     expect(close).not.toHaveBeenCalled();
+  });
+
+  it('navigates the root detail sequence with standard previous and next controls', () => {
+    const navigate = vi.fn();
+    const store = createStore();
+    store.set(collectionChromeAtom, {
+      label: 'Morning set',
+      parentLabel: 'All',
+      parentNodeId: 'system:all',
+      mode: 'reader',
+      memberViewerOpen: false,
+      currentIndex: 1,
+      total: 3,
+      close: vi.fn(),
+      navigate,
+      showReader: vi.fn(),
+      edit: vi.fn(),
+    });
+
+    render(
+      <MantineProvider>
+        <Provider store={store}><CollectionToolbar /></Provider>
+      </MantineProvider>,
+    );
+    expect(screen.getByText('2 / 3')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Previous' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Next' }));
+    expect(navigate.mock.calls).toEqual([[-1], [1]]);
   });
 });

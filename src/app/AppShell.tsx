@@ -30,7 +30,7 @@ import {
 import { sidebarNodesAtom } from '../state/sidebar';
 import { gridActiveAtom, gridScopeLabelAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
-import { viewerSessionAtom } from '../state/viewer';
+import { viewerCurrentItemAtom, viewerSessionAtom } from '../state/viewer';
 import { collectionChromeAtom } from '../state/collections';
 import { startAppRuntime } from '../runtime/appRuntime';
 import { registerAppSettingsReload } from '../runtime/appSettingsSettle';
@@ -222,6 +222,7 @@ export function AppShell() {
   const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
   const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
   const viewerSession = useAtomValue(viewerSessionAtom);
+  const viewerItem = useAtomValue(viewerCurrentItemAtom);
   const collectionChrome = useAtomValue(collectionChromeAtom);
   const canBack = useAtomValue(canGoBackAtom);
   const canForward = useAtomValue(canGoForwardAtom);
@@ -436,13 +437,15 @@ export function AppShell() {
           </div>
         </div>
         <div className={styles.titlebarCenter}>
-          {viewerSession || collectionChrome?.memberViewerOpen ? (
+          {collectionChrome?.memberViewerOpen ? (
             <ViewerToolbar />
-          ) : collectionChrome ? (
+          ) : viewerItem?.kind === 'collection' ? (
             <>
-              <CollectionToolbar />
-              <CollectionScopeTitle />
+              {collectionChrome ? <CollectionToolbar /> : null}
+              {collectionChrome ? <CollectionScopeTitle /> : null}
             </>
+          ) : viewerSession ? (
+            <ViewerToolbar />
           ) : (
             <>
               <KbdTooltip label="Back" shortcut="Alt+ArrowLeft">

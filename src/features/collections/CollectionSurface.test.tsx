@@ -142,7 +142,7 @@ async function enterEditor() {
 
 describe('CollectionSurface', () => {
   it('renders members in persisted order as a document reader', async () => {
-    render(<CollectionSurface collectionId={7} onClose={vi.fn()} />);
+    render(<CollectionSurface collectionId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
     await screen.findByLabelText('Ordered set');
     expect([...document.querySelectorAll('[data-collection-member]')].map(
       (element) => element.getAttribute('data-collection-member'),
@@ -150,21 +150,21 @@ describe('CollectionSurface', () => {
   });
 
   it('opens inline media detail on member double-click', async () => {
-    render(<CollectionSurface collectionId={7} onClose={vi.fn()} />);
+    render(<CollectionSurface collectionId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
     await screen.findByLabelText('Ordered set');
     fireEvent.doubleClick(document.querySelector('[data-collection-member="2"]')!);
     expect(await screen.findByTestId('media-view')).toHaveTextContent('Viewing 1');
   });
 
   it('uses the same inline detail viewer for video members', async () => {
-    render(<CollectionSurface collectionId={7} onClose={vi.fn()} />);
+    render(<CollectionSurface collectionId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
     await screen.findByLabelText('Ordered set');
     fireEvent.doubleClick(document.querySelector('[data-collection-member="3"]')!);
     expect(await screen.findByTestId('media-view')).toHaveTextContent('Viewing 2');
   });
 
   it('sends the complete reordered member list', async () => {
-    render(<CollectionSurface collectionId={7} onClose={vi.fn()} />);
+    render(<CollectionSurface collectionId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
     await enterEditor();
     expect(screen.queryByText(/Drag to reorder/i)).not.toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: 'Reorder' }));
@@ -175,7 +175,7 @@ describe('CollectionSurface', () => {
   });
 
   it('removes multiple selected members from the collection', async () => {
-    render(<CollectionSurface collectionId={7} onClose={vi.fn()} />);
+    render(<CollectionSurface collectionId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
     await enterEditor();
     fireEvent.click(await screen.findByTestId('grid-item-1'));
     fireEvent.click(await screen.findByTestId('grid-item-2'), { metaKey: true });
@@ -188,12 +188,21 @@ describe('CollectionSurface', () => {
   });
 
   it('sets a single selected member as the cover', async () => {
-    render(<CollectionSurface collectionId={7} initialMode="editor" onClose={vi.fn()} />);
+    render(<CollectionSurface collectionId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
     fireEvent.contextMenu(await screen.findByTestId('grid-item-2'));
     fireEvent.click(await screen.findByRole('button', { name: 'Set as Cover' }));
     await waitFor(() => expect(mocks.setCollectionCover).toHaveBeenCalledWith({
       collection_id: 7,
       media_item_id: 2,
     }));
+  });
+
+  it('uses arrow keys to navigate the root detail sequence', async () => {
+    const navigate = vi.fn();
+    render(<CollectionSurface collectionId={7} rootCurrentIndex={1} rootTotal={3} onNavigateRoot={navigate} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(navigate.mock.calls).toEqual([[-1], [1]]);
   });
 });

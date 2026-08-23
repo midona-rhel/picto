@@ -19,6 +19,9 @@ export interface CollectionSurfaceProps {
   collectionId: number;
   parentNodeId?: string;
   initialMode?: 'reader' | 'editor';
+  rootCurrentIndex: number;
+  rootTotal: number;
+  onNavigateRoot: (delta: number) => void;
   onClose: () => void;
 }
 
@@ -101,6 +104,9 @@ export function CollectionSurface({
   collectionId,
   parentNodeId = 'system:all',
   initialMode = 'reader',
+  rootCurrentIndex,
+  rootTotal,
+  onNavigateRoot,
   onClose,
 }: CollectionSurfaceProps) {
   const [details, setDetails] = useState<ItemDetails | null>(null);
@@ -147,7 +153,10 @@ export function CollectionSurface({
       parentNodeId,
       mode,
       memberViewerOpen: viewerIndex !== null,
+      currentIndex: rootCurrentIndex,
+      total: rootTotal,
       close: onClose,
+      navigate: onNavigateRoot,
       showReader: () => {
         setMode('reader');
         setSelectedItemIds(new Set());
@@ -155,11 +164,17 @@ export function CollectionSurface({
       edit: () => setMode('editor'),
     });
     return () => setCollectionChrome(null);
-  }, [details, mode, onClose, parentLabel, parentNodeId, setCollectionChrome, viewerIndex]);
+  }, [details, mode, onClose, onNavigateRoot, parentLabel, parentNodeId, rootCurrentIndex, rootTotal, setCollectionChrome, viewerIndex]);
 
   useEffect(() => {
     if (viewerIndex !== null) return;
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      if (mode === 'reader' && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
+        event.preventDefault();
+        onNavigateRoot(event.key === 'ArrowLeft' ? -1 : 1);
+        return;
+      }
       if (event.key !== 'Escape') return;
       event.preventDefault();
       if (mode === 'editor') {
@@ -171,7 +186,7 @@ export function CollectionSurface({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [mode, onClose, viewerIndex]);
+  }, [mode, onClose, onNavigateRoot, viewerIndex]);
 
   const members = useMemo(
     () => details?.media.map((media) => memberToGridItem(details, media)) ?? [],
