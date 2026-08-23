@@ -11,22 +11,15 @@ interface CanvasViewportRefs {
   redraw: RefObject<() => void>;
 }
 
-/**
- * Stretch the existing bitmap during a live resize. This is deliberately a
- * CSS-only operation: backing-store resize, drawing, and width-dependent
- * layout happen once after the gesture settles.
- */
-export function applyTransientViewportSize(
-  container: HTMLDivElement,
+/** Height is the only live canvas adjustment; CSS already owns width. */
+export function applyTransientViewportHeight(
+  height: number,
   viewportLayer: HTMLDivElement | null,
   canvases: Array<HTMLCanvasElement | null>,
 ): void {
-  const width = container.clientWidth;
-  const height = container.clientHeight;
   if (viewportLayer) viewportLayer.style.height = `${height}px`;
   for (const canvas of canvases) {
     if (!canvas) continue;
-    canvas.style.width = `${width}px`;
     canvas.style.height = `${height}px`;
   }
 }
@@ -40,13 +33,14 @@ export function useCanvasViewport(refs: CanvasViewportRefs, headerContent: unkno
     const container = refs.container.current;
     if (!container) return;
 
-    const applyTransientSize = () => applyTransientViewportSize(
-      container,
-      refs.viewportLayer.current,
-      [refs.baseCanvas.current, refs.overlayCanvas.current],
-    );
+    let appliedHeight = -1;
+    const applyHeight = (height: number) => {
+      if (height === appliedHeight) return;
+      appliedHeight = height;
+      applyTransientViewportHeight(height, refs.viewportLayer.current, [refs.baseCanvas.current, refs.overlayCanvas.current]);
+    };
     const settle = () => {
-      applyTransientSize();
+      applyHeight(container.clientHeight);
       const width = container.clientWidth;
       const scrollbarWidth = container.offsetWidth - width;
       setLayoutWidth((current) => (
@@ -56,8 +50,9 @@ export function useCanvasViewport(refs: CanvasViewportRefs, headerContent: unkno
       ));
       refs.redraw.current?.();
     };
-    const scheduleSettlement = () => {
-      applyTransientSize();
+    const scheduleSettlement = (entries: ResizeObserverEntry[]) => {
+      const height = entries[0]?.contentRect.height;
+      if (Number.isFinite(height)) applyHeight(height);
       if (settleTimer.current) clearTimeout(settleTimer.current);
       settleTimer.current = setTimeout(() => {
         settleTimer.current = null;
