@@ -47,6 +47,7 @@ const dragEndHandlers: DragEndHandler[] = [];
 
 type DragChangeHandler = () => void;
 const dragChangeHandlers: DragChangeHandler[] = [];
+let highlightedDropElement: HTMLElement | null = null;
 
 function notifyChange() {
   for (const h of dragChangeHandlers) h();
@@ -91,44 +92,72 @@ export function moveDrag(x: number, y: number) {
 
   // Detect drop target via elementFromPoint
   const el = document.elementFromPoint(x, y) as HTMLElement | null;
-  let newTarget: DropTarget | null = null;
-  if (el) {
-    // Check for folder drop target (sidebar row or subfolder tile)
-    const folderDropEl = el.closest('[data-folder-drop-id]') as HTMLElement | null;
-    const statusDropEl = el.closest('[data-status-drop]') as HTMLElement | null;
-    const folderHashEl = el.closest('[data-folder-hash]') as HTMLElement | null;
-
-    if (folderDropEl) {
-      const fid = parseInt(folderDropEl.dataset.folderDropId ?? '', 10);
-      if (!isNaN(fid)) newTarget = { kind: 'folder', folderId: fid, nodeId: `folder:${fid}` };
-    } else if (statusDropEl) {
-      const status = parseInt(statusDropEl.dataset.statusDrop ?? '', 10);
-      if (!isNaN(status)) newTarget = { kind: 'status', status };
-    } else if (folderHashEl) {
-      const nodeId = folderHashEl.dataset.folderHash ?? '';
-      const fid = parseInt(nodeId.replace('folder:', ''), 10);
-      if (!isNaN(fid)) newTarget = { kind: 'folder', folderId: fid, nodeId };
-    }
-  }
+  const resolved = resolveDropTarget(el);
+  const newTarget = resolved?.target ?? null;
 
   const prev = state.dropTarget;
-  const changed = JSON.stringify(prev) !== JSON.stringify(newTarget);
+  const changed = !sameDropTarget(prev, newTarget);
+  setHighlightedDropElement(resolved?.element ?? null);
   if (changed) {
     state = { ...state, dropTarget: newTarget };
-    // Update visual highlight on drop targets
-    document.querySelectorAll('[data-drop-highlighted]').forEach((el) => el.removeAttribute('data-drop-highlighted'));
-    if (newTarget) {
-      let targetEl: Element | null = null;
-      if (newTarget.kind === 'folder') {
-        targetEl = document.querySelector(`[data-folder-drop-id="${newTarget.folderId}"]`)
-          ?? document.querySelector(`[data-folder-hash="${newTarget.nodeId}"]`);
-      } else if (newTarget.kind === 'status') {
-        targetEl = document.querySelector(`[data-status-drop="${newTarget.status}"]`);
-      }
-      targetEl?.setAttribute('data-drop-highlighted', 'true');
-    }
     notifyChange();
   }
+}
+
+interface ResolvedDropTarget {
+  target: Extract<DropTarget, { kind: 'folder' | 'status' }>;
+  element: HTMLElement;
+}
+
+/** Resolve the semantic target and the exact hovered drop surface together. */
+export function resolveDropTarget(element: HTMLElement | null): ResolvedDropTarget | null {
+  if (!element) return null;
+
+  const folderDropElement = element.closest<HTMLElement>('[data-folder-drop-id]');
+  if (folderDropElement) {
+    const folderId = Number.parseInt(folderDropElement.dataset.folderDropId ?? '', 10);
+    if (!Number.isNaN(folderId)) {
+      return {
+        target: { kind: 'folder', folderId, nodeId: `folder:${folderId}` },
+        element: folderDropElement,
+      };
+    }
+  }
+
+  const statusDropElement = element.closest<HTMLElement>('[data-status-drop]');
+  if (statusDropElement) {
+    const status = Number.parseInt(statusDropElement.dataset.statusDrop ?? '', 10);
+    if (!Number.isNaN(status)) {
+      return { target: { kind: 'status', status }, element: statusDropElement };
+    }
+  }
+
+  const folderTileElement = element.closest<HTMLElement>('[data-folder-hash]');
+  const nodeId = folderTileElement?.dataset.folderHash ?? '';
+  const folderId = Number.parseInt(nodeId.replace('folder:', ''), 10);
+  if (folderTileElement && !Number.isNaN(folderId)) {
+    return {
+      target: { kind: 'folder', folderId, nodeId },
+      element: folderTileElement,
+    };
+  }
+
+  return null;
+}
+
+function sameDropTarget(left: DropTarget | null, right: DropTarget | null): boolean {
+  if (left?.kind !== right?.kind) return false;
+  if (!left || !right) return true;
+  if (left.kind === 'folder' && right.kind === 'folder') return left.folderId === right.folderId;
+  if (left.kind === 'status' && right.kind === 'status') return left.status === right.status;
+  return left === right;
+}
+
+function setHighlightedDropElement(next: HTMLElement | null) {
+  if (highlightedDropElement === next) return;
+  highlightedDropElement?.removeAttribute('data-drop-highlighted');
+  highlightedDropElement = next;
+  highlightedDropElement?.setAttribute('data-drop-highlighted', 'true');
 }
 
 export function setDropTarget(target: DropTarget | null) {
@@ -138,7 +167,7 @@ export function setDropTarget(target: DropTarget | null) {
 }
 
 function clearDropHighlights() {
-  document.querySelectorAll('[data-drop-highlighted]').forEach((el) => el.removeAttribute('data-drop-highlighted'));
+  setHighlightedDropElement(null);
 }
 
 export function endDrag() {
