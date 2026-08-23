@@ -47,7 +47,7 @@ describe('inspector invalidation', () => {
     stop();
   });
 
-  it('displays a query-wide selection and returns to its scope when cleared', () => {
+  it('keeps the committed scope until a query summary is ready and returns when cleared', () => {
     store.set(activeNodeIdAtom, 'system:active');
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
@@ -63,6 +63,12 @@ describe('inspector invalidation', () => {
     });
 
     expect(store.get(displayedInspectorTargetAtom)).toEqual({
+      kind: 'scope',
+      nodeId: 'system:active',
+    });
+
+    // The summary owner commits this only after its data or loading state is ready.
+    store.set(displayedInspectorTargetAtom, {
       kind: 'multi',
       count: 25,
       selectionMode: 'query_results',

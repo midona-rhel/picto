@@ -36,12 +36,19 @@ export function startInspectorSettle(): () => void {
       return;
     }
 
+    if (target.kind === 'multi') {
+      // The summary request owns this transition. It keeps the previous inspector
+      // visible until the full result is ready or the 250ms loading threshold wins.
+      lastItemId = null;
+      cancelInspectorLoad();
+      return;
+    }
+
     const displayedTarget = store.get(displayedInspectorTargetAtom);
-    // Selection changes do not wait for a grid snapshot: their target already refers
-    // to the displayed query. Scope→scope navigation still waits for GridScreen's
-    // snapshot commit so the scope inspector cannot get ahead of its grid data.
-    const commitImmediately = target.kind === 'multi'
-      || target.kind === 'none'
+    // Scope→scope navigation waits for GridScreen's snapshot commit so the scope
+    // inspector cannot get ahead of its grid data. Leaving a committed item or
+    // multi-selection is immediate because the destination scope is already shown.
+    const commitImmediately = target.kind === 'none'
       || lastItemId != null
       || displayedTarget.kind === 'item'
       || displayedTarget.kind === 'multi';

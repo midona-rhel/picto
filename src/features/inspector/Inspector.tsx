@@ -7,6 +7,7 @@
  */
 
 import { forwardRef, useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useAtomValue, getDefaultStore } from 'jotai';
 import { IconAlertCircle, IconFolder, IconSparkles } from '@tabler/icons-react';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
@@ -28,6 +29,7 @@ import {
   displayedInspectorTargetAtom,
   inspectorErrorAtom,
   inspectorLoadingAtom,
+  inspectorPinnedAtom,
   scopeInspectorViewModelAtom,
 } from '../../state/inspector';
 import {
@@ -183,48 +185,76 @@ function useSelectionSummary() {
   const target = useAtomValue(selectionTargetAtom);
   const selectionCount = useAtomValue(selectionCountAtom);
   const selectionFingerprint = useAtomValue(selectionFingerprintAtom);
+  const pinned = useAtomValue(inspectorPinnedAtom);
   const [result, setResult] = useState<{ fingerprint: string; summary: SelectionSummary } | null>(null);
   const [loadingFingerprint, setLoadingFingerprint] = useState<string | null>(null);
   const [failedFingerprint, setFailedFingerprint] = useState<string | null>(null);
   const [refreshRevision, setRefreshRevision] = useState(0);
-  const summary = result?.fingerprint === selectionFingerprint ? result.summary : null;
-  const needsSummary = Boolean(target && selectionCount >= 2);
+  // Keep the last committed summary while a changed selection is resolving. The
+  // displayed inspector still describes that committed selection during this time.
+  const summary = result?.summary ?? null;
+  const needsSummary = Boolean(!pinned && target && selectionCount >= 2);
 
   useEffect(() => libraryInvalidation.register('library', (payload) => {
     setRefreshRevision(payload.revision);
   }), []);
 
   useEffect(() => {
-    if (!target || selectionCount < 2) {
+    if (pinned || !target || selectionCount < 2) {
       setResult(null);
       setLoadingFingerprint(null);
       setFailedFingerprint(null);
       return;
     }
     let stale = false;
-    setLoadingFingerprint(null);
+    const refreshingDisplayedSummary = result?.fingerprint === selectionFingerprint;
+    if (!refreshingDisplayedSummary) setLoadingFingerprint(null);
     setFailedFingerprint(null);
     const timer = window.setTimeout(() => {
-      if (!stale) setLoadingFingerprint(selectionFingerprint);
+      if (stale || refreshingDisplayedSummary || store.get(inspectorPinnedAtom)) return;
+      flushSync(() => {
+        setResult(null);
+        setLoadingFingerprint(selectionFingerprint);
+      });
+      store.set(displayedInspectorTargetAtom, {
+        kind: 'multi',
+        count: selectionCount,
+        selectionMode: target.kind === 'query' ? 'query_results' : 'explicit',
+      });
     }, 250);
     void entityMutations.getTargetSelectionSummary(target).then((s) => {
-      if (!stale) {
+      if (!stale && !store.get(inspectorPinnedAtom)) {
         window.clearTimeout(timer);
-        setResult({ fingerprint: selectionFingerprint, summary: s });
-        setLoadingFingerprint(null);
+        flushSync(() => {
+          setResult({ fingerprint: selectionFingerprint, summary: s });
+          setLoadingFingerprint(null);
+        });
+        store.set(displayedInspectorTargetAtom, {
+          kind: 'multi',
+          count: s.selected_count,
+          selectionMode: target.kind === 'query' ? 'query_results' : 'explicit',
+        });
       }
     }).catch(() => {
-      if (!stale) {
+      if (!stale && !store.get(inspectorPinnedAtom)) {
         window.clearTimeout(timer);
-        setLoadingFingerprint(null);
-        setFailedFingerprint(selectionFingerprint);
+        flushSync(() => {
+          setResult(null);
+          setLoadingFingerprint(null);
+          setFailedFingerprint(selectionFingerprint);
+        });
+        store.set(displayedInspectorTargetAtom, {
+          kind: 'multi',
+          count: selectionCount,
+          selectionMode: target.kind === 'query' ? 'query_results' : 'explicit',
+        });
       }
     });
     return () => {
       stale = true;
       window.clearTimeout(timer);
     };
-  }, [refreshRevision, selectionCount, selectionFingerprint, target]);
+  }, [pinned, refreshRevision, selectionCount, selectionFingerprint, target]);
 
   return {
     target,
