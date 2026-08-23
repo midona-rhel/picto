@@ -200,7 +200,7 @@ export function createMenuManager({
         label: 'Organize',
         submenu: [
           {
-            label: 'Tag Manager',
+            label: 'Tags',
             click: () => sendToFocusedWindow('menu:navigate', 'tags'),
           },
         ],

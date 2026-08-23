@@ -1,123 +1,25 @@
-/* FolderPickerModal — wide GlassModal for folder membership.
- * Sidebar (Recent / Members / All) + folder tree/list. */
+/* Folder-specific geometry layered on the shared selection-modal shell. */
 
 .panelBody {
-  display: flex;
-  flex-direction: column;
+  composes: panelBody from './SelectionModalShell.module.css';
   height: 480px;
 }
 
-/* ── Search bar ── */
-
-.searchBar {
-  display: flex;
-  align-items: center;
-  height: 38px;
-  padding: 0 12px;
-  gap: 6px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--color-border-secondary);
-}
-
-.searchIcon {
-  flex-shrink: 0;
-  color: var(--color-text-tertiary);
-  opacity: 0.6;
-}
-
-.searchInput {
-  flex: 1;
-  background: none;
-  border: none;
-  outline: none;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-md);
-  font-family: var(--font-family);
-  height: 38px;
-  padding: 0;
-  min-width: 0;
-  caret-color: var(--color-text-primary);
-}
-
-.searchInput::placeholder {
-  color: var(--color-text-tertiary);
-}
-
-/* ── Main area (sidebar + content) ── */
-
-.mainArea {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-
-/* ── Sidebar ── */
+.searchBar { composes: searchBar from './SelectionModalShell.module.css'; }
+.searchIcon { composes: searchIcon from './SelectionModalShell.module.css'; }
+.searchInput { composes: searchInput from './SelectionModalShell.module.css'; }
+.mainArea { composes: mainArea from './SelectionModalShell.module.css'; }
 
 .sidebar {
+  composes: sidebar from './SelectionModalShell.module.css';
   width: 180px;
-  flex-shrink: 0;
-  overflow-y: auto;
-  padding: 4px;
-  border-right: 1px solid var(--color-border-secondary);
 }
 
-.sidebarItem {
-  display: flex;
-  align-items: center;
-  height: 28px;
-  padding: 0 10px;
-  gap: 6px;
-  border-radius: 6px;
-  font-size: 13px;
-  color: var(--color-text-primary);
-  white-space: nowrap;
-  cursor: pointer;
-  transition: background-color 60ms ease;
-}
-
-.sidebarItem:hover {
-  background-color: var(--color-subtle-overlay);
-}
-
-.sidebarItemActive {
-  color: var(--color-primary) !important;
-  background-color: var(--color-primary-10) !important;
-}
-
-.sidebarName {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0.85;
-}
-
-.sidebarItem:hover .sidebarName,
-.sidebarItemActive .sidebarName {
-  opacity: 1;
-}
-
-.sidebarBadge {
-  font-size: 12px;
-  font-family: var(--font-family-mono);
-  color: var(--color-text-tertiary);
-  flex-shrink: 0;
-  margin-left: auto;
-  opacity: 0.5;
-}
-
-.sidebarItem:hover .sidebarBadge,
-.sidebarItemActive .sidebarBadge {
-  opacity: 1;
-}
-
-.sidebarSep {
-  height: 1px;
-  margin: 4px 10px;
-  background: var(--color-border-secondary);
-}
-
-/* ── Content ── */
+.sidebarItem { composes: sidebarItem from './SelectionModalShell.module.css'; }
+.sidebarItemActive { composes: sidebarItemActive from './SelectionModalShell.module.css'; }
+.sidebarName { composes: sidebarName from './SelectionModalShell.module.css'; }
+.sidebarBadge { composes: sidebarBadge from './SelectionModalShell.module.css'; }
+.sidebarSep { composes: sidebarSep from './SelectionModalShell.module.css'; }
 
 .content {
   flex: 1;
@@ -126,33 +28,12 @@
   padding: 4px 0;
 }
 
-.flatList {
-  padding: 0;
-}
-
+.flatList,
 .treeContainer {
   padding: 0;
 }
 
-/* ── Folder row ── */
-
-.folderRow {
-  display: flex;
-  align-items: center;
-  height: 28px;
-  padding: 0 8px;
-  gap: 6px;
-  margin: 0 4px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  color: var(--color-text-primary);
-  transition: background-color 60ms ease;
-}
-
-.folderRow:hover {
-  background: var(--color-subtle-overlay);
-}
+.folderRow { composes: itemRow from './SelectionModalShell.module.css'; }
 
 .folderIcon {
   flex-shrink: 0;
@@ -163,33 +44,8 @@
   opacity: 1;
 }
 
-.folderName {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  opacity: 0.85;
-}
-
-.folderRow:hover .folderName {
-  opacity: 1;
-}
-
-.folderCount {
-  font-size: 11px;
-  font-family: var(--font-family-mono);
-  color: var(--color-text-tertiary);
-  flex-shrink: 0;
-  margin-left: auto;
-  opacity: 0.5;
-}
-
-.folderRow:hover .folderCount {
-  opacity: 1;
-}
-
-/* ── Expand button ── */
+.folderName { composes: itemName from './SelectionModalShell.module.css'; }
+.folderCount { composes: itemBadge from './SelectionModalShell.module.css'; }
 
 .expandBtn {
   width: 16px;
@@ -199,8 +55,8 @@
   justify-content: center;
   flex-shrink: 0;
   color: var(--color-text-tertiary);
-  transition: transform 120ms ease;
   cursor: pointer;
+  transition: transform 120ms ease;
 }
 
 .expandBtnOpen {
@@ -212,36 +68,12 @@
   flex-shrink: 0;
 }
 
-/* ── Checkbox states ── */
-
 .checkRemove {
   background: var(--color-negative) !important;
   outline: 1px solid transparent !important;
   color: rgba(255, 255, 255, 0.99) !important;
 }
 
-/* ── Empty state ── */
-
-.emptyState {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 80px;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
-}
-
-/* ── Footer ── */
-
-.footerLeft {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: 1;
-}
-
-.summaryText {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  font-family: var(--font-family-mono);
-}
+.emptyState { composes: emptyState from './SelectionModalShell.module.css'; }
+.footerLeft { composes: footerLeft from './SelectionModalShell.module.css'; }
+.summaryText { composes: summaryText from './SelectionModalShell.module.css'; }

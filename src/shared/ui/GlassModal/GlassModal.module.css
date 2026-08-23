@@ -157,7 +157,7 @@
 }
 
 .helpText {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
   line-height: 1.4;
 }
@@ -176,7 +176,7 @@
 
 .section { display: flex; flex-direction: column; gap: 8px; }
 .sectionLabel {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.03em;
@@ -186,7 +186,7 @@
 /* Bordered group container (rule groups, card-style sections) */
 .group {
   border: 1px solid var(--color-border-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 10px;
   display: flex;
   flex-direction: column;

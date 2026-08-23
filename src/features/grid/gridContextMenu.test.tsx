@@ -74,4 +74,31 @@ describe('buildTileContextMenu', () => {
     expect(autoTagEntry).toBeDefined();
     expect(autoTagEntry!.disabled).toBe(true);
   });
+
+  it('uses Picto bookmark semantics for tag actions', () => {
+    const entries = buildTileContextMenu({
+      selectionCount: 1,
+      querySelectionActive: false,
+      singleSelected: false,
+      singleHash: null,
+      hasClipboardTags: true,
+      scopeKind: 'system',
+      statusFilter: null,
+      loadedCount: 1,
+      onSelectAll: vi.fn(),
+      onDeselectAll: vi.fn(),
+      onOpenTagSelect: vi.fn(),
+      onOpenAiTagger: vi.fn(),
+      onCopyTags: vi.fn(),
+      onPasteTags: vi.fn(),
+    });
+    const byLabel = (label: string) => entries.find(
+      (entry): entry is MenuItem => 'label' in entry && entry.label === label,
+    );
+
+    expect(renderToStaticMarkup(byLabel('Add Tags')!.icon)).toContain('tabler-icon-bookmark');
+    expect(renderToStaticMarkup(byLabel('Auto Tag')!.icon)).toContain('data-icon="auto-tag"');
+    expect(renderToStaticMarkup(byLabel('Copy Tags')!.icon)).toContain('tabler-icon-bookmarks');
+    expect(renderToStaticMarkup(byLabel('Paste Tags')!.icon)).toContain('data-icon="paste-tags"');
+  });
 });

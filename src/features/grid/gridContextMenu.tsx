@@ -17,7 +17,7 @@ import {
   IconFileExport, IconFolder, IconStar,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
-import { IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
+import { IconAutoTag, IconPasteTags, IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
 import { IconFolderNewSelection } from '../../shared/ui/IconPicker/customIcons';
 import { buildContextMenuViewEntries } from './GridViewMenu';
 import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
@@ -214,13 +214,13 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   if (hasSelection) {
     entries.push(item('Add Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('organize.addTag'), action: ctx.onOpenTagSelect }));
     entries.push(item(selectionCount > 1 ? `Auto Tag ${selectionCount} Images` : 'Auto Tag', {
-      icon: <IconBookmarks size={15} />,
+      icon: <IconAutoTag size={15} />,
       shortcut: kbd('organize.autoTag'),
       action: ctx.onOpenAiTagger,
       disabled: !aiTagEnabled,
     }));
-    entries.push(item('Copy Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags }));
-    entries.push(item('Paste Tags', { icon: <IconBookmarks size={15} style={{ transform: 'scaleX(-1)' }} />, shortcut: kbd('edit.pasteTags'), action: ctx.onPasteTags, disabled: !ctx.hasClipboardTags }));
+    entries.push(item('Copy Tags', { icon: <IconBookmarks size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags }));
+    entries.push(item('Paste Tags', { icon: <IconPasteTags size={15} />, shortcut: kbd('edit.pasteTags'), action: ctx.onPasteTags, disabled: !ctx.hasClipboardTags }));
     entries.push(sep());
   }
 

@@ -45,7 +45,7 @@
   gap: 4px;
   cursor: grab;
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   box-shadow: 0 -1px 0 var(--color-border-secondary) inset;
 }
 
@@ -73,7 +73,7 @@
   cursor: grab;
   background: var(--color-black-10);
   border-top: 1px solid var(--color-border-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
 }
 
@@ -155,7 +155,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
 }
 
@@ -168,7 +168,7 @@
   padding: 0 4px;
   border-radius: 3px;
   background: var(--color-subtle-overlay);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-family: var(--font-family-mono);
   color: var(--color-text-primary);
 }
@@ -178,7 +178,7 @@
 .checkRow {
   display: flex;
   align-items: center;
-  height: 28px;
+  height: var(--control-height-md);
   padding: 0 6px;
   gap: 6px;
   border-radius: var(--radius-md);
@@ -229,7 +229,7 @@
 }
 
 .checkBadge {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   font-family: var(--font-family-mono);
   color: var(--color-text-tertiary);
   flex-shrink: 0;

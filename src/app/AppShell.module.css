@@ -60,10 +60,6 @@
 .titlebarBtnActive { composes: iconBtnActive from '../shared/styles/iconButton.module.css'; }
 .titlebarBtnDisabled { composes: iconBtnDisabled from '../shared/styles/iconButton.module.css'; }
 
-/* Aliases for backward compat with JSX class names */
-.navBtn { composes: titlebarBtn; margin: 0 1px; }
-.navBtnDisabled { composes: titlebarBtnDisabled; }
-
 .scopeTitle {
   position: absolute;
   left: 72px;
@@ -106,6 +102,7 @@
   flex-shrink: 0;
   width: var(--sidebar-width);
   height: 100%;
+  contain: layout style;
   border-right: 1px solid var(--color-border-secondary);
 }
 
@@ -113,6 +110,7 @@
   flex: 1;
   min-width: 0;
   height: 100%;
+  contain: layout style;
   overflow: hidden;
   background: var(--color-bg-app);
 }
@@ -130,11 +128,28 @@
   top: 0;
   right: 0;
   bottom: 0;
+  contain: layout style;
   background: var(--inspector-surface);
   color: var(--inspector-text-primary);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.inspector[data-chrome-transition='leaving_grid'] {
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 170ms var(--ease-default);
+}
+
+.inspector[data-chrome-transition='entering_grid'][data-transition-phase='waiting'] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.inspector[data-chrome-transition='entering_grid'][data-transition-phase='fading_in'] {
+  opacity: 1;
+  transition: opacity 170ms var(--ease-default);
 }
 
 .inspectorDragging {

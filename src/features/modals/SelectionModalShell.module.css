@@ -1,0 +1,175 @@
+/* Shared structure for folder/tag selection modals. Domain rows extend these primitives. */
+
+.panelBody {
+  display: flex;
+  flex-direction: column;
+}
+
+.searchBar {
+  display: flex;
+  align-items: center;
+  height: 38px;
+  padding: 0 12px;
+  gap: 6px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.searchIcon {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  opacity: 0.6;
+}
+
+.searchInput {
+  flex: 1;
+  min-width: 0;
+  height: 38px;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: none;
+  color: var(--color-text-primary);
+  caret-color: var(--color-text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+}
+
+.searchInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.mainArea {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.sidebar {
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 4px;
+  border-right: 1px solid var(--color-border-secondary);
+}
+
+.sidebarItem {
+  display: flex;
+  align-items: center;
+  height: var(--control-height-md);
+  padding: 0 10px;
+  gap: 6px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  white-space: nowrap;
+  transition: background-color 60ms ease;
+}
+
+.sidebarItem:hover {
+  background-color: var(--color-subtle-overlay);
+}
+
+.sidebarItemActive {
+  color: var(--color-primary) !important;
+  background-color: var(--color-primary-10) !important;
+}
+
+.sidebarName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0.85;
+}
+
+.sidebarItem:hover .sidebarName,
+.sidebarItemActive .sidebarName {
+  opacity: 1;
+}
+
+.sidebarBadge {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-sm);
+  opacity: 0.5;
+}
+
+.sidebarItem:hover .sidebarBadge,
+.sidebarItemActive .sidebarBadge {
+  opacity: 1;
+}
+
+.sidebarSep {
+  height: 1px;
+  margin: 4px 10px;
+  background: var(--color-border-secondary);
+}
+
+.itemRow {
+  display: flex;
+  align-items: center;
+  height: var(--control-height-md);
+  margin: 0 4px;
+  padding: 0 8px;
+  gap: 6px;
+  border-radius: var(--radius-md);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  font-size: var(--font-size-md);
+  transition: background-color 60ms ease;
+}
+
+.itemRow:hover {
+  background: var(--color-subtle-overlay);
+}
+
+.itemName {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+.itemRow:hover .itemName {
+  opacity: 1;
+}
+
+.itemBadge {
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+  opacity: 0.5;
+}
+
+.itemRow:hover .itemBadge {
+  opacity: 1;
+}
+
+.emptyState {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 80px;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.footerLeft {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+}
+
+.summaryText {
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-caption);
+}

@@ -24,7 +24,7 @@
   outline: none;
   flex-shrink: 0;
   width: 28px;
-  height: 28px;
+  height: var(--control-height-md);
   min-width: 28px;
   -webkit-app-region: no-drag;
   transition: all 150ms var(--ease-default);

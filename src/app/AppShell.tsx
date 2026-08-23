@@ -8,10 +8,13 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { isNativeDragPending as isNativeDragPendingFn, isDragActive as isDragActiveFn, getDragState, startNativeDrag as startNativeDragFn } from '../features/grid/dragState';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
-import { IconLayoutSidebar, IconSettings, IconChevronLeft, IconChevronRight, IconPin, IconPinFilled } from '@tabler/icons-react';
+import { IconSettings, IconPin, IconPinFilled } from '@tabler/icons-react';
+import { ToolbarHistoryIcon, ToolbarPanelIcon } from '../shared/ui/icons/toolbar-icons';
 import { Sidebar } from '../features/sidebar/Sidebar';
 import { GridScreen } from '../features/grid/GridScreen';
 import { GridToolbar, ViewerToolbar } from '../features/grid/GridToolbar';
+import { TagsToolbar } from '../features/tags/TagManagerScreen';
+import { DuplicatesToolbar } from '../features/duplicates/DuplicatesScreen';
 import { Inspector } from '../features/inspector/Inspector';
 import { ModalLayer } from '../features/modals/ModalLayer';
 import {
@@ -20,10 +23,11 @@ import {
   inspectorWidthAtom, setInspectorWidthAtom,
   INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH,
   activeNodeIdAtom,
+  displayedSurfaceNodeIdAtom,
   showTreeGuidesAtom,
 } from '../state/navigation';
 import { sidebarNodesAtom } from '../state/sidebar';
-import { gridActiveAtom, gridScopeLabelAtom } from '../state/grid';
+import { gridActiveAtom, gridChromeTransitionAtom, gridScopeLabelAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
 import { viewerSessionAtom } from '../state/viewer';
 import { startAppRuntime } from '../runtime/appRuntime';
@@ -33,6 +37,7 @@ import { canGoBackAtom, canGoForwardAtom, goBack, goForward, pushHistory, pushSu
 import { subscriptionsSelectionAtom, subscriptionsWorkspaceSnapshotAtom } from '../state/subscriptionsWorkspace';
 import { getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
 import { KbdTooltip } from '../shared/ui/KbdTooltip';
+import { TitlebarControlButton } from '../shared/ui/TitlebarControls';
 import { WindowControls } from '../shared/ui/WindowControls';
 import { appController } from '../controllers/appController';
 import { settingsController } from '../controllers/settingsController';
@@ -86,7 +91,7 @@ function ScopeTitle() {
   const label = gridActive ? (frozenLabel || liveLabel) : liveLabel;
   const snapshot = useAtomValue(displayedGridSnapshotAtom);
   const nodes = useAtomValue(sidebarNodesAtom);
-  const activeNodeId = useAtomValue(activeNodeIdAtom);
+  const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
   const [subsSelection, setSubsSelection] = useAtom(subscriptionsSelectionAtom);
   const subsSnapshot = useAtomValue(subscriptionsWorkspaceSnapshotAtom);
@@ -97,7 +102,7 @@ function ScopeTitle() {
   };
 
   // Subscription breadcrumb: Subscriptions [/ Subscription].
-  if (activeNodeId === 'system:subscriptions') {
+  if (displayedSurfaceNodeId === 'system:subscriptions') {
     const selectedSub =
       subsSelection?.kind === 'subscription'
         ? subsSnapshot?.subscriptions.find((sub) => sub.id === subsSelection.id) ?? null
@@ -122,6 +127,14 @@ function ScopeTitle() {
         {leafName}
       </span>
     );
+  }
+
+  if (displayedSurfaceNodeId === 'system:duplicates') {
+    return <span className={styles.scopeTitle}>Duplicates</span>;
+  }
+
+  if (displayedSurfaceNodeId === 'system:tag_manager') {
+    return <span className={styles.scopeTitle}>Tags</span>;
   }
 
   if (!label) return null;
@@ -158,7 +171,9 @@ export function AppShell() {
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const inspectorCollapsed = useAtomValue(inspectorCollapsedAtom);
   const gridActive = useAtomValue(gridActiveAtom);
-  const activeNodeId = useAtomValue(activeNodeIdAtom);
+  const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
+  const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
+  const gridChromeTransition = useAtomValue(gridChromeTransitionAtom);
   const viewerSession = useAtomValue(viewerSessionAtom);
   const canBack = useAtomValue(canGoBackAtom);
   const canForward = useAtomValue(canGoForwardAtom);
@@ -168,7 +183,7 @@ export function AppShell() {
   const toggleInspector = useSetAtom(toggleInspectorAtom);
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
   const toggleBothPanels = () => { toggleSidebar(); toggleInspector(); };
-  const isSubscriptionsWorkspace = activeNodeId === 'system:subscriptions';
+  const isSubscriptionsWorkspace = displayedSurfaceNodeId === 'system:subscriptions';
   const titlebarLeftClass = sidebarCollapsed
     ? (isMacPlatform ? styles.titlebarLeftPanelHiddenMac : styles.titlebarLeftPanelHidden)
     : styles.titlebarLeft;
@@ -381,7 +396,7 @@ export function AppShell() {
             </KbdTooltip>
             <KbdTooltip label="Toggle Panels" shortcut="Tab">
               <button className={styles.toggleBtn} onClick={toggleBothPanels}>
-                <IconLayoutSidebar size={18} stroke={1.5} />
+                <ToolbarPanelIcon size={14} />
               </button>
             </KbdTooltip>
           </div>
@@ -392,19 +407,21 @@ export function AppShell() {
           ) : (
             <>
               <KbdTooltip label="Back" shortcut="Alt+ArrowLeft">
-                <button className={`${styles.navBtn} ${!canBack ? styles.navBtnDisabled : ''}`} onClick={canBack ? goBack : undefined}>
-                  <IconChevronLeft size={16} stroke={1.5} />
-                </button>
+                <TitlebarControlButton disabled={!canBack} onClick={canBack ? goBack : undefined}>
+                  <ToolbarHistoryIcon direction="back" />
+                </TitlebarControlButton>
               </KbdTooltip>
               <KbdTooltip label="Forward" shortcut="Alt+ArrowRight">
-                <button className={`${styles.navBtn} ${!canForward ? styles.navBtnDisabled : ''}`} onClick={canForward ? goForward : undefined}>
-                  <IconChevronRight size={16} stroke={1.5} />
-                </button>
+                <TitlebarControlButton disabled={!canForward} onClick={canForward ? goForward : undefined}>
+                  <ToolbarHistoryIcon direction="forward" />
+                </TitlebarControlButton>
               </KbdTooltip>
               <ScopeTitle />
               {gridActive && !isSubscriptionsWorkspace ? (
                 <GridToolbar />
               ) : null}
+              {displayedSurfaceNodeId === 'system:duplicates' ? <DuplicatesToolbar /> : null}
+              {displayedSurfaceNodeId === 'system:tag_manager' ? <TagsToolbar /> : null}
               {!showInspector && <WindowControls />}
             </>
           )}
@@ -422,7 +439,13 @@ export function AppShell() {
         </div>
       </div>
       {showInspector && (
-        <div ref={inspectorElRef} className={styles.inspector} style={{ width: inspectorWidth }}>
+        <div
+          ref={inspectorElRef}
+          className={styles.inspector}
+          data-chrome-transition={gridChromeTransition}
+          data-transition-phase={transitionPhase}
+          style={{ width: inspectorWidth }}
+        >
           <div className={styles.inspectorResizeHandle} onMouseDown={onInspectorResizeStart} />
           <div className={styles.inspectorTitlebar}>
             <InspectorTitlebarActions />

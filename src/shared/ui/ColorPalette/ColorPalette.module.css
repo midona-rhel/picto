@@ -6,7 +6,7 @@
   max-width: 100%;
   align-self: center;
   gap: 2px;
-  min-height: 26px;
+  min-height: var(--control-height-sm);
   align-items: center;
   border-radius: 40px;
   padding: 0 6px;

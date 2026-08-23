@@ -9,27 +9,41 @@
 .menu {
   position: fixed;
   z-index: var(--layer-menu);
+  isolation: isolate;
   width: 270px;
   max-height: calc(100vh - 40px);
-  overflow: hidden;
+  overflow: visible;
   display: flex;
   flex-direction: column;
   user-select: none;
   -webkit-user-select: none;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   -webkit-font-smoothing: antialiased;
 
-  /* Glass surface */
-  background: color-mix(in srgb, var(--color-bg-app) 92%, transparent);
+  animation: menuIn 100ms cubic-bezier(0.4, 0, 0.22, 1);
+}
+
+/*
+ * reference application renders floating chrome on a behind-content pseudo-element. Keeping
+ * the rim separate prevents the menu's scrolling content from clipping the
+ * lower highlight and lets the same theme tokens drive every floating panel.
+ */
+.menu::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  box-sizing: border-box;
+  background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   border-top: var(--glass-border-top);
-  border-right: 1px solid rgba(255, 255, 255, 0.15);
-  border-bottom: 1px solid rgba(0, 0, 0, 0.1);
-  border-left: 1px solid rgba(255, 255, 255, 0.15);
-  border-radius: 8px;
-  box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.5);
-  animation: menuIn 100ms cubic-bezier(0.4, 0, 0.22, 1);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
 }
 
 .menuClosing {
@@ -73,7 +87,7 @@
   border: none;
   outline: none;
   color: var(--color-text-primary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-family: var(--font-family);
   height: 36px;
   padding: 0;
@@ -98,15 +112,15 @@
 .item {
   display: flex;
   align-items: center;
-  height: 26px;
-  min-height: 26px;
+  height: var(--control-height-sm);
+  min-height: var(--control-height-sm);
   flex-shrink: 0;
   padding: 0 6px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   color: var(--color-text-primary);
   white-space: nowrap;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   transition: all var(--ease-default) 30ms;
 }
 
@@ -160,7 +174,7 @@
 
 .shortcut {
   opacity: 0.5;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   flex-shrink: 0;
   margin-left: auto;
   padding-left: 28px;
@@ -195,5 +209,5 @@
   text-align: center;
   color: var(--color-text-tertiary);
   padding: 8px 12px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }

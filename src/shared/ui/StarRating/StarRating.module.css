@@ -6,7 +6,7 @@
 
 .label {
   color: var(--inspector-text-secondary, var(--color-text-secondary));
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   min-width: 64px;
 }
 
