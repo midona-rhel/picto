@@ -12,6 +12,7 @@ import {
   IconPlayerPlay,
   IconPlayerPause,
   IconPlayerStop,
+  IconRefresh,
   IconTrash,
 } from '@tabler/icons-react';
 import type { MenuEntry, MenuSeparator } from '../../shared/ui/ContextMenu/ContextMenu';
@@ -30,6 +31,7 @@ export interface SubscriptionMenuContext {
   onPause: (paused: boolean) => void;
   onRename: () => void;
   onSetSchedule: (schedule: string) => void;
+  onReset: () => void;
   onDelete: () => void;
 }
 
@@ -62,6 +64,13 @@ export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[]
         action: () => ctx.onSetSchedule(entry.value),
         disabled: subscription.schedule === entry.value,
       })),
+    },
+    sep(),
+    {
+      label: 'Reset Sync History…',
+      icon: <IconRefresh size={14} />,
+      action: ctx.onReset,
+      disabled: running,
     },
     sep(),
     { label: 'Delete Subscription…', icon: <IconTrash size={14} />, action: ctx.onDelete, danger: true },

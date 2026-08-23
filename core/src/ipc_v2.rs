@@ -492,6 +492,15 @@ pub async fn dispatch_async(
     args_json: &str,
 ) -> Result<String, String> {
     match command {
+        "subscriptions.reset" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            return publish(
+                application,
+                application
+                    .reset_subscription(input.subscription_id)
+                    .await?,
+            );
+        }
         "pixiv_oauth_start" => {
             return read(crate::subscriptions::pixiv_oauth::generate_challenge());
         }

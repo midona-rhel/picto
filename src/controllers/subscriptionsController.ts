@@ -18,6 +18,7 @@ import {
   pauseSubscription,
   pauseSubscriptionQuery,
   renameSubscription,
+  resetSubscription,
   runSubscription,
   setSubscriptionSchedule,
   stopSubscription,
@@ -130,6 +131,10 @@ export const subscriptionsController = {
 
   delete(id: string): Promise<void> {
     return deleteSubscription(id);
+  },
+
+  reset(id: string): Promise<void> {
+    return resetSubscription(id);
   },
 
   pause(id: string, paused: boolean): Promise<void> {

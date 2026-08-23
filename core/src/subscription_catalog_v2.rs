@@ -414,6 +414,49 @@ impl Application {
         Ok(subscription_receipt(revision))
     }
 
+    pub async fn reset_subscription(
+        &self,
+        subscription_id: i64,
+    ) -> Result<MutationReceipt, String> {
+        self.store().read(|connection| {
+            require_subscription(connection, subscription_id)?;
+            reject_active_subscription_edit(connection, subscription_id)
+        })?;
+
+        crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
+            self.store().library_root(),
+            subscription_id,
+        )
+        .await?;
+
+        let (_, revision) = self.store().transaction(|transaction| {
+            require_subscription(transaction, subscription_id)?;
+            reject_active_subscription_edit(transaction, subscription_id)?;
+            transaction.execute(
+                "UPDATE subscription_query
+                 SET resume_cursor = NULL, initial_run_complete = 0,
+                     last_success_at = NULL, last_failure_at = NULL,
+                     last_failure_kind = NULL, last_failure_message = NULL
+                 WHERE subscription_id = ?1",
+                [subscription_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM subscription_issue WHERE subscription_id = ?1",
+                [subscription_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM subscription_source_post WHERE subscription_id = ?1",
+                [subscription_id],
+            )?;
+            transaction.execute(
+                "DELETE FROM subscription_run WHERE subscription_id = ?1",
+                [subscription_id],
+            )?;
+            Ok(())
+        })?;
+        Ok(subscription_receipt(revision))
+    }
+
     pub fn request_subscription_run(
         &self,
         subscription_id: i64,
@@ -592,6 +635,24 @@ fn reject_active_query_edit(
     Ok(())
 }
 
+fn reject_active_subscription_edit(
+    connection: &rusqlite::Connection,
+    subscription_id: i64,
+) -> rusqlite::Result<()> {
+    let active: bool = connection.query_row(
+        "SELECT EXISTS (
+             SELECT 1 FROM subscription_run
+             WHERE subscription_id = ?1 AND status IN ('pending', 'running')
+         )",
+        [subscription_id],
+        |row| row.get(0),
+    )?;
+    if active {
+        return Err(invalid("stop the subscription before resetting it"));
+    }
+    Ok(())
+}
+
 fn subscription_receipt(revision: u64) -> MutationReceipt {
     MutationReceipt {
         revision,
@@ -699,6 +760,126 @@ mod tests {
             })
             .unwrap();
         assert_eq!(source_posts, 1);
+    }
+
+    #[tokio::test]
+    async fn reset_forgets_sync_history_without_deleting_source_provenance() {
+        let (directory, application) = fixture();
+        let (subscription_id, _) = application
+            .create_subscription_definition(&input(), "2026-01-01T00:00:00Z")
+            .unwrap();
+        let query_id = list(&application).unwrap().subscriptions[0].queries[0].query_id;
+        let (run, _) = application
+            .request_subscription_run(subscription_id, "2026-01-01T00:00:01Z")
+            .unwrap();
+
+        assert!(application
+            .reset_subscription(subscription_id)
+            .await
+            .is_err());
+        application
+            .cancel_subscription_run(subscription_id, "2026-01-01T00:00:02Z")
+            .unwrap();
+
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE subscription_query
+                     SET resume_cursor = 'page-2', initial_run_complete = 1,
+                         last_success_at = 'now', last_failure_at = 'now',
+                         last_failure_kind = 'network', last_failure_message = 'failed'
+                     WHERE query_id = ?1",
+                    [query_id],
+                )?;
+                transaction.execute(
+                    "INSERT INTO source_post (site_id, post_key, created_at, updated_at)
+                     VALUES ('pixiv', 'post', 'now', 'now')",
+                    [],
+                )?;
+                let source_post_id = transaction.last_insert_rowid();
+                transaction.execute(
+                    "INSERT INTO subscription_source_post (
+                         subscription_id, query_id, source_post_id, last_seen_run_id
+                     ) VALUES (?1, ?2, ?3, ?4)",
+                    params![subscription_id, query_id, source_post_id, run.run_id],
+                )?;
+                transaction.execute(
+                    "INSERT INTO subscription_issue (
+                         issue_key, subscription_id, query_id, issue_kind, message,
+                         status, first_seen_at, last_seen_at
+                     ) VALUES ('issue', ?1, ?2, 'network', 'failed', 'open', 'now', 'now')",
+                    params![subscription_id, query_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let archive_path = directory.path().join("gdl-archive.sqlite3");
+        let archive = rusqlite::Connection::open(&archive_path).unwrap();
+        archive
+            .execute_batch("CREATE TABLE archive (entry TEXT PRIMARY KEY);")
+            .unwrap();
+        archive
+            .execute(
+                "INSERT INTO archive (entry) VALUES (?1)",
+                [format!("picto_s{subscription_id}_q{query_id}_post")],
+            )
+            .unwrap();
+        archive
+            .execute(
+                "INSERT INTO archive (entry) VALUES ('picto_s999_q1_post')",
+                [],
+            )
+            .unwrap();
+        drop(archive);
+
+        application
+            .reset_subscription(subscription_id)
+            .await
+            .unwrap();
+
+        application
+            .store()
+            .read(|connection| {
+                let query: (Option<String>, bool, Option<String>, Option<String>) = connection
+                    .query_row(
+                        "SELECT resume_cursor, initial_run_complete,
+                                last_success_at, last_failure_at
+                         FROM subscription_query WHERE query_id = ?1",
+                        [query_id],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )?;
+                assert_eq!(query, (None, false, None, None));
+                for table in [
+                    "subscription_run",
+                    "subscription_issue",
+                    "subscription_source_post",
+                ] {
+                    let count: i64 = connection.query_row(
+                        &format!("SELECT COUNT(*) FROM {table} WHERE subscription_id = ?1"),
+                        [subscription_id],
+                        |row| row.get(0),
+                    )?;
+                    assert_eq!(count, 0, "{table} should be reset");
+                }
+                let source_posts: i64 =
+                    connection
+                        .query_row("SELECT COUNT(*) FROM source_post", [], |row| row.get(0))?;
+                assert_eq!(source_posts, 1);
+                Ok(())
+            })
+            .unwrap();
+
+        let archive = rusqlite::Connection::open(archive_path).unwrap();
+        let entries = archive
+            .prepare("SELECT entry FROM archive ORDER BY entry")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(0))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        assert_eq!(entries, vec!["picto_s999_q1_post"]);
     }
 
     #[test]

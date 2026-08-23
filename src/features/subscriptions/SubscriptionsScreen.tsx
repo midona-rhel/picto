@@ -183,6 +183,16 @@ export function SubscriptionsScreen() {
         () => void act(`delete:${id}`, () => subscriptionsController.delete(id)),
       );
     },
+    reset: (id: string) => {
+      confirm(
+        {
+          title: 'Reset Sync History',
+          message: 'Picto will scan every query from the beginning on the next run. Imported media, the subscription, queries, and account login remain untouched.',
+          confirmLabel: 'Reset',
+        },
+        () => void act(`reset:${id}`, () => subscriptionsController.reset(id)),
+      );
+    },
     rename: (id: string, currentName: string) => {
       setRenameTarget({ kind: 'subscription', id, currentName });
     },
@@ -221,6 +231,7 @@ export function SubscriptionsScreen() {
         onPause: (paused) => detailController.pause(subscription.id, paused),
         onRename: () => setRenameTarget({ kind: 'subscription', id: subscription.id, currentName: subscription.name }),
         onSetSchedule: (schedule) => detailController.setSchedule(subscription.id, schedule),
+        onReset: () => detailController.reset(subscription.id),
         onDelete: () => detailController.delete(subscription.id),
       }));
     },

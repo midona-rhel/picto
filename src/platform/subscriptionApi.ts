@@ -227,6 +227,10 @@ export function deleteSubscription(id: string): Promise<void> {
   return invoke<MutationReceipt>('subscriptions.delete', { subscription_id: Number(id) }).then(() => undefined);
 }
 
+export function resetSubscription(id: string): Promise<void> {
+  return invoke<MutationReceipt>('subscriptions.reset', { subscription_id: Number(id) }).then(() => undefined);
+}
+
 export function renameSubscription(id: string, name: string): Promise<void> {
   return invoke<MutationReceipt>('subscriptions.rename', { subscription_id: Number(id), name }).then(() => undefined);
 }
