@@ -10,6 +10,7 @@ pub mod db;
 pub mod engine;
 
 // ── Domain modules ──────────────────────────────────
+pub mod ai_models_v2;
 pub mod ai_runtime_v2;
 pub mod ai_tagger;
 pub mod app;

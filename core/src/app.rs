@@ -3,9 +3,11 @@
 //! Commands call one application operation. Operations own their SQLite
 //! transaction, projection settlement, revision, and invalidation receipt.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
 use crate::blob_store::BlobStore;
@@ -184,6 +186,8 @@ pub struct Application {
     blobs: Arc<BlobStore>,
     projections: Arc<ProjectionStore>,
     ai_sessions: crate::ai_tagger::inference::SharedTaggerSessions,
+    ai_model_downloads: tokio::sync::Mutex<HashMap<String, CancellationToken>>,
+    ai_model_lifecycle: tokio::sync::Mutex<()>,
 }
 
 impl Application {
@@ -202,6 +206,8 @@ impl Application {
             blobs,
             projections,
             ai_sessions: crate::ai_tagger::inference::new_shared_sessions(),
+            ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
+            ai_model_lifecycle: tokio::sync::Mutex::new(()),
         })
     }
 
@@ -219,6 +225,22 @@ impl Application {
 
     pub(crate) fn ai_sessions(&self) -> &crate::ai_tagger::inference::SharedTaggerSessions {
         &self.ai_sessions
+    }
+
+    pub(crate) fn ai_model_downloads(
+        &self,
+    ) -> &tokio::sync::Mutex<HashMap<String, CancellationToken>> {
+        &self.ai_model_downloads
+    }
+
+    pub(crate) fn ai_model_lifecycle(&self) -> &tokio::sync::Mutex<()> {
+        &self.ai_model_lifecycle
+    }
+
+    pub(crate) async fn cancel_ai_model_downloads(&self) {
+        for token in self.ai_model_downloads.lock().await.values() {
+            token.cancel();
+        }
     }
 
     pub fn transaction<T, D>(

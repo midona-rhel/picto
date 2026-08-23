@@ -465,6 +465,44 @@ pub async fn dispatch_async(
     command: &str,
     args_json: &str,
 ) -> Result<String, String> {
+    match command {
+        "ai.status" => return read(crate::ai_runtime_v2::model_status(application).await?),
+        "ai.models.download" => {
+            let input: ModelInput = parse(args_json)?;
+            crate::ai_models_v2::download(application, &input.slug).await?;
+            return read(crate::ai_runtime_v2::model_status(application).await?);
+        }
+        "ai.models.cancel" => {
+            let input: ModelInput = parse(args_json)?;
+            crate::ai_models_v2::cancel_download(application, &input.slug).await?;
+            return read(EmptyOutput {});
+        }
+        "ai.models.delete" => {
+            let input: ModelInput = parse(args_json)?;
+            crate::ai_models_v2::delete(application, &input.slug).await?;
+            return read(crate::ai_runtime_v2::model_status(application).await?);
+        }
+        "ai.review.predict" => {
+            let input: crate::ai_runtime_v2::ManualPredictionRequest = parse(args_json)?;
+            return read(crate::ai_runtime_v2::manual_predict(application, input).await?);
+        }
+        "ai.review.apply" => {
+            let input: AiAssignmentsInput = parse(args_json)?;
+            let assignments = input
+                .assignments
+                .into_iter()
+                .map(|assignment| (assignment.media_item_id, assignment.tags))
+                .collect::<Vec<_>>();
+            return publish(
+                application,
+                application.apply_media_tag_assignments(
+                    &assignments,
+                    crate::ai_runtime_v2::AI_PROVENANCE_MASK,
+                )?,
+            );
+        }
+        _ => {}
+    }
     if command == "media.ensure_thumbnail" {
         let input: FileHashInput = parse(args_json)?;
         return read(
@@ -806,6 +844,25 @@ struct PatchViewSettingsInput {
     value: serde_json::Value,
 }
 
+#[derive(Deserialize)]
+struct ModelInput {
+    slug: String,
+}
+
+#[derive(Deserialize)]
+struct AiTagAssignment {
+    media_item_id: ItemId,
+    tags: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AiAssignmentsInput {
+    assignments: Vec<AiTagAssignment>,
+}
+
+#[derive(Serialize)]
+struct EmptyOutput {}
+
 fn default_limit() -> i64 {
     100
 }
@@ -912,5 +969,43 @@ mod tests {
         assert!(dispatch(&application, "items.details", "{}")
             .unwrap_err()
             .starts_with("Invalid command arguments:"));
+    }
+
+    #[tokio::test]
+    async fn ai_commands_share_the_replacement_item_and_invalidation_contract() {
+        let (_directory, application, item_id) = fixture();
+
+        let status = dispatch_async(&application, "ai.status", "{}")
+            .await
+            .unwrap();
+        let status: crate::ai_runtime_v2::AiRuntimeStatus = serde_json::from_str(&status).unwrap();
+        assert_eq!(status.models.len(), 3);
+
+        let output = dispatch_async(
+            &application,
+            "ai.review.apply",
+            &format!(
+                r#"{{"assignments":[{{"media_item_id":{},"tags":["general:one girl"]}}]}}"#,
+                item_id.0
+            ),
+        )
+        .await
+        .unwrap();
+        let receipt: MutationReceipt = serde_json::from_str(&output).unwrap();
+        assert_eq!(receipt.item_ids, vec![item_id]);
+        assert!(receipt.resources.iter().any(|resource| resource == "tags"));
+        let assigned: String = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT t.subtag
+                     FROM media_tag mt JOIN tag t ON t.tag_id = mt.tag_id
+                     WHERE mt.media_item_id = ?1 AND mt.source = 'ai'",
+                    [item_id.0],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(assigned, "one girl");
     }
 }

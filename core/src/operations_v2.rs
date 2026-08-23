@@ -505,6 +505,73 @@ impl Application {
         ))
     }
 
+    pub(crate) fn apply_media_tag_assignments(
+        &self,
+        assignments: &[(ItemId, Vec<String>)],
+        provenance_mask: i64,
+    ) -> Result<MutationReceipt, String> {
+        if assignments.is_empty() {
+            return Err("At least one AI tag assignment is required".to_string());
+        }
+        let normalized = assignments
+            .iter()
+            .map(|(media_item_id, tags)| {
+                let tags = tags
+                    .iter()
+                    .map(|tag| {
+                        crate::tag_name_v2::parse_external(tag).map_err(|error| {
+                            format!(
+                                "Invalid AI tag '{tag}' for media item {}: {error}",
+                                media_item_id.0
+                            )
+                        })
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                if tags.is_empty() {
+                    return Err(format!(
+                        "Media item {} has no valid AI tags",
+                        media_item_id.0
+                    ));
+                }
+                Ok((*media_item_id, tags))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        let (root_ids, revision, _) = self.transaction_if_changed(
+            |transaction| {
+                let mut root_ids = BTreeSet::new();
+                let mut changed_tags = Vec::new();
+                for (media_item_id, tags) in &normalized {
+                    root_ids.insert(root_for_media(transaction, media_item_id.0)?);
+                    changed_tags.extend(apply_tags_in(
+                        transaction,
+                        &[media_item_id.0],
+                        tags,
+                        true,
+                        provenance_mask,
+                        "ai",
+                    )?);
+                }
+                let changed = !changed_tags.is_empty();
+                Ok((
+                    root_ids.into_iter().collect::<Vec<_>>(),
+                    changed_tags,
+                    changed,
+                ))
+            },
+            |projections, changed_tags| projections.apply_tag_changes(&changed_tags, true),
+        )?;
+        Ok(receipt(
+            revision,
+            &[
+                resources::LIBRARY,
+                resources::SIDEBAR,
+                resources::TAGS,
+                resources::SMART_FOLDERS,
+            ],
+            &root_ids,
+        ))
+    }
+
     pub fn patch_metadata(
         &self,
         target: &ItemTarget,
@@ -1165,6 +1232,52 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn ai_review_assignments_commit_once_and_report_affected_roots() {
+        let (_directory, app, ids) = fixture();
+        let grouped = app
+            .group_items(GroupItemsInput {
+                item_ids: ids[..2].to_vec(),
+                label: None,
+            })
+            .unwrap();
+        let before = app.store().revision().unwrap();
+
+        let receipt = app
+            .apply_media_tag_assignments(
+                &[
+                    (ids[0], vec!["general:first".to_string()]),
+                    (ids[1], vec!["general:second".to_string()]),
+                ],
+                2,
+            )
+            .unwrap();
+
+        assert_eq!(receipt.revision, before + 1);
+        assert_eq!(receipt.item_ids, vec![grouped.collection_id]);
+        let assignments: Vec<(i64, String)> = app
+            .store()
+            .read(|connection| {
+                connection
+                    .prepare(
+                        "SELECT mt.media_item_id, t.subtag
+                         FROM media_tag mt JOIN tag t ON t.tag_id = mt.tag_id
+                         WHERE mt.source = 'ai'
+                         ORDER BY mt.media_item_id",
+                    )?
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect()
+            })
+            .unwrap();
+        assert_eq!(
+            assignments,
+            vec![
+                (ids[0].0, "first".to_string()),
+                (ids[1].0, "second".to_string())
+            ]
+        );
     }
 
     #[test]

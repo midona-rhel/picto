@@ -90,6 +90,7 @@ async fn close_library_inner() -> Result<(), String> {
     };
 
     state.cancel.cancel();
+    state.application.cancel_ai_model_downloads().await;
     let workers = {
         let mut guard = state.workers.lock().await;
         std::mem::take(&mut *guard)

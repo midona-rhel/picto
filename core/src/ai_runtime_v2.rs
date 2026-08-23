@@ -5,21 +5,361 @@
 //! asset that was actually analyzed.
 
 use std::collections::BTreeSet;
-use std::path::PathBuf;
+
+use serde::{Deserialize, Serialize};
 
 use crate::ai_tagger::inference::{TagPrediction, Thresholds};
 use crate::ai_tagger::models::{self, ModelInfo};
 use crate::app::{Application, ItemId, MutationReceipt};
 use crate::blob_store::mime_to_extension;
 
+const MAX_MANUAL_PREDICTION_ITEMS: usize = 256;
+const MAX_MANUAL_PREDICTION_MODELS: usize = 8;
+
 /// Provenance bit shared with the existing AI tagger.
-const AI_PROVENANCE_MASK: i64 = 1 << 1;
+pub(crate) const AI_PROVENANCE_MASK: i64 = 1 << 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MediaOriginal {
     root_item_id: ItemId,
     file_hash: String,
     mime_type: String,
+}
+
+/// Read-only model state exposed by the replacement AI runtime.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiModelStatus {
+    pub slug: String,
+    pub label: String,
+    pub enabled: bool,
+    pub downloaded: bool,
+    pub session_loaded: bool,
+    pub recommended: bool,
+    pub heavy: bool,
+    pub size_bytes: u64,
+    pub dataset: String,
+}
+
+/// Replacement AI status derived from settings, the model bundle, and the
+/// in-process session cache. No download or mutation state is implied.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AiRuntimeStatus {
+    pub models: Vec<AiModelStatus>,
+    pub configured_model_slugs: Vec<String>,
+    pub thresholds: Thresholds,
+    pub cached_backend: Option<String>,
+}
+
+/// Read-only manual prediction request. Item IDs are logical replacement
+/// identities; physical file hashes never cross this boundary.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualPredictionRequest {
+    pub item_ids: Vec<ItemId>,
+    #[serde(default)]
+    pub model_slugs: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaPrediction {
+    pub media_item_id: ItemId,
+    pub predictions: Vec<TagPrediction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ManualPredictionResponse {
+    pub predictions: Vec<MediaPrediction>,
+    pub thresholds: Thresholds,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PredictionOriginal {
+    file_hash: String,
+    mime_type: String,
+}
+
+/// Return the replacement AI model status without touching model files or
+/// starting inference sessions.
+pub async fn model_status(application: &Application) -> Result<AiRuntimeStatus, String> {
+    let settings = crate::settings_v2::application_settings(application)?.value;
+    let models_root = crate::ai_models_v2::models_root(application);
+    let configured_model_slugs = configured_models(&settings)
+        .iter()
+        .map(|model| model.slug.clone())
+        .collect::<Vec<_>>();
+
+    let sessions = application.ai_sessions().lock().await;
+    let cached_backend = sessions
+        .values()
+        .find_map(|session| session.lock().ok().map(|session| session.gpu_backend()));
+    let models = models::known_models()
+        .into_iter()
+        .map(|model| AiModelStatus {
+            enabled: setting_bool(&settings, model_setting_key(&model.slug)).unwrap_or(false),
+            downloaded: models::is_model_downloaded(&models_root, &model.slug),
+            session_loaded: sessions.contains_key(&model.slug),
+            recommended: !model.heavy,
+            slug: model.slug,
+            label: model.label,
+            heavy: model.heavy,
+            size_bytes: model.size_bytes,
+            dataset: model.dataset,
+        })
+        .collect();
+
+    Ok(AiRuntimeStatus {
+        models,
+        configured_model_slugs,
+        thresholds: thresholds_from_settings(&settings),
+        cached_backend,
+    })
+}
+
+/// Predict tags for explicit replacement media items without applying them.
+/// Invalid item kinds and item-local read/inference failures are returned next
+/// to their item IDs so one bad item does not hide the rest of the result.
+pub async fn manual_predict(
+    application: &Application,
+    request: ManualPredictionRequest,
+) -> Result<ManualPredictionResponse, String> {
+    if request.item_ids.is_empty() {
+        return Err("At least one library item is required".into());
+    }
+    if request.item_ids.len() > MAX_MANUAL_PREDICTION_ITEMS {
+        return Err(format!(
+            "Manual prediction accepts at most {} library items",
+            MAX_MANUAL_PREDICTION_ITEMS
+        ));
+    }
+    let media_item_ids = resolve_prediction_items(application, &request.item_ids)?;
+    if media_item_ids.len() > MAX_MANUAL_PREDICTION_ITEMS {
+        return Err(format!(
+            "Manual prediction accepts at most {} media items after expanding collections",
+            MAX_MANUAL_PREDICTION_ITEMS
+        ));
+    }
+
+    let models = select_prediction_models(&request.model_slugs, application).await?;
+    let settings = crate::settings_v2::application_settings(application)?.value;
+    let thresholds = thresholds_from_settings(&settings);
+    let session_error = ensure_sessions(application, &models).await.err();
+
+    let mut results = Vec::with_capacity(media_item_ids.len());
+    for media_item_id in media_item_ids {
+        let result =
+            match load_prediction_original(application, media_item_id).and_then(|original| {
+                validate_image_original(media_item_id, &original)?;
+                Ok(original)
+            }) {
+                Err(error) => Err(error),
+                Ok(original) => match &session_error {
+                    Some(error) => Err(error.clone()),
+                    None => {
+                        predict_one(
+                            application,
+                            media_item_id,
+                            &models,
+                            thresholds.clone(),
+                            original,
+                        )
+                        .await
+                    }
+                },
+            };
+        results.push(match result {
+            Ok(predictions) => MediaPrediction {
+                media_item_id,
+                predictions,
+                error: None,
+            },
+            Err(error) => MediaPrediction {
+                media_item_id,
+                predictions: Vec::new(),
+                error: Some(error),
+            },
+        });
+    }
+
+    Ok(ManualPredictionResponse {
+        predictions: results,
+        thresholds,
+    })
+}
+
+fn resolve_prediction_items(
+    application: &Application,
+    item_ids: &[ItemId],
+) -> Result<Vec<ItemId>, String> {
+    application.store().read_result(|connection| {
+        let mut resolved = Vec::new();
+        let mut seen = BTreeSet::new();
+        for item_id in item_ids {
+            let kind = connection
+                .query_row(
+                    "SELECT kind FROM library_item WHERE item_id = ?1",
+                    [item_id.0],
+                    |row| row.get::<_, String>(0),
+                )
+                .map_err(|error| format!("Library item {} was not found: {error}", item_id.0))?;
+            match kind.as_str() {
+                "media" => {
+                    if seen.insert(item_id.0) {
+                        resolved.push(*item_id);
+                    }
+                }
+                "collection" => {
+                    let mut statement = connection
+                        .prepare(
+                            "SELECT media_item_id
+                             FROM collection_member
+                             WHERE collection_id = ?1
+                             ORDER BY position_rank, media_item_id",
+                        )
+                        .map_err(|error| error.to_string())?;
+                    let members = statement
+                        .query_map([item_id.0], |row| row.get::<_, i64>(0))
+                        .map_err(|error| error.to_string())?;
+                    for member in members {
+                        let member = member.map_err(|error| error.to_string())?;
+                        if seen.insert(member) {
+                            resolved.push(ItemId(member));
+                        }
+                    }
+                }
+                other => {
+                    return Err(format!(
+                        "Library item {} has unsupported kind '{other}'",
+                        item_id.0
+                    ));
+                }
+            }
+        }
+        Ok(resolved)
+    })
+}
+
+async fn select_prediction_models(
+    requested_slugs: &Option<Vec<String>>,
+    application: &Application,
+) -> Result<Vec<ModelInfo>, String> {
+    let settings = crate::settings_v2::application_settings(application)?.value;
+    resolve_prediction_models(requested_slugs, &settings)
+}
+
+fn resolve_prediction_models(
+    requested_slugs: &Option<Vec<String>>,
+    settings: &serde_json::Value,
+) -> Result<Vec<ModelInfo>, String> {
+    let slugs = match requested_slugs {
+        Some(slugs) if !slugs.is_empty() => slugs.clone(),
+        _ => configured_models(settings)
+            .into_iter()
+            .map(|model| model.slug)
+            .collect(),
+    };
+    if slugs.is_empty() {
+        return Err("No AI tagger models specified or enabled".into());
+    }
+    if slugs.len() > MAX_MANUAL_PREDICTION_MODELS {
+        return Err(format!(
+            "Manual prediction accepts at most {} models",
+            MAX_MANUAL_PREDICTION_MODELS
+        ));
+    }
+
+    let mut seen = BTreeSet::new();
+    slugs
+        .into_iter()
+        .filter(|slug| seen.insert(slug.clone()))
+        .map(|slug| models::find_model(&slug).ok_or_else(|| format!("Unknown AI model '{slug}'")))
+        .collect()
+}
+
+async fn predict_one(
+    application: &Application,
+    media_item_id: ItemId,
+    models: &[ModelInfo],
+    thresholds: Thresholds,
+    original: PredictionOriginal,
+) -> Result<Vec<TagPrediction>, String> {
+    let image_bytes = application
+        .blobs()
+        .read_original(
+            &original.file_hash,
+            Some(mime_to_extension(&original.mime_type)),
+        )
+        .map_err(|error| {
+            format!(
+                "Failed to read original for media item {}: {error}",
+                media_item_id.0
+            )
+        })?;
+    predict(application, models, image_bytes, thresholds).await
+}
+
+fn validate_image_original(
+    media_item_id: ItemId,
+    original: &PredictionOriginal,
+) -> Result<(), String> {
+    if original.mime_type.starts_with("image/") {
+        Ok(())
+    } else {
+        Err(format!(
+            "AI prediction requires an image; media item {} has MIME type {}",
+            media_item_id.0, original.mime_type
+        ))
+    }
+}
+
+fn load_prediction_original(
+    application: &Application,
+    media_item_id: ItemId,
+) -> Result<PredictionOriginal, String> {
+    application.store().read_result(|connection| {
+        let row = connection
+            .query_row(
+                "SELECT li.kind, mf.file_hash, mf.mime_type
+                 FROM library_item li
+                 LEFT JOIN media_asset ma ON ma.item_id = li.item_id
+                 LEFT JOIN media_file mf ON mf.file_id = ma.file_id
+                 WHERE li.item_id = ?1",
+                [media_item_id.0],
+                |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, Option<String>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .map_err(|error| format!("Media item {} was not found: {error}", media_item_id.0))?;
+        if row.0 == "collection" {
+            return Err(format!(
+                "Media item {} is a collection; AI prediction requires an image item",
+                media_item_id.0
+            ));
+        }
+        if row.0 != "media" {
+            return Err(format!(
+                "Media item {} has unsupported kind '{}'",
+                media_item_id.0, row.0
+            ));
+        }
+        Ok(PredictionOriginal {
+            file_hash: row
+                .1
+                .ok_or_else(|| format!("Media item {} has no physical file", media_item_id.0))?,
+            mime_type: row
+                .2
+                .ok_or_else(|| format!("Media item {} has no MIME type", media_item_id.0))?,
+        })
+    })
 }
 
 /// The result of tagging one replacement-backend media item.
@@ -98,7 +438,7 @@ fn load_media_original(
     application: &Application,
     media_item_id: ItemId,
 ) -> Result<MediaOriginal, String> {
-    application.store().read(|connection| {
+    application.store().read_result(|connection| {
         connection
             .query_row(
                 "SELECT COALESCE(cm.collection_id, lr.item_id), mf.file_hash, mf.mime_type
@@ -117,24 +457,12 @@ fn load_media_original(
                 },
             )
             .map_err(|error| {
-                rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!(
-                        "Media item {} has no persisted original: {error}",
-                        media_item_id.0
-                    ),
-                )))
+                format!(
+                    "Media item {} has no persisted original: {error}",
+                    media_item_id.0
+                )
             })
     })
-}
-
-fn models_root(application: &Application) -> PathBuf {
-    application
-        .store()
-        .library_root()
-        .parent()
-        .unwrap_or_else(|| application.store().library_root())
-        .join("models")
 }
 
 fn configured_models(settings: &serde_json::Value) -> Vec<ModelInfo> {
@@ -179,7 +507,7 @@ fn setting_threshold(settings: &serde_json::Value, key: &str, default: f32) -> f
 }
 
 async fn ensure_sessions(application: &Application, models: &[ModelInfo]) -> Result<(), String> {
-    let models_root = models_root(application);
+    let models_root = crate::ai_models_v2::models_root(application);
     for model in models {
         if application
             .ai_sessions()
@@ -287,7 +615,10 @@ fn normalized_prediction(prediction: &TagPrediction, write_rating: bool) -> Opti
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::*;
+    use crate::store::Store;
 
     fn prediction(namespace: &str, tag: &str) -> TagPrediction {
         TagPrediction {
@@ -359,5 +690,97 @@ mod tests {
         assert_eq!(thresholds.character, 0.0);
         assert_eq!(thresholds.species, 0.35);
         assert_eq!(thresholds.rating, 0.50);
+    }
+
+    #[test]
+    fn manual_model_selection_is_registry_bound_and_deduplicated() {
+        let settings = serde_json::json!({
+            "aiTaggerWd14Enabled": true,
+        });
+        let selected = resolve_prediction_models(
+            &Some(vec!["wd14-swinv2-v3".into(), "wd14-swinv2-v3".into()]),
+            &settings,
+        )
+        .unwrap();
+        assert_eq!(
+            selected
+                .iter()
+                .map(|model| model.slug.as_str())
+                .collect::<Vec<_>>(),
+            ["wd14-swinv2-v3"]
+        );
+        assert!(
+            resolve_prediction_models(&Some(vec!["not-a-known-model".into()]), &settings)
+                .unwrap_err()
+                .contains("Unknown AI model")
+        );
+    }
+
+    #[test]
+    fn manual_prediction_model_and_item_limits_are_bounded() {
+        let settings = serde_json::json!({
+            "aiTaggerWd14Enabled": true,
+        });
+        let too_many_models = vec!["wd14-swinv2-v3".to_string(); MAX_MANUAL_PREDICTION_MODELS + 1];
+        assert!(resolve_prediction_models(&Some(too_many_models), &settings)
+            .unwrap_err()
+            .contains("at most"));
+
+        let video = PredictionOriginal {
+            file_hash: "video-hash".into(),
+            mime_type: "video/mp4".into(),
+        };
+        let error = validate_image_original(ItemId(7), &video).unwrap_err();
+        assert!(error.contains("requires an image"));
+    }
+
+    #[test]
+    fn sqlite_media_lookup_expands_collections_and_keeps_member_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO library_item
+                     (item_id, item_key, kind, created_at, updated_at)
+                     VALUES (7, 'media-7', 'media', 'now', 'now'),
+                            (8, 'collection-8', 'collection', 'now', 'now')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle)
+                     VALUES (7, 'active'), (8, 'active')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO media_file
+                     (file_id, file_hash, mime_type, size_bytes, created_at)
+                     VALUES (70, 'hash-7', 'image/png', 10, 'now')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO media_asset
+                     (item_id, file_id, imported_at, updated_at)
+                     VALUES (7, 70, 'now', 'now')",
+                    [],
+                )?;
+                transaction.execute("DELETE FROM library_root WHERE item_id = 7", [])?;
+                transaction.execute(
+                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
+                     VALUES (8, 7, 0)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let original = load_prediction_original(&application, ItemId(7)).unwrap();
+        assert_eq!(original.file_hash, "hash-7");
+        assert_eq!(original.mime_type, "image/png");
+        assert_eq!(
+            resolve_prediction_items(&application, &[ItemId(8)]).unwrap(),
+            vec![ItemId(7)]
+        );
     }
 }

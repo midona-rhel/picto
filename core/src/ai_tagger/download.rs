@@ -15,6 +15,25 @@ pub async fn download_model(
     cancel: &CancellationToken,
     lifecycle: &tokio::sync::Mutex<()>,
 ) -> Result<(), String> {
+    download_model_inner(slug, models_root, cancel, lifecycle, true).await
+}
+
+pub async fn download_model_quiet(
+    slug: &str,
+    models_root: &Path,
+    cancel: &CancellationToken,
+    lifecycle: &tokio::sync::Mutex<()>,
+) -> Result<(), String> {
+    download_model_inner(slug, models_root, cancel, lifecycle, false).await
+}
+
+async fn download_model_inner(
+    slug: &str,
+    models_root: &Path,
+    cancel: &CancellationToken,
+    lifecycle: &tokio::sync::Mutex<()>,
+    report_legacy_task: bool,
+) -> Result<(), String> {
     let model_info =
         super::models::find_model(slug).ok_or_else(|| format!("Unknown model: {slug}"))?;
 
@@ -27,7 +46,9 @@ pub async fn download_model(
     let task_id = format!("model_download:{slug}");
 
     // Publish start
-    emit_task(&task_id, slug, TaskStatus::Running, None);
+    if report_legacy_task {
+        emit_task(&task_id, slug, TaskStatus::Running, None);
+    }
 
     // Download ONNX model
     let onnx_path = temp_dir.join("model.onnx");
@@ -40,6 +61,7 @@ pub async fn download_model(
             &task_id,
             slug,
             cancel,
+            report_legacy_task,
         )
         .await
         .map_err(|e| format!("Failed to download model ONNX: {e}"))?;
@@ -54,6 +76,7 @@ pub async fn download_model(
             &task_id,
             slug,
             cancel,
+            report_legacy_task,
         )
         .await
         .map_err(|e| format!("Failed to download labels CSV: {e}"))?;
@@ -90,16 +113,18 @@ pub async fn download_model(
 
     match result {
         Ok(()) => {
-            emit_task(&task_id, slug, TaskStatus::Finished, None);
-            crate::runtime_state::remove_task(&task_id);
+            if report_legacy_task {
+                emit_task(&task_id, slug, TaskStatus::Finished, None);
+                crate::runtime_state::remove_task(&task_id);
+            }
             tracing::info!(slug, "Model download complete");
             Ok(())
         }
         Err(error) => {
             let _ = std::fs::remove_dir_all(&temp_dir);
-            if cancel.is_cancelled() {
+            if report_legacy_task && cancel.is_cancelled() {
                 crate::runtime_state::remove_task(&task_id);
-            } else {
+            } else if report_legacy_task {
                 emit_task(
                     &task_id,
                     slug,
@@ -240,6 +265,7 @@ async fn download_file(
     task_id: &str,
     slug: &str,
     cancel: &CancellationToken,
+    report_legacy_task: bool,
 ) -> Result<(), String> {
     cancelled(cancel)?;
     let client = reqwest::Client::new();
@@ -284,7 +310,7 @@ async fn download_file(
         // Emit progress at most every 1%
         if total > 0 {
             let pct = (downloaded * 100) / total;
-            if pct > last_progress_pct {
+            if report_legacy_task && pct > last_progress_pct {
                 last_progress_pct = pct;
                 emit_task(
                     task_id,
