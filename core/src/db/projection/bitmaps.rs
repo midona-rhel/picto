@@ -65,6 +65,14 @@ impl BitmapStore {
         bitmaps.get(key).map(|b| b.len()).unwrap_or(0)
     }
 
+    /// Test membership without cloning the bitmap. Used by SQLite scalar queries.
+    pub fn contains(&self, key: &BitmapKey, entity_id: u32) -> bool {
+        let bitmaps = self.bitmaps.read().unwrap();
+        bitmaps
+            .get(key)
+            .is_some_and(|bitmap| bitmap.contains(entity_id))
+    }
+
     /// Replace a bitmap entirely (used by compilers during rebuild).
     pub fn set(&self, key: BitmapKey, bitmap: RoaringBitmap) {
         let mut bitmaps = self.bitmaps.write().unwrap();

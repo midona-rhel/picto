@@ -187,10 +187,10 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
     }
 
     // Smart folder nodes (children of section:smart_folders)
-    let smart_folders: Vec<(i64, String, Option<i64>, Option<String>, Option<String>, Option<String>, Option<i64>, String, Option<String>, Option<String>, i64, i64, i64)> = conn
-        .prepare("SELECT smart_folder_id, name, parent_id, icon, color, notes, display_order, predicate_json, sort_field, sort_order, total_size_bytes, pinned, pin_order FROM smart_folder ORDER BY display_order, name")
+    let smart_folders: Vec<(i64, String, Option<i64>, Option<String>, Option<String>, Option<String>, Option<i64>, String, i64, i64, i64)> = conn
+        .prepare("SELECT smart_folder_id, name, parent_id, icon, color, notes, display_order, predicate_json, total_size_bytes, pinned, pin_order FROM smart_folder ORDER BY display_order, name")
         .and_then(|mut stmt| {
-            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get::<_, i64>(10)?, row.get::<_, i64>(11)?, row.get::<_, i64>(12)?)))
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get::<_, i64>(8)?, row.get::<_, i64>(9)?, row.get::<_, i64>(10)?)))
                 .map(|rows| rows.flatten().collect())
         })
         .unwrap_or_default();
@@ -204,8 +204,6 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
         notes,
         display_order,
         predicate_json,
-        sort_field,
-        sort_order,
         total_size_bytes,
         pinned,
         pin_order,
@@ -220,8 +218,6 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
             "parent_id": parent_id,
             "notes": notes,
             "predicate": serde_json::from_str::<serde_json::Value>(predicate_json).unwrap_or_default(),
-            "sort_field": sort_field,
-            "sort_order": sort_order,
             "total_size_bytes": total_size_bytes,
             "pinned": *pinned != 0,
             "pin_order": pin_order,

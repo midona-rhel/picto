@@ -25,19 +25,9 @@ impl ApplicationEngine {
         icon: Option<&str>,
         color: Option<&str>,
         notes: Option<&str>,
-        sort_field: Option<&str>,
-        sort_order: Option<&str>,
     ) -> Result<(), String> {
-        self.db.update_smart_folder(
-            smart_folder_id,
-            name,
-            predicate_json,
-            icon,
-            color,
-            notes,
-            sort_field,
-            sort_order,
-        )
+        self.db
+            .update_smart_folder(smart_folder_id, name, predicate_json, icon, color, notes)
     }
 
     /// Delete a smart folder. Returns (promoted_child_ids, deleted_parent_id).

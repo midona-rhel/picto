@@ -2,9 +2,9 @@
 
 use chrono::Utc;
 use roaring::RoaringBitmap;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap};
 
-use crate::db::types::{EntityGridItem, EntityTarget, QueryPage};
+use crate::db::types::{EntityGridItem, EntityTarget, QueryTargetAggregate};
 use crate::selection::helpers::RatingStats;
 use crate::types::{
     SelectionFolderInfo, SelectionSummary, SelectionSummaryStats, SelectionTagCount,
@@ -25,24 +25,41 @@ impl ApplicationEngine {
                 self.build_selection_summary(items.len() as i64, items)
             }
             target::ResolvedTarget::Query {
-                mut view_query,
+                view_query,
                 exclusions,
             } => {
-                view_query.page = QueryPage {
-                    limit: i64::MAX,
-                    cursor: None,
-                };
-                let page = self.db.query_entity_view(&view_query)?;
-                let total_count = page.total_count.unwrap_or(page.items.len() as i64);
-                let excluded: HashSet<&str> = exclusions.iter().map(String::as_str).collect();
-                let items = page
-                    .items
-                    .into_iter()
-                    .filter(|item| !excluded.contains(item.entity_hash.as_str()))
-                    .collect::<Vec<_>>();
-                self.build_selection_summary(total_count, items)
+                let aggregate = self.db.query_target_aggregate(&view_query, &exclusions)?;
+                self.build_query_selection_summary(aggregate)
             }
         }
+    }
+
+    fn build_query_selection_summary(
+        &self,
+        aggregate: QueryTargetAggregate,
+    ) -> Result<SelectionSummary, String> {
+        let (shared_tags, top_tags) = self.summarize_tags_from_bitmap(&aggregate.entity_ids)?;
+        let shared_folders = self.summarize_folders_from_bitmap(&aggregate.entity_ids)?;
+
+        Ok(SelectionSummary {
+            total_count: aggregate.total_count,
+            selected_count: aggregate.selected_count,
+            sample_hashes: aggregate.sample_hashes,
+            shared_tags,
+            top_tags,
+            shared_folders,
+            stats: SelectionSummaryStats {
+                total_size_bytes: Some(aggregate.total_size_bytes),
+                mime_counts: Some(aggregate.mime_counts),
+                rating_stats: Some(serde_json::json!({
+                    "min": aggregate.min_rating,
+                    "max": aggregate.max_rating,
+                    "shared": aggregate.shared_rating,
+                })),
+            },
+            pending: false,
+            generated_at: Utc::now().to_rfc3339(),
+        })
     }
 
     fn build_selection_summary(

@@ -776,8 +776,6 @@ pub(super) fn apply_remote_op(
                     payload_str(p, "icon"),
                     payload_str(p, "color"),
                     payload_str(p, "notes"),
-                    payload_str(p, "sort_field"),
-                    payload_str(p, "sort_order"),
                     &now,
                 )?;
             }

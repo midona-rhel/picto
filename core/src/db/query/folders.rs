@@ -29,8 +29,6 @@ pub struct SmartFolderRow {
     pub color: Option<String>,
     pub notes: Option<String>,
     pub predicate_json: String,
-    pub sort_field: Option<String>,
-    pub sort_order: Option<String>,
     pub display_order: Option<i64>,
 }
 
@@ -61,22 +59,23 @@ pub fn get_smart_folder(
     smart_folder_id: i64,
 ) -> rusqlite::Result<Option<SmartFolderRow>> {
     conn.query_row(
-        "SELECT smart_folder_id, name, parent_id, icon, color, notes, predicate_json, sort_field, sort_order, display_order
+        "SELECT smart_folder_id, name, parent_id, icon, color, notes, predicate_json, display_order
          FROM smart_folder WHERE smart_folder_id = ?1",
         [smart_folder_id],
-        |row| Ok(SmartFolderRow {
-            smart_folder_id: row.get(0)?,
-            name: row.get(1)?,
-            parent_id: row.get(2)?,
-            icon: row.get(3)?,
-            color: row.get(4)?,
-            notes: row.get(5)?,
-            predicate_json: row.get(6)?,
-            sort_field: row.get(7)?,
-            sort_order: row.get(8)?,
-            display_order: row.get(9)?,
-        }),
-    ).optional()
+        |row| {
+            Ok(SmartFolderRow {
+                smart_folder_id: row.get(0)?,
+                name: row.get(1)?,
+                parent_id: row.get(2)?,
+                icon: row.get(3)?,
+                color: row.get(4)?,
+                notes: row.get(5)?,
+                predicate_json: row.get(6)?,
+                display_order: row.get(7)?,
+            })
+        },
+    )
+    .optional()
 }
 
 pub fn list_folders(conn: &Connection) -> rusqlite::Result<Vec<FolderRow>> {
@@ -128,8 +127,8 @@ pub fn collect_descendant_smart_folder_ids(
 
 pub fn list_smart_folders(conn: &Connection) -> rusqlite::Result<Vec<SmartFolderRow>> {
     let mut stmt = conn.prepare(
-        "SELECT smart_folder_id, name, parent_id, icon, color, notes, predicate_json, sort_field, sort_order, display_order
-         FROM smart_folder ORDER BY display_order, name"
+        "SELECT smart_folder_id, name, parent_id, icon, color, notes, predicate_json, display_order
+         FROM smart_folder ORDER BY display_order, name",
     )?;
     let rows = stmt
         .query_map([], |row| {
@@ -141,9 +140,7 @@ pub fn list_smart_folders(conn: &Connection) -> rusqlite::Result<Vec<SmartFolder
                 color: row.get(4)?,
                 notes: row.get(5)?,
                 predicate_json: row.get(6)?,
-                sort_field: row.get(7)?,
-                sort_order: row.get(8)?,
-                display_order: row.get(9)?,
+                display_order: row.get(7)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;

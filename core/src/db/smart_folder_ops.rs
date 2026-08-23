@@ -58,8 +58,6 @@ impl LibraryDatabase {
         icon: Option<&str>,
         color: Option<&str>,
         notes: Option<&str>,
-        sort_field: Option<&str>,
-        sort_order: Option<&str>,
     ) -> Result<(), String> {
         let now = chrono::Utc::now().to_rfc3339();
         let n = name.map(str::to_string);
@@ -67,8 +65,6 @@ impl LibraryDatabase {
         let i = icon.map(str::to_string);
         let c = color.map(str::to_string);
         let notes = notes.map(str::to_string);
-        let sf = sort_field.map(str::to_string);
-        let so = sort_order.map(str::to_string);
         self.with_write(move |conn| {
             write::smart_folders::update_smart_folder(
                 conn,
@@ -78,8 +74,6 @@ impl LibraryDatabase {
                 i.as_deref(),
                 c.as_deref(),
                 notes.as_deref(),
-                sf.as_deref(),
-                so.as_deref(),
                 &now,
             )?;
             let mut fields = serde_json::Map::new();
@@ -97,12 +91,6 @@ impl LibraryDatabase {
             }
             if let Some(v) = &notes {
                 fields.insert("notes".into(), v.clone().into());
-            }
-            if let Some(v) = &sf {
-                fields.insert("sort_field".into(), v.clone().into());
-            }
-            if let Some(v) = &so {
-                fields.insert("sort_order".into(), v.clone().into());
             }
             if !fields.is_empty() {
                 if let Some(uuid) = smart_folder_uuid(conn, smart_folder_id)? {

@@ -1,6 +1,8 @@
 //! Shared types for the database boundary.
 
+use roaring::RoaringBitmap;
 use serde::{Serialize, Serializer};
+use std::collections::HashMap;
 
 #[derive(Debug, Default, Serialize)]
 pub struct EntityChange {
@@ -218,6 +220,18 @@ pub struct EntityGridItem {
     pub has_audio: bool,
     pub dominant_color_hex: Option<String>,
     pub size_bytes: i64,
+}
+
+pub(crate) struct QueryTargetAggregate {
+    pub entity_ids: RoaringBitmap,
+    pub total_count: i64,
+    pub selected_count: i64,
+    pub sample_hashes: Vec<String>,
+    pub total_size_bytes: i64,
+    pub mime_counts: HashMap<String, i64>,
+    pub min_rating: Option<i64>,
+    pub max_rating: Option<i64>,
+    pub shared_rating: Option<i64>,
 }
 
 /// A page of grid results.

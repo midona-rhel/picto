@@ -10,8 +10,6 @@ pub struct SmartFolder {
     pub color: Option<String>,
     pub notes: Option<String>,
     pub predicate_json: String,
-    pub sort_field: Option<String>,
-    pub sort_order: Option<String>,
     pub display_order: Option<i64>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,

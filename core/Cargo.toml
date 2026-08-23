@@ -67,7 +67,7 @@ open = "5"
 notify = "6.1"
 
 # SQLite database engine (WAL mode, FTS5)
-rusqlite = { version = "0.31", features = ["bundled"] }
+rusqlite = { version = "0.31", features = ["bundled", "functions"] }
 
 # Roaring bitmaps for fast set operations
 roaring = "0.10"

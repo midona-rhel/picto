@@ -132,8 +132,6 @@ function buildPayload(data: {
   color: string | null;
   notes: string | null;
   predicate: SmartFolderPredicate;
-  sort_field?: string | null;
-  sort_order?: string | null;
   display_order?: number | null;
 }): SmartFolderCommandPayload {
   return {
@@ -144,8 +142,6 @@ function buildPayload(data: {
     color: data.color,
     notes: data.notes,
     predicate_json: JSON.stringify(data.predicate),
-    sort_field: data.sort_field ?? null,
-    sort_order: data.sort_order ?? null,
     display_order: data.display_order ?? null,
     created_at: null,
     updated_at: null,
@@ -166,8 +162,6 @@ export interface SmartFolderModalProps {
     color?: string | null;
     notes?: string | null;
     predicate?: SmartFolderPredicate;
-    sort_field?: string | null;
-    sort_order?: string | null;
     display_order?: number | null;
   };
   mode?: 'create' | 'edit';
@@ -211,8 +205,6 @@ export function SmartFolderModal({
         icon, color,
         notes: notes.trim() ? notes.trim() : null,
         predicate,
-        sort_field: initial.sort_field ?? null,
-        sort_order: initial.sort_order ?? null,
         display_order: initial.display_order ?? null,
       });
       void smartFoldersController.update(initial.id!, payload);
@@ -233,8 +225,6 @@ export function SmartFolderModal({
         color: initial.color ?? null,
         notes: initial.notes ?? null,
         predicate: origPred,
-        sort_field: initial.sort_field ?? null,
-        sort_order: initial.sort_order ?? null,
         display_order: initial.display_order ?? null,
       });
       void smartFoldersController.update(initial.id, revertPayload);
@@ -254,8 +244,6 @@ export function SmartFolderModal({
       color,
       notes: notes.trim() ? notes.trim() : null,
       predicate,
-      sort_field: initial?.sort_field ?? null,
-      sort_order: initial?.sort_order ?? null,
       display_order: initial?.display_order ?? null,
     }));
   }, [color, icon, initial, name, notes, onSave, predicate]);

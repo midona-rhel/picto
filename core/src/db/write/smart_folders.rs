@@ -29,8 +29,6 @@ pub fn update_smart_folder(
     icon: Option<&str>,
     color: Option<&str>,
     notes: Option<&str>,
-    sort_field: Option<&str>,
-    sort_order: Option<&str>,
     now: &str,
 ) -> rusqlite::Result<()> {
     conn.execute(
@@ -40,18 +38,14 @@ pub fn update_smart_folder(
              icon = ?3,
              color = ?4,
              notes = ?5,
-             sort_field = ?6,
-             sort_order = ?7,
-             date_modified = ?8
-         WHERE smart_folder_id = ?9",
+             date_modified = ?6
+         WHERE smart_folder_id = ?7",
         params![
             name,
             predicate_json,
             icon,
             color,
             notes,
-            sort_field,
-            sort_order,
             now,
             smart_folder_id
         ],

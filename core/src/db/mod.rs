@@ -19,6 +19,7 @@ pub mod write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use rusqlite::functions::FunctionFlags;
 use rusqlite::{Connection, OptionalExtension};
 
 use crate::blob_store::BlobHashLease;
@@ -369,6 +370,34 @@ impl LibraryDatabase {
             .map_err(|e| format!("Failed to configure read connection: {e}"))?;
 
         let bitmaps = Arc::new(BitmapStore::new());
+        for conn in [&write_conn, &read_conn] {
+            let store = bitmaps.clone();
+            conn.create_scalar_function(
+                "smart_folder_contains",
+                2,
+                FunctionFlags::SQLITE_DETERMINISTIC,
+                move |ctx| {
+                    let folder_id = ctx.get::<i64>(0)?;
+                    let entity_id = ctx.get::<i64>(1)?;
+                    Ok(u32::try_from(entity_id).ok().is_some_and(|id| {
+                        store.contains(&projection::bitmaps::BitmapKey::SmartFolder(folder_id), id)
+                    }))
+                },
+            )
+            .map_err(|e| format!("Failed to register smart-folder query function: {e}"))?;
+
+            let store = bitmaps.clone();
+            conn.create_scalar_function(
+                "smart_folder_count",
+                1,
+                FunctionFlags::SQLITE_DETERMINISTIC,
+                move |ctx| {
+                    let folder_id = ctx.get::<i64>(0)?;
+                    Ok(store.len(&projection::bitmaps::BitmapKey::SmartFolder(folder_id)) as i64)
+                },
+            )
+            .map_err(|e| format!("Failed to register smart-folder count function: {e}"))?;
+        }
 
         let db = Self {
             write_conn: Mutex::new(write_conn),
@@ -1015,22 +1044,9 @@ impl LibraryDatabase {
         let q = query.clone();
         let excl = exclusions.to_vec();
         let p = patch.clone();
-        let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
-            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::entities::patch_entity_metadata(
-                conn,
-                &ids,
-                p.name.as_deref(),
-                p.rating.map(Some),
-                p.notes.as_ref().map(|notes| notes.as_deref()),
-                p.source_urls
-                    .as_ref()
-                    .map(|u| serde_json::to_string(u).unwrap_or_default())
-                    .as_deref(),
-                &now,
-            )?;
+            write::bulk::populate_bulk_target(conn, &q, &excl)?;
+            let change = write::bulk::patch_target(conn, &p, &now)?;
             let payload = entity_patch_payload(&p);
             if payload.as_object().is_some_and(|o| !o.is_empty()) {
                 emit_per_entity(
@@ -1054,11 +1070,9 @@ impl LibraryDatabase {
         let now = chrono::Utc::now().to_rfc3339();
         let q = query.clone();
         let excl = exclusions.to_vec();
-        let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
-            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::entities::set_entity_status(conn, &ids, status, &now)?;
+            write::bulk::populate_bulk_target(conn, &q, &excl)?;
+            let change = write::bulk::set_target_status(conn, status, &now)?;
             emit_per_entity(
                 conn,
                 &self.device_id,
@@ -1077,9 +1091,8 @@ impl LibraryDatabase {
     ) -> Result<types::EntityChange, String> {
         let q = query.clone();
         let excl = exclusions.to_vec();
-        let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
-            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
+            write::bulk::populate_bulk_target(conn, &q, &excl)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
             let change = write::entities::delete_entities(conn, &ids)?;
             emit_per_entity(
@@ -1103,13 +1116,11 @@ impl LibraryDatabase {
         let q = query.clone();
         let excl = exclusions.to_vec();
         let t = tags.to_vec();
-        let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
-            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::tags::add_tags(conn, &ids, &t, provenance_mask)?;
+            write::bulk::populate_bulk_target(conn, &q, &excl)?;
+            let change = write::bulk::add_tags_to_target(conn, &t, provenance_mask)?;
             if !change.tags_added.is_empty() {
-                let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
+                let hashes = write::bulk::collect_target_hashes(conn)?;
                 emit_per_entity(
                     conn,
                     &self.device_id,
@@ -1131,13 +1142,11 @@ impl LibraryDatabase {
         let q = query.clone();
         let excl = exclusions.to_vec();
         let t = tags.to_vec();
-        let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
-            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::tags::remove_tags(conn, &ids, &t)?;
+            write::bulk::populate_bulk_target(conn, &q, &excl)?;
+            let change = write::bulk::remove_tags_from_target(conn, &t)?;
             if !change.tags_removed.is_empty() {
-                let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
+                let hashes = write::bulk::collect_target_hashes(conn)?;
                 emit_per_entity(
                     conn,
                     &self.device_id,
@@ -1158,11 +1167,9 @@ impl LibraryDatabase {
     ) -> Result<types::FolderMembershipChange, String> {
         let q = query.clone();
         let excl = exclusions.to_vec();
-        let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
-            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::folders::add_members(conn, folder_id, &ids)?;
+            write::bulk::populate_bulk_target(conn, &q, &excl)?;
+            let change = write::bulk::add_folder_members_to_target(conn, folder_id)?;
             emit_folder_membership_op(
                 conn,
                 &self.device_id,
@@ -1182,11 +1189,9 @@ impl LibraryDatabase {
     ) -> Result<types::FolderMembershipChange, String> {
         let q = query.clone();
         let excl = exclusions.to_vec();
-        let bm = self.bitmaps.clone();
         self.with_write(move |conn| {
-            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
-            let ids = write::bulk::collect_bulk_ids(conn)?;
-            let change = write::folders::remove_members(conn, folder_id, &ids)?;
+            write::bulk::populate_bulk_target(conn, &q, &excl)?;
+            let change = write::bulk::remove_folder_members_from_target(conn, folder_id)?;
             emit_folder_membership_op(
                 conn,
                 &self.device_id,
@@ -1201,24 +1206,79 @@ impl LibraryDatabase {
     // ── Query operations ─────────────────────────────────────────
 
     /// Single entry point for all grid queries. Routes by scope, applies filters.
-    /// Pre-resolves bitmap-backed scopes (SmartFolder) before passing to the query builder.
     pub fn query_entity_view(
         &self,
         view_query: &types::EntityViewQuery,
     ) -> Result<types::EntityViewPage, String> {
-        // Pre-resolve SmartFolder bitmap to entity_ids (doesn't need DB connection)
-        let preresolved = match view_query.base_scope.kind {
-            types::ScopeKind::SmartFolder => {
-                let sf_id = view_query.base_scope.id.unwrap_or(0);
-                let bitmap = self
-                    .bitmaps
-                    .get(&projection::bitmaps::BitmapKey::SmartFolder(sf_id));
-                Some(bitmap.iter().map(|id| id as i64).collect::<Vec<_>>())
-            }
-            _ => None,
-        };
+        self.with_read(|conn| query::grid::query_entity_view(conn, view_query))
+    }
+
+    pub(crate) fn query_target_aggregate(
+        &self,
+        view_query: &types::EntityViewQuery,
+        exclusions: &[String],
+    ) -> Result<types::QueryTargetAggregate, String> {
         self.with_read(|conn| {
-            query::grid::query_entity_view(conn, view_query, preresolved.as_deref())
+            let mut count_query = view_query.clone();
+            count_query.page = types::QueryPage {
+                limit: 1,
+                cursor: None,
+            };
+            let total_count = query::grid::query_entity_view(conn, &count_query)?
+                .total_count
+                .unwrap_or_default();
+            write::bulk::populate_bulk_target(conn, view_query, exclusions)?;
+            let (selected_count, total_size_bytes, min_rating, max_rating, distinct_ratings) = conn
+                .query_row(
+                    "SELECT COUNT(*), COALESCE(SUM(mf.size_bytes), 0),
+                        MIN(COALESCE(me.rating, 0)), MAX(COALESCE(me.rating, 0)),
+                        COUNT(DISTINCT COALESCE(me.rating, 0))
+                 FROM _bulk_target bt
+                 JOIN media_entity me ON me.entity_id = bt.entity_id
+                 JOIN media_file mf ON mf.file_id = me.file_id",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get::<_, i64>(4)?,
+                        ))
+                    },
+                )?;
+            let sample_hashes = conn
+                .prepare(
+                    "SELECT me.entity_hash FROM _bulk_target bt
+                 JOIN media_entity me ON me.entity_id = bt.entity_id
+                 ORDER BY me.date_added DESC, me.entity_id ASC LIMIT 10",
+                )?
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<_>>()?;
+            let mime_counts = conn
+                .prepare(
+                    "SELECT mf.mime_type, COUNT(*) FROM _bulk_target bt
+                 JOIN media_entity me ON me.entity_id = bt.entity_id
+                 JOIN media_file mf ON mf.file_id = me.file_id GROUP BY mf.mime_type",
+                )?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<std::collections::HashMap<_, _>>>()?;
+            let mut entity_ids = roaring::RoaringBitmap::new();
+            let mut stmt = conn.prepare("SELECT entity_id FROM _bulk_target")?;
+            for entity_id in stmt.query_map([], |row| row.get::<_, u32>(0))? {
+                entity_ids.insert(entity_id?);
+            }
+            Ok(types::QueryTargetAggregate {
+                entity_ids,
+                total_count,
+                selected_count,
+                sample_hashes,
+                total_size_bytes,
+                mime_counts,
+                min_rating,
+                max_rating,
+                shared_rating: (distinct_ratings == 1).then_some(min_rating).flatten(),
+            })
         })
     }
 
@@ -1545,12 +1605,7 @@ impl LibraryDatabase {
         self.with_write(move |conn| {
             let left = query::duplicates::get_duplicate_single_ref_by_hash(conn, &hash_a)?;
             let right = query::duplicates::get_duplicate_single_ref_by_hash(conn, &hash_b)?;
-            let result = write::duplicates::resolve_duplicate_pair(
-                conn,
-                &action,
-                left,
-                right,
-            )?;
+            let result = write::duplicates::resolve_duplicate_pair(conn, &action, left, right)?;
             if matches!(result.status, types::DuplicateResolveStatus::Resolved) {
                 // The detected pair is recomputable; the user's decision is truth.
                 let (a, b) = if hash_a <= hash_b {

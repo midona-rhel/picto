@@ -4,8 +4,8 @@ use super::LibraryDatabase;
 use crate::background_work::{DeferredWorkFilter, DeferredWorkType};
 use crate::db::core::schema::{CURRENT_SCHEMA_VERSION, LIBRARY_DDL};
 use crate::db::types::{
-    BaseScope, DuplicateResolveStatus, EntityViewQuery, QueryFilters, QueryPage, QuerySort,
-    ScopeKind,
+    BaseScope, DuplicateResolveStatus, EntityViewQuery, MediaEntityPatch, QueryFilters, QueryPage,
+    QuerySort, ScopeKind, TAG_PROVENANCE_MANUAL,
 };
 use crate::media_analysis::ensure_missing_color_analysis_jobs;
 use crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION;
@@ -15,7 +15,7 @@ use crate::subscriptions::runtime_db::upsert_subscription_issue;
 use img_hash::ImageHash;
 use rusqlite::{params, Connection};
 use std::sync::{mpsc, Arc};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tempfile::TempDir;
 
 fn open_test_db() -> LibraryDatabase {
@@ -394,6 +394,9 @@ fn folder_grid_pages_by_position_rank_without_capping_the_scope() {
         .unwrap();
 
     assert_eq!(first.total_count, Some(5));
+    assert_eq!(second.total_count, None);
+    assert_eq!(second.total_size_bytes, None);
+    assert_eq!(third.total_count, None);
     assert_eq!(
         first
             .items
@@ -413,6 +416,354 @@ fn folder_grid_pages_by_position_rank_without_capping_the_scope() {
     assert!(first.next_cursor.is_some());
     assert!(second.next_cursor.is_some());
     assert!(third.next_cursor.is_none());
+}
+
+#[test]
+fn query_target_aggregate_excludes_without_materializing_grid_rows() {
+    let db = open_test_db();
+    for (index, mime, size, rating) in [
+        (1, "image/png", 10, 1),
+        (2, "image/png", 20, 1),
+        (3, "video/mp4", 30, 2),
+    ] {
+        let file_id = db
+            .insert_file(
+                &format!("aggregate-file-{index}"),
+                mime,
+                size,
+                None,
+                None,
+                None,
+                None,
+                false,
+                "2026-08-04",
+            )
+            .unwrap();
+        let entity_id = db
+            .insert_entity(
+                &format!("aggregate-{index}"),
+                file_id,
+                Some(&format!("Aggregate {index}")),
+                1,
+                "2026-08-04",
+                "2026-08-04",
+            )
+            .unwrap();
+        db.patch_entity_metadata(
+            &[entity_id],
+            &MediaEntityPatch {
+                rating: Some(rating),
+                ..MediaEntityPatch::default()
+            },
+        )
+        .unwrap();
+    }
+    let query = EntityViewQuery {
+        base_scope: BaseScope {
+            kind: ScopeKind::System,
+            key: Some("all".into()),
+            id: None,
+        },
+        filters: QueryFilters::default(),
+        sort: QuerySort::default(),
+        page: QueryPage::default(),
+    };
+    let aggregate = db
+        .query_target_aggregate(&query, &["aggregate-3".into()])
+        .unwrap();
+    assert_eq!(aggregate.total_count, 3);
+    assert_eq!(aggregate.selected_count, 2);
+    assert_eq!(aggregate.entity_ids.len(), 2);
+    assert_eq!(aggregate.total_size_bytes, 30);
+    assert_eq!(aggregate.mime_counts.get("image/png"), Some(&2));
+    assert_eq!(aggregate.shared_rating, Some(1));
+}
+
+#[test]
+fn query_target_mutations_execute_against_the_temp_target() {
+    let db = open_test_db();
+    let mut ids = Vec::new();
+    for index in 1..=3 {
+        let file_id = db
+            .insert_file(
+                &format!("target-file-{index}"),
+                "image/png",
+                10,
+                None,
+                None,
+                None,
+                None,
+                false,
+                "2026-08-04",
+            )
+            .unwrap();
+        ids.push(
+            db.insert_entity(
+                &format!("target-{index}"),
+                file_id,
+                Some(&format!("Target {index}")),
+                1,
+                "2026-08-04",
+                "2026-08-04",
+            )
+            .unwrap(),
+        );
+    }
+    let query = EntityViewQuery {
+        base_scope: BaseScope {
+            kind: ScopeKind::System,
+            key: Some("all".into()),
+            id: None,
+        },
+        filters: QueryFilters::default(),
+        sort: QuerySort::default(),
+        page: QueryPage::default(),
+    };
+    let excluded = vec!["target-3".to_string()];
+    db.patch_entity_metadata_bulk(
+        &query,
+        &excluded,
+        &MediaEntityPatch {
+            rating: Some(4),
+            ..MediaEntityPatch::default()
+        },
+    )
+    .unwrap();
+    db.add_tags_bulk(
+        &query,
+        &excluded,
+        &["bulk:test".into()],
+        TAG_PROVENANCE_MANUAL,
+    )
+    .unwrap();
+    let folder_id = db.create_folder("Bulk", None, None, None).unwrap();
+    db.add_folder_members_bulk(folder_id, &query, &excluded)
+        .unwrap();
+
+    db.with_read(|conn| {
+        let rated: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM media_entity WHERE rating = 4",
+            [],
+            |row| row.get(0),
+        )?;
+        let tagged: i64 =
+            conn.query_row("SELECT COUNT(*) FROM entity_tag", [], |row| row.get(0))?;
+        let members: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM folder_member WHERE folder_id = ?1",
+            [folder_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!((rated, tagged, members), (2, 2, 2));
+        Ok(())
+    })
+    .unwrap();
+
+    db.remove_tags_bulk(&query, &excluded, &["bulk:test".into()])
+        .unwrap();
+    db.remove_folder_members_bulk(folder_id, &query, &excluded)
+        .unwrap();
+    db.set_entity_status_bulk(&query, &excluded, 2).unwrap();
+    db.with_read(|conn| {
+        let remaining_tags: i64 =
+            conn.query_row("SELECT COUNT(*) FROM entity_tag", [], |row| row.get(0))?;
+        let remaining_members: i64 =
+            conn.query_row("SELECT COUNT(*) FROM folder_member", [], |row| row.get(0))?;
+        let trashed: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM media_entity WHERE status = 2",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!((remaining_tags, remaining_members, trashed), (0, 0, 2));
+        Ok(())
+    })
+    .unwrap();
+}
+
+#[test]
+fn typed_cursors_page_every_supported_grid_sort_without_gaps() {
+    let db = open_test_db();
+    for index in 0..7_i64 {
+        let file_id = db
+            .insert_file(
+                &format!("cursor-file-{index}"),
+                "image/png",
+                10 + index * 7,
+                None,
+                None,
+                (index % 3 != 0).then_some(index * 100),
+                None,
+                false,
+                "2026-08-04",
+            )
+            .unwrap();
+        let entity_id = db
+            .insert_entity(
+                &format!("cursor-{index}"),
+                file_id,
+                Some(&format!("Name {}", 6 - index)),
+                1,
+                &format!("2026-08-{:02}", index + 1),
+                &format!("2026-09-{:02}", index + 1),
+            )
+            .unwrap();
+        db.with_write(|conn| {
+            conn.execute(
+                "UPDATE media_entity
+                 SET rating = ?1, date_modified = ?2
+                 WHERE entity_id = ?3",
+                params![
+                    (index % 4 != 0).then_some(index % 5),
+                    format!("2026-10-{:02}", index + 1),
+                    entity_id,
+                ],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    for field in [
+        "name",
+        "rating",
+        "size_bytes",
+        "duration",
+        "duration_ms",
+        "date_added",
+        "date_created",
+        "date_modified",
+    ] {
+        for direction in ["asc", "desc"] {
+            let query = |limit, cursor| EntityViewQuery {
+                base_scope: BaseScope {
+                    kind: ScopeKind::System,
+                    key: Some("all".into()),
+                    id: None,
+                },
+                filters: QueryFilters::default(),
+                sort: QuerySort {
+                    field: field.into(),
+                    direction: direction.into(),
+                },
+                page: QueryPage { limit, cursor },
+            };
+            let expected = db
+                .query_entity_view(&query(100, None))
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|item| item.entity_hash)
+                .collect::<Vec<_>>();
+            let mut actual = Vec::new();
+            let mut cursor = None;
+            loop {
+                let page = db.query_entity_view(&query(2, cursor)).unwrap();
+                actual.extend(page.items.into_iter().map(|item| item.entity_hash));
+                let Some(next) = page.next_cursor else { break };
+                cursor = Some(next);
+            }
+            assert_eq!(actual, expected, "{field} {direction}");
+        }
+    }
+}
+
+#[test]
+#[ignore = "explicit million-entity performance verification"]
+fn million_entity_smart_scope_summary_and_bulk_membership_stay_db_backed() {
+    const ENTITY_COUNT: i64 = 1_000_000;
+    let db = open_test_db();
+    let seed_started = Instant::now();
+    db.with_write(|conn| {
+        conn.execute_batch(
+            "WITH RECURSIVE digit(value) AS (
+                 VALUES(0) UNION ALL SELECT value + 1 FROM digit WHERE value < 999
+             )
+             INSERT INTO media_file(file_id, file_hash, mime_type, size_bytes, date_added)
+             SELECT first.value * 1000 + second.value + 1,
+                    printf('million-file-%07d', first.value * 1000 + second.value + 1),
+                    'image/jpeg', 1, '2026-08-04'
+             FROM digit first CROSS JOIN digit second;
+
+             WITH RECURSIVE digit(value) AS (
+                 VALUES(0) UNION ALL SELECT value + 1 FROM digit WHERE value < 999
+             )
+             INSERT INTO media_entity(
+                 entity_id, entity_hash, file_id, status, name,
+                 date_created, date_added, date_modified
+             )
+             SELECT first.value * 1000 + second.value + 1,
+                    printf('million-entity-%07d', first.value * 1000 + second.value + 1),
+                    first.value * 1000 + second.value + 1,
+                    1,
+                    printf('Entity %07d', first.value * 1000 + second.value + 1),
+                    '2026-08-04', '2026-08-04', '2026-08-04'
+             FROM digit first CROSS JOIN digit second;",
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    eprintln!("million seed: {:?}", seed_started.elapsed());
+
+    db.bitmaps.set(
+        crate::db::projection::bitmaps::BitmapKey::SmartFolder(1),
+        roaring::RoaringBitmap::from_iter(1..=ENTITY_COUNT as u32),
+    );
+    db.with_write(|conn| {
+        conn.execute(
+            "INSERT INTO smart_folder(
+                 smart_folder_id, name, predicate_json, total_size_bytes,
+                 date_added, date_modified
+             ) VALUES (1, 'Million', '{}', ?1, '2026-08-04', '2026-08-04')",
+            [ENTITY_COUNT],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    let smart_query = EntityViewQuery {
+        base_scope: BaseScope {
+            kind: ScopeKind::SmartFolder,
+            key: None,
+            id: Some(1),
+        },
+        filters: QueryFilters::default(),
+        sort: QuerySort::default(),
+        page: QueryPage {
+            limit: 500,
+            cursor: None,
+        },
+    };
+    let page_started = Instant::now();
+    let page = db.query_entity_view(&smart_query).unwrap();
+    eprintln!("million smart page + count: {:?}", page_started.elapsed());
+    assert_eq!(page.total_count, Some(ENTITY_COUNT));
+    assert_eq!(page.items.len(), 500);
+
+    let summary_started = Instant::now();
+    let aggregate = db.query_target_aggregate(&smart_query, &[]).unwrap();
+    eprintln!("million target summary: {:?}", summary_started.elapsed());
+    assert_eq!(aggregate.total_count, ENTITY_COUNT);
+    assert_eq!(aggregate.selected_count, ENTITY_COUNT);
+    assert_eq!(aggregate.entity_ids.len(), ENTITY_COUNT as u64);
+
+    let folder_id = db.create_folder("Million", None, None, None).unwrap();
+    let mutation_started = Instant::now();
+    db.with_write(|conn| {
+        super::write::bulk::populate_bulk_target(conn, &smart_query, &[])?;
+        let change = super::write::bulk::add_folder_members_to_target(conn, folder_id)?;
+        assert_eq!(change.entity_ids.len(), ENTITY_COUNT as usize);
+        Ok(())
+    })
+    .unwrap();
+    eprintln!("million bulk membership: {:?}", mutation_started.elapsed());
+    db.with_read(|conn| {
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM folder_member WHERE folder_id = ?1",
+            [folder_id],
+            |row| row.get(0),
+        )?;
+        assert_eq!(count, ENTITY_COUNT);
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[test]

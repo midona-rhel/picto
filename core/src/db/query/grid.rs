@@ -1,55 +1,43 @@
-//! Grid page queries over independent media entities.
+//! Canonical scope/filter SQL and paged grid reads.
 
-use rusqlite::{Connection, ToSql};
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
+use rusqlite::{types::Value, Connection, OptionalExtension, ToSql};
+use serde::{Deserialize, Serialize};
 
+use super::tags::effective_tag_exists;
 use crate::db::types::{
     EntityGridItem, EntityViewPage, EntityViewQuery, FilterOp, QueryFilters, ScopeKind,
     TagMatchMode,
 };
 
-use super::tags::effective_tag_exists;
+pub(crate) struct EntityFilterSql {
+    pub where_clause: String,
+    pub params: Vec<Value>,
+}
 
-fn folder_scope_membership(parameter_index: usize) -> String {
-    format!(
-        "EXISTS (SELECT 1 FROM folder_member fm WHERE fm.folder_id = ?{parameter_index} AND fm.entity_id = me.entity_id)"
-    )
+pub(crate) fn build_entity_filter(query: &EntityViewQuery) -> EntityFilterSql {
+    let mut parts = vec!["1=1".to_string()];
+    let mut params = Vec::new();
+    apply_scope(&query.base_scope, &mut parts, &mut params);
+    apply_filters(&query.filters, &mut parts, &mut params);
+    EntityFilterSql {
+        where_clause: parts.join(" AND "),
+        params,
+    }
 }
 
 pub fn folder_visible_count(conn: &Connection, folder_id: i64) -> rusqlite::Result<i64> {
     conn.query_row(
-        "SELECT COUNT(*)
-         FROM folder_member fm
-         JOIN media_entity me ON me.entity_id = fm.entity_id
-         WHERE fm.folder_id = ?1 AND me.status = 1",
-        [folder_id],
-        |row| row.get(0),
+        "SELECT COUNT(*) FROM folder_member fm JOIN media_entity me ON me.entity_id = fm.entity_id WHERE fm.folder_id = ?1 AND me.status = 1",
+        [folder_id], |row| row.get(0),
     )
 }
 
-// Columns: hash, name, mime, width, height, status, rating, dates (3),
-// thumbnail flag, duration, frame count, audio, dominant color, size, id, viewed_at.
 const GRID_SELECT: &str = "SELECT
-        me.entity_hash,
-        me.name,
-        mf.mime_type,
-        mf.pixel_width,
-        mf.pixel_height,
-        me.status,
-        me.rating,
-        me.date_added,
-        me.date_created,
-        me.date_modified,
-        1 AS has_thumbnail,
-        mf.duration_ms,
-        mf.frame_count,
-        COALESCE(mf.has_audio, 0),
-        mf.dominant_color_hex,
-        COALESCE(mf.size_bytes, 0),
-        me.entity_id,
-        mv.viewed_at
-     FROM media_entity me
-     JOIN media_file mf ON mf.file_id = me.file_id
-     LEFT JOIN media_view mv ON mv.entity_id = me.entity_id";
+    me.entity_hash, me.name, mf.mime_type, mf.pixel_width, mf.pixel_height,
+    me.status, me.rating, me.date_added, me.date_created, me.date_modified,
+    1, mf.duration_ms, mf.frame_count, COALESCE(mf.has_audio, 0),
+    mf.dominant_color_hex, COALESCE(mf.size_bytes, 0), me.entity_id, mv.viewed_at";
 
 fn read_grid_item(row: &rusqlite::Row) -> rusqlite::Result<EntityGridItem> {
     Ok(EntityGridItem {
@@ -73,164 +61,197 @@ fn read_grid_item(row: &rusqlite::Row) -> rusqlite::Result<EntityGridItem> {
     })
 }
 
-pub fn query_entity_view(
-    conn: &Connection,
-    q: &EntityViewQuery,
-    preresolved_ids: Option<&[i64]>,
-) -> rusqlite::Result<EntityViewPage> {
-    let is_folder_scope = matches!(q.base_scope.kind, ScopeKind::Folder);
-    let is_recently_viewed_scope = matches!(q.base_scope.kind, ScopeKind::System)
-        && q.base_scope.key.as_deref() == Some("recent_viewed");
-    let sort_field = if is_recently_viewed_scope {
-        "viewed_at"
-    } else {
-        &q.sort.field
-    };
-    let sort_direction = if is_recently_viewed_scope {
-        "desc"
-    } else {
-        &q.sort.direction
-    };
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+struct GridCursor {
+    value: CursorValue,
+    entity_id: i64,
+}
 
-    let mut where_parts = vec!["1=1".to_string()];
-    let mut bound: Vec<Box<dyn ToSql>> = Vec::new();
-    apply_scope(&q.base_scope, &mut where_parts, &mut bound, preresolved_ids);
-    apply_filters(&q.filters, &mut where_parts, &mut bound);
+#[derive(Debug, PartialEq, Serialize, Deserialize)]
+enum CursorValue {
+    Text(String),
+    Integer(i64),
+}
 
-    if !is_folder_scope {
-        if let Some((cursor_value, cursor_id)) = q
-            .page
-            .cursor
-            .as_deref()
-            .and_then(|cursor| parse_cursor(conn, cursor))
-        {
-            let op = if sort_direction == "asc" { ">" } else { "<" };
-            let first = bound.len() + 1;
-            let second = first + 1;
-            let column = sort_column(sort_field);
-            where_parts.push(format!(
-                "({column} {op} ?{first} OR ({column} = ?{first} AND me.entity_id > ?{second}))"
-            ));
-            bound.push(Box::new(cursor_value));
-            bound.push(Box::new(cursor_id));
+impl CursorValue {
+    fn into_sql(self) -> Value {
+        match self {
+            Self::Text(value) => Value::Text(value),
+            Self::Integer(value) => Value::Integer(value),
         }
     }
+    fn from_sql(value: Value) -> Option<Self> {
+        match value {
+            Value::Text(value) => Some(Self::Text(value)),
+            Value::Integer(value) => Some(Self::Integer(value)),
+            _ => None,
+        }
+    }
+}
 
-    let folder_join = if is_folder_scope {
-        let index = bound.len() + 1;
-        bound.push(Box::new(q.base_scope.id.unwrap_or_default()));
-        format!(
-            " LEFT JOIN folder_member fm_sort ON fm_sort.entity_id = me.entity_id AND fm_sort.folder_id = ?{index}"
-        )
+fn encode_cursor(value: Value, entity_id: i64) -> Option<String> {
+    let cursor = GridCursor {
+        value: CursorValue::from_sql(value)?,
+        entity_id,
+    };
+    serde_json::to_vec(&cursor)
+        .ok()
+        .map(|bytes| URL_SAFE_NO_PAD.encode(bytes))
+}
+
+fn decode_cursor(cursor: &str) -> Option<GridCursor> {
+    serde_json::from_slice(&URL_SAFE_NO_PAD.decode(cursor).ok()?).ok()
+}
+
+pub fn query_entity_view(
+    conn: &Connection,
+    query: &EntityViewQuery,
+) -> rusqlite::Result<EntityViewPage> {
+    let folder_scope = matches!(query.base_scope.kind, ScopeKind::Folder);
+    let recent_scope = matches!(query.base_scope.kind, ScopeKind::System)
+        && query.base_scope.key.as_deref() == Some("recent_viewed");
+    let field = if recent_scope {
+        "viewed_at"
+    } else {
+        &query.sort.field
+    };
+    let direction = if recent_scope {
+        "desc"
+    } else {
+        &query.sort.direction
+    };
+    let sort_expression = if folder_scope {
+        "COALESCE(fm_sort.position_rank, 0)"
+    } else {
+        sort_column(field)
+    };
+
+    let EntityFilterSql {
+        mut where_clause,
+        mut params,
+    } = build_entity_filter(query);
+    let folder_join = if folder_scope {
+        let index = params.len() + 1;
+        params.push(Value::Integer(query.base_scope.id.unwrap_or_default()));
+        format!(" LEFT JOIN folder_member fm_sort ON fm_sort.entity_id = me.entity_id AND fm_sort.folder_id = ?{index}")
     } else {
         String::new()
     };
-    if is_folder_scope {
-        if let Some((rank, cursor_id)) = q
-            .page
-            .cursor
-            .as_deref()
-            .and_then(|cursor| parse_cursor(conn, cursor))
-            .and_then(|(value, entity_id)| value.parse::<i64>().ok().map(|rank| (rank, entity_id)))
-        {
-            let first = bound.len() + 1;
-            let second = first + 1;
-            where_parts.push(format!(
-                "(COALESCE(fm_sort.position_rank, 0) > ?{first} OR \
-                 (COALESCE(fm_sort.position_rank, 0) = ?{first} AND me.entity_id > ?{second}))"
-            ));
-            bound.push(Box::new(rank));
-            bound.push(Box::new(cursor_id));
-        }
-    }
-    let order = if is_folder_scope {
-        "fm_sort.position_rank ASC, me.entity_id ASC".to_string()
-    } else {
-        format!(
-            "{}, me.entity_id ASC",
-            validated_sort(sort_field, sort_direction)
-        )
-    };
-    let limit_index = bound.len() + 1;
-    bound.push(Box::new(q.page.limit));
-    let where_clause = where_parts.join(" AND ");
 
-    let mut count_where = vec!["1=1".to_string()];
-    let mut count_bound: Vec<Box<dyn ToSql>> = Vec::new();
-    apply_scope(
-        &q.base_scope,
-        &mut count_where,
-        &mut count_bound,
-        preresolved_ids,
+    if let Some(cursor) = query.page.cursor.as_deref().and_then(decode_cursor) {
+        let op = if folder_scope || direction == "asc" {
+            ">"
+        } else {
+            "<"
+        };
+        let value_index = params.len() + 1;
+        let id_index = value_index + 1;
+        where_clause.push_str(&format!(
+            " AND ({sort_expression} {op} ?{value_index} OR ({sort_expression} = ?{value_index} AND me.entity_id > ?{id_index}))"
+        ));
+        params.push(cursor.value.into_sql());
+        params.push(Value::Integer(cursor.entity_id));
+    }
+
+    let order = format!(
+        "{sort_expression} {}, me.entity_id ASC",
+        if folder_scope || direction == "asc" {
+            "ASC"
+        } else {
+            "DESC"
+        }
     );
-    apply_filters(&q.filters, &mut count_where, &mut count_bound);
-    let count_sql = format!(
-        "SELECT COUNT(*), COALESCE(SUM(mf.size_bytes), 0)
-         FROM media_entity me
+    let limit_index = params.len() + 1;
+    params.push(Value::Integer(query.page.limit));
+    let data_sql = format!(
+        "{GRID_SELECT}, {sort_expression} AS cursor_value FROM media_entity me
          JOIN media_file mf ON mf.file_id = me.file_id
          LEFT JOIN media_view mv ON mv.entity_id = me.entity_id
-         WHERE {}",
-        count_where.join(" AND ")
+         {folder_join} WHERE {where_clause} ORDER BY {order} LIMIT ?{limit_index}"
     );
-    let count_refs: Vec<&dyn ToSql> = count_bound.iter().map(|value| value.as_ref()).collect();
-    let (total_count, total_size_bytes) =
-        conn.query_row(&count_sql, count_refs.as_slice(), |row| {
-            Ok((row.get(0)?, row.get(1)?))
-        })?;
-
-    let data_sql = format!(
-        "{GRID_SELECT}{folder_join} WHERE {where_clause} ORDER BY {order} LIMIT ?{limit_index}"
-    );
-    let refs: Vec<&dyn ToSql> = bound.iter().map(|value| value.as_ref()).collect();
+    let refs: Vec<&dyn ToSql> = params.iter().map(|value| value as &dyn ToSql).collect();
     let mut stmt = conn.prepare(&data_sql)?;
-    let rows: Vec<(EntityGridItem, Option<String>)> = stmt
+    let rows = stmt
         .query_map(refs.as_slice(), |row| {
-            Ok((read_grid_item(row)?, row.get(17)?))
+            Ok((read_grid_item(row)?, row.get::<_, Value>(18)?))
         })?
-        .collect::<rusqlite::Result<_>>()?;
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    let next_cursor = if rows.len() as i64 == q.page.limit {
-        rows.last().and_then(|(item, viewed_at)| {
-            if is_folder_scope {
-                let folder_id = q.base_scope.id.unwrap_or_default();
-                let rank = conn
-                    .query_row(
-                        "SELECT COALESCE(position_rank, 0)
-                         FROM folder_member
-                         WHERE folder_id = ?1 AND entity_id = ?2",
-                        [folder_id, item.entity_id],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .ok()?;
-                return Some(format!("{rank}|{}", item.entity_hash));
-            }
-            let value = match sort_field {
-                "viewed_at" => viewed_at.as_deref().unwrap_or(""),
-                "date_added" => item.date_added.as_str(),
-                "date_created" => item.date_created.as_str(),
-                "date_modified" => item.date_modified.as_str(),
-                "name" => item.name.as_deref().unwrap_or(""),
-                _ => item.date_added.as_str(),
-            };
-            Some(format!("{value}|{}", item.entity_hash))
+    let next_cursor = (rows.len() as i64 == query.page.limit)
+        .then(|| {
+            rows.last()
+                .and_then(|(item, value)| encode_cursor(value.clone(), item.entity_id))
         })
+        .flatten();
+    let (total_count, total_size_bytes) = if query.page.cursor.is_none() {
+        if matches!(query.base_scope.kind, ScopeKind::SmartFolder)
+            && filters_are_empty(&query.filters)
+        {
+            let smart_folder_id = query.base_scope.id.unwrap_or_default();
+            let projected = conn
+                .query_row(
+                    "SELECT smart_folder_count(?1), total_size_bytes
+                     FROM smart_folder WHERE smart_folder_id = ?1",
+                    [smart_folder_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            if let Some((count, size)) = projected {
+                return Ok(EntityViewPage {
+                    items: rows.into_iter().map(|(item, _)| item).collect(),
+                    next_cursor,
+                    total_count: Some(count),
+                    total_size_bytes: Some(size),
+                });
+            }
+        }
+        let filter = build_entity_filter(query);
+        let sql = format!(
+            "SELECT COUNT(*), COALESCE(SUM(mf.size_bytes), 0) FROM media_entity me
+             JOIN media_file mf ON mf.file_id = me.file_id
+             LEFT JOIN media_view mv ON mv.entity_id = me.entity_id WHERE {}",
+            filter.where_clause
+        );
+        let refs: Vec<&dyn ToSql> = filter
+            .params
+            .iter()
+            .map(|value| value as &dyn ToSql)
+            .collect();
+        let totals = conn.query_row(&sql, refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?;
+        (Some(totals.0), Some(totals.1))
     } else {
-        None
+        (None, None)
     };
 
     Ok(EntityViewPage {
         items: rows.into_iter().map(|(item, _)| item).collect(),
         next_cursor,
-        total_count: Some(total_count),
-        total_size_bytes: Some(total_size_bytes),
+        total_count,
+        total_size_bytes,
     })
+}
+
+fn filters_are_empty(filters: &QueryFilters) -> bool {
+    filters.rating.is_none()
+        && filters.colors.as_ref().is_none_or(Vec::is_empty)
+        && filters.mime_types.as_ref().is_none_or(Vec::is_empty)
+        && filters.entity_types.as_ref().is_none_or(Vec::is_empty)
+        && filters.tags.as_ref().is_none_or(Vec::is_empty)
+        && filters.date_created.is_none()
+        && filters.date_added.is_none()
+        && filters.date_modified.is_none()
+        && filters.search_text.as_deref().is_none_or(str::is_empty)
+}
+
+fn bind(params: &mut Vec<Value>, value: impl Into<Value>) -> usize {
+    params.push(value.into());
+    params.len()
 }
 
 fn apply_scope(
     scope: &crate::db::types::BaseScope,
     parts: &mut Vec<String>,
-    bound: &mut Vec<Box<dyn ToSql>>,
-    preresolved_ids: Option<&[i64]>,
+    params: &mut Vec<Value>,
 ) {
     match scope.kind {
         ScopeKind::System => {
@@ -253,44 +274,32 @@ fn apply_scope(
             }
         }
         ScopeKind::Folder => {
-            let index = bound.len() + 1;
             parts.push("me.status = 1".into());
-            parts.push(folder_scope_membership(index));
-            bound.push(Box::new(scope.id.unwrap_or_default()));
+            let index = bind(params, scope.id.unwrap_or_default());
+            parts.push(format!("EXISTS (SELECT 1 FROM folder_member fm WHERE fm.folder_id = ?{index} AND fm.entity_id = me.entity_id)"));
         }
         ScopeKind::SmartFolder => {
             parts.push("me.status = 1".into());
-            match preresolved_ids {
-                Some(ids) if !ids.is_empty() => parts.push(format!(
-                    "me.entity_id IN ({})",
-                    ids.iter().map(i64::to_string).collect::<Vec<_>>().join(",")
-                )),
-                _ => parts.push("1=0".into()),
-            }
+            let index = bind(params, scope.id.unwrap_or_default());
+            parts.push(format!("smart_folder_contains(?{index}, me.entity_id) = 1"));
         }
         ScopeKind::Tag => {
-            let index = bound.len() + 1;
             parts.push("me.status = 1".into());
+            let index = bind(params, scope.key.clone().unwrap_or_default());
             parts.push(effective_tag_exists("me.entity_id", index));
-            bound.push(Box::new(scope.key.clone().unwrap_or_default()));
         }
         ScopeKind::Search => {
             parts.push("me.status = 1".into());
-            let search = scope.key.as_deref().unwrap_or("");
-            if !search.is_empty() {
-                let index = bound.len() + 1;
-                parts.push(format!(
-                    "me.entity_id IN (SELECT rowid FROM entity_fts WHERE entity_fts MATCH ?{index})"
-                ));
-                bound.push(Box::new(format!("{search}*")));
+            if let Some(search) = scope.key.as_deref().filter(|value| !value.is_empty()) {
+                let index = bind(params, format!("{search}*"));
+                parts.push(format!("me.entity_id IN (SELECT rowid FROM entity_fts WHERE entity_fts MATCH ?{index})"));
             }
         }
     }
 }
 
-fn apply_filters(filters: &QueryFilters, parts: &mut Vec<String>, bound: &mut Vec<Box<dyn ToSql>>) {
+fn apply_filters(filters: &QueryFilters, parts: &mut Vec<String>, params: &mut Vec<Value>) {
     if let Some(rating) = &filters.rating {
-        let index = bound.len() + 1;
         let op = match rating.op {
             FilterOp::Eq => "=",
             FilterOp::Gte => ">=",
@@ -298,82 +307,61 @@ fn apply_filters(filters: &QueryFilters, parts: &mut Vec<String>, bound: &mut Ve
             FilterOp::Gt => ">",
             FilterOp::Lt => "<",
         };
+        let index = bind(params, rating.value);
         parts.push(format!("me.rating {op} ?{index}"));
-        bound.push(Box::new(rating.value));
     }
-
-    if let Some(mimes) = &filters.mime_types {
-        if !mimes.is_empty() {
-            let placeholders = (0..mimes.len())
-                .map(|offset| format!("?{}", bound.len() + offset + 1))
-                .collect::<Vec<_>>();
-            parts.push(format!("mf.mime_type IN ({})", placeholders.join(",")));
-            bound.extend(
-                mimes
-                    .iter()
-                    .cloned()
-                    .map(|mime| Box::new(mime) as Box<dyn ToSql>),
-            );
-        }
+    if let Some(values) = filters
+        .mime_types
+        .as_ref()
+        .filter(|values| !values.is_empty())
+    {
+        let placeholders = values
+            .iter()
+            .map(|value| format!("?{}", bind(params, value.clone())))
+            .collect::<Vec<_>>();
+        parts.push(format!("mf.mime_type IN ({})", placeholders.join(",")));
     }
-
     if let Some(types) = &filters.entity_types {
-        let mut type_parts = Vec::new();
-        for media_type in types {
-            let index = bound.len() + 1;
-            match media_type.as_str() {
-                "image" | "video" | "audio" => {
-                    type_parts.push(format!("mf.mime_type LIKE ?{index}"));
-                    bound.push(Box::new(format!("{media_type}/%")));
-                }
-                _ => {}
-            }
-        }
-        if !type_parts.is_empty() {
-            parts.push(format!("({})", type_parts.join(" OR ")));
+        let values = types
+            .iter()
+            .filter(|value| matches!(value.as_str(), "image" | "video" | "audio"))
+            .map(|value| format!("mf.mime_type LIKE ?{}", bind(params, format!("{value}/%"))))
+            .collect::<Vec<_>>();
+        if !values.is_empty() {
+            parts.push(format!("({})", values.join(" OR ")));
         }
     }
-
     if let Some(tags) = &filters.tags {
         for tag in tags {
-            let index = bound.len() + 1;
+            let index = bind(params, tag.tag.clone());
             let exists = effective_tag_exists("me.entity_id", index);
-            match tag.match_mode {
-                TagMatchMode::Include => parts.push(exists),
-                TagMatchMode::Exclude => parts.push(format!("NOT {exists}")),
-            }
-            bound.push(Box::new(tag.tag.clone()));
+            parts.push(if matches!(tag.match_mode, TagMatchMode::Exclude) {
+                format!("NOT {exists}")
+            } else {
+                exists
+            });
         }
     }
-
-    apply_date_filter("me.date_created", &filters.date_created, parts, bound);
-    apply_date_filter("me.date_added", &filters.date_added, parts, bound);
-    apply_date_filter("me.date_modified", &filters.date_modified, parts, bound);
-
-    if let Some(text) = &filters.search_text {
-        if !text.is_empty() {
-            let index = bound.len() + 1;
-            parts.push(format!("(me.name LIKE ?{index} OR me.notes LIKE ?{index})"));
-            bound.push(Box::new(format!("%{text}%")));
-        }
+    apply_date_filter("me.date_created", &filters.date_created, parts, params);
+    apply_date_filter("me.date_added", &filters.date_added, parts, params);
+    apply_date_filter("me.date_modified", &filters.date_modified, parts, params);
+    if let Some(text) = filters
+        .search_text
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        let index = bind(params, format!("%{text}%"));
+        parts.push(format!("(me.name LIKE ?{index} OR me.notes LIKE ?{index})"));
     }
-
-    if let Some(colors) = &filters.colors {
-        if !colors.is_empty() {
-            let placeholders = (0..colors.len())
-                .map(|offset| format!("?{}", bound.len() + offset + 1))
-                .collect::<Vec<_>>();
-            parts.push(format!(
-                "EXISTS (SELECT 1 FROM file_color fc WHERE fc.file_id = mf.file_id AND fc.hex IN ({}))",
-                placeholders.join(",")
-            ));
-            bound.extend(
-                colors
-                    .iter()
-                    .cloned()
-                    .map(|color| Box::new(color) as Box<dyn ToSql>),
-            );
-        }
+    if let Some(colors) = filters.colors.as_ref().filter(|values| !values.is_empty()) {
+        let placeholders = colors
+            .iter()
+            .map(|value| format!("?{}", bind(params, value.clone())))
+            .collect::<Vec<_>>();
+        parts.push(format!(
+            "EXISTS (SELECT 1 FROM file_color fc WHERE fc.file_id = mf.file_id AND fc.hex IN ({}))",
+            placeholders.join(",")
+        ));
     }
 }
 
@@ -381,63 +369,36 @@ fn apply_date_filter(
     column: &str,
     range: &Option<crate::db::types::DateRange>,
     parts: &mut Vec<String>,
-    bound: &mut Vec<Box<dyn ToSql>>,
+    params: &mut Vec<Value>,
 ) {
     if let Some(range) = range {
         if let Some(from) = &range.from {
-            let index = bound.len() + 1;
+            let index = bind(params, from.clone());
             parts.push(format!("{column} >= ?{index}"));
-            bound.push(Box::new(from.clone()));
         }
         if let Some(to) = &range.to {
-            let index = bound.len() + 1;
+            let index = bind(params, to.clone());
             parts.push(format!("{column} <= ?{index}"));
-            bound.push(Box::new(to.clone()));
         }
     }
 }
 
 fn sort_column(field: &str) -> &str {
     match field {
-        "viewed_at" => "mv.viewed_at",
-        "date_added" => "me.date_added",
-        "date_created" => "me.date_created",
-        "date_modified" => "me.date_modified",
-        "rating" => "me.rating",
-        "size_bytes" => "mf.size_bytes",
-        "name" => "me.name",
-        _ => "me.date_added",
+        "viewed_at" => "COALESCE(mv.viewed_at, '')",
+        "date_added" => "COALESCE(me.date_added, '')",
+        "date_created" => "COALESCE(me.date_created, '')",
+        "date_modified" => "COALESCE(me.date_modified, '')",
+        "rating" => "COALESCE(me.rating, -1)",
+        "size_bytes" => "COALESCE(mf.size_bytes, 0)",
+        "duration" | "duration_ms" => "COALESCE(mf.duration_ms, -1)",
+        "name" => "COALESCE(me.name, '')",
+        _ => "COALESCE(me.date_added, '')",
     }
 }
 
-fn validated_sort(field: &str, direction: &str) -> String {
-    let direction = if direction == "asc" { "ASC" } else { "DESC" };
-    format!("{} {direction}", sort_column(field))
-}
-
 pub fn recently_viewed_count(conn: &Connection) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*)
-         FROM media_view mv
-         JOIN media_entity me ON me.entity_id = mv.entity_id
-         WHERE me.status = 1",
-        [],
-        |row| row.get(0),
-    )
-}
-
-fn parse_cursor(conn: &Connection, cursor: &str) -> Option<(String, i64)> {
-    let split = cursor.rfind('|')?;
-    let sort_value = cursor[..split].to_string();
-    let hash = &cursor[split + 1..];
-    let entity_id = conn
-        .query_row(
-            "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",
-            [hash],
-            |row| row.get(0),
-        )
-        .ok()?;
-    Some((sort_value, entity_id))
+    conn.query_row("SELECT COUNT(*) FROM media_view mv JOIN media_entity me ON me.entity_id = mv.entity_id WHERE me.status = 1", [], |row| row.get(0))
 }
 
 pub fn get_entity_grid_items_by_hash(
@@ -450,12 +411,47 @@ pub fn get_entity_grid_items_by_hash(
     let placeholders = (1..=hashes.len())
         .map(|index| format!("?{index}"))
         .collect::<Vec<_>>();
-    let sql = format!(
-        "{GRID_SELECT} WHERE me.entity_hash IN ({})",
-        placeholders.join(",")
-    );
-    let mut stmt = conn.prepare(&sql)?;
+    let sql = format!("{GRID_SELECT} FROM media_entity me JOIN media_file mf ON mf.file_id = me.file_id LEFT JOIN media_view mv ON mv.entity_id = me.entity_id WHERE me.entity_hash IN ({})", placeholders.join(","));
     let params: Vec<&dyn ToSql> = hashes.iter().map(|hash| hash as &dyn ToSql).collect();
-    let rows = stmt.query_map(params.as_slice(), read_grid_item)?;
-    rows.collect()
+    conn.prepare(&sql)?
+        .query_map(params.as_slice(), read_grid_item)?
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cursor_round_trips_typed_text_and_integer_values() {
+        for (value, entity_id) in [
+            (Value::Text("name|with|separators".into()), 41),
+            (Value::Integer(-1), 42),
+            (Value::Integer(9_223_372_036_854_775_000), 43),
+        ] {
+            let encoded = encode_cursor(value.clone(), entity_id).expect("encode cursor");
+            let expected = GridCursor {
+                value: CursorValue::from_sql(value).expect("supported value"),
+                entity_id,
+            };
+            assert_eq!(decode_cursor(&encoded), Some(expected));
+        }
+    }
+
+    #[test]
+    fn every_supported_sort_uses_a_normalized_cursor_expression() {
+        for field in [
+            "name",
+            "rating",
+            "size_bytes",
+            "duration",
+            "duration_ms",
+            "date_added",
+            "date_created",
+            "date_modified",
+            "viewed_at",
+        ] {
+            assert!(sort_column(field).starts_with("COALESCE("), "{field}");
+        }
+    }
 }

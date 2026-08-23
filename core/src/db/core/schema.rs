@@ -159,8 +159,6 @@ CREATE TABLE IF NOT EXISTS smart_folder (
     color            TEXT,
     notes            TEXT,
     predicate_json   TEXT    NOT NULL,
-    sort_field        TEXT,
-    sort_order        TEXT,
     display_order    INTEGER,
     total_size_bytes INTEGER NOT NULL DEFAULT 0,
     pinned           INTEGER NOT NULL DEFAULT 0,

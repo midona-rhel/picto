@@ -25,8 +25,6 @@ export function emptySmartFolderPayload(overrides: Partial<SmartFolderCommandPay
     color: overrides.color ?? null,
     notes: overrides.notes ?? null,
     predicate_json: overrides.predicate_json ?? JSON.stringify(predicate),
-    sort_field: overrides.sort_field ?? null,
-    sort_order: overrides.sort_order ?? null,
     display_order: overrides.display_order ?? null,
     created_at: overrides.created_at ?? null,
     updated_at: overrides.updated_at ?? null,

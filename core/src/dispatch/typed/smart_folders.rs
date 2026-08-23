@@ -14,8 +14,6 @@ fn smart_folder_meta_json_canonical(row: &crate::db::query::folders::SmartFolder
         "notes": row.notes,
         "predicate": serde_json::from_str::<serde_json::Value>(&row.predicate_json)
             .unwrap_or_else(|_| serde_json::json!({ "groups": [] })),
-        "sort_field": row.sort_field,
-        "sort_order": row.sort_order,
     })
     .to_string()
 }
@@ -84,8 +82,6 @@ pub async fn create_smart_folder(
             color: input.color,
             notes: input.notes,
             predicate_json: input.predicate_json.unwrap_or_else(default_predicate),
-            sort_field: None,
-            sort_order: None,
             display_order: None,
             created_at: None,
             updated_at: None,
@@ -168,8 +164,6 @@ pub async fn update_smart_folder(
         sf.icon.as_deref(),
         sf.color.as_deref(),
         sf.notes.as_deref(),
-        sf.sort_field.as_deref(),
-        sf.sort_order.as_deref(),
     )?;
     let row = state
         .engine
