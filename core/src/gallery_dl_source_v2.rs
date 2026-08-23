@@ -6,7 +6,6 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::Lifecycle;
-use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::ingest_v2::{PreparedMediaInput, SourcePostInput};
 use crate::subscription_runtime_v2::{
     DownloadedItem, RunnerFailure, RunnerFailureKind, RunnerFuture, RunnerSuccess, SourceRunner,
@@ -197,15 +196,7 @@ async fn normalize_download(
     file_path: PathBuf,
     metadata: ParsedMetadata,
 ) -> Result<DownloadedItem, RunnerFailure> {
-    let options = ImportOptions {
-        tags: metadata.tags.clone(),
-        source_urls: metadata.source_urls.clone(),
-        created_at: metadata.created_at.clone(),
-        name: preferred_import_name(&metadata),
-        skip_thumbnail: true,
-        ..ImportOptions::default()
-    };
-    let prepared = ImportPipeline::prepare_blob_import(&file_path, &options)
+    let prepared = crate::media_processing::PreparedMediaSource::prepare_ingest(&file_path)
         .await
         .map_err(|error| {
             RunnerFailure::terminal(
@@ -213,17 +204,47 @@ async fn normalize_download(
                 format!("{}: {error}", file_path.display()),
             )
         })?;
+    if !prepared.caps.ingest_supported {
+        return Err(RunnerFailure::terminal(
+            RunnerFailureKind::InvalidOutput,
+            format!("Unsupported media: {}", file_path.display()),
+        ));
+    }
+    let bytes = prepared.file_bytes.as_deref().ok_or_else(|| {
+        RunnerFailure::terminal(
+            RunnerFailureKind::InvalidOutput,
+            format!("Downloaded media has no bytes: {}", file_path.display()),
+        )
+    })?;
+    let file_hash = hex::encode(crate::media_processing::get_hash_from_bytes(bytes));
+    let size_bytes = prepared.size_bytes.unwrap_or(bytes.len() as u64) as i64;
+    let created_at = metadata.created_at.clone().or_else(|| {
+        std::fs::metadata(&file_path).ok().and_then(|file| {
+            let timestamp = file.created().or_else(|_| file.modified()).ok()?;
+            Some(chrono::DateTime::<chrono::Utc>::from(timestamp).to_rfc3339())
+        })
+    });
+    let tags = metadata
+        .tags
+        .iter()
+        .filter_map(|(namespace, subtag)| {
+            let tag = crate::tag_name_v2::format(namespace, subtag);
+            crate::tag_name_v2::parse_external(&tag)
+                .ok()
+                .map(|(namespace, subtag)| crate::tag_name_v2::format(&namespace, &subtag))
+        })
+        .collect();
     let post_key = metadata
         .post_id
         .clone()
         .or_else(|| metadata.canonical_post_url.clone())
-        .unwrap_or_else(|| prepared.hex_hash.clone());
+        .unwrap_or_else(|| file_hash.clone());
     let position = i64::from(metadata.page_num.unwrap_or(0));
     let item_key = metadata
         .item_key
         .clone()
         .or_else(|| metadata.media_url.clone())
-        .unwrap_or_else(|| format!("{post_key}:{position}:{}", prepared.hex_hash));
+        .unwrap_or_else(|| format!("{post_key}:{position}:{file_hash}"));
     let creator_name = metadata
         .raw_metadata
         .as_ref()
@@ -268,22 +289,22 @@ async fn normalize_download(
         },
         source_path: file_path,
         input: PreparedMediaInput {
-            file_hash: prepared.hex_hash,
-            mime_type: prepared.mime,
-            size_bytes: prepared.size as i64,
-            pixel_width: prepared.pixel_width,
-            pixel_height: prepared.pixel_height,
-            duration_ms: prepared.duration_ms,
-            frame_count: prepared.num_frames,
+            file_hash,
+            mime_type: prepared.mime_type,
+            size_bytes,
+            pixel_width: prepared.pixel_width.map(i64::from),
+            pixel_height: prepared.pixel_height.map(i64::from),
+            duration_ms: prepared.duration_ms.map(|value| value as i64),
+            frame_count: prepared.num_frames.map(i64::from),
             has_audio: prepared.has_audio,
-            name: prepared.name,
+            name: preferred_import_name(&metadata),
             notes: metadata.description,
             rating: None,
             source_urls: metadata.source_urls,
-            tags: prepared.tags_applied,
+            tags,
             provenance_mask: 1,
             lifecycle: Lifecycle::Inbox,
-            captured_at: prepared.created_at,
+            captured_at: created_at,
             source: Some(source),
             target_folder_id: None,
         },

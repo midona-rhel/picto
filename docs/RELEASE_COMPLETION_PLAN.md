@@ -27,7 +27,7 @@ projection settlement, compact resource invalidation. Delete each replaced path 
 
 ## Phase 1: Store and Application Core
 
-- [x] Create exact schema 118 and reject incompatible databases without mutation.
+- [x] Create exact schema 124 and reject incompatible databases without mutation.
 - [x] Separate item, media, and physical file identity.
 - [x] Add direct Store read/transaction boundaries and monotonic library revision.
 - [x] Add compact mutation receipts and `LibraryChanged` resources.
@@ -68,15 +68,15 @@ projection settlement, compact resource invalidation. Delete each replaced path 
 
 ## Phase 6: Atomic App Cutover
 
-- [ ] Build a one-time development conversion for the current active library; dry-run and back it up
+- [x] Build a one-time development conversion for the current active library; dry-run and back it up
   before mutation. Never ship or auto-run this conversion.
-- [ ] Replace hash-based logical UI identity with item IDs.
-- [ ] Replace detailed state-change settlement with the resource invalidation registry.
-- [ ] Remove optimistic grid/count ownership and reconcile from canonical queries.
-- [ ] Remove unused commands and switch IPC/backend/frontend contracts atomically.
-- [ ] Delete old engine, DB facade, compiler/change-impact, old ingest/subscription paths, and cloud
+- [x] Replace hash-based logical UI identity with item IDs.
+- [x] Replace detailed state-change settlement with the resource invalidation registry.
+- [x] Remove optimistic grid/count ownership and reconcile from canonical queries.
+- [x] Remove unused commands and switch IPC/backend/frontend contracts atomically.
+- [x] Delete old engine, DB facade, compiler/change-impact, old ingest/subscription paths, and cloud
   sync immediately after the smoke passes.
-- [ ] Delete the one-time conversion tool after the converted active library passes verification.
+- [x] Delete the one-time conversion tool after the converted active library passes verification.
 
 ## Phase 7: OnlyFans
 

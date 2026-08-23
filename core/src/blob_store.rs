@@ -14,14 +14,10 @@
 //!   path. A file at a content-addressed path is therefore always complete —
 //!   which is what makes the existence-skip and hash-as-filename safe.
 
-use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, Weak};
-
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 
 #[derive(thiserror::Error, Debug)]
 pub enum BlobError {
@@ -105,11 +101,6 @@ pub struct BlobStore {
     /// Unique per open, so a re-open never disturbs an in-flight writer
     /// still holding the previous instance.
     staging: PathBuf,
-    hash_locks: Arc<Mutex<HashMap<String, Weak<Semaphore>>>>,
-}
-
-pub(crate) struct BlobHashLease {
-    _permit: OwnedSemaphorePermit,
 }
 
 impl Drop for BlobStore {
@@ -151,39 +142,7 @@ impl BlobStore {
             rand::random::<u32>()
         ));
         fs::create_dir_all(&staging)?;
-        Ok(Self {
-            root,
-            staging,
-            hash_locks: Arc::new(Mutex::new(HashMap::new())),
-        })
-    }
-
-    fn hash_lock(&self, hex_hash: &str) -> Arc<Semaphore> {
-        let mut locks = self.hash_locks.lock().unwrap();
-        locks.retain(|_, lock| lock.strong_count() > 0);
-        if let Some(lock) = locks.get(hex_hash).and_then(Weak::upgrade) {
-            return lock;
-        }
-        let lock = Arc::new(Semaphore::new(1));
-        locks.insert(hex_hash.to_string(), Arc::downgrade(&lock));
-        lock
-    }
-
-    /// Serialize blob publication and the following database reference write.
-    pub(crate) async fn acquire_hash_lease(&self, hex_hash: &str) -> BlobHashLease {
-        let permit = self
-            .hash_lock(hex_hash)
-            .acquire_owned()
-            .await
-            .expect("blob hash semaphore remains open");
-        BlobHashLease { _permit: permit }
-    }
-
-    /// Cleanup must not wait behind an import while holding the DB writer.
-    /// Returning `None` leaves the durable job for a later retry.
-    pub(crate) fn try_acquire_hash_lease(&self, hex_hash: &str) -> Option<BlobHashLease> {
-        let permit = self.hash_lock(hex_hash).try_acquire_owned().ok()?;
-        Some(BlobHashLease { _permit: permit })
+        Ok(Self { root, staging })
     }
 
     /// Write an original file with extension. Skips if already exists (idempotent).
@@ -195,18 +154,6 @@ impl BlobStore {
         }
         // Originals are irreplaceable — fsync before rename.
         self.write_atomic(&path, data, true, true)
-    }
-
-    /// Atomically replace a corrupt original with bytes already verified
-    /// against `hex_hash` by the sync boundary.
-    pub(crate) fn replace_original(
-        &self,
-        hex_hash: &str,
-        data: &[u8],
-        ext: Option<&str>,
-    ) -> BlobResult<()> {
-        let path = self.original_path_with_ext(hex_hash, ext)?;
-        self.write_atomic(&path, data, true, false)
     }
 
     /// Stage `data` in this instance's staging dir and atomically rename onto
@@ -536,25 +483,6 @@ mod tests {
         store.write_original(&hash, b"second", Some("png")).unwrap();
         let data = store.read_original(&hash, Some("png")).unwrap();
         assert_eq!(data, b"first");
-    }
-
-    #[test]
-    fn replace_original_atomically_replaces_corrupt_bytes() {
-        let dir = TempDir::new().unwrap();
-        let store = BlobStore::open(dir.path()).unwrap();
-        let hash = test_hash();
-
-        store
-            .write_original(&hash, b"corrupt", Some("png"))
-            .unwrap();
-        store
-            .replace_original(&hash, b"verified", Some("png"))
-            .unwrap();
-
-        assert_eq!(
-            store.read_original(&hash, Some("png")).unwrap(),
-            b"verified"
-        );
     }
 
     #[test]
