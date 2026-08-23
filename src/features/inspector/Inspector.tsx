@@ -632,9 +632,6 @@ export function Inspector() {
     scopeVM.searchText ? { label: 'Search', value: scopeVM.searchText } : null,
     node.kind === 'folder' ? { label: 'Auto tags', value: scopeVM.folder!.autoTags.length > 0 ? 'Yes' : 'No' } : null,
     node.kind === 'folder' ? { label: 'Watch', value: scopeVM.folder!.watchEnabled ? 'Yes' : 'No' } : null,
-    node.kind === 'smart_folder' && scopeVM.smartFolder?.sortField
-      ? { label: 'Sort', value: `${scopeVM.smartFolder.sortField.replace(/_/g, ' ')}${scopeVM.smartFolder.sortOrder ? ` ${scopeVM.smartFolder.sortOrder.toUpperCase()}` : ''}` }
-      : null,
   ].filter((property): property is { label: string; value: string } => property !== null);
 
   return <InspectorSkeleton
@@ -827,7 +824,6 @@ function buildSmartFolderPayload(
     parent_id: sf.parentId ?? null, icon: scopeVM.node.icon ?? null,
     color: scopeVM.node.color ?? null, notes: overrides.notes !== undefined ? overrides.notes : sf.notes ?? null,
     predicate_json: JSON.stringify(sf.predicate ?? { groups: [] }),
-    sort_field: sf.sortField ?? null, sort_order: sf.sortOrder ?? null,
     display_order: scopeVM.node.sort_order ?? null, created_at: null, updated_at: null,
   };
 }

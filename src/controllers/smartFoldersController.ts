@@ -41,8 +41,8 @@ function toInput(folder: SmartFolderCommandPayload): CreateSmartFolderInput {
     icon: folder.icon,
     color: folder.color,
     notes: folder.notes,
-    sort_field: folder.sort_field,
-    sort_order: folder.sort_order,
+    sort_field: folder.sort_field ?? null,
+    sort_order: folder.sort_order ?? null,
   };
 }
 

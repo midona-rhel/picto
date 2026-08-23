@@ -1,3 +1,5 @@
+import { GRID_BADGE_FONT, GRID_SELECTION_COLOR } from './gridAppearance';
+
 export const DRAG_GHOST_THUMB_SIZE = 44;
 export const DRAG_GHOST_STACK_OFFSET = 3;
 export const DRAG_GHOST_RADIUS = 4;
@@ -48,9 +50,9 @@ export function createNativeDragImageUrl(
 
   if (count > 1) {
     const label = formatDragGhostCount(count);
-    context.font = 'bold 10px -apple-system, BlinkMacSystemFont, sans-serif';
+    context.font = GRID_BADGE_FONT;
     const badgeWidth = Math.max(DRAG_GHOST_BADGE_MIN_WIDTH, context.measureText(label).width + 10);
-    context.fillStyle = '#3297FF';
+    context.fillStyle = GRID_SELECTION_COLOR;
     context.beginPath();
     context.roundRect(width - badgeWidth, 0, badgeWidth, DRAG_GHOST_BADGE_HEIGHT, DRAG_GHOST_BADGE_HEIGHT / 2);
     context.fill();

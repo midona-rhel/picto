@@ -110,8 +110,6 @@ type ScopeInspectorSmartMeta = {
   parent_id?: number | null;
   notes?: unknown;
   predicate?: unknown;
-  sort_field?: unknown;
-  sort_order?: unknown;
 };
 
 function asString(value: unknown): string | null {
@@ -204,8 +202,6 @@ export const scopeInspectorViewModelAtom = atom((get) => {
                 : null,
             notes: asString(smartMeta.notes),
             predicate: smartMeta.predicate,
-            sortField: asString(smartMeta.sort_field),
-            sortOrder: asString(smartMeta.sort_order),
           }
         : null,
   };

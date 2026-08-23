@@ -1,10 +1,3 @@
-/**
- * SubfolderGrid — collapsible section of folder tiles above the media grid.
- * Renders child folders as stacked-card tiles matching legacy v0.5.0-alpha exactly.
- *
- * Left-click selects, double-click navigates, right-click opens context menu.
- */
-
 import { forwardRef, useState, useEffect, useCallback, useImperativeHandle, useRef } from 'react';
 import { IconChevronRight, IconFolder } from '@tabler/icons-react';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
@@ -35,7 +28,6 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
   const rootRef = useRef<HTMLDivElement>(null);
   const [coverHashes, setCoverHashes] = useState<Map<number, string | null>>(new Map());
 
-  // Fetch all child covers through one backend read instead of one IPC per tile.
   useEffect(() => {
     let cancelled = false;
     const folderIds = childFolders
@@ -94,7 +86,6 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
 
   return (
     <div ref={rootRef} className={styles.container}>
-      {/* Section header */}
       <div className={styles.sectionLabel} data-grid-header-interactive onClick={() => setExpanded(!expanded)}>
         <span className={`${styles.chevron} ${!expanded ? styles.chevronCollapsed : ''}`}>
           <IconChevronRight size={11} />
@@ -119,7 +110,6 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
                 onDoubleClick={(e) => handleDoubleClick(e, folder.id)}
                 onContextMenu={(e) => handleContextMenu(e, folder.id, folder)}
               >
-                {/* Stacked card thumbnail */}
                 <div className={styles.thumbnail}>
                   <div className={styles.pic1}>
                     {coverHash ? (
@@ -139,7 +129,6 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
                   <div className={styles.pic3} />
                 </div>
 
-                {/* Name row */}
                 <div className={styles.nameRow}>
                   {folder.icon ? (
                     <DynamicIcon name={folder.icon} size={19} color={folder.color ?? undefined} />
@@ -149,7 +138,6 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
                   <div className={styles.name}>{folder.name}</div>
                 </div>
 
-                {/* Metadata */}
                 <div className={styles.metas}>
                   {folder.count ?? 0} {(folder.count ?? 0) === 1 ? 'item' : 'items'}
                 </div>
@@ -159,7 +147,6 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
         </div>
       )}
 
-      {/* Content label */}
       {totalImageCount > 0 && (
         <div className={styles.contentLabel}>Content ({totalImageCount})</div>
       )}

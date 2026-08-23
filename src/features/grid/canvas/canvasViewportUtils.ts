@@ -1,10 +1,3 @@
-/**
- * Viewport metrics — reads fresh from DOM every frame.
- *
- * No caching (unlike legacy 2ms cache that caused jitter).
- * Returns a snapshot of scroll/viewport state for frame-coherent drawing.
- */
-
 export interface ViewportSnapshot {
   scrollTop: number;
   viewportHeight: number;
@@ -21,10 +14,6 @@ export function snapshotViewport(container: HTMLDivElement): ViewportSnapshot {
   };
 }
 
-/**
- * Ensure canvas physical size matches CSS size × DPR.
- * Returns true if the canvas was resized (needs full redraw).
- */
 export function ensureCanvasSize(
   canvas: HTMLCanvasElement,
   cssWidth: number,

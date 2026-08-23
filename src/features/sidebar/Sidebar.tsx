@@ -335,8 +335,6 @@ export function Sidebar() {
     color?: string | null;
     notes?: string | null;
     predicate?: SmartFolderPredicate;
-    sort_field?: string | null;
-    sort_order?: string | null;
     display_order?: number | null;
   }) => {
     setSmartFolderModal({ open: true, mode, initial });
@@ -951,8 +949,6 @@ function smartFolderInitialFromNode(node: SidebarNodeDto) {
     color: node.color ?? null,
     notes: typeof meta?.notes === 'string' ? meta.notes : null,
     predicate: parseSmartFolderPredicate(node),
-    sort_field: typeof meta?.sort_field === 'string' ? meta.sort_field : null,
-    sort_order: typeof meta?.sort_order === 'string' ? meta.sort_order : null,
     display_order: node.sort_order ?? null,
   };
 }
@@ -975,8 +971,6 @@ function buildSmartFolderPayloadFromNode(
     color: pick('color', initial.color ?? null),
     notes: pick('notes', initial.notes ?? null),
     predicate_json: pick('predicate_json', JSON.stringify(initial.predicate ?? { groups: [] })),
-    sort_field: pick('sort_field', initial.sort_field ?? null),
-    sort_order: pick('sort_order', initial.sort_order ?? null),
     display_order: pick('display_order', initial.display_order ?? null),
     created_at: pick('created_at', null),
     updated_at: pick('updated_at', null),

@@ -85,7 +85,15 @@ function createModel(
     ratios[i] = safeAspectRatio(item.aspectRatio ?? 1.5);
     itemIdToIndex.set(item.itemId, i);
   }
-  const layout = computeLayout(ratios, config.width, config.targetSize, config.gap, config.viewMode, config.textHeight, 0, config.scrollbarWidth);
+  const layout = computeLayout(
+    ratios,
+    config.width,
+    config.targetSize,
+    config.gap,
+    config.viewMode,
+    config.textHeight,
+    config.scrollbarWidth,
+  );
   return { ratios, model: {
     items,
     positions: layout.positions,

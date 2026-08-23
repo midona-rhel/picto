@@ -1,5 +1,3 @@
-/* Grid screen — feature root layout. Canvas handles tile rendering. */
-
 .root {
   width: 100%;
   height: 100%;
@@ -34,7 +32,6 @@
   will-change: opacity;
 }
 
-/* States */
 .error {
   display: flex;
   flex-direction: column;
@@ -61,17 +58,6 @@
   color: var(--color-text-primary);
   background: var(--color-surface-hover);
 }
-
-.nonGridPlaceholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100%;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-md);
-}
-
-/* ── Drop overlay (external file drag) ── */
 
 .dropOverlay {
   position: absolute;

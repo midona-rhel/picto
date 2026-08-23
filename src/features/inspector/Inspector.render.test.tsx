@@ -357,7 +357,7 @@ describe('Inspector presentation branches', () => {
         node: { id: `${kind}:1`, kind, name: 'Example', count: 1, meta: {}, icon: null, color: null },
         totalCount: 1, totalSizeBytes: null, searchText: '', previewItems: [], description: null,
         folder: kind === 'folder' ? { folderId: 1, notes: null, autoTags: [], watchEnabled: false } : null,
-        smartFolder: kind === 'smart_folder' ? { smartFolderId: 1, parentId: null, notes: null, predicate: null, sortField: null, sortOrder: null } : null,
+        smartFolder: kind === 'smart_folder' ? { smartFolderId: 1, parentId: null, notes: null, predicate: null } : null,
       };
       const view = renderInspector({ target: { kind: 'scope', nodeId: scope.node.id }, scope });
       expect([...document.querySelectorAll('[data-inspector-anchor]')].map((node) => node.getAttribute('data-inspector-anchor')))

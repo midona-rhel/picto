@@ -192,8 +192,8 @@ export interface SmartFolderCommandPayload {
   color: string | null;
   notes: string | null;
   predicate_json: string;
-  sort_field: string | null;
-  sort_order: string | null;
+  sort_field?: string | null;
+  sort_order?: string | null;
   display_order: number | null;
   created_at: string | null;
   updated_at: string | null;
