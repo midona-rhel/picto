@@ -7,9 +7,11 @@ import {
 } from './grid';
 import {
   clearSelectionAtom,
-  selectedEntityHashesAtom,
-  selectedSubfolderNodeIdAtom,
-  selectedSubfolderNodeIdsAtom,
+  emptyGridSelection,
+  gridSelectionAtom,
+  loadedSelectedEntityHashesAtom,
+  reduceGridSelection,
+  selectedFolderNodeIdAtom,
   selectionCountAtom,
   selectionTargetAtom,
   selectAllResultsAtom,
@@ -58,17 +60,45 @@ describe('selection state', () => {
     });
   });
 
-  it('keeps subfolder tile selection out of entity selection targets', () => {
+  it('represents a real mixed selection while entity targets stay canonical', () => {
     const store = createStore();
-    store.set(selectedEntityHashesAtom, new Set(['hash-1']));
-    store.set(selectedSubfolderNodeIdsAtom, new Set(['folder:9']));
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(),
+      entityHashes: new Set(['hash-1']),
+      folderNodeIds: new Set(['folder:9']),
+    });
 
-    expect(store.get(selectedSubfolderNodeIdAtom)).toBe('folder:9');
-    expect(store.get(selectedEntityHashesAtom).size).toBe(0);
-    expect(store.get(selectionCountAtom)).toBe(0);
-    expect(store.get(selectionTargetAtom)).toBeNull();
+    expect(store.get(selectedFolderNodeIdAtom)).toBe('folder:9');
+    expect(store.get(loadedSelectedEntityHashesAtom)).toEqual(new Set(['hash-1']));
+    expect(store.get(selectionCountAtom)).toBe(1);
+    expect(store.get(selectionTargetAtom)).toEqual({ kind: 'entity_hashes', entity_hashes: ['hash-1'] });
 
     store.set(clearSelectionAtom);
-    expect(store.get(selectedSubfolderNodeIdAtom)).toBeNull();
+    expect(store.get(selectedFolderNodeIdAtom)).toBeNull();
+  });
+
+  it('keeps a hash anchor across range replacement and metadata replacement', () => {
+    const initial = reduceGridSelection(emptyGridSelection(), {
+      type: 'replace_entities', hashes: new Set(['a']), anchor: 'a',
+    });
+    const ranged = reduceGridSelection(initial, { type: 'range_entities', hashes: new Set(['a', 'b']) });
+    expect(ranged.anchor).toEqual({ kind: 'entity', id: 'a' });
+  });
+
+  it('does not collapse query-wide selection when a folder is modifier-selected', () => {
+    const query = reduceGridSelection(emptyGridSelection(), { type: 'select_all', totalCount: 1_000_000 });
+    const mixed = reduceGridSelection(query, { type: 'toggle_folder', id: 'folder:4' });
+    const excluded = reduceGridSelection(mixed, { type: 'toggle_query_entity', hash: 'visible-a', totalCount: 1_000_000 });
+    expect(excluded.mode).toBe('query_results');
+    expect(excluded.folderNodeIds).toEqual(new Set(['folder:4']));
+    expect(excluded.excludedEntityHashes).toEqual(new Set(['visible-a']));
+  });
+
+  it('keeps entity and folder marquee hits in separate sets', () => {
+    const selection = reduceGridSelection(emptyGridSelection(), {
+      type: 'marquee', entityHashes: new Set(['hash-a']), folderNodeIds: new Set(['folder:2']), additive: false,
+    });
+    expect(selection.entityHashes).toEqual(new Set(['hash-a']));
+    expect(selection.folderNodeIds).toEqual(new Set(['folder:2']));
   });
 });

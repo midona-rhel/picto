@@ -15,10 +15,10 @@ import type {
 import { gridActiveAtom } from './grid';
 import { activeNodeIdAtom } from './navigation';
 import {
+  gridSelectionAtom,
   selectedEntityHashAtom,
   selectionCountAtom,
-  selectedSubfolderNodeIdAtom,
-  selectionModeAtom,
+  selectedFolderNodeIdAtom,
 } from './selection';
 import { sidebarNodesAtom } from './sidebar';
 
@@ -40,15 +40,19 @@ export type DisplayedGridSnapshot = {
 
 export const liveInspectorTargetAtom = atom<InspectorTarget>((get) => {
   if (!get(gridActiveAtom)) return { kind: 'none' };
-  const selectionMode = get(selectionModeAtom);
+  const selection = get(gridSelectionAtom);
+  const selectionMode = selection.mode;
   const selectionCount = get(selectionCountAtom);
+  if (selectionCount > 0 && selection.folderNodeIds.size > 0) {
+    return { kind: 'multi', count: selectionCount + selection.folderNodeIds.size, selectionMode };
+  }
   if (selectionMode === 'query_results' && selectionCount > 0) {
     return { kind: 'multi', count: selectionCount, selectionMode };
   }
   if (selectionCount > 1) {
     return { kind: 'multi', count: selectionCount, selectionMode };
   }
-  const selectedSubfolderNodeId = get(selectedSubfolderNodeIdAtom);
+  const selectedSubfolderNodeId = get(selectedFolderNodeIdAtom);
   if (selectedSubfolderNodeId) {
     return { kind: 'scope', nodeId: selectedSubfolderNodeId };
   }

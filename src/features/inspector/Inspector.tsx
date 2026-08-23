@@ -33,7 +33,7 @@ import {
   selectionCountAtom,
   selectionFingerprintAtom,
   selectionTargetAtom,
-  selectedEntityHashesAtom,
+  loadedSelectedEntityHashesAtom,
 } from '../../state/selection';
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { tagSelectPortalAtom, folderPickerPortalAtom, aiTaggerPortalAtom } from '../../state/portals';
@@ -180,7 +180,7 @@ function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage
 
 function useSelectionSummary() {
   const target = useAtomValue(selectionTargetAtom);
-  const selectedHashes = useAtomValue(selectedEntityHashesAtom);
+  const selectedHashes = useAtomValue(loadedSelectedEntityHashesAtom);
   const selectionCount = useAtomValue(selectionCountAtom);
   const selectionFingerprint = useAtomValue(selectionFingerprintAtom);
   const [summary, setSummary] = useState<SelectionSummary | null>(null);

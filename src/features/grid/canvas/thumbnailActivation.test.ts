@@ -5,7 +5,6 @@ import { collectThumbnailActivation } from './thumbnailActivation';
 const item = (hash: string): CanvasRenderItem => ({
   hash,
   thumbnailHash: hash,
-  kind: 'single',
   name: null,
   mime: 'image/jpeg',
   width: 100,

@@ -12,7 +12,7 @@ import {
   inspectorPinnedAtom,
   liveInspectorTargetAtom,
 } from '../state/inspector';
-import { selectedSubfolderNodeIdAtom } from '../state/selection';
+import { selectedFolderNodeIdAtom } from '../state/selection';
 
 const store = getDefaultStore();
 
@@ -33,7 +33,7 @@ export function startInspectorSettle(): () => void {
       return;
     }
 
-    const selectedSubfolderNodeId = store.get(selectedSubfolderNodeIdAtom);
+    const selectedSubfolderNodeId = store.get(selectedFolderNodeIdAtom);
     if (target.kind === 'scope' && selectedSubfolderNodeId === target.nodeId) {
       lastEntityHash = '';
       void loadSubfolderInspectorPreview(target.nodeId);

@@ -79,7 +79,10 @@ export interface CanvasGridProps {
   /** Restore scroll position on first paint (e.g., after back/forward navigation). */
   initialScrollTop?: number | null;
   selectedEntityHashes?: Set<string>;
+  selectedFolderNodeIds?: Set<string>;
   onSelectionChange?: (hashes: Set<string>) => void;
+  onMarqueeSelectionChange?: (selection: { entityHashes: Set<string>; folderNodeIds: Set<string> }) => void;
+  collectHeaderMarqueeHits?: (rect: { left: number; top: number; width: number; height: number }) => Set<string>;
   /** DOM content rendered above the canvas inside the scroll container (e.g. SubfolderGrid). */
   headerContent?: React.ReactNode;
   /** Current scope for drag-and-drop context. */
@@ -117,6 +120,7 @@ export function CanvasGrid({
   suppressTileReveal = false,
   initialScrollTop = null,
   selectedEntityHashes = EMPTY_HASH_SET,
+  selectedFolderNodeIds = EMPTY_HASH_SET,
   headerContent,
   dragSourceScope = null,
   onContainerRef,
@@ -124,6 +128,8 @@ export function CanvasGrid({
   renamingIndex = null,
   onRenameCommit,
   onRenameCancel,
+  onMarqueeSelectionChange,
+  collectHeaderMarqueeHits,
 }: CanvasGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const containerCallbackRef = useCallback((el: HTMLDivElement | null) => {
@@ -187,6 +193,7 @@ export function CanvasGrid({
   });
   const marqueeRectRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
   const marqueeBaseSelectionRef = useRef<Set<string>>(new Set());
+  const marqueeBaseFolderSelectionRef = useRef<Set<string>>(new Set());
   const dragJustEndedRef = useRef(false);
   const tileDragRef = useRef<{ tileIdx: number; startClientX: number; startClientY: number } | null>(null);
   const reorderDropRef = useRef<{ dropIndex: number; dropSide: 'left' | 'right' } | null>(null);
@@ -820,8 +827,7 @@ export function CanvasGrid({
   const isOnHeaderInteractive = useCallback((target: EventTarget) => {
     const el = target as HTMLElement;
     if (!isInHeader(target)) return false;
-    // Check if the click is on a folder tile or its children
-    return !!el.closest('[data-folder-hash]') || !!el.closest('button');
+    return !!el.closest('[data-grid-header-interactive]') || !!el.closest('button');
   }, [isInHeader]);
 
   const handleClick = useCallback((e: React.MouseEvent) => {
@@ -964,32 +970,11 @@ export function CanvasGrid({
     }
   }, [items, layoutModel.positions, onTileContextMenu, onEmptyContextMenu, textHeight, headerHeight]);
 
-  // ── Folder tile marquee hit-testing ──
-  const hitTestFolderTiles = useCallback((left: number, top: number, width: number, height: number, hitSet: Set<string>) => {
-    const header = headerRef.current;
-    if (!header) return;
-    const tiles = header.querySelectorAll<HTMLElement>('[data-folder-hash]');
-    const container = containerRef.current;
-    if (!container) return;
-    for (const tile of tiles) {
-      const hash = tile.dataset.folderHash;
-      if (!hash) continue;
-      // Tile offset in scroll-space → convert to content-space by subtracting headerHeight
-      const tileTop = tile.offsetTop - headerHeight;
-      const tileLeft = tile.offsetLeft;
-      const tileW = tile.offsetWidth;
-      const tileH = tile.offsetHeight;
-      if (tileLeft + tileW > left && tileLeft < left + width &&
-          tileTop + tileH > top && tileTop < top + height) {
-        hitSet.add(hash);
-      }
-    }
-  }, [headerHeight]);
-
   // Marquee rect → selected hashes (canvas tiles via spatial index + folder
   // DOM tiles). Reads refs so the auto-scroll RAF tick never goes stale.
-  const collectMarqueeHits = useCallback((left: number, top: number, width: number, height: number): Set<string> => {
-    const hits = new Set(marqueeBaseSelectionRef.current);
+  const collectMarqueeHits = useCallback((left: number, top: number, width: number, height: number) => {
+    const entityHashes = new Set(marqueeBaseSelectionRef.current);
+    const folderNodeIds = new Set(marqueeBaseFolderSelectionRef.current);
     const positions = layoutModelRef.current.positions;
     const curItems = itemsRef.current;
     const th = textHeightRef.current;
@@ -1003,12 +988,12 @@ export function CanvasGrid({
       const imgH = pos.h - th;
       if (pos.x + pos.w > left && pos.x < left + width &&
           pos.y + imgH > top && pos.y < top + height) {
-        hits.add(curItems[i].entity_hash);
+        entityHashes.add(curItems[i].entity_hash);
       }
     }
-    hitTestFolderTiles(left, top, width, height, hits);
-    return hits;
-  }, [hitTestFolderTiles]);
+    for (const id of collectHeaderMarqueeHits?.({ left, top, width, height }) ?? []) folderNodeIds.add(id);
+    return { entityHashes, folderNodeIds };
+  }, [collectHeaderMarqueeHits]);
 
   // ── Marquee drag handlers ──
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
@@ -1034,6 +1019,9 @@ export function CanvasGrid({
     marqueeBaseSelectionRef.current = e.shiftKey || e.metaKey || e.ctrlKey
       ? new Set(selectedEntityHashes)
       : new Set();
+    marqueeBaseFolderSelectionRef.current = e.shiftKey || e.metaKey || e.ctrlKey
+      ? new Set(selectedFolderNodeIds)
+      : new Set();
     marqueeRectRef.current = null;
     autoScrollSpeedRef.current = 0;
     container.setPointerCapture(e.pointerId);
@@ -1056,7 +1044,7 @@ export function CanvasGrid({
           if (w >= 5 || h >= 5) {
             marqueeRectRef.current = { left: l, top: t, width: w, height: h };
             setMarqueeVisual({ left: l, top: t + headerHeight, width: w, height: h });
-            onSelectionChangeRef.current?.(collectMarqueeHits(l, t, w, h));
+            onMarqueeSelectionChange?.(collectMarqueeHits(l, t, w, h));
           }
           markDirty('both');
         }
@@ -1064,7 +1052,7 @@ export function CanvasGrid({
       };
       autoScrollRef.current = requestAnimationFrame(tick);
     }
-  }, [layoutModel.positions, textHeight, selectedEntityHashes, headerHeight, collectMarqueeHits, markDirty]);
+  }, [layoutModel.positions, textHeight, selectedEntityHashes, selectedFolderNodeIds, headerHeight, collectMarqueeHits, markDirty, onMarqueeSelectionChange]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
     // Check for tile drag initiation (5px threshold)
@@ -1132,9 +1120,9 @@ export function CanvasGrid({
     setMarqueeVisual({ left, top: top + headerHeight, width, height });
 
     // Compute intersecting tiles (canvas + folder DOM)
-    onSelectionChange?.(collectMarqueeHits(left, top, width, height));
+    onMarqueeSelectionChange?.(collectMarqueeHits(left, top, width, height));
     markDirty('overlay');
-  }, [items, onSelectionChange, markDirty, collectMarqueeHits, headerHeight]);
+  }, [items, onMarqueeSelectionChange, markDirty, collectMarqueeHits, headerHeight]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
     tileDragRef.current = null;

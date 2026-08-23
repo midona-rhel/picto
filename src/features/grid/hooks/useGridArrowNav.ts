@@ -8,9 +8,10 @@
  * Scrolls the target item into view.
  */
 
-import { useEffect, useRef, type MutableRefObject, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { LayoutResult } from '../layout/types';
+import type { GridSelection, GridSelectionAction } from '../../../state/selection';
 
 const GAP = 16;
 
@@ -32,8 +33,8 @@ export function useGridArrowNav(opts: {
   layoutRef: RefObject<LayoutResult | null>;
   containerRef: RefObject<HTMLDivElement | null>;
   selectedHashes: Set<string>;
-  setSelectedHashes: (update: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
-  lastClickedIndexRef: MutableRefObject<number | null>;
+  selection: GridSelection;
+  dispatchSelection: (action: GridSelectionAction) => void;
   viewerOpen: boolean;
   containerWidth: number;
   targetSize: number;
@@ -43,7 +44,7 @@ export function useGridArrowNav(opts: {
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      const { items, layoutRef, containerRef, selectedHashes, setSelectedHashes, lastClickedIndexRef, viewerOpen, containerWidth, targetSize } = optsRef.current;
+      const { items, layoutRef, containerRef, selectedHashes, selection, dispatchSelection, viewerOpen, containerWidth, targetSize } = optsRef.current;
 
       if (viewerOpen) return;
       if (items.length === 0) return;
@@ -69,7 +70,9 @@ export function useGridArrowNav(opts: {
       const columnCount = Math.max(1, Math.round((minInnerWidth + GAP) / (snappedSize + GAP)));
 
       // Find current position
-      let current = lastClickedIndexRef.current;
+      let current = selection.anchor?.kind === 'entity'
+        ? items.findIndex((item) => item.entity_hash === selection.anchor!.id)
+        : -1;
       if (current == null || current < 0 || current >= items.length) {
         for (let i = 0; i < items.length; i++) {
           if (selectedHashes.has(items[i].entity_hash)) { current = i; break; }
@@ -98,18 +101,19 @@ export function useGridArrowNav(opts: {
 
       if (e.shiftKey) {
         // Range select from anchor to target
-        const anchor = lastClickedIndexRef.current ?? current;
+        const anchorIndex = selection.anchor?.kind === 'entity'
+          ? items.findIndex((item) => item.entity_hash === selection.anchor!.id)
+          : current;
+        const anchor = anchorIndex >= 0 ? anchorIndex : current;
         const [lo, hi] = [Math.min(anchor, target), Math.max(anchor, target)];
         const next = new Set<string>();
         for (let i = lo; i <= hi; i++) {
           if (items[i]) next.add(items[i].entity_hash);
         }
-        setSelectedHashes(next);
-        // Don't update lastClickedIndexRef — keep anchor stable for shift ranges
+        dispatchSelection({ type: 'range_entities', hashes: next });
       } else {
         const hash = items[target]?.entity_hash;
-        if (hash) setSelectedHashes(new Set([hash]));
-        lastClickedIndexRef.current = target;
+        if (hash) dispatchSelection({ type: 'replace_entities', hashes: new Set([hash]), anchor: hash });
       }
 
       // Scroll target into view

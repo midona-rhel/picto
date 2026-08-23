@@ -7,7 +7,7 @@ import {
   subfolderPreviewAtom,
 } from '../state/inspector';
 import { activeNodeIdAtom } from '../state/navigation';
-import { selectedSubfolderNodeIdsAtom } from '../state/selection';
+import { emptyGridSelection, gridSelectionAtom } from '../state/selection';
 
 const entityApiMocks = vi.hoisted(() => ({
   getEntityDetails: vi.fn(),
@@ -55,7 +55,7 @@ describe('subfolder inspector preview', () => {
     entityApiMocks.queryEntityView.mockReset();
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: true });
     store.set(activeNodeIdAtom, 'folder:1');
-    store.set(selectedSubfolderNodeIdsAtom, new Set(['folder:2']));
+    store.set(gridSelectionAtom, { ...emptyGridSelection(), folderNodeIds: new Set(['folder:2']) });
     store.set(displayedInspectorTargetAtom, { kind: 'scope', nodeId: 'folder:1' });
     store.set(subfolderPreviewAtom, null);
   });
@@ -80,7 +80,7 @@ describe('subfolder inspector preview', () => {
     );
 
     const loading = loadSubfolderInspectorPreview('folder:2');
-    store.set(selectedSubfolderNodeIdsAtom, new Set());
+    store.set(gridSelectionAtom, emptyGridSelection());
     resolvePage?.(page());
     await loading;
 

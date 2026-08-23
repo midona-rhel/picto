@@ -8,7 +8,7 @@ import {
 } from '../state/inspector';
 import { gridSessionAtom } from '../state/grid';
 import { activeNodeIdAtom } from '../state/navigation';
-import { selectedSubfolderNodeIdsAtom } from '../state/selection';
+import { emptyGridSelection, gridSelectionAtom } from '../state/selection';
 
 let eventHandler: ((event: { payload: { changes: Record<string, unknown> } }) => void) | undefined;
 
@@ -42,7 +42,7 @@ describe('inspector runtime settling', () => {
     store.set(displayedInspectorEntityDataAtom, null);
     store.set(displayedInspectorTargetAtom, { kind: 'none' });
     store.set(displayedGridSnapshotAtom, null);
-    store.set(selectedSubfolderNodeIdsAtom, new Set());
+    store.set(gridSelectionAtom, emptyGridSelection());
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: true });
     store.set(inspectorPinnedAtom, false);
   });
@@ -69,7 +69,7 @@ describe('inspector runtime settling', () => {
     store.set(activeNodeIdAtom, 'folder:1');
     const stop = startInspectorSettle();
 
-    store.set(selectedSubfolderNodeIdsAtom, new Set(['folder:2']));
+    store.set(gridSelectionAtom, { ...emptyGridSelection(), folderNodeIds: new Set(['folder:2']) });
 
     expect(inspectorControllerMocks.loadSubfolderInspectorPreview).toHaveBeenCalledWith('folder:2');
     stop();
@@ -86,10 +86,10 @@ describe('inspector runtime settling', () => {
       sidebarNode: null,
     });
     store.set(displayedInspectorTargetAtom, { kind: 'scope', nodeId: 'folder:2' });
-    store.set(selectedSubfolderNodeIdsAtom, new Set(['folder:2']));
+    store.set(gridSelectionAtom, { ...emptyGridSelection(), folderNodeIds: new Set(['folder:2']) });
     const stop = startInspectorSettle();
 
-    store.set(selectedSubfolderNodeIdsAtom, new Set());
+    store.set(gridSelectionAtom, emptyGridSelection());
 
     expect(inspectorControllerMocks.commitInspectorTarget).toHaveBeenCalledWith({
       kind: 'scope',

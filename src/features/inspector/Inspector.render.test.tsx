@@ -38,7 +38,7 @@ import {
   selectionCountAtom,
   selectionFingerprintAtom,
   selectionTargetAtom,
-  selectedEntityHashesAtom,
+  loadedSelectedEntityHashesAtom,
 } from '../../state/selection';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
 
@@ -62,7 +62,7 @@ function renderInspector({ target, data = null, scope = null, loading = false, e
     [sidebarNodesAtom, []],
     [gridItemsAtom, []],
     [selectionTargetAtom, null],
-    [selectedEntityHashesAtom, new Set()],
+    [loadedSelectedEntityHashesAtom, new Set()],
     [selectionCountAtom, target && (target as { kind?: string }).kind === 'multi' ? 2 : 0],
     [selectionFingerprintAtom, 'test'],
   ]);

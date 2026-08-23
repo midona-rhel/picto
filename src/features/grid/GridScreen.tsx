@@ -33,14 +33,12 @@ import { foldersController } from '../../controllers/foldersController';
 import { isNativeDragPending, isDragActive as isDragActiveCheck, isInternalDragOrigin } from './dragState';
 import {
   clearSelectionAtom,
-  querySelectionActiveAtom,
+  gridSelectionActionAtom,
+  gridSelectionAtom,
+  loadedSelectedEntityHashesAtom,
   selectAllResultsAtom,
-  selectedEntityHashesAtom,
-  selectedSubfolderNodeIdsAtom,
   selectionCountAtom,
-  selectionModeAtom,
   selectionTargetAtom,
-  toggleQuerySelectionHashAtom,
 } from '../../state/selection';
 import {
   displayedGridSnapshotAtom,
@@ -52,7 +50,7 @@ import {
 } from '../../state/inspector';
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { CanvasGrid } from './canvas/CanvasGrid';
-import { SubfolderGrid } from './SubfolderGrid';
+import { SubfolderGrid, type SubfolderGridHandle } from './SubfolderGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import { pushHistory } from '../../state/navigationHistory';
@@ -72,7 +70,6 @@ import { viewerController } from '../../controllers/viewerController';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { ApplicationMenuButton } from '../../shared/ui/ApplicationMenuButton/ApplicationMenuButton';
 import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
-import { hasSameEntityOrder } from './gridItemIdentity';
 import { resolveContextMenuTarget } from './gridMenuSelection';
 import styles from './GridScreen.module.css';
 
@@ -129,18 +126,16 @@ export function GridScreen({
   const totalSizeBytes = useAtomValue(gridTotalSizeBytesAtom);
   const gridScope = useAtomValue(gridScopeAtom);
   const sidebarNodes = useAtomValue(sidebarNodesAtom);
-  const selectedHashes = useAtomValue(selectedEntityHashesAtom);
-  const selectedSubfolderNodeIds = useAtomValue(selectedSubfolderNodeIdsAtom);
-  const selectionMode = useAtomValue(selectionModeAtom);
-  const querySelectionActive = useAtomValue(querySelectionActiveAtom);
+  const selection = useAtomValue(gridSelectionAtom);
+  const selectedHashes = useAtomValue(loadedSelectedEntityHashesAtom);
+  const selectedSubfolderNodeIds = selection.folderNodeIds;
+  const selectionMode = selection.mode;
+  const querySelectionActive = selection.mode === 'query_results';
   const selectionCount = useAtomValue(selectionCountAtom);
   const selectionTarget = useAtomValue(selectionTargetAtom);
-  const setSelectedHashes = useSetAtom(selectedEntityHashesAtom);
-  const setSelectedSubfolderNodeIds = useSetAtom(selectedSubfolderNodeIdsAtom);
+  const dispatchSelection = useSetAtom(gridSelectionActionAtom);
   const clearSelection = useSetAtom(clearSelectionAtom);
   const selectAllResults = useSetAtom(selectAllResultsAtom);
-  const toggleQuerySelectionHash = useSetAtom(toggleQuerySelectionHashAtom);
-  const lastClickedIndexRef = useRef<number | null>(null);
   const viewerSession = useAtomValue(viewerSessionAtom);
   const setViewerSession = useSetAtom(viewerSessionAtom);
   const quickLookSession = useAtomValue(quickLookSessionAtom);
@@ -151,6 +146,7 @@ export function GridScreen({
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const gridLayoutRef = useRef<LayoutResult | null>(null);
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
+  const subfolderGridRef = useRef<SubfolderGridHandle>(null);
 
   const scrollToItem = useCallback((index: number, alignment: GridScrollAlignment = 'nearest') => {
     const layout = gridLayoutRef.current;
@@ -165,8 +161,8 @@ export function GridScreen({
     layoutRef: gridLayoutRef,
     containerRef: gridContainerRef,
     selectedHashes,
-    setSelectedHashes,
-    lastClickedIndexRef,
+    selection,
+    dispatchSelection,
     viewerOpen: !!(viewerSession || quickLookSession),
     containerWidth: gridContainerRef.current?.clientWidth ?? 0,
     targetSize,
@@ -217,15 +213,6 @@ export function GridScreen({
   const childFolders = useAtomValue(gridChildFoldersAtom);
   const contextMenu = useContextMenu();
 
-  // Metadata reconciliation replaces item objects without changing selection
-  // order. Preserve the range anchor unless membership or order truly changes.
-  const previousItemOrderRef = useRef<string[]>([]);
-  useEffect(() => {
-    const nextOrder = items.map((item) => item.entity_hash);
-    const previousOrder = previousItemOrderRef.current;
-    if (!hasSameEntityOrder(previousOrder, items)) lastClickedIndexRef.current = null;
-    previousItemOrderRef.current = nextOrder;
-  }, [items]);
   const setDisplayedGridSnapshot = useSetAtom(displayedGridSnapshotAtom);
   const setDisplayedInspectorTarget = useSetAtom(displayedInspectorTargetAtom);
   const setDisplayedEntityData = useSetAtom(displayedInspectorEntityDataAtom);
@@ -590,6 +577,7 @@ export function GridScreen({
 
     const subfolderHeader = hasSubfolders ? (
       <SubfolderGrid
+        ref={subfolderGridRef}
         childFolders={childFolders}
         targetSize={targetSize}
         totalImageCount={items.length}
@@ -600,19 +588,15 @@ export function GridScreen({
         }}
         onSelectFolder={(nodeId, event) => {
           if (event.metaKey || event.ctrlKey) {
-            setSelectedSubfolderNodeIds((prev) => {
-              const next = new Set(prev);
-              if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId);
-              return next;
-            });
+            dispatchSelection({ type: 'toggle_folder', id: nodeId });
           } else {
-            setSelectedSubfolderNodeIds(new Set([nodeId]));
+            dispatchSelection({ type: 'replace_folders', ids: new Set([nodeId]), anchor: nodeId });
           }
         }}
         onFolderContextMenu={(nodeId, _folder, pos) => {
           // Select the folder if not already selected
           if (!selectedSubfolderNodeIds.has(nodeId)) {
-            setSelectedSubfolderNodeIds(new Set([nodeId]));
+            dispatchSelection({ type: 'replace_folders', ids: new Set([nodeId]), anchor: nodeId });
           }
           const folderId = parseInt(nodeId.replace('folder:', ''), 10);
           if (isNaN(folderId)) return;
@@ -654,6 +638,7 @@ export function GridScreen({
         interactive={!viewerSession && !quickLookSession}
         suppressTileReveal={transitionPhase === 'fading_out' || transitionPhase === 'waiting'}
         selectedEntityHashes={selectedHashes}
+        selectedFolderNodeIds={selectedSubfolderNodeIds}
         initialScrollTop={initialScrollTop}
         onContainerRef={(el) => { gridContainerRef.current = el; }}
         onLayoutChange={(l) => { gridLayoutRef.current = l; }}
@@ -668,39 +653,35 @@ export function GridScreen({
         onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; onScrollTopChange?.(scrollTop); }}
         onTileClick={(index, item, event) => {
           const hash = item.entity_hash;
-          if (event?.shiftKey && lastClickedIndexRef.current != null) {
-            const from = Math.min(lastClickedIndexRef.current, index);
-            const to = Math.max(lastClickedIndexRef.current, index);
+          if (event?.shiftKey && selection.anchor?.kind === 'entity') {
+            const anchorIndex = items.findIndex((entry) => entry.entity_hash === selection.anchor!.id);
+            const from = Math.min(anchorIndex >= 0 ? anchorIndex : index, index);
+            const to = Math.max(anchorIndex >= 0 ? anchorIndex : index, index);
             const base = (event.metaKey || event.ctrlKey)
               ? new Set(selectedHashes)
               : new Set<string>();
             for (let i = from; i <= to; i++) {
               if (items[i]) base.add(items[i].entity_hash);
             }
-            setSelectedHashes(base);
+            dispatchSelection({ type: 'range_entities', hashes: base });
           } else if (event?.metaKey || event?.ctrlKey) {
-            if (selectionMode === 'query_results') {
-              toggleQuerySelectionHash(hash);
-            } else {
-              setSelectedHashes((prev) => {
-                const next = new Set(prev);
-                if (next.has(hash)) next.delete(hash);
-                else next.add(hash);
-                return next;
-              });
-            }
-            lastClickedIndexRef.current = index;
+            dispatchSelection(selectionMode === 'query_results'
+              ? { type: 'toggle_query_entity', hash, totalCount: totalCount ?? items.length }
+              : { type: 'toggle_entity', hash });
           } else {
-            setSelectedHashes(new Set([hash]));
-            lastClickedIndexRef.current = index;
+            dispatchSelection({ type: 'replace_entities', hashes: new Set([hash]), anchor: hash });
           }
         }}
         onTileDoubleClick={(_index, item) => {
           setViewerSession(createViewerSession(items, item.entity_hash));
         }}
         onEmptyClick={() => clearSelection()}
-        onSelectionChange={setSelectedHashes}
-        onTileContextMenu={(index, item, pos) => {
+        onSelectionChange={(hashes) => dispatchSelection({ type: 'replace_entities', hashes })}
+        onMarqueeSelectionChange={({ entityHashes, folderNodeIds }) => {
+          dispatchSelection({ type: 'marquee', entityHashes, folderNodeIds, additive: false });
+        }}
+        collectHeaderMarqueeHits={(rect) => subfolderGridRef.current?.collectMarqueeHits(rect) ?? new Set()}
+        onTileContextMenu={(_index, item, pos) => {
           // Ensure the right-clicked tile is selected
           let effectiveHashes = selectedHashes;
           let effectiveSelectionMode = selectionMode;
@@ -708,8 +689,7 @@ export function GridScreen({
           let effectiveQuerySelectionActive = querySelectionActive;
           if (!selectedHashes.has(item.entity_hash)) {
             effectiveHashes = new Set([item.entity_hash]);
-            setSelectedHashes(effectiveHashes);
-            lastClickedIndexRef.current = index;
+            dispatchSelection({ type: 'replace_entities', hashes: effectiveHashes, anchor: item.entity_hash });
             effectiveSelectionMode = 'explicit';
             effectiveSelectionCount = 1;
             effectiveQuerySelectionActive = false;
@@ -882,15 +862,14 @@ export function GridScreen({
             const next = navigateViewerSession(viewerSession, items, delta);
             if (next) {
               setViewerSession(next);
-              setSelectedHashes(new Set([next.currentHash]));
+              dispatchSelection({ type: 'replace_entities', hashes: new Set([next.currentHash]), anchor: next.currentHash });
             }
           }}
           onClose={(exitHash) => {
             setViewerSession(null);
             if (exitHash) {
-              setSelectedHashes(new Set([exitHash]));
+              dispatchSelection({ type: 'replace_entities', hashes: new Set([exitHash]), anchor: exitHash });
               const idx = items.findIndex((i) => i.entity_hash === exitHash);
-              if (idx >= 0) lastClickedIndexRef.current = idx;
               scrollToItem(idx);
             }
           }}
@@ -907,10 +886,9 @@ export function GridScreen({
             const next = navigateViewerSession(quickLookSession, items, delta);
             if (next) {
               setQuickLookSession(next);
-              setSelectedHashes(new Set([next.currentHash]));
+              dispatchSelection({ type: 'replace_entities', hashes: new Set([next.currentHash]), anchor: next.currentHash });
               const idx = items.findIndex((item) => item.entity_hash === next.currentHash);
               if (idx >= 0) {
-                lastClickedIndexRef.current = idx;
                 scrollToItem(idx, 'center');
               }
             }
@@ -918,9 +896,8 @@ export function GridScreen({
           onClose={(exitHash) => {
             setQuickLookSession(null);
             if (exitHash) {
-              setSelectedHashes(new Set([exitHash]));
+              dispatchSelection({ type: 'replace_entities', hashes: new Set([exitHash]), anchor: exitHash });
               const idx = items.findIndex((i) => i.entity_hash === exitHash);
-              if (idx >= 0) lastClickedIndexRef.current = idx;
               scrollToItem(idx);
             }
           }}
