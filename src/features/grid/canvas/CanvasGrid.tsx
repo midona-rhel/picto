@@ -15,7 +15,7 @@ import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 import { ThumbnailPipeline, type PlanTile } from './thumbnailPipeline';
 import { ThumbnailRevealTracker } from './thumbnailRevealTracker';
 import { zoomController } from '../../../controllers/zoomController';
-import { collectThumbnailActivation, GridLayoutRuntime } from './gridLayoutModel';
+import { collectThumbnailActivation, estimateGridScrollHeight, GridLayoutRuntime } from './gridLayoutModel';
 import { startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive, startNativeDrag as startNativeDragFn, setInternalDragOrigin } from '../dragState';
 import { hitTestTile, computeReorderTarget } from './hitTesting';
 import { DragGhost } from '../DragGhost';
@@ -114,6 +114,8 @@ export interface CanvasGridProps {
   showExtensionLabel?: boolean;
   showResolution?: boolean;
   fitThumbnails?: boolean;
+  /** Complete query result count used to preserve full-library scroll range. */
+  totalCount?: number | null;
   onTileClick?: (index: number, item: CanonicalEntityGridItem, event?: React.MouseEvent) => void;
   onTileDoubleClick?: (index: number, item: CanonicalEntityGridItem) => void;
   onEmptyClick?: () => void;
@@ -155,6 +157,7 @@ export function CanvasGrid({
   showExtensionLabel = false,
   showResolution = false,
   fitThumbnails = false,
+  totalCount = null,
   onTileClick,
   onTileDoubleClick,
   onEmptyClick,
@@ -281,6 +284,10 @@ export function CanvasGrid({
   }), [items, layoutWidth, targetSize, viewMode, textHeight]);
   const renderItemsRef = useRef(layoutModel.items);
   renderItemsRef.current = layoutModel.items;
+  const estimatedScrollHeight = useMemo(
+    () => estimateGridScrollHeight(layoutModel.totalHeight, items.length, totalCount),
+    [items.length, layoutModel.totalHeight, totalCount],
+  );
 
   const onLayoutChangeRef = useRef(onLayoutChange);
   onLayoutChangeRef.current = onLayoutChange;
@@ -866,12 +873,23 @@ export function CanvasGrid({
       markDirty('base');
     }, CANVAS_SCROLL_IDLE_DELAY_MS);
 
-    // Load more trigger
-    const distanceFromBottom = container.scrollHeight - scrollTop - container.clientHeight;
-    if (distanceFromBottom < container.clientHeight * 3) {
+    // Prefetch against real loaded content, not the estimated full extent.
+    const distanceFromLoadedEnd = headerHeightRef.current + layoutModel.totalHeight
+      - scrollTop - container.clientHeight;
+    if (distanceFromLoadedEnd < container.clientHeight * 3) {
       onLoadMoreRef.current?.();
     }
-  }, [interactive, markDirty]);
+  }, [interactive, layoutModel.totalHeight, markDirty]);
+
+  // Continue filling the runway after each append, including when the user
+  // drags the scrollbar into an estimated-but-not-yet-loaded region.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || !onLoadMore) return;
+    const distanceFromLoadedEnd = headerHeight + layoutModel.totalHeight
+      - container.scrollTop - container.clientHeight;
+    if (distanceFromLoadedEnd < container.clientHeight * 3) onLoadMore();
+  }, [headerHeight, layoutModel.totalHeight, onLoadMore]);
 
   // ── Click handler ──
   const isInHeader = useCallback((target: EventTarget) => {
@@ -1269,7 +1287,7 @@ export function CanvasGrid({
         <div
           className={styles.canvasWrap}
           data-grid-layout
-          style={{ height: `${layoutModel.totalHeight}px` }}
+          style={{ height: `${estimatedScrollHeight}px` }}
         >
           <div
             ref={viewportLayerRef}

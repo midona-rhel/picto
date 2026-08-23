@@ -55,6 +55,16 @@ export function collectThumbnailActivation(
   buffers.planTiles.length = planCount;
 }
 
+/** Estimate the complete scroll extent from real loaded layout density. */
+export function estimateGridScrollHeight(
+  loadedHeight: number,
+  loadedCount: number,
+  totalCount: number | null | undefined,
+): number {
+  if (loadedCount === 0 || totalCount == null || totalCount <= loadedCount) return loadedHeight;
+  return Math.max(loadedHeight, Math.round((loadedHeight / loadedCount) * totalCount));
+}
+
 interface LayoutConfig {
   width: number; targetSize: number; gap: number; viewMode: GridViewMode;
   textHeight: number; scrollbarWidth: number;

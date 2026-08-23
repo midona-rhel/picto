@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { GridLayoutRuntime } from './gridLayoutModel';
+import { estimateGridScrollHeight, GridLayoutRuntime } from './gridLayoutModel';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 
 function item(itemId: number, fileHash = `file-${itemId}`, width = 100, height = 100): CanonicalEntityGridItem {
@@ -50,5 +50,16 @@ describe('buildGridLayoutModel', () => {
     const reordered = runtime.update([first[1], first[0], item(12)], config);
     expect(reordered.items[0]).not.toBe(appended.items[1]);
     expect(reordered.itemIdToIndex).toEqual(new Map([[11, 0], [10, 1], [12, 2]]));
+  });
+});
+
+describe('estimateGridScrollHeight', () => {
+  it('preserves the full result scroll range from loaded layout density', () => {
+    expect(estimateGridScrollHeight(2_000, 500, 10_000)).toBe(40_000);
+  });
+
+  it('never shrinks below real loaded content', () => {
+    expect(estimateGridScrollHeight(2_000, 500, 400)).toBe(2_000);
+    expect(estimateGridScrollHeight(2_000, 500, null)).toBe(2_000);
   });
 });
