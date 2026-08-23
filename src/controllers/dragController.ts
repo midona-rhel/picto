@@ -1,5 +1,5 @@
 import { setEntityStatus } from '../platform/entityApi';
-import { reorderFolderMembers, updateFolderMembership } from '../platform/folderApi';
+import { reorderFolderItems, updateFolderMembership } from '../platform/folderApi';
 import type { EntityTarget } from '../shared/types/canonical';
 import type { DropTarget, GridDragState } from '../features/grid/dragState';
 
@@ -30,7 +30,7 @@ export const dragController = {
     }
 
     if (sourceScope?.kind === 'folder' && sourceScope.id != null) {
-      await reorderFolderMembers(sourceScope.id, target.orderedEntityIds);
+      await reorderFolderItems(sourceScope.id, { moves: target.moves });
       return;
     }
 

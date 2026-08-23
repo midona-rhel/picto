@@ -6,13 +6,14 @@
  */
 
 import { dragController } from '../../controllers/dragController';
+import type { FolderReorderMove } from '../../platform/folderApi';
 
 // ── Types ──
 
 export type DropTarget =
   | { kind: 'folder'; folderId: number; nodeId: string }
   | { kind: 'status'; status: number }
-  | { kind: 'reorder'; orderedEntityIds: [number, number][]; orderedHashes?: string[] };
+  | { kind: 'reorder'; moves: FolderReorderMove[] };
 
 export interface GridDragState {
   active: boolean;

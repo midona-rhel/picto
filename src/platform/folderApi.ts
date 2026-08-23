@@ -101,12 +101,14 @@ export function exportMedia(target: EntityTarget, config: {
 export function reorderFolderItems(folderId: number, params: {
   sort_by?: string;
   direction?: string;
-  moves?: Array<{ hash: string; before_hash?: string | null; after_hash?: string | null }>;
+  moves?: FolderReorderMove[];
   hashes?: string[];
 }): Promise<void> {
   return invoke<void>('reorder_folder_items', { folder_id: folderId, ...params } as unknown as Record<string, unknown>);
 }
 
-export function reorderFolderMembers(folderId: number, moves: [number, number][]): Promise<void> {
-  return invoke<void>('reorder_folder_members', { folder_id: folderId, moves });
+export interface FolderReorderMove {
+  hash: string;
+  before_hash?: string | null;
+  after_hash?: string | null;
 }

@@ -33,6 +33,7 @@ import {
 } from '../dragGhostSpec';
 import { GlassInput } from '../../../shared/ui/GlassInput/GlassInput';
 import { resolveGridScrollAnchor } from './gridScrollAnchor';
+import { planFolderReorder } from './folderReorder';
 import { collectThumbnailActivation } from './thumbnailActivation';
 import {
   type CanvasScrollState,
@@ -799,22 +800,13 @@ export function CanvasGrid({
         const rd = reorderDropRef.current;
         const existingTarget = getDragState().dropTarget;
         if (rd && !existingTarget) {
-          const curItems = itemsRef.current;
-          const draggedSet = new Set(getDragState().hashes);
-          const targetIdx = rd.dropSide === 'right' ? rd.dropIndex + 1 : rd.dropIndex;
-          let offset = 0;
-          for (let i = 0; i < targetIdx && i < curItems.length; i++) {
-            if (draggedSet.has(curItems[i].entity_hash)) offset++;
-          }
-          const insertAt = targetIdx - offset;
-          const dragged = curItems.filter((it) => draggedSet.has(it.entity_hash));
-          const remaining = curItems.filter((it) => !draggedSet.has(it.entity_hash));
-          const reordered = [...remaining.slice(0, insertAt), ...dragged, ...remaining.slice(insertAt)];
-          const orderedEntityIds: [number, number][] = reordered.map((it, i) => [it.entity_id, i]);
-          const orderedHashes = reordered.map((it) => it.entity_hash);
-          if (orderedEntityIds.length > 0) {
-            setDropTarget({ kind: 'reorder', orderedEntityIds, orderedHashes });
-          }
+          const moves = planFolderReorder(
+            itemsRef.current.map((item) => item.entity_hash),
+            new Set(getDragState().hashes),
+            rd.dropIndex,
+            rd.dropSide,
+          );
+          if (moves.length > 0) setDropTarget({ kind: 'reorder', moves });
         }
         reorderDropRef.current = null;
         // Preserve selection: re-select the dragged hashes after drop
