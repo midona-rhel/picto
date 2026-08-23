@@ -7,8 +7,8 @@
  *  2. Receives revealed bitmaps and stores them for drawing.
  *  3. Handles eviction of transferred bitmaps.
  *
- * The main thread never waits on the decoder. Bitmap arrival IS the
- * signal to start fading in.
+ * The main thread never waits on the decoder. Reveal identity is owned
+ * separately by ThumbnailRevealTracker.
  */
 
 import {
@@ -28,7 +28,6 @@ import {
 
 export type { PlanTile } from './thumbnailPlan';
 
-export const THUMBNAIL_PIPELINE_REVEAL_MS = 250;
 export type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
 
 /** If a tile exceeds this size in either axis, load the full original instead of the 512px thumb. */
@@ -41,12 +40,9 @@ function mediaThumbnailUrl(hash: string): string {
 export class ThumbnailPipeline {
   private cache = new Map<string, ThumbnailPipelineEntry>();
   private onDirty: () => void;
+  private onBitmapAvailable: (hash: string) => void;
   private destroyed = false;
   private totalBytes = 0;
-  /** When true, new thumbnails appear instantly without fade animation. */
-  suppressAnimation = false;
-  /** Timestamp until which animation is suppressed (handles async thumbnail arrival after transition). */
-  private suppressUntil = 0;
 
   // ── Plan deduplication ──
   // Only send plan to worker when the visible hash set actually changes.
@@ -55,19 +51,15 @@ export class ThumbnailPipeline {
   // Reusable array for building plan entries — avoids per-frame allocation.
   private planBuffer: Array<{ hash: string; url: string }> = [];
 
-  constructor(onDirty: () => void = () => {}) {
+  constructor(onDirty: () => void = () => {}, onBitmapAvailable: (hash: string) => void = () => {}) {
     this.onDirty = onDirty;
+    this.onBitmapAvailable = onBitmapAvailable;
     setThumbnailRevealCallback((hash, bitmap) => this.handleReveal(hash, bitmap));
     setThumbnailErrorCallback((hash) => this.handleError(hash));
   }
 
   setOnDirty(onDirty: () => void): void {
     this.onDirty = onDirty;
-  }
-
-  /** Suppress fade animation for the next N milliseconds (covers async arrivals after transition). */
-  suppressAnimationFor(ms: number): void {
-    this.suppressUntil = performance.now() + ms;
   }
 
   /**
@@ -115,18 +107,16 @@ export class ThumbnailPipeline {
     return this.cache.get(hash) ?? null;
   }
 
-  /** Close bitmaps for tiles no longer in the visible set. */
-  evictOutsideVisible(visibleHashes: Set<string>): void {
+  /** Close bitmaps for tiles no longer in the decode activation zone. */
+  evictOutsideActive(activeHashes: Set<string>): void {
     for (const [hash, entry] of this.cache) {
-      if (visibleHashes.has(hash)) continue;
+      if (activeHashes.has(hash)) continue;
       if (entry.thumb) {
         this.totalBytes -= entry.bytes;
         entry.thumb.close();
         entry.thumb = null;
         entry.bytes = 0;
       }
-      entry.animateIn = false;
-      entry.revealStartedAt = 0;
       entry.state = 'idle';
     }
   }
@@ -154,7 +144,7 @@ export class ThumbnailPipeline {
 
     let entry = this.cache.get(hash);
     if (!entry) {
-      entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0, animateIn: false, revealStartedAt: 0 };
+      entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0 };
       this.cache.set(hash, entry);
     }
 
@@ -169,20 +159,14 @@ export class ThumbnailPipeline {
     this.totalBytes += entry.bytes;
     entry.state = 'shown';
 
-    if (isUpgrade || this.suppressAnimation || performance.now() < this.suppressUntil) {
-      entry.animateIn = false;
-    } else {
-      entry.animateIn = true;
-      entry.revealStartedAt = performance.now();
-    }
-
+    if (!isUpgrade) this.onBitmapAvailable(hash);
     this.onDirty();
   }
 
   private handleError(hash: string): void {
     let entry = this.cache.get(hash);
     if (!entry) {
-      entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0, animateIn: false, revealStartedAt: 0 };
+      entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0 };
       this.cache.set(hash, entry);
     }
     entry.state = 'error';

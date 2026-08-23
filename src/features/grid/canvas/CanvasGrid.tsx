@@ -1,8 +1,8 @@
 /**
  * Canvas2D grid renderer — dual-canvas (base + overlay) with thumbnail pipeline.
  *
- * Activation zone: viewport ± 100px. Tiles inside are drawn, loaded, and
- * fade-animated. Tiles outside get loads cancelled and stop rendering.
+ * Activation zone: viewport ± 100px. Tiles inside are drawn and loaded;
+ * reveal eligibility is tracked against the actual viewport.
  * One linear scan per frame drives everything.
  */
 
@@ -15,6 +15,7 @@ import { HoverPreviewPortal } from './HoverPreviewPortal';
 import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 
 import { ThumbnailPipeline, type PlanTile } from './thumbnailPipeline';
+import { ThumbnailRevealTracker } from './thumbnailRevealTracker';
 import { zoomController } from '../../../controllers/zoomController';
 import { adaptGridItem } from './renderItemAdapter';
 import { startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive, startNativeDrag as startNativeDragFn, setInternalDragOrigin } from '../dragState';
@@ -132,10 +133,14 @@ export function CanvasGrid({
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const pipelineRef = useRef<ThumbnailPipeline | null>(null);
+  const revealTrackerRef = useRef(new ThumbnailRevealTracker());
+  const suppressTileRevealRef = useRef(suppressTileReveal);
+  const suppressRevealUntilRef = useRef(0);
 
   // Reusable per-frame buffers — avoids allocating new arrays/sets every draw call.
   const activeTilesRef = useRef<number[]>([]);
-  const visibleHashesRef = useRef(new Set<string>());
+  const activeHashesRef = useRef(new Set<string>());
+  const viewportHashesRef = useRef(new Set<string>());
   const planTilesRef = useRef<PlanTile[]>([]);
 
   // Cache theme CSS values — avoids getComputedStyle() on every draw frame
@@ -330,6 +335,13 @@ export function CanvasGrid({
   useEffect(() => {
     const pipeline = new ThumbnailPipeline(() => {
       markDirty('base');
+    }, (hash) => {
+      const now = performance.now();
+      revealTrackerRef.current.onBitmapAvailable(
+        hash,
+        now,
+        suppressTileRevealRef.current || now < suppressRevealUntilRef.current,
+      );
     });
     pipelineRef.current = pipeline;
     // Cache theme values on mount and observe theme attribute changes
@@ -338,6 +350,7 @@ export function CanvasGrid({
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-mantine-color-scheme'] });
     return () => {
       pipeline.clear();
+      revealTrackerRef.current.clear();
       pipelineRef.current = null;
       observer.disconnect();
       if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null; }
@@ -372,13 +385,11 @@ export function CanvasGrid({
   // Thumbnails loaded during fade-out/fade-in appear instantly.
   const prevSuppressRef = useRef(suppressTileReveal);
   useEffect(() => {
-    const pipeline = pipelineRef.current;
-    if (!pipeline) return;
-    pipeline.suppressAnimation = suppressTileReveal;
+    suppressTileRevealRef.current = suppressTileReveal;
     // When transition ends (suppress goes false), keep suppressing for 500ms
     // to cover thumbnails still in flight from the transition period.
     if (prevSuppressRef.current && !suppressTileReveal) {
-      pipeline.suppressAnimationFor(500);
+      suppressRevealUntilRef.current = performance.now() + 500;
     }
     prevSuppressRef.current = suppressTileReveal;
   }, [suppressTileReveal]);
@@ -403,9 +414,8 @@ export function CanvasGrid({
     ctx.scale(vp.dpr, vp.dpr);
     ctx.clearRect(0, 0, vp.containerWidth, vp.viewportHeight);
 
-    // Single activation zone: viewport ± 100px.
-    // Tiles inside: drawn, loaded, fade-animated.
-    // Tiles outside: loads cancelled, not drawn.
+    // The activation zone controls decode residency. The actual viewport
+    // independently controls entity reveal identity.
     const ACTIVATION_MARGIN = 100;
     const zoneTop = scrollTop - ACTIVATION_MARGIN;
     const zoneBottom = scrollTop + vp.viewportHeight + ACTIVATION_MARGIN;
@@ -413,8 +423,10 @@ export function CanvasGrid({
     // Reuse arrays/sets across frames to avoid per-frame GC pressure.
     const activeTiles = activeTilesRef.current;
     activeTiles.length = 0;
-    const visibleHashes = visibleHashesRef.current;
-    visibleHashes.clear();
+    const activeHashes = activeHashesRef.current;
+    activeHashes.clear();
+    const viewportHashes = viewportHashesRef.current;
+    viewportHashes.clear();
     const planTiles = planTilesRef.current;
     let planCount = 0;
 
@@ -436,7 +448,10 @@ export function CanvasGrid({
       const item = renderItems[i];
       if (!item) continue;
 
-      visibleHashes.add(item.thumbnailHash);
+      activeHashes.add(item.thumbnailHash);
+      if (pos.y + pos.h >= scrollTop && pos.y <= scrollTop + vp.viewportHeight) {
+        viewportHashes.add(item.hash);
+      }
       if (planTiles[planCount]) {
         planTiles[planCount].hash = item.thumbnailHash;
         planTiles[planCount].mime = item.mime;
@@ -452,6 +467,13 @@ export function CanvasGrid({
 
     // Send plan to worker — deduplicates internally, only posts when visible set changes.
     pipeline.updatePlan(planTiles, scrollTop + vp.viewportHeight / 2);
+    const suppressReveal = suppressTileRevealRef.current || now < suppressRevealUntilRef.current;
+    revealTrackerRef.current.updateViewport(
+      viewportHashes,
+      now,
+      (hash) => pipeline.get(hash)?.thumb != null,
+      suppressReveal,
+    );
 
     const drawCtx: DrawContext = {
       scrollTop,
@@ -465,7 +487,7 @@ export function CanvasGrid({
       positions: layout.positions,
       items: renderItems,
       atlasGet: (hash) => pipeline.get(hash),
-      now,
+      revealProgress: (hash) => revealTrackerRef.current.getProgress(hash, now),
       activeTiles,
       draw: drawCtx,
       theme: cachedThemeRef.current,
@@ -481,7 +503,7 @@ export function CanvasGrid({
 
     // Evict main-thread bitmaps outside the draw zone.
     // The worker handles load cancellation via the plan diff.
-    pipeline.evictOutsideVisible(visibleHashes);
+    pipeline.evictOutsideActive(activeHashes);
 
     // Continue animation loop for active reveals
     if (hasActiveRevealFromDraw) {

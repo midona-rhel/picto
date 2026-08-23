@@ -8,7 +8,6 @@
 import type { LayoutItem, GridViewMode } from '../layout/types';
 import type { CanvasRenderItem } from './renderItemAdapter';
 import type { ThumbnailPipelineEntry } from './thumbnailPipeline';
-import { THUMBNAIL_PIPELINE_REVEAL_MS } from './thumbnailPipeline';
 import {
   BADGE_FONT,
   INFO_FONT,
@@ -45,7 +44,7 @@ export interface BaseLayerArgs {
   positions: LayoutItem[];
   items: CanvasRenderItem[];
   atlasGet: (hash: string) => ThumbnailPipelineEntry | null;
-  now: number;
+  revealProgress: (entityHash: string) => number;
   /** Indices of tiles in the activation zone — the ONLY tiles to draw. */
   activeTiles: number[];
   draw: DrawContext;
@@ -95,7 +94,7 @@ export function drawCanvasBaseLayer({
   positions,
   items,
   atlasGet,
-  now,
+  revealProgress,
   activeTiles,
   draw,
   theme,
@@ -143,17 +142,13 @@ export function drawCanvasBaseLayer({
       ctx.clip();
     }
 
-    // Legacy two-phase reveal: image fades 0→1 over REVEAL_MS,
-    // then placeholder fades 1→0 over the next REVEAL_MS.
+    // Preserve the two-phase visual: image first, then placeholder removal.
     if (entry?.thumb) {
-      const revealElapsedMs = entry.animateIn
-        ? Math.max(0, now - entry.revealStartedAt)
-        : THUMBNAIL_PIPELINE_REVEAL_MS * 2;
-      const imageProgress = Math.min(1, revealElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS);
-      const placeholderFadeElapsedMs = Math.max(0, revealElapsedMs - THUMBNAIL_PIPELINE_REVEAL_MS);
+      const progress = revealProgress(item.hash);
+      const imageProgress = Math.min(1, progress * 2);
       const placeholderAlpha = imageProgress < 1
         ? 1
-        : Math.max(0, 1 - (placeholderFadeElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS));
+        : Math.max(0, 2 - (progress * 2));
 
       if (imageProgress < 1 || placeholderAlpha > 0) {
         hasActiveReveal = true;
