@@ -39,8 +39,6 @@ export interface SubscriptionInfo {
   name: string;
   schedule: SubscriptionSchedule | string;
   paused: boolean;
-  initial_post_limit: number;
-  periodic_post_limit: number;
   created_at: string;
   total_files: number;
   queries: SubscriptionQueryInfo[];

@@ -40,8 +40,6 @@ function subscription(queries: SubscriptionQueryInfo[]): SubscriptionInfo {
     name: 'Huffslove',
     schedule: 'daily',
     paused: false,
-    initial_post_limit: 100,
-    periodic_post_limit: 50,
     created_at: '2026-08-05T19:08:25Z',
     total_files: 198,
     queries,

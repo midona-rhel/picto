@@ -28,10 +28,6 @@ import type {
   SubscriptionSiteInfo,
 } from '../shared/types/subscriptions';
 
-function numberOrZero(value: number | null): number {
-  return value ?? 0;
-}
-
 function latest(...values: Array<string | null | undefined>): string | null {
   const present = values.filter((value): value is string => Boolean(value)).sort();
   return present[present.length - 1] ?? null;
@@ -80,8 +76,6 @@ function mapSubscription(subscription: SubscriptionView): SubscriptionInfo {
     name: subscription.name,
     schedule: subscription.schedule,
     paused: subscription.paused,
-    initial_post_limit: numberOrZero(subscription.initial_post_limit),
-    periodic_post_limit: numberOrZero(subscription.periodic_post_limit),
     created_at: '',
     total_files: subscription.media_count,
     queries: subscription.queries.map(mapQuery),
@@ -200,14 +194,12 @@ export async function createSubscription(params: {
   name: string;
   site_id: string;
   query_text: string;
-  initial_post_limit?: number | null;
-  periodic_post_limit?: number | null;
 }): Promise<SubscriptionInfo> {
   const input: NewSubscription = {
     name: params.name,
     schedule: 'manual',
-    initial_post_limit: params.initial_post_limit ?? null,
-    periodic_post_limit: params.periodic_post_limit ?? null,
+    initial_post_limit: null,
+    periodic_post_limit: null,
     queries: [{
       site_id: params.site_id,
       query_kind: 'tag',

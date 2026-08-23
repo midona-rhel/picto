@@ -110,8 +110,6 @@ export const subscriptionsController = {
     name: string;
     site_id: string;
     query_text: string;
-    initial_post_limit?: number | null;
-    periodic_post_limit?: number | null;
   }): Promise<SubscriptionInfo> {
     return createSubscription(input);
   },

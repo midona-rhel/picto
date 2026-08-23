@@ -156,8 +156,6 @@ export function SubscriptionsScreen() {
         name: result.name,
         site_id: result.siteId,
         query_text: result.queryText,
-        initial_post_limit: result.initialPostLimit,
-        periodic_post_limit: result.periodicPostLimit,
       });
       navigateTo({ kind: 'subscription', id: subscription.id });
       setWizard({ open: false });

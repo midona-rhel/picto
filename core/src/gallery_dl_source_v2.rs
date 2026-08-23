@@ -82,7 +82,7 @@ impl GalleryDlSourceRunner {
             query_id: Some(query.query_id),
             site_id: query.site_id.clone(),
             url,
-            post_limit: selected_post_limit(query),
+            post_limit: None,
             range_start: 1,
             source_cursor: query.resume_cursor.clone(),
             abort_threshold: query
@@ -209,17 +209,6 @@ fn load_auth(owner_site_id: &str) -> Result<Option<GalleryDlAuthConfig>, RunnerF
         site_category: owner_site_id.to_string(),
         fragment: crate::credential_store::build_extractor_auth(&credential),
     }))
-}
-
-fn selected_post_limit(query: &ClaimedQueryRun) -> Option<u32> {
-    let limit = if query.initial_run_complete {
-        query.periodic_post_limit
-    } else {
-        query.initial_post_limit
-    };
-    limit
-        .and_then(|value| u32::try_from(value).ok())
-        .filter(|value| *value > 0)
 }
 
 async fn normalize_download(
@@ -485,16 +474,6 @@ mod tests {
     }
 
     #[test]
-    fn post_limits_switch_after_the_initial_run() {
-        let mut query = claimed_query();
-        query.initial_post_limit = Some(100);
-        query.periodic_post_limit = Some(20);
-        assert_eq!(selected_post_limit(&query), Some(100));
-        query.initial_run_complete = true;
-        assert_eq!(selected_post_limit(&query), Some(20));
-    }
-
-    #[test]
     fn summary_distinguishes_up_to_date_from_broken_output() {
         let up_to_date = summary(0, 10, 10);
         assert_eq!(settle_summary(up_to_date, 0).unwrap().resume_cursor, None);
@@ -527,21 +506,4 @@ mod tests {
         }
     }
 
-    fn claimed_query() -> ClaimedQueryRun {
-        ClaimedQueryRun {
-            run_query_id: 1,
-            run_id: 1,
-            query_id: 1,
-            subscription_id: 1,
-            site_id: "pixiv".into(),
-            domain_key: "pixiv.net".into(),
-            query_kind: "search".into(),
-            query_text: "landscape".into(),
-            initial_post_limit: None,
-            periodic_post_limit: None,
-            initial_run_complete: false,
-            resume_cursor: None,
-            attempt_count: 1,
-        }
-    }
 }

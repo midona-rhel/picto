@@ -1,5 +1,4 @@
 import { useEffect, useState } from 'react';
-import { IconChevronRight } from '@tabler/icons-react';
 import { GlassModal } from '../../../shared/ui/GlassModal/GlassModal';
 import { ActionButton } from './ActionButton';
 import type { SubscriptionSiteInfo } from '../../../shared/types/subscriptions';
@@ -9,14 +8,9 @@ export interface CreateSubscriptionInput {
   name: string;
   siteId: string;
   queryText: string;
-  initialPostLimit: number;
-  periodicPostLimit: number;
 }
 
-/**
- * Compact single-form dialog for adding one subscription.
- * Sync limits live under Advanced.
- */
+/** Compact single-form dialog for adding one subscription. */
 export function NewSubscriptionDialog({
   open,
   busy,
@@ -33,9 +27,6 @@ export function NewSubscriptionDialog({
   const [name, setName] = useState('');
   const [siteId, setSiteId] = useState(sites[0]?.id ?? '');
   const [queryText, setQueryText] = useState('');
-  const [initialLimit, setInitialLimit] = useState('100');
-  const [periodicLimit, setPeriodicLimit] = useState('50');
-  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     if (sites.length > 0 && !sites.some((site) => site.id === siteId)) {
@@ -49,9 +40,6 @@ export function NewSubscriptionDialog({
     setName('');
     setSiteId(sites[0]?.id ?? '');
     setQueryText('');
-    setInitialLimit('100');
-    setPeriodicLimit('50');
-    setShowAdvanced(false);
   };
 
   const close = () => {
@@ -60,14 +48,10 @@ export function NewSubscriptionDialog({
   };
 
   const submit = () => {
-    const parsedInitial = Number.parseInt(initialLimit, 10);
-    const parsedPeriodic = Number.parseInt(periodicLimit, 10);
     onCreate({
       name: name.trim(),
       siteId,
       queryText: queryText.trim(),
-      initialPostLimit: Number.isFinite(parsedInitial) && parsedInitial > 0 ? parsedInitial : 100,
-      periodicPostLimit: Number.isFinite(parsedPeriodic) && parsedPeriodic > 0 ? parsedPeriodic : 50,
     });
     reset();
   };
@@ -128,47 +112,6 @@ export function NewSubscriptionDialog({
           </div>
         </div>
 
-        <button
-          type="button"
-          className={styles.advancedToggle}
-          aria-expanded={showAdvanced}
-          onClick={() => setShowAdvanced((v) => !v)}
-        >
-          <IconChevronRight
-            size={12}
-            className={`${styles.advancedChevron} ${showAdvanced ? styles.advancedChevronOpen : ''}`.trim()}
-          />
-          Advanced
-        </button>
-
-        {showAdvanced && (
-          <div className={styles.advancedBody}>
-            <div className={styles.row}>
-              <span className={styles.rowLabel}>First sync</span>
-              <div className={styles.rowControl}>
-                <input
-                  className={`${styles.textInput} ${styles.numInput}`}
-                  value={initialLimit}
-                  inputMode="numeric"
-                  onChange={(e) => setInitialLimit(e.target.value)}
-                />
-                <span className={styles.helper}>posts on the first run</span>
-              </div>
-            </div>
-            <div className={styles.row}>
-              <span className={styles.rowLabel}>Later checks</span>
-              <div className={styles.rowControl}>
-                <input
-                  className={`${styles.textInput} ${styles.numInput}`}
-                  value={periodicLimit}
-                  inputMode="numeric"
-                  onChange={(e) => setPeriodicLimit(e.target.value)}
-                />
-                <span className={styles.helper}>new posts per check</span>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </GlassModal>
   );
