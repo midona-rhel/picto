@@ -16,7 +16,7 @@ import { ThumbnailPipeline, type PlanTile } from './thumbnailPipeline';
 import { ThumbnailRevealTracker } from './thumbnailRevealTracker';
 import { zoomController } from '../../../controllers/zoomController';
 import { collectThumbnailActivation, estimateGridScrollHeight, GridLayoutRuntime } from './gridLayoutModel';
-import { startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive, startNativeDrag as startNativeDragFn, setInternalDragOrigin } from '../dragState';
+import { createDragOwnerId, startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive, isDragOwnedBy, startNativeDrag as startNativeDragFn, setInternalDragOrigin } from '../dragState';
 import { hitTestTile, computeReorderTarget } from './hitTesting';
 import { DragGhost } from '../DragGhost';
 import { createNativeDragImageUrl } from '../dragGhostSpec';
@@ -187,6 +187,8 @@ export function CanvasGrid({
   collectHeaderMarqueeHits,
 }: CanvasGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const dragOwnerIdRef = useRef(0);
+  if (dragOwnerIdRef.current === 0) dragOwnerIdRef.current = createDragOwnerId();
   const containerCallbackRef = useCallback((el: HTMLDivElement | null) => {
     (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
     onContainerRef?.(el);
@@ -741,7 +743,7 @@ export function CanvasGrid({
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
-      if (!isDragActive()) return;
+      if (!isDragOwnedBy(dragOwnerIdRef.current)) return;
 
       // If cursor exits the window during drag, initiate native OS file drag
       if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
@@ -790,7 +792,7 @@ export function CanvasGrid({
       }
     };
     const onUp = (e: MouseEvent) => {
-      if (isDragActive()) {
+      if (isDragOwnedBy(dragOwnerIdRef.current)) {
         // If cursor is outside the window, the onMove handler already triggered native drag
         if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
           return;
@@ -825,7 +827,7 @@ export function CanvasGrid({
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
       reorderDropRef.current = null;
-      if (isDragActive()) cancelDrag();
+      if (isDragOwnedBy(dragOwnerIdRef.current)) cancelDrag();
     };
   }, []); // stable — never re-runs, uses refs for all mutable data
 
@@ -1159,7 +1161,7 @@ export function CanvasGrid({
           const thumbHashes = itemIds.slice(0, 3).map((id) => {
             return items.find((candidate) => candidate.item_id === id)?.display_file_hash ?? '';
           });
-          startDrag(itemIds, e.clientX, e.clientY, dragSourceScope);
+          startDrag(itemIds, e.clientX, e.clientY, dragSourceScope, dragOwnerIdRef.current);
           setDragGhost({ x: e.clientX, y: e.clientY, count: itemIds.length, thumbnailHashes: thumbHashes });
           reorderDropRef.current = null;
           tileDragRef.current = null;

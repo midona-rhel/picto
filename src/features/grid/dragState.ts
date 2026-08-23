@@ -17,6 +17,7 @@ export type DropTarget =
 
 export interface GridDragState {
   active: boolean;
+  ownerId: number | null;
   itemIds: number[];
   sourceScope: ItemScope | null;
   startX: number;
@@ -30,6 +31,7 @@ export interface GridDragState {
 
 let state: GridDragState = {
   active: false,
+  ownerId: null,
   itemIds: [],
   sourceScope: null,
   startX: 0,
@@ -43,6 +45,7 @@ let nativeDragPending = false;
 let nativeDragTimer: ReturnType<typeof setTimeout> | null = null;
 
 let highlightedDropElement: HTMLElement | null = null;
+let nextDragOwnerId = 1;
 
 // ── Public API ──
 
@@ -54,6 +57,14 @@ export function isDragActive(): boolean {
   return state.active;
 }
 
+export function createDragOwnerId(): number {
+  return nextDragOwnerId++;
+}
+
+export function isDragOwnedBy(ownerId: number): boolean {
+  return state.active && state.ownerId === ownerId;
+}
+
 export function isNativeDragPending(): boolean {
   return nativeDragPending;
 }
@@ -63,9 +74,11 @@ export function startDrag(
   x: number,
   y: number,
   sourceScope: GridDragState['sourceScope'],
+  ownerId: number | null = null,
 ) {
   state = {
     active: true,
+    ownerId,
     itemIds,
     sourceScope,
     startX: x,
@@ -161,7 +174,7 @@ function clearDropHighlights() {
 export function endDrag() {
   if (!state.active) return;
   const { itemIds, dropTarget, sourceScope } = state;
-  state = { ...state, active: false, dropTarget: null };
+  state = { ...state, active: false, ownerId: null, dropTarget: null };
   clearDropHighlights();
   if (dropTarget) {
     void dragController.executeDrop(itemIds, dropTarget, sourceScope).catch((err) => console.error('[drag] drop failed:', err));
@@ -169,7 +182,7 @@ export function endDrag() {
 }
 
 export function cancelDrag() {
-  state = { ...state, active: false, dropTarget: null };
+  state = { ...state, active: false, ownerId: null, dropTarget: null };
   clearDropHighlights();
 }
 
@@ -182,6 +195,7 @@ export function isInternalDragOrigin() { return internalDragOrigin; }
 // Saved drag data for restoring internal drag when cursor re-enters
 let savedDragItemIds: number[] = [];
 let savedDragScope: ItemScope | null = null;
+let savedDragOwnerId: number | null = null;
 
 // ── Native drag-out ──
 
@@ -189,6 +203,7 @@ export function startNativeDrag(fileHashes: string[], iconDataUrl: string) {
   // Save drag data before cancelling so we can restore on re-entry
   savedDragItemIds = [...state.itemIds];
   savedDragScope = state.sourceScope;
+  savedDragOwnerId = state.ownerId;
 
   nativeDragPending = true;
   internalDragOrigin = true;
@@ -198,6 +213,7 @@ export function startNativeDrag(fileHashes: string[], iconDataUrl: string) {
     internalDragOrigin = false;
     savedDragItemIds = [];
     savedDragScope = null;
+    savedDragOwnerId = null;
     nativeDragTimer = null;
   }, 3_000);
   (window as any).picto?.webview?.startNativeDrag?.(fileHashes, iconDataUrl);
@@ -210,8 +226,9 @@ export function restoreInternalDrag(x: number, y: number) {
   nativeDragPending = false;
   internalDragOrigin = false;
   if (nativeDragTimer) { clearTimeout(nativeDragTimer); nativeDragTimer = null; }
-  startDrag(savedDragItemIds, x, y, savedDragScope);
+  startDrag(savedDragItemIds, x, y, savedDragScope, savedDragOwnerId);
   savedDragItemIds = [];
   savedDragScope = null;
+  savedDragOwnerId = null;
   return true;
 }

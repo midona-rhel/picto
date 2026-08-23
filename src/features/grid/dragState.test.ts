@@ -1,7 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   cancelDrag,
+  createDragOwnerId,
   getDragState,
+  isDragOwnedBy,
   moveDrag,
   resolveDropTarget,
   startDrag,
@@ -67,5 +69,13 @@ describe('grid drag target resolution', () => {
     expect(row.dataset.dropHighlighted).toBeUndefined();
     expect(unrelated.dataset.dropHighlighted).toBe('true');
     expect(getDragState().dropTarget).toBeNull();
+  });
+
+  it('identifies only the grid instance that started the drag as its owner', () => {
+    const owner = createDragOwnerId();
+    const other = createDragOwnerId();
+    startDrag([2], 0, 0, null, owner);
+    expect(isDragOwnedBy(owner)).toBe(true);
+    expect(isDragOwnedBy(other)).toBe(false);
   });
 });
