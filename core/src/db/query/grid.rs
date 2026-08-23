@@ -125,6 +125,24 @@ pub fn query_entity_view(
     } else {
         String::new()
     };
+    if is_folder_scope {
+        if let Some((rank, cursor_id)) = q
+            .page
+            .cursor
+            .as_deref()
+            .and_then(|cursor| parse_cursor(conn, cursor))
+            .and_then(|(value, entity_id)| value.parse::<i64>().ok().map(|rank| (rank, entity_id)))
+        {
+            let first = bound.len() + 1;
+            let second = first + 1;
+            where_parts.push(format!(
+                "(COALESCE(fm_sort.position_rank, 0) > ?{first} OR \
+                 (COALESCE(fm_sort.position_rank, 0) = ?{first} AND me.entity_id > ?{second}))"
+            ));
+            bound.push(Box::new(rank));
+            bound.push(Box::new(cursor_id));
+        }
+    }
     let order = if is_folder_scope {
         "fm_sort.position_rank ASC, me.entity_id ASC".to_string()
     } else {
@@ -171,8 +189,21 @@ pub fn query_entity_view(
         })?
         .collect::<rusqlite::Result<_>>()?;
 
-    let next_cursor = if rows.len() as i64 == q.page.limit && !is_folder_scope {
-        rows.last().map(|(item, viewed_at)| {
+    let next_cursor = if rows.len() as i64 == q.page.limit {
+        rows.last().and_then(|(item, viewed_at)| {
+            if is_folder_scope {
+                let folder_id = q.base_scope.id.unwrap_or_default();
+                let rank = conn
+                    .query_row(
+                        "SELECT COALESCE(position_rank, 0)
+                         FROM folder_member
+                         WHERE folder_id = ?1 AND entity_id = ?2",
+                        [folder_id, item.entity_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .ok()?;
+                return Some(format!("{rank}|{}", item.entity_hash));
+            }
             let value = match sort_field {
                 "viewed_at" => viewed_at.as_deref().unwrap_or(""),
                 "date_added" => item.date_added.as_str(),
@@ -181,7 +212,7 @@ pub fn query_entity_view(
                 "name" => item.name.as_deref().unwrap_or(""),
                 _ => item.date_added.as_str(),
             };
-            format!("{value}|{}", item.entity_hash)
+            Some(format!("{value}|{}", item.entity_hash))
         })
     } else {
         None

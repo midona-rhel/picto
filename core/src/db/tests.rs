@@ -348,6 +348,74 @@ fn folder_count_matches_grid_active_visibility() {
 }
 
 #[test]
+fn folder_grid_pages_by_position_rank_without_capping_the_scope() {
+    let db = open_test_db();
+    let folder_id = db.create_folder("Paged", None, None, None).unwrap();
+    let mut entity_ids = Vec::new();
+    for index in 1..=5 {
+        let hash = format!("folder-page-{index}");
+        let file_id = db
+            .insert_file(
+                &format!("{hash}-file"),
+                "image/png",
+                10,
+                None,
+                None,
+                None,
+                None,
+                false,
+                "2026-08-04",
+            )
+            .unwrap();
+        entity_ids.push(
+            db.insert_entity(&hash, file_id, Some(&hash), 1, "2026-08-04", "2026-08-04")
+                .unwrap(),
+        );
+    }
+    db.add_folder_members(folder_id, &entity_ids).unwrap();
+
+    let query = |cursor: Option<String>| EntityViewQuery {
+        base_scope: BaseScope {
+            kind: ScopeKind::Folder,
+            key: None,
+            id: Some(folder_id),
+        },
+        filters: QueryFilters::default(),
+        sort: QuerySort::default(),
+        page: QueryPage { limit: 2, cursor },
+    };
+
+    let first = db.query_entity_view(&query(None)).unwrap();
+    let second = db
+        .query_entity_view(&query(first.next_cursor.clone()))
+        .unwrap();
+    let third = db
+        .query_entity_view(&query(second.next_cursor.clone()))
+        .unwrap();
+
+    assert_eq!(first.total_count, Some(5));
+    assert_eq!(
+        first
+            .items
+            .iter()
+            .chain(&second.items)
+            .chain(&third.items)
+            .map(|item| item.entity_hash.as_str())
+            .collect::<Vec<_>>(),
+        vec![
+            "folder-page-1",
+            "folder-page-2",
+            "folder-page-3",
+            "folder-page-4",
+            "folder-page-5",
+        ]
+    );
+    assert!(first.next_cursor.is_some());
+    assert!(second.next_cursor.is_some());
+    assert!(third.next_cursor.is_none());
+}
+
+#[test]
 fn tag_counts_match_visible_tag_scopes() {
     let db = open_test_db();
     let insert = |hash: &str, status: i64| {
