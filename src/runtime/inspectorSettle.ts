@@ -1,5 +1,5 @@
 import { getDefaultStore } from 'jotai';
-import { loadInspectorData } from '../controllers/inspectorController';
+import { cancelInspectorLoad, loadInspectorData } from '../controllers/inspectorController';
 import {
   displayedInspectorItemDetailsAtom,
   displayedInspectorTargetAtom,
@@ -42,6 +42,7 @@ export function startInspectorSettle(): () => void {
     // grid query returns size/count).
     if (lastItemId != null) {
       lastItemId = null;
+      cancelInspectorLoad();
       store.set(displayedInspectorItemDetailsAtom, null);
       store.set(displayedInspectorTargetAtom, target);
       store.set(inspectorLoadingAtom, false);

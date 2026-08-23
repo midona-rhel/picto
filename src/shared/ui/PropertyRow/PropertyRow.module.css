@@ -26,3 +26,19 @@
   font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
   font-variant-numeric: tabular-nums slashed-zero;
 }
+
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  opacity: 0.65;
+  animation: property-spinner 650ms linear infinite;
+}
+
+@keyframes property-spinner {
+  to { transform: rotate(360deg); }
+}

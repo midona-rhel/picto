@@ -41,6 +41,7 @@ import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
 import { activeNodeIdAtom } from '../../state/navigation';
 import { pushHistory } from '../../state/navigationHistory';
 import { InspectorAddIcon } from '../../shared/ui/icons/toolbar-icons';
+import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import styles from './Inspector.module.css';
 
 const store = getDefaultStore();
@@ -182,25 +183,56 @@ function useSelectionSummary() {
   const target = useAtomValue(selectionTargetAtom);
   const selectionCount = useAtomValue(selectionCountAtom);
   const selectionFingerprint = useAtomValue(selectionFingerprintAtom);
-  const [summary, setSummary] = useState<SelectionSummary | null>(null);
-  const [ready, setReady] = useState(false);
+  const [result, setResult] = useState<{ fingerprint: string; summary: SelectionSummary } | null>(null);
+  const [loadingFingerprint, setLoadingFingerprint] = useState<string | null>(null);
+  const [failedFingerprint, setFailedFingerprint] = useState<string | null>(null);
+  const [refreshRevision, setRefreshRevision] = useState(0);
+  const summary = result?.fingerprint === selectionFingerprint ? result.summary : null;
+  const needsSummary = Boolean(target && selectionCount >= 2);
+
+  useEffect(() => libraryInvalidation.register('library', (payload) => {
+    setRefreshRevision(payload.revision);
+  }), []);
 
   useEffect(() => {
     if (!target || selectionCount < 2) {
-      setSummary(null);
-      setReady(true); // nothing to wait for
+      setResult(null);
+      setLoadingFingerprint(null);
+      setFailedFingerprint(null);
       return;
     }
     let stale = false;
-    // Don't clear summary — keep old data visible until new arrives
-    setReady(false);
+    setLoadingFingerprint(null);
+    setFailedFingerprint(null);
+    const timer = window.setTimeout(() => {
+      if (!stale) setLoadingFingerprint(selectionFingerprint);
+    }, 250);
     void entityMutations.getTargetSelectionSummary(target).then((s) => {
-      if (!stale) { setSummary(s); setReady(true); }
-    }).catch(() => { if (!stale) setReady(true); });
-    return () => { stale = true; };
-  }, [selectionCount, selectionFingerprint, target]);
+      if (!stale) {
+        window.clearTimeout(timer);
+        setResult({ fingerprint: selectionFingerprint, summary: s });
+        setLoadingFingerprint(null);
+      }
+    }).catch(() => {
+      if (!stale) {
+        window.clearTimeout(timer);
+        setLoadingFingerprint(null);
+        setFailedFingerprint(selectionFingerprint);
+      }
+    });
+    return () => {
+      stale = true;
+      window.clearTimeout(timer);
+    };
+  }, [refreshRevision, selectionCount, selectionFingerprint, target]);
 
-  return { target, summary, ready };
+  return {
+    target,
+    summary,
+    pending: needsSummary && summary == null,
+    showLoading: loadingFingerprint === selectionFingerprint,
+    failed: failedFingerprint === selectionFingerprint,
+  };
 }
 
 function itemDetailsDisplay(details: ItemDetails) {
@@ -229,6 +261,8 @@ type CoreProperty = {
   value: string;
   mono: boolean;
   title?: string;
+  loading?: boolean;
+  showLoading?: boolean;
 };
 
 const CORE_PROPERTIES: Array<Pick<CoreProperty, 'label' | 'mono'>> = [
@@ -242,13 +276,13 @@ const CORE_PROPERTIES: Array<Pick<CoreProperty, 'label' | 'mono'>> = [
   { label: 'Date modified', mono: true },
 ];
 
-type CorePropertyValues = Partial<Record<CorePropertyLabel, Pick<CoreProperty, 'value' | 'title'>>>;
+type CorePropertyValues = Partial<Record<CorePropertyLabel, Pick<CoreProperty, 'value' | 'title' | 'loading' | 'showLoading'>>>;
 
 function normalizedCoreProperties(values: CorePropertyValues): CoreProperty[] {
   return CORE_PROPERTIES.flatMap(({ label, mono }) => {
     const property = values[label];
-    if (!property || property.value === '' || property.value === '—') return [];
-    return [{ label, mono, value: property.value, title: property.title }];
+    if (!property || (!property.loading && (property.value === '' || property.value === '—'))) return [];
+    return [{ label, mono, ...property }];
   });
 }
 
@@ -283,6 +317,8 @@ type InspectorSkeletonProps = {
   extras?: Array<{ label: string; value: string }>;
   action?: React.ReactNode;
   status?: { kind: 'loading' | 'error'; message: string };
+  summaryPending?: boolean;
+  showSummaryLoading?: boolean;
 };
 
 /** The inspector's invariant top stack; content state changes data, not row order. */
@@ -305,6 +341,8 @@ export function InspectorSkeleton({
   extras = [],
   action,
   status,
+  summaryPending = false,
+  showSummaryLoading = false,
 }: InspectorSkeletonProps) {
   return (
     <Shell>
@@ -327,19 +365,21 @@ export function InspectorSkeleton({
 
       {showTags && (
         <div data-inspector-section="tags">
-          <TagsSection tags={tags} onRemove={onRemoveTag} editable={Boolean(onRemoveTag)} />
+          <TagsSection tags={tags} onRemove={onRemoveTag} editable={Boolean(onRemoveTag)} pending={summaryPending} showLoading={showSummaryLoading} />
         </div>
       )}
       {showFolders && (
         <div data-inspector-section="folders">
-          <FoldersSection folders={folders} onRemove={onRemoveFolder} onNavigate={onNavigateFolder} editable={Boolean(onRemoveFolder)} />
+          <FoldersSection folders={folders} onRemove={onRemoveFolder} onNavigate={onNavigateFolder} editable={Boolean(onRemoveFolder)} pending={summaryPending} showLoading={showSummaryLoading} />
         </div>
       )}
       <div data-inspector-section="properties">
         <InspectorSection title="Properties">
           <div className={styles.propsStack} data-inspector-core-properties="">
-            <StarRating value={rating.value} onChange={rating.onChange} />
-            {coreProperties.filter((property) => property.value !== '' && property.value !== '—').map((property) => (
+            {summaryPending
+              ? <div className={styles.pendingRating}>{showSummaryLoading && <SummarySpinner label="Loading shared rating" />}</div>
+              : <StarRating value={rating.value} onChange={rating.onChange} />}
+            {coreProperties.filter((property) => property.loading || (property.value !== '' && property.value !== '—')).map((property) => (
               <div key={property.label} data-inspector-core-property={property.label}>
                 <PropertyRow {...property} />
               </div>
@@ -405,7 +445,13 @@ export function Inspector() {
   const entityData = useAtomValue(displayedInspectorItemDetailsAtom);
   const scopeVM = useAtomValue(scopeInspectorViewModelAtom);
   const sidebarNodes = useAtomValue(sidebarNodesAtom);
-  const { target: selTarget, summary } = useSelectionSummary();
+  const {
+    target: selTarget,
+    summary,
+    pending: summaryPending,
+    showLoading: showSummaryLoading,
+    failed: summaryFailed,
+  } = useSelectionSummary();
 
   if (inspectorTarget.kind === 'none') return null;
 
@@ -469,7 +515,9 @@ export function Inspector() {
       rating={{ value: summary?.stats?.rating_stats?.shared ?? 0, onChange: selTarget ? (rating) => { void entityMutations.setTargetRating(selTarget, rating); } : undefined }}
       coreProperties={normalizedCoreProperties({
         Items: { value: count.toLocaleString() },
-        Size: { value: summary?.stats?.total_size_bytes != null ? fmtSize(summary.stats.total_size_bytes) : '—' },
+        Size: summaryPending
+          ? { value: '', loading: true, showLoading: showSummaryLoading }
+          : { value: summary?.stats?.total_size_bytes != null ? fmtSize(summary.stats.total_size_bytes) : '—' },
       })}
       tags={tags}
       onRemoveTag={selTarget ? (raw) => { void entityMutations.removeTargetTags(selTarget, [raw]); } : undefined}
@@ -477,6 +525,9 @@ export function Inspector() {
       onRemoveFolder={selTarget ? (folderId) => { void entityMutations.updateTargetFolderMembership(selTarget, folderId, 'remove'); } : undefined}
       onNavigateFolder={navigateToFolder}
       action={<InspectorAutoTagAction count={count} enabled={selectionSupportsAiTagging(selTarget, summary)} />}
+      summaryPending={summaryPending}
+      showSummaryLoading={showSummaryLoading}
+      status={summaryFailed ? { kind: 'error', message: 'Could not load selection details.' } : undefined}
     />;
   }
 
@@ -591,17 +642,23 @@ const InspectorActionButton = forwardRef<HTMLButtonElement, {
   return <button ref={ref} className={buttonClass} data-inspector-action={action} data-inspector-button-primitive="action" data-inspector-button-variant={variant} data-inspector-empty-action={variant === 'empty-section' ? action : undefined} disabled={disabled} onClick={onClick} type="button">{children}</button>;
 });
 
-function TagsSection({ tags, onRemove, onNavigate, editable = true }: {
+function SummarySpinner({ label }: { label: string }) {
+  return <span className={styles.summarySpinner} data-inspector-summary-loading="" aria-label={label} />;
+}
+
+function TagsSection({ tags, onRemove, onNavigate, editable = true, pending = false, showLoading = false }: {
   tags: Array<{ ns: string; sub: string; raw: string }>;
   onRemove?: (raw: string) => void;
   onNavigate?: (tag: string) => void;
   editable?: boolean;
+  pending?: boolean;
+  showLoading?: boolean;
 }) {
   const chipMenu = useContextMenu();
   const hasTags = tags.length > 0;
   return (
-    <InspectorSection title="Tags" count={tags.length}>
-      {hasTags || editable ? <div className={styles.tagsWrap}>
+    <InspectorSection title="Tags" count={pending ? undefined : tags.length}>
+      {pending ? <div className={styles.pendingSection}>{showLoading && <SummarySpinner label="Loading shared tags" />}</div> : hasTags || editable ? <div className={styles.tagsWrap}>
         {hasTags && tags.map((t) => (
           <TagChip
             key={t.raw} namespace={t.ns} subtag={t.sub}
@@ -639,17 +696,19 @@ function TagsSection({ tags, onRemove, onNavigate, editable = true }: {
   );
 }
 
-function FoldersSection({ folders, onRemove, onNavigate, editable = true }: {
+function FoldersSection({ folders, onRemove, onNavigate, editable = true, pending = false, showLoading = false }: {
   folders: Array<{ id: number; name: string; color: string | null }>;
   onRemove?: (fid: number) => void;
   onNavigate?: (folderId: number) => void;
   editable?: boolean;
+  pending?: boolean;
+  showLoading?: boolean;
 }) {
   const chipMenu = useContextMenu();
   const hasFolders = folders.length > 0;
   return (
-    <InspectorSection title="Folders" count={folders.length}>
-      {hasFolders || editable ? <div className={styles.foldersWrap}>
+    <InspectorSection title="Folders" count={pending ? undefined : folders.length}>
+      {pending ? <div className={styles.pendingSection}>{showLoading && <SummarySpinner label="Loading shared folders" />}</div> : hasFolders || editable ? <div className={styles.foldersWrap}>
         {hasFolders && folders.map((f) => (
           <TagChip
             key={f.id} namespace="" subtag={f.name} colorRgb={hexToRgb(f.color)}

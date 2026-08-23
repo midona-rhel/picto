@@ -19,7 +19,13 @@ import {
 const store = getDefaultStore();
 
 let loadVersion = 0;
+let loadingTimer: ReturnType<typeof setTimeout> | null = null;
 
+export function cancelInspectorLoad() {
+  loadVersion += 1;
+  if (loadingTimer) clearTimeout(loadingTimer);
+  loadingTimer = null;
+}
 
 function preloadImage(src: string): Promise<void> {
   return new Promise((resolve) => {
@@ -31,11 +37,20 @@ function preloadImage(src: string): Promise<void> {
 }
 
 export async function loadInspectorData(itemId: number | null) {
-  if (itemId == null) return;
+  if (itemId == null) {
+    cancelInspectorLoad();
+    return;
+  }
 
   const v = ++loadVersion;
-  // Don't set loading or clear data — keep showing the current entity until new data arrives.
-  // This prevents the inspector from flashing empty/partial state during navigation.
+  if (loadingTimer) clearTimeout(loadingTimer);
+  loadingTimer = setTimeout(() => {
+    if (v !== loadVersion) return;
+    store.set(displayedInspectorTargetAtom, { kind: 'item', itemId });
+    store.set(displayedInspectorItemDetailsAtom, null);
+    store.set(inspectorLoadingAtom, true);
+    store.set(inspectorErrorAtom, null);
+  }, 250);
 
   try {
     const result = await invoke<ItemDetails>('items.details', { item_id: itemId });
@@ -43,13 +58,18 @@ export async function loadInspectorData(itemId: number | null) {
     const displayHash = result.media[0]?.file_hash;
     if (displayHash) await preloadImage(`media://localhost/thumb/${displayHash}.jpg`);
     if (v !== loadVersion) return;
-    // Atomic swap — old data visible until this point
+    if (loadingTimer) clearTimeout(loadingTimer);
+    loadingTimer = null;
     store.set(displayedInspectorItemDetailsAtom, result);
     store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: result.item_id });
     store.set(inspectorLoadingAtom, false);
     store.set(inspectorErrorAtom, null);
   } catch (err) {
     if (v !== loadVersion) return;
+    if (loadingTimer) clearTimeout(loadingTimer);
+    loadingTimer = null;
+    store.set(displayedInspectorTargetAtom, { kind: 'item', itemId });
+    store.set(displayedInspectorItemDetailsAtom, null);
     store.set(inspectorErrorAtom, err instanceof Error ? err.message : String(err));
     store.set(inspectorLoadingAtom, false);
   }

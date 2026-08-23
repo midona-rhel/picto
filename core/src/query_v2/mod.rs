@@ -194,39 +194,6 @@ pub struct SelectionSummary {
     pub revision: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct RatingAccumulator {
-    min: Option<i64>,
-    max: Option<i64>,
-    shared: Option<i64>,
-    saw_unrated: bool,
-}
-
-impl RatingAccumulator {
-    fn add(&mut self, rating: Option<i64>) {
-        let Some(rating) = rating else {
-            self.saw_unrated = true;
-            self.shared = None;
-            return;
-        };
-        self.min = Some(self.min.map_or(rating, |value| value.min(rating)));
-        self.max = Some(self.max.map_or(rating, |value| value.max(rating)));
-        if !self.saw_unrated && self.shared.is_none() {
-            self.shared = Some(rating);
-        } else if self.shared != Some(rating) {
-            self.shared = None;
-        }
-    }
-
-    fn finish(self) -> SelectionRatingStats {
-        SelectionRatingStats {
-            min: self.min,
-            max: self.max,
-            shared: self.shared,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ScopeCount {
@@ -275,114 +242,141 @@ pub fn details(store: &Store, item_id: ItemId) -> Result<ItemDetails, String> {
 
 pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<SelectionSummary, String> {
     store.read(|connection| {
-        let item_ids = resolve_target_ids(connection, target)?;
-        let selected_count = item_ids.len() as i64;
+        let selection = target_selection_sql(connection, target)?;
+        let parameters = selection.parameters();
         let mut mime_counts = BTreeMap::new();
-        let mut tag_root_counts = BTreeMap::<String, i64>::new();
+        let mut tag_media_counts = BTreeMap::<String, i64>::new();
         let mut folder_root_counts = BTreeMap::<i64, (String, i64)>::new();
-        let mut total_size_bytes = 0_i64;
-        let mut ratings = RatingAccumulator::default();
+        let stats_sql = format!(
+            "{}
+             SELECT
+                 (SELECT COUNT(*) FROM selected_roots),
+                 COUNT(sm.media_item_id),
+                 COALESCE(SUM(mf.size_bytes), 0),
+                 MIN(ma.rating),
+                 MAX(ma.rating),
+                 COUNT(ma.rating)
+             FROM selected_media sm
+             JOIN media_asset ma ON ma.item_id = sm.media_item_id
+             JOIN media_file mf ON mf.file_id = ma.file_id",
+            selection.with_clause
+        );
+        let (
+            selected_count,
+            selected_media_count,
+            total_size_bytes,
+            min_rating,
+            max_rating,
+            rated_count,
+        ): (i64, i64, i64, Option<i64>, Option<i64>, i64) =
+            connection.query_row(&stats_sql, parameters.as_slice(), |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            })?;
+        let rating_stats = SelectionRatingStats {
+            min: min_rating,
+            max: max_rating,
+            shared: (selected_media_count > 0
+                && rated_count == selected_media_count
+                && min_rating == max_rating)
+                .then_some(min_rating)
+                .flatten(),
+        };
 
-        for chunk in item_ids.chunks(400) {
-            let placeholders = std::iter::repeat_n("?", chunk.len())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let root_media = format!(
-                "WITH root_media(root_item_id, media_item_id) AS (
-                     SELECT lr.item_id, lr.item_id
-                     FROM library_root lr JOIN media_asset ma ON ma.item_id = lr.item_id
-                     WHERE lr.item_id IN ({placeholders})
-                     UNION ALL
-                     SELECT cm.collection_id, cm.media_item_id
-                     FROM collection_member cm
-                     WHERE cm.collection_id IN ({placeholders})
-                 )"
-            );
-            let mut root_values = Vec::with_capacity(chunk.len() * 2);
-            root_values.extend(chunk.iter().copied());
-            root_values.extend(chunk.iter().copied());
-
-            let media_sql = format!(
-                "{root_media}
-                 SELECT mf.mime_type, mf.size_bytes, ma.rating
-                 FROM root_media rm
-                 JOIN media_asset ma ON ma.item_id = rm.media_item_id
-                 JOIN media_file mf ON mf.file_id = ma.file_id"
-            );
-            for row in connection.prepare(&media_sql)?.query_map(
-                rusqlite::params_from_iter(root_values.iter()),
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, Option<i64>>(2)?,
-                    ))
-                },
-            )? {
-                let (mime_type, size_bytes, rating) = row?;
-                *mime_counts.entry(mime_type).or_insert(0) += 1;
-                total_size_bytes += size_bytes;
-                ratings.add(rating);
-            }
-
-            let tag_sql = format!(
-                "{root_media}
-                 SELECT DISTINCT rm.root_item_id,
-                    CASE WHEN t.namespace IN ('', 'general') THEN t.subtag
-                         ELSE t.namespace || ':' || t.subtag END
-                 FROM root_media rm
-                 JOIN media_tag mt ON mt.media_item_id = rm.media_item_id
-                 JOIN tag t ON t.tag_id = mt.tag_id
-                 ORDER BY rm.root_item_id, 2"
-            );
-            for row in connection
-                .prepare(&tag_sql)?
-                .query_map(rusqlite::params_from_iter(root_values.iter()), |row| {
-                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                })?
-            {
-                let (_, tag) = row?;
-                *tag_root_counts.entry(tag).or_insert(0) += 1;
-            }
-
-            let folder_sql = format!(
-                "SELECT fi.item_id, f.folder_id, f.name
-                 FROM folder_item fi JOIN folder f ON f.folder_id = fi.folder_id
-                 WHERE fi.item_id IN ({placeholders})
-                 ORDER BY f.folder_id"
-            );
-            for row in connection.prepare(&folder_sql)?.query_map(
-                rusqlite::params_from_iter(chunk.iter()),
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                },
-            )? {
-                let (_, folder_id, name) = row?;
-                let entry = folder_root_counts.entry(folder_id).or_insert((name, 0));
-                entry.1 += 1;
-            }
+        let mime_sql = format!(
+            "{}
+             SELECT mf.mime_type, COUNT(*)
+             FROM selected_media sm
+             JOIN media_asset ma ON ma.item_id = sm.media_item_id
+             JOIN media_file mf ON mf.file_id = ma.file_id
+             GROUP BY mf.mime_type",
+            selection.with_clause
+        );
+        for row in connection
+            .prepare(&mime_sql)?
+            .query_map(parameters.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+        {
+            let (mime_type, count) = row?;
+            mime_counts.insert(mime_type, count);
         }
 
+        let tags_sql = format!(
+            "{}
+             SELECT
+                 CASE WHEN t.namespace IN ('', 'general') THEN t.subtag
+                      ELSE t.namespace || ':' || t.subtag END,
+                 COUNT(DISTINCT sm.media_item_id)
+             FROM selected_media sm
+             JOIN media_tag mt ON mt.media_item_id = sm.media_item_id
+             JOIN tag t ON t.tag_id = mt.tag_id
+             GROUP BY t.namespace, t.subtag",
+            selection.with_clause
+        );
+        for row in connection
+            .prepare(&tags_sql)?
+            .query_map(parameters.as_slice(), |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?
+        {
+            let (tag, count) = row?;
+            tag_media_counts.insert(tag, count);
+        }
+
+        let folders_sql = format!(
+            "{}
+             SELECT f.folder_id, f.name, COUNT(*)
+             FROM selected_roots sr
+             JOIN folder_item fi ON fi.item_id = sr.item_id
+             JOIN folder f ON f.folder_id = fi.folder_id
+             GROUP BY f.folder_id, f.name",
+            selection.with_clause
+        );
+        for row in connection
+            .prepare(&folders_sql)?
+            .query_map(parameters.as_slice(), |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?
+        {
+            let (folder_id, name, count) = row?;
+            folder_root_counts.insert(folder_id, (name, count));
+        }
+
+        let samples_sql = format!(
+            "{} SELECT item_id FROM selected_roots ORDER BY item_id LIMIT 3",
+            selection.with_clause
+        );
+        let sample_item_ids = connection
+            .prepare(&samples_sql)?
+            .query_map(parameters.as_slice(), |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         let mut sample_hashes = Vec::new();
-        for item_id in item_ids.iter().take(3) {
-            if let Some(hash) = selection_display_hash(connection, *item_id)? {
+        for item_id in sample_item_ids {
+            if let Some(hash) = selection_display_hash(connection, item_id)? {
                 sample_hashes.push(FileHash(hash));
             }
         }
 
-        let shared_tags = tag_root_counts
+        let shared_tags = tag_media_counts
             .iter()
-            .filter(|(_, count)| **count == selected_count)
+            .filter(|(_, count)| selected_media_count > 0 && **count == selected_media_count)
             .map(|(tag, count)| SelectionTagCount {
                 tag: tag.clone(),
                 count: *count,
             })
             .collect::<Vec<_>>();
-        let mut top_tags = tag_root_counts
+        let mut top_tags = tag_media_counts
             .iter()
             .map(|(tag, count)| SelectionTagCount {
                 tag: tag.clone(),
@@ -416,11 +410,142 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
             stats: SelectionSummaryStats {
                 total_size_bytes: Some(total_size_bytes),
                 mime_counts,
-                rating_stats: ratings.finish(),
+                rating_stats,
             },
             revision: crate::store::schema::revision(connection)?,
         })
     })
+}
+
+struct TargetSelectionSql {
+    with_clause: String,
+    arguments: Vec<Box<dyn ToSql>>,
+}
+
+impl TargetSelectionSql {
+    fn parameters(&self) -> Vec<&dyn ToSql> {
+        self.arguments.iter().map(|value| value.as_ref()).collect()
+    }
+}
+
+fn target_selection_sql(
+    connection: &Connection,
+    target: &ItemTarget,
+) -> rusqlite::Result<TargetSelectionSql> {
+    match target {
+        ItemTarget::Explicit { item_ids } => {
+            let unique_ids = item_ids
+                .iter()
+                .map(|item_id| item_id.0)
+                .collect::<std::collections::HashSet<_>>();
+            if unique_ids.is_empty() || unique_ids.len() != item_ids.len() {
+                return Err(invalid_target(
+                    "An explicit target must contain unique library root IDs",
+                ));
+            }
+            let encoded = serde_json::to_string(
+                &item_ids.iter().map(|item_id| item_id.0).collect::<Vec<_>>(),
+            )
+            .map_err(|error| invalid_target(format!("Could not encode item target: {error}")))?;
+            let valid_count: i64 = connection.query_row(
+                "SELECT COUNT(*)
+                 FROM json_each(?1) target
+                 JOIN library_root lr ON lr.item_id = CAST(target.value AS INTEGER)",
+                [&encoded],
+                |row| row.get(0),
+            )?;
+            if valid_count != item_ids.len() as i64 {
+                return Err(invalid_target("A targeted item is not a library root"));
+            }
+            Ok(TargetSelectionSql {
+                with_clause: "WITH
+                    selected_roots(item_id) AS (
+                        SELECT lr.item_id
+                        FROM json_each(?1) target
+                        JOIN library_root lr ON lr.item_id = CAST(target.value AS INTEGER)
+                    ),
+                    selected_media(root_item_id, media_item_id) AS (
+                        SELECT sr.item_id, sr.item_id
+                        FROM selected_roots sr
+                        JOIN media_asset ma ON ma.item_id = sr.item_id
+                        UNION ALL
+                        SELECT sr.item_id, cm.media_item_id
+                        FROM selected_roots sr
+                        JOIN collection_member cm ON cm.collection_id = sr.item_id
+                    )"
+                .to_string(),
+                arguments: vec![Box::new(encoded)],
+            })
+        }
+        ItemTarget::Query {
+            query,
+            excluded_item_ids,
+        } => {
+            let mut arguments: Vec<Box<dyn ToSql>> = vec![Box::new(match &query.scope {
+                ItemScope::Folder { folder_id } => *folder_id,
+                _ => -1,
+            })];
+            let mut predicates = vec![scope_predicate(connection, &query.scope, &mut arguments)?];
+            apply_filters(&query.filters, &mut predicates, &mut arguments);
+            if !excluded_item_ids.is_empty() {
+                let encoded = serde_json::to_string(
+                    &excluded_item_ids
+                        .iter()
+                        .map(|item_id| item_id.0)
+                        .collect::<Vec<_>>(),
+                )
+                .map_err(|error| {
+                    invalid_target(format!("Could not encode excluded item IDs: {error}"))
+                })?;
+                let index = push_argument(&mut arguments, encoded);
+                predicates.push(format!(
+                    "NOT EXISTS (
+                        SELECT 1 FROM json_each(?{index}) excluded
+                        WHERE CAST(excluded.value AS INTEGER) = ri.item_id
+                    )"
+                ));
+            }
+            Ok(TargetSelectionSql {
+                with_clause: format!(
+                    "WITH
+                     root_items AS (
+                         SELECT lr.item_id, lr.lifecycle, li.kind, li.label,
+                                li.cover_media_item_id, li.created_at, li.updated_at,
+                                fi.position_rank AS folder_position, mv.viewed_at
+                         FROM library_root lr
+                         JOIN library_item li ON li.item_id = lr.item_id
+                         LEFT JOIN folder_item fi
+                           ON fi.item_id = lr.item_id AND fi.folder_id = ?1
+                         LEFT JOIN media_view mv ON mv.item_id = lr.item_id
+                         WHERE li.kind = 'collection'
+                            OR NOT EXISTS (
+                                SELECT 1 FROM collection_member member_root
+                                WHERE member_root.media_item_id = lr.item_id
+                            )
+                     ),
+                     root_media AS (
+                         SELECT ri.item_id AS root_item_id, ri.item_id AS media_item_id
+                         FROM root_items ri WHERE ri.kind = 'media'
+                         UNION ALL
+                         SELECT ri.item_id, cm.media_item_id
+                         FROM root_items ri
+                         JOIN collection_member cm ON cm.collection_id = ri.item_id
+                         WHERE ri.kind = 'collection'
+                     ),
+                     selected_roots(item_id) AS (
+                         SELECT ri.item_id FROM root_items ri WHERE {}
+                     ),
+                     selected_media(root_item_id, media_item_id) AS (
+                         SELECT rm.root_item_id, rm.media_item_id
+                         FROM root_media rm
+                         JOIN selected_roots sr ON sr.item_id = rm.root_item_id
+                     )",
+                    predicates.join(" AND ")
+                ),
+                arguments,
+            })
+        }
+    }
 }
 
 fn selection_display_hash(
@@ -1705,12 +1830,37 @@ mod tests {
         assert_eq!(summary.stats.mime_counts["image/jpeg"], 2);
         assert_eq!(summary.stats.mime_counts["video/mp4"], 1);
         assert_eq!(summary.stats.total_size_bytes, Some(100));
-        assert_eq!(summary.shared_tags[0].tag, "member-tag");
-        assert_eq!(summary.shared_tags[0].count, 2);
+        assert!(summary.shared_tags.is_empty());
+        assert_eq!(summary.top_tags[0].tag, "member-tag");
+        assert_eq!(summary.top_tags[0].count, 2);
         assert_eq!(summary.stats.rating_stats.min, Some(2));
         assert_eq!(summary.stats.rating_stats.max, Some(5));
+        assert_eq!(summary.stats.rating_stats.shared, None);
         assert_eq!(summary.shared_folders.len(), 1);
         assert_eq!(summary.revision, 2);
+
+        let excluded = ItemTarget::Query {
+            query: query_for(ItemScope::All),
+            excluded_item_ids: vec![ItemId(1)],
+        };
+        let excluded_summary = selection_summary(&store, &excluded).unwrap();
+        assert_eq!(excluded_summary.selected_count, 1);
+        assert_eq!(excluded_summary.stats.total_size_bytes, Some(90));
+        assert_eq!(excluded_summary.stats.mime_counts["image/jpeg"], 1);
+        assert_eq!(excluded_summary.stats.mime_counts["video/mp4"], 1);
+
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO media_tag (media_item_id, tag_id) VALUES (12, 1)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let summary = selection_summary(&store, &target).unwrap();
+        assert_eq!(summary.shared_tags[0].tag, "member-tag");
+        assert_eq!(summary.shared_tags[0].count, 3);
     }
 
     #[test]

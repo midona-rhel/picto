@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { getDefaultStore } from 'jotai';
 import { MantineProvider } from '@mantine/core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -31,6 +31,7 @@ vi.mock('../../controllers/entityMutations', () => ({
 }));
 
 import { Inspector } from './Inspector';
+import * as entityMutations from '../../controllers/entityMutations';
 import {
   displayedInspectorItemDetailsAtom,
   displayedInspectorTargetAtom,
@@ -62,8 +63,24 @@ const collection = {
   media: [entity.media[0], { ...entity.media[0], media_item_id: 12, file_hash: 'file-2', mime_type: 'video/mp4', position: 1 }],
 };
 
-function renderInspector({ target, data = null, scope = null, loading = false, error = null }: {
-  target: unknown; data?: unknown; scope?: unknown; loading?: boolean; error?: string | null;
+function renderInspector({
+  target,
+  data = null,
+  scope = null,
+  loading = false,
+  error = null,
+  selectionTarget = null,
+  selectionCount,
+  selectionFingerprint = 'test',
+}: {
+  target: unknown;
+  data?: unknown;
+  scope?: unknown;
+  loading?: boolean;
+  error?: string | null;
+  selectionTarget?: unknown;
+  selectionCount?: number;
+  selectionFingerprint?: string;
 }) {
   const values = new Map<unknown, unknown>([
     [displayedInspectorTargetAtom, target],
@@ -73,9 +90,9 @@ function renderInspector({ target, data = null, scope = null, loading = false, e
     [scopeInspectorViewModelAtom, scope],
     [sidebarNodesAtom, []],
     [gridItemsAtom, []],
-    [selectionTargetAtom, null],
-    [selectionCountAtom, target && (target as { kind?: string }).kind === 'multi' ? 2 : 0],
-    [selectionFingerprintAtom, 'test'],
+    [selectionTargetAtom, selectionTarget],
+    [selectionCountAtom, selectionCount ?? (target && (target as { kind?: string }).kind === 'multi' ? 2 : 0)],
+    [selectionFingerprintAtom, selectionFingerprint],
   ]);
   useAtomValue.mockImplementation((atom) => values.get(atom));
   return render(<MantineProvider><Inspector /></MantineProvider>);
@@ -97,6 +114,7 @@ function assertNoClassificationSections() {
 describe('Inspector presentation branches', () => {
   beforeEach(() => {
     useAtomValue.mockReset();
+    vi.mocked(entityMutations.getTargetSelectionSummary).mockReset();
     const store = getDefaultStore();
     store.set(tagSelectPortalAtom, { open: false, anchor: null });
     store.set(folderPickerPortalAtom, { open: false, anchor: null });
@@ -143,6 +161,52 @@ describe('Inspector presentation branches', () => {
     expect(document.querySelector('[title="#123456 · Click to copy"]')).toBeInTheDocument();
     expect(document.querySelector('[title="#abcdef · Click to copy"]')).toBeInTheDocument();
     view.unmount();
+  });
+
+  it('waits 250ms before showing aggregate loaders and swaps the summary atomically', async () => {
+    vi.useFakeTimers();
+    let resolveSummary: ((value: never) => void) | undefined;
+    const summaryPromise = new Promise((resolve) => { resolveSummary = resolve; });
+    vi.mocked(entityMutations.getTargetSelectionSummary).mockReturnValue(summaryPromise as never);
+    const selectionTarget = { kind: 'query', query: { scope: { kind: 'all' }, filters: {}, sort: {} }, excluded_item_ids: [] };
+    const view = renderInspector({
+      target: { kind: 'multi', count: 2, selectionMode: 'query_results' },
+      selectionTarget,
+      selectionCount: 2,
+    });
+
+    expect(document.querySelectorAll('[data-inspector-summary-loading]')).toHaveLength(0);
+    expect(document.querySelector('[data-inspector-action="add-tags"]')).not.toBeInTheDocument();
+
+    act(() => { vi.advanceTimersByTime(249); });
+    expect(document.querySelectorAll('[data-inspector-summary-loading]')).toHaveLength(0);
+    act(() => { vi.advanceTimersByTime(1); });
+    expect(document.querySelectorAll('[data-inspector-summary-loading]').length).toBeGreaterThan(0);
+
+    await act(async () => {
+      resolveSummary?.({
+        total_count: 2,
+        selected_count: 2,
+        sample_hashes: ['file-1', 'file-2'],
+        shared_tags: [{ tag: 'general:shared', count: 2 }],
+        top_tags: [{ tag: 'general:shared', count: 2 }],
+        shared_folders: [{ folder_id: 7, name: 'Shared folder' }],
+        stats: {
+          total_size_bytes: 300,
+          mime_counts: { 'image/jpeg': 2 },
+          rating_stats: { min: 3, max: 3, shared: 3 },
+        },
+        revision: 4,
+      } as never);
+      await summaryPromise;
+    });
+
+    expect(document.querySelectorAll('[data-inspector-summary-loading]')).toHaveLength(0);
+    expect(screen.getByText('shared')).toBeInTheDocument();
+    expect(screen.getByText('Shared folder')).toBeInTheDocument();
+    expect(document.querySelector('[data-inspector-core-property="Size"]')).toHaveTextContent('300 B');
+    view.unmount();
+    vi.useRealTimers();
   });
 
   it('renders a collection from ordered replacement media details', () => {

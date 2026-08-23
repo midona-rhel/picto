@@ -13,7 +13,7 @@ vi.mock('./libraryInvalidation', () => ({
 }));
 
 const loadInspectorData = vi.hoisted(() => vi.fn());
-vi.mock('../controllers/inspectorController', () => ({ loadInspectorData }));
+vi.mock('../controllers/inspectorController', () => ({ loadInspectorData, cancelInspectorLoad: vi.fn() }));
 
 import { startInspectorSettle } from './inspectorSettle';
 

@@ -422,6 +422,29 @@
   flex-direction: column;
 }
 
+.pendingSection,
+.pendingRating {
+  min-height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.summarySpinner {
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--inspector-text-secondary, var(--color-text-secondary));
+  border-right-color: transparent;
+  border-radius: 50%;
+  opacity: 0.65;
+  animation: summary-spinner 650ms linear infinite;
+}
+
+@keyframes summary-spinner {
+  to { transform: rotate(360deg); }
+}
+
 .bulkActions {
   display: flex;
   flex-wrap: wrap;
