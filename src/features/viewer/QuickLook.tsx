@@ -7,8 +7,9 @@
  */
 
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
-import { IconChevronLeft, IconChevronRight, IconX } from '@tabler/icons-react';
+import { createPortal } from 'react-dom';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { ToolbarChevronIcon, ToolbarCloseIcon } from '../../shared/ui/icons/toolbar-icons';
 import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
 import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
@@ -144,11 +145,11 @@ export function QuickLook({
   const canPrev = currentIndex > 0;
   const canNext = currentIndex < items.length - 1;
 
-  return (
-    <div className={styles.overlay}>
+  return createPortal(
+    <div className={styles.overlay} data-quick-look-overlay>
       <KbdTooltip label="Close" shortcut="Space" position="bottom">
         <button className={styles.exitBtn} onClick={() => onClose(currentHash)}>
-          <IconX size={16} />
+          <ToolbarCloseIcon />
         </button>
       </KbdTooltip>
 
@@ -187,16 +188,17 @@ export function QuickLook({
       <div className={styles.inlineToolbar}>
         <KbdTooltip label="Previous" shortcut="ArrowLeft">
           <button className={styles.navBtn} onClick={() => navigate(-1)} disabled={!canPrev}>
-            <IconChevronLeft size={18} />
+            <ToolbarChevronIcon direction="left" />
           </button>
         </KbdTooltip>
         <span className={styles.pageCounter}>{currentIndex + 1} / {total}</span>
         <KbdTooltip label="Next" shortcut="ArrowRight">
           <button className={styles.navBtn} onClick={() => navigate(1)} disabled={!canNext}>
-            <IconChevronRight size={18} />
+            <ToolbarChevronIcon direction="right" />
           </button>
         </KbdTooltip>
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

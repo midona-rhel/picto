@@ -9,20 +9,37 @@ import { useAtomValue, useSetAtom } from 'jotai';
 import { useRef, useState, useEffect, useCallback } from 'react';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import {
-  IconMinus, IconPlus, IconSearch,
-  IconAdjustments, IconFilter,
-  IconArrowLeft, IconChevronLeft, IconChevronRight,
-  IconArrowsMaximize, IconMaximize,
+  IconSearch,
 } from '@tabler/icons-react';
 import {
+  gridChromeTransitionAtom,
+  gridTransitionPhaseAtom,
   gridTargetSizeAtom,
   gridSearchTextAtom,
+  gridFiltersAtom,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import { gridPerfAtom } from '../../state/gridPerf';
 import { viewerDisplayStateAtom, viewerDisplayControlsAtom } from '../../state/viewer';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
+import {
+  TitlebarControlButton,
+  TitlebarControlGroup,
+  TitlebarControls,
+  TitlebarCounter,
+  TitlebarRangeSlider,
+  TitlebarZoomSlider,
+} from '../../shared/ui/TitlebarControls';
 import { buildViewMenuEntries } from './GridViewMenu';
+import { buildFilterMenuEntries, countActiveGridFilters } from './GridFilterMenu';
+import {
+  ToolbarActualSizeIcon,
+  ToolbarChevronIcon,
+  ToolbarFilterIcon,
+  ToolbarFitIcon,
+  ToolbarLayoutIcon,
+  ToolbarHistoryIcon,
+} from '../../shared/ui/icons/toolbar-icons';
 import styles from './GridToolbar.module.css';
 
 const ZOOM_MIN = 150;
@@ -50,25 +67,15 @@ function ZoomControls() {
 
   return (
     <div className={styles.sliderSection}>
-      <KbdTooltip label="Zoom out" shortcut="-">
-        <button className={styles.icBtn} onClick={zoomOut} disabled={targetSize <= ZOOM_MIN}>
-          <IconMinus size={16} />
-        </button>
-      </KbdTooltip>
-      <input
-        type="range"
+      <TitlebarZoomSlider
         min={ZOOM_MIN}
         max={ZOOM_MAX}
         step={10}
         value={targetSize}
-        onChange={(e) => setAndSave(Number(e.target.value))}
-        className={styles.zoomSlider}
+        onChange={setAndSave}
+        onZoomOut={zoomOut}
+        onZoomIn={zoomIn}
       />
-      <KbdTooltip label="Zoom in" shortcut="+">
-        <button className={styles.icBtn} onClick={zoomIn} disabled={targetSize >= ZOOM_MAX}>
-          <IconPlus size={16} />
-        </button>
-      </KbdTooltip>
     </div>
   );
 }
@@ -135,15 +142,20 @@ function sliderToZoom(pos: number): number {
 export function ViewerToolbar() {
   const state = useAtomValue(viewerDisplayStateAtom);
   const controls = useAtomValue(viewerDisplayControlsAtom);
-  const [sliderPos, setSliderPos] = useState(50);
   const sliderDraggingRef = useRef(false);
+  const sliderRef = useRef<HTMLInputElement>(null);
+  const zoomLabelRef = useRef<HTMLSpanElement>(null);
 
-  // Sync slider from viewer state when not dragging
   useEffect(() => {
-    if (state && !sliderDraggingRef.current) {
-      setSliderPos(zoomToSlider(state.zoomPercent));
-    }
-  }, [state?.zoomPercent]);
+    if (!controls) return;
+    return controls.subscribeZoomScale((scale) => {
+      const percent = Math.round(scale * 100);
+      if (zoomLabelRef.current) zoomLabelRef.current.textContent = `${percent}%`;
+      if (sliderRef.current && !sliderDraggingRef.current) {
+        sliderRef.current.value = String(zoomToSlider(scale * 100));
+      }
+    });
+  }, [controls]);
 
   if (!state || !controls) return null;
 
@@ -151,85 +163,98 @@ export function ViewerToolbar() {
   const canNext = state.currentIndex < state.total - 1;
 
   return (
-    <div className={styles.toolbar}>
-      <div className={styles.leftSection}>
+    <TitlebarControls
+      left={(
+        <>
         <KbdTooltip label="Back to grid" shortcut="Escape">
-          <button className={styles.icBtn} onClick={controls.close}>
-            <IconArrowLeft size={16} />
-          </button>
+          <TitlebarControlButton onClick={controls.close}>
+            <ToolbarHistoryIcon direction="back" />
+          </TitlebarControlButton>
         </KbdTooltip>
-        <span className={styles.counter}>
-          {state.currentIndex + 1} / {state.total}
-        </span>
-      </div>
-
-      <div className={styles.centerGroup}>
+        <TitlebarCounter current={state.currentIndex + 1} total={state.total} />
+        </>
+      )}
+      center={(
         <div className={styles.sliderSection}>
-          <span className={styles.zoomLabel}>{state.zoomPercent}%</span>
-          <input
-            type="range"
-            className={styles.zoomSlider}
+          <span ref={zoomLabelRef} className={styles.zoomLabel}>{state.zoomPercent}%</span>
+          <TitlebarRangeSlider
+            ref={sliderRef}
+            aria-label="Zoom"
             min={0}
             max={100}
             step={0.5}
-            value={sliderPos}
-            onChange={(e) => {
+            defaultValue={zoomToSlider(state.zoomPercent)}
+            onValueChange={(value) => {
               sliderDraggingRef.current = true;
-              const v = Number(e.target.value);
-              setSliderPos(v);
-              controls.setZoomScale(sliderToZoom(v) / 100);
+              controls.setZoomScale(sliderToZoom(value) / 100);
             }}
             onMouseUp={() => { sliderDraggingRef.current = false; }}
             onTouchEnd={() => { sliderDraggingRef.current = false; }}
+            onPointerCancel={() => { sliderDraggingRef.current = false; }}
+            onKeyUp={() => { sliderDraggingRef.current = false; }}
+            onBlur={() => { sliderDraggingRef.current = false; }}
           />
         </div>
-      </div>
-
-      <div className={styles.rightSection}>
+      )}
+      right={(
+        <>
         <KbdTooltip label="Fit to window" shortcut="`">
-          <button className={styles.icBtn} onClick={controls.fitToWindow}>
-            <IconArrowsMaximize size={14} />
-          </button>
+          <TitlebarControlButton onClick={controls.fitToWindow}>
+            <ToolbarFitIcon />
+          </TitlebarControlButton>
         </KbdTooltip>
         <KbdTooltip label="Actual size" shortcut="Mod+0">
-          <button className={styles.icBtn} onClick={controls.fitActual}>
-            <IconMaximize size={14} />
-          </button>
+          <TitlebarControlButton onClick={controls.fitActual}>
+            <ToolbarActualSizeIcon />
+          </TitlebarControlButton>
         </KbdTooltip>
-        <div className={styles.navGroup}>
+        <TitlebarControlGroup>
           <KbdTooltip label="Previous" shortcut="ArrowLeft">
-            <button
-              className={`${styles.icBtn} ${!canPrev ? styles.icBtnDisabled : ''}`}
+            <TitlebarControlButton
+              disabled={!canPrev}
               onClick={canPrev ? () => controls.navigate(-1) : undefined}
             >
-              <IconChevronLeft size={16} />
-            </button>
+              <ToolbarChevronIcon direction="left" />
+            </TitlebarControlButton>
           </KbdTooltip>
           <KbdTooltip label="Next" shortcut="ArrowRight">
-            <button
-              className={`${styles.icBtn} ${!canNext ? styles.icBtnDisabled : ''}`}
+            <TitlebarControlButton
+              disabled={!canNext}
               onClick={canNext ? () => controls.navigate(1) : undefined}
             >
-              <IconChevronRight size={16} />
-            </button>
+              <ToolbarChevronIcon direction="right" />
+            </TitlebarControlButton>
           </KbdTooltip>
-        </div>
-      </div>
-    </div>
+        </TitlebarControlGroup>
+        </>
+      )}
+    />
   );
 }
 
 export function GridToolbar() {
+  const chromeTransition = useAtomValue(gridChromeTransitionAtom);
+  const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
   const isDevHost = typeof window !== 'undefined'
     && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
   const viewMenu = useContextMenu();
+  const filterMenu = useContextMenu();
+  const filters = useAtomValue(gridFiltersAtom);
+  const activeFilterCount = countActiveGridFilters(filters);
   const viewBtnRef = useRef<HTMLButtonElement>(null);
+  const filterBtnRef = useRef<HTMLButtonElement>(null);
 
   const openViewMenu = useCallback(() => {
     const rect = viewBtnRef.current?.getBoundingClientRect();
     if (!rect) return;
     viewMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, buildViewMenuEntries());
   }, [viewMenu]);
+
+  const openFilterMenu = useCallback(() => {
+    const rect = filterBtnRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    filterMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, buildFilterMenuEntries(filterMenu.close));
+  }, [filterMenu]);
 
   const toolbarRef = useRef<HTMLDivElement>(null);
   const [toolbarWidth, setToolbarWidth] = useState(9999);
@@ -246,23 +271,29 @@ export function GridToolbar() {
   const showZoom = toolbarWidth > 300;
 
   return (
-    <div ref={toolbarRef} className={styles.toolbar}>
+    <div
+      ref={toolbarRef}
+      className={styles.toolbar}
+      data-chrome-transition={chromeTransition}
+      data-transition-phase={transitionPhase}
+    >
       <div className={styles.centerGroup} style={showZoom ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}>
         <ZoomControls />
       </div>
 
       <div className={styles.rightSection}>
-        <button
-          ref={viewBtnRef}
-          className={`${styles.icBtn} ${viewMenu.state ? styles.icBtnActive : ''}`}
-          onClick={openViewMenu}
-        >
-          <IconAdjustments size={14} style={{ transform: 'rotate(90deg)' }} />
-        </button>
+        <KbdTooltip label="View options">
+          <TitlebarControlButton ref={viewBtnRef} active={viewMenu.state != null} onClick={openViewMenu} aria-label="View options">
+            <ToolbarLayoutIcon />
+          </TitlebarControlButton>
+        </KbdTooltip>
 
-        <button className={styles.icBtn}>
-          <IconFilter size={14} />
-        </button>
+        <KbdTooltip label="Filter library">
+          <TitlebarControlButton ref={filterBtnRef} active={filterMenu.state != null || activeFilterCount > 0} onClick={openFilterMenu} aria-label="Filter library">
+            <ToolbarFilterIcon />
+            {activeFilterCount > 0 ? <span className={styles.filterBadge}>{activeFilterCount}</span> : null}
+          </TitlebarControlButton>
+        </KbdTooltip>
 
         <SearchInput />
       </div>
@@ -274,9 +305,10 @@ export function GridToolbar() {
           entries={viewMenu.state.entries}
           position={viewMenu.state.position}
           onClose={viewMenu.close}
-          searchable={false}
-          width={270}
         />
+      )}
+      {filterMenu.state && (
+        <ContextMenu entries={filterMenu.state.entries} position={filterMenu.state.position} onClose={filterMenu.close} />
       )}
     </div>
   );

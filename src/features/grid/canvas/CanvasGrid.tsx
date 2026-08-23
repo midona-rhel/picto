@@ -52,6 +52,7 @@ const LOAD_MORE_THRESHOLD_PX = 400;
 const ZOOM_BTN_SIZE = 24;
 const HOVER_PREVIEW_DELAY_MS = 200;
 const HOVER_HIDE_DELAY_MS = 90;
+const GRID_RESIZE_SETTLE_MS = 180;
 
 export interface CanvasGridProps {
   items: CanonicalEntityGridItem[];
@@ -72,7 +73,6 @@ export interface CanvasGridProps {
   onFirstPaint?: () => void;
   onScrollTopChange?: (scrollTop: number) => void;
   interactive?: boolean;
-  frozenScrollTop?: number;
   suppressTileReveal?: boolean;
   /** Restore scroll position on first paint (e.g., after back/forward navigation). */
   initialScrollTop?: number | null;
@@ -112,7 +112,6 @@ export function CanvasGrid({
   onFirstPaint,
   onScrollTopChange,
   interactive = true,
-  frozenScrollTop = 0,
   suppressTileReveal = false,
   initialScrollTop = null,
   selectedEntityHashes = EMPTY_HASH_SET,
@@ -196,9 +195,16 @@ export function CanvasGrid({
   onScrollTopChangeRef.current = onScrollTopChange;
 
   // Debounced container dimensions for layout — prevents jitter during resize
-  const [containerWidth, setContainerWidth] = useState(0);
-  const [containerHeight, setContainerHeight] = useState(0);
-  const [scrollbarWidth, setScrollbarWidth] = useState(0);
+  const [containerSize, setContainerSize] = useState({
+    width: 0,
+    height: 0,
+    scrollbarWidth: 0,
+  });
+  const {
+    width: containerWidth,
+    height: containerHeight,
+    scrollbarWidth,
+  } = containerSize;
   const [headerHeight, setHeaderHeight] = useState(0);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -389,9 +395,8 @@ export function CanvasGrid({
 
     ensureCanvasSize(canvas, vp.containerWidth, vp.viewportHeight, vp.dpr);
 
-    const rawScrollTop = interactive ? vp.scrollTop : frozenScrollTop;
     // Offset by header height — tile positions start at Y=0 but the header pushes canvas content down
-    const scrollTop = Math.max(0, rawScrollTop - headerHeight);
+    const scrollTop = Math.max(0, vp.scrollTop - headerHeight);
     const now = performance.now();
 
     ctx.save();
@@ -488,7 +493,7 @@ export function CanvasGrid({
       firstPaintRef.current = true;
       onFirstPaint?.();
     }
-  }, [layout, spatialIndex, renderItems, effectiveViewMode, fitThumbnails, showName, showExtension, showResolution, suppressTileReveal, textHeight, interactive, frozenScrollTop, headerHeight]);
+  }, [layout, spatialIndex, renderItems, effectiveViewMode, fitThumbnails, showName, showExtension, showResolution, suppressTileReveal, textHeight, headerHeight]);
 
   const drawOverlay = useCallback(() => {
     const container = containerRef.current;
@@ -504,7 +509,7 @@ export function CanvasGrid({
 
     ctx.save();
     ctx.scale(vp.dpr, vp.dpr);
-    const scrollTop = Math.max(0, (interactive ? vp.scrollTop : frozenScrollTop) - headerHeight);
+    const scrollTop = Math.max(0, vp.scrollTop - headerHeight);
 
     // Draw selection borders on all selected tiles
     if (selectedEntityHashes.size > 0) {
@@ -612,7 +617,7 @@ export function CanvasGrid({
       reorderDropRef.current == null;
 
     ctx.restore();
-  }, [layout, items, selectedEntityHashes, textHeight, interactive, frozenScrollTop, headerHeight]);
+  }, [layout, items, selectedEntityHashes, textHeight, headerHeight]);
 
   // ── RAF scheduler (legacy pattern) ──
   const frozenRef = useRef(!interactive);
@@ -627,18 +632,20 @@ export function CanvasGrid({
     drawOverlayRef,
   });
 
-  // ── Resize observer (debounced 16ms) ──
+  // ── Resize observer ──
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
+    if (!container || !interactive) return;
 
     const measure = () => {
       const w = container.clientWidth;
       const h = container.clientHeight;
       const sbw = container.offsetWidth - w;
-      setContainerWidth(w);
-      setContainerHeight(h);
-      setScrollbarWidth(sbw);
+      setContainerSize((current) => (
+        current.width === w && current.height === h && current.scrollbarWidth === sbw
+          ? current
+          : { width: w, height: h, scrollbarWidth: sbw }
+      ));
     };
 
     measure();
@@ -647,7 +654,7 @@ export function CanvasGrid({
       resizeTimerRef.current = setTimeout(() => {
         resizeTimerRef.current = null;
         measure();
-      }, 16);
+      }, GRID_RESIZE_SETTLE_MS);
     });
     observer.observe(container);
 
@@ -661,7 +668,7 @@ export function CanvasGrid({
       dprQuery.removeEventListener('change', handleDprChange);
       if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
     };
-  }, []);
+  }, [interactive]);
 
   // ── Header height observer ──
   useEffect(() => {
@@ -843,10 +850,16 @@ export function CanvasGrid({
   // ── Scroll handler ──
   const handleScroll = useCallback(() => {
     const container = containerRef.current;
-    if (!container || !interactive) return;
+    if (!container) return;
 
     const now = performance.now();
     const scrollTop = container.scrollTop;
+    if (!interactive) {
+      lastScrollTopRef.current = scrollTop;
+      onScrollTopChangeRef.current?.(scrollTop);
+      markDirty('both');
+      return;
+    }
     const delta = scrollTop - lastScrollTopRef.current;
     const elapsed = now - lastScrollTimeRef.current;
     const velocity = elapsed > 0 ? (Math.abs(delta) / elapsed) * 1000 : 0;
@@ -895,14 +908,6 @@ export function CanvasGrid({
       onLoadMoreRef.current?.();
     }
   }, [interactive, markDirty]);
-
-  // ── Frozen scroll ──
-  useEffect(() => {
-    if (!interactive && containerRef.current) {
-      containerRef.current.scrollTop = frozenScrollTop;
-      markDirty('both');
-    }
-  }, [frozenScrollTop, interactive, markDirty]);
 
   // ── Click handler ──
   const isInHeader = useCallback((target: EventTarget) => {
@@ -1329,6 +1334,7 @@ export function CanvasGrid({
         })()}
         <div
           className={styles.canvasWrap}
+          data-grid-layout
           style={{ height: `${estimatedTotalHeight - headerHeight}px` }}
         >
           <div

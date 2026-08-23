@@ -3,7 +3,7 @@
  */
 
 import { atom } from 'jotai';
-import type { CanonicalEntityGridItem, BaseScope, EntityViewQuery } from '../shared/types/canonical';
+import type { CanonicalEntityGridItem, BaseScope, EntityViewQuery, QueryFilters } from '../shared/types/canonical';
 import type { GridViewMode } from '../shared/types/grid';
 import { activeNodeIdAtom } from './navigation';
 import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
@@ -20,12 +20,15 @@ export type SortDirection = 'asc' | 'desc';
 export const gridSortFieldAtom = atom<SortField>('date_added');
 export const gridSortDirectionAtom = atom<SortDirection>('desc');
 export const gridSearchTextAtom = atom<string>('');
+export const gridFiltersAtom = atom<QueryFilters>({});
 
 export const currentGridQueryAtom = atom<EntityViewQuery>((get) => {
   const searchText = get(gridSearchTextAtom).trim();
+  const filters = get(gridFiltersAtom);
+  const hasFilters = Object.values(filters).some((value) => value != null && (!Array.isArray(value) || value.length > 0));
   return {
     base_scope: get(gridScopeAtom),
-    filters: searchText ? { search_text: searchText } : undefined,
+    filters: searchText || hasFilters ? { ...filters, search_text: searchText || undefined } : undefined,
     sort: {
       field: get(gridSortFieldAtom),
       direction: get(gridSortDirectionAtom),
@@ -65,6 +68,10 @@ export const gridActiveAtom = atom(true);
 /** Grid transition phase — inspector/toolbar freeze when not 'idle'. */
 export type GridTransitionPhase = 'idle' | 'fading_out' | 'waiting' | 'fading_in';
 export const gridTransitionPhaseAtom = atom<GridTransitionPhase>('idle');
+
+/** Whether grid-only chrome is entering or leaving a manager surface. */
+export type GridChromeTransition = 'stable' | 'leaving_grid' | 'entering_grid';
+export const gridChromeTransitionAtom = atom<GridChromeTransition>('stable');
 
 /** Pending action to execute at the midpoint of a soft fade transition. */
 export const gridSoftTransitionActionAtom = atom<(() => void) | null>(null);

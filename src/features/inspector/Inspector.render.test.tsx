@@ -42,8 +42,6 @@ import {
 } from '../../state/selection';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
 
-const coreLabels = ['Items', 'Dimensions', 'Size', 'Type', 'Duration', 'Date added', 'Date created', 'Date modified'];
-
 const entity = {
   entity_hash: 'entity-1', name: 'Example', mime_type: 'image/jpeg', size_bytes: 100,
   pixel_width: 20, pixel_height: 10, duration_ms: null, frame_count: null, has_audio: false,
@@ -72,13 +70,17 @@ function renderInspector({ target, data = null, scope = null, loading = false, e
   return render(<MantineProvider><Inspector /></MantineProvider>);
 }
 
-function assertStableAnchors() {
+function assertStableAnchors(expectedCoreLabels: string[]) {
   expect([...document.querySelectorAll('[data-inspector-anchor]')].map((node) => node.getAttribute('data-inspector-anchor')))
     .toEqual(['name', 'notes', 'source']);
   expect([...document.querySelectorAll('[data-inspector-core-property]')].map((node) => node.getAttribute('data-inspector-core-property')))
-    .toEqual(coreLabels);
-  expect([...document.querySelectorAll('[data-inspector-section]')].map((node) => node.getAttribute('data-inspector-section')).slice(0, 3))
-    .toEqual(['tags', 'folders', 'properties']);
+    .toEqual(expectedCoreLabels);
+}
+
+function assertNoClassificationSections() {
+  expect(document.querySelector('[data-inspector-section="tags"]')).not.toBeInTheDocument();
+  expect(document.querySelector('[data-inspector-section="folders"]')).not.toBeInTheDocument();
+  expect(document.querySelector('[data-inspector-empty-action]')).not.toBeInTheDocument();
 }
 
 describe('Inspector presentation branches', () => {
@@ -99,7 +101,15 @@ describe('Inspector presentation branches', () => {
 
     for (const entry of cases) {
       const view = renderInspector(entry);
-      assertStableAnchors();
+      assertStableAnchors(entry.data
+        ? ['Items', 'Dimensions', 'Size', 'Type', 'Date added', 'Date created', 'Date modified']
+        : entry.target.kind === 'multi' ? ['Items'] : []);
+      const sections = [...document.querySelectorAll('[data-inspector-section]')].map((node) => node.getAttribute('data-inspector-section'));
+      if (entry.data || entry.target.kind === 'multi') {
+        expect(sections.slice(0, 3)).toEqual(['tags', 'folders', 'properties']);
+      } else {
+        expect(sections).toEqual(['properties']);
+      }
       if (entry.unavailableSource) expect(document.querySelector('[data-inspector-anchor="source"]')).toHaveTextContent('—');
       view.unmount();
     }
@@ -139,6 +149,24 @@ describe('Inspector presentation branches', () => {
     view.unmount();
   });
 
+  it('uses compact icon-only add controls when Tags and Folders are populated', () => {
+    const populated = {
+      ...entity,
+      tags: [{ namespace: 'creator', subtag: 'Example' }],
+      folders: [{ folder_id: 1, name: 'References' }],
+    };
+    const view = renderInspector({ target: { kind: 'entity', entityHash: 'entity-1' }, data: populated });
+
+    const addTags = screen.getByRole('button', { name: 'Add Tags' });
+    const addFolder = screen.getByRole('button', { name: 'Add to Folder' });
+    expect(addTags).not.toHaveTextContent('Add Tags');
+    expect(addFolder).not.toHaveTextContent('Add to Folder');
+    expect(addTags.querySelector('svg')).toHaveAttribute('width', '15');
+    expect(addFolder.querySelector('svg')).toHaveAttribute('width', '15');
+    expect(document.querySelector('[data-inspector-empty-action]')).not.toBeInTheDocument();
+    view.unmount();
+  });
+
   it('keeps Auto Tag in inspector scroll flow with its local action variant', () => {
     const entityView = renderInspector({ target: { kind: 'entity', entityHash: 'entity-1' }, data: entity });
     const action = document.querySelector('[data-inspector-action="auto-tag"]');
@@ -162,9 +190,11 @@ describe('Inspector presentation branches', () => {
         smartFolder: kind === 'smart_folder' ? { smartFolderId: 1, parentId: null, notes: null, predicate: null, sortField: null, sortOrder: null } : null,
       };
       const view = renderInspector({ target: { kind: 'scope', nodeId: scope.node.id }, scope });
-      assertStableAnchors();
-      expect(document.querySelector('[data-inspector-anchor="source"]')).toHaveTextContent('—');
-      expect(document.querySelector('[data-inspector-empty-action]')).not.toBeInTheDocument();
+      expect([...document.querySelectorAll('[data-inspector-anchor]')].map((node) => node.getAttribute('data-inspector-anchor')))
+        .toEqual(['name', 'notes']);
+      expect([...document.querySelectorAll('[data-inspector-core-property]')].map((node) => node.getAttribute('data-inspector-core-property')))
+        .toEqual(['Items']);
+      assertNoClassificationSections();
       view.unmount();
     }
   });

@@ -7,6 +7,9 @@
   background: var(--color-bg-app);
   display: flex;
   flex-direction: column;
+  color: var(--color-text-primary);
+  font-family: var(--font-family-ui);
+  font-weight: var(--font-weight-regular);
 }
 
 /* Zoom container — the viewport for pan/zoom. overflow:hidden clips. */
@@ -47,8 +50,9 @@
 
 .navigatorViewport {
   position: absolute;
-  border: 1.5px solid rgba(255, 255, 255, 0.7);
-  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid rgba(248, 249, 251, 0.9);
+  background: rgba(248, 249, 251, 0.06);
+  box-shadow: 0 0 0 999px rgba(0, 0, 0, 0.58);
   border-radius: 2px;
   pointer-events: none;
 }

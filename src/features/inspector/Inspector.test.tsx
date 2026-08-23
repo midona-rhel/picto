@@ -24,6 +24,7 @@ function renderState(state: 'entity' | 'multi' | 'folder' | 'smart-folder' | 'sy
       name={{ value: state === 'multi' ? '2 items selected' : state === 'loading' || state === 'error' ? '—' : 'Example' }}
       notes={{ value: state === 'entity' ? 'Notes' : '—', readOnly: unavailable }}
       source={{ urls: state === 'entity' ? ['https://example.com/item'] : [], unavailable }}
+      showSource={!['folder', 'smart-folder', 'system'].includes(state)}
       rating={{ value: 0 }}
       coreProperties={coreLabels.map((label, index) => ({
         label: label as 'Items' | 'Dimensions' | 'Size' | 'Type' | 'Duration' | 'Date added' | 'Date created' | 'Date modified',
@@ -31,7 +32,9 @@ function renderState(state: 'entity' | 'multi' | 'folder' | 'smart-folder' | 'sy
         mono: label !== 'Type',
       }))}
       tags={[]}
+      showTags={!['folder', 'smart-folder', 'system', 'loading', 'error'].includes(state)}
       folders={[]}
+      showFolders={!['folder', 'smart-folder', 'system', 'loading', 'error'].includes(state)}
       status={state === 'loading' ? { kind: 'loading', message: 'Loading...' } : state === 'error' ? { kind: 'error', message: 'Unavailable' } : undefined}
     />,
   );
@@ -42,12 +45,18 @@ describe('InspectorSkeleton', () => {
     it(`keeps identity and core anchors for ${state}`, () => {
       renderState(state);
 
-      expect(document.querySelectorAll('[data-inspector-anchor]')).toHaveLength(3);
+      const expectedAnchors = ['folder', 'smart-folder', 'system'].includes(state)
+        ? ['name', 'notes']
+        : ['name', 'notes', 'source'];
       expect([...document.querySelectorAll('[data-inspector-anchor]')].map((node) => node.getAttribute('data-inspector-anchor')))
-        .toEqual(['name', 'notes', 'source']);
+        .toEqual(expectedAnchors);
       expect([...document.querySelectorAll('[data-inspector-core-property]')].map((node) => node.getAttribute('data-inspector-core-property')))
-        .toEqual(coreLabels);
+        .toEqual(['Items']);
       expect(screen.getByText('Properties')).toBeInTheDocument();
+
+      const applicable = state === 'entity' || state === 'multi';
+      expect(Boolean(document.querySelector('[data-inspector-section="tags"]'))).toBe(applicable);
+      expect(Boolean(document.querySelector('[data-inspector-section="folders"]'))).toBe(applicable);
 
       if (state === 'loading') expect(screen.getByRole('status')).toHaveTextContent('Loading...');
       if (state === 'error') expect(screen.getByRole('status')).toHaveTextContent('Unavailable');

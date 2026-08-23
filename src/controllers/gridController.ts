@@ -9,7 +9,7 @@ import {
   queryEntityView,
   reconcileEntityView,
 } from '../platform/entityApi';
-import type { BaseScope, EntityViewQuery } from '../shared/types/canonical';
+import type { BaseScope, EntityViewQuery, QueryFilters } from '../shared/types/canonical';
 import {
   getViewPrefs,
   setViewPrefs,
@@ -20,7 +20,7 @@ import type { SortField, SortDirection } from '../state/grid';
 import {
   gridScopeAtom, gridActiveAtom, gridItemsAtom, gridCursorAtom,
   gridTotalCountAtom, gridTotalSizeBytesAtom, gridLoadingAtom, gridErrorAtom,
-  gridSortFieldAtom, gridSortDirectionAtom, gridSearchTextAtom,
+  gridSortFieldAtom, gridSortDirectionAtom, gridSearchTextAtom, gridFiltersAtom,
   gridViewModeAtom, gridTargetSizeAtom,
   gridShowNameAtom, gridShowExtensionAtom, gridShowResolutionAtom,
   gridShowExtensionLabelAtom, gridFitThumbnailsAtom,
@@ -109,6 +109,14 @@ export const gridController = {
       searchDebounceTimer = null;
       void this.loadFirstPage();
     }, SEARCH_DEBOUNCE_MS);
+  },
+
+  /** Replace browse filters at the same soft-fade midpoint used by sorting. */
+  setFilters(filters: QueryFilters) {
+    store.set(gridSoftTransitionActionAtom, () => {
+      store.set(gridFiltersAtom, filters);
+      void this.loadFirstPage({ preserveItems: true });
+    });
   },
 
   /** Change sort — deferred to soft fade midpoint. */

@@ -89,6 +89,8 @@ export function MediaView({
 
   // ── Zoom/pan ──
   const zoom = useImageZoom(containerRef, imageSize, [thumbFrameRef, fullFrameRef]);
+  const zoomRef = useRef(zoom);
+  zoomRef.current = zoom;
 
   // Fit image when displayed hash changes (not when requested hash changes).
   useLayoutEffect(() => {
@@ -124,26 +126,22 @@ export function MediaView({
   }, [currentIndex, items.length, onNavigate, onLoadMore]);
 
   // ── Toolbar state ──
-  const zoomPercent = Math.round(zoom.state.scale * 100);
-
   useEffect(() => {
-    setDisplayState({ currentIndex, total, zoomPercent });
-  }, [currentIndex, total, zoomPercent, setDisplayState]);
-
-  // Zoom % updates only on committed state (after 96ms debounce).
-  // Live per-frame updates removed — settle-only is sufficient.
+    setDisplayState({ currentIndex, total, zoomPercent: Math.round(zoomRef.current.state.scale * 100) });
+  }, [currentIndex, total, setDisplayState]);
 
   useEffect(() => {
     setDisplayControls({
       close: () => onClose(currentHash),
       navigate,
-      fitToWindow: zoom.fitToWindow,
-      fitActual: zoom.fitActual,
-      zoomIn: () => zoom.animateZoomTo(zoom.state.scale * 1.25),
-      zoomOut: () => zoom.animateZoomTo(zoom.state.scale / 1.25),
-      setZoomScale: (s) => zoom.zoomTo(s),
+      fitToWindow: () => zoomRef.current.fitToWindow(),
+      fitActual: () => zoomRef.current.fitActual(),
+      zoomIn: () => zoomRef.current.animateZoomTo(zoomRef.current.state.scale * 1.25),
+      zoomOut: () => zoomRef.current.animateZoomTo(zoomRef.current.state.scale / 1.25),
+      setZoomScale: (scale) => zoomRef.current.zoomTo(scale),
+      subscribeZoomScale: (listener) => zoomRef.current.subscribeLiveScale(listener),
     });
-  }, [currentHash, navigate, onClose, zoom, setDisplayControls]);
+  }, [currentHash, navigate, onClose, setDisplayControls]);
 
   useEffect(() => () => { setDisplayState(null); setDisplayControls(null); }, [setDisplayState, setDisplayControls]);
 

@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { atom, useAtom, useAtomValue } from 'jotai';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   IconEdit,
   IconGitMerge,
+  IconBookmark,
+  IconBookmarks,
   IconPlus,
-  IconRefresh,
   IconSearch,
-  IconTag,
   IconTrash,
   IconX,
 } from '@tabler/icons-react';
@@ -22,11 +24,13 @@ import { GlassModal } from '../../shared/ui/GlassModal';
 import { ConfirmModal } from '../modals/ConfirmModal';
 import { EmptyState } from '../subscriptions/components/EmptyState';
 import { ActionButton } from '../subscriptions/components/ActionButton';
+import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
+import { tagGroupColor, tagGroupOrder, tagGroupPresentation } from './tagGroupPresentation';
 import styles from './TagManagerScreen.module.css';
 
 const PAGE_SIZE = 100;
 const PICKER_PAGE_SIZE = 40;
-const MAX_RENDERED_TAGS = PAGE_SIZE * 3;
+const tagManagerQueryAtom = atom('');
 
 type RelationMode = 'alias' | 'parent' | 'child';
 type EditorAction =
@@ -188,7 +192,7 @@ function TagEditorModal({
     <GlassModal open onClose={onClose} title="Edit tag" size="lg">
       <div className={styles.editor}>
         <div className={styles.editorIntro}>
-          <div className={styles.editorIcon}><IconTag size={18} /></div>
+          <div className={styles.editorIcon}><IconBookmark size={18} /></div>
           <div>
             <TagChip namespace={tag.namespace} subtag={tag.subtag} />
             <div className={styles.editorCount}>{tag.file_count} media items</div>
@@ -283,7 +287,7 @@ export function TagManagerScreen() {
   const [tags, setTags] = useState<CanonicalTagRecord[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [namespaces, setNamespaces] = useState<CanonicalNamespaceSummary[]>([]);
-  const [query, setQuery] = useState('');
+  const query = useAtomValue(tagManagerQueryAtom);
   const [namespace, setNamespace] = useState<string | null>(null);
   const [selected, setSelected] = useState<CanonicalTagRecord | null>(null);
   const [aliases, setAliases] = useState<CanonicalTagRelation[]>([]);
@@ -299,6 +303,9 @@ export function TagManagerScreen() {
   const summaryGeneration = useRef(0);
   const relationGeneration = useRef(0);
   const selectedRef = useRef<CanonicalTagRecord | null>(null);
+  const tagCanvasRef = useRef<HTMLDivElement>(null);
+  const [columnCount, setColumnCount] = useState(3);
+  const contextMenu = useContextMenu();
   selectedRef.current = selected;
 
   const reloadNamespaceSummary = useCallback(async () => {
@@ -350,7 +357,7 @@ export function TagManagerScreen() {
       limit: PAGE_SIZE,
     }).then((page) => {
       if (cancelled || generation !== listGeneration.current) return;
-      setTags(page.items.slice(-MAX_RENDERED_TAGS));
+      setTags(page.items);
       setCursor(page.next_cursor);
     }).catch((reason: unknown) => {
       if (!cancelled && generation === listGeneration.current) setError(errorMessage(reason));
@@ -361,6 +368,11 @@ export function TagManagerScreen() {
       cancelled = true;
     };
   }, [namespace, query, reloadToken]);
+
+  useEffect(() => {
+    setSelected(null);
+    setEditorAction(null);
+  }, [query]);
 
   useEffect(() => {
     void loadRelations(selected);
@@ -402,11 +414,6 @@ export function TagManagerScreen() {
     setEditorAction(null);
   }, []);
 
-  const handleQueryChange = useCallback((value: string) => {
-    resetBrowse();
-    setQuery(value);
-  }, [resetBrowse]);
-
   const handleNamespaceChange = useCallback((value: string | null) => {
     resetBrowse();
     setNamespace(value);
@@ -424,7 +431,7 @@ export function TagManagerScreen() {
       limit: PAGE_SIZE,
     }).then((page) => {
       if (generation !== listGeneration.current) return;
-      setTags((current) => [...current, ...page.items].slice(-MAX_RENDERED_TAGS));
+      setTags((current) => [...current, ...page.items]);
       setCursor(page.next_cursor);
     }).catch((reason: unknown) => {
       if (generation === listGeneration.current) setError(errorMessage(reason));
@@ -433,10 +440,58 @@ export function TagManagerScreen() {
     });
   }, [cursor, loadingMore, namespace, query]);
 
-  const refresh = useCallback(() => {
-    setError(null);
-    void refreshData();
-  }, [refreshData]);
+  useEffect(() => {
+    const element = tagCanvasRef.current;
+    if (!element || typeof ResizeObserver === 'undefined') return undefined;
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry?.contentRect.width ?? element.clientWidth;
+      setColumnCount(Math.max(1, Math.floor((width - 30) / 201)));
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
+  const expectedTagCount = useMemo(() => {
+    if (query.trim()) return tags.length;
+    if (namespace === null) return namespaces.reduce((sum, item) => sum + item.count, 0);
+    return namespaces.find((item) => item.namespace === namespace)?.count ?? tags.length;
+  }, [namespace, namespaces, query, tags.length]);
+
+  const virtualItemCount = cursor || loading
+    ? Math.max(tags.length, expectedTagCount)
+    : tags.length;
+  const virtualRowCount = Math.ceil(virtualItemCount / columnCount);
+  const tagVirtualizer = useVirtualizer({
+    count: virtualRowCount,
+    getScrollElement: () => tagCanvasRef.current,
+    estimateSize: () => 27,
+    overscan: 12,
+    initialRect: { width: 720, height: 540 },
+    observeElementRect: (instance, callback) => {
+      const element = instance.scrollElement;
+      if (!element) return undefined;
+      const publish = () => {
+        const rect = element.getBoundingClientRect();
+        callback({ width: rect.width || 720, height: rect.height || 540 });
+      };
+      publish();
+      const Observer = instance.targetWindow?.ResizeObserver;
+      if (!Observer) return undefined;
+      const observer = new Observer(publish);
+      observer.observe(element);
+      return () => observer.disconnect();
+    },
+  });
+  const virtualRows = tagVirtualizer.getVirtualItems();
+  const lastVirtualRowIndex = virtualRows.length > 0
+    ? virtualRows[virtualRows.length - 1].index
+    : -1;
+
+  useEffect(() => {
+    if (!cursor || loadingMore || lastVirtualRowIndex < 0) return;
+    const lastVisibleItem = (lastVirtualRowIndex + 1) * columnCount - 1;
+    if (lastVisibleItem >= tags.length - columnCount * 3) loadMore();
+  }, [columnCount, cursor, lastVirtualRowIndex, loadMore, loadingMore, tags.length]);
 
   const closeEditor = useCallback(() => {
     setEditorAction(null);
@@ -500,58 +555,65 @@ export function TagManagerScreen() {
   }, [runMutation]);
 
   const namespaceLabel = (value: string) => value || 'general';
-  const totalLoadedLabel = `${tags.length}${cursor ? '+' : ''} tags loaded`;
+  const sortedNamespaces = useMemo(
+    () => [...namespaces].sort((left, right) => tagGroupOrder(left.namespace) - tagGroupOrder(right.namespace)),
+    [namespaces],
+  );
+  const openTagContextMenu = useCallback((event: React.MouseEvent, tag: CanonicalTagRecord) => {
+    const entries: MenuEntry[] = [
+      {
+        label: 'Edit Tag',
+        icon: <IconEdit size={16} />,
+        action: () => { setSelected(tag); setEditorAction(null); },
+      },
+      {
+        label: 'Merge Into…',
+        icon: <IconGitMerge size={16} />,
+        action: () => { setSelected(tag); setEditorAction({ kind: 'merge' }); },
+      },
+      { separator: true },
+      {
+        label: 'Delete Tag',
+        icon: <IconTrash size={16} />,
+        danger: true,
+        action: () => { setSelected(tag); setEditorAction({ kind: 'delete' }); },
+      },
+    ];
+    contextMenu.open(event, entries);
+  }, [contextMenu]);
 
   return (
     <div className={styles.root}>
-      <header className={styles.header}>
-        <div>
-          <h1 className={styles.title}>Tag Manager</h1>
-          <p className={styles.subtitle}>Browse every tag, including tags with no current media.</p>
-        </div>
-        <button className={styles.iconButton} onClick={refresh} title="Refresh tags" aria-label="Refresh tags" type="button">
-          <IconRefresh size={17} />
-        </button>
-      </header>
-
-      <div className={styles.toolbar}>
-        <div className={styles.searchField}>
-          <IconSearch size={15} />
-          <input
-            value={query}
-            onChange={(event) => handleQueryChange(event.target.value)}
-            placeholder="Search tags"
-            aria-label="Search tags"
-          />
-          {query && <button onClick={() => handleQueryChange('')} aria-label="Clear tag search" type="button"><IconX size={14} /></button>}
-        </div>
-        <span className={styles.toolbarHint}>{totalLoadedLabel}</span>
-      </div>
-
       {error && <div className={styles.error} role="alert">{error}</div>}
 
       <div className={styles.content}>
-        <nav className={styles.namespaceRail} aria-label="Tag namespaces">
-          <div className={styles.railHeading}>Namespaces</div>
+        <nav className={styles.namespaceRail} aria-label="Tag groups">
+          <div className={styles.railHeading}>Groups ({namespaces.length})</div>
           <button
             className={`${styles.namespaceItem} ${namespace === null ? styles.namespaceItemActive : ''}`}
             onClick={() => handleNamespaceChange(null)}
             type="button"
           >
-            <span>All tags</span>
+            <span className={styles.groupIdentity}><IconBookmarks size={16} /><span>All tags</span></span>
             <span className={styles.namespaceCount}>{namespaces.reduce((sum, item) => sum + item.count, 0)}</span>
           </button>
-          {namespaces.map((item) => (
-            <button
-              className={`${styles.namespaceItem} ${namespace === item.namespace ? styles.namespaceItemActive : ''}`}
-              key={item.namespace || '__general__'}
-              onClick={() => handleNamespaceChange(item.namespace)}
-              type="button"
-            >
-              <span>{namespaceLabel(item.namespace)}</span>
-              <span className={styles.namespaceCount}>{item.count}</span>
-            </button>
-          ))}
+          {sortedNamespaces.map((item) => {
+            const GroupIcon = tagGroupPresentation(item.namespace).icon;
+            return (
+              <button
+                className={`${styles.namespaceItem} ${namespace === item.namespace ? styles.namespaceItemActive : ''}`}
+                key={item.namespace || '__general__'}
+                onClick={() => handleNamespaceChange(item.namespace)}
+                type="button"
+              >
+                <span className={styles.groupIdentity} style={{ color: tagGroupColor(item.namespace) }}>
+                  <GroupIcon size={16} />
+                  <span className={styles.groupName}>{namespaceLabel(item.namespace)}</span>
+                </span>
+                <span className={styles.namespaceCount}>{item.count}</span>
+              </button>
+            );
+          })}
         </nav>
 
         <section className={styles.browseSurface} aria-label="Tags">
@@ -560,34 +622,59 @@ export function TagManagerScreen() {
               <span className={styles.canvasTitle}>
                 {namespace === null ? 'All tags' : namespaceLabel(namespace)}
               </span>
+              <span className={styles.canvasCount}>
+                ({query.trim() ? `${tags.length}${cursor ? '+' : ''}` : expectedTagCount})
+              </span>
               {query && <span className={styles.canvasQuery}> matching "{query}"</span>}
             </div>
-            {loading && <span className={styles.muted}>Loading...</span>}
           </div>
-          <div className={styles.tagCanvas}>
+          <div className={styles.tagCanvas} ref={tagCanvasRef}>
             {!loading && tags.length === 0 && (
-              <EmptyState title="No tags found" description="Try a different search or namespace." />
+              <EmptyState title="No tags found" description="Try a different search or group." />
             )}
-            {tags.map((tag) => (
-              <button
-                className={styles.tagCard}
-                key={tag.tag_id}
-                onClick={() => { setSelected(tag); setEditorAction(null); }}
-                type="button"
-              >
-                <span className={styles.tagCardMark}><IconTag size={13} /></span>
-                <TagChip namespace={tag.namespace} subtag={tag.subtag} />
-                <span className={styles.tagCardCount}>{tag.file_count} media</span>
-              </button>
-            ))}
+            <div className={styles.tagListInner} style={{ height: tagVirtualizer.getTotalSize() }}>
+              {virtualRows.map((virtualRow) => (
+                <div
+                  className={styles.tagVirtualRow}
+                  key={virtualRow.key}
+                  style={{
+                    gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))`,
+                    transform: `translateY(${virtualRow.start}px)`,
+                  }}
+                >
+                  {Array.from({ length: columnCount }, (_, columnIndex) => {
+                    const itemIndex = virtualRow.index * columnCount + columnIndex;
+                    if (itemIndex >= virtualItemCount) return null;
+                    const tag = tags[itemIndex];
+                    if (!tag) return <div className={styles.tagSkeleton} key={`skeleton-${itemIndex}`} />;
+                    return (
+                      <button
+                        className={styles.tagCard}
+                        key={tag.tag_id}
+                        onClick={() => { setSelected(tag); setEditorAction(null); }}
+                        onContextMenu={(event) => openTagContextMenu(event, tag)}
+                        type="button"
+                      >
+                        <span className={styles.tagDot} style={{ background: tagGroupColor(tag.namespace) }} />
+                        <span className={styles.tagName}>{tagKey(tag)}</span>
+                        <span className={styles.tagCardCount}>({tag.file_count})</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
           </div>
-          {cursor && (
-            <button className={styles.loadMore} onClick={loadMore} disabled={loadingMore} type="button">
-              {loadingMore ? 'Loading...' : 'Load more tags'}
-            </button>
-          )}
         </section>
       </div>
+
+      {contextMenu.state && (
+        <ContextMenu
+          entries={contextMenu.state.entries}
+          position={contextMenu.state.position}
+          onClose={contextMenu.close}
+        />
+      )}
 
       {selected && (
         <TagEditorModal
@@ -637,6 +724,42 @@ export function TagManagerScreen() {
           loading={busy}
         />
       )}
+    </div>
+  );
+}
+
+export function TagsToolbar() {
+  const [query, setQuery] = useAtom(tagManagerQueryAtom);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const focusSearch = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
+        event.preventDefault();
+        inputRef.current?.focus();
+      }
+    };
+    window.addEventListener('keydown', focusSearch);
+    return () => window.removeEventListener('keydown', focusSearch);
+  }, []);
+
+  return (
+    <div className={styles.titlebarToolbar}>
+      <div className={styles.titlebarSearch}>
+        <IconSearch size={13} className={styles.titlebarSearchIcon} />
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search tags"
+          aria-label="Search tags"
+        />
+        {query && (
+          <button onClick={() => setQuery('')} aria-label="Clear tag search" type="button">
+            <IconX size={12} />
+          </button>
+        )}
+      </div>
     </div>
   );
 }

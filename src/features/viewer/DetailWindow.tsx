@@ -11,15 +11,13 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import {
-  IconArrowsMaximize,
-  IconAspectRatio,
   IconPin,
   IconPinFilled,
-  IconX,
 } from '@tabler/icons-react';
 import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { ToolbarActualSizeIcon, ToolbarCloseIcon, ToolbarFitIcon } from '../../shared/ui/icons/toolbar-icons';
 import { useImageZoom, type ImageSize, type ZoomState } from './hooks/useImageZoom';
 import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { useRecordMediaView } from './hooks/useRecordMediaView';
@@ -377,12 +375,12 @@ export function DetailWindow({ hash }: DetailWindowProps) {
                 <span className={styles.zoomRatio}>{zoomPercent}%</span>
                 <KbdTooltip label="Actual size" shortcut="Mod+0">
                   <button className={styles.icBtn} onClick={() => zoom.fitActual()}>
-                    <IconArrowsMaximize size={16} />
+                    <ToolbarActualSizeIcon />
                   </button>
                 </KbdTooltip>
                 <KbdTooltip label="Fit to window" shortcut="`">
                   <button className={styles.icBtn} onClick={() => zoom.fitToWindow()}>
-                    <IconAspectRatio size={16} />
+                    <ToolbarFitIcon />
                   </button>
                 </KbdTooltip>
               </>
@@ -402,7 +400,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
                 className={styles.icBtn}
                 onClick={() => void windowController.closeCurrentWindow()}
               >
-                <IconX size={16} />
+                <ToolbarCloseIcon />
               </button>
             </KbdTooltip>
           </div>

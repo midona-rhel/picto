@@ -1,8 +1,9 @@
-import { act, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { createStore, Provider } from 'jotai';
 import type { CanonicalTagRecord } from '../../shared/types/canonical';
-import { TagManagerScreen } from './TagManagerScreen';
+import { TagManagerScreen, TagsToolbar } from './TagManagerScreen';
 
 const mocks = vi.hoisted(() => ({
   getPaginated: vi.fn(),
@@ -75,7 +76,12 @@ beforeEach(() => {
 async function renderScreen() {
   let result: ReturnType<typeof render>;
   await act(async () => {
-    result = render(<TagManagerScreen />);
+    result = render(
+      <Provider store={createStore()}>
+        <TagsToolbar />
+        <TagManagerScreen />
+      </Provider>,
+    );
     await new Promise((resolve) => setTimeout(resolve, 20));
   });
   return result!;
@@ -105,20 +111,19 @@ function setupUser() {
 
 describe('TagManagerScreen', () => {
   it('browses zero-count tags and follows the opaque cursor', async () => {
-    const user = setupUser();
     await renderScreen();
 
-    expect(await screen.findByText('unused')).toBeInTheDocument();
-    await user.click(screen.getByRole('button', { name: 'Load more tags' }));
-    await settle();
-
-    expect(await screen.findByText('bob')).toBeInTheDocument();
-    expect(mocks.getPaginated).toHaveBeenLastCalledWith({
+    expect(await screen.findByText('character:unused')).toBeInTheDocument();
+    expect(await screen.findByText('creator:bob')).toBeInTheDocument();
+    expect(mocks.getPaginated).toHaveBeenCalledWith({
       namespace: null,
       search: null,
       cursor: 'opaque-cursor',
       limit: 100,
     });
+    expect(screen.queryByRole('button', { name: 'Load more tags' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Refresh tags' })).not.toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: 'Tag groups' })).toHaveTextContent('Groups (2)');
   });
 
   it('resets the page and closes the editor when search or namespace changes', async () => {
@@ -161,7 +166,7 @@ describe('TagManagerScreen', () => {
     await settle();
 
     expect(within(screen.getByRole('region', { name: 'Tags' })).getByText('general')).toBeInTheDocument();
-    await waitFor(() => expect(mocks.getPaginated).toHaveBeenLastCalledWith({
+    await waitFor(() => expect(mocks.getPaginated).toHaveBeenCalledWith({
       namespace: '',
       search: null,
       cursor: null,
@@ -179,12 +184,11 @@ describe('TagManagerScreen', () => {
     });
     await renderScreen();
 
-    await screen.findByText('unused');
-    await user.click(screen.getByRole('button', { name: 'Load more tags' }));
-    await settle();
+    await screen.findByText('character:unused');
+    await waitFor(() => expect(resolveStale).toBeTypeOf('function'));
     await user.type(screen.getByRole('textbox', { name: 'Search tags' }), 'bob');
     await settle();
-    await screen.findByText('bob');
+    await screen.findByText('creator:bob');
 
     await act(async () => {
       resolveStale?.({ items: [staleTag], next_cursor: null });
@@ -211,17 +215,19 @@ describe('TagManagerScreen', () => {
     await settle();
     await user.click(screen.getByRole('button', { name: 'Add alias' }));
     await settle();
-    await user.type(screen.getByPlaceholderText('Search existing tags'), 'bob');
+    const aliasDialog = screen.getByRole('dialog', { name: 'Add existing alias' });
+    await user.type(within(aliasDialog).getByPlaceholderText('Search existing tags'), 'bob');
     await settle();
-    await user.click(await screen.findByRole('button', { name: /bob/ }));
+    await user.click(await within(aliasDialog).findByRole('button', { name: /bob/ }));
     await settle();
     await waitFor(() => expect(mocks.setAlias).toHaveBeenCalledWith('creator:bob', 'character:alice'));
 
     await user.click(screen.getByRole('button', { name: 'Add parent' }));
     await settle();
-    await user.type(screen.getByPlaceholderText('Search existing tags'), 'bob');
+    const parentDialog = screen.getByRole('dialog', { name: 'Add existing parent' });
+    await user.type(within(parentDialog).getByPlaceholderText('Search existing tags'), 'bob');
     await settle();
-    await user.click(await screen.findByRole('button', { name: /bob/ }));
+    await user.click(await within(parentDialog).findByRole('button', { name: /bob/ }));
     await settle();
     await waitFor(() => expect(mocks.setImplication).toHaveBeenCalledWith('character:alice', 'creator:bob', 'add'));
     expect(mocks.getPaginated).not.toHaveBeenCalledWith(expect.objectContaining({ limit: 0 }));
@@ -262,11 +268,24 @@ describe('TagManagerScreen', () => {
     await settle();
     await user.click(screen.getByRole('button', { name: 'Merge into...' }));
     await settle();
-    await user.type(screen.getByPlaceholderText('Search existing tags'), 'bob');
+    const mergeDialog = screen.getByRole('dialog', { name: 'Merge into existing tag' });
+    await user.type(within(mergeDialog).getByPlaceholderText('Search existing tags'), 'bob');
     await settle();
-    await user.click(await screen.findByRole('button', { name: /bob/ }));
+    await user.click(await within(mergeDialog).findByRole('button', { name: /bob/ }));
     await settle();
     await waitFor(() => expect(mocks.merge).toHaveBeenCalledWith('character:alice', 'creator:bob'));
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Edit tag' })).not.toBeInTheDocument());
+  });
+
+  it('uses the shared tag context menu for every tag row', async () => {
+    await renderScreen();
+    const tag = await screen.findByRole('button', { name: /character:alice/ });
+
+    fireEvent.contextMenu(tag, { clientX: 100, clientY: 100 });
+
+    expect(await screen.findByRole('menu')).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Edit Tag' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Merge Into…' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete Tag' })).toBeInTheDocument();
   });
 });

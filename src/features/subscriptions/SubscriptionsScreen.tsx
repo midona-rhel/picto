@@ -414,7 +414,6 @@ export function SubscriptionsScreen() {
           entries={contextMenu.state.entries}
           position={contextMenu.state.position}
           onClose={contextMenu.close}
-          searchable={false}
         />
       )}
     </div>

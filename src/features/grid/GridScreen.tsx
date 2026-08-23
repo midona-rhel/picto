@@ -7,7 +7,7 @@ import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { IconPhoto, IconUpload, IconFolderPlus } from '@tabler/icons-react';
 import * as entityMutations from '../../controllers/entityMutations';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
-import { activeNodeIdAtom, skipFadeOutAtom } from '../../state/navigation';
+import { activeNodeIdAtom, displayedSurfaceNodeIdAtom, skipFadeOutAtom } from '../../state/navigation';
 import {
   gridItemsAtom,
   gridLoadingAtom,
@@ -24,6 +24,7 @@ import {
   gridTotalSizeBytesAtom,
   gridScopeAtom,
   gridTransitionPhaseAtom,
+  gridChromeTransitionAtom,
   gridSoftTransitionActionAtom,
   gridShowSubfoldersAtom,
   gridChildFoldersAtom,
@@ -75,6 +76,7 @@ import { viewerController } from '../../controllers/viewerController';
 import { nodeIdToGridScope } from '../../shared/lib/gridScope';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { ApplicationMenuButton } from '../../shared/ui/ApplicationMenuButton/ApplicationMenuButton';
+import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
 import styles from './GridScreen.module.css';
 
 const store = getDefaultStore();
@@ -99,6 +101,8 @@ function supportsExplicitImageAutoTagging(
 
 export function GridScreen() {
   const activeNodeId = useAtomValue(activeNodeIdAtom);
+  const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
+  const setDisplayedSurfaceNodeId = useSetAtom(displayedSurfaceNodeIdAtom);
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
   const items = useAtomValue(gridItemsAtom);
   const loading = useAtomValue(gridLoadingAtom);
@@ -143,19 +147,12 @@ export function GridScreen() {
   const gridLayoutRef = useRef<LayoutResult | null>(null);
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
 
-  const scrollToItem = useCallback((index: number) => {
+  const scrollToItem = useCallback((index: number, alignment: GridScrollAlignment = 'nearest') => {
     const layout = gridLayoutRef.current;
     const container = gridContainerRef.current;
-    if (!layout || !container || index < 0 || index >= layout.positions.length) return;
-    const pos = layout.positions[index];
-    if (!pos) return;
-    const scrollTop = container.scrollTop;
-    const viewportH = container.clientHeight;
-    if (pos.y < scrollTop + 16) {
-      container.scrollTop = pos.y - 16;
-    } else if (pos.y + pos.h > scrollTop + viewportH - 16) {
-      container.scrollTop = pos.y + pos.h - viewportH + 16;
-    }
+    if (!layout || !container || index < 0) return;
+    const nextScrollTop = scrollGridItemIntoView(container, layout, index, alignment);
+    if (nextScrollTop != null) lastScrollTopRef.current = nextScrollTop;
   }, []);
 
   useGridArrowNav({
@@ -273,6 +270,7 @@ export function GridScreen() {
 
   const scope = activeGridScope;
   const isGridScope = scope !== null;
+  const displayedIsGridScope = nodeIdToGridScope(displayedSurfaceNodeId) !== null;
 
   const clearTransition = useCallback(() => {
     if (transitionTimerRef.current != null) {
@@ -322,11 +320,28 @@ export function GridScreen() {
     }
 
     if (!nextScope) {
-      // Navigating to non-grid (subscriptions, etc.) — no fade, just deactivate immediately
-      if (previousScope) saveScrollPosition(previousNodeIdRef.current, lastScrollTopRef.current);
-      gridController.deactivate();
-      previousNodeIdRef.current = '';
-      clearTransition();
+      // Managers share the grid's exit → commit → enter timeline. Keep the
+      // committed surface mounted until the fade-out midpoint.
+      if (activeNodeId === previousNodeIdRef.current && !previousScope) {
+        store.set(gridChromeTransitionAtom, 'stable');
+        gridController.deactivate();
+        setDisplayedSurfaceNodeId(activeNodeId);
+        clearTransition();
+        return;
+      }
+
+      store.set(gridChromeTransitionAtom, previousScope ? 'leaving_grid' : 'stable');
+      setTransitionPhase('fading_out');
+      transitionTimerRef.current = window.setTimeout(() => {
+        transitionTimerRef.current = null;
+        const committedNodeId = pendingNodeIdRef.current;
+        if (previousScope) saveScrollPosition(previousNodeIdRef.current, lastScrollTopRef.current);
+        gridController.deactivate();
+        setDisplayedSurfaceNodeId(committedNodeId);
+        previousNodeIdRef.current = committedNodeId;
+        setTransitionPhase('waiting');
+        beginFadeIn();
+      }, SCOPE_TRANSITION_MS);
       return;
     }
 
@@ -357,12 +372,26 @@ export function GridScreen() {
       return;
     }
 
-    // Non-grid to grid: no fade-out, start in waiting for clean fade-in
-    setTransitionPhase('waiting');
-    restoredScrollTopRef.current = getScrollPosition(activeNodeId);
-    void gridController.navigateTo(nextScope);
-    previousNodeIdRef.current = activeNodeId;
-  }, [activeGridScope, activeNodeId, clearTransition]);
+    // Manager-to-grid uses the same fade-out midpoint before the grid mounts.
+    store.set(gridChromeTransitionAtom, 'stable');
+    setTransitionPhase('fading_out');
+    transitionTimerRef.current = window.setTimeout(() => {
+      transitionTimerRef.current = null;
+      const committedNodeId = pendingNodeIdRef.current;
+      const committedScope = nodeIdToGridScope(committedNodeId);
+      if (!committedScope) return;
+      restoredScrollTopRef.current = getScrollPosition(committedNodeId);
+      store.set(gridChromeTransitionAtom, 'entering_grid');
+      setDisplayedSurfaceNodeId(committedNodeId);
+      setTransitionPhase('waiting');
+      void gridController.navigateTo(committedScope);
+      previousNodeIdRef.current = committedNodeId;
+    }, SCOPE_TRANSITION_MS);
+  }, [activeGridScope, activeNodeId, beginFadeIn, clearTransition, setDisplayedSurfaceNodeId]);
+
+  useEffect(() => {
+    if (transitionPhase === 'idle') store.set(gridChromeTransitionAtom, 'stable');
+  }, [transitionPhase]);
 
   useEffect(() => {
     if (transitionPhase !== 'waiting') return;
@@ -691,8 +720,8 @@ export function GridScreen() {
   const isEmpty = items.length === 0 && !loading;
 
   const renderIncomingSurface = () => {
-    if (!isGridScope) {
-      return <ManagerSurface nodeId={activeNodeId} />;
+    if (!displayedIsGridScope) {
+      return <ManagerSurface nodeId={displayedSurfaceNodeId} />;
     }
 
     if (error) {
@@ -844,6 +873,7 @@ export function GridScreen() {
         showResolution={showResolution}
         fitThumbnails={fitThumbnails}
         totalCount={totalCount}
+        interactive={!viewerSession && !quickLookSession}
         suppressTileReveal={transitionPhase === 'fading_out' || transitionPhase === 'waiting'}
         selectedEntityHashes={selectedHashes}
         initialScrollTop={restoredScrollTopRef.current}
@@ -1115,6 +1145,11 @@ export function GridScreen() {
             if (next) {
               setQuickLookSession(next);
               setSelectedHashes(new Set([next.currentHash]));
+              const idx = items.findIndex((item) => item.entity_hash === next.currentHash);
+              if (idx >= 0) {
+                lastClickedIndexRef.current = idx;
+                scrollToItem(idx, 'center');
+              }
             }
           }}
           onClose={(exitHash) => {
