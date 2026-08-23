@@ -31,16 +31,20 @@ export function CollectionToolbar() {
             <span className={styles.separator}>/</span>
             <span className={styles.current}>{chrome.label}</span>
           </span>
-          <KbdTooltip label={editing ? 'Finish editing' : 'Edit collection'}>
-            <TitlebarControlButton
-              active={editing}
-              onClick={editing ? chrome.finishEditing : chrome.edit}
-              aria-label={editing ? 'Finish editing collection' : 'Edit collection'}
-            >
-              {editing ? <IconCheck size={16} /> : <IconEdit size={16} />}
-            </TitlebarControlButton>
-          </KbdTooltip>
         </>
+      )}
+      right={(
+        <KbdTooltip label={editing ? 'Finish editing' : 'Edit collection'}>
+          <TitlebarControlButton
+            active={editing}
+            onClick={editing ? chrome.finishEditing : chrome.edit}
+            aria-label={editing ? 'Finish editing collection' : 'Edit collection'}
+          >
+            {editing
+              ? <IconCheck size={16} stroke={1.5} />
+              : <IconEdit size={16} stroke={1.5} />}
+          </TitlebarControlButton>
+        </KbdTooltip>
       )}
     />
   );

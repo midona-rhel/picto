@@ -29,7 +29,10 @@ describe('CollectionToolbar', () => {
     expect(screen.getByText('All')).toBeInTheDocument();
     expect(screen.getByText('Morning set')).toBeInTheDocument();
     expect(screen.queryByText('Edit Collection')).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Edit collection' }));
+    const toolbar = screen.getByLabelText('Collection controls');
+    const editButton = screen.getByRole('button', { name: 'Edit collection' });
+    expect(toolbar.lastElementChild).toContainElement(editButton);
+    fireEvent.click(editButton);
     expect(edit).toHaveBeenCalledOnce();
   });
 });
