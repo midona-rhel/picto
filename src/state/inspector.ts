@@ -22,6 +22,7 @@ import {
   selectionModeAtom,
 } from './selection';
 import { sidebarNodesAtom } from './sidebar';
+import { viewerSessionAtom } from './viewer';
 
 export type InspectorTarget =
   | { kind: 'none' }
@@ -41,6 +42,8 @@ export type DisplayedGridSnapshot = {
 
 export const liveInspectorTargetAtom = atom<InspectorTarget>((get) => {
   if (!get(gridActiveAtom)) return { kind: 'none' };
+  const viewerSession = get(viewerSessionAtom);
+  if (viewerSession) return { kind: 'item', itemId: viewerSession.currentItemId };
   const selection = get(gridSelectionAtom);
   const selectionMode = get(selectionModeAtom);
   const selectionCount = get(selectionCountAtom);

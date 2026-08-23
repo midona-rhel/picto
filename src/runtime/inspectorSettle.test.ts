@@ -8,6 +8,7 @@ import {
 import { gridSessionAtom } from '../state/grid';
 import { activeNodeIdAtom } from '../state/navigation';
 import { emptyGridSelection, gridSelectionAtom } from '../state/selection';
+import { viewerSessionAtom } from '../state/viewer';
 
 const { callbacks } = vi.hoisted(() => ({ callbacks: new Map<string, () => void>() }));
 vi.mock('./libraryInvalidation', () => ({
@@ -34,6 +35,7 @@ describe('inspector invalidation', () => {
     store.set(displayedInspectorTargetAtom, { kind: 'none' });
     store.set(inspectorPinnedAtom, false);
     store.set(gridSelectionAtom, emptyGridSelection());
+    store.set(viewerSessionAtom, null);
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: false });
   });
 
@@ -79,6 +81,24 @@ describe('inspector invalidation', () => {
       kind: 'scope',
       nodeId: 'system:active',
     });
+    stop();
+  });
+
+  it('inspects the open detail root instead of a selected collection member', () => {
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      active: true,
+    });
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(),
+      itemIds: new Set([2]),
+      anchor: { kind: 'item', id: 2 },
+    });
+    const stop = startInspectorSettle();
+
+    store.set(viewerSessionAtom, { currentIndex: 0, currentItemId: 17 });
+
+    expect(loadInspectorData).toHaveBeenLastCalledWith(17);
     stop();
   });
 });
