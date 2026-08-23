@@ -47,6 +47,7 @@ pub struct ReorderCollectionInput {
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct MediaMetadataPatch {
+    #[ts(type = "number | null")]
     pub rating: Option<Option<i64>>,
     pub notes: Option<Option<String>>,
     pub source_urls: Option<Vec<String>>,

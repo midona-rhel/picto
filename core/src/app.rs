@@ -85,6 +85,7 @@ pub struct ItemFilters {
     pub include_tags: Vec<String>,
     #[serde(default)]
     pub exclude_tags: Vec<String>,
+    #[ts(type = "number | null")]
     pub minimum_rating: Option<i64>,
     pub mime_prefix: Option<String>,
     pub text: Option<String>,

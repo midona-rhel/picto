@@ -8,14 +8,17 @@ use std::collections::HashSet;
 
 use rusqlite::{types::Value, Connection};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SmartFolderPredicate {
     #[serde(default)]
     pub groups: Vec<SmartRuleGroup>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SmartRuleGroup {
     #[serde(default)]
     pub match_mode: MatchMode,
@@ -25,7 +28,8 @@ pub struct SmartRuleGroup {
     pub rules: Vec<PredicateRule>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 #[serde(rename_all = "snake_case")]
 pub enum MatchMode {
     #[default]
@@ -33,13 +37,16 @@ pub enum MatchMode {
     Any,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct PredicateRule {
     pub field: String,
     pub op: String,
     #[serde(default)]
+    #[ts(type = "unknown")]
     pub value: Option<serde_json::Value>,
     #[serde(default)]
+    #[ts(type = "unknown")]
     pub value2: Option<serde_json::Value>,
     #[serde(default)]
     pub values: Option<Vec<String>>,

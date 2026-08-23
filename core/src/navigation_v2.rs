@@ -6,30 +6,38 @@ use chrono::Utc;
 use rand::RngCore;
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::app::{resources, Application, MutationReceipt};
 use crate::smart_v2::SmartFolderPredicate;
 
 const RANK_GAP: i64 = 1024;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct FolderNavigationItem {
+    #[ts(type = "number")]
     pub folder_id: i64,
     pub name: String,
+    #[ts(type = "number | null")]
     pub parent_id: Option<i64>,
     pub icon: Option<String>,
     pub color: Option<String>,
     pub notes: Option<String>,
+    #[ts(type = "number")]
     pub sort_rank: i64,
     pub watch_path: Option<String>,
     pub watch_enabled: bool,
     pub watch_subfolders: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SmartFolderNavigationItem {
+    #[ts(type = "number")]
     pub smart_folder_id: i64,
     pub name: String,
+    #[ts(type = "number | null")]
     pub parent_id: Option<i64>,
     pub icon: Option<String>,
     pub color: Option<String>,
@@ -37,19 +45,24 @@ pub struct SmartFolderNavigationItem {
     pub predicate: SmartFolderPredicate,
     pub sort_field: Option<String>,
     pub sort_order: Option<String>,
+    #[ts(type = "number")]
     pub display_order: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct NavigationSnapshot {
     pub folders: Vec<FolderNavigationItem>,
     pub smart_folders: Vec<SmartFolderNavigationItem>,
+    #[ts(type = "number")]
     pub revision: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct CreateSmartFolderInput {
     pub name: String,
+    #[ts(type = "number | null")]
     pub parent_id: Option<i64>,
     pub predicate: SmartFolderPredicate,
     pub icon: Option<String>,
@@ -59,11 +72,15 @@ pub struct CreateSmartFolderInput {
     pub sort_order: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SmartFolderMutationReceipt {
     pub receipt: MutationReceipt,
+    #[ts(type = "number[]")]
     pub smart_folder_ids: Vec<i64>,
+    #[ts(type = "number[]")]
     pub deleted_smart_folder_ids: Vec<i64>,
+    #[ts(type = "number | null")]
     pub fallback_smart_folder_id: Option<i64>,
 }
 

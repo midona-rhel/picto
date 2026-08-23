@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use chrono::Utc;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::app::{resources, Application, FileHash, ItemTarget, MutationReceipt};
 use crate::blob_store::{mime_to_extension, BlobStore};
@@ -19,9 +20,11 @@ use crate::media_processing_v2;
 use crate::store::Store;
 use crate::workers_v2::WorkKind;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ResolvedFilePath {
     pub file_hash: FileHash,
+    #[ts(type = "string")]
     pub path: PathBuf,
 }
 
@@ -77,7 +80,8 @@ pub fn resolve_file_paths(
 ///
 /// Existing thumbnails are treated as success, so retries and repeated
 /// protocol requests are safe and do not create duplicate generation paths.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct EnsureThumbnailResult {
     pub created: bool,
 }
@@ -103,7 +107,8 @@ pub async fn ensure_thumbnail(
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ThumbnailQueueResult {
     pub requested: usize,
     pub enqueued: usize,
@@ -168,7 +173,8 @@ pub fn enqueue_thumbnail_regeneration(
     })
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 #[serde(rename_all = "lowercase")]
 pub enum ExportFormat {
     Original,
@@ -184,9 +190,11 @@ impl Default for ExportFormat {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ExportRequest {
     pub target: ItemTarget,
+    #[ts(type = "string")]
     pub output_dir: PathBuf,
     pub format: ExportFormat,
     pub quality: u8,
@@ -195,7 +203,8 @@ pub struct ExportRequest {
     pub keep_aspect: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ExportResult {
     pub selected_item_count: usize,
     pub selected_media_count: usize,

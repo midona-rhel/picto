@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rusqlite::{params, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::app::{
     FileHash, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope, ItemTarget, Lifecycle,
@@ -17,9 +18,12 @@ use crate::store::Store;
 const DEFAULT_PAGE_LIMIT: i64 = 100;
 const MAX_PAGE_LIMIT: i64 = 500;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ItemPageRequest {
+    #[ts(type = "number")]
     pub offset: i64,
+    #[ts(type = "number")]
     pub limit: i64,
 }
 
@@ -45,7 +49,8 @@ impl ItemPageRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ItemSummary {
     pub item_id: ItemId,
     pub kind: ItemKind,
@@ -54,85 +59,122 @@ pub struct ItemSummary {
     pub name: Option<String>,
     pub mime_type: Option<String>,
     pub file_hash: Option<FileHash>,
+    #[ts(type = "number")]
     pub size_bytes: i64,
+    #[ts(type = "number | null")]
     pub rating: Option<i64>,
     pub captured_at: Option<String>,
     pub imported_at: Option<String>,
     pub cover_media_item_id: Option<ItemId>,
     pub cover_mime_type: Option<String>,
     pub cover_file_hash: Option<FileHash>,
+    #[ts(type = "number | null")]
     pub cover_size_bytes: Option<i64>,
+    #[ts(type = "number")]
     pub collection_member_count: i64,
+    #[ts(type = "number")]
     pub total_size_bytes: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ItemPage {
     pub items: Vec<ItemSummary>,
+    #[ts(type = "number")]
     pub revision: u64,
+    #[ts(type = "number")]
     pub visible_item_count: i64,
+    #[ts(type = "number")]
     pub visible_media_count: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct MediaDetails {
     pub media_item_id: ItemId,
     pub file_hash: FileHash,
     pub mime_type: String,
+    #[ts(type = "number")]
     pub size_bytes: i64,
+    #[ts(type = "number | null")]
     pub pixel_width: Option<i64>,
+    #[ts(type = "number | null")]
     pub pixel_height: Option<i64>,
+    #[ts(type = "number | null")]
     pub duration_ms: Option<i64>,
+    #[ts(type = "number | null")]
     pub frame_count: Option<i64>,
     pub has_audio: bool,
     pub name: Option<String>,
     pub notes: Option<String>,
+    #[ts(type = "number | null")]
     pub rating: Option<i64>,
     pub source_urls: Vec<String>,
     pub captured_at: Option<String>,
     pub imported_at: String,
+    #[ts(type = "number")]
     pub position: i64,
     pub tags: Vec<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ItemDetails {
     pub item_id: ItemId,
     pub kind: ItemKind,
     pub lifecycle: Lifecycle,
     pub label: Option<String>,
     pub cover_media_item_id: Option<ItemId>,
+    #[ts(type = "number[]")]
     pub folder_ids: Vec<i64>,
     pub media: Vec<MediaDetails>,
     pub aggregate_tags: Vec<String>,
+    #[ts(type = "number")]
     pub revision: u64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SelectionSummary {
+    #[ts(type = "number")]
     pub visible_item_count: i64,
+    #[ts(type = "number")]
     pub visible_media_count: i64,
+    #[ts(type = "number")]
     pub total_size_bytes: i64,
+    #[ts(type = "number")]
     pub revision: u64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ScopeCount {
+    #[ts(type = "number")]
     pub id: i64,
+    #[ts(type = "number")]
     pub count: i64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SidebarCounts {
+    #[ts(type = "number")]
     pub all: i64,
+    #[ts(type = "number")]
     pub inbox: i64,
+    #[ts(type = "number")]
     pub trash: i64,
+    #[ts(type = "number")]
     pub recently_viewed: i64,
+    #[ts(type = "number")]
     pub untagged: i64,
+    #[ts(type = "number")]
     pub uncategorized: i64,
+    #[ts(type = "number")]
     pub duplicates: i64,
     pub folders: Vec<ScopeCount>,
     pub smart_folders: Vec<ScopeCount>,
+    #[ts(type = "number")]
     pub revision: u64,
 }
 

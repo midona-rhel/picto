@@ -1,31 +1,40 @@
 //! Persisted background-task status for renderer progress and notifications.
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::app::Application;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct QueueCounts {
+    #[ts(type = "number")]
     pub pending: i64,
+    #[ts(type = "number")]
     pub running: i64,
+    #[ts(type = "number")]
     pub failed: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct TaskIssue {
     pub source: String,
+    #[ts(type = "number")]
     pub task_id: i64,
     pub kind: String,
     pub message: String,
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct TaskSnapshot {
     pub ingest: QueueCounts,
     pub background: QueueCounts,
     pub subscriptions: QueueCounts,
     pub issues: Vec<TaskIssue>,
+    #[ts(type = "number")]
     pub revision: u64,
 }
 

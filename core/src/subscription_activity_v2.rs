@@ -8,6 +8,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::store::Store;
 
@@ -18,19 +19,29 @@ const MAX_PAGE_SIZE: usize = 100;
 /// These are independent facts, not a forced partition. For example, an item
 /// can be counted as downloaded and failed when its bytes arrived but its
 /// durable ingest job later failed.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ActivityCounts {
+    #[ts(type = "number")]
     pub fetched: i64,
+    #[ts(type = "number")]
     pub downloaded: i64,
+    #[ts(type = "number")]
     pub queued: i64,
+    #[ts(type = "number")]
     pub ingested: i64,
+    #[ts(type = "number")]
     pub failed: i64,
+    #[ts(type = "number")]
     pub deleted: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionRunSummary {
+    #[ts(type = "number")]
     pub run_id: i64,
+    #[ts(type = "number")]
     pub subscription_id: i64,
     pub requested_by: String,
     pub status: String,
@@ -39,47 +50,63 @@ pub struct SubscriptionRunSummary {
     pub failure_kind: Option<String>,
     pub error_message: Option<String>,
     pub created_at: String,
+    #[ts(type = "number")]
     pub query_count: i64,
     pub counts: ActivityCounts,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionRunList {
+    #[ts(type = "number")]
     pub subscription_id: i64,
     pub runs: Vec<SubscriptionRunSummary>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct IngestAttempt {
+    #[ts(type = "number")]
     pub ingest_job_id: i64,
     pub status: String,
+    #[ts(type = "number")]
     pub attempt_count: i64,
     pub available_at: String,
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SourceItemActivity {
+    #[ts(type = "number")]
     pub source_item_id: i64,
+    #[ts(type = "number")]
     pub source_post_id: i64,
     pub site_id: String,
     pub post_key: String,
     pub item_key: String,
+    #[ts(type = "number")]
     pub position: i64,
+    #[ts(type = "number | null")]
     pub media_item_id: Option<i64>,
     pub state: String,
     pub last_error: Option<String>,
     pub ingest: Option<IngestAttempt>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionQueryActivity {
+    #[ts(type = "number")]
     pub run_query_id: i64,
+    #[ts(type = "number")]
     pub run_id: i64,
+    #[ts(type = "number")]
     pub query_id: i64,
     pub site_id: String,
     pub query_text: String,
     pub status: String,
+    #[ts(type = "number")]
     pub attempt_count: i64,
     pub started_at: Option<String>,
     pub finished_at: Option<String>,
@@ -90,25 +117,33 @@ pub struct SubscriptionQueryActivity {
     pub source_items_truncated: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionRunActivity {
     pub summary: SubscriptionRunSummary,
     pub queries: Vec<SubscriptionQueryActivity>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct CurrentSubscriptionProgress {
+    #[ts(type = "number")]
     pub subscription_id: i64,
+    #[ts(type = "number")]
     pub run_id: i64,
     pub status: String,
     pub counts: ActivityCounts,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionIssue {
+    #[ts(type = "number")]
     pub issue_id: i64,
     pub issue_key: String,
+    #[ts(type = "number")]
     pub subscription_id: i64,
+    #[ts(type = "number | null")]
     pub query_id: Option<i64>,
     pub issue_kind: String,
     pub message: String,
@@ -119,23 +154,30 @@ pub struct SubscriptionIssue {
     pub resolved_at: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct IssueCursor {
     pub last_seen_at: String,
+    #[ts(type = "number")]
     pub issue_id: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct IssuePageRequest {
+    #[ts(type = "number")]
     pub subscription_id: i64,
+    #[ts(type = "number | null")]
     pub query_id: Option<i64>,
     pub open_only: bool,
     pub cursor: Option<IssueCursor>,
     pub limit: usize,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct IssuePage {
+    #[ts(type = "number")]
     pub subscription_id: i64,
     pub issues: Vec<SubscriptionIssue>,
     pub next_cursor: Option<IssueCursor>,

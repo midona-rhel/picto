@@ -11,17 +11,24 @@ use chrono::Utc;
 use img_hash::ImageHash;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::app::{resources, Application, FileHash, ItemId, MutationReceipt};
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct FileQuality {
+    #[ts(type = "number")]
     pub file_id: i64,
     pub file_hash: FileHash,
     pub mime_type: String,
+    #[ts(type = "number")]
     pub size_bytes: i64,
+    #[ts(type = "number | null")]
     pub pixel_width: Option<i64>,
+    #[ts(type = "number | null")]
     pub pixel_height: Option<i64>,
+    #[ts(type = "number | null")]
     pub frame_count: Option<i64>,
     /// Optional decoded evidence supplied by a media analysis worker.
     pub decoded_information: Option<f64>,
@@ -69,7 +76,8 @@ fn materially_greater(value: f64, reference: f64) -> bool {
         && (reference <= 0.0 || value >= reference * 1.20)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub enum QualityDecision {
     LeftBetter,
     RightBetter,
@@ -314,9 +322,12 @@ fn find_candidate_pairs(
     pairs
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct DuplicateCandidate {
+    #[ts(type = "number")]
     pub file_id_a: i64,
+    #[ts(type = "number")]
     pub file_id_b: i64,
     pub distance: u32,
     pub left: CandidateSide,
@@ -324,26 +335,34 @@ pub struct DuplicateCandidate {
     pub decision: QualityDecision,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct CandidateSide {
     pub file: FileQuality,
     pub item_ids: Vec<ItemId>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct DuplicateScanResult {
+    #[ts(type = "number")]
     pub candidate_count: usize,
     pub affected_item_ids: Vec<ItemId>,
     pub receipt: MutationReceipt,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub enum ResolutionChoice {
     KeepBoth,
-    KeepFile { winner_file_id: i64 },
+    KeepFile {
+        #[ts(type = "number")]
+        winner_file_id: i64,
+    },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ResolutionResult {
     pub choice: ResolutionChoice,
     pub affected_item_ids: Vec<ItemId>,

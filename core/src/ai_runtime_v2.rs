@@ -7,6 +7,7 @@
 use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::ai_tagger::inference::{TagPrediction, Thresholds};
 use crate::ai_tagger::models::{self, ModelInfo};
@@ -27,7 +28,8 @@ struct MediaOriginal {
 }
 
 /// Read-only model state exposed by the replacement AI runtime.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 #[serde(rename_all = "camelCase")]
 pub struct AiModelStatus {
     pub slug: String,
@@ -37,24 +39,36 @@ pub struct AiModelStatus {
     pub session_loaded: bool,
     pub recommended: bool,
     pub heavy: bool,
+    #[ts(type = "number")]
     pub size_bytes: u64,
     pub dataset: String,
 }
 
 /// Replacement AI status derived from settings, the model bundle, and the
 /// in-process session cache. No download or mutation state is implied.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 #[serde(rename_all = "camelCase")]
 pub struct AiRuntimeStatus {
     pub models: Vec<AiModelStatus>,
     pub configured_model_slugs: Vec<String>,
-    pub thresholds: Thresholds,
+    pub thresholds: AiThresholds,
     pub cached_backend: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct AiTagPrediction {
+    pub tag: String,
+    pub namespace: String,
+    pub confidence: f32,
+    pub model: String,
 }
 
 /// Read-only manual prediction request. Item IDs are logical replacement
 /// identities; physical file hashes never cross this boundary.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 #[serde(rename_all = "camelCase")]
 pub struct ManualPredictionRequest {
     pub item_ids: Vec<ItemId>,
@@ -62,20 +76,33 @@ pub struct ManualPredictionRequest {
     pub model_slugs: Option<Vec<String>>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 #[serde(rename_all = "camelCase")]
 pub struct MediaPrediction {
     pub media_item_id: ItemId,
-    pub predictions: Vec<TagPrediction>,
+    pub predictions: Vec<AiTagPrediction>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 #[serde(rename_all = "camelCase")]
 pub struct ManualPredictionResponse {
     pub predictions: Vec<MediaPrediction>,
-    pub thresholds: Thresholds,
+    pub thresholds: AiThresholds,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct AiThresholds {
+    pub general: f32,
+    pub character: f32,
+    pub copyright: f32,
+    pub artist: f32,
+    pub species: f32,
+    pub rating: f32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,7 +143,7 @@ pub async fn model_status(application: &Application) -> Result<AiRuntimeStatus, 
     Ok(AiRuntimeStatus {
         models,
         configured_model_slugs,
-        thresholds: thresholds_from_settings(&settings),
+        thresholds: public_thresholds(&thresholds_from_settings(&settings)),
         cached_backend,
     })
 }
@@ -175,7 +202,15 @@ pub async fn manual_predict(
         results.push(match result {
             Ok(predictions) => MediaPrediction {
                 media_item_id,
-                predictions,
+                predictions: predictions
+                    .into_iter()
+                    .map(|prediction| AiTagPrediction {
+                        tag: prediction.tag,
+                        namespace: prediction.namespace,
+                        confidence: prediction.confidence,
+                        model: prediction.model,
+                    })
+                    .collect(),
                 error: None,
             },
             Err(error) => MediaPrediction {
@@ -188,7 +223,7 @@ pub async fn manual_predict(
 
     Ok(ManualPredictionResponse {
         predictions: results,
-        thresholds,
+        thresholds: public_thresholds(&thresholds),
     })
 }
 
@@ -493,6 +528,17 @@ fn thresholds_from_settings(settings: &serde_json::Value) -> Thresholds {
         artist: setting_threshold(settings, "aiThresholdArtist", 0.85),
         species: setting_threshold(settings, "aiThresholdSpecies", 0.35),
         rating: setting_threshold(settings, "aiThresholdRating", 0.50),
+    }
+}
+
+fn public_thresholds(thresholds: &Thresholds) -> AiThresholds {
+    AiThresholds {
+        general: thresholds.general,
+        character: thresholds.character,
+        copyright: thresholds.copyright,
+        artist: thresholds.artist,
+        species: thresholds.species,
+        rating: thresholds.rating,
     }
 }
 

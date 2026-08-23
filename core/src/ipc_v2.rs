@@ -6,6 +6,7 @@
 
 use chrono::Utc;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::app::{
     Application, FileHash, ItemId, ItemQuery, ItemTarget, Lifecycle, MutationReceipt,
@@ -608,8 +609,9 @@ impl SmartReceipt for SmartFolderMutationReceipt {
     }
 }
 
-#[derive(Serialize)]
-struct CreatedFolder {
+#[derive(Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct CreatedFolder {
     folder_id: FolderId,
     receipt: FolderMutationReceipt,
 }
@@ -619,8 +621,10 @@ impl FolderReceipt for CreatedFolder {
     }
 }
 
-#[derive(Serialize)]
-struct CreatedSmartFolder {
+#[derive(Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct CreatedSmartFolder {
+    #[ts(type = "number")]
     smart_folder_id: i64,
     receipt: SmartFolderMutationReceipt,
 }
@@ -630,18 +634,24 @@ impl SmartReceipt for CreatedSmartFolder {
     }
 }
 
-#[derive(Serialize)]
-struct CreatedSubscription {
+#[derive(Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct CreatedSubscription {
+    #[ts(type = "number")]
     subscription_id: i64,
     receipt: MutationReceipt,
 }
-#[derive(Serialize)]
-struct CreatedSubscriptionQuery {
+#[derive(Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct CreatedSubscriptionQuery {
+    #[ts(type = "number")]
     query_id: i64,
     receipt: MutationReceipt,
 }
-#[derive(Serialize)]
-struct CreatedSubscriptionRun {
+#[derive(Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct CreatedSubscriptionRun {
+    #[ts(type = "number")]
     run_id: i64,
     created: bool,
     receipt: MutationReceipt,
@@ -650,224 +660,301 @@ receipt_field!(CreatedSubscription);
 receipt_field!(CreatedSubscriptionQuery);
 receipt_field!(CreatedSubscriptionRun);
 
-#[derive(Deserialize)]
-struct QueryItemsInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct QueryItemsInput {
     query: ItemQuery,
     page: ItemPageRequest,
 }
-#[derive(Deserialize)]
-struct ItemInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ItemInput {
     item_id: ItemId,
 }
-#[derive(Deserialize)]
-struct FileHashInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct FileHashInput {
     file_hash: FileHash,
 }
-#[derive(Deserialize)]
-struct FileHashesInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct FileHashesInput {
     file_hashes: Vec<FileHash>,
 }
-#[derive(Deserialize)]
-struct TargetInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct TargetInput {
     target: ItemTarget,
 }
-#[derive(Deserialize)]
-struct LifecycleInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct LifecycleInput {
     target: ItemTarget,
     lifecycle: Lifecycle,
 }
-#[derive(Deserialize)]
-struct FolderMembershipInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct FolderMembershipInput {
     target: ItemTarget,
+    #[ts(type = "number")]
     folder_id: i64,
     present: bool,
 }
-#[derive(Deserialize)]
-struct CollectionCoverInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct CollectionCoverInput {
     collection_id: ItemId,
     media_item_id: ItemId,
 }
-#[derive(Deserialize)]
-struct ApplyTagsInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ApplyTagsInput {
     target: ItemTarget,
     tags: Vec<String>,
     add: bool,
     #[serde(default = "default_provenance_mask")]
+    #[ts(type = "number")]
     provenance_mask: i64,
 }
-#[derive(Deserialize)]
-struct PatchMetadataInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct PatchMetadataInput {
     target: ItemTarget,
     patch: MediaMetadataPatch,
 }
-#[derive(Deserialize)]
-struct ListTagsInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ListTagsInput {
     namespace: Option<String>,
     search: Option<String>,
     cursor: Option<String>,
     #[serde(default = "default_limit")]
+    #[ts(type = "number")]
     limit: i64,
 }
-#[derive(Deserialize)]
-struct TagInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct TagInput {
+    #[ts(type = "number")]
     tag_id: i64,
 }
-#[derive(Deserialize)]
-struct TagAliasInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct TagAliasInput {
+    #[ts(type = "number")]
     from_tag_id: i64,
+    #[ts(type = "number | null")]
     to_tag_id: Option<i64>,
 }
-#[derive(Deserialize)]
-struct TagImplicationInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct TagImplicationInput {
+    #[ts(type = "number")]
     child_tag_id: i64,
+    #[ts(type = "number")]
     parent_tag_id: i64,
     present: bool,
 }
-#[derive(Deserialize)]
-struct RenameTagInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct RenameTagInput {
+    #[ts(type = "number")]
     tag_id: i64,
     name: String,
 }
-#[derive(Deserialize)]
-struct LimitInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct LimitInput {
     #[serde(default = "default_limit")]
+    #[ts(type = "number")]
     limit: i64,
 }
-#[derive(Deserialize)]
-struct ScanDuplicatesInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ScanDuplicatesInput {
     #[serde(default = "default_distance_threshold")]
+    #[ts(type = "number")]
     distance_threshold: u32,
 }
-#[derive(Deserialize)]
-struct ResolveDuplicateInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ResolveDuplicateInput {
+    #[ts(type = "number")]
     file_id_a: i64,
+    #[ts(type = "number")]
     file_id_b: i64,
     choice: ResolutionChoice,
 }
-#[derive(Deserialize)]
-struct AutomaticDuplicateInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct AutomaticDuplicateInput {
     candidate: DuplicateCandidate,
 }
-#[derive(Deserialize)]
-struct FolderInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct FolderInput {
     folder_id: FolderId,
 }
-#[derive(Deserialize)]
-struct RenameFolderInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct RenameFolderInput {
     folder_id: FolderId,
     name: String,
 }
-#[derive(Deserialize)]
-struct MoveFolderInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct MoveFolderInput {
     folder_id: FolderId,
     parent_id: Option<FolderId>,
 }
-#[derive(Deserialize)]
-struct SmartFolderInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SmartFolderInput {
+    #[ts(type = "number")]
     smart_folder_id: i64,
 }
-#[derive(Deserialize)]
-struct UpdateSmartFolderInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct UpdateSmartFolderInput {
+    #[ts(type = "number")]
     smart_folder_id: i64,
     value: CreateSmartFolderInput,
 }
-#[derive(Deserialize)]
-struct MoveSmartFolderInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct MoveSmartFolderInput {
+    #[ts(type = "number")]
     smart_folder_id: i64,
+    #[ts(type = "number | null")]
     parent_id: Option<i64>,
 }
-#[derive(Deserialize)]
-struct ReorderSmartFoldersInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ReorderSmartFoldersInput {
+    #[ts(type = "number | null")]
     parent_id: Option<i64>,
+    #[ts(type = "number[]")]
     smart_folder_ids: Vec<i64>,
 }
-#[derive(Deserialize)]
-struct AddSubscriptionQueryInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct AddSubscriptionQueryInput {
+    #[ts(type = "number")]
     subscription_id: i64,
     query: NewSubscriptionQuery,
 }
-#[derive(Deserialize)]
-struct UpdateSubscriptionQueryInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct UpdateSubscriptionQueryInput {
+    #[ts(type = "number")]
     query_id: i64,
     query: NewSubscriptionQuery,
 }
-#[derive(Deserialize)]
-struct PauseSubscriptionQueryInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct PauseSubscriptionQueryInput {
+    #[ts(type = "number")]
     query_id: i64,
     paused: bool,
 }
-#[derive(Deserialize)]
-struct SubscriptionQueryInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SubscriptionQueryInput {
+    #[ts(type = "number")]
     query_id: i64,
 }
-#[derive(Deserialize)]
-struct SubscriptionInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SubscriptionInput {
+    #[ts(type = "number")]
     subscription_id: i64,
 }
-#[derive(Deserialize)]
-struct SubscriptionRunsInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SubscriptionRunsInput {
+    #[ts(type = "number")]
     subscription_id: i64,
     #[serde(default = "default_page_limit")]
+    #[ts(type = "number")]
     limit: usize,
 }
-#[derive(Deserialize)]
-struct SubscriptionRunActivityInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SubscriptionRunActivityInput {
+    #[ts(type = "number")]
     run_id: i64,
     #[serde(default = "default_page_limit")]
+    #[ts(type = "number")]
     source_item_limit: usize,
 }
-#[derive(Deserialize)]
-struct RenameSubscriptionInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct RenameSubscriptionInput {
+    #[ts(type = "number")]
     subscription_id: i64,
     name: String,
 }
-#[derive(Deserialize)]
-struct PauseSubscriptionInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct PauseSubscriptionInput {
+    #[ts(type = "number")]
     subscription_id: i64,
     paused: bool,
 }
-#[derive(Deserialize)]
-struct ScheduleSubscriptionInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ScheduleSubscriptionInput {
+    #[ts(type = "number")]
     subscription_id: i64,
     schedule: String,
 }
-#[derive(Deserialize)]
-struct ScopeInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ScopeInput {
     scope: String,
 }
 
-#[derive(Deserialize)]
-struct SiteInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SiteInput {
     site_id: String,
 }
-#[derive(Deserialize)]
-struct ValueInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ValueInput {
+    #[ts(type = "unknown")]
     value: serde_json::Value,
 }
-#[derive(Deserialize)]
-struct PatchViewSettingsInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct PatchViewSettingsInput {
     scope: String,
+    #[ts(type = "unknown")]
     value: serde_json::Value,
 }
 
-#[derive(Deserialize)]
-struct ModelInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ModelInput {
     slug: String,
 }
 
-#[derive(Deserialize)]
-struct AiTagAssignment {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct AiTagAssignment {
     media_item_id: ItemId,
     tags: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct AiAssignmentsInput {
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct AiAssignmentsInput {
     assignments: Vec<AiTagAssignment>,
 }
 
-#[derive(Serialize)]
-struct EmptyOutput {}
+#[derive(Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct EmptyOutput {}
 
 fn default_limit() -> i64 {
     100

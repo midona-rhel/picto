@@ -2,14 +2,18 @@
 
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::app::{resources, Application, MutationReceipt};
 
 const APPLICATION_SETTINGS_KEY: &str = "application";
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SettingsSnapshot {
+    #[ts(type = "unknown")]
     pub value: serde_json::Value,
+    #[ts(type = "number")]
     pub revision: u64,
 }
 

@@ -7,13 +7,15 @@ use std::collections::HashMap;
 
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::app::{resources, Application, MutationReceipt};
 use crate::credential_store::{CredentialType, SiteCredential};
 use crate::store::Store;
 use crate::subscriptions::gallery_dl_runner::{site_by_id, SiteEntry, SITES};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct CredentialRecord {
     pub site_id: String,
     pub credential_type: String,
@@ -21,7 +23,8 @@ pub struct CredentialRecord {
     pub created_at: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct CredentialHealthRecord {
     pub site_id: String,
     pub status: String,
@@ -29,7 +32,8 @@ pub struct CredentialHealthRecord {
     pub last_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SetCredentialInput {
     pub site_id: String,
     pub credential_type: String,
@@ -40,8 +44,43 @@ pub struct SetCredentialInput {
     pub oauth_token: Option<String>,
 }
 
-pub fn sources() -> &'static [SiteEntry] {
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SourceCatalogEntry {
+    pub id: String,
+    pub name: String,
+    pub domain: String,
+    pub credential_owner_site_id: String,
+    pub example_query: String,
+    pub supports_query: bool,
+    pub supports_account: bool,
+    pub auth_required_for_full_access: bool,
+    pub auth_strictly_required: bool,
+    pub credential_types: Vec<String>,
+    pub oauth_provider: Option<String>,
+}
+
+pub fn sources() -> Vec<SourceCatalogEntry> {
     SITES
+        .iter()
+        .map(|site| SourceCatalogEntry {
+            id: site.id.to_string(),
+            name: site.name.to_string(),
+            domain: site.domain.to_string(),
+            credential_owner_site_id: site.credential_owner_site_id.to_string(),
+            example_query: site.example_query.to_string(),
+            supports_query: site.supports_query,
+            supports_account: site.supports_account,
+            auth_required_for_full_access: site.auth_required_for_full_access,
+            auth_strictly_required: site.auth_strictly_required,
+            credential_types: site
+                .credential_types
+                .iter()
+                .map(|value| (*value).to_string())
+                .collect(),
+            oauth_provider: site.oauth_provider.map(str::to_string),
+        })
+        .collect()
 }
 
 pub fn list_credentials(store: &Store) -> Result<Vec<CredentialRecord>, String> {

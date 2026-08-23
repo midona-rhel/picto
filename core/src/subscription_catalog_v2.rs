@@ -3,6 +3,7 @@
 use rand::RngCore;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::app::{resources, Application, MutationReceipt};
 use crate::subscriptions::gallery_dl_runner::{build_url, site_by_id};
@@ -11,7 +12,8 @@ use crate::subscriptions::source_adapter::{
 };
 use crate::subscriptions_v2::{self, CreatedRun};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct NewSubscriptionQuery {
     pub site_id: String,
     pub query_kind: String,
@@ -20,17 +22,22 @@ pub struct NewSubscriptionQuery {
     pub notes: Option<String>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct NewSubscription {
     pub name: String,
     pub schedule: String,
+    #[ts(type = "number | null")]
     pub initial_post_limit: Option<i64>,
+    #[ts(type = "number | null")]
     pub periodic_post_limit: Option<i64>,
     pub queries: Vec<NewSubscriptionQuery>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionQueryView {
+    #[ts(type = "number")]
     pub query_id: i64,
     pub site_id: String,
     pub query_kind: String,
@@ -43,38 +50,54 @@ pub struct SubscriptionQueryView {
     pub last_failure_at: Option<String>,
     pub last_failure_kind: Option<String>,
     pub last_failure_message: Option<String>,
+    #[ts(type = "number")]
     pub post_count: i64,
+    #[ts(type = "number")]
     pub media_count: i64,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionProgress {
+    #[ts(type = "number")]
     pub discovered: i64,
+    #[ts(type = "number")]
     pub downloaded: i64,
+    #[ts(type = "number")]
     pub ingested: i64,
+    #[ts(type = "number")]
     pub failed: i64,
+    #[ts(type = "number")]
     pub deleted: i64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionView {
+    #[ts(type = "number")]
     pub subscription_id: i64,
     pub name: String,
     pub schedule: String,
     pub paused: bool,
+    #[ts(type = "number | null")]
     pub initial_post_limit: Option<i64>,
+    #[ts(type = "number | null")]
     pub periodic_post_limit: Option<i64>,
     pub next_run_at: Option<String>,
     pub status: Option<String>,
+    #[ts(type = "number | null")]
     pub active_run_id: Option<i64>,
+    #[ts(type = "number")]
     pub media_count: i64,
     pub progress: SubscriptionProgress,
     pub queries: Vec<SubscriptionQueryView>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionList {
     pub subscriptions: Vec<SubscriptionView>,
+    #[ts(type = "number")]
     pub revision: u64,
 }
 
