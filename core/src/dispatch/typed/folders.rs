@@ -1,7 +1,7 @@
 //! Handler functions for folder operations.
 
 use rusqlite::{params, OptionalExtension};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::runtime_contract::change_builder::ChangeImpact;
@@ -437,9 +437,17 @@ fn reverse_folder_items_canonical(
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFolderCoverHashInput {
+pub struct GetFolderCoverHashesInput {
+    #[ts(type = "number")]
+    pub folder_ids: Vec<i64>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct FolderCoverHashDto {
     #[ts(type = "number")]
     pub folder_id: i64,
+    pub entity_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -538,11 +546,19 @@ pub struct ReorderFolderItemsInput {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn get_folder_cover_hash(
+pub async fn get_folder_cover_hashes(
     state: &AppState,
-    input: GetFolderCoverHashInput,
-) -> Result<Option<String>, String> {
-    state.engine.get_folder_cover_hash(input.folder_id)
+    input: GetFolderCoverHashesInput,
+) -> Result<Vec<FolderCoverHashDto>, String> {
+    Ok(state
+        .engine
+        .get_folder_cover_hashes(&input.folder_ids)?
+        .into_iter()
+        .map(|(folder_id, entity_hash)| FolderCoverHashDto {
+            folder_id,
+            entity_hash,
+        })
+        .collect())
 }
 
 pub async fn move_folder(state: &AppState, input: MoveFolderInput) -> Result<(), String> {
@@ -877,27 +893,6 @@ pub async fn reorder_folder_items(
     }
     crate::events::emit_state_changed(
         "reorder_folder_items",
-        ChangeImpact::folder_item_reorder(input.folder_id),
-    );
-    Ok(())
-}
-
-// New engine: reorder folder items by entity_id + position_rank.
-#[derive(Debug, Deserialize)]
-pub struct ReorderFolderMembersInput {
-    pub folder_id: i64,
-    pub moves: Vec<(i64, i64)>, // (entity_id, position_rank)
-}
-
-pub async fn reorder_folder_members(
-    state: &AppState,
-    input: ReorderFolderMembersInput,
-) -> Result<(), String> {
-    state
-        .engine
-        .reorder_folder_items(input.folder_id, &input.moves)?;
-    crate::events::emit_state_changed(
-        "reorder_folder_members",
         ChangeImpact::folder_item_reorder(input.folder_id),
     );
     Ok(())

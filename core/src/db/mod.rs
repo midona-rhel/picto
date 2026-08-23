@@ -1374,8 +1374,11 @@ impl LibraryDatabase {
         self.with_read(|conn| query::folders::get_folder_entity_hashes(conn, folder_id))
     }
 
-    pub fn get_folder_cover_hash(&self, folder_id: i64) -> Result<Option<String>, String> {
-        self.with_read(|conn| query::folders::get_folder_cover_hash(conn, folder_id))
+    pub fn get_folder_cover_hashes(
+        &self,
+        folder_ids: &[i64],
+    ) -> Result<Vec<(i64, Option<String>)>, String> {
+        self.with_read(|conn| query::folders::get_folder_cover_hashes(conn, folder_ids))
     }
 
     pub fn get_entity_folder_memberships(

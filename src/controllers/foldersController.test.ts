@@ -12,7 +12,7 @@ vi.mock('../platform/folderApi', () => ({
   clearFolderWatchConfig: vi.fn(),
   createFolder: vi.fn(),
   deleteFolder: deleteFolderMock,
-  getFolderCoverHash: vi.fn(),
+  getFolderCoverHashes: vi.fn(),
   moveFolder: vi.fn(),
   renameFolder: vi.fn(),
   reorderFolderItems: vi.fn(),

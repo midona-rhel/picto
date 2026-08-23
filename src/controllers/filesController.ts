@@ -1,6 +1,5 @@
 import {
   exportMedia,
-  getFolderCoverHash,
   addMedia,
 } from '../platform/folderApi';
 import {
@@ -38,10 +37,6 @@ export function manualImportParamsForScope(
 }
 
 export const filesController = {
-  getFolderCoverHash(folderId: number): Promise<string | null> {
-    return getFolderCoverHash(folderId);
-  },
-
   addMedia(
     paths: string[],
     params?: MediaImportParams,

@@ -8,7 +8,7 @@ import {
   clearFolderWatchConfig,
   createFolder,
   deleteFolder,
-  getFolderCoverHash,
+  getFolderCoverHashes,
   addMedia,
   moveFolder,
   renameFolder,
@@ -165,8 +165,8 @@ export const foldersController = {
     });
   },
 
-  getCoverHash(folderId: number): Promise<string | null> {
-    return getFolderCoverHash(folderId);
+  getCoverHashes(folderIds: number[]) {
+    return getFolderCoverHashes(folderIds);
   },
 
   async setWatchConfig(folderId: number, config: {

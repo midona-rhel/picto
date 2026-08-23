@@ -103,8 +103,11 @@ impl ApplicationEngine {
         self.db.get_smart_folder(smart_folder_id)
     }
 
-    pub fn get_folder_cover_hash(&self, folder_id: i64) -> Result<Option<String>, String> {
-        self.db.get_folder_cover_hash(folder_id)
+    pub fn get_folder_cover_hashes(
+        &self,
+        folder_ids: &[i64],
+    ) -> Result<Vec<(i64, Option<String>)>, String> {
+        self.db.get_folder_cover_hashes(folder_ids)
     }
 
     pub fn run_compiler(&self, plan: crate::db::projection::compiler::CompilerPlan) {

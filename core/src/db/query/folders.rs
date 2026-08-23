@@ -165,22 +165,35 @@ pub fn get_folder_entity_hashes(
     hashes.collect()
 }
 
-pub fn get_folder_cover_hash(
+pub fn get_folder_cover_hashes(
     conn: &Connection,
-    folder_id: i64,
-) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT me.entity_hash
-         FROM folder_member fm
-         JOIN media_entity me ON me.entity_id = fm.entity_id
-         WHERE me.status = 1
-           AND fm.folder_id = ?1
-         ORDER BY fm.position_rank ASC, me.entity_hash ASC
-         LIMIT 1",
-        [folder_id],
-        |row| row.get(0),
-    )
-    .optional()
+    folder_ids: &[i64],
+) -> rusqlite::Result<Vec<(i64, Option<String>)>> {
+    if folder_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders = (1..=folder_ids.len())
+        .map(|index| format!("?{index}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT f.folder_id,
+                (SELECT me.entity_hash
+                 FROM folder_member fm
+                 JOIN media_entity me ON me.entity_id = fm.entity_id
+                 WHERE me.status = 1
+                   AND fm.folder_id = f.folder_id
+                 ORDER BY fm.position_rank ASC, me.entity_hash ASC
+                 LIMIT 1) AS cover_hash
+         FROM folder f
+         WHERE f.folder_id IN ({placeholders})
+         ORDER BY f.folder_id ASC"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(folder_ids), |row| {
+        Ok((row.get(0)?, row.get(1)?))
+    })?;
+    rows.collect()
 }
 
 pub fn get_entity_folder_memberships(

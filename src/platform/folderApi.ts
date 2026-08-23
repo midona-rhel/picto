@@ -68,8 +68,13 @@ export function clearFolderWatchConfig(folderId: number): Promise<void> {
   return invoke<void>('clear_folder_watch_config', { folder_id: folderId });
 }
 
-export function getFolderCoverHash(folderId: number): Promise<string | null> {
-  return invoke<string | null>('get_folder_cover_hash', { folder_id: folderId });
+export interface FolderCoverHashDto {
+  folder_id: number;
+  entity_hash: string | null;
+}
+
+export function getFolderCoverHashes(folderIds: number[]): Promise<FolderCoverHashDto[]> {
+  return invoke<FolderCoverHashDto[]>('get_folder_cover_hashes', { folder_ids: folderIds });
 }
 
 export function addMedia(paths: string[], params?: {

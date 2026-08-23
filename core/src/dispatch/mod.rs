@@ -84,7 +84,6 @@ const WRITE_COMMANDS: &[&str] = &[
     "move_folder",
     "remove_entities_from_folder",
     "reorder_folder_items",
-    "reorder_folder_members",
     "set_folder_watch_config",
     "clear_folder_watch_config",
     "save_settings",
@@ -299,7 +298,7 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "set_view_prefs" => call!(typed::system::set_view_prefs, &state, args),
         "set_zoom_factor" => call!(typed::system::set_zoom_factor, &state, args),
         // ── Folders ──────────────────────────────────────────
-        "get_folder_cover_hash" => call!(typed::folders::get_folder_cover_hash, &state, args),
+        "get_folder_cover_hashes" => call!(typed::folders::get_folder_cover_hashes, &state, args),
         "move_folder" => call!(typed::folders::move_folder, &state, args),
         "create_folder" => call!(typed::folders::create_folder, &state, args),
         "update_folder" => call!(typed::folders::update_folder, &state, args),
@@ -314,7 +313,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
             ok_null()
         }
         "reorder_folder_items" => call!(typed::folders::reorder_folder_items, &state, args),
-        "reorder_folder_members" => call!(typed::folders::reorder_folder_members, &state, args),
 
         // ── Media I/O ─────────────────────────────────────────
         "resolve_file_path" => call!(typed::media_io::resolve_file_path, &state, args),

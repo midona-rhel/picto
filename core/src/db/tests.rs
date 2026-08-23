@@ -416,6 +416,46 @@ fn folder_grid_pages_by_position_rank_without_capping_the_scope() {
 }
 
 #[test]
+fn folder_cover_hashes_batch_returns_populated_and_empty_folders() {
+    let db = open_test_db();
+    let populated_id = db.create_folder("Populated", None, None, None).unwrap();
+    let empty_id = db.create_folder("Empty", None, None, None).unwrap();
+    let file_id = db
+        .insert_file(
+            "folder-cover-file",
+            "image/png",
+            10,
+            None,
+            None,
+            None,
+            None,
+            false,
+            "2026-08-04",
+        )
+        .unwrap();
+    let entity_id = db
+        .insert_entity(
+            "folder-cover-entity",
+            file_id,
+            Some("Cover"),
+            1,
+            "2026-08-04",
+            "2026-08-04",
+        )
+        .unwrap();
+    db.add_folder_members(populated_id, &[entity_id]).unwrap();
+
+    assert_eq!(
+        db.get_folder_cover_hashes(&[empty_id, populated_id])
+            .unwrap(),
+        vec![
+            (populated_id, Some("folder-cover-entity".to_string())),
+            (empty_id, None),
+        ]
+    );
+}
+
+#[test]
 fn tag_counts_match_visible_tag_scopes() {
     let db = open_test_db();
     let insert = |hash: &str, status: i64| {
