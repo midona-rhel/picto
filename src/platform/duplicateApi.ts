@@ -1,4 +1,9 @@
 import { invoke } from './ipc';
+import type { DuplicateCandidate } from '../shared/types/generated/application/DuplicateCandidate';
+import type { DuplicateScanResult } from '../shared/types/generated/application/DuplicateScanResult';
+import type { ItemDetails } from '../shared/types/generated/application/ItemDetails';
+import type { ResolutionChoice } from '../shared/types/generated/application/ResolutionChoice';
+import type { ResolutionResult } from '../shared/types/generated/application/ResolutionResult';
 
 export type DuplicateAction =
   | 'smart_merge'
@@ -7,67 +12,93 @@ export type DuplicateAction =
   | 'not_duplicate'
   | 'keep_both';
 
-export interface DuplicatePair {
-  hash_a: string;
-  hash_b: string;
-  distance: number;
+export type DuplicatePair = DuplicateCandidate & {
   similarity_pct: number;
-  status: string;
-}
+  status: 'detected';
+};
 
 export interface DuplicatePairPage {
   items: DuplicatePair[];
-  next_cursor: string | null;
-  has_more: boolean;
+  next_cursor: null;
+  has_more: false;
   total: number;
 }
 
-export interface DuplicateScanSummary {
-  candidates_found: number;
-  pairs_inserted: number;
-  reviewable_detected_total: number;
-  reviewable_detected_new: number;
-  total_files: number;
-  files_with_phash: number;
-  files_scanned: number;
-  closest_distance: number | null;
-}
+export type DuplicateScanSummary = DuplicateScanResult;
 
-export interface DuplicateResolutionResult {
+export interface DuplicateResolutionResult extends ResolutionResult {
   status: 'resolved' | 'quality_ambiguous';
-  winner_hash: string | null;
-  loser_hash: string | null;
-  action: string;
-  affected_folder_ids: number[];
-  tags_merged: number;
-  blob_cleanup_pending: boolean;
-  cleanup_error: string | null;
 }
 
-export function scanDuplicates(threshold?: number | null): Promise<DuplicateScanSummary> {
-  return invoke<DuplicateScanSummary>('scan_duplicates', { threshold: threshold ?? null });
+function toPair(candidate: DuplicateCandidate): DuplicatePair {
+  return {
+    ...candidate,
+    similarity_pct: Math.max(0, (1 - candidate.distance / 256) * 100),
+    status: 'detected',
+  };
 }
 
-export function getDuplicatePairs(params: {
-  cursor?: string | null;
-  limit?: number;
-  status?: string | null;
-} = {}): Promise<DuplicatePairPage> {
-  return invoke<DuplicatePairPage>('get_duplicate_pairs', {
-    cursor: params.cursor ?? null,
-    limit: params.limit ?? 100,
-    status: params.status ?? 'detected',
+export function scanDuplicates(distanceThreshold = 10): Promise<DuplicateScanSummary> {
+  return invoke<DuplicateScanResult>('duplicates.scan', {
+    distance_threshold: distanceThreshold,
   });
+}
+
+export function getDuplicatePairs(params: { limit?: number } = {}): Promise<DuplicatePairPage> {
+  return invoke<DuplicateCandidate[]>('duplicates.list', {
+    limit: params.limit ?? 500,
+  }).then((items) => {
+    const pairs = items.map(toPair);
+    return {
+      items: pairs,
+      next_cursor: null,
+      has_more: false,
+      total: pairs.length,
+    };
+  });
+}
+
+export function getDuplicateItemDetails(itemId: number): Promise<ItemDetails> {
+  return invoke<ItemDetails>('items.details', { item_id: itemId });
+}
+
+function choiceForAction(action: DuplicateAction, pair: DuplicatePair): ResolutionChoice {
+  switch (action) {
+    case 'keep_both':
+    case 'not_duplicate':
+      return 'KeepBoth';
+    case 'keep_left':
+      return { KeepFile: { winner_file_id: pair.file_id_a } };
+    case 'keep_right':
+      return { KeepFile: { winner_file_id: pair.file_id_b } };
+    case 'smart_merge':
+      throw new Error('A duplicate quality choice is required.');
+  }
 }
 
 export function resolveDuplicatePair(
   action: DuplicateAction,
-  hashA: string,
-  hashB: string,
+  pair: DuplicatePair,
 ): Promise<DuplicateResolutionResult> {
-  return invoke<DuplicateResolutionResult>('resolve_duplicate_pair', {
-    action,
-    hash_a: hashA,
-    hash_b: hashB,
-  });
+  if (action === 'smart_merge') {
+    if (pair.decision === 'NeedsChoice') {
+      return Promise.resolve({
+        status: 'quality_ambiguous',
+        choice: 'KeepBoth',
+        affected_item_ids: [],
+        freed_file_hash: null,
+        receipt: { revision: 0, resources: [], item_ids: [] },
+      });
+    }
+    const { similarity_pct: _similarity, status: _status, ...candidate } = pair;
+    return invoke<ResolutionResult>('duplicates.resolve_automatically', {
+      candidate,
+    }).then((result) => ({ ...result, status: 'resolved' }));
+  }
+
+  return invoke<ResolutionResult>('duplicates.resolve', {
+    file_id_a: pair.file_id_a,
+    file_id_b: pair.file_id_b,
+    choice: choiceForAction(action, pair),
+  }).then((result) => ({ ...result, status: 'resolved' }));
 }

@@ -19,6 +19,7 @@ import type {
   SubscriptionSiteInfo,
 } from '../shared/types/subscriptions';
 import type { AuthSiteSnapshot, AuthWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
+import type { IssueCursor } from '../shared/types/generated/application/IssueCursor';
 
 const AUTH_ISSUE_KINDS = new Set([
   'unauthorized',
@@ -46,7 +47,7 @@ function healthRank(site: AuthSiteSnapshot): number {
 
 async function listAllOpenIssues(subscriptionId: string): Promise<SubscriptionIssueRecord[]> {
   const items: SubscriptionIssueRecord[] = [];
-  let cursor: number | null = null;
+  let cursor: IssueCursor | null = null;
   do {
     const page = await listSubscriptionIssues(subscriptionId, null, 100, cursor);
     items.push(...page.items);

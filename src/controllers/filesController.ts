@@ -12,14 +12,14 @@ import {
   shellShowInFolder,
 } from '../platform/shellApi';
 import type { BaseScope, EntityTarget } from '../shared/types/canonical';
-
-export const MEDIA_STATUS_INBOX = 0;
-export const MEDIA_STATUS_ACTIVE = 1;
+import type { ExportFormat } from '../shared/types/generated/application/ExportFormat';
+import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
+import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
 
 export interface MediaImportParams {
-  tag_strings?: string[];
+  tags?: string[];
   source_urls?: string[];
-  initial_status?: number;
+  lifecycle: Lifecycle;
   parent_folder_id?: number | null;
   preserve_structure?: boolean;
 }
@@ -27,13 +27,11 @@ export interface MediaImportParams {
 /** Resolve the destination for a manual import from the currently open grid. */
 export function manualImportParamsForScope(
   scope: BaseScope,
-  params: Omit<MediaImportParams, 'initial_status'> = {},
-): Omit<MediaImportParams, 'initial_status'> & { initial_status: number } {
+  params: Omit<MediaImportParams, 'lifecycle'> = {},
+): MediaImportParams {
   return {
     ...params,
-    initial_status: scope.kind === 'inbox'
-      ? MEDIA_STATUS_INBOX
-      : MEDIA_STATUS_ACTIVE,
+    lifecycle: scope.kind === 'inbox' ? 'inbox' : 'active',
   };
 }
 
@@ -44,8 +42,8 @@ export const filesController = {
 
   addMedia(
     paths: string[],
-    params?: MediaImportParams,
-  ): Promise<void> {
+    params: MediaImportParams,
+  ): Promise<ImportEnqueueReport> {
     return addMedia(paths, params);
   },
 
@@ -53,7 +51,7 @@ export const filesController = {
     target: EntityTarget,
     config: {
       output_dir: string;
-      format?: string | null;
+      format?: ExportFormat | null;
       quality?: number | null;
       width?: number | null;
       height?: number | null;

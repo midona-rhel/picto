@@ -70,11 +70,11 @@ export interface FolderImportModalState {
   open: boolean;
   path: string;
   targetFolderId: number | null;
-  initialStatus: number;
+  lifecycle: import('../shared/types/generated/application/Lifecycle').Lifecycle;
 }
 
 export const folderImportModalAtom = atom<FolderImportModalState>({
-  open: false, path: '', targetFolderId: null, initialStatus: 1,
+  open: false, path: '', targetFolderId: null, lifecycle: 'active',
 });
 
 // ── Tag select modal (wider modal version, opened from context menu / keyboard) ──

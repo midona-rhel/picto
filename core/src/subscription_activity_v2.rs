@@ -181,6 +181,8 @@ pub struct IssuePage {
     pub subscription_id: i64,
     pub issues: Vec<SubscriptionIssue>,
     pub next_cursor: Option<IssueCursor>,
+    #[ts(type = "number")]
+    pub total_count: i64,
 }
 
 /// Returns the newest persisted runs, bounded to a small page.
@@ -279,6 +281,18 @@ pub fn list_issues(store: &Store, request: &IssuePageRequest) -> Result<IssuePag
     let cursor_id = request.cursor.as_ref().map(|cursor| cursor.issue_id);
 
     store.read(|connection| {
+        let total_count = connection.query_row(
+            "SELECT COUNT(*) FROM subscription_issue
+             WHERE subscription_id = ?1
+               AND (?2 IS NULL OR query_id = ?2)
+               AND (?3 = 0 OR status = 'open')",
+            params![
+                request.subscription_id,
+                request.query_id,
+                request.open_only as i64,
+            ],
+            |row| row.get(0),
+        )?;
         let mut statement = connection.prepare(
             "SELECT issue_id, issue_key, subscription_id, query_id, issue_kind,
                     message, detail, status, first_seen_at, last_seen_at, resolved_at
@@ -334,6 +348,7 @@ pub fn list_issues(store: &Store, request: &IssuePageRequest) -> Result<IssuePag
             subscription_id: request.subscription_id,
             issues,
             next_cursor,
+            total_count,
         })
     })
 }

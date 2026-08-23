@@ -1,105 +1,59 @@
-/**
- * Folder controller — owns folder CRUD actions.
- * Calls API and settles confirmed sidebar updates.
- */
+/** Folder CRUD through the replacement transaction and invalidation boundary. */
 
 import { getDefaultStore } from 'jotai';
 import {
+  addMedia,
   clearFolderWatchConfig,
   createFolder,
   deleteFolder,
   getFolderCoverHash,
-  addMedia,
   moveFolder,
   renameFolder,
-  reorderFolderItems,
+  reorderFolderChildren,
+  setFolderMetadata,
   setFolderWatchConfig,
-  updateFolder,
+  sortFolderItemsByName,
 } from '../platform/folderApi';
-import type { SidebarNodeDto } from '../shared/types/canonical';
+import type { FolderMutationReceipt } from '../shared/types/generated/application/FolderMutationReceipt';
 import { activeNodeIdAtom } from '../state/navigation';
 import { removeHistoryEntries, pushHistory } from '../state/navigationHistory';
-import { patchFolderNodeAtom, removeFolderNodesAtom, sidebarNodesAtom } from '../state/sidebar';
+import { sidebarNodesAtom } from '../state/sidebar';
 
 const store = getDefaultStore();
-
-interface FolderDeletionPlan {
-  rootFolderIds: number[];
-  deletedNodeIds: Set<string>;
-  parentByNodeId: Map<string, string | null>;
-}
 
 function folderNodeId(folderId: number): string {
   return `folder:${folderId}`;
 }
 
-/**
- * Expand selected roots using the current sidebar tree. A selected descendant
- * is omitted when its ancestor is already selected, so the backend sees one
- * delete command per independent hierarchy.
- */
-export function planFolderDeletion(nodes: SidebarNodeDto[], folderIds: number[]): FolderDeletionPlan {
-  const folders = nodes.filter((node) => node.kind === 'folder');
-  const byId = new Map(folders.map((node) => [node.id, node]));
-  const selected = new Set(folderIds.map(folderNodeId).filter((nodeId) => byId.has(nodeId)));
-  const roots = [...selected].filter((nodeId) => {
-    let parentId = byId.get(nodeId)?.parent_id ?? null;
-    while (parentId?.startsWith('folder:')) {
-      if (selected.has(parentId)) return false;
-      parentId = byId.get(parentId)?.parent_id ?? null;
-    }
-    return true;
-  });
-  const deletedNodeIds = new Set(roots);
-
-  let added = true;
-  while (added) {
-    added = false;
-    for (const folder of folders) {
-      if (folder.parent_id && deletedNodeIds.has(folder.parent_id) && !deletedNodeIds.has(folder.id)) {
-        deletedNodeIds.add(folder.id);
-        added = true;
-      }
-    }
-  }
-
-  return {
-    rootFolderIds: roots.map((nodeId) => Number(nodeId.slice('folder:'.length))),
-    deletedNodeIds,
-    parentByNodeId: new Map(folders.map((node) => [node.id, node.parent_id])),
-  };
-}
-
-function nearestSurvivingParent(plan: FolderDeletionPlan, nodeId: string): string {
-  let parentId = plan.parentByNodeId.get(nodeId) ?? null;
-  while (parentId?.startsWith('folder:')) {
-    if (!plan.deletedNodeIds.has(parentId)) return parentId;
-    parentId = plan.parentByNodeId.get(parentId) ?? null;
-  }
-  return 'system:active';
-}
-
-/** Apply a backend-confirmed recursive folder deletion to every dependent UI state. */
-export function settleFolderDeletion(plan: FolderDeletionPlan) {
-  if (plan.deletedNodeIds.size === 0) return;
+function settleDeletedFolders(receipts: FolderMutationReceipt[]): void {
+  const deletedNodeIds = new Set(
+    receipts.flatMap((receipt) => receipt.deleted_folder_ids.map(folderNodeId)),
+  );
+  if (deletedNodeIds.size === 0) return;
 
   const activeNodeId = store.get(activeNodeIdAtom);
-  const fallbackNodeId = plan.deletedNodeIds.has(activeNodeId)
-    ? nearestSurvivingParent(plan, activeNodeId)
-    : null;
+  const activeReceipt = receipts.find((receipt) =>
+    receipt.deleted_folder_ids.some((folderId) => folderNodeId(folderId) === activeNodeId));
 
-  store.set(removeFolderNodesAtom, plan.deletedNodeIds);
-  removeHistoryEntries(plan.deletedNodeIds);
-
-  if (fallbackNodeId) {
+  removeHistoryEntries(deletedNodeIds);
+  if (activeReceipt) {
+    const fallbackNodeId = activeReceipt.fallback_folder_id == null
+      ? 'system:active'
+      : folderNodeId(activeReceipt.fallback_folder_id);
     store.set(activeNodeIdAtom, fallbackNodeId);
     pushHistory(fallbackNodeId);
   }
 }
 
-/** Settle a delete_folder state change, including descendants omitted by the backend event. */
-export function settleFolderDeletionFromSidebar(folderIds: number[]) {
-  settleFolderDeletion(planFolderDeletion(store.get(sidebarNodesAtom), folderIds));
+function folderMetadata(folderId: number) {
+  const node = store.get(sidebarNodesAtom).find((candidate) => candidate.id === folderNodeId(folderId));
+  const meta = (node?.meta ?? {}) as Record<string, unknown>;
+  return {
+    folder_id: folderId,
+    icon: node?.icon ?? null,
+    color: node?.color ?? null,
+    notes: typeof meta.notes === 'string' ? meta.notes : null,
+  };
 }
 
 export function singleFolderDeletionMessage(name: string): string {
@@ -111,55 +65,56 @@ export function bulkFolderDeletionMessage(selectedCount: number): string {
 }
 
 export const foldersController = {
-  async create(name: string, parentId?: number | null): Promise<string | null> {
+  async create(name: string, parentId?: number | null): Promise<string> {
     const result = await createFolder({ name, parent_id: parentId ?? null });
-    // Return the node ID if the backend returned a folder_id
-    const folderId = result && typeof result === 'object' && 'folder_id' in result
-      ? (result as { folder_id: number }).folder_id
-      : null;
-    return folderId != null ? `folder:${folderId}` : null;
+    return folderNodeId(result.folder_id);
   },
 
-  async rename(folderId: number, newName: string) {
-    store.set(patchFolderNodeAtom, { folderId, patch: { name: newName } });
+  async rename(folderId: number, newName: string): Promise<void> {
     await renameFolder(folderId, newName);
   },
 
-  async delete(folderId: number) {
+  async delete(folderId: number): Promise<void> {
     await this.deleteMany([folderId]);
   },
 
-  async deleteMany(folderIds: number[]) {
-    const plan = planFolderDeletion(store.get(sidebarNodesAtom), folderIds);
-    if (plan.rootFolderIds.length === 0) return;
-    await Promise.all(plan.rootFolderIds.map((folderId) => deleteFolder(folderId)));
-    settleFolderDeletion(plan);
+  async deleteMany(folderIds: number[]): Promise<void> {
+    const receipts: FolderMutationReceipt[] = [];
+    for (const folderId of [...new Set(folderIds)]) {
+      receipts.push(await deleteFolder(folderId));
+    }
+    settleDeletedFolders(receipts);
   },
 
-  async applyColor(folderId: number, color: string | null) {
-    store.set(patchFolderNodeAtom, { folderId, patch: { color } });
-    await updateFolder(folderId, { color });
+  async applyColor(folderId: number, color: string | null): Promise<void> {
+    await setFolderMetadata({ ...folderMetadata(folderId), color });
   },
 
-  async applyIcon(folderId: number, icon: string | null) {
-    store.set(patchFolderNodeAtom, { folderId, patch: { icon } });
-    await updateFolder(folderId, { icon });
+  async applyIcon(folderId: number, icon: string | null): Promise<void> {
+    await setFolderMetadata({ ...folderMetadata(folderId), icon });
   },
 
-  async applyNotes(folderId: number, notes: string | null) {
-    await updateFolder(folderId, { notes });
+  async applyNotes(folderId: number, notes: string | null): Promise<void> {
+    await setFolderMetadata({ ...folderMetadata(folderId), notes });
   },
 
   async move(folderId: number, parentFolderId: number | null, moves: [number, number][]) {
-    await moveFolder(folderId, parentFolderId, moves);
+    await moveFolder(folderId, parentFolderId);
+    if (moves.length > 0) {
+      const orderedIds = [...moves]
+        .sort((left, right) => left[1] - right[1])
+        .map(([siblingId]) => siblingId);
+      await reorderFolderChildren(parentFolderId, orderedIds);
+    }
   },
 
-  async sortByName(folderId: number) {
-    await reorderFolderItems(folderId, { sort_by: 'name', direction: 'asc' });
+  async sortByName(folderId: number): Promise<void> {
+    await sortFolderItemsByName(folderId);
   },
 
-  async addMedia(folderPath: string, parentFolderId: number | null) {
+  async addMedia(folderPath: string, parentFolderId: number | null): Promise<void> {
     await addMedia([folderPath], {
+      lifecycle: 'active',
       parent_folder_id: parentFolderId,
       preserve_structure: true,
     });
@@ -174,16 +129,15 @@ export const foldersController = {
     enabled: boolean;
     subfolders: boolean;
     importStatusMode: string;
-  }) {
-    await setFolderWatchConfig(folderId, {
-      watch_path: config.watchPath,
-      watch_enabled: config.enabled,
-      watch_subfolders: config.subfolders,
-      watch_import_status_mode: config.importStatusMode,
-    });
+  }): Promise<void> {
+    if (!config.enabled) {
+      await clearFolderWatchConfig(folderId);
+      return;
+    }
+    await setFolderWatchConfig(folderId, config.watchPath, config.subfolders);
   },
 
-  async clearWatchConfig(folderId: number) {
+  async clearWatchConfig(folderId: number): Promise<void> {
     await clearFolderWatchConfig(folderId);
   },
 };

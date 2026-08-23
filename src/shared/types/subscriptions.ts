@@ -109,7 +109,7 @@ export interface SubscriptionIssueRecord {
 
 export interface SubscriptionIssuePage {
   items: SubscriptionIssueRecord[];
-  next_cursor: number | null;
+  next_cursor: { last_seen_at: string; issue_id: number } | null;
   total_count: number;
 }
 

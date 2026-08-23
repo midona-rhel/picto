@@ -7,8 +7,9 @@ import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
 import { GlassInput } from '../../shared/ui/GlassInput';
 import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
+import type { ExportFormat } from '../../shared/types/generated/application/ExportFormat';
 
-const FORMAT_OPTIONS = [
+const FORMAT_OPTIONS: Array<{ value: ExportFormat; label: string }> = [
   { value: 'original', label: 'Original Format' },
   { value: 'jpeg', label: 'JPEG' },
   { value: 'png', label: 'PNG' },
@@ -18,7 +19,7 @@ const FORMAT_OPTIONS = [
 
 export interface ExportConfig {
   outputDir: string;
-  format: string;
+  format: ExportFormat;
   quality: number;
   width: number | null;
   height: number | null;
@@ -34,7 +35,7 @@ export interface ExportModalProps {
 
 export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalProps) {
   const [outputDir, setOutputDir] = useState('');
-  const [format, setFormat] = useState('original');
+  const [format, setFormat] = useState<ExportFormat>('original');
   const [quality, setQuality] = useState(90);
   const [width, setWidth] = useState('');
   const [height, setHeight] = useState('');
@@ -94,7 +95,12 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
 
         <div className={modalStyles.field}>
           <label className={modalStyles.fieldLabel}>Format</label>
-          <CmSelect value={format} options={FORMAT_OPTIONS} onChange={setFormat} width={180} />
+          <CmSelect
+            value={format}
+            options={FORMAT_OPTIONS}
+            onChange={(value) => setFormat(value as ExportFormat)}
+            width={180}
+          />
         </div>
 
         {!isOriginal && format !== 'png' && (

@@ -15,7 +15,6 @@ import type {
   SubscriptionProgressEvent,
   SubscriptionQueryInfo,
 } from '../../../shared/types/subscriptions';
-import type { FailedPostGroup } from '../../../shared/types/subscriptions';
 import {
   subscriptionsDetailModeAtom,
   type SubscriptionDetailState,
@@ -48,18 +47,13 @@ export interface DetailController {
   run: (id: string) => void;
   stop: (id: string) => void;
   pause: (id: string, paused: boolean) => void;
-  reset: (id: string) => void;
   delete: (id: string) => void;
   rename: (id: string, currentName: string) => void;
   setSchedule: (id: string, schedule: string) => void;
-  runQuery: (subscriptionId: string, queryId: string) => void;
-  stopQuery: (subscriptionId: string, queryId: string) => void;
   pauseQuery: (queryId: string, paused: boolean) => void;
   deleteQuery: (queryId: string) => void;
   editQuery: (queryId: number, siteId: string, queryText: string, displayName: string | null, notes: string | null) => Promise<void>;
   addQuery: (subscriptionId: string, siteId: string, queryText: string) => Promise<void>;
-  retryFailedPosts: () => void;
-  retryFailedPost: (post: FailedPostGroup) => void;
   openExternalUrl: (url: string) => void;
 }
 
@@ -202,16 +196,6 @@ export function SubscriptionDetail({
               {failedCount === 0 && !authAttention && 'Something needs attention — see the technical view.'}
             </span>
             <span className={styles.ovActions}>
-              {detail.retryablePostCount > 0 && (
-                <ActionButton
-                  variant="secondary"
-                  compact
-                  disabled={busy}
-                  onClick={controller.retryFailedPosts}
-                >
-                  <IconRefresh size={13} /> Try again
-                </ActionButton>
-              )}
               {authAttention && (
                 <ActionButton
                   variant="secondary"
@@ -400,21 +384,18 @@ export function SubscriptionDetail({
                   credentials: snapshot.credentials,
                   credentialHealth: snapshot.credentialHealth,
                 });
-                const queryRunning = progress?.query_id === query.id;
+                const queryRunning = running && !query.paused;
                 return (
                   <QueryRow
                     key={query.id}
                     query={query}
                     sites={snapshot.sites}
                     running={queryRunning}
-                    runDisabled={running}
                     paused={query.paused}
                     failedCount={getQueryFailedCount(query.id, detail.failedPosts)}
                     authWarning={auth.tone === 'attention' ? auth.label : null}
                     progress={queryRunning ? progress : null}
                     busy={busy}
-                    onRun={() => controller.runQuery(subscription.id, query.id)}
-                    onStop={() => controller.stopQuery(subscription.id, query.id)}
                     onPause={(paused) => controller.pauseQuery(query.id, paused)}
                     onEdit={() => setEditing(query)}
                     onDelete={() => controller.deleteQuery(query.id)}
@@ -451,8 +432,6 @@ export function SubscriptionDetail({
               failedPosts={detail.failedPosts}
               issues={detail.issues}
               busy={busy}
-              onRetryAll={controller.retryFailedPosts}
-              onRetryPost={controller.retryFailedPost}
               onOpenUrl={controller.openExternalUrl}
               onFixCredentials={(issue) => {
                 const query = subscription.queries.find((entry) => Number(entry.id) === issue.query_id);

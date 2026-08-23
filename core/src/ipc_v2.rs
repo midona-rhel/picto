@@ -13,7 +13,7 @@ use crate::app::{
 };
 use crate::duplicates_v2::{DuplicateCandidate, ResolutionChoice};
 use crate::folders_v2::{
-    FolderId, FolderMutationReceipt, FolderWatchInput, ReorderFolderItemsInput,
+    FolderId, FolderMetadataInput, FolderMutationReceipt, FolderWatchInput, ReorderFolderItemsInput,
 };
 use crate::navigation_v2::{CreateSmartFolderInput, SmartFolderMutationReceipt};
 use crate::operations_v2::MediaMetadataPatch;
@@ -147,7 +147,10 @@ pub fn dispatch(
 
         "items.rename" => {
             let input: ItemNameInput = parse(args_json)?;
-            publish(application, application.rename_item(input.item_id, &input.name)?)
+            publish(
+                application,
+                application.rename_item(input.item_id, &input.name)?,
+            )
         }
 
         "items.set_lifecycle" => {
@@ -220,6 +223,10 @@ pub fn dispatch(
                 application.rename_folder(input.folder_id, &input.name)?,
             )
         }
+        "folders.metadata.set" => publish_folder(
+            application,
+            application.set_folder_metadata(&parse::<FolderMetadataInput>(args_json)?)?,
+        ),
         "folders.move" => {
             let input: MoveFolderInput = parse(args_json)?;
             publish_folder(
@@ -235,6 +242,13 @@ pub fn dispatch(
             application,
             application.reorder_folder_items(&parse::<ReorderFolderItemsInput>(args_json)?)?,
         ),
+        "folders.items.sort_name" => {
+            let input: FolderInput = parse(args_json)?;
+            publish_folder(
+                application,
+                application.sort_folder_items_by_name(input.folder_id)?,
+            )
+        }
         "folders.delete" => {
             let input: FolderInput = parse(args_json)?;
             publish_folder(application, application.delete_folder(input.folder_id)?)

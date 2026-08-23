@@ -1,50 +1,64 @@
+import { queryItems } from './entityApi';
 import { invoke } from './ipc';
-import type { EntityTarget } from '../shared/types/canonical';
+import type { CreatedFolder } from '../shared/types/generated/application/CreatedFolder';
+import type { ExportFormat } from '../shared/types/generated/application/ExportFormat';
+import type { ExportResult } from '../shared/types/generated/application/ExportResult';
+import type { FolderMutationReceipt } from '../shared/types/generated/application/FolderMutationReceipt';
+import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
+import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
+import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
 
 export function createFolder(params: {
   name: string;
   parent_id?: number | null;
-  icon?: string;
-  color?: string;
-}): Promise<unknown> {
-  return invoke('create_folder', params);
+}): Promise<CreatedFolder> {
+  return invoke<CreatedFolder>('folders.create', {
+    name: params.name,
+    parent_id: params.parent_id ?? null,
+    folder_key: null,
+  });
 }
 
-export function deleteFolder(folderId: number): Promise<void> {
-  return invoke<void>('delete_folder', { folder_id: folderId });
+export function deleteFolder(folderId: number): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.delete', { folder_id: folderId });
 }
 
-export function removeEntitiesFromFolder(folderId: number, target: EntityTarget): Promise<void> {
-  return invoke<void>('items.set_folder', { folder_id: folderId, target, present: false });
+export function removeEntitiesFromFolder(folderId: number, target: ItemTarget): Promise<unknown> {
+  return invoke('items.set_folder', { folder_id: folderId, target, present: false });
 }
 
-export function renameFolder(folderId: number, name: string): Promise<void> {
-  return invoke<void>('update_folder', { folder_id: folderId, name });
+export function renameFolder(folderId: number, name: string): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.rename', { folder_id: folderId, name });
 }
 
-export function updateFolder(folderId: number, patch: {
-  name?: string;
-  icon?: string | null;
-  color?: string | null;
-  notes?: string | null;
-}): Promise<void> {
-  return invoke<void>('update_folder', { folder_id: folderId, ...patch });
+export function setFolderMetadata(input: {
+  folder_id: number;
+  icon: string | null;
+  color: string | null;
+  notes: string | null;
+}): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.metadata.set', input);
 }
 
-export function moveFolder(
-  folderId: number,
-  newParentId: number | null,
-  siblingOrder: [number, number][],
-): Promise<void> {
-  return invoke<void>('move_folder', {
+export function moveFolder(folderId: number, parentId: number | null): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.move', {
     folder_id: folderId,
-    new_parent_id: newParentId,
-    sibling_order: siblingOrder,
+    parent_id: parentId,
+  });
+}
+
+export function reorderFolderChildren(
+  parentId: number | null,
+  folderIds: number[],
+): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.reorder', {
+    parent_id: parentId,
+    folder_ids: folderIds,
   });
 }
 
 export function updateFolderMembership(
-  target: EntityTarget,
+  target: ItemTarget,
   folderId: number,
   operation: 'add' | 'remove',
 ): Promise<unknown> {
@@ -55,58 +69,83 @@ export function updateFolderMembership(
   });
 }
 
-export function setFolderWatchConfig(folderId: number, config: {
-  watch_path: string;
-  watch_enabled: boolean;
-  watch_subfolders: boolean;
-  watch_import_status_mode: string;
-}): Promise<void> {
-  return invoke<void>('set_folder_watch_config', { folder_id: folderId, ...config });
+export function setFolderWatchConfig(
+  folderId: number,
+  path: string,
+  includeSubfolders: boolean,
+): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.watch.set', {
+    folder_id: folderId,
+    path,
+    include_subfolders: includeSubfolders,
+  });
 }
 
-export function clearFolderWatchConfig(folderId: number): Promise<void> {
-  return invoke<void>('clear_folder_watch_config', { folder_id: folderId });
+export function clearFolderWatchConfig(folderId: number): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.watch.clear', { folder_id: folderId });
 }
 
-export function getFolderCoverHash(folderId: number): Promise<string | null> {
-  return invoke<string | null>('get_folder_cover_hash', { folder_id: folderId });
+export async function getFolderCoverHash(folderId: number): Promise<string | null> {
+  const page = await queryItems({
+    scope: { kind: 'folder', folder_id: folderId },
+    filters: {
+      include_tags: [],
+      exclude_tags: [],
+      minimum_rating: null,
+      mime_prefix: null,
+      text: null,
+    },
+    sort: { field: 'folder_order', direction: 'ascending', random_seed: null },
+  }, { offset: 0, limit: 1 });
+  return page.items[0]?.display_file_hash ?? null;
 }
 
-export function addMedia(paths: string[], params?: {
-  tag_strings?: string[];
+export function addMedia(paths: string[], params: {
+  tags?: string[];
   source_urls?: string[];
-  initial_status?: number;
+  lifecycle: Lifecycle;
   parent_folder_id?: number | null;
   preserve_structure?: boolean;
-}): Promise<void> {
-  return invoke<void>('add_media', {
+}): Promise<ImportEnqueueReport> {
+  return invoke<ImportEnqueueReport>('imports.enqueue', {
     paths,
-    ...params,
-    preserve_structure: params?.preserve_structure ?? false,
-    parent_folder_id: params?.parent_folder_id ?? null,
-  } as unknown as Record<string, unknown>);
+    tags: params.tags ?? [],
+    source_urls: params.source_urls ?? [],
+    lifecycle: params.lifecycle,
+    parent_folder_id: params.parent_folder_id ?? null,
+    preserve_structure: params.preserve_structure ?? false,
+  });
 }
 
-export function exportMedia(target: EntityTarget, config: {
+export function exportMedia(target: ItemTarget, config: {
   output_dir: string;
-  format?: string | null;
+  format?: ExportFormat | null;
   quality?: number | null;
   width?: number | null;
   height?: number | null;
   keep_aspect?: boolean;
-}): Promise<unknown> {
-  return invoke('export_media', { target, ...config } as unknown as Record<string, unknown>);
+}): Promise<ExportResult> {
+  return invoke<ExportResult>('media.export', {
+    target,
+    output_dir: config.output_dir,
+    format: config.format ?? 'original',
+    quality: config.quality ?? 90,
+    width: config.width ?? null,
+    height: config.height ?? null,
+    keep_aspect: config.keep_aspect ?? true,
+  });
 }
 
-export function reorderFolderItems(folderId: number, params: {
-  sort_by?: string;
-  direction?: string;
-  moves?: Array<{ hash: string; before_hash?: string | null; after_hash?: string | null }>;
-  hashes?: string[];
-}): Promise<void> {
-  return invoke<void>('reorder_folder_items', { folder_id: folderId, ...params } as unknown as Record<string, unknown>);
+export function reorderFolderMembers(
+  folderId: number,
+  itemIds: number[],
+): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.items.reorder', {
+    folder_id: folderId,
+    item_ids: itemIds,
+  });
 }
 
-export function reorderFolderMembers(folderId: number, itemIds: number[]): Promise<void> {
-  return invoke<void>('folders.items.reorder', { folder_id: folderId, item_ids: itemIds });
+export function sortFolderItemsByName(folderId: number): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.items.sort_name', { folder_id: folderId });
 }

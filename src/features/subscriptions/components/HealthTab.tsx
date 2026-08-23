@@ -42,8 +42,8 @@ export function HealthTab({
   failedPosts: FailedPostGroup[];
   issues: SubscriptionIssueRecord[];
   busy: boolean;
-  onRetryAll: () => void;
-  onRetryPost: (post: FailedPostGroup) => void;
+  onRetryAll?: () => void;
+  onRetryPost?: (post: FailedPostGroup) => void;
   onOpenUrl: (url: string) => void;
   onFixCredentials: (issue: SubscriptionIssueRecord) => void;
   onReviewQuery: (issue: SubscriptionIssueRecord) => void;
@@ -78,8 +78,8 @@ export function HealthTab({
             <ActionButton
               variant="secondary"
               compact
-              disabled={busy || retryablePostCount === 0}
-              onClick={onRetryAll}
+              disabled={busy || retryablePostCount === 0 || !onRetryAll}
+              onClick={() => onRetryAll?.()}
             >
               <IconRefresh size={13} /> Retry all
             </ActionButton>
@@ -123,7 +123,7 @@ export function HealthTab({
                         variant="ghost"
                         compact
                         disabled={busy}
-                        onClick={() => onRetryPost(post)}
+                        onClick={() => onRetryPost?.(post)}
                       >
                         Retry
                       </ActionButton>
@@ -164,7 +164,12 @@ export function HealthTab({
                 </ActionButton>
               )}
               {issue.recovery_action === 'retry_now' && (
-                <ActionButton variant="secondary" compact disabled={busy} onClick={onRetryAll}>
+                <ActionButton
+                  variant="secondary"
+                  compact
+                  disabled={busy || !onRetryAll}
+                  onClick={() => onRetryAll?.()}
+                >
                   <IconRefresh size={13} /> Retry now
                 </ActionButton>
               )}

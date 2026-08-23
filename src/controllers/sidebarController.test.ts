@@ -6,10 +6,7 @@ import { setSidebarTreeAtom, sidebarNodesAtom } from '../state/sidebar';
 
 const getNavigation = vi.hoisted(() => vi.fn());
 const getSidebarCounts = vi.hoisted(() => vi.fn());
-const reorderSidebarNodes = vi.hoisted(() => vi.fn());
-
 vi.mock('../platform/navigationApi', () => ({ getNavigation, getSidebarCounts }));
-vi.mock('../platform/sidebarApi', () => ({ reorderSidebarNodes }));
 
 import { buildSidebarNodes, sidebarController } from './sidebarController';
 

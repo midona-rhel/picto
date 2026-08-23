@@ -2,4 +2,4 @@
 import type { SubscriptionProgress } from "./SubscriptionProgress";
 import type { SubscriptionQueryView } from "./SubscriptionQueryView";
 
-export type SubscriptionView = { subscription_id: number, name: string, schedule: string, paused: boolean, initial_post_limit: number | null, periodic_post_limit: number | null, next_run_at: string | null, status: string | null, active_run_id: number | null, media_count: number, progress: SubscriptionProgress, queries: Array<SubscriptionQueryView>, };
+export type SubscriptionView = { subscription_id: number, name: string, schedule: string, paused: boolean, initial_post_limit: number | null, periodic_post_limit: number | null, next_run_at: string | null, status: string | null, active_run_id: number | null, media_count: number, cover_file_hash: string | null, progress: SubscriptionProgress, queries: Array<SubscriptionQueryView>, };

@@ -4,7 +4,6 @@ import { getDefaultStore } from 'jotai';
 import type { NavigationSnapshot } from '../shared/types/generated/application/NavigationSnapshot';
 import type { SidebarCounts } from '../shared/types/generated/application/SidebarCounts';
 import { getNavigation, getSidebarCounts } from '../platform/navigationApi';
-import { reorderSidebarNodes } from '../platform/sidebarApi';
 import type { SidebarNodeDto } from '../shared/types/canonical';
 import { setSidebarTreeAtom, sidebarLoadingAtom } from '../state/sidebar';
 
@@ -143,9 +142,5 @@ export const sidebarController = {
       .then(() => { initialFetchDone = true; })
       .catch(() => {})
       .finally(() => { initialFetchPromise = null; });
-  },
-
-  async reorderNodes(moves: [string, number][]) {
-    await reorderSidebarNodes(moves);
   },
 };

@@ -1,31 +1,44 @@
 import { invoke } from './ipc';
-import type { SmartFolderCommandPayload } from '../shared/types/canonical';
+import type { CreateSmartFolderInput } from '../shared/types/generated/application/CreateSmartFolderInput';
+import type { CreatedSmartFolder } from '../shared/types/generated/application/CreatedSmartFolder';
+import type { SmartFolderMutationReceipt } from '../shared/types/generated/application/SmartFolderMutationReceipt';
 
-export function createSmartFolder(params: {
-  folder: SmartFolderCommandPayload;
-}): Promise<unknown> {
-  return invoke('create_smart_folder', params as unknown as Record<string, unknown>);
+export function createSmartFolder(input: CreateSmartFolderInput): Promise<CreatedSmartFolder> {
+  return invoke<CreatedSmartFolder>('smart_folders.create', input);
 }
 
-export function deleteSmartFolder(id: string): Promise<void> {
-  return invoke<void>('delete_smart_folder', { id });
+export function deleteSmartFolder(smartFolderId: number): Promise<SmartFolderMutationReceipt> {
+  return invoke<SmartFolderMutationReceipt>('smart_folders.delete', {
+    smart_folder_id: smartFolderId,
+  });
 }
 
-export function updateSmartFolder(params: {
-  id: string;
-  folder: SmartFolderCommandPayload;
-}): Promise<void> {
-  return invoke<void>('update_smart_folder', params);
+export function updateSmartFolder(
+  smartFolderId: number,
+  value: CreateSmartFolderInput,
+): Promise<SmartFolderMutationReceipt> {
+  return invoke<SmartFolderMutationReceipt>('smart_folders.update', {
+    smart_folder_id: smartFolderId,
+    value,
+  });
 }
 
 export function moveSmartFolder(
   smartFolderId: number,
-  newParentId: number | null,
-  siblingOrder: [number, number][],
-): Promise<void> {
-  return invoke<void>('move_smart_folder', {
+  parentId: number | null,
+): Promise<SmartFolderMutationReceipt> {
+  return invoke<SmartFolderMutationReceipt>('smart_folders.move', {
     smart_folder_id: smartFolderId,
-    new_parent_id: newParentId,
-    sibling_order: siblingOrder,
+    parent_id: parentId,
+  });
+}
+
+export function reorderSmartFolders(
+  parentId: number | null,
+  smartFolderIds: number[],
+): Promise<SmartFolderMutationReceipt> {
+  return invoke<SmartFolderMutationReceipt>('smart_folders.reorder', {
+    parent_id: parentId,
+    smart_folder_ids: smartFolderIds,
   });
 }

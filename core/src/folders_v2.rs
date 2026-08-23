@@ -52,6 +52,15 @@ pub struct FolderWatchInput {
     pub include_subfolders: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct FolderMetadataInput {
+    pub folder_id: FolderId,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub notes: Option<String>,
+}
+
 /// Folder IDs are explicit because `MutationReceipt.item_ids` is reserved for
 /// media/library roots. This keeps folder invalidation truthful and typed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -120,6 +129,42 @@ impl Application {
         )?;
 
         Ok(folder_receipt(revision, vec![folder_id], Vec::new(), None))
+    }
+
+    pub fn set_folder_metadata(
+        &self,
+        input: &FolderMetadataInput,
+    ) -> Result<FolderMutationReceipt, String> {
+        let icon = normalized_optional(input.icon.as_deref());
+        let color = normalized_optional(input.color.as_deref());
+        let notes = normalized_optional(input.notes.as_deref());
+        let now = Utc::now().to_rfc3339();
+        let (_, revision, _) = self.store().transaction_if_changed(|transaction| {
+            require_folder(transaction, input.folder_id.0)?;
+            let previous: (Option<String>, Option<String>, Option<String>) = transaction
+                .query_row(
+                    "SELECT icon, color, notes FROM folder WHERE folder_id = ?1",
+                    [input.folder_id.0],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+            let next = (icon.clone(), color.clone(), notes.clone());
+            let changed = previous != next;
+            if changed {
+                transaction.execute(
+                    "UPDATE folder
+                     SET icon = ?1, color = ?2, notes = ?3, updated_at = ?4
+                     WHERE folder_id = ?5",
+                    params![icon, color, notes, now, input.folder_id.0],
+                )?;
+            }
+            Ok(((), changed))
+        })?;
+        Ok(folder_receipt(
+            revision,
+            vec![input.folder_id],
+            Vec::new(),
+            None,
+        ))
     }
 
     pub fn move_folder(
@@ -254,6 +299,40 @@ impl Application {
         )?;
         let mut receipt = folder_receipt(revision, vec![input.folder_id], Vec::new(), None);
         receipt.receipt.item_ids = input.item_ids.clone();
+        Ok(receipt)
+    }
+
+    pub fn sort_folder_items_by_name(
+        &self,
+        folder_id: FolderId,
+    ) -> Result<FolderMutationReceipt, String> {
+        let (item_ids, revision) = self.transaction(
+            |transaction| {
+                require_folder(transaction, folder_id.0)?;
+                let item_ids = transaction
+                    .prepare(
+                        "SELECT fi.item_id
+                         FROM folder_item fi
+                         JOIN library_root lr ON lr.item_id = fi.item_id
+                         JOIN library_item li ON li.item_id = fi.item_id
+                         WHERE fi.folder_id = ?1 AND lr.lifecycle = 'active'
+                         ORDER BY lower(COALESCE(li.label, '')), fi.item_id",
+                    )?
+                    .query_map([folder_id.0], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for (index, item_id) in item_ids.iter().enumerate() {
+                    transaction.execute(
+                        "UPDATE folder_item SET position_rank = ?1
+                         WHERE folder_id = ?2 AND item_id = ?3",
+                        params![(index as i64 + 1) * RANK_GAP, folder_id.0, item_id],
+                    )?;
+                }
+                Ok((item_ids.clone(), item_ids))
+            },
+            |_, _| Ok(()),
+        )?;
+        let mut receipt = folder_receipt(revision, vec![folder_id], Vec::new(), None);
+        receipt.receipt.item_ids = item_ids.into_iter().map(ItemId).collect();
         Ok(receipt)
     }
 
@@ -500,6 +579,13 @@ fn non_empty(label: &str, value: &str) -> Result<String, String> {
     Ok(value.to_string())
 }
 
+fn normalized_optional(value: Option<&str>) -> Option<String> {
+    value.and_then(|value| {
+        let value = value.trim();
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
 fn new_folder_key() -> String {
     let mut bytes = [0_u8; 16];
     rand::thread_rng().fill_bytes(&mut bytes);
@@ -515,8 +601,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        CreateFolderInput, FolderId, FolderWatchInput, ReorderFolderChildrenInput,
-        ReorderFolderItemsInput, RANK_GAP,
+        CreateFolderInput, FolderId, FolderMetadataInput, FolderWatchInput,
+        ReorderFolderChildrenInput, ReorderFolderItemsInput, RANK_GAP,
     };
     use crate::app::{Application, ItemId};
     use crate::store::Store;
@@ -672,6 +758,95 @@ mod tests {
                     .query_map([], |row| row.get::<_, i64>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 assert_eq!(ids, vec![third.0, first.0, second.0]);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn metadata_round_trips_as_one_folder_update() {
+        let (_directory, app, _media_id) = fixture();
+        let folder = create(&app, "Styled", None);
+
+        app.set_folder_metadata(&FolderMetadataInput {
+            folder_id: folder,
+            icon: Some("star".to_string()),
+            color: Some("#ff8800".to_string()),
+            notes: Some("Reference images".to_string()),
+        })
+        .unwrap();
+
+        app.store()
+            .read(|connection| {
+                let metadata: (Option<String>, Option<String>, Option<String>) = connection
+                    .query_row(
+                        "SELECT icon, color, notes FROM folder WHERE folder_id = ?1",
+                        [folder.0],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )?;
+                assert_eq!(
+                    metadata,
+                    (
+                        Some("star".to_string()),
+                        Some("#ff8800".to_string()),
+                        Some("Reference images".to_string()),
+                    )
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn sorting_folder_items_by_name_writes_canonical_order() {
+        let (_directory, app, zulu_id) = fixture();
+        let folder = create(&app, "Sorted", None);
+        let ((alpha_id, mike_id), _) = app
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE library_item SET label = 'Zulu' WHERE item_id = ?1",
+                    [zulu_id],
+                )?;
+                let create_root = |key: &str, label: &str| {
+                    transaction.execute(
+                        "INSERT INTO library_item
+                             (item_key, kind, label, created_at, updated_at)
+                         VALUES (?1, 'media', ?2, 'now', 'now')",
+                        rusqlite::params![key, label],
+                    )?;
+                    let item_id = transaction.last_insert_rowid();
+                    transaction.execute(
+                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
+                        [item_id],
+                    )?;
+                    Ok::<_, rusqlite::Error>(item_id)
+                };
+                let alpha_id = create_root("sort-alpha", "Alpha")?;
+                let mike_id = create_root("sort-mike", "mike")?;
+                for (item_id, rank) in [(zulu_id, 10), (mike_id, 20), (alpha_id, 30)] {
+                    transaction.execute(
+                        "INSERT INTO folder_item (folder_id, item_id, position_rank)
+                         VALUES (?1, ?2, ?3)",
+                        rusqlite::params![folder.0, item_id, rank],
+                    )?;
+                }
+                Ok((alpha_id, mike_id))
+            })
+            .unwrap();
+
+        app.sort_folder_items_by_name(folder).unwrap();
+
+        app.store()
+            .read(|connection| {
+                let ids = connection
+                    .prepare(
+                        "SELECT item_id FROM folder_item
+                         WHERE folder_id = ?1 ORDER BY position_rank, item_id",
+                    )?
+                    .query_map([folder.0], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                assert_eq!(ids, vec![alpha_id, mike_id, zulu_id]);
                 Ok(())
             })
             .unwrap();

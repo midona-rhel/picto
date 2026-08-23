@@ -7,18 +7,11 @@ import type { Lifecycle } from '../shared/types/generated/application/Lifecycle'
 import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
 import type { QueryItemsInput } from '../shared/types/generated/application/QueryItemsInput';
 import type { SelectionSummary as ReplacementSelectionSummary } from '../shared/types/generated/application/SelectionSummary';
-import type {
-  CanonicalEntityDetails,
-  MediaEntityPatch,
-} from '../shared/types/canonical';
+import type { MediaEntityPatch } from '../shared/types/canonical';
 
 export function queryItems(query: ItemQuery, page: ItemPageRequest): Promise<ItemPage> {
   const input: QueryItemsInput = { query, page };
   return invoke<ItemPage>('items.query', input);
-}
-
-export function getEntityDetails(entityHash: string): Promise<CanonicalEntityDetails | null> {
-  return invoke<CanonicalEntityDetails | null>('get_entity_details', { entity_hash: entityHash });
 }
 
 export function recordMediaView(itemId: number): Promise<unknown> {

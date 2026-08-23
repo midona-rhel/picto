@@ -7,6 +7,7 @@ import type {
   SubscriptionProgressEvent,
   SubscriptionRunRecord,
 } from '../shared/types/subscriptions';
+import type { IssueCursor } from '../shared/types/generated/application/IssueCursor';
 import { getProgressBySubscriptionId } from '../shared/lib/subscriptionHelpers';
 
 export type SubscriptionsSelection =
@@ -50,7 +51,7 @@ export type SubscriptionDetailState = {
   issues: SubscriptionIssueRecord[];
   failedPosts: FailedPostGroup[];
   attempts: SubscriptionDownloadAttemptRecord[];
-  issueNextCursor: number | null;
+  issueNextCursor: IssueCursor | null;
   failedPostNextCursor: number | null;
   issueTotalCount: number;
   failedPostTotalCount: number;

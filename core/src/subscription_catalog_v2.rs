@@ -89,6 +89,7 @@ pub struct SubscriptionView {
     pub active_run_id: Option<i64>,
     #[ts(type = "number")]
     pub media_count: i64,
+    pub cover_file_hash: Option<String>,
     pub progress: SubscriptionProgress,
     pub queries: Vec<SubscriptionQueryView>,
 }
@@ -108,7 +109,20 @@ pub fn list(application: &Application) -> Result<SubscriptionList, String> {
                 "SELECT s.subscription_id, s.name, s.schedule, s.paused,
                         s.initial_post_limit, s.periodic_post_limit, s.next_run_at,
                         active.run_id, COALESCE(active.status, latest.status),
-                        COUNT(DISTINCT CASE WHEN si.state = 'ingested' THEN si.media_item_id END)
+                        COUNT(DISTINCT CASE WHEN si.state = 'ingested' THEN si.media_item_id END),
+                        (
+                            SELECT mf.file_hash
+                            FROM subscription_source_post cover_ssp
+                            JOIN source_item cover_si
+                              ON cover_si.source_post_id = cover_ssp.source_post_id
+                            JOIN media_asset cover_ma
+                              ON cover_ma.item_id = cover_si.media_item_id
+                            JOIN media_file mf ON mf.file_id = cover_ma.file_id
+                            WHERE cover_ssp.subscription_id = s.subscription_id
+                              AND cover_si.state = 'ingested'
+                            ORDER BY cover_si.updated_at DESC, cover_si.source_item_id DESC
+                            LIMIT 1
+                        )
                  FROM subscription s
                  LEFT JOIN subscription_source_post ssp
                    ON ssp.subscription_id = s.subscription_id
@@ -136,6 +150,7 @@ pub fn list(application: &Application) -> Result<SubscriptionList, String> {
                     active_run_id: row.get(7)?,
                     status: row.get(8)?,
                     media_count: row.get(9)?,
+                    cover_file_hash: row.get(10)?,
                     progress: SubscriptionProgress::default(),
                     queries: Vec::new(),
                 })

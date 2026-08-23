@@ -2,4 +2,4 @@
 import type { IssueCursor } from "./IssueCursor";
 import type { SubscriptionIssue } from "./SubscriptionIssue";
 
-export type IssuePage = { subscription_id: number, issues: Array<SubscriptionIssue>, next_cursor: IssueCursor | null, };
+export type IssuePage = { subscription_id: number, issues: Array<SubscriptionIssue>, next_cursor: IssueCursor | null, total_count: number, };

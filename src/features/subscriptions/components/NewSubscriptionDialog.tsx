@@ -1,11 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconChevronRight } from '@tabler/icons-react';
 import { GlassModal } from '../../../shared/ui/GlassModal/GlassModal';
 import { ActionButton } from './ActionButton';
+import type { SubscriptionSiteInfo } from '../../../shared/types/subscriptions';
 import styles from './NewSubscriptionDialog.module.css';
 
 export interface CreateSubscriptionInput {
   name: string;
+  siteId: string;
+  queryText: string;
   initialPostLimit: number;
   periodicPostLimit: number;
 }
@@ -17,23 +20,35 @@ export interface CreateSubscriptionInput {
 export function NewSubscriptionDialog({
   open,
   busy,
+  sites,
   onCreate,
   onClose,
 }: {
   open: boolean;
   busy: boolean;
+  sites: SubscriptionSiteInfo[];
   onCreate: (result: CreateSubscriptionInput) => void;
   onClose: () => void;
 }) {
   const [name, setName] = useState('');
+  const [siteId, setSiteId] = useState(sites[0]?.id ?? '');
+  const [queryText, setQueryText] = useState('');
   const [initialLimit, setInitialLimit] = useState('100');
   const [periodicLimit, setPeriodicLimit] = useState('50');
   const [showAdvanced, setShowAdvanced] = useState(false);
 
-  const canCreate = name.trim() !== '' && !busy;
+  useEffect(() => {
+    if (sites.length > 0 && !sites.some((site) => site.id === siteId)) {
+      setSiteId(sites[0].id);
+    }
+  }, [siteId, sites]);
+
+  const canCreate = name.trim() !== '' && siteId !== '' && queryText.trim() !== '' && !busy;
 
   const reset = () => {
     setName('');
+    setSiteId(sites[0]?.id ?? '');
+    setQueryText('');
     setInitialLimit('100');
     setPeriodicLimit('50');
     setShowAdvanced(false);
@@ -49,6 +64,8 @@ export function NewSubscriptionDialog({
     const parsedPeriodic = Number.parseInt(periodicLimit, 10);
     onCreate({
       name: name.trim(),
+      siteId,
+      queryText: queryText.trim(),
       initialPostLimit: Number.isFinite(parsedInitial) && parsedInitial > 0 ? parsedInitial : 100,
       periodicPostLimit: Number.isFinite(parsedPeriodic) && parsedPeriodic > 0 ? parsedPeriodic : 50,
     });
@@ -80,6 +97,33 @@ export function NewSubscriptionDialog({
               placeholder="e.g. Favourite artists"
               autoFocus
               onChange={(e) => setName(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <div className={styles.row}>
+          <span className={styles.rowLabel}>Source</span>
+          <div className={styles.rowControl}>
+            <select
+              className={styles.textInput}
+              value={siteId}
+              onChange={(event) => setSiteId(event.target.value)}
+              disabled={busy || sites.length === 0}
+            >
+              {sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
+            </select>
+          </div>
+        </div>
+
+        <div className={styles.row}>
+          <span className={styles.rowLabel}>Query</span>
+          <div className={styles.rowControl}>
+            <input
+              className={styles.textInput}
+              value={queryText}
+              placeholder={sites.find((site) => site.id === siteId)?.example_query ?? 'artist or tag'}
+              onChange={(event) => setQueryText(event.target.value)}
+              disabled={busy || sites.length === 0}
             />
           </div>
         </div>

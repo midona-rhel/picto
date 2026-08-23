@@ -13,7 +13,6 @@ import {
   getSubscriptions,
   listCredentialHealth,
   listCredentials,
-  listSubscriptionDownloadAttempts,
   listSubscriptionIssues,
   listSubscriptionRuns,
   pauseSubscription,
@@ -21,19 +20,12 @@ import {
   pixivOAuthExchange,
   pixivOAuthStart,
   renameSubscription,
-  resetSubscription,
-  resetSubscriptionQuery,
-  retrySubscriptionFailedPost,
-  retrySubscriptionFailedPosts,
   runSubscription,
-  runSubscriptionQuery,
   setCredential,
   setSubscriptionSchedule,
   stopSubscription,
-  stopSubscriptionQuery,
-  suggestSiteTags,
 } from '../platform/subscriptionApi';
-import type { TagSuggestion } from '../platform/subscriptionApi';
+import type { IssueCursor } from '../shared/types/generated/application/IssueCursor';
 import type {
   CredentialDomain,
   CredentialHealth,
@@ -45,7 +37,6 @@ import type {
   SubscriptionRunRecord,
   SubscriptionSiteInfo,
 } from '../shared/types/subscriptions';
-import { groupFailedPostAttempts } from '../shared/lib/subscriptionHelpers';
 import type { SubscriptionWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
 
 function deriveLastActivityAt(subscription: SubscriptionInfo): string | null {
@@ -70,14 +61,11 @@ export const subscriptionsController = {
 
     const metricsEntries = await Promise.all(
       subscriptions.map(async (subscription) => {
-        const [issues, attempts] = await Promise.all([
-          listSubscriptionIssues(subscription.id, null, 1),
-          listSubscriptionDownloadAttempts(subscription.id, null, 1),
-        ]);
+        const issues = await listSubscriptionIssues(subscription.id, null, 1);
         return [
           subscription.id,
           {
-            failedPostCount: attempts.failed_post_count,
+            failedPostCount: 0,
             openIssueCount: issues.total_count,
             lastActivityAt: deriveLastActivityAt(subscription),
           },
@@ -111,19 +99,8 @@ export const subscriptionsController = {
     return listSubscriptionRuns(subscriptionId, 20);
   },
 
-  async listIssues(subscriptionId: string, cursor?: number | null) {
+  async listIssues(subscriptionId: string, cursor?: IssueCursor | null) {
     return listSubscriptionIssues(subscriptionId, null, 50, cursor);
-  },
-
-  async listFailedPosts(subscription: SubscriptionInfo, cursor?: number | null) {
-    const page = await listSubscriptionDownloadAttempts(subscription.id, null, 100, cursor);
-    return {
-      attempts: page.items,
-      failedPosts: groupFailedPostAttempts(page.items, subscription.queries),
-      nextCursor: page.next_cursor,
-      totalCount: page.failed_post_count,
-      retryableCount: page.retryable_post_count,
-    };
   },
 
   getSites(): Promise<SubscriptionSiteInfo[]> {
@@ -136,6 +113,8 @@ export const subscriptionsController = {
 
   create(input: {
     name: string;
+    site_id: string;
+    query_text: string;
     initial_post_limit?: number | null;
     periodic_post_limit?: number | null;
   }): Promise<SubscriptionInfo> {
@@ -146,24 +125,9 @@ export const subscriptionsController = {
     return setSubscriptionSchedule(id, schedule);
   },
 
-  suggestSiteTags(siteId: string, prefix: string, limit?: number): Promise<TagSuggestion[]> {
-    return suggestSiteTags(siteId, prefix, limit);
-  },
-
   /** Newest downloaded file hash per subscription id, for grid covers. */
   async getCovers(): Promise<Map<string, string>> {
-    const records = await getSubscriptionCovers();
-    return new Map(records.map((record) => [record.subscription_id, record.entity_hash]));
-  },
-
-  async retryFailedPosts(subscriptionId: string) {
-    const result = await retrySubscriptionFailedPosts(subscriptionId);
-    if (result.failed > 0) {
-      throw new Error(
-        `Queued ${result.queued} failed post${result.queued === 1 ? '' : 's'}, but ${result.failed} could not be queued.`,
-      );
-    }
-    return result;
+    return getSubscriptionCovers();
   },
 
   rename(id: string, name: string): Promise<void> {
@@ -176,10 +140,6 @@ export const subscriptionsController = {
 
   pause(id: string, paused: boolean): Promise<void> {
     return pauseSubscription(id, paused);
-  },
-
-  reset(id: string): Promise<void> {
-    return resetSubscription(id);
   },
 
   run(id: string): Promise<void> {
@@ -215,26 +175,6 @@ export const subscriptionsController = {
 
   pauseQuery(id: string, paused: boolean): Promise<void> {
     return pauseSubscriptionQuery(id, paused);
-  },
-
-  resetQuery(id: string): Promise<void> {
-    return resetSubscriptionQuery(id);
-  },
-
-  runQuery(subscriptionId: string, queryId: string): Promise<void> {
-    return runSubscriptionQuery(subscriptionId, queryId);
-  },
-
-  stopQuery(subscriptionId: string, queryId: string): Promise<void> {
-    return stopSubscriptionQuery(subscriptionId, queryId);
-  },
-
-  retryFailedPost(input: {
-    subscription_id: string;
-    query_id: string;
-    post_id: string;
-  }): Promise<void> {
-    return retrySubscriptionFailedPost(input);
   },
 
   listCredentials(): Promise<CredentialDomain[]> {

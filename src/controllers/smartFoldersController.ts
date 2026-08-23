@@ -1,22 +1,55 @@
-/**
- * Smart folder controller — owns smart folder actions.
- * Calls API, then eagerly updates sidebar state atoms.
- */
+/** Smart-folder CRUD through the replacement transaction boundary. */
 
 import { getDefaultStore } from 'jotai';
 import {
   createSmartFolder,
   deleteSmartFolder,
   moveSmartFolder,
+  reorderSmartFolders,
   updateSmartFolder,
 } from '../platform/smartFolderApi';
-import type { SmartFolderCommandPayload, SmartFolderPredicate } from '../shared/types/canonical';
-import { removeSmartFolderNodeAtom } from '../state/sidebar';
+import type {
+  SmartFolderCommandPayload,
+  SmartFolderPredicate as UiSmartFolderPredicate,
+} from '../shared/types/canonical';
+import type { CreateSmartFolderInput } from '../shared/types/generated/application/CreateSmartFolderInput';
+import type { SmartFolderPredicate } from '../shared/types/generated/application/SmartFolderPredicate';
+import { activeNodeIdAtom } from '../state/navigation';
+import { pushHistory, removeHistoryEntries } from '../state/navigationHistory';
 
 const store = getDefaultStore();
 
-export function emptySmartFolderPayload(overrides: Partial<SmartFolderCommandPayload> = {}): SmartFolderCommandPayload {
-  const predicate: SmartFolderPredicate = { groups: [] };
+function toInput(folder: SmartFolderCommandPayload): CreateSmartFolderInput {
+  const parsed = JSON.parse(folder.predicate_json) as UiSmartFolderPredicate;
+  const predicate: SmartFolderPredicate = {
+    groups: parsed.groups.map((group) => ({
+      match_mode: group.match_mode,
+      negate: group.negate ?? false,
+      rules: group.rules.map((rule) => ({
+        field: rule.field,
+        op: rule.op,
+        value: rule.value ?? null,
+        value2: rule.value2 ?? null,
+        values: rule.values ?? null,
+      })),
+    })),
+  };
+  return {
+    name: folder.name,
+    parent_id: folder.parent_id,
+    predicate,
+    icon: folder.icon,
+    color: folder.color,
+    notes: folder.notes,
+    sort_field: folder.sort_field,
+    sort_order: folder.sort_order,
+  };
+}
+
+export function emptySmartFolderPayload(
+  overrides: Partial<SmartFolderCommandPayload> = {},
+): SmartFolderCommandPayload {
+  const predicate: UiSmartFolderPredicate = { groups: [] };
   return {
     smart_folder_id: overrides.smart_folder_id ?? 0,
     name: overrides.name ?? 'New Smart Folder',
@@ -34,22 +67,37 @@ export function emptySmartFolderPayload(overrides: Partial<SmartFolderCommandPay
 }
 
 export const smartFoldersController = {
-  async delete(id: string) {
-    const numId = parseInt(id, 10);
-    if (!isNaN(numId)) store.set(removeSmartFolderNodeAtom, numId);
-    await deleteSmartFolder(id);
+  async delete(id: string): Promise<void> {
+    const smartFolderId = Number(id);
+    if (!Number.isSafeInteger(smartFolderId)) throw new Error(`Invalid smart folder ID: ${id}`);
+    const result = await deleteSmartFolder(smartFolderId);
+    const deleted = new Set(result.deleted_smart_folder_ids.map((value) => `smart:${value}`));
+    removeHistoryEntries(deleted);
+    if (deleted.has(store.get(activeNodeIdAtom))) {
+      const fallback = result.fallback_smart_folder_id == null
+        ? 'system:active'
+        : `smart:${result.fallback_smart_folder_id}`;
+      store.set(activeNodeIdAtom, fallback);
+      pushHistory(fallback);
+    }
   },
 
-  async create(folder: SmartFolderCommandPayload) {
-    await createSmartFolder({ folder });
-    // Sidebar will refresh via state_changed event
+  async create(folder: SmartFolderCommandPayload): Promise<string> {
+    const result = await createSmartFolder(toInput(folder));
+    return `smart:${result.smart_folder_id}`;
   },
 
-  async update(id: number, folder: SmartFolderCommandPayload) {
-    await updateSmartFolder({ id: String(id), folder });
+  async update(id: number, folder: SmartFolderCommandPayload): Promise<void> {
+    await updateSmartFolder(id, toInput(folder));
   },
 
-  async move(smartFolderId: number, newParentId: number | null, siblingOrder: [number, number][]) {
-    await moveSmartFolder(smartFolderId, newParentId, siblingOrder);
+  async move(smartFolderId: number, parentId: number | null, siblingOrder: [number, number][]) {
+    await moveSmartFolder(smartFolderId, parentId);
+    if (siblingOrder.length > 0) {
+      const orderedIds = [...siblingOrder]
+        .sort((left, right) => left[1] - right[1])
+        .map(([siblingId]) => siblingId);
+      await reorderSmartFolders(parentId, orderedIds);
+    }
   },
 };

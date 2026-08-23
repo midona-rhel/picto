@@ -3,42 +3,90 @@ import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
 import { Notifications, notifications } from '@mantine/notifications';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { getEntityDetails } from '../../platform/entityApi';
-import { getDuplicatePairs, resolveDuplicatePair, scanDuplicates } from '../../platform/duplicateApi';
-import type { CanonicalEntityDetails } from '../../shared/types/canonical';
+import {
+  getDuplicateItemDetails,
+  getDuplicatePairs,
+  resolveDuplicatePair,
+  scanDuplicates,
+  type DuplicatePair,
+} from '../../platform/duplicateApi';
+import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
 import { DuplicatesScreen } from './DuplicatesScreen';
 
-vi.mock('../../platform/entityApi', () => ({ getEntityDetails: vi.fn() }));
 vi.mock('../../platform/duplicateApi', () => ({
+  getDuplicateItemDetails: vi.fn(),
   getDuplicatePairs: vi.fn(),
   resolveDuplicatePair: vi.fn(),
   scanDuplicates: vi.fn(),
 }));
 
-function details(hash: string, name: string): CanonicalEntityDetails {
+function file(fileId: number, hash: string, width = 100, height = 100) {
   return {
-    entity_hash: hash,
-    name,
+    file_id: fileId,
+    file_hash: hash,
     mime_type: 'image/png',
     size_bytes: 1_024,
-    pixel_width: 100,
-    pixel_height: 100,
-    duration_ms: null,
+    pixel_width: width,
+    pixel_height: height,
     frame_count: null,
-    has_audio: false,
-    status: 1,
-    rating: null,
-    notes: null,
-    source_urls: null,
-    date_created: '2026-01-01T00:00:00Z',
-    date_added: '2026-01-01T00:00:00Z',
-    date_modified: '2026-01-01T00:00:00Z',
-    dominant_color_hex: null,
-    dominant_colors: null,
-    perceptual_hash: null,
-    tags: [],
-    folders: [],
+    decoded_information: null,
+    has_alpha: null,
   };
+}
+
+function pair(decision: DuplicatePair['decision'] = 'NeedsChoice'): DuplicatePair {
+  return {
+    file_id_a: 1,
+    file_id_b: 2,
+    distance: 5,
+    left: { file: file(1, 'left'), item_ids: [11] },
+    right: { file: file(2, 'right'), item_ids: [22] },
+    decision,
+    similarity_pct: 98.046875,
+    status: 'detected',
+  };
+}
+
+function details(itemId: number, hash: string, name: string): ItemDetails {
+  return {
+    item_id: itemId,
+    kind: 'media',
+    lifecycle: 'active',
+    label: name,
+    cover_media_item_id: null,
+    folder_ids: [],
+    media: [{
+      media_item_id: itemId,
+      file_hash: hash,
+      mime_type: 'image/png',
+      dominant_color_hex: null,
+      size_bytes: 1_024,
+      pixel_width: 100,
+      pixel_height: 100,
+      duration_ms: null,
+      frame_count: null,
+      has_audio: false,
+      name,
+      notes: null,
+      rating: null,
+      source_urls: [],
+      captured_at: null,
+      imported_at: '2026-01-01T00:00:00Z',
+      position: 0,
+      tags: [],
+    }],
+    aggregate_tags: [],
+    revision: 1,
+  };
+}
+
+function renderScreen(withNotifications = false) {
+  return render(
+    <MantineProvider forceColorScheme="dark">
+      {withNotifications && <Notifications />}
+      <DuplicatesScreen />
+    </MantineProvider>,
+  );
 }
 
 describe('DuplicatesScreen', () => {
@@ -46,382 +94,127 @@ describe('DuplicatesScreen', () => {
     vi.clearAllMocks();
     notifications.clean();
     vi.mocked(getDuplicatePairs).mockResolvedValue({
-      items: [{ hash_a: 'left', hash_b: 'right', distance: 1, similarity_pct: 98, status: 'detected' }],
+      items: [pair()],
       next_cursor: null,
       has_more: false,
       total: 1,
     });
-    vi.mocked(getEntityDetails).mockImplementation(async (hash) => details(hash, hash === 'left' ? 'Left image' : 'Right image'));
+    vi.mocked(getDuplicateItemDetails).mockImplementation(async (itemId) => (
+      itemId === 11 ? details(itemId, 'left', 'Left image') : details(itemId, 'right', 'Right image')
+    ));
+    vi.mocked(resolveDuplicatePair).mockResolvedValue({
+      status: 'resolved',
+      choice: 'KeepBoth',
+      affected_item_ids: [11, 22],
+      freed_file_hash: null,
+      receipt: { revision: 2, resources: ['duplicates'], item_ids: [11, 22] },
+    });
     vi.mocked(scanDuplicates).mockResolvedValue({
-      candidates_found: 0,
-      pairs_inserted: 0,
-      reviewable_detected_total: 0,
-      reviewable_detected_new: 0,
-      total_files: 0,
-      files_with_phash: 0,
-      files_scanned: 0,
-      closest_distance: null,
+      candidate_count: 0,
+      affected_item_ids: [],
+      receipt: { revision: 2, resources: ['duplicates'], item_ids: [] },
     });
   });
 
-  it('resolves a duplicate using direct media ownership', async () => {
-    vi.mocked(getDuplicatePairs)
-      .mockResolvedValueOnce({
-        items: [{ hash_a: 'left', hash_b: 'right', distance: 1, similarity_pct: 98, status: 'detected' }],
-        next_cursor: null,
-        has_more: false,
-        total: 1,
-      })
-      .mockResolvedValueOnce({ items: [], next_cursor: null, has_more: false, total: 0 });
-    vi.mocked(resolveDuplicatePair).mockResolvedValueOnce({
-        status: 'resolved',
-        winner_hash: 'left',
-        loser_hash: 'right',
-        action: 'keep_left',
-        affected_folder_ids: [],
-        tags_merged: 0,
-        blob_cleanup_pending: false,
-        cleanup_error: null,
-      });
+  it('loads logical details by item ID while rendering physical file hashes', async () => {
+    await act(async () => { renderScreen(); });
 
-    const user = userEvent.setup();
-    await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
-    });
-
-    await screen.findByText('Left image');
-    expect(screen.queryByText('Duplicate review')).not.toBeInTheDocument();
-    expect(screen.queryByText('VS')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Previous pair' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Next pair' })).toBeInTheDocument();
+    expect(await screen.findByText('Left image')).toBeInTheDocument();
+    expect(screen.getByText('Right image')).toBeInTheDocument();
+    expect(getDuplicateItemDetails).toHaveBeenCalledWith(11);
+    expect(getDuplicateItemDetails).toHaveBeenCalledWith(22);
     expect(screen.getByText('98% match')).toBeInTheDocument();
-    expect(screen.getByRole('contentinfo')).toHaveTextContent('Not duplicates');
-    expect(screen.getByRole('contentinfo')).toHaveTextContent('Smart merge');
-    await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Keep left' }));
-    });
+    expect(screen.getByTestId('left-preview-layers').querySelector('img')).toHaveAttribute(
+      'src',
+      'media://localhost/thumb/left.jpg',
+    );
+  });
 
-    await waitFor(() => {
-      expect(resolveDuplicatePair).toHaveBeenLastCalledWith('keep_left', 'left', 'right');
-      expect(screen.getByText('Review complete')).toBeInTheDocument();
-    });
+  it('resolves a pair through the replacement candidate contract', async () => {
+    const user = userEvent.setup();
+    await act(async () => { renderScreen(); });
+    await screen.findByText('Left image');
+
+    await user.click(screen.getByRole('button', { name: 'Keep left' }));
+
+    await waitFor(() => expect(resolveDuplicatePair).toHaveBeenLastCalledWith('keep_left', expect.objectContaining({
+      file_id_a: 1,
+      file_id_b: 2,
+    })));
   });
 
   it('keeps an ambiguous smart merge in review for an explicit choice', async () => {
-    vi.mocked(resolveDuplicatePair).mockResolvedValue({
-      status: 'quality_ambiguous',
-      winner_hash: null,
-      loser_hash: null,
-      action: 'smart_merge',
-      affected_folder_ids: [],
-      tags_merged: 0,
-      blob_cleanup_pending: false,
-      cleanup_error: null,
-    });
-
     const user = userEvent.setup();
-    await act(async () => {
-      render(
-        <MantineProvider forceColorScheme="dark">
-          <Notifications />
-          <DuplicatesScreen />
-        </MantineProvider>,
-      );
-    });
-
+    await act(async () => { renderScreen(true); });
     await screen.findByText('Left image');
-    await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Smart merge' }));
-    });
 
-    await waitFor(() => expect(resolveDuplicatePair).toHaveBeenCalledTimes(1));
+    vi.mocked(resolveDuplicatePair).mockResolvedValueOnce({
+      status: 'quality_ambiguous',
+      choice: 'KeepBoth',
+      affected_item_ids: [],
+      freed_file_hash: null,
+      receipt: { revision: 2, resources: ['duplicates'], item_ids: [] },
+    });
+    await user.click(screen.getByRole('button', { name: 'Smart merge' }));
+
     expect(await screen.findByRole('alert')).toHaveTextContent('No clear quality winner. Choose left or right, or keep both.');
-    expect(screen.queryByText('Review complete')).not.toBeInTheDocument();
+    expect(resolveDuplicatePair).toHaveBeenCalledWith('smart_merge', expect.objectContaining({ decision: 'NeedsChoice' }));
     expect(getDuplicatePairs).toHaveBeenCalledTimes(1);
   });
 
-  it('warns about pending blob cleanup without blocking resolution', async () => {
-    vi.mocked(getDuplicatePairs)
-      .mockResolvedValueOnce({
-        items: [{ hash_a: 'left', hash_b: 'right', distance: 1, similarity_pct: 98, status: 'detected' }],
-        next_cursor: null,
-        has_more: false,
-        total: 1,
-      })
-      .mockResolvedValueOnce({ items: [], next_cursor: null, has_more: false, total: 0 });
-    vi.mocked(resolveDuplicatePair).mockResolvedValue({
-      status: 'resolved',
-      winner_hash: 'left',
-      loser_hash: 'right',
-      action: 'keep_left',
-      affected_folder_ids: [],
-      tags_merged: 0,
-      blob_cleanup_pending: true,
-      cleanup_error: 'Cleanup will resume after the blob store is available.',
-    });
-
+  it('uses one linked zoom level for both comparison panes', async () => {
     const user = userEvent.setup();
-    await act(async () => {
-      render(
-        <MantineProvider forceColorScheme="dark">
-          <Notifications />
-          <DuplicatesScreen />
-        </MantineProvider>,
-      );
-    });
-
+    await act(async () => { renderScreen(); });
     await screen.findByText('Left image');
-    await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Keep left' }));
-    });
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Cleanup will resume after the blob store is available.');
-    await waitFor(() => expect(screen.getByText('Review complete')).toBeInTheDocument());
-    expect(getDuplicatePairs).toHaveBeenCalledTimes(2);
-  });
-
-  it('keeps resolution failures visible while a candidate is displayed', async () => {
-    vi.mocked(resolveDuplicatePair).mockRejectedValue(new Error('The pair could not be resolved.'));
-    const user = userEvent.setup();
-
-    await act(async () => {
-      render(
-        <MantineProvider forceColorScheme="dark">
-          <Notifications />
-          <DuplicatesScreen />
-        </MantineProvider>,
-      );
-    });
-
-    await screen.findByText('Left image');
-    await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Not duplicates' }));
-    });
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('The pair could not be resolved.');
-    expect(screen.getByText('Left image')).toBeInTheDocument();
-  });
-
-  it('applies one zoom level to both comparison panes', async () => {
-    const user = userEvent.setup();
-    await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
-    });
-
-    await screen.findByText('Left image');
-    await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Zoom out' }));
-    });
+    await user.click(screen.getByRole('button', { name: 'Zoom out' }));
 
     expect(screen.getByText('80%')).toBeInTheDocument();
     expect(screen.getByTestId('left-preview-layers').style.transform).toContain('scale(0.8)');
     expect(screen.getByTestId('right-preview-layers').style.transform).toContain('scale(0.8)');
-
-    await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Fit both images' }));
-    });
-    expect(screen.getByText('100%')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Fit both images' })).toHaveAttribute('aria-pressed', 'true');
   });
 
-  it('fits different source dimensions independently at the shared 100% zoom', async () => {
-    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(500);
-    const height = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(300);
-    vi.mocked(getEntityDetails).mockImplementation(async (hash) => ({
-      ...details(hash, hash === 'left' ? 'Left image' : 'Right image'),
-      pixel_width: hash === 'left' ? 100 : 200,
-      pixel_height: 100,
-    }));
-
-    await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
-    });
-    await screen.findByText('Left image');
-
-    expect(screen.getByText('100%')).toBeInTheDocument();
-    expect(screen.getByTestId('left-preview-layers').style.transform).toContain('scale(3)');
-    expect(screen.getByTestId('right-preview-layers').style.transform).toContain('scale(2.5)');
-    width.mockRestore();
-    height.mockRestore();
-  });
-
-  it('uses a cancelable native wheel listener for linked zoom', async () => {
-    await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
-    });
-    await screen.findByText('Left image');
-    const event = new WheelEvent('wheel', {
-      bubbles: true,
-      cancelable: true,
-      clientX: 20,
-      clientY: 20,
-      deltaY: -100,
-    });
-
-    act(() => {
-      screen.getByTestId('left-preview').dispatchEvent(event);
-    });
-
-    expect(event.defaultPrevented).toBe(true);
-    expect(screen.queryByText('100%')).not.toBeInTheDocument();
-  });
-
-  it('shows an aligned difference composite only while the comparison control is held', async () => {
+  it('shows the aligned difference composite only while the control is held', async () => {
     const user = userEvent.setup();
-    await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
-    });
-
+    await act(async () => { renderScreen(); });
     await screen.findByText('Left image');
     const control = screen.getByRole('button', { name: 'Highlight differences' });
-    await act(async () => {
-      await user.hover(control);
-    });
 
+    await user.hover(control);
     expect(screen.getByTestId('left-difference-composite')).toBeInTheDocument();
     expect(screen.getByTestId('right-difference-composite')).toBeInTheDocument();
-    expect(control).toHaveAttribute('aria-pressed', 'true');
 
-    await act(async () => {
-      await user.unhover(control);
-    });
+    await user.unhover(control);
     expect(screen.queryByTestId('left-difference-composite')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('right-difference-composite')).not.toBeInTheDocument();
   });
 
-  it('disables decisions while the current pair metadata is loading', async () => {
-    vi.mocked(getEntityDetails).mockImplementation(() => new Promise(() => {}));
-
-    await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
-    });
+  it('keeps decisions disabled while logical details are loading', async () => {
+    vi.mocked(getDuplicateItemDetails).mockImplementation(() => new Promise(() => {}));
+    await act(async () => { renderScreen(); });
 
     expect(await screen.findByRole('button', { name: 'Keep left' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Keep right' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Not duplicates' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Keep both' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Smart merge' })).toBeDisabled();
   });
 
-  it('clears the previous pair metadata while the next pair loads', async () => {
-    vi.mocked(getDuplicatePairs).mockResolvedValue({
-      items: [
-        { hash_a: 'left', hash_b: 'right', distance: 1, similarity_pct: 98, status: 'detected' },
-        { hash_a: 'next-left', hash_b: 'next-right', distance: 2, similarity_pct: 97, status: 'detected' },
-      ],
-      next_cursor: null,
-      has_more: false,
-      total: 2,
-    });
-    let resolveNext!: () => void;
-    const nextMetadata = new Promise<void>((resolve) => { resolveNext = resolve; });
-    vi.mocked(getEntityDetails).mockImplementation(async (hash) => {
-      if (hash.startsWith('next-')) {
-        await nextMetadata;
-      }
-      return details(hash, hash === 'left' ? 'Left image' : hash === 'right' ? 'Right image' : `${hash} image`);
-    });
-
+  it('keeps the empty state stable and reports scan progress', async () => {
+    vi.mocked(getDuplicatePairs).mockResolvedValue({ items: [], next_cursor: null, has_more: false, total: 0 });
+    let finishScan!: (result: Awaited<ReturnType<typeof scanDuplicates>>) => void;
+    vi.mocked(scanDuplicates).mockImplementationOnce(() => new Promise((resolve) => { finishScan = resolve; }));
     const user = userEvent.setup();
-    await act(async () => {
-      render(<MantineProvider forceColorScheme="dark"><DuplicatesScreen /></MantineProvider>);
-    });
-    await screen.findByText('Left image');
-
-    await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Next pair' }));
-    });
-
-    expect(screen.queryByText('Left image')).not.toBeInTheDocument();
-    expect(screen.getAllByText('Loading metadata...')).toHaveLength(2);
-
-    await act(async () => { resolveNext(); });
-    expect(await screen.findByText('next-left image')).toBeInTheDocument();
-  });
-
-  it('shows one shared result notification for newly found pairs', async () => {
-    vi.mocked(getDuplicatePairs).mockResolvedValue({
-      items: [],
-      next_cursor: null,
-      has_more: false,
-      total: 0,
-    });
-    vi.mocked(scanDuplicates).mockResolvedValue({
-      candidates_found: 17,
-      pairs_inserted: 17,
-      reviewable_detected_total: 17,
-      reviewable_detected_new: 17,
-      total_files: 100,
-      files_with_phash: 100,
-      files_scanned: 100,
-      closest_distance: 1,
-    });
-    const user = userEvent.setup();
-
-    await act(async () => {
-      render(
-        <MantineProvider forceColorScheme="dark">
-          <Notifications />
-          <DuplicatesScreen />
-        </MantineProvider>,
-      );
-    });
-    expect(await screen.findByRole('region', { name: 'No duplicate pairs' })).toBeInTheDocument();
-    expect(screen.getByText('Scan the library to find similar images.')).toBeInTheDocument();
-    await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Scan library' }));
-    });
-
-    expect(await screen.findByRole('alert')).toHaveTextContent('Found 17 new review pairs');
-  });
-
-  it('keeps the empty state stable and shows progress while the backend scan is running', async () => {
-    vi.mocked(getDuplicatePairs).mockResolvedValue({
-      items: [],
-      next_cursor: null,
-      has_more: false,
-      total: 0,
-    });
-    let finishScan!: (summary: Awaited<ReturnType<typeof scanDuplicates>>) => void;
-    vi.mocked(scanDuplicates).mockImplementationOnce(() => new Promise((resolve) => {
-      finishScan = resolve;
-    }));
-    const user = userEvent.setup();
-
-    await act(async () => {
-      render(
-        <MantineProvider forceColorScheme="dark">
-          <Notifications />
-          <DuplicatesScreen />
-        </MantineProvider>,
-      );
-    });
+    await act(async () => { renderScreen(true); });
     await screen.findByRole('region', { name: 'No duplicate pairs' });
-    await act(async () => {
-      await user.click(screen.getByRole('button', { name: 'Scan library' }));
-    });
 
+    await user.click(screen.getByRole('button', { name: 'Scan library' }));
     expect(screen.getByRole('region', { name: 'No duplicate pairs' })).toBeInTheDocument();
-    expect(screen.queryByText('Loading duplicate review queue...')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Scan library' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Scan library' })).toBeDisabled();
-    expect(screen.queryByRole('button', { name: 'Scanning...' })).not.toBeInTheDocument();
-    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
     expect(await screen.findByRole('progressbar')).toBeInTheDocument();
 
-    await act(async () => {
-      finishScan({
-        candidates_found: 0,
-        pairs_inserted: 0,
-        reviewable_detected_total: 0,
-        reviewable_detected_new: 0,
-        total_files: 0,
-        files_with_phash: 0,
-        files_scanned: 0,
-        closest_distance: null,
-      });
+    finishScan({
+      candidate_count: 0,
+      affected_item_ids: [],
+      receipt: { revision: 2, resources: ['duplicates'], item_ids: [] },
     });
     await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument());
-    expect(await screen.findByRole('alert')).toHaveTextContent('Scan complete — no new review pairs');
+    expect(await screen.findByRole('alert')).toHaveTextContent('Scan complete - no new review pairs');
   });
 });

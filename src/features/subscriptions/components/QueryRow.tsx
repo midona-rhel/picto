@@ -1,8 +1,8 @@
 import {
   IconAlertTriangle,
   IconPencil,
+  IconPlayerPause,
   IconPlayerPlay,
-  IconPlayerStop,
   IconShieldLock,
   IconTrash,
 } from '@tabler/icons-react';
@@ -20,14 +20,11 @@ export function QueryRow({
   query,
   sites,
   running,
-  runDisabled,
   paused,
   failedCount,
   authWarning,
   progress,
   busy,
-  onRun,
-  onStop,
   onPause,
   onEdit,
   onDelete,
@@ -36,15 +33,12 @@ export function QueryRow({
   query: SubscriptionQueryInfo;
   sites: SubscriptionSiteInfo[];
   running: boolean;
-  runDisabled: boolean;
   paused: boolean;
   failedCount: number;
   /** Non-null when the site needs auth attention; text shown on the chip. */
   authWarning: string | null;
   progress: SubscriptionProgressEvent | null;
   busy: boolean;
-  onRun: () => void;
-  onStop: () => void;
   onPause: (paused: boolean) => void;
   onEdit: () => void;
   onDelete: () => void;
@@ -122,24 +116,16 @@ export function QueryRow({
         {toneLabel}
       </span>
       <span className={styles.qCellActions}>
-        {running ? (
-          <KbdTooltip label="Stop">
-            <button type="button" className={styles.querySmallBtn} onClick={onStop} disabled={busy}>
-              <IconPlayerStop size={14} />
-            </button>
-          </KbdTooltip>
-        ) : (
-          <KbdTooltip label={paused ? 'Resume' : 'Run now'}>
-            <button
-              type="button"
-              className={styles.querySmallBtn}
-              onClick={() => (paused ? onPause(false) : onRun())}
-              disabled={busy || runDisabled}
-            >
-              <IconPlayerPlay size={14} />
-            </button>
-          </KbdTooltip>
-        )}
+        <KbdTooltip label={paused ? 'Resume query' : 'Pause query'}>
+          <button
+            type="button"
+            className={styles.querySmallBtn}
+            onClick={() => onPause(!paused)}
+            disabled={busy || running}
+          >
+            {paused ? <IconPlayerPlay size={14} /> : <IconPlayerPause size={14} />}
+          </button>
+        </KbdTooltip>
         <KbdTooltip label="Edit">
           <button type="button" className={styles.querySmallBtn} onClick={onEdit} disabled={busy}>
             <IconPencil size={14} />

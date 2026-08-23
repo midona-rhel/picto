@@ -92,7 +92,7 @@ export function ModalLayer() {
           if (exportState.target) {
             void filesController.exportMedia(exportState.target, {
               output_dir: config.outputDir,
-              format: config.format === 'original' ? null : config.format,
+              format: config.format,
               quality: config.quality,
               width: config.width,
               height: config.height,
@@ -111,7 +111,7 @@ export function ModalLayer() {
           void filesController.addMedia([folderImport.path], {
             preserve_structure: true,
             parent_folder_id: folderImport.targetFolderId,
-            initial_status: folderImport.initialStatus,
+            lifecycle: folderImport.lifecycle,
           });
           setFolderImport({ ...folderImport, open: false });
         }}

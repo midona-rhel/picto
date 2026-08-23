@@ -196,7 +196,7 @@ export function GridScreen() {
           open: true,
           path: paths[0],
           targetFolderId: folderId ?? null,
-          initialStatus: manualImportParamsForScope(scope).initial_status,
+          lifecycle: manualImportParamsForScope(scope).lifecycle,
         });
       } else {
         // File import — direct

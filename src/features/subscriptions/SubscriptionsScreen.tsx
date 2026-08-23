@@ -15,10 +15,7 @@ import {
   startSubscriptionsSettle,
 } from '../../runtime/subscriptionsSettle';
 import type { SubscriptionInfo } from '../../shared/types/subscriptions';
-import {
-  getCredentialOwnerSiteId,
-  groupFailedPostAttempts,
-} from '../../shared/lib/subscriptionHelpers';
+import { getCredentialOwnerSiteId } from '../../shared/lib/subscriptionHelpers';
 import { AccountsModal } from './components/AccountsModal';
 import { SubscriptionsGrid } from './components/SubscriptionsGrid';
 import { SubscriptionDetail } from './components/SubscriptionDetail';
@@ -73,10 +70,9 @@ export function SubscriptionsScreen() {
   const refreshDetail = useCallback(async (subscription: SubscriptionInfo) => {
     setDetail((current) => ({ ...current, loading: true, error: null, subscriptionId: subscription.id }));
     try {
-      const [runs, issues, failedPosts] = await Promise.all([
+      const [runs, issues] = await Promise.all([
         subscriptionsController.listRuns(subscription.id),
         subscriptionsController.listIssues(subscription.id),
-        subscriptionsController.listFailedPosts(subscription),
       ]);
       setDetail({
         loading: false,
@@ -84,13 +80,13 @@ export function SubscriptionsScreen() {
         subscriptionId: subscription.id,
         runs,
         issues: issues.items,
-        failedPosts: failedPosts.failedPosts,
-        attempts: failedPosts.attempts,
+        failedPosts: [],
+        attempts: [],
         issueNextCursor: issues.next_cursor,
-        failedPostNextCursor: failedPosts.nextCursor,
+        failedPostNextCursor: null,
         issueTotalCount: issues.total_count,
-        failedPostTotalCount: failedPosts.totalCount,
-        retryablePostCount: failedPosts.retryableCount,
+        failedPostTotalCount: 0,
+        retryablePostCount: 0,
       });
     } catch (err) {
       setDetail({
@@ -134,33 +130,19 @@ export function SubscriptionsScreen() {
   const loadMoreHealth = useCallback(async () => {
     if (!selectedSubscription || busyKey) return;
     const issueCursor = detail.issueNextCursor;
-    const attemptCursor = detail.failedPostNextCursor;
-    if (issueCursor == null && attemptCursor == null) return;
+    if (issueCursor == null) return;
     await act('health:more', async () => {
-      const [issues, failed] = await Promise.all([
-        issueCursor == null
-          ? Promise.resolve(null)
-          : subscriptionsController.listIssues(selectedSubscription.id, issueCursor),
-        attemptCursor == null
-          ? Promise.resolve(null)
-          : subscriptionsController.listFailedPosts(selectedSubscription, attemptCursor),
-      ]);
+      const issues = await subscriptionsController.listIssues(selectedSubscription.id, issueCursor);
       setDetail((current) => {
-        const attempts = failed ? [...current.attempts, ...failed.attempts] : current.attempts;
         return {
           ...current,
           issues: issues ? [...current.issues, ...issues.items] : current.issues,
-          attempts,
-          failedPosts: groupFailedPostAttempts(attempts, selectedSubscription.queries),
           issueNextCursor: issues ? issues.next_cursor : current.issueNextCursor,
-          failedPostNextCursor: failed ? failed.nextCursor : current.failedPostNextCursor,
           issueTotalCount: issues?.total_count ?? current.issueTotalCount,
-          failedPostTotalCount: failed?.totalCount ?? current.failedPostTotalCount,
-          retryablePostCount: failed?.retryableCount ?? current.retryablePostCount,
         };
       });
     }, { refresh: false });
-  }, [act, busyKey, detail.failedPostNextCursor, detail.issueNextCursor, selectedSubscription, setDetail]);
+  }, [act, busyKey, detail.issueNextCursor, selectedSubscription, setDetail]);
 
   /** User-initiated navigation inside the workspace — recorded in app history. */
   const navigateTo = useCallback((next: typeof selection) => {
@@ -172,6 +154,8 @@ export function SubscriptionsScreen() {
     await act('wizard', async () => {
       const subscription = await subscriptionsController.create({
         name: result.name,
+        site_id: result.siteId,
+        query_text: result.queryText,
         initial_post_limit: result.initialPostLimit,
         periodic_post_limit: result.periodicPostLimit,
       });
@@ -188,16 +172,6 @@ export function SubscriptionsScreen() {
     },
     stop: (id: string) => void act(`stop:${id}`, () => subscriptionsController.stop(id)),
     pause: (id: string, paused: boolean) => void act(`pause:${id}`, () => subscriptionsController.pause(id, paused)),
-    reset: (id: string) => {
-      confirm(
-        {
-          title: 'Reset Sync Progress',
-          message: 'Sync progress and download history for this subscription will be cleared. The next run re-downloads everything.',
-          confirmLabel: 'Reset',
-        },
-        () => void act(`reset:${id}`, () => subscriptionsController.reset(id)),
-      );
-    },
     delete: (id: string) => {
       confirm(
         {
@@ -214,12 +188,6 @@ export function SubscriptionsScreen() {
     },
     setSchedule: (id: string, schedule: string) =>
       void act(`schedule:${id}`, () => subscriptionsController.setSchedule(id, schedule)),
-    runQuery: (subscriptionId: string, queryId: string) => {
-      markSubscriptionRunTriggered();
-      void act(`runq:${queryId}`, () => subscriptionsController.runQuery(subscriptionId, queryId));
-    },
-    stopQuery: (subscriptionId: string, queryId: string) =>
-      void act(`stopq:${queryId}`, () => subscriptionsController.stopQuery(subscriptionId, queryId)),
     pauseQuery: (queryId: string, paused: boolean) =>
       void act(`pauseq:${queryId}`, () => subscriptionsController.pauseQuery(queryId, paused)),
     deleteQuery: (queryId: string) => {
@@ -253,7 +221,6 @@ export function SubscriptionsScreen() {
         onPause: (paused) => detailController.pause(subscription.id, paused),
         onRename: () => setRenameTarget({ kind: 'subscription', id: subscription.id, currentName: subscription.name }),
         onSetSchedule: (schedule) => detailController.setSchedule(subscription.id, schedule),
-        onReset: () => detailController.reset(subscription.id),
         onDelete: () => detailController.delete(subscription.id),
       }));
     },
@@ -352,23 +319,6 @@ export function SubscriptionsScreen() {
             busy={busy}
             controller={{
               ...detailController,
-              retryFailedPosts: () => {
-                void act('retryposts', async () => {
-                  await subscriptionsController.retryFailedPosts(selectedSubscription.id);
-                  await refreshDetail(selectedSubscription);
-                });
-              },
-              retryFailedPost: (post) => {
-                if (!post.queryId) return;
-                void act(`retrypost:${post.key}`, async () => {
-                  await subscriptionsController.retryFailedPost({
-                    subscription_id: selectedSubscription.id,
-                    query_id: post.queryId as string,
-                    post_id: post.postId,
-                  });
-                  await refreshDetail(selectedSubscription);
-                });
-              },
             }}
             onTabChange={setActiveTab}
             onOpenAccounts={(siteId) => setAccountsModal({
@@ -389,6 +339,7 @@ export function SubscriptionsScreen() {
       <NewSubscriptionDialog
         open={wizard.open}
         busy={busy}
+        sites={snapshot?.sites ?? []}
         onCreate={(result) => void createFromWizard(result)}
         onClose={() => setWizard({ open: false })}
       />
