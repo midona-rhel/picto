@@ -59,6 +59,45 @@ function currentQuery(limit: number): EntityViewQuery {
   return { ...q, page: { limit } };
 }
 
+type PageAppendResult = 'appended' | 'unavailable' | 'stale' | 'failed';
+
+/**
+ * Fetch and append the current cursor exactly once.
+ *
+ * Scroll pagination and background prefetch intentionally share this path so
+ * cursor locking, version checks, and page state cannot drift apart.
+ */
+async function appendNextPage(reportError: boolean): Promise<PageAppendResult> {
+  const cursor = store.get(gridCursorAtom);
+  if (!cursor || paginationInFlight === cursor) return 'unavailable';
+
+  paginationInFlight = cursor;
+  const v = gridVersion;
+  if (reportError) store.set(gridLoadingAtom, true);
+
+  try {
+    const query = currentQuery(PREFETCH_BATCH_SIZE);
+    query.page = { limit: PREFETCH_BATCH_SIZE, cursor };
+    const result = await queryEntityView(query);
+    if (v !== gridVersion || paginationInFlight !== cursor) return 'stale';
+
+    store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
+    store.set(gridCursorAtom, result.next_cursor);
+    store.set(gridTotalCountAtom, result.total_count);
+    store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
+    return 'appended';
+  } catch (err) {
+    if (v !== gridVersion) return 'stale';
+    if (reportError) {
+      store.set(gridErrorAtom, err instanceof Error ? err.message : String(err));
+    }
+    return 'failed';
+  } finally {
+    if (paginationInFlight === cursor) paginationInFlight = null;
+    if (reportError && v === gridVersion) store.set(gridLoadingAtom, false);
+  }
+}
+
 export const gridController = {
   async navigateTo(scope: BaseScope) {
     store.set(gridScopeAtom, scope);
@@ -169,31 +208,9 @@ export const gridController = {
   },
 
   async loadNextPage() {
-    const cursor = store.get(gridCursorAtom);
-    if (!cursor) return;
-    if (paginationInFlight === cursor) return;
-    paginationInFlight = cursor;
-    const v = gridVersion;
-    store.set(gridLoadingAtom, true);
-    try {
-      const query = currentQuery(PREFETCH_BATCH_SIZE);
-      query.page = { limit: PREFETCH_BATCH_SIZE, cursor };
-      const result = await queryEntityView(query);
-      if (v !== gridVersion || paginationInFlight !== cursor) return;
-      paginationInFlight = null;
-      store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
-      store.set(gridCursorAtom, result.next_cursor);
-      store.set(gridTotalCountAtom, result.total_count);
-      store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
-      // After each scroll-triggered fetch, check if we need more
-      void this.prefetchToMinimum();
-    } catch (err) {
-      if (v !== gridVersion) return;
-      paginationInFlight = null;
-      store.set(gridErrorAtom, err instanceof Error ? err.message : String(err));
-    } finally {
-      if (v === gridVersion) store.set(gridLoadingAtom, false);
-    }
+    const result = await appendNextPage(true);
+    // After each scroll-triggered fetch, check if we need more.
+    if (result === 'appended') void this.prefetchToMinimum();
   },
 
   /**
@@ -214,22 +231,8 @@ export const gridController = {
       if (loaded >= PREFETCH_MIN_ITEMS && remaining > PREFETCH_RUNWAY_ITEMS) break;
       // Also stop if loaded >= total (everything fetched)
       if (loaded >= total) break;
-      if (paginationInFlight === cursor) break; // another fetch is handling this cursor
-      paginationInFlight = cursor;
-      try {
-        const query = currentQuery(PREFETCH_BATCH_SIZE);
-        query.page = { limit: PREFETCH_BATCH_SIZE, cursor };
-        const result = await queryEntityView(query);
-        if (v !== gridVersion || paginationInFlight !== cursor) return;
-        paginationInFlight = null;
-        store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
-        store.set(gridCursorAtom, result.next_cursor);
-        store.set(gridTotalCountAtom, result.total_count);
-        store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
-      } catch {
-        paginationInFlight = null;
-        break; // stop prefetching on error, scroll-triggered fetch will retry
-      }
+      const result = await appendNextPage(false);
+      if (result !== 'appended') break;
     }
   },
 
