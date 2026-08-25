@@ -26,6 +26,7 @@ import {
 import {
   sidebarNodesAtom, systemNodesAtom, folderNodesAtom,
   smartFolderNodesAtom, sidebarLoadingAtom,
+  pendingSidebarRenameNodeIdAtom,
 } from '../../state/sidebar';
 import { displayedSurfaceNodeIdAtom } from '../../state/navigation';
 import { navigateToNode } from '../../state/navigationHistory';
@@ -192,6 +193,8 @@ export function Sidebar() {
   const folderNodes = useAtomValue(folderNodesAtom);
   const smartFolderNodes = useAtomValue(smartFolderNodesAtom);
   const loading = useAtomValue(sidebarLoadingAtom);
+  const pendingRenameNodeId = useAtomValue(pendingSidebarRenameNodeIdAtom);
+  const setPendingRenameNodeId = useSetAtom(pendingSidebarRenameNodeIdAtom);
   const activeNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
   const quickAccessIds = useQuickAccess();
   const setSmartFolderModal = useSetAtom(smartFolderModalAtom);
@@ -380,27 +383,25 @@ export function Sidebar() {
 
   // Pending rename: when a new folder is created, we queue its ID here
   // and start inline rename once the node appears in the tree.
-  const pendingRenameRef = useRef<string | null>(null);
-
   useEffect(() => { sidebarController.ensureLoaded(); }, []);
 
   // Trigger pending rename when folder nodes update
   useEffect(() => {
-    const pendingId = pendingRenameRef.current;
+    const pendingId = pendingRenameNodeId;
     if (!pendingId) return;
     const node = folderNodes.find((n) => n.id === pendingId);
     if (node) {
-      pendingRenameRef.current = null;
+      setPendingRenameNodeId(null);
       folderRename.startRename(node.id, node.name);
     }
-  }, [folderNodes, folderRename]);
+  }, [folderNodes, folderRename, pendingRenameNodeId, setPendingRenameNodeId]);
 
   const createFolderAndRename = useCallback(async (parentId?: number | null) => {
     const nodeId = await foldersController.create('New Folder', parentId);
     if (nodeId) {
-      pendingRenameRef.current = nodeId;
+      setPendingRenameNodeId(nodeId);
     }
-  }, []);
+  }, [setPendingRenameNodeId]);
 
   const openFolderAutoTags = useCallback(async (
     folderIds: number[],

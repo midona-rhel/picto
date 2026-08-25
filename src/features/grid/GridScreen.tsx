@@ -63,7 +63,7 @@ import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import { navigateToNode } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
 import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor, tagSelectPortalAtom } from '../../state/portals';
-import { groupOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, folderWatchModalAtom, tagSelectModalAtom, folderPickerModalAtom } from '../../state/modals';
+import { groupOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, folderWatchModalAtom, tagSelectModalAtom, folderPickerModalAtom, smartFolderModalAtom } from '../../state/modals';
 import { organizeIntoGroup, ungroup } from '../../platform/entityApi';
 import { GroupSurface } from '../groups/GroupSurface';
 import { MediaView } from '../viewer/MediaView';
@@ -71,7 +71,7 @@ import { GridQuickLook } from '../viewer/GridQuickLook';
 import { useGridArrowNav } from './hooks/useGridArrowNav';
 import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
-import { chooseAndImportFiles, chooseAndImportFolder, filesController, manualImportParamsForScope } from '../../controllers/filesController';
+import { chooseAndImportFiles, chooseAndImportFolder, filesController, hasClipboardImport, manualImportParamsForScope, pasteImport } from '../../controllers/filesController';
 import { viewerController } from '../../controllers/viewerController';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
@@ -98,6 +98,7 @@ import { IconPicker } from '../../shared/ui/IconPicker';
 import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
 import { readRecentItems } from '../../shared/hooks/useRecentItems';
 import type { GridScrollPosition } from '../../shared/types/gridScroll';
+import { pendingSidebarRenameNodeIdAtom } from '../../state/sidebar';
 
 const store = getDefaultStore();
 function supportsExplicitImageAutoTagging(
@@ -172,6 +173,8 @@ export function GridScreen({
   const setTagSelectModal = useSetAtom(tagSelectModalAtom);
   const setFolderPickerModal = useSetAtom(folderPickerModalAtom);
   const setGroupOrganizerModal = useSetAtom(groupOrganizerModalAtom);
+  const setPendingSidebarRenameNodeId = useSetAtom(pendingSidebarRenameNodeIdAtom);
+  const setSmartFolderModal = useSetAtom(smartFolderModalAtom);
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const gridLayoutRef = useRef<LayoutResult | null>(null);
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
@@ -646,6 +649,64 @@ export function GridScreen({
     scrollToItem(items.findIndex((item) => item.item_id === exitItemId));
   }, [dispatchSelection, items, scrollToItem, setViewerSession]);
 
+  const openEmptyGridContextMenu = useCallback(async (pos: { x: number; y: number }) => {
+    const canImport = gridScope.kind !== 'trash'
+      && gridScope.kind !== 'smart_folder'
+      && gridScope.kind !== 'recently_viewed';
+    const clipboardImportAvailable = canImport ? await hasClipboardImport().catch(() => false) : false;
+    const runImport = (operation: () => Promise<void>, title: string) => {
+      void operation().catch((reason) => showErrorNotification({
+        title,
+        message: reason instanceof Error ? reason.message : String(reason),
+      }));
+    };
+    const entries = buildEmptyContextMenu({
+      selectionCount,
+      querySelectionActive,
+      singleSelected: selectionCount === 1,
+      singleHash: null,
+      scopeKind: null,
+      statusFilter: null,
+      loadedCount: items.length,
+      onSelectAll: () => selectAllResults(),
+      onDeselectAll: () => clearSelection(),
+      onNewFolder: () => {
+        const parentId = gridScope.kind === 'folder' ? gridScope.folder_id : null;
+        void foldersController.create('New Folder', parentId)
+          .then(setPendingSidebarRenameNodeId)
+          .catch((reason) => showErrorNotification({
+            title: 'Could not create folder',
+            message: reason instanceof Error ? reason.message : String(reason),
+          }));
+      },
+      onNewSmartFolder: () => setSmartFolderModal({
+        open: true,
+        mode: 'create',
+        initial: { name: 'New Smart Folder', predicate: { groups: [] } },
+      }),
+      onImportFiles: canImport
+        ? () => runImport(() => chooseAndImportFiles(gridScope), 'Could not import files')
+        : undefined,
+      onImportFolder: canImport
+        ? () => runImport(() => chooseAndImportFolder(gridScope), 'Could not import folder')
+        : undefined,
+      onPasteImport: clipboardImportAvailable
+        ? () => runImport(() => pasteImport(gridScope), 'Could not paste import')
+        : undefined,
+    });
+    contextMenu.openAt(pos, entries);
+  }, [
+    clearSelection,
+    contextMenu,
+    gridScope,
+    items.length,
+    querySelectionActive,
+    selectAllResults,
+    selectionCount,
+    setPendingSidebarRenameNodeId,
+    setSmartFolderModal,
+  ]);
+
   const renderIncomingSurface = () => {
     const hasSubfolders = showSubfolders && childFolders.length > 0 && gridScope.kind === 'folder';
 
@@ -680,6 +741,13 @@ export function GridScreen({
       const showImport = !hasSearch && scopeKey !== 'inbox' && scopeKey !== 'untagged' && scopeKey !== 'smart_folder';
 
       return (
+        <div
+          className={styles.emptyContextSurface}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            void openEmptyGridContextMenu({ x: event.clientX, y: event.clientY });
+          }}
+        >
         <EmptyState
           icon={<IconPhoto size={28} stroke={1.2} style={{ color: 'var(--color-bg-app)', opacity: 1 }} />}
           title={emptyTitle}
@@ -705,6 +773,7 @@ export function GridScreen({
             </>
           ) : undefined}
         />
+        </div>
       );
     }
 
@@ -1210,23 +1279,7 @@ export function GridScreen({
           });
           contextMenu.openAt(pos, entries);
         }}
-        onEmptyContextMenu={(pos) => {
-          // Don't clear selection — let the menu reflect current state
-          const entries = buildEmptyContextMenu({
-            selectionCount,
-            querySelectionActive,
-            singleSelected: selectionCount === 1,
-            singleHash: selectionCount === 1
-              ? items.find((item) => selectedItemIds.has(item.item_id))?.display_file_hash ?? null
-              : null,
-            scopeKind: null,
-            statusFilter: null,
-            loadedCount: items.length,
-            onSelectAll: () => selectAllResults(),
-            onDeselectAll: () => clearSelection(),
-          });
-          contextMenu.openAt(pos, entries);
-        }}
+        onEmptyContextMenu={(pos) => { void openEmptyGridContextMenu(pos); }}
         onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
       />
     );

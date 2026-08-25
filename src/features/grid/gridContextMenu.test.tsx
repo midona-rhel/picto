@@ -1,9 +1,68 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { MenuItem } from '../../shared/ui/ContextMenu/ContextMenu';
-import { buildEntityOpenContextEntries, buildTileContextMenu } from './gridContextMenu';
+import { buildEmptyContextMenu, buildEntityOpenContextEntries, buildTileContextMenu } from './gridContextMenu';
 
 describe('buildTileContextMenu', () => {
+  it('exposes real creation and import actions on empty grid space', () => {
+    const actions = {
+      onNewFolder: vi.fn(),
+      onNewSmartFolder: vi.fn(),
+      onImportFiles: vi.fn(),
+      onImportFolder: vi.fn(),
+      onPasteImport: vi.fn(),
+    };
+    const entries = buildEmptyContextMenu({
+      selectionCount: 0,
+      querySelectionActive: false,
+      singleSelected: false,
+      singleHash: null,
+      scopeKind: null,
+      statusFilter: null,
+      loadedCount: 0,
+      onSelectAll: vi.fn(),
+      onDeselectAll: vi.fn(),
+      ...actions,
+    });
+    const byLabel = new Map(entries.flatMap((entry) => (
+      'label' in entry ? [[entry.label, entry] as const] : []
+    )));
+
+    expect([...byLabel.keys()]).toEqual(expect.arrayContaining([
+      'New Folder', 'New Smart Folder', 'Import Files...', 'Import Folder...', 'Paste Import',
+    ]));
+    for (const [label, action] of [
+      ['New Folder', actions.onNewFolder],
+      ['New Smart Folder', actions.onNewSmartFolder],
+      ['Import Files...', actions.onImportFiles],
+      ['Import Folder...', actions.onImportFolder],
+      ['Paste Import', actions.onPasteImport],
+    ] as const) {
+      const entry = byLabel.get(label);
+      if (!entry || !('action' in entry)) throw new Error(`missing ${label}`);
+      entry.action();
+      expect(action).toHaveBeenCalledOnce();
+    }
+  });
+
+  it('omits Paste Import when the clipboard has no importable payload', () => {
+    const entries = buildEmptyContextMenu({
+      selectionCount: 0,
+      querySelectionActive: false,
+      singleSelected: false,
+      singleHash: null,
+      scopeKind: null,
+      statusFilter: null,
+      loadedCount: 0,
+      onSelectAll: vi.fn(),
+      onDeselectAll: vi.fn(),
+      onImportFiles: vi.fn(),
+      onImportFolder: vi.fn(),
+    });
+    const labels = entries.flatMap((entry) => ('label' in entry ? [entry.label] : []));
+    expect(labels).not.toContain('Paste Import');
+  });
+
   it('matches reference application macOS Open With Other as an associated-application submenu', () => {
     const onOpenWithApplication = vi.fn();
     const entries = buildEntityOpenContextEntries({

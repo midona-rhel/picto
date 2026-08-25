@@ -1,5 +1,37 @@
 import { shell } from 'electron';
 import { spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { isAbsolute, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+function clipboardFilePaths(clipboard) {
+  const candidates = [];
+  if (process.platform === 'darwin') {
+    const bookmark = clipboard.readBookmark();
+    if (bookmark?.url?.startsWith('file:')) {
+      try { candidates.push(fileURLToPath(bookmark.url)); } catch {}
+    }
+  }
+  for (const line of clipboard.readText().split(/\r?\n/)) {
+    const value = line.trim();
+    if (!value) continue;
+    try { candidates.push(value.startsWith('file:') ? fileURLToPath(value) : value); } catch {}
+  }
+  return [...new Set(candidates)].filter((path) => {
+    try {
+      const metadata = isAbsolute(path) && existsSync(path) ? statSync(path) : null;
+      return metadata?.isFile() || metadata?.isDirectory() || false;
+    } catch {
+      return false;
+    }
+  });
+}
+
+function clipboardHasImport(clipboard) {
+  return clipboardFilePaths(clipboard).length > 0 || !clipboard.readImage().isEmpty();
+}
 
 function createReverseSearchConfigs() {
   const waitForHelper = `
@@ -385,6 +417,20 @@ export function registerIpcHandlers({
     } catch (err) {
       throw new Error(`Failed to copy image: ${err.message}`);
     }
+  });
+
+  ipcMain.handle('picto:clipboard:hasImport', () => clipboardHasImport(clipboard));
+
+  ipcMain.handle('picto:clipboard:readImport', () => {
+    const paths = clipboardFilePaths(clipboard);
+    if (paths.length > 0) return { paths, temporary: false };
+    const image = clipboard.readImage();
+    if (image.isEmpty()) return { paths: [], temporary: false };
+    const directory = join(tmpdir(), 'picto-clipboard-imports');
+    mkdirSync(directory, { recursive: true });
+    const path = join(directory, `${randomUUID()}.png`);
+    writeFileSync(path, image.toPNG());
+    return { paths: [path], temporary: true };
   });
 
   ipcMain.handle('picto:reverseImageSearch', async (_event, { filePath, engine }) => {

@@ -11,7 +11,7 @@ import {
   IconApps, IconArrowsMaximize, IconExternalLink, IconFolderSearch, IconBrandFinder, IconAppWindow,
   IconFolderMinus, IconFolderPlus,
   IconCopy, IconClipboardCopy, IconLink, IconBookmark, IconBookmarks,
-  IconRefresh, IconTrash, IconArrowBackUp,
+  IconRefresh, IconTrash, IconArrowBackUp, IconClipboard, IconFilterPlus, IconFileImport,
   IconSearch,
   IconFileExport, IconFolder, IconPhoto, IconStar,
 } from '@tabler/icons-react';
@@ -89,6 +89,11 @@ export interface GridMenuContext {
   onOrganizeGroup?: () => void;
   onEditGroup?: () => void;
   onUngroup?: () => void;
+  onNewFolder?: () => void;
+  onNewSmartFolder?: () => void;
+  onImportFiles?: () => void;
+  onImportFolder?: () => void;
+  onPasteImport?: () => void;
 }
 
 function sep(): MenuSeparator {
@@ -477,6 +482,38 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 /** Build context menu entries for right-clicking empty grid space. */
 export function buildEmptyContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const entries: MenuEntry[] = [];
+
+  if (ctx.onNewFolder) {
+    entries.push(item('New Folder', {
+      icon: <IconFolderPlus size={15} />,
+      shortcut: kbd('file.newFolder'),
+      action: ctx.onNewFolder,
+    }));
+  }
+  if (ctx.onNewSmartFolder) {
+    entries.push(item('New Smart Folder', {
+      icon: <IconFilterPlus size={15} />,
+      shortcut: kbd('file.newSmartFolder'),
+      action: ctx.onNewSmartFolder,
+    }));
+  }
+  if (ctx.onNewFolder || ctx.onNewSmartFolder) entries.push(sep());
+
+  if (ctx.onImportFiles) entries.push(item('Import Files...', {
+    icon: <IconFileImport size={15} />,
+    shortcut: kbd('file.import'),
+    action: ctx.onImportFiles,
+  }));
+  if (ctx.onImportFolder) entries.push(item('Import Folder...', {
+    icon: <IconFolderPlus size={15} />,
+    action: ctx.onImportFolder,
+  }));
+  if (ctx.onPasteImport) entries.push(item('Paste Import', {
+    icon: <IconClipboard size={15} />,
+    shortcut: kbd('edit.paste'),
+    action: ctx.onPasteImport,
+  }));
+  if (ctx.onImportFiles || ctx.onImportFolder || ctx.onPasteImport) entries.push(sep());
 
   const viewEntries = buildContextMenuViewEntries();
   for (const entry of viewEntries) entries.push(entry);

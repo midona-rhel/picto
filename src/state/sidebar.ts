@@ -28,6 +28,8 @@ const SUBSCRIPTIONS_NODE: SidebarNodeDto = {
 export const sidebarNodesAtom = atom<SidebarNodeDto[]>([]);
 export const sidebarEpochAtom = atom(0);
 export const sidebarLoadingAtom = atom(false);
+/** Lets non-sidebar commands hand a newly created node to the tree's rename owner. */
+export const pendingSidebarRenameNodeIdAtom = atom<string | null>(null);
 
 // ── Derived: node kind filters ───────────────────────────────────
 

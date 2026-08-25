@@ -5,6 +5,8 @@ import {
 import {
   clipboardCopyFile,
   clipboardWriteText,
+  hasClipboardImport,
+  readClipboardImport,
   regenerateThumbnailsBatch,
   setThumbnail,
   resolveFilePath,
@@ -25,6 +27,7 @@ export interface MediaImportParams {
   lifecycle: Lifecycle;
   parent_folder_id?: number | null;
   preserve_structure?: boolean;
+  delete_after_ingest?: boolean;
 }
 
 /** Resolve the destination for a manual import from the currently open grid. */
@@ -74,6 +77,20 @@ export async function chooseAndImportFolder(scope: BaseScope): Promise<void> {
     parent_folder_id: scope.kind === 'folder' ? scope.folder_id : null,
   }));
 }
+
+/** Import copied files or a copied bitmap through the durable ingest queue. */
+export async function pasteImport(scope: BaseScope): Promise<void> {
+  const payload = await readClipboardImport();
+  if (payload.paths.length === 0) {
+    throw new Error('The clipboard does not contain importable files or an image.');
+  }
+  await addMedia(payload.paths, manualImportParamsForScope(scope, {
+    parent_folder_id: scope.kind === 'folder' ? scope.folder_id : null,
+    delete_after_ingest: payload.temporary,
+  }));
+}
+
+export { hasClipboardImport };
 
 export const filesController = {
   addMedia(

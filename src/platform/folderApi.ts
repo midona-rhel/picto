@@ -126,6 +126,7 @@ export function addMedia(paths: string[], params: {
   lifecycle: Lifecycle;
   parent_folder_id?: number | null;
   preserve_structure?: boolean;
+  delete_after_ingest?: boolean;
 }): Promise<ImportEnqueueReport> {
   return invoke<ImportEnqueueReport>('imports.enqueue', {
     paths,
@@ -134,6 +135,7 @@ export function addMedia(paths: string[], params: {
     lifecycle: params.lifecycle,
     parent_folder_id: params.parent_folder_id ?? null,
     preserve_structure: params.preserve_structure ?? false,
+    delete_after_ingest: params.delete_after_ingest ?? false,
   });
 }
 

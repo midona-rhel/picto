@@ -67,6 +67,15 @@ export function clipboardCopyFile(path: string): void {
   (window as any).picto?.clipboard?.copyFile(path);
 }
 
+export function hasClipboardImport(): Promise<boolean> {
+  return (window as any).picto?.clipboard?.hasImport() ?? Promise.resolve(false);
+}
+
+export function readClipboardImport(): Promise<{ paths: string[]; temporary: boolean }> {
+  return (window as any).picto?.clipboard?.readImport()
+    ?? Promise.resolve({ paths: [], temporary: false });
+}
+
 export function regenerateThumbnailsBatch(fileHashes: string[]): Promise<ThumbnailQueueResult> {
   return invoke<ThumbnailQueueResult>('media.regenerate_thumbnails', {
     file_hashes: fileHashes,

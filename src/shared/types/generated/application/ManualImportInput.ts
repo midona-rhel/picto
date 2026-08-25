@@ -2,4 +2,4 @@
 import type { FolderId } from "./FolderId";
 import type { Lifecycle } from "./Lifecycle";
 
-export type ManualImportInput = { paths: Array<string>, tags: Array<string>, source_urls: Array<string>, lifecycle: Lifecycle, parent_folder_id: FolderId | null, preserve_structure: boolean, };
+export type ManualImportInput = { paths: Array<string>, tags: Array<string>, source_urls: Array<string>, lifecycle: Lifecycle, parent_folder_id: FolderId | null, preserve_structure: boolean, delete_after_ingest: boolean, };

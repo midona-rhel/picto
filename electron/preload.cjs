@@ -43,6 +43,8 @@ const clipboard = {
   writeText: (text) => ipcRenderer.invoke('picto:clipboard:writeText', { text }),
   copyFile: (filePath) => ipcRenderer.invoke('picto:clipboard:copyFile', { filePath }),
   copyImage: (filePath) => ipcRenderer.invoke('picto:clipboard:copyImage', { filePath }),
+  hasImport: () => ipcRenderer.invoke('picto:clipboard:hasImport'),
+  readImport: () => ipcRenderer.invoke('picto:clipboard:readImport'),
 };
 
 const shellOps = {

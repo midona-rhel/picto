@@ -28,6 +28,8 @@ pub struct ManualImportInput {
     pub parent_folder_id: Option<FolderId>,
     #[serde(default)]
     pub preserve_structure: bool,
+    #[serde(default)]
+    pub delete_after_ingest: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -82,6 +84,7 @@ impl Application {
                 folder_id,
                 &input.tags,
                 &input.source_urls,
+                input.delete_after_ingest,
             )
             .await
             {
@@ -156,6 +159,7 @@ pub async fn scan_watched_folders(
             Some(folder_id),
             &[],
             &[],
+            false,
         )
         .await
         {
@@ -192,6 +196,7 @@ async fn prepare_and_enqueue(
     target_folder_id: Option<FolderId>,
     tags: &[String],
     source_urls: &[String],
+    delete_after_ingest: bool,
 ) -> Result<bool, String> {
     if path
         .extension()
@@ -218,7 +223,7 @@ async fn prepare_and_enqueue(
             job_key: job_key.to_string(),
             source_kind: source_kind.to_string(),
             source_path: path.display().to_string(),
-            delete_after_ingest: false,
+            delete_after_ingest,
             input,
         },
     )?;
@@ -581,6 +586,7 @@ mod tests {
                 lifecycle: Lifecycle::Inbox,
                 parent_folder_id: None,
                 preserve_structure: true,
+                delete_after_ingest: false,
             })
             .await
             .unwrap();
@@ -605,6 +611,38 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn clipboard_source_is_owned_after_successful_staging() {
+        let library = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let staged = source.path().join("clipboard.png");
+        png(&staged);
+        let application = Application::new(Arc::new(Store::open(library.path()).unwrap()));
+
+        let report = application
+            .enqueue_manual_import(&ManualImportInput {
+                paths: vec![staged.display().to_string()],
+                tags: Vec::new(),
+                source_urls: Vec::new(),
+                lifecycle: Lifecycle::Inbox,
+                parent_folder_id: None,
+                preserve_structure: false,
+                delete_after_ingest: true,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(report.queued, 1);
+        assert!(!staged.exists());
+        assert_eq!(
+            ingest_queue_v2::run_batch(&application, 1)
+                .unwrap()
+                .ingested,
+            1
+        );
+        assert!(!staged.exists());
     }
 
     #[tokio::test]
@@ -692,6 +730,7 @@ mod tests {
                 lifecycle: Lifecycle::Inbox,
                 parent_folder_id: None,
                 preserve_structure: false,
+                delete_after_ingest: false,
             })
             .await
             .unwrap();
