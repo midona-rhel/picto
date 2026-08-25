@@ -167,6 +167,12 @@ function dimensions(file: FileQuality): string {
   return `${file.pixel_width} x ${file.pixel_height}`;
 }
 
+function similarityLabel(pair: DuplicatePair): string {
+  return pair.distance === 0
+    ? 'Same perceptual hash'
+    : `${pair.similarity_pct.toFixed(1)}% similar`;
+}
+
 function mediaForFile(details: ItemDetails, fileHash: string): MediaDetails | null {
   return details.media.find((media) => media.file_hash === fileHash) ?? details.media[0] ?? null;
 }
@@ -246,6 +252,7 @@ function MediaCard({
     thumbnailHash: file.file_hash,
     mime: file.mime_type,
     isVideo: false,
+    fullResolutionDelayMs: 0,
   });
   const thumbnailUrl = mediaThumbnailUrl(file.file_hash);
   const media = details.media;
@@ -628,7 +635,12 @@ export function DuplicatesScreen() {
               <IconArrowsJoin size={16} /> Smart merge
             </button>
           </KbdTooltip>
-          <span className={styles.similarity}>{currentPair.similarity_pct.toFixed(0)}% match</span>
+          <span
+            className={styles.similarity}
+            title="Perceptual similarity is not pixel equality"
+          >
+            {similarityLabel(currentPair)}
+          </span>
         </div>
       </footer>
     </section>

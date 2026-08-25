@@ -87,6 +87,19 @@ describe('useMediaImagePipeline', () => {
     expect(screen.getByTestId('pipeline')).toHaveAttribute('data-displayed-hash', 'broken');
   });
 
+  it('can request full resolution immediately while retaining the thumbnail layer', () => {
+    render(<PipelineHarness {...input('first')} fullResolutionDelayMs={0} />);
+
+    expect(screen.getByTestId('pipeline')).toHaveAttribute(
+      'data-full-url',
+      'media://localhost/file/first-thumb.png',
+    );
+    expect(screen.getByTestId('pipeline')).toHaveAttribute(
+      'data-thumb-url',
+      'media://localhost/thumb/first-thumb.jpg',
+    );
+  });
+
   it('swaps on a ready hash change and ignores stale thumbnail loads', () => {
     const { rerender } = render(<PipelineHarness {...input('first')} />);
     const firstPreload = images[0];

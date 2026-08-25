@@ -32,3 +32,18 @@ export function createEmptyItemFilters(): ItemFilters {
     source_url_contains: null,
   };
 }
+
+/** Exact semantic equality for the canonical filter value object. */
+export function itemFiltersEqual(left: ItemFilters, right: ItemFilters): boolean {
+  for (const key of Object.keys(left) as Array<keyof ItemFilters>) {
+    const leftValue = left[key];
+    const rightValue = right[key];
+    if (Array.isArray(leftValue) && Array.isArray(rightValue)) {
+      if (leftValue.length !== rightValue.length
+        || leftValue.some((value, index) => value !== rightValue[index])) return false;
+    } else if (leftValue !== rightValue) {
+      return false;
+    }
+  }
+  return true;
+}

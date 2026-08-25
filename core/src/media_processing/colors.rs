@@ -8,6 +8,22 @@ use image::DynamicImage;
 use kmeans_colors::{get_kmeans_hamerly, Sort};
 use palette::{cast::from_component_slice, IntoColor, Lab, Srgb};
 
+/// Convert a UI hex color into the same Lab space persisted in `file_color`.
+/// Keeping this conversion beside extraction prevents query-time color search
+/// from drifting from the stored palette representation.
+pub fn lab_components_from_hex(hex: &str) -> Option<(f64, f64, f64)> {
+    let normalized = hex.trim().strip_prefix('#').unwrap_or(hex.trim());
+    if normalized.len() != 6 {
+        return None;
+    }
+    let red = u8::from_str_radix(&normalized[0..2], 16).ok()?;
+    let green = u8::from_str_radix(&normalized[2..4], 16).ok()?;
+    let blue = u8::from_str_radix(&normalized[4..6], 16).ok()?;
+    let srgb: Srgb<u8> = Srgb::new(red, green, blue);
+    let lab: Lab = srgb.into_linear::<f32>().into_color();
+    Some((lab.l as f64, lab.a as f64, lab.b as f64))
+}
+
 /// A dominant color associated with an image.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DominantColor {
@@ -130,7 +146,7 @@ pub fn extract_dominant_colors(img: &DynamicImage, max_colors: usize) -> Vec<Dom
 #[cfg(test)]
 mod tests {
     use super::{
-        deserialize_dominant_palette_blob, extract_dominant_colors,
+        deserialize_dominant_palette_blob, extract_dominant_colors, lab_components_from_hex,
         serialize_dominant_palette_blob, DominantColor,
     };
     use image::{DynamicImage, Rgb, RgbImage};
@@ -158,6 +174,15 @@ mod tests {
         assert_eq!(decoded.len(), 2);
         assert_eq!(decoded[0].hex, "#112233");
         assert_eq!(decoded[1].hex, "#445566");
+    }
+
+    #[test]
+    fn hex_conversion_preserves_opposing_hue_axes() {
+        let (_, green_a, _) = lab_components_from_hex("#00ff00").unwrap();
+        let (_, purple_a, _) = lab_components_from_hex("#800080").unwrap();
+
+        assert!(green_a < 0.0);
+        assert!(purple_a > 0.0);
     }
 
     #[test]

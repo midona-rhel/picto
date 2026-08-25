@@ -21,6 +21,8 @@ export interface MediaPipelineInput {
   mime: string;
   isVideo: boolean;
   neighborHashes?: string[];
+  /** Delay before requesting full resolution; viewers may opt into immediate promotion. */
+  fullResolutionDelayMs?: number;
 }
 
 export interface MediaPipelineOutput {
@@ -42,6 +44,7 @@ export function useMediaImagePipeline({
   mime,
   isVideo,
   neighborHashes = [],
+  fullResolutionDelayMs = 100,
 }: MediaPipelineInput): MediaPipelineOutput {
   // What's currently shown to the user (lags behind `hash` until new thumb is ready)
   // Start empty so the first render takes the same thumbnail-first path as navigation.
@@ -130,9 +133,14 @@ export function useMediaImagePipeline({
     if (!fileHash || !displayedHash || isVideo) { setFullUrl(''); return; }
     // Only load full-res for the currently displayed hash
     if (displayedHash !== hash) return; // Still transitioning
-    const timer = setTimeout(() => setFullUrl(mediaFileUrl(fileHash, mime)), 100);
+    const nextFullUrl = mediaFileUrl(fileHash, mime);
+    if (fullResolutionDelayMs <= 0) {
+      setFullUrl(nextFullUrl);
+      return;
+    }
+    const timer = setTimeout(() => setFullUrl(nextFullUrl), fullResolutionDelayMs);
     return () => clearTimeout(timer);
-  }, [displayedHash, hash, thumbnailHash, mime, isVideo]);
+  }, [displayedHash, fullResolutionDelayMs, hash, thumbnailHash, mime, isVideo]);
 
   // Prefetch neighbor thumbnails
   useEffect(() => {

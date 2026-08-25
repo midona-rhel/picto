@@ -162,4 +162,22 @@ describe('GridFilterToolbar', () => {
     expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({ color_hex: '#FF2727' }));
     expect(document.querySelector('input[type="color"]')).toBeNull();
   });
+
+  it('maps the green hue position to green rather than the opposing purple hue', () => {
+    vi.useFakeTimers();
+    const store = getDefaultStore();
+    store.set(gridFilterToolbarOpenAtom, true);
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      filters: { ...emptyFilters, color_hex: '#FF0000' },
+    });
+    const setFilters = vi.spyOn(gridController, 'setFilters').mockImplementation(() => {});
+    render(<GridFilterToolbar />);
+
+    fireEvent.click(screen.getByRole('button', { name: '#FF0000' }));
+    fireEvent.change(screen.getByLabelText('Color hue'), { target: { value: '120' } });
+    act(() => vi.advanceTimersByTime(100));
+
+    expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({ color_hex: '#00FF00' }));
+  });
 });

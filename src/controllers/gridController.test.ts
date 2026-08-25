@@ -282,6 +282,28 @@ describe('gridController pagination', () => {
     expect('page' in query).toBe(false);
   });
 
+  it('ignores an identical filter intent without querying or changing generation', () => {
+    const before = store.get(gridSessionAtom);
+
+    gridController.applyIntent({ type: 'filter', filters: before.filters });
+
+    expect(queryItemsMock).not.toHaveBeenCalled();
+    expect(store.get(gridSessionAtom)).toBe(before);
+  });
+
+  it('keeps the rendered page identity when a changed filter returns the same rows', async () => {
+    const before = store.get(gridItemsAtom);
+    queryItemsMock.mockResolvedValueOnce(page(before.map((entry) => ({ ...entry })), 1));
+
+    gridController.applyIntent({
+      type: 'filter',
+      filters: { ...store.get(gridSessionAtom).filters, color_hex: '#00FF00' },
+    });
+    await vi.waitFor(() => expect(store.get(gridLoadingAtom)).toBe(false));
+
+    expect(store.get(gridItemsAtom)).toBe(before);
+  });
+
   it('reconciles the loaded window without loading state or identity churn', async () => {
     const first = item(1);
     const second = item(2);

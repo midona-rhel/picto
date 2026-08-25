@@ -18,6 +18,7 @@ use crate::store::Store;
 
 const DEFAULT_PAGE_LIMIT: i64 = 100;
 const MAX_PAGE_LIMIT: i64 = 500;
+const COLOR_FILTER_DELTA_E: f64 = 30.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -1407,15 +1408,36 @@ fn apply_filters(
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let index = push_argument(arguments, color_hex.to_ascii_lowercase());
-        predicates.push(format!(
-            "EXISTS (
-                 SELECT 1 FROM root_media rm
-                 JOIN media_asset ma ON ma.item_id = rm.media_item_id
-                 JOIN file_color fc ON fc.file_id = ma.file_id
-                 WHERE rm.root_item_id = ri.item_id AND lower(fc.hex) = ?{index}
-             )"
-        ));
+        let hex_index = push_argument(arguments, color_hex.to_ascii_lowercase());
+        if let Some((l, a, b)) = crate::media_processing::colors::lab_components_from_hex(color_hex)
+        {
+            let l_index = push_argument(arguments, l);
+            let a_index = push_argument(arguments, a);
+            let b_index = push_argument(arguments, b);
+            let threshold_index =
+                push_argument(arguments, COLOR_FILTER_DELTA_E * COLOR_FILTER_DELTA_E);
+            predicates.push(format!(
+                "EXISTS (
+                     SELECT 1 FROM root_media rm
+                     JOIN media_asset ma ON ma.item_id = rm.media_item_id
+                     JOIN file_color fc ON fc.file_id = ma.file_id
+                     WHERE rm.root_item_id = ri.item_id
+                       AND (lower(fc.hex) = ?{hex_index}
+                            OR ((fc.l - ?{l_index}) * (fc.l - ?{l_index})
+                              + (fc.a - ?{a_index}) * (fc.a - ?{a_index})
+                              + (fc.b - ?{b_index}) * (fc.b - ?{b_index})) <= ?{threshold_index})
+                 )"
+            ));
+        } else {
+            predicates.push(format!(
+                "EXISTS (
+                     SELECT 1 FROM root_media rm
+                     JOIN media_asset ma ON ma.item_id = rm.media_item_id
+                     JOIN file_color fc ON fc.file_id = ma.file_id
+                     WHERE rm.root_item_id = ri.item_id AND lower(fc.hex) = ?{hex_index}
+                 )"
+            ));
+        }
     }
 
     apply_text_range(
@@ -2285,6 +2307,35 @@ mod tests {
         let (_directory, store) = seed_store();
         let mut item_query = query_for(ItemScope::All);
         item_query.filters.color_hex = Some("#ABCDEF".to_string());
+        let page = query(&store, &item_query, ItemPageRequest::default()).unwrap();
+
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(10)]
+        );
+    }
+
+    #[test]
+    fn color_filter_matches_perceptually_near_palette_colors() {
+        let (_directory, store) = seed_store();
+        let (l, a, b) =
+            crate::media_processing::colors::lab_components_from_hex("#36a852").unwrap();
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO file_color (file_id, hex, l, a, b)
+                     VALUES (11, '#36a852', ?1, ?2, ?3)",
+                    rusqlite::params![l, a, b],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let mut item_query = query_for(ItemScope::All);
+        item_query.filters.color_hex = Some("#2f9f4b".to_string());
+
         let page = query(&store, &item_query, ItemPageRequest::default()).unwrap();
 
         assert_eq!(

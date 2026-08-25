@@ -7,6 +7,7 @@ import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { ItemSort } from '../shared/types/generated/application/ItemSort';
 import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
 import { clearSelectionAtom } from '../state/selection';
+import { itemFiltersEqual } from '../shared/lib/itemFilters';
 import {
   currentGridQueryAtom,
   gridSessionAtom,
@@ -299,8 +300,9 @@ class GridSessionController {
       if (result.visible_item_count == null || result.total_size_bytes == null) {
         throw new Error('The first grid page did not include exact totals');
       }
+      const current = store.get(gridSessionAtom);
       updateSession({
-        items: result.items,
+        items: reuseStablePageItems(current.items, result.items),
         cursor: nextOffset(result.items.length, result.visible_item_count),
         totalCount: result.visible_item_count,
         totalSizeBytes: result.total_size_bytes,
@@ -414,6 +416,7 @@ class GridSessionController {
   }
 
   private setFiltersNow(filters: QueryFilters): void {
+    if (itemFiltersEqual(store.get(gridSessionAtom).filters, filters)) return;
     updateSession({ filters: { ...filters, include_tags: [...filters.include_tags], exclude_tags: [...filters.exclude_tags] } });
     void this.loadFirstPage({ preserveItems: true });
   }
@@ -454,6 +457,21 @@ function itemSummaryEqual(
     && left.dominant_color_hex === right.dominant_color_hex
     && left.rating === right.rating
     && left.media_count === right.media_count;
+}
+
+function reuseStablePageItems(
+  previous: GridSessionSnapshot['items'],
+  incoming: GridSessionSnapshot['items'],
+): GridSessionSnapshot['items'] {
+  const previousById = new Map(previous.map((item) => [item.item_id, item]));
+  const stable = incoming.map((item) => {
+    const existing = previousById.get(item.item_id);
+    return existing != null && itemSummaryEqual(existing, item) ? existing : item;
+  });
+  return stable.length === previous.length
+    && stable.every((item, index) => item === previous[index])
+    ? previous
+    : stable;
 }
 
 function createRandomSeed(): string {

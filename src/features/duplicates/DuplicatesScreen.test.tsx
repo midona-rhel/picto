@@ -157,13 +157,27 @@ describe('DuplicatesScreen', () => {
     expect(screen.getByText('Right image')).toBeInTheDocument();
     expect(getDuplicateItemDetails).toHaveBeenCalledWith(11);
     expect(getDuplicateItemDetails).toHaveBeenCalledWith(22);
-    expect(screen.getByText('98% match')).toBeInTheDocument();
+    expect(screen.getByText('98.0% similar')).toBeInTheDocument();
     expect(screen.getAllByText('Created')).toHaveLength(2);
     expect(screen.getAllByText('Added')).toHaveLength(2);
     expect(screen.getByTestId('left-preview-layers').querySelector('img')).toHaveAttribute(
       'src',
       'media://localhost/thumb/left.jpg',
     );
+  });
+
+  it('does not describe an equal perceptual hash as a pixel-perfect match', async () => {
+    const equalHashPair = pair();
+    equalHashPair.distance = 0;
+    equalHashPair.similarity_pct = 100;
+    vi.mocked(getDuplicatePairs).mockResolvedValueOnce({
+      items: [equalHashPair], next_cursor: null, has_more: false, total: 1,
+    });
+
+    await renderScreen();
+
+    expect(await screen.findByText('Same perceptual hash')).toBeInTheDocument();
+    expect(screen.queryByText('100% match')).not.toBeInTheDocument();
   });
 
   it('loads an attached duplicate occurrence through its group root', async () => {
