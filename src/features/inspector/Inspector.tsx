@@ -788,7 +788,7 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** reference application's analogous export action lives after inspector properties, not in chrome. */
+/** The in-flow action lives after inspector properties, not in chrome. */
 function InspectorAutoTagAction({ count, enabled }: { count: number; enabled: boolean }) {
   const autoTagDef = getShortcut('organize.autoTag');
   return (

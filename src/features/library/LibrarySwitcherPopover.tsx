@@ -20,14 +20,16 @@ interface Entry {
   imageZoomPercent: number | null;
 }
 
-/// reference application-style library switcher panel, anchored under the sidebar button:
+/// Library switcher panel anchored under the sidebar button:
 /// search header, icon + name + path rows with an opened check, and a
 /// function list (create / open / manager) at the bottom.
 export function LibrarySwitcherPopover({
   anchor,
+  trigger,
   onClose,
 }: {
   anchor: DOMRect;
+  trigger: HTMLElement | null;
   onClose: () => void;
 }) {
   const [entries, setEntries] = useState<Entry[]>([]);
@@ -67,13 +69,15 @@ export function LibrarySwitcherPopover({
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose();
+      const target = e.target as Node;
+      if (rootRef.current?.contains(target) || trigger?.contains(target)) return;
+      onClose();
     };
     window.addEventListener('mousedown', onDown);
     return () => {
       window.removeEventListener('mousedown', onDown);
     };
-  }, [onClose]);
+  }, [onClose, trigger]);
 
   useShortcutScope((event) => {
     if (event.key !== 'Escape') return;

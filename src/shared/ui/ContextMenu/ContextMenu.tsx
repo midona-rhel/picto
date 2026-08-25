@@ -13,12 +13,12 @@ import styles from './ContextMenu.module.css';
 
 export interface MenuItem {
   label: string;
-  /** Alternate terms used by reference application-style command search. */
+  /** Alternate terms used by command search. */
   keywords?: string | string[];
   icon?: ReactNode;
   shortcut?: string;
   action: () => void;
-  /** Alternate action invoked by right-clicking an reference application-style facet value. */
+  /** Alternate action invoked by right-clicking a facet value. */
   contextAction?: () => void;
   danger?: boolean;
   disabled?: boolean;
@@ -457,7 +457,7 @@ function keywordText(entry: MenuItem | MenuSubmenu): string {
 }
 
 /**
- * reference application searches command keywords and submenu actions, not only visible
+ * Command search includes keywords and submenu actions, not only visible
  * top-level labels. Matching submenu actions are flattened into executable
  * results so search never leads to a dead parent row.
  */

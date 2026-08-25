@@ -22,7 +22,7 @@ const DARK_ONLY_NEUTRALS = [
 ] as const;
 
 describe('theme surface ownership', () => {
-  it('keeps reference application-derived theme colors in tokens instead of core surface modules', () => {
+  it('keeps theme colors in tokens instead of core surface modules', () => {
     for (const relativePath of CORE_THEME_SURFACES) {
       const source = readFileSync(resolve(process.cwd(), relativePath), 'utf8');
       for (const fixedColor of DARK_ONLY_NEUTRALS) {

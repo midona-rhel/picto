@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { FilterLogicTabs } from './FilterLogicTabs';
 
 describe('FilterLogicTabs', () => {
-  it('exposes reference application-compatible any, all, and exact rules', () => {
+  it('exposes any, all, and exact matching rules', () => {
     const onChange = vi.fn();
     render(<FilterLogicTabs value="any" onChange={onChange} />);
 

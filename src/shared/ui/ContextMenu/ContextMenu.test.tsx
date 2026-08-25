@@ -118,7 +118,7 @@ describe('ContextMenu', () => {
     expect(menu.className).toContain('menu');
   });
 
-  it('supports reference application facet include on click and exclude on right-click', () => {
+  it('supports facet include on click and exclude on right-click', () => {
     const include = vi.fn();
     const exclude = vi.fn();
     render(

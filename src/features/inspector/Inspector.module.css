@@ -67,7 +67,7 @@
   border-color: var(--color-primary-60);
 }
 
-/* Mirrors reference application's in-flow inspector export action without copying its asset. */
+/* In-flow inspector action geometry. */
 .flowAction {
   width: 100%;
   margin-top: 12px;

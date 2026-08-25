@@ -12,7 +12,7 @@ import styles from './ColorPalette.module.css';
 interface ColorPaletteProps {
   /** Hex color strings in relevance order (most coverage first). */
   colors: string[];
-  /** Applies the same grid color filter as reference application's swatch context action. */
+  /** Applies the grid color filter represented by this swatch. */
   onFilter?: (hex: string) => void;
 }
 

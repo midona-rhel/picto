@@ -56,7 +56,7 @@ describe('FolderPickerPanel row context actions', () => {
     await waitFor(() => expect(foldersController.create).toHaveBeenCalledWith('Sibling', 7));
   });
 
-  it('applies the selected reference application matching rule for folder filters', async () => {
+  it('applies the selected matching rule for folder filters', async () => {
     const onApplyFolderFilter = vi.fn();
     store.set(folderPickerPortalAtom, {
       open: true,

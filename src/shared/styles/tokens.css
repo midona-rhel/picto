@@ -1,6 +1,6 @@
 /*
  * Design tokens — single source of truth for all visual values.
- * Derived from the reference application-matched design system (legacy globals.css).
+ * Canonical Picto design tokens, consolidated from the legacy globals.
  */
 
 /* Bundled so the sidebar and titlebar do not vary with host font installs. */
@@ -20,6 +20,15 @@
   src: url('../assets/fonts/Roboto-Medium.ttf') format('truetype');
 }
 
+/* Keep the 600 alias on Roboto Medium to avoid an abrupt weight jump. */
+@font-face {
+  font-family: 'Picto Roboto';
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url('../assets/fonts/Roboto-Medium.ttf') format('truetype');
+}
+
 @font-face {
   font-family: 'Picto Roboto';
   font-style: normal;
@@ -29,7 +38,7 @@
 }
 
 :root {
-  /* reference application's theme model: one base surface and one contrast family. */
+  /* One base surface and one contrast family. */
   --theme-background: #18191c;
   --theme-contrast: #f8f9fb;
   --theme-text: #f8f9fb;
@@ -162,7 +171,7 @@
   /* ── Titlebar ────────────────────────────────────────────── */
   --titlebar-height: 48px;
 
-  /* ── Sidebar-specific (reference application-matched) ────────────────────── */
+  /* ── Sidebar-specific ────────────────────────────────────── */
   --sidebar-width: 300px;
   --sidebar-row-height: 27px;
   --sidebar-indent: 20px;
@@ -184,7 +193,7 @@
   --sidebar-section-text-nudge: 1px;
   /* Header controls extend around text aligned with the rendered folder glyph. */
   --sidebar-section-control-inset: 5px;
-  /* reference application's --color-dark-3 over the dark base captures as rgb(31 32 35). */
+  /* Inspector surface over the dark base resolves to rgb(31 32 35). */
   --sidebar-surface: var(--color-rail-surface);
   --sidebar-surface-top: var(--sidebar-surface);
   --sidebar-surface-elevated: color-mix(in srgb, var(--color-surface-2) 88%, transparent);
@@ -205,7 +214,7 @@
   --sidebar-list-highlight-hover-bg: var(--sidebar-item-hover-bg);
   --sidebar-list-highlight-active-bg: var(--sidebar-item-active-bg);
   --sidebar-list-highlight-selected-bg: var(--sidebar-item-selected-bg);
-  /* reference application's normal tree connectors: rgba(189, 190, 192, 25%). */
+  /* Normal tree connectors: rgba(189, 190, 192, 25%). */
   --sidebar-tree-guide-color: color-mix(in srgb, var(--color-text-secondary) 25%, transparent);
 
   --scrollbar-thumb-background: var(--color-contrast-25);

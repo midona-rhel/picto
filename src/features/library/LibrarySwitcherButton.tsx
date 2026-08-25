@@ -12,7 +12,7 @@ function libraryDisplayName(path: string | null): string {
   return last.endsWith('.library') ? last.slice(0, -'.library'.length) : last;
 }
 
-/// reference application-style current-library button at the top of the sidebar.
+/// Current-library button at the top of the sidebar.
 /// Shows the open library's name; clicking opens the Library Manager.
 export function LibrarySwitcherButton() {
   const [name, setName] = useState<string>('');
@@ -65,7 +65,13 @@ export function LibrarySwitcherButton() {
           <span className={styles.chevron}><IconSelector size={14} stroke={1.25} /></span>
         </button>
       </KbdTooltip>
-      {anchor ? <LibrarySwitcherPopover anchor={anchor} onClose={() => setAnchor(null)} /> : null}
+      {anchor ? (
+        <LibrarySwitcherPopover
+          anchor={anchor}
+          trigger={buttonRef.current}
+          onClose={() => setAnchor(null)}
+        />
+      ) : null}
     </>
   );
 }

@@ -19,7 +19,7 @@ describe('FontViewer', () => {
 
   afterEach(() => { vi.unstubAllGlobals(); });
 
-  it('loads the font and exposes reference application-style preview modes and themes', async () => {
+  it('loads the font and exposes preview modes and themes', async () => {
     render(<FontViewer src="media://localhost/file/hash.ttf" displayName="Example.ttf" mimeType="font/ttf" />);
     await waitFor(() => expect(add).toHaveBeenCalled());
 

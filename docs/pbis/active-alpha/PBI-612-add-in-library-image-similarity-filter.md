@@ -2,8 +2,8 @@
 
 ## Problem
 
-reference application's Image filter accepts an existing library item or external image and returns visually similar
-items inside the current library query. Picto currently offers only external reverse-image-search
+Picto needs an Image filter that accepts an existing library item or external image and returns
+visually similar items inside the current library query. Picto currently offers only external reverse-image-search
 actions and duplicate detection. Neither is a truthful substitute: external search leaves the library,
 while duplicate detection is pair-review infrastructure rather than a composable grid predicate.
 

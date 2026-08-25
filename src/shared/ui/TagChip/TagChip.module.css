@@ -1,4 +1,4 @@
-/* Tag/folder chip — reference application-matched label-item. */
+/* Shared tag/folder label item. */
 
 .chip {
   display: inline-flex;

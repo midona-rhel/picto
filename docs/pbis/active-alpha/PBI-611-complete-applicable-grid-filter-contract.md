@@ -3,7 +3,7 @@
 ## Problem
 
 Picto’s canonical query contract now supports its stored date, duration, byte-size, resolution,
-Notes, and URL predicates. Two reference application behavior families still require backend evidence that cannot be
+Notes, and URL predicates. Two filter behavior families still require backend evidence that cannot be
 truthfully reconstructed from loaded grid rows:
 
 - date menus show available year-month buckets and counts for every preset/month, while rating,
@@ -17,10 +17,10 @@ truthfully reconstructed from loaded grid rows:
 - Add one canonical filter-facet query for preset date counts, available `YYYY-MM` buckets, rating,
   media type, tag, and folder values/counts. Each facet must use the current scope and all other
   active predicates while omitting its own predicate, never the loaded page.
-- Persist palette ratio/order (and any marking reference application’s matching rule proves necessary) alongside
+- Persist palette ratio/order and any marking the documented matching rule requires alongside
   each projected Lab color.
 - Extend the color filter contract with grayscale mode and accuracy, and compile it with the same
-  palette-ratio and CIEDE2000 semantics proven in reference application’s shipped source.
+  documented palette-ratio and CIEDE2000 semantics.
 - Reuse the existing filter row and shared floating surface; do not add a client-only fallback.
 - Do not add Shape. Do not add Semantic, Fonts, Camera, BPM, or Annotation filters without a
   separately approved data/product contract.
@@ -29,8 +29,7 @@ truthfully reconstructed from loaded grid rows:
 
 - Facet values/counts are exact for presets, month buckets, ratings, types, tags, folders, scope
   changes, and combinations with another active filter.
-- Color fixtures prove grayscale, palette-ratio rejection, and accuracy thresholds against reference application
-  examples.
+- Color fixtures prove grayscale, palette-ratio rejection, and accuracy thresholds.
 - Pages, counts, query-wide selection, exports, and writes resolve the same matching IDs.
 - TypeScript, production build, Rust query tests, and contextual interaction tests pass.
 
