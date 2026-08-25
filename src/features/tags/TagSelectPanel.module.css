@@ -120,7 +120,8 @@
 }
 
 .contentExpanded {
-  border-left: 0;
+  /* Preserve the divider's 1px inset so collapsing the sidebar never shifts rows. */
+  border-left-color: transparent;
 }
 
 .tagListScroller {
