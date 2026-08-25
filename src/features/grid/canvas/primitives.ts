@@ -14,6 +14,8 @@ import {
 export const BADGE_H = 18;
 export const BADGE_FONT = GRID_BADGE_FONT;
 export const BADGE_PAD_X = 2;
+export const INSPECTOR_BADGE_PAD_X = 4;
+export const INSPECTOR_BADGE_TEXT = '#fff';
 export const BADGE_RADIUS = GRID_TILE_RADIUS;
 export const NAME_FONT = GRID_NAME_FONT;
 export const INFO_FONT = GRID_INFO_FONT;
@@ -95,10 +97,12 @@ export function drawBadge(
   text: string,
   x: number, y: number,
   align: 'left' | 'right' = 'left',
+  appearance: 'duration' | 'inspector' = 'duration',
 ): number {
   ctx.font = BADGE_FONT;
   const metrics = ctx.measureText(text);
-  const w = metrics.width + BADGE_PAD_X * 2;
+  const padX = appearance === 'inspector' ? INSPECTOR_BADGE_PAD_X : BADGE_PAD_X;
+  const w = metrics.width + padX * 2;
   const bx = align === 'right' ? x - w : x;
 
   ctx.fillStyle = GRID_BADGE_BACKGROUND;
@@ -110,10 +114,10 @@ export function drawBadge(
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  ctx.fillStyle = GRID_BADGE_TEXT;
+  ctx.fillStyle = appearance === 'inspector' ? INSPECTOR_BADGE_TEXT : GRID_BADGE_TEXT;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, bx + BADGE_PAD_X, y + BADGE_H / 2);
+  ctx.fillText(text, bx + padX, y + BADGE_H / 2);
 
   return w;
 }

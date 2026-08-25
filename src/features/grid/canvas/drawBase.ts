@@ -271,9 +271,9 @@ export function drawCanvasBaseLayer({
 
     // Item-kind / extension badge — top-left
     if (item.kind === 'collection') {
-      drawBadge(ctx, 'GROUP', bx + 5, by + 5);
+      drawBadge(ctx, 'GROUP', bx + 5, by + 5, 'left', 'inspector');
     } else if (showBadge) {
-      drawBadge(ctx, formatLabel, bx + 5, by + 5);
+      drawBadge(ctx, formatLabel, bx + 5, by + 5, 'left', 'inspector');
     }
 
     // Duration badge — top-right (video/animated only)
@@ -285,7 +285,14 @@ export function drawCanvasBaseLayer({
     }
 
     if (showItemCount && item.kind === 'collection') {
-      drawBadge(ctx, String(item.mediaCount), bx + 5, by + bh - BADGE_H - 5);
+      drawBadge(
+        ctx,
+        String(item.mediaCount),
+        bx + 5,
+        by + bh - BADGE_H - 5,
+        'left',
+        'inspector',
+      );
     }
 
   }
