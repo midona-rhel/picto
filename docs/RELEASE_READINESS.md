@@ -37,7 +37,8 @@ native addons, and downloaded sidecars must not imply otherwise.
 
 ## Outstanding release blockers
 
-- Cloud Sync and Tutorials are not complete in this workstream.
+- Cloud Sync and Tutorials are separately owned release gates and are intentionally not modified by
+  release-finalization work.
 - The accepted release icon is wired for macOS, Windows, and Linux. The macOS package currently
   uses the generated flattened ICNS fallback; an Apple Icon Composer export remains the final
   material pass when that Apple tool is available.
@@ -47,8 +48,13 @@ native addons, and downloaded sidecars must not imply otherwise.
   one green clean-run result after the current branch is published.
 - Gallery-dl and OF-Scraper source revisions and Python dependency graphs are frozen. The universal
   OnlyFans lock resolves for macOS ARM64, Windows x64, and Linux x64 on Python 3.12.
-- The frontend suite passes but emits existing React `act(...)` warnings from asynchronous Settings,
-  AI Tagger, and Duplicate Review tests; remove this warning noise before treating logs as clean.
+- TypeScript, the production build, and all 596 frontend tests pass. The suite still emits 242 React
+  scheduling warnings, led by Settings, shared selects, Duplicate Review, and AI Tagging; remove the
+  warning noise without suppressing React diagnostics before treating the gate as clean.
+- `npm audit --omit=dev` reports no known production dependency vulnerabilities. The source license
+  and repository-hygiene audit passes; packaged artifact licenses remain part of the platform gate.
+- The large dirty integration surface must be separated into reviewed commits before publishing or
+  tagging; generated build output must remain untracked.
 - The public branch and tags have been rewritten to remove audited personal absolute paths,
   competitor references, copied audit material, and generated captures. Keep the local lineage on
   that scrubbed base before publishing further work so removed objects are not reintroduced.
