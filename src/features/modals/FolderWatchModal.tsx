@@ -72,6 +72,7 @@ export function FolderWatchModal({
           )}
           <button className={modalStyles.btn} onClick={onClose} type="button">Cancel</button>
           <button
+            data-modal-primary="true"
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
             onClick={() => onSave({ watchPath, enabled, subfolders, importStatusMode })}
             disabled={!watchPath}

@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest';
-import { formatLabelForMime } from './primitives';
+import { BADGE_PAD_X, formatLabelForMime } from './primitives';
+
+describe('grid badge geometry', () => {
+  it('uses the compact two-pixel horizontal inset', () => {
+    expect(BADGE_PAD_X).toBe(2);
+  });
+});
 
 describe('formatLabelForMime', () => {
   it.each([

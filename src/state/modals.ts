@@ -103,6 +103,29 @@ export const folderImportModalAtom = atom<FolderImportModalState>({
   open: false, path: '', targetFolderId: null, lifecycle: 'active',
 });
 
+// ── Multi-file import choice ──
+export interface MultiFileImportModalState {
+  open: boolean;
+  paths: string[];
+  lifecycle: import('../shared/types/generated/application/Lifecycle').Lifecycle;
+  parentFolderId: number | null;
+  tags: string[];
+  sourceUrls: string[];
+  preserveStructure: boolean;
+  deleteAfterIngest: boolean;
+}
+
+export const multiFileImportModalAtom = atom<MultiFileImportModalState>({
+  open: false,
+  paths: [],
+  lifecycle: 'active',
+  parentFolderId: null,
+  tags: [],
+  sourceUrls: [],
+  preserveStructure: false,
+  deleteAfterIngest: false,
+});
+
 // ── Tag select modal (wider modal version, opened from context menu / keyboard) ──
 export const tagSelectModalAtom = atom({ open: false });
 

@@ -109,12 +109,9 @@ export class ThumbnailPipeline {
   }
 
   invalidate(hash: string): void {
-    const entry = this.cache.get(hash);
-    if (entry?.thumb) {
-      this.totalBytes -= entry.bytes;
-      entry.thumb.close();
-    }
-    this.cache.delete(hash);
+    // Keep a usable bitmap on screen until its replacement has decoded.
+    // Removing it here exposes a placeholder frame for every background
+    // thumbnail refresh and makes active subscription grids visibly flash.
     this.revisions.set(hash, (this.revisions.get(hash) ?? 0) + 1);
     this.lastPlanFingerprint = -1;
     this.decoder.invalidate(hash);

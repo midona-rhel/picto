@@ -30,6 +30,8 @@ pub struct ManualImportInput {
     pub preserve_structure: bool,
     #[serde(default)]
     pub delete_after_ingest: bool,
+    #[serde(default)]
+    pub group_files: bool,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -57,6 +59,9 @@ impl Application {
         }
         let candidates = collect_manual_candidates(self, input)?;
         let invocation = rand::random::<u64>();
+        let grouped_post_key = format!("manual:{invocation:016x}");
+        let grouped_title = manual_group_title(&candidates);
+        let candidate_count = candidates.len();
         let mut folders = BTreeMap::new();
         let mut report = ImportEnqueueReport {
             discovered: candidates.len(),
@@ -75,6 +80,22 @@ impl Application {
                 input.parent_folder_id
             };
             let job_key = format!("manual:{invocation:016x}:{index}");
+            let source = (input.group_files && candidate_count > 1).then(|| SourcePostInput {
+                site_id: "manual".to_string(),
+                post_key: grouped_post_key.clone(),
+                item_key: format!("{grouped_post_key}:{index}"),
+                position: index as i64,
+                post_complete: index + 1 == candidate_count,
+                force_collection: false,
+                group_post: true,
+                canonical_post_url: None,
+                canonical_media_url: None,
+                creator_name: None,
+                title: grouped_title.clone(),
+                description: None,
+                captured_at: None,
+                metadata_json: None,
+            });
             match prepare_and_enqueue(
                 self,
                 &candidate.path,
@@ -85,6 +106,7 @@ impl Application {
                 &input.tags,
                 &input.source_urls,
                 input.delete_after_ingest,
+                source,
             )
             .await
             {
@@ -102,6 +124,14 @@ impl Application {
 pub async fn scan_watched_folders(
     application: &Application,
 ) -> Result<ImportEnqueueReport, String> {
+    let auto_import_enabled = crate::settings_v2::application_settings(application)?
+        .value
+        .get("autoImportEnabled")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    if !auto_import_enabled {
+        return Ok(ImportEnqueueReport::default());
+    }
     let watches = application.store().read(|connection| {
         let mut statement = connection.prepare(
             "SELECT folder_id, watch_path, watch_subfolders
@@ -160,6 +190,7 @@ pub async fn scan_watched_folders(
             &[],
             &[],
             false,
+            None,
         )
         .await
         {
@@ -197,6 +228,7 @@ async fn prepare_and_enqueue(
     tags: &[String],
     source_urls: &[String],
     delete_after_ingest: bool,
+    source: Option<SourcePostInput>,
 ) -> Result<bool, String> {
     if path
         .extension()
@@ -216,7 +248,7 @@ async fn prepare_and_enqueue(
         .await;
     }
 
-    let input = prepare_input(path, lifecycle, target_folder_id, tags, source_urls, None).await?;
+    let input = prepare_input(path, lifecycle, target_folder_id, tags, source_urls, source).await?;
     let result = ingest_queue_v2::enqueue(
         application,
         &IngestJobSpec {
@@ -228,6 +260,21 @@ async fn prepare_and_enqueue(
         },
     )?;
     Ok(result.inserted)
+}
+
+fn manual_group_title(candidates: &[ImportCandidate]) -> Option<String> {
+    let mut parents = candidates
+        .iter()
+        .filter_map(|candidate| candidate.path.parent());
+    let parent = parents.next()?;
+    if !parents.all(|candidate_parent| candidate_parent == parent) {
+        return Some("Imported Collection".to_string());
+    }
+    parent
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(str::to_string)
+        .or_else(|| Some("Imported Collection".to_string()))
 }
 
 async fn prepare_input(
@@ -587,6 +634,7 @@ mod tests {
                 parent_folder_id: None,
                 preserve_structure: true,
                 delete_after_ingest: false,
+                group_files: false,
             })
             .await
             .unwrap();
@@ -614,6 +662,70 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn grouped_manual_files_become_one_visible_collection_after_completion() {
+        let library = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let first_path = source.path().join("one.png");
+        let second_path = source.path().join("two.png");
+        png(&first_path);
+        png(&second_path);
+        let application = Application::new(Arc::new(Store::open(library.path()).unwrap()));
+
+        let report = application
+            .enqueue_manual_import(&ManualImportInput {
+                paths: vec![
+                    first_path.display().to_string(),
+                    second_path.display().to_string(),
+                ],
+                tags: Vec::new(),
+                source_urls: Vec::new(),
+                lifecycle: Lifecycle::Inbox,
+                parent_folder_id: None,
+                preserve_structure: false,
+                delete_after_ingest: false,
+                group_files: true,
+            })
+            .await
+            .unwrap();
+        assert_eq!(report.queued, 2);
+
+        assert_eq!(
+            ingest_queue_v2::run_batch(&application, 1)
+                .unwrap()
+                .ingested,
+            1
+        );
+        assert!(application.projections().inbox_bitmap().is_empty());
+
+        assert_eq!(
+            ingest_queue_v2::run_batch(&application, 1)
+                .unwrap()
+                .ingested,
+            1
+        );
+        application
+            .store()
+            .read(|connection| {
+                let roots: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM library_root lr
+                     JOIN library_item li ON li.item_id = lr.item_id
+                     WHERE li.kind = 'collection'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let members: i64 =
+                    connection.query_row("SELECT COUNT(*) FROM collection_member", [], |row| {
+                        row.get(0)
+                    })?;
+                assert_eq!(roots, 1);
+                assert_eq!(members, 2);
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(application.projections().inbox_bitmap().len(), 1);
+    }
+
+    #[tokio::test]
     async fn clipboard_source_is_owned_after_successful_staging() {
         let library = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
@@ -630,6 +742,7 @@ mod tests {
                 parent_folder_id: None,
                 preserve_structure: false,
                 delete_after_ingest: true,
+                group_files: false,
             })
             .await
             .unwrap();
@@ -712,6 +825,40 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn disabled_auto_import_does_not_scan_watched_folders() {
+        let library = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        png(&source.path().join("watched.png"));
+        let application = Application::new(Arc::new(Store::open(library.path()).unwrap()));
+        let folder = application
+            .create_folder(&CreateFolderInput {
+                name: "Watch".to_string(),
+                parent_id: None,
+                folder_key: None,
+            })
+            .unwrap()
+            .0;
+        application
+            .set_folder_watch(&crate::folders_v2::FolderWatchInput {
+                folder_id: folder,
+                path: source.path().display().to_string(),
+                include_subfolders: false,
+            })
+            .unwrap();
+        application
+            .patch_application_settings(&serde_json::json!({ "autoImportEnabled": false }))
+            .unwrap();
+
+        assert_eq!(
+            scan_watched_folders(&application).await.unwrap(),
+            ImportEnqueueReport::default()
+        );
+        assert!(ingest_queue_v2::existing_watch_job_keys(&application)
+            .unwrap()
+            .is_empty());
+    }
+
+    #[tokio::test]
     async fn manual_zip_expands_to_one_hidden_until_complete_collection() {
         let library = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
@@ -731,6 +878,7 @@ mod tests {
                 parent_folder_id: None,
                 preserve_structure: false,
                 delete_after_ingest: false,
+                group_files: false,
             })
             .await
             .unwrap();

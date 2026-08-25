@@ -20,6 +20,9 @@ import type { BaseScope, EntityTarget } from '../shared/types/canonical';
 import type { ExportFormat } from '../shared/types/generated/application/ExportFormat';
 import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
 import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
+import { getDefaultStore } from 'jotai';
+import { multiFileImportModalAtom } from '../state/modals';
+import { showErrorNotification } from '../shared/lib/notifications';
 
 export interface MediaImportParams {
   tags?: string[];
@@ -28,6 +31,36 @@ export interface MediaImportParams {
   parent_folder_id?: number | null;
   preserve_structure?: boolean;
   delete_after_ingest?: boolean;
+  group_files?: boolean;
+}
+
+const store = getDefaultStore();
+
+function enqueueMediaImport(paths: string[], params: MediaImportParams): void {
+  void addMedia(paths, params).catch((reason) => {
+    showErrorNotification({
+      title: 'Could not import media',
+      message: reason instanceof Error ? reason.message : String(reason),
+    });
+  });
+}
+
+/** Import one file directly or ask how a multi-file selection should be represented. */
+export function requestMediaImport(paths: string[], params: MediaImportParams): void {
+  if (paths.length <= 1) {
+    enqueueMediaImport(paths, params);
+    return;
+  }
+  store.set(multiFileImportModalAtom, {
+    open: true,
+    paths,
+    lifecycle: params.lifecycle,
+    parentFolderId: params.parent_folder_id ?? null,
+    tags: params.tags ?? [],
+    sourceUrls: params.source_urls ?? [],
+    preserveStructure: params.preserve_structure ?? false,
+    deleteAfterIngest: params.delete_after_ingest ?? false,
+  });
 }
 
 /** Resolve the destination for a manual import from the currently open grid. */
@@ -56,7 +89,7 @@ export async function chooseAndImportFiles(scope: BaseScope): Promise<void> {
   });
   if (!result) return;
   const paths = Array.isArray(result) ? result : [result];
-  await addMedia(paths, manualImportParamsForScope(
+  requestMediaImport(paths, manualImportParamsForScope(
     scope,
     scope.kind === 'folder' ? { parent_folder_id: scope.folder_id } : {},
   ));
@@ -84,10 +117,15 @@ export async function pasteImport(scope: BaseScope): Promise<void> {
   if (payload.paths.length === 0) {
     throw new Error('The clipboard does not contain importable files or an image.');
   }
-  await addMedia(payload.paths, manualImportParamsForScope(scope, {
+  const params = manualImportParamsForScope(scope, {
     parent_folder_id: scope.kind === 'folder' ? scope.folder_id : null,
     delete_after_ingest: payload.temporary,
-  }));
+  });
+  if (payload.paths.length > 1) {
+    requestMediaImport(payload.paths, params);
+    return;
+  }
+  await addMedia(payload.paths, params);
 }
 
 /** Pick one destination and export the target's original files unchanged. */
@@ -112,6 +150,8 @@ export const filesController = {
   ): Promise<ImportEnqueueReport> {
     return addMedia(paths, params);
   },
+
+  requestMediaImport,
 
   exportMedia(
     target: EntityTarget,

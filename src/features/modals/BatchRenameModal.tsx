@@ -44,7 +44,7 @@ export function BatchRenameModal({ open, items, onClose, onRename }: {
 
   return <GlassModal open={open} onClose={onClose} title={`Batch Rename ${items.length} Items`} size="md" footer={<>
     <button className={modalStyles.btn} onClick={onClose} type="button">Cancel</button>
-    <button className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} onClick={() => onRename(preview)} disabled={invalid} type="button">Rename</button>
+    <button data-modal-primary="true" className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} onClick={() => onRename(preview)} disabled={invalid} type="button">Rename</button>
   </>}>
     <div className={modalStyles.stack}>
       <div className={styles.tabs} role="tablist" aria-label="Rename mode">

@@ -275,7 +275,7 @@ export function FolderPickerPanel() {
         footer={(
           <>
             <button type="button" className={modalStyles.btn} onClick={() => setCreateTarget(null)}>Cancel</button>
-            <button type="submit" form="folder-picker-create-form" className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} disabled={!folderName.trim()}>Create</button>
+            <button data-modal-primary="true" type="submit" form="folder-picker-create-form" className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} disabled={!folderName.trim()}>Create</button>
           </>
         )}
       >

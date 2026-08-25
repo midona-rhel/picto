@@ -152,7 +152,7 @@ export const gridReconcileContextAtom = atom((get) => ({
 
 export type GridTransitionPhase = 'idle' | 'fading_out' | 'waiting' | 'fading_in';
 export const gridTransitionPhaseAtom = atom<GridTransitionPhase>('idle');
-/** Visibility of reference application-style persistent filter chips below the titlebar. */
+/** Visibility of persistent filter chips below the titlebar. */
 export const gridFilterToolbarOpenAtom = atom(false);
 
 export const gridScopeLabelAtom = atom((get) => {

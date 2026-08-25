@@ -34,4 +34,42 @@ describe('GlassModal outside dismissal', () => {
 
     expect(onClose).toHaveBeenCalledOnce();
   });
+
+  it('activates the enabled primary action when Enter is pressed in an input', () => {
+    const onPrimary = vi.fn();
+    render(
+      <GlassModal
+        open
+        title="Rename"
+        onClose={vi.fn()}
+        footer={<button data-modal-primary="true" onClick={onPrimary}>Save</button>}
+      >
+        <input aria-label="Name" />
+      </GlassModal>,
+    );
+
+    fireEvent.keyDown(screen.getByLabelText('Name'), { key: 'Enter' });
+
+    expect(onPrimary).toHaveBeenCalledOnce();
+  });
+
+  it('does not replace the native Enter behavior of a focused button', () => {
+    const onSecondary = vi.fn();
+    const onPrimary = vi.fn();
+    render(
+      <GlassModal
+        open
+        title="Confirm"
+        onClose={vi.fn()}
+        footer={<button data-modal-primary="true" onClick={onPrimary}>Confirm</button>}
+      >
+        <button onClick={onSecondary}>Alternative</button>
+      </GlassModal>,
+    );
+
+    fireEvent.keyDown(screen.getByRole('button', { name: 'Alternative' }), { key: 'Enter' });
+
+    expect(onPrimary).not.toHaveBeenCalled();
+    expect(onSecondary).not.toHaveBeenCalled();
+  });
 });

@@ -69,6 +69,7 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
         <>
           <button className={modalStyles.btn} onClick={onClose} type="button">Cancel</button>
           <button
+            data-modal-primary="true"
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
             onClick={() => onExport({
               outputDir, format, quality,

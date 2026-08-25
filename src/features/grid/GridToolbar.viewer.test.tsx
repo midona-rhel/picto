@@ -68,7 +68,7 @@ describe('ViewerToolbar live zoom display', () => {
     expect(navigate.mock.calls).toEqual([[-1], [1]]);
   });
 
-  it('exposes reference application-style zoom levels and toggles actual/fit on right click', () => {
+  it('exposes standard zoom levels and toggles actual/fit on right click', () => {
     const store = createStore();
     const fitToWindow = vi.fn();
     const setZoomScale = vi.fn();

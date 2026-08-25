@@ -1,7 +1,25 @@
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getDefaultStore } from 'jotai';
 import type { BaseScope } from '../shared/types/canonical';
-import { chooseAndExportOriginals, manualImportParamsForScope } from './filesController';
+import { chooseAndExportOriginals, manualImportParamsForScope, requestMediaImport } from './filesController';
 import * as folderApi from '../platform/folderApi';
+import { multiFileImportModalAtom } from '../state/modals';
+
+const closedMultiFileImport = {
+  open: false,
+  paths: [],
+  lifecycle: 'active' as const,
+  parentFolderId: null,
+  tags: [],
+  sourceUrls: [],
+  preserveStructure: false,
+  deleteAfterIngest: false,
+};
+
+afterEach(() => {
+  getDefaultStore().set(multiFileImportModalAtom, closedMultiFileImport);
+  vi.restoreAllMocks();
+});
 
 describe('manual import destination', () => {
   it('imports from Inbox into Inbox', () => {
@@ -22,6 +40,28 @@ describe('manual import destination', () => {
     { kind: 'smart_folder', smart_folder_id: 9 },
   ])('keeps %j imports active without inventing scope semantics', (scope) => {
     expect(manualImportParamsForScope(scope).lifecycle).toBe('active');
+  });
+});
+
+describe('multi-file import choice', () => {
+  it('asks how an explicit multi-file batch should be represented', () => {
+    requestMediaImport(['/tmp/one.png', '/tmp/two.png'], {
+      lifecycle: 'inbox',
+      parent_folder_id: 7,
+      tags: ['artist:test'],
+      delete_after_ingest: true,
+    });
+
+    expect(getDefaultStore().get(multiFileImportModalAtom)).toEqual({
+      open: true,
+      paths: ['/tmp/one.png', '/tmp/two.png'],
+      lifecycle: 'inbox',
+      parentFolderId: 7,
+      tags: ['artist:test'],
+      sourceUrls: [],
+      preserveStructure: false,
+      deleteAfterIngest: true,
+    });
   });
 });
 

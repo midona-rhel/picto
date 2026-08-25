@@ -274,6 +274,7 @@ export function SmartFolderModal({
         <>
           <button className={modalStyles.btn} onClick={handleClose} type="button">Cancel</button>
           <button
+            data-modal-primary="true"
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
             onClick={handleSave}
             disabled={!name.trim()}

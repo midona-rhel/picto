@@ -4,17 +4,21 @@ import {
   GRID_BADGE_FONT,
   GRID_BADGE_TEXT,
   GRID_INFO_FONT,
+  GRID_INFO_BASELINE,
   GRID_NAME_FONT,
+  GRID_NAME_BASELINE,
   GRID_RATING_FONT,
   GRID_TILE_RADIUS,
 } from '../gridAppearance';
 
 export const BADGE_H = 18;
 export const BADGE_FONT = GRID_BADGE_FONT;
-export const BADGE_PAD_X = 4;
+export const BADGE_PAD_X = 2;
 export const BADGE_RADIUS = GRID_TILE_RADIUS;
 export const NAME_FONT = GRID_NAME_FONT;
 export const INFO_FONT = GRID_INFO_FONT;
+export const NAME_BASELINE = GRID_NAME_BASELINE;
+export const INFO_BASELINE = GRID_INFO_BASELINE;
 export const RATING_FONT = GRID_RATING_FONT;
 
 const truncateCache = new Map<string, string>();

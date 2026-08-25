@@ -12,7 +12,7 @@ import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { GridViewMode, LayoutResult } from '../layout/types';
 import { HoverPreviewPortal } from './HoverPreviewPortal';
 import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
-import { getContainRect, mimeToExt, NAME_FONT, truncateText } from './primitives';
+import { getContainRect, mimeToExt, NAME_BASELINE, NAME_FONT, truncateText } from './primitives';
 
 import { ThumbnailPipeline, type PlanTile } from './thumbnailPipeline';
 import { ThumbnailRevealTracker } from './thumbnailRevealTracker';
@@ -137,6 +137,8 @@ export interface CanvasGridProps {
   totalCount?: number | null;
   onTileClick?: (index: number, item: CanonicalEntityGridItem, event?: React.MouseEvent) => void;
   onTileDoubleClick?: (index: number, item: CanonicalEntityGridItem) => void;
+  onTileMiddleClick?: (index: number, item: CanonicalEntityGridItem) => void;
+  onGridWheel?: (event: React.WheelEvent<HTMLDivElement>) => void;
   onEmptyClick?: () => void;
   onTileContextMenu?: (index: number, item: CanonicalEntityGridItem, position: { x: number; y: number }) => void;
   onEmptyContextMenu?: (position: { x: number; y: number }) => void;
@@ -184,6 +186,8 @@ export function CanvasGrid({
   totalCount = null,
   onTileClick,
   onTileDoubleClick,
+  onTileMiddleClick,
+  onGridWheel,
   onEmptyClick,
   onTileContextMenu,
   onEmptyContextMenu,
@@ -562,7 +566,7 @@ export function CanvasGrid({
     ctx.scale(vp.dpr, vp.dpr);
     const scrollTop = Math.max(0, vp.scrollTop - headerHeight);
 
-    // reference application-style selection follows the rendered thumbnail, not the empty tile cell.
+    // Selection follows the rendered thumbnail, not the empty tile cell.
     if (selectedItemIds.size > 0) {
       const visible = activeTilesRef.current;
       for (let k = 0; k < visible.length; k++) {
@@ -612,8 +616,8 @@ export function CanvasGrid({
           const text = truncateText(ctx, label, pos.w - 8);
           const textWidth = ctx.measureText(text).width;
           const textX = pos.x + pos.w / 2;
-          const textY = drawY + imgH + 14;
-          const labelHeight = 17;
+          const textY = drawY + imgH + NAME_BASELINE;
+          const labelHeight = 15;
           ctx.fillStyle = GRID_SELECTION_COLOR;
           ctx.beginPath();
           ctx.roundRect(textX - textWidth / 2 - 3, textY - labelHeight / 2, textWidth + 6, labelHeight, 2);
@@ -998,6 +1002,18 @@ export function CanvasGrid({
     }
   }, [items, layoutModel.positions, onTileDoubleClick, textHeight, isOnHeaderInteractive, headerHeight]);
 
+  const handleAuxClick = useCallback((e: React.MouseEvent) => {
+    if (e.button !== 1 || isOnHeaderInteractive(e.target) || !onTileMiddleClick) return;
+    const container = containerRef.current;
+    if (!container) return;
+    const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
+    const idx = hitTestTile(layoutModel.positions, x, y, textHeight, 0, layoutModel.positions.length);
+    if (idx != null && items[idx]) {
+      e.preventDefault();
+      onTileMiddleClick(idx, items[idx]);
+    }
+  }, [headerHeight, isOnHeaderInteractive, items, layoutModel.positions, onTileMiddleClick, textHeight]);
+
   // ── Zoom button hit test (bottom-right corner of tile image area) ──
   const isZoomButtonHit = useCallback((clientX: number, clientY: number, tileIdx: number): boolean => {
     const container = containerRef.current;
@@ -1295,6 +1311,8 @@ export function CanvasGrid({
         onScroll={handleScroll}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        onAuxClick={handleAuxClick}
+        onWheel={onGridWheel}
         onContextMenu={handleContextMenu}
         onMouseMove={handleMouseMove}
         onMouseLeave={handleMouseLeave}

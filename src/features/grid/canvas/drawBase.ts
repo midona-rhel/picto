@@ -11,7 +11,10 @@ import type { ThumbnailPipelineEntry } from './thumbnailPipeline';
 import {
   BADGE_H,
   BADGE_FONT,
+  BADGE_PAD_X,
+  INFO_BASELINE,
   INFO_FONT,
+  NAME_BASELINE,
   NAME_FONT,
   drawBadge,
   drawImageContain,
@@ -277,7 +280,7 @@ export function drawCanvasBaseLayer({
     if ((isVideo || isAudio || isAnimated) && typeof item.durationMs === 'number' && item.durationMs > 0) {
       const durText = formatDuration(item.durationMs);
       ctx.font = BADGE_FONT;
-      const durW = ctx.measureText(durText).width + 8;
+      const durW = ctx.measureText(durText).width + BADGE_PAD_X * 2;
       drawBadge(ctx, durText, bx + bw - durW - 5, by + 5);
     }
 
@@ -303,7 +306,7 @@ export function drawCanvasBaseLayer({
         const imageHeight = pos.h - th;
         if (drawY + pos.h < 0 || drawY > cssH) continue;
         const textX = pos.x + pos.w / 2;
-        const nameY = drawY + imageHeight + 14;
+        const nameY = drawY + imageHeight + NAME_BASELINE;
         const textMaxW = pos.w - 8;
         const ext = mimeToExt(item.mime);
         const nameStr = (item.name || 'Untitled') + (showExtension && ext ? `.${ext.toUpperCase()}` : '');
@@ -322,7 +325,8 @@ export function drawCanvasBaseLayer({
         const drawY = pos.y - scrollTop;
         const imageHeight = pos.h - th;
         if (drawY + pos.h < 0 || drawY > cssH) continue;
-        ctx.fillText(`${item.width} × ${item.height}`, pos.x + pos.w / 2, drawY + imageHeight + 14 + resOffset);
+        const infoY = drawY + imageHeight + INFO_BASELINE + resOffset;
+        ctx.fillText(`${item.width} × ${item.height}`, pos.x + pos.w / 2, infoY);
       }
     }
   }

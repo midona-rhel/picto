@@ -57,7 +57,7 @@ describe('adaptGridItem', () => {
     });
   });
 
-  it('gives audio waveform tiles reference application\'s two-to-one geometry', () => {
+  it('gives audio waveform tiles two-to-one geometry', () => {
     const audio = item(30, 'audio-file');
     audio.display_mime_type = 'audio/mpeg';
     audio.pixel_width = null;

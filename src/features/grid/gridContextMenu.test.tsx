@@ -108,7 +108,7 @@ describe('buildTileContextMenu', () => {
     expect(labels).not.toContain('Paste Import');
   });
 
-  it('matches reference application macOS Open With Other as an associated-application submenu', () => {
+  it('shows macOS Open With Other as an associated-application submenu', () => {
     const onOpenWithApplication = vi.fn();
     const entries = buildEntityOpenContextEntries({
       hash: 'hash',

@@ -148,7 +148,7 @@ export function FolderPickerModal() {
           <div className={btnStyles.btnGroup}>
             <button className={btnStyles.btn} onClick={close} type="button">Cancel</button>
             {pendingCount > 0 && (
-              <button className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={applyFolders} type="button">
+              <button data-modal-primary="true" className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={applyFolders} type="button">
                 Apply ({pendingCount})
               </button>
             )}

@@ -30,6 +30,7 @@ export function GlassModal({ open, onClose, title, size = 'md', flush = false, f
   const [visible, setVisible] = useState(false);
   const [closing, setClosing] = useState(false);
   const backdropPressRef = useRef(false);
+  const panelRef = useRef<HTMLDivElement>(null);
 
   // Sync visibility with open prop
   useEffect(() => {
@@ -78,10 +79,21 @@ export function GlassModal({ open, onClose, title, size = 'md', flush = false, f
       onPointerCancel={() => { backdropPressRef.current = false; }}
     >
       <div
+        ref={panelRef}
         className={`${styles.panel} ${sizeClass} ${closing ? styles.panelClosing : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
+        onKeyDown={(event) => {
+          if (event.defaultPrevented) return;
+          if (event.key !== 'Enter' || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+          const target = event.target as HTMLElement;
+          if (target.closest('button, textarea, [contenteditable="true"], [role="option"], [role="menuitem"]')) return;
+          const primary = panelRef.current?.querySelector<HTMLButtonElement>('[data-modal-primary="true"]:not(:disabled)');
+          if (!primary) return;
+          event.preventDefault();
+          primary.click();
+        }}
       >
         <div className={styles.header}>
           <span className={styles.title} id={titleId}>{title}</span>

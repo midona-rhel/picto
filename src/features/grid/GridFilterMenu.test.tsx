@@ -53,7 +53,7 @@ describe('GridFilterToolbar', () => {
     vi.useRealTimers();
   });
 
-  it('renders reference application default filters as a dedicated pinned row', () => {
+  it('renders default filters as a dedicated pinned row', () => {
     const store = getDefaultStore();
     store.set(gridFilterToolbarOpenAtom, true);
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters: emptyFilters });
@@ -85,7 +85,7 @@ describe('GridFilterToolbar', () => {
     expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({ min_size_bytes: 2_000_000n }));
   });
 
-  it('uses reference application presence plus keyword semantics for notes', () => {
+  it('uses presence plus keyword semantics for notes', () => {
     vi.useFakeTimers();
     window.localStorage.setItem('picto:grid:pinned-filters', JSON.stringify(['notes']));
     const store = getDefaultStore();
@@ -108,7 +108,7 @@ describe('GridFilterToolbar', () => {
     }));
   });
 
-  it('commits reference application date presets as canonical half-open ranges', () => {
+  it('commits date presets as canonical half-open ranges', () => {
     window.localStorage.setItem('picto:grid:pinned-filters', JSON.stringify(['imported']));
     const store = getDefaultStore();
     store.set(gridFilterToolbarOpenAtom, true);
@@ -146,7 +146,7 @@ describe('GridFilterToolbar', () => {
     });
   });
 
-  it('uses an in-app reference application-style color editor instead of the native picker', () => {
+  it('uses the in-app color editor instead of the native picker', () => {
     const store = getDefaultStore();
     store.set(gridFilterToolbarOpenAtom, true);
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters: emptyFilters });

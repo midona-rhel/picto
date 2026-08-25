@@ -76,7 +76,7 @@ export function GroupOrganizerModal({
       footer={(
         <>
           <button className={modalStyles.btn} onClick={onClose} disabled={saving} type="button">Cancel</button>
-          <button className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} onClick={() => { void submit(); }} disabled={!canSubmit} type="button">
+          <button data-modal-primary="true" className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} onClick={() => { void submit(); }} disabled={!canSubmit} type="button">
             {saving ? 'Saving...' : submitLabel}
           </button>
         </>

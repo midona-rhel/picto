@@ -11,6 +11,7 @@ import {
   exportModalAtom,
   batchRenameModalAtom,
   folderImportModalAtom,
+  multiFileImportModalAtom,
   groupOrganizerModalAtom,
 } from '../../state/modals';
 import { ConfirmModal } from './ConfirmModal';
@@ -45,8 +46,29 @@ export function ModalLayer() {
 
   const folderImport = useAtomValue(folderImportModalAtom);
   const setFolderImport = useSetAtom(folderImportModalAtom);
+  const multiFileImport = useAtomValue(multiFileImportModalAtom);
+  const setMultiFileImport = useSetAtom(multiFileImportModalAtom);
   const groupOrganizer = useAtomValue(groupOrganizerModalAtom);
   const setGroupOrganizer = useSetAtom(groupOrganizerModalAtom);
+
+  const submitMultiFileImport = (groupFiles: boolean) => {
+    const request = multiFileImport;
+    setMultiFileImport({ ...request, open: false });
+    void filesController.addMedia(request.paths, {
+      lifecycle: request.lifecycle,
+      parent_folder_id: request.parentFolderId,
+      tags: request.tags,
+      source_urls: request.sourceUrls,
+      preserve_structure: request.preserveStructure,
+      delete_after_ingest: request.deleteAfterIngest,
+      group_files: groupFiles,
+    }).catch((reason) => {
+      showErrorNotification({
+        title: 'Could not import media',
+        message: reason instanceof Error ? reason.message : String(reason),
+      });
+    });
+  };
 
   return (
     <>
@@ -160,6 +182,17 @@ export function ModalLayer() {
           </p>
         </div>
       </ConfirmModal>
+
+      <ConfirmModal
+        open={multiFileImport.open}
+        onClose={() => setMultiFileImport({ ...multiFileImport, open: false })}
+        onCancel={() => submitMultiFileImport(false)}
+        onConfirm={() => submitMultiFileImport(true)}
+        title="Import as Collection?"
+        cancelLabel="No"
+        confirmLabel="Yes"
+        message={`Do you wish to import these ${multiFileImport.paths.length} media items as a collection?`}
+      />
 
       <TagSelectModal />
       <FolderPickerModal />

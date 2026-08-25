@@ -277,7 +277,7 @@ export function TagSelectModal() {
           <div className={btnStyles.btnGroup}>
             <button className={btnStyles.btn} onClick={close} type="button">Cancel</button>
             {pendingCount > 0 && (
-              <button className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={applyTags} type="button">
+              <button data-modal-primary="true" className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={applyTags} type="button">
                 Apply ({pendingCount})
               </button>
             )}

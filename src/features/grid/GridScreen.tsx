@@ -9,6 +9,7 @@ import * as entityMutations from '../../controllers/entityMutations';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import {
   activeNodeIdAtom,
+  controlPreferencesAtom,
   inspectorCollapsedAtom,
   sidebarCollapsedAtom,
 } from '../../state/navigation';
@@ -71,7 +72,7 @@ import { GridQuickLook } from '../viewer/GridQuickLook';
 import { useGridArrowNav } from './hooks/useGridArrowNav';
 import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
-import { chooseAndImportFiles, chooseAndImportFolder, filesController, hasClipboardImport, manualImportParamsForScope, pasteImport } from '../../controllers/filesController';
+import { chooseAndImportFiles, chooseAndImportFolder, filesController, hasClipboardImport, manualImportParamsForScope, pasteImport, requestMediaImport } from '../../controllers/filesController';
 import { viewerController } from '../../controllers/viewerController';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { scrollGridItemIntoView, type GridScrollAlignment } from './gridScroll';
@@ -134,6 +135,7 @@ export function GridScreen({
   const activeNodeId = useAtomValue(activeNodeIdAtom);
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const inspectorCollapsed = useAtomValue(inspectorCollapsedAtom);
+  const controlPreferences = useAtomValue(controlPreferencesAtom);
   const displayedNodeId = nodeId ?? activeNodeId;
   const items = useAtomValue(gridItemsAtom);
   const loading = useAtomValue(gridLoadingAtom);
@@ -167,9 +169,12 @@ export function GridScreen({
   const setViewerSession = useSetAtom(viewerSessionAtom);
   const quickLookSession = useAtomValue(quickLookSessionAtom);
   const setQuickLookSession = useSetAtom(quickLookSessionAtom);
+  const viewerOpenRef = useRef(false);
+  viewerOpenRef.current = Boolean(viewerSession || quickLookSession);
   const setAiTaggerPortal = useSetAtom(aiTaggerPortalAtom);
   const setFolderPortal = useSetAtom(folderPickerPortalAtom);
   const setTagPortal = useSetAtom(tagSelectPortalAtom);
+
   const setTagSelectModal = useSetAtom(tagSelectModalAtom);
   const setFolderPickerModal = useSetAtom(folderPickerModalAtom);
   const setGroupOrganizerModal = useSetAtom(groupOrganizerModalAtom);
@@ -205,6 +210,10 @@ export function GridScreen({
 
   // ── External file drop (drag from OS into app) ──
   const [fileDragOver, setFileDragOver] = useState(false);
+
+  useEffect(() => {
+    if (viewerSession || quickLookSession) setFileDragOver(false);
+  }, [quickLookSession, viewerSession]);
   const gridScopeRef2 = useRef(gridScope);
   gridScopeRef2.current = gridScope;
 
@@ -216,6 +225,10 @@ export function GridScreen({
       const { type, paths } = event.payload;
       // Completely ignore all drag events while any app-originated drag is active
       if (isNativeDragPending() || isDragActiveCheck() || isInternalDragOrigin()) return;
+      if (viewerOpenRef.current) {
+        setFileDragOver(false);
+        return;
+      }
       if (type === 'enter') { setFileDragOver(true); return; }
       if (type === 'leave') { setFileDragOver(false); return; }
       if (type !== 'drop' || !paths?.length) return;
@@ -235,8 +248,7 @@ export function GridScreen({
           lifecycle: manualImportParamsForScope(scope).lifecycle,
         });
       } else {
-        // File import — direct
-        void filesController.addMedia(paths, manualImportParamsForScope(scope,
+        requestMediaImport(paths, manualImportParamsForScope(scope,
           folderId != null ? { parent_folder_id: folderId } : {}));
       }
     });
@@ -352,6 +364,16 @@ export function GridScreen({
   // Single selection → one image, no navigation in detail window.
   // Multi selection → those images as a navigable set.
   const detailWindowSelectionRef = useRef(new Map<string, number[]>());
+  const wheelSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wheelTargetSizeRef = useRef(targetSize);
+
+  useEffect(() => {
+    wheelTargetSizeRef.current = targetSize;
+  }, [targetSize]);
+
+  useEffect(() => () => {
+    if (wheelSaveTimerRef.current) clearTimeout(wheelSaveTimerRef.current);
+  }, []);
   useEffect(() => {
     const picto = (window as any).picto;
     if (!picto?.events?.on) return;
@@ -418,6 +440,17 @@ export function GridScreen({
     setQuickLookSession(null);
     setViewerSession(createViewerSession(sourceItems, item.item_id));
   }, [setQuickLookSession, setViewerSession]);
+
+  const openGridItemInWindow = useCallback((item: CanonicalEntityGridItem) => {
+    if (item.kind === 'collection' || !item.display_file_hash) return;
+    const label = `detail-${item.display_file_hash.slice(0, 12)}`;
+    detailWindowSelectionRef.current.set(label, [item.item_id]);
+    void windowController.openDetailWindow({
+      hash: item.display_file_hash,
+      width: item.pixel_width ?? null,
+      height: item.pixel_height ?? null,
+    });
+  }, []);
 
   const organizeSelection = useCallback(async (target: ItemTarget) => {
     try {
@@ -515,6 +548,14 @@ export function GridScreen({
         return;
       }
       if (matchesShortcutDef(e, defs.quicklook) && !viewerSessionRef.current) {
+        if (controlPreferences.spaceKeyAction === 'scroll') {
+          e.preventDefault();
+          gridContainerRef.current?.scrollBy({
+            top: (gridContainerRef.current.clientHeight || 0) * (e.shiftKey ? -0.9 : 0.9),
+            behavior: 'smooth',
+          });
+          return;
+        }
         e.preventDefault();
         if (quickLookSessionRef.current) setQuickLookSession(null);
         else if (singleItemId != null) setQuickLookSession(createViewerSession(curItems, singleItemId));
@@ -591,10 +632,11 @@ export function GridScreen({
   const isEmpty = items.length === 0 && !loading;
 
   useEffect(() => {
-    const hasSubfolders = showSubfolders && childFolders.length > 0 && gridScope.kind === 'folder';
+    const hasSubfolders = !viewerSession && !quickLookSession
+      && showSubfolders && childFolders.length > 0 && gridScope.kind === 'folder';
     const staticSurfaceCommitted = Boolean(error) || (isEmpty && !hasSubfolders);
     if (transitionPhase === 'waiting' && !loading && staticSurfaceCommitted) onFirstPaint?.();
-  }, [childFolders.length, error, gridScope.kind, isEmpty, loading, onFirstPaint, showSubfolders, transitionPhase]);
+  }, [childFolders.length, error, gridScope.kind, isEmpty, loading, onFirstPaint, quickLookSession, showSubfolders, transitionPhase, viewerSession]);
   const viewerIndex = viewerSession ? resolveViewerIndex(viewerSession, items) : -1;
   const viewerItem = viewerIndex >= 0 ? items[viewerIndex] ?? null : null;
   const quickLookIndex = quickLookSession ? resolveViewerIndex(quickLookSession, items) : -1;
@@ -721,7 +763,8 @@ export function GridScreen({
   ]);
 
   const renderIncomingSurface = () => {
-    const hasSubfolders = showSubfolders && childFolders.length > 0 && gridScope.kind === 'folder';
+    const hasSubfolders = !viewerSession && !quickLookSession
+      && showSubfolders && childFolders.length > 0 && gridScope.kind === 'folder';
 
     if (error) {
       return (
@@ -1074,7 +1117,33 @@ export function GridScreen({
           }
         }}
         onTileDoubleClick={(_index, item) => {
-          openGridItem(item, items);
+          if (controlPreferences.gridDoubleClickAction === 'external' && item.kind === 'media') {
+            void filesController.openDefaultAppForHash(item.display_file_hash);
+          } else {
+            openGridItem(item, items);
+          }
+        }}
+        onTileMiddleClick={(_index, item) => {
+          if (controlPreferences.gridMiddleClickAction === 'new_window') openGridItemInWindow(item);
+        }}
+        onGridWheel={(event) => {
+          const action = controlPreferences.gridWheelAction;
+          if (action !== 'zoom' || event.deltaY === 0) return;
+          event.preventDefault();
+          const currentTargetSize = wheelTargetSizeRef.current;
+          const candidate = currentTargetSize + (event.deltaY < 0 ? 25 : -25);
+          const nextTargetSize = Math.max(150, Math.min(900,
+            candidate === currentTargetSize
+              ? currentTargetSize + (event.deltaY < 0 ? 1 : -1)
+              : candidate,
+          ));
+          wheelTargetSizeRef.current = nextTargetSize;
+          gridController.updateView({ targetSize: nextTargetSize });
+          if (wheelSaveTimerRef.current) clearTimeout(wheelSaveTimerRef.current);
+          wheelSaveTimerRef.current = setTimeout(() => {
+            wheelSaveTimerRef.current = null;
+            gridController.saveViewPref({ target_size: nextTargetSize });
+          }, 150);
         }}
         onEmptyClick={() => clearSelection()}
         onSelectionChange={(itemIds) => dispatchSelection({ type: 'replace_items', itemIds })}
@@ -1349,7 +1418,7 @@ export function GridScreen({
         />
       ) : null}
 
-      {!viewerSession && fileDragOver && (
+      {!viewerSession && !quickLookSession && fileDragOver && (
         <div className={styles.dropOverlay}>
           <div className={styles.dropOverlayBadge}>
             Drop files to import
