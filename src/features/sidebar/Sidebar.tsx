@@ -14,7 +14,7 @@ import {
   IconPhoto, IconInbox, IconTrash,
   IconClock, IconBookmark,
   IconArrowsShuffle,
-  IconFilter, IconRefresh, IconX,
+  IconFilter, IconLayoutGrid, IconRefresh, IconX,
   IconStar, IconStarOff, IconTags,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
@@ -404,18 +404,23 @@ export function Sidebar() {
   useEffect(() => {
     const pendingId = pendingRenameNodeId;
     if (!pendingId) return;
-    const node = folderNodes.find((n) => n.id === pendingId);
+    const node = [...folderNodes, ...smartFolderNodes].find((n) => n.id === pendingId);
     if (node) {
       setPendingRenameNodeId(null);
       folderRename.startRename(node.id, node.name);
     }
-  }, [folderNodes, folderRename, pendingRenameNodeId, setPendingRenameNodeId]);
+  }, [folderNodes, folderRename, pendingRenameNodeId, setPendingRenameNodeId, smartFolderNodes]);
 
   const createFolderAndRename = useCallback(async (parentId?: number | null) => {
     const nodeId = await foldersController.create('New Folder', parentId);
     if (nodeId) {
       setPendingRenameNodeId(nodeId);
     }
+  }, [setPendingRenameNodeId]);
+
+  const createSmartFolderGroupAndRename = useCallback(async (parentId: number | null = null) => {
+    const nodeId = await smartFoldersController.createGroup('Untitled', parentId);
+    setPendingRenameNodeId(nodeId);
   }, [setPendingRenameNodeId]);
 
   const openFolderAutoTags = useCallback(async (
@@ -677,17 +682,18 @@ export function Sidebar() {
     const sfIdNum = parseSmartFolderIdNum(node.id);
     if (sfId == null) return;
     const currentPayload = buildSmartFolderPayloadFromNode(node);
+    const isGroup = isSmartFolderGroup(node);
     const isExpanded = !collapsed.has(node.id);
     const hasChildren = smartList.some(({ node: child }) => child.parent_id === node.id);
     const allExpandableIds = expandableNodeIds(smartFolderNodes);
     const anyTreeExpanded = allExpandableIds.some((id) => !collapsed.has(id));
     const moveTargets = availableTreeMoveTargetIds(smartFolderNodes, [node.id]);
     const entries: MenuEntry[] = [
-      {
+      ...(!isGroup ? [{
         label: 'Edit Smart Folder...',
         icon: <IconFolderOpen size={14} />,
         action: () => openSmartFolderModal('edit', smartFolderInitialFromNode(node)),
-      },
+      } satisfies MenuEntry] : []),
       {
         label: 'New Child Smart Folder',
         icon: <IconFolderPlus size={14} />,
@@ -697,10 +703,15 @@ export function Sidebar() {
           predicate: { groups: [] },
         }),
       },
+      {
+        label: 'New Child Smart Folder Group',
+        icon: <IconLayoutGrid size={14} />,
+        action: () => { if (sfIdNum != null) void createSmartFolderGroupAndRename(sfIdNum); },
+      },
       { separator: true },
-      { label: quickAccessIds.includes(node.id) ? 'Remove from Quick Access' : 'Add to Quick Access', icon: quickAccessIds.includes(node.id) ? <IconStarOff size={14} /> : <IconStar size={14} />, action: () => {
+      ...(!isGroup ? [{ label: quickAccessIds.includes(node.id) ? 'Remove from Quick Access' : 'Add to Quick Access', icon: quickAccessIds.includes(node.id) ? <IconStarOff size={14} /> : <IconStar size={14} />, action: () => {
         void (quickAccessIds.includes(node.id) ? removeQuickAccess(node.id) : addQuickAccess(node.id));
-      } },
+      } } satisfies MenuEntry] : []),
       { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
       { submenu: true, label: 'Move to...', icon: <IconFolderOpen size={14} />, children: [
         { label: 'Top Level', action: () => { if (sfIdNum != null) void smartFoldersController.move(sfIdNum, null, []); } },
@@ -727,7 +738,7 @@ export function Sidebar() {
         })();
       } },
       { separator: true },
-      {
+      ...(!isGroup ? [{
         label: 'Refresh Results', icon: <IconRefresh size={14} />, action: () => {
           if (sfIdNum == null) return;
           void smartFoldersController.refresh(sfIdNum).catch((reason) => showErrorNotification({
@@ -735,8 +746,7 @@ export function Sidebar() {
             message: reason instanceof Error ? reason.message : String(reason),
           }));
         },
-      },
-      {
+      } satisfies MenuEntry, {
         label: 'Sort Results by Name', icon: <IconSort size={14} />, action: () => {
           if (sfIdNum != null) void smartFoldersController.update(sfIdNum, {
             ...currentPayload,
@@ -744,7 +754,7 @@ export function Sidebar() {
             sort_order: 'ascending',
           });
         },
-      },
+      } satisfies MenuEntry] : []),
       {
         label: isExpanded ? 'Collapse Smart Folder' : 'Expand Smart Folder',
         icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
@@ -775,7 +785,7 @@ export function Sidebar() {
         }} />
       ) },
       { separator: true },
-      ...(sfIdNum == null ? [] : [scopeExportEntry(
+      ...(sfIdNum == null || isGroup ? [] : [scopeExportEntry(
         queryTarget({ kind: 'smart_folder', smart_folder_id: sfIdNum }),
         node.count ?? 0,
       )]),
@@ -783,13 +793,15 @@ export function Sidebar() {
       { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
         store.set(confirmModalAtom, {
           open: true, title: 'Delete Smart Folder', danger: true, confirmLabel: 'Delete',
-          message: `Delete "${node.name}"? This only removes the smart folder, not its contents.`,
+          message: isGroup
+            ? `Delete "${node.name}" and its child smart folders? This does not delete any media.`
+            : `Delete "${node.name}"? This only removes the smart folder, not its contents.`,
           onConfirm: () => smartFoldersController.delete(sfId),
         });
       } },
     ];
     contextMenu.open(e, entries);
-  }, [collapsed, contextMenu, expandableNodeIds, folderRename, openSmartFolderModal, setNodesExpanded, smartFolderNodes, smartList, toggleCollapse, quickAccessIds]);
+  }, [collapsed, contextMenu, createSmartFolderGroupAndRename, expandableNodeIds, folderRename, openSmartFolderModal, setNodesExpanded, smartFolderNodes, smartList, toggleCollapse, quickAccessIds]);
 
   const openSystemMenu = useCallback((event: React.MouseEvent, node: SidebarNodeDto) => {
     if (node.id === 'system:recent_viewed') {
@@ -1157,8 +1169,20 @@ export function Sidebar() {
           count={smartFolderNodes.length}
           expanded={treeFilterActive || !collapsed.has('smart_folders')}
           onToggle={() => { if (!treeFilterActive) toggleCollapse('smart_folders'); }}
-          onAdd={() => openSmartFolderModal('create', { name: 'New Smart Folder', predicate: { groups: [] } })}
-          addTooltip="New Smart Folder"
+          onAdd={(event) => {
+            const rect = event.currentTarget.getBoundingClientRect();
+            contextMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, [
+              {
+                label: 'New Smart Folder', icon: <IconFolderPlus size={14} />,
+                action: () => openSmartFolderModal('create', { name: 'New Smart Folder', predicate: { groups: [] } }),
+              },
+              {
+                label: 'New Smart Folder Group', icon: <IconLayoutGrid size={14} />,
+                action: () => { void createSmartFolderGroupAndRename(); },
+              },
+            ], { showSearch: false });
+          }}
+          addTooltip="New Smart Folder or Group"
         />
         {(treeFilterActive || !collapsed.has('smart_folders')) && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
@@ -1174,7 +1198,13 @@ export function Sidebar() {
             contextHighlight={contextMenuNodeId === node.id}
             dropPosition={folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
             onToggleExpand={treeFilterActive ? undefined : () => toggleCollapse(node.id)}
-            onClick={(e) => handleRowClick(node.id, e)}
+            onClick={(e) => {
+              if (isSmartFolderGroup(node)) {
+                if (hasChildren && !treeFilterActive) toggleCollapse(node.id);
+                return;
+              }
+              handleRowClick(node.id, e);
+            }}
             onContextMenu={(e) => handleSmartFolderContextMenu(e, node)}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
@@ -1280,9 +1310,17 @@ function NodeIcon({ node, expanded }: { node: SidebarNodeDto; expanded: boolean 
   if (node.icon) {
     return <DynamicIcon name={node.icon} size={IC} color={node.color} filled />;
   }
+  if (isSmartFolderGroup(node)) {
+    return <IconLayoutGrid size={IC} color={node.color ?? undefined} stroke={1.2} />;
+  }
   const color = node.color ?? undefined;
   const Icon = expanded ? IconFolderOpen : IconFolder;
   return <Icon size={IC} color={color} stroke={1.2} fill={color ?? 'currentColor'} fillOpacity={0.15} />;
+}
+
+export function isSmartFolderGroup(node: SidebarNodeDto): boolean {
+  return node.kind === 'smart_folder'
+    && (node.meta as Record<string, unknown> | null | undefined)?.is_group === true;
 }
 
 /** Check if `nodeId` is a descendant of `ancestorId` in the folder tree. */

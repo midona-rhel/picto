@@ -38,6 +38,17 @@ const navigation: NavigationSnapshot = {
     sort_field: 'name',
     sort_order: 'asc',
     display_order: 3,
+  }, {
+    smart_folder_id: 8,
+    name: 'Rated',
+    parent_id: 7,
+    icon: null,
+    color: null,
+    notes: null,
+    predicate: { groups: [{ match_mode: 'all', negate: false, rules: [{ field: 'rating', op: 'gte', value: '1', value2: null, values: null }] }] },
+    sort_field: 'name',
+    sort_order: 'asc',
+    display_order: 4,
   }],
   revision: 11,
 };
@@ -51,7 +62,7 @@ const counts: SidebarCounts = {
   uncategorized: 5,
   duplicates: 6,
   folders: [{ id: 4, count: 8 }],
-  smart_folders: [{ id: 7, count: 7 }],
+  smart_folders: [{ id: 7, count: 0 }, { id: 8, count: 7 }],
   revision: 11,
 };
 
@@ -74,7 +85,16 @@ describe('replacement sidebar reads', () => {
     expect(nodes.find((node) => node.id === 'system:tag_manager')?.count).toBe(7);
     expect(nodes.find((node) => node.id === 'system:random')?.count).toBeNull();
     expect(nodes.find((node) => node.id === 'folder:4')?.count).toBe(8);
-    expect(nodes.find((node) => node.id === 'smart:7')?.count).toBe(7);
+    expect(nodes.find((node) => node.id === 'smart:7')).toMatchObject({
+      count: null,
+      selectable: false,
+      meta: expect.objectContaining({ is_group: true }),
+    });
+    expect(nodes.find((node) => node.id === 'smart:8')).toMatchObject({
+      count: 7,
+      selectable: true,
+      meta: expect.objectContaining({ is_group: false }),
+    });
   });
 
   it('reads navigation and counts at the same revision before replacing the tree', async () => {
@@ -98,6 +118,7 @@ describe('replacement sidebar reads', () => {
       'system:trash',
       'folder:4',
       'smart:7',
+      'smart:8',
     ]);
   });
 

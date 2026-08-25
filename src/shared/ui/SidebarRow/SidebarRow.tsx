@@ -6,7 +6,7 @@
  * not by separate component hierarchies.
  */
 
-import type { ReactNode } from 'react';
+import type { MouseEvent, ReactNode } from 'react';
 import { useAtomValue } from 'jotai';
 import { IconChevronRight, IconPlus } from '@tabler/icons-react';
 import { KbdTooltip } from '../KbdTooltip';
@@ -21,7 +21,7 @@ interface SectionProps {
   count?: number | null;
   expanded: boolean;
   onToggle: () => void;
-  onAdd?: () => void;
+  onAdd?: (event: MouseEvent<HTMLButtonElement>) => void;
   addTooltip?: string;
   addShortcut?: string;
   collapsible?: boolean;
@@ -67,7 +67,8 @@ function SectionRow({
         <KbdTooltip label={addTooltip ?? 'Add'} shortcut={addShortcut}>
           <button
             className={styles.sectionAddBtn}
-            onClick={(e) => { e.stopPropagation(); onAdd(); }}
+            aria-label={addTooltip ?? 'Add'}
+            onClick={(e) => { e.stopPropagation(); onAdd(e); }}
           >
             <IconPlus size={14} />
           </button>

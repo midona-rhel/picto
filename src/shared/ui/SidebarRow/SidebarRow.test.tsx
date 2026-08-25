@@ -1,5 +1,7 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
+import { MantineProvider } from '@mantine/core';
+import type { MouseEvent } from 'react';
 import { SidebarRow } from './SidebarRow';
 
 describe('SidebarRow', () => {
@@ -38,6 +40,31 @@ describe('SidebarRow', () => {
     fireEvent.keyDown(section, { key: ' ' });
 
     expect(onToggle).toHaveBeenCalledTimes(2);
+  });
+
+  it('passes the add-button anchor event without toggling the section', () => {
+    let addTarget: EventTarget | null = null;
+    const onAdd = vi.fn((event: MouseEvent<HTMLButtonElement>) => {
+      addTarget = event.currentTarget;
+    });
+    const onToggle = vi.fn();
+    render(
+      <MantineProvider>
+        <SidebarRow
+          variant="section"
+          label="Smart Folders"
+          expanded
+          onToggle={onToggle}
+          onAdd={onAdd}
+          addTooltip="New Smart Folder or Group"
+        />
+      </MantineProvider>,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'New Smart Folder or Group' }));
+    expect(onAdd).toHaveBeenCalledOnce();
+    expect(addTarget).toBeInstanceOf(HTMLButtonElement);
+    expect(onToggle).not.toHaveBeenCalled();
   });
 
   it('delegates row indentation to the shared sidebar geometry variable', () => {

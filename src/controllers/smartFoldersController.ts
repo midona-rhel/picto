@@ -70,6 +70,10 @@ export function emptySmartFolderPayload(
 }
 
 export const smartFoldersController = {
+  createGroup(name = 'Untitled', parentId: number | null = null): Promise<string> {
+    return this.create(emptySmartFolderPayload({ name, parent_id: parentId }));
+  },
+
   async refresh(id: number): Promise<void> {
     await sidebarController.fetchTree();
     if (store.get(activeNodeIdAtom) === `smart:${id}`) {

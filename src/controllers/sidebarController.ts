@@ -84,7 +84,9 @@ function folderNodes(navigation: NavigationSnapshot, counts: SidebarCounts): Sid
 
 function smartFolderNodes(navigation: NavigationSnapshot, counts: SidebarCounts): SidebarNodeDto[] {
   const countsById = countById(counts.smart_folders);
-  return navigation.smart_folders.map((folder) => ({
+  return navigation.smart_folders.map((folder) => {
+    const isGroup = folder.predicate.groups.length === 0;
+    return {
     id: `smart:${folder.smart_folder_id}`,
     kind: 'smart_folder',
     parent_id: folder.parent_id == null ? 'section:smart_folders' : `smart:${folder.parent_id}`,
@@ -92,17 +94,19 @@ function smartFolderNodes(navigation: NavigationSnapshot, counts: SidebarCounts)
     icon: folder.icon,
     color: folder.color,
     sort_order: folder.display_order,
-    count: countValue(countsById.get(folder.smart_folder_id) ?? 0, `Smart folder ${folder.smart_folder_id}`),
+    count: isGroup ? null : countValue(countsById.get(folder.smart_folder_id) ?? 0, `Smart folder ${folder.smart_folder_id}`),
     freshness: 'exact',
-    selectable: true,
+    selectable: !isGroup,
     meta: {
+      is_group: isGroup,
       parent_id: folder.parent_id,
       notes: folder.notes,
       predicate: folder.predicate,
       sort_field: folder.sort_field,
       sort_order: folder.sort_order,
     },
-  }));
+    };
+  });
 }
 
 export function buildSidebarNodes(
