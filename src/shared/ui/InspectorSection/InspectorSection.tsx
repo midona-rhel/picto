@@ -8,15 +8,16 @@ interface Props {
   collapsed?: boolean;
   onToggle?: () => void;
   children: ReactNode;
+  onContextMenu?: (event: React.MouseEvent<HTMLDivElement>) => void;
 }
 
-export function InspectorSection({ title, count, collapsed: controlledCollapsed, onToggle, children }: Props) {
+export function InspectorSection({ title, count, collapsed: controlledCollapsed, onToggle, children, onContextMenu }: Props) {
   const [internalCollapsed, setInternalCollapsed] = useState(false);
   const collapsed = controlledCollapsed ?? internalCollapsed;
   const toggle = onToggle ?? (() => setInternalCollapsed((c) => !c));
 
   return (
-    <div className={styles.section}>
+    <div className={styles.section} onContextMenu={onContextMenu}>
       <div className={styles.header} onClick={toggle}>
         <span className={styles.title}>{title}</span>
         {count != null && <span className={styles.count}> ({count})</span>}

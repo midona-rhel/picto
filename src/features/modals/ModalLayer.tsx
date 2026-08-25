@@ -10,7 +10,7 @@ import {
   folderWatchModalAtom,
   exportModalAtom,
   folderImportModalAtom,
-  collectionOrganizerModalAtom,
+  groupOrganizerModalAtom,
 } from '../../state/modals';
 import { ConfirmModal } from './ConfirmModal';
 import { SmartFolderModal } from './SmartFolderModal';
@@ -21,7 +21,7 @@ import { FolderPickerModal } from './FolderPickerModal';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { foldersController } from '../../controllers/foldersController';
 import { filesController } from '../../controllers/filesController';
-import { CollectionOrganizerModal } from './CollectionOrganizerModal';
+import { GroupOrganizerModal } from './GroupOrganizerModal';
 
 export function ModalLayer() {
   const confirm = useAtomValue(confirmModalAtom);
@@ -38,8 +38,8 @@ export function ModalLayer() {
 
   const folderImport = useAtomValue(folderImportModalAtom);
   const setFolderImport = useSetAtom(folderImportModalAtom);
-  const collectionOrganizer = useAtomValue(collectionOrganizerModalAtom);
-  const setCollectionOrganizer = useSetAtom(collectionOrganizerModalAtom);
+  const groupOrganizer = useAtomValue(groupOrganizerModalAtom);
+  const setGroupOrganizer = useSetAtom(groupOrganizerModalAtom);
 
   return (
     <>
@@ -53,12 +53,12 @@ export function ModalLayer() {
         danger={confirm.danger}
       />
 
-      <CollectionOrganizerModal
-        open={collectionOrganizer.open}
-        target={collectionOrganizer.target}
-        collections={collectionOrganizer.collections}
-        onClose={() => setCollectionOrganizer({ open: false, target: null, collections: [] })}
-        onComplete={collectionOrganizer.onComplete}
+      <GroupOrganizerModal
+        open={groupOrganizer.open}
+        target={groupOrganizer.target}
+        groups={groupOrganizer.groups}
+        onClose={() => setGroupOrganizer({ open: false, target: null, groups: [] })}
+        onComplete={groupOrganizer.onComplete}
       />
 
       <SmartFolderModal

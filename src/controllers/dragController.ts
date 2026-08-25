@@ -1,6 +1,6 @@
-import { setItemLifecycle } from '../platform/entityApi';
 import { reorderFolderMembers, updateFolderMembership } from '../platform/folderApi';
 import { gridController } from './gridController';
+import { setTargetLifecycle, settleSelectionAfterMutation } from './entityMutations';
 import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 import type { DropTarget, GridDragState } from '../features/grid/dragState';
 
@@ -18,14 +18,16 @@ export const dragController = {
     if (target.kind === 'folder') {
       await updateFolderMembership(entityTarget, target.folderId, 'add');
       if (sourceScope?.kind === 'inbox' || sourceScope?.kind === 'trash') {
-        await setItemLifecycle(entityTarget, 'active');
+        await setTargetLifecycle(entityTarget, 'active');
+      } else {
+        settleSelectionAfterMutation();
       }
       return;
     }
 
     if (target.kind === 'status') {
       const lifecycle = LIFECYCLE_BY_STATUS[target.status];
-      if (lifecycle) await setItemLifecycle(entityTarget, lifecycle);
+      if (lifecycle) await setTargetLifecycle(entityTarget, lifecycle);
       return;
     }
 

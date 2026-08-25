@@ -2,6 +2,7 @@ import type { ItemScope } from '../types/generated/application/ItemScope';
 
 const GRID_SYSTEM_SCOPES: Record<string, ItemScope> = {
   'system:active': { kind: 'all' },
+  'system:random': { kind: 'all' },
   'system:inbox': { kind: 'inbox' },
   'system:trash': { kind: 'trash' },
   'system:uncategorized': { kind: 'uncategorized' },

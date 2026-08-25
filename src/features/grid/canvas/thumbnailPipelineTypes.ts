@@ -5,6 +5,4 @@ export interface ThumbnailPipelineEntry {
   state: ThumbnailPipelineState;
   lastAccessed: number;
   bytes: number;
-  animateIn: boolean;
-  revealStartedAt: number;
 }

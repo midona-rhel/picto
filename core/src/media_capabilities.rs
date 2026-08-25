@@ -57,26 +57,26 @@ pub fn capabilities_for_detected_mime(mime: MimeType) -> MediaCapabilities {
             ingest_supported: true,
             thumbnail_backend: Some(ThumbnailBackend::Ffmpeg),
             can_preview_image: true,
-            can_dominant_colors: false,
+            can_dominant_colors: true,
             can_perceptual_hash: false,
         },
         m if is_special_thumbnail_detected_mime(m) => MediaCapabilities {
             ingest_supported: true,
             thumbnail_backend: Some(ThumbnailBackend::GenericAdapter),
             can_preview_image: false,
-            can_dominant_colors: false,
+            can_dominant_colors: !is_document_thumbnail_detected_mime(m),
             can_perceptual_hash: false,
         },
         m if m.is_video() => MediaCapabilities {
             ingest_supported: true,
             thumbnail_backend: Some(ThumbnailBackend::Ffmpeg),
             can_preview_image: true,
-            can_dominant_colors: false,
+            can_dominant_colors: true,
             can_perceptual_hash: false,
         },
         m if m.is_audio() => MediaCapabilities {
             ingest_supported: true,
-            thumbnail_backend: None,
+            thumbnail_backend: Some(ThumbnailBackend::Ffmpeg),
             can_preview_image: false,
             can_dominant_colors: false,
             can_perceptual_hash: false,
@@ -107,7 +107,7 @@ pub fn capabilities_for_stored_media(
             ingest_supported: true,
             thumbnail_backend: Some(ThumbnailBackend::Ffmpeg),
             can_preview_image: true,
-            can_dominant_colors: false,
+            can_dominant_colors: true,
             can_perceptual_hash: false,
         };
     }
@@ -115,7 +115,7 @@ pub fn capabilities_for_stored_media(
     if mime_type.starts_with("audio/") {
         return MediaCapabilities {
             ingest_supported: true,
-            thumbnail_backend: None,
+            thumbnail_backend: Some(ThumbnailBackend::Ffmpeg),
             can_preview_image: false,
             can_dominant_colors: false,
             can_perceptual_hash: false,
@@ -127,19 +127,19 @@ pub fn capabilities_for_stored_media(
             ingest_supported: true,
             thumbnail_backend: Some(ThumbnailBackend::GenericAdapter),
             can_preview_image: false,
-            can_dominant_colors: false,
+            can_dominant_colors: !is_document_thumbnail_mime(mime_type),
             can_perceptual_hash: false,
         };
     }
 
-    if mime_type.starts_with("image/") {
+    if is_static_raster_mime(mime_type) {
         let animated = frame_count.unwrap_or(1) > 1 || matches!(mime_type, "image/apng");
         if animated {
             return MediaCapabilities {
                 ingest_supported: true,
                 thumbnail_backend: Some(ThumbnailBackend::Ffmpeg),
                 can_preview_image: true,
-                can_dominant_colors: false,
+                can_dominant_colors: true,
                 can_perceptual_hash: false,
             };
         }
@@ -159,6 +159,25 @@ pub fn capabilities_for_stored_media(
         can_dominant_colors: false,
         can_perceptual_hash: false,
     }
+}
+
+fn is_static_raster_mime(mime_type: &str) -> bool {
+    matches!(
+        mime_type,
+        "image/jpeg"
+            | "image/png"
+            | "image/gif"
+            | "image/webp"
+            | "image/bmp"
+            | "image/tiff"
+            | "image/x-icon"
+            | "image/qoi"
+            | "image/heif"
+            | "image/heic"
+            | "image/avif"
+            | "image/jxl"
+            | "image/apng"
+    )
 }
 
 fn is_static_raster_detected_mime(mime: MimeType) -> bool {
@@ -188,9 +207,20 @@ fn is_special_thumbnail_detected_mime(mime: MimeType) -> bool {
             | MimeType::ApplicationKrita
             | MimeType::ApplicationPaintDotNet
             | MimeType::ApplicationPptx
+            | MimeType::ApplicationDocx
             | MimeType::ApplicationProcreate
             | MimeType::ApplicationPsd
             | MimeType::ImageSvg
+    )
+}
+
+fn is_document_thumbnail_detected_mime(mime: MimeType) -> bool {
+    matches!(
+        mime,
+        MimeType::ApplicationCbz
+            | MimeType::ApplicationEpub
+            | MimeType::ApplicationPptx
+            | MimeType::ApplicationDocx
     )
 }
 
@@ -203,9 +233,20 @@ fn is_special_thumbnail_mime(mime_type: &str) -> bool {
             | "application/x-krita"
             | "application/x-paint-dot-net"
             | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             | "application/x-procreate"
             | "image/svg+xml"
             | "image/vnd.adobe.photoshop"
+    )
+}
+
+fn is_document_thumbnail_mime(mime_type: &str) -> bool {
+    matches!(
+        mime_type,
+        "application/vnd.comicbook+zip"
+            | "application/epub+zip"
+            | "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+            | "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
     )
 }
 
@@ -215,19 +256,48 @@ mod tests {
     use crate::constants::MimeType;
 
     #[test]
-    fn detected_video_uses_ffmpeg_without_colors() {
+    fn detected_video_uses_its_thumbnail_for_colors() {
         let caps = capabilities_for_detected_mime(MimeType::VideoMp4);
         assert_eq!(caps.thumbnail_backend, Some(ThumbnailBackend::Ffmpeg));
-        assert!(!caps.can_dominant_colors);
+        assert!(caps.can_dominant_colors);
         assert!(!caps.can_perceptual_hash);
     }
 
     #[test]
-    fn stored_animated_image_does_not_get_colors_or_phash() {
+    fn stored_animated_image_uses_its_thumbnail_for_colors() {
         let caps = capabilities_for_stored_media("image/gif", Some(12));
         assert_eq!(caps.thumbnail_backend, Some(ThumbnailBackend::Ffmpeg));
-        assert!(!caps.can_dominant_colors);
+        assert!(caps.can_dominant_colors);
         assert!(!caps.can_perceptual_hash);
+    }
+
+    #[test]
+    fn audio_uses_ffmpeg_waveform_without_color_analysis() {
+        let detected = capabilities_for_detected_mime(MimeType::AudioMp3);
+        let stored = capabilities_for_stored_media("audio/mpeg", None);
+        assert_eq!(detected.thumbnail_backend, Some(ThumbnailBackend::Ffmpeg));
+        assert_eq!(stored.thumbnail_backend, Some(ThumbnailBackend::Ffmpeg));
+        assert!(!detected.can_dominant_colors);
+        assert!(!stored.can_dominant_colors);
+        assert!(!stored.can_perceptual_hash);
+    }
+
+    #[test]
+    fn documents_keep_thumbnails_without_color_analysis() {
+        for mime in [
+            MimeType::ApplicationCbz,
+            MimeType::ApplicationEpub,
+            MimeType::ApplicationPptx,
+            MimeType::ApplicationDocx,
+        ] {
+            let caps = capabilities_for_detected_mime(mime);
+            assert!(caps.can_thumbnail());
+            assert!(!caps.can_dominant_colors);
+        }
+
+        let project = capabilities_for_detected_mime(MimeType::ApplicationPsd);
+        assert!(project.can_thumbnail());
+        assert!(project.can_dominant_colors);
     }
 
     #[test]

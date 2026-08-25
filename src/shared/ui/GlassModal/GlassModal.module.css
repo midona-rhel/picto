@@ -41,6 +41,7 @@
 .sm { width: 440px; max-height: 80vh; }
 .md { width: 560px; max-height: 80vh; }
 .lg { width: 680px; max-height: 85vh; }
+.xl { width: min(900px, calc(100vw - 48px)); height: min(600px, calc(100vh - 48px)); }
 
 /* ── Header ── */
 
@@ -91,6 +92,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 16px;
 }
 
@@ -108,7 +110,7 @@
   justify-content: flex-end;
   padding: 0 16px;
   gap: 8px;
-  background: var(--color-black-10);
+  background: var(--color-footer-surface);
   border-top: 1px solid var(--color-border-secondary);
 }
 
@@ -139,7 +141,7 @@
   padding: 0 10px;
   border: 1px solid var(--color-border-primary);
   border-radius: var(--radius-sm);
-  background: var(--color-black-20);
+  background: var(--color-control-surface);
   color: var(--color-text-primary);
   font-size: var(--font-size-md);
   font-family: var(--font-family);

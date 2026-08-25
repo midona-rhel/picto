@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react';
 import { IconPlus, IconShieldLock } from '@tabler/icons-react';
 import type {
+  SubscriptionCover,
   SubscriptionInfo,
   SubscriptionProgressEvent,
 } from '../../../shared/types/subscriptions';
 import type { SubscriptionListMetrics } from '../../../shared/types/subscriptionsWorkspace';
 import type { SubscriptionsSelection } from '../../../state/subscriptionsWorkspace';
-import { mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
-import { isSubscriptionUpToDate } from '../subscriptionUtils';
+import { SubscriptionCoverImage } from './SubscriptionCoverImage';
+import { isSubscriptionCompleted, isSubscriptionUpToDate } from '../subscriptionUtils';
 import { ActionButton } from './ActionButton';
+import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
 import styles from '../SubscriptionsScreen.module.css';
 
 interface CardModel {
@@ -17,10 +19,11 @@ interface CardModel {
   name: string;
   files: number;
   sources: number;
-  coverHash: string | null;
+  cover: SubscriptionCover | null;
   running: boolean;
   paused: boolean;
   attention: boolean;
+  completed: boolean;
   upToDate: boolean;
 }
 
@@ -38,13 +41,17 @@ function FollowCard({
   onContextMenu: (e: React.MouseEvent) => void;
 }) {
   const [coverFailed, setCoverFailed] = useState(false);
-  const showCover = card.coverHash != null && !coverFailed;
+  const showCover = card.cover != null && !coverFailed;
+
+  useEffect(() => setCoverFailed(false), [card.cover?.file_hash]);
   const dotClass = card.running
     ? styles.qDotRunning
     : card.attention
       ? styles.qDotAttention
       : card.paused
         ? styles.qDotPaused
+        : card.completed
+          ? styles.qDotSuccess
         : styles.qDotIdle;
 
   return (
@@ -60,8 +67,13 @@ function FollowCard({
     >
       <span className={styles.followCover}>
         {showCover ? (
-          <img
-            src={mediaThumbnailUrl(card.coverHash as string)}
+          <SubscriptionCoverImage
+            fileHash={card.cover?.file_hash as string}
+            crop={{
+              focusX: card.cover?.focus_x ?? 500,
+              focusY: card.cover?.focus_y ?? 500,
+              zoomPercent: card.cover?.zoom_percent ?? 100,
+            }}
             alt=""
             loading="lazy"
             draggable={false}
@@ -76,7 +88,7 @@ function FollowCard({
       <span className={styles.followName}>
         <span className={`${styles.qDot} ${dotClass}`.trim()} />
         <span className={styles.followNameText}>{card.name}</span>
-        {card.upToDate && <span className={styles.upToDateChip}>Up to date</span>}
+        {card.completed && <span className={styles.upToDateChip}>{card.upToDate ? 'Up to date' : 'Completed'}</span>}
       </span>
       <span className={styles.followMeta}>
         {card.files.toLocaleString()} files
@@ -108,7 +120,7 @@ export function SubscriptionsGrid({
 }: {
   subscriptions: SubscriptionInfo[];
   listMetrics: Record<string, SubscriptionListMetrics>;
-  covers: Map<string, string>;
+  covers: Map<string, SubscriptionCover>;
   progressBySubscriptionId: Map<string, SubscriptionProgressEvent>;
   runningSubscriptionIds: string[];
   onSelect: (selection: SubscriptionsSelection) => void;
@@ -129,10 +141,17 @@ export function SubscriptionsGrid({
         name: sub.name,
         files: sub.total_files,
         sources: sub.queries.length,
-        coverHash: covers.get(sub.id) ?? null,
+        cover: covers.get(sub.id) ?? null,
         running: running.has(sub.id) || progressBySubscriptionId.has(sub.id),
         paused: sub.paused,
         attention: hasAttention(sub.id),
+        completed: !running.has(sub.id)
+          && !progressBySubscriptionId.has(sub.id)
+          && isSubscriptionCompleted(
+            sub,
+            listMetrics[sub.id]?.failedPostCount ?? 0,
+            listMetrics[sub.id]?.openIssueCount ?? 0,
+          ),
         upToDate: !running.has(sub.id)
           && !progressBySubscriptionId.has(sub.id)
           && isSubscriptionUpToDate(
@@ -150,13 +169,11 @@ export function SubscriptionsGrid({
   const validKeys = new Set(cards.map((card) => card.key));
   const liveSelected = new Set([...selected].filter((key) => validKeys.has(key)));
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setSelected(new Set());
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, []);
+  useShortcutScope((event) => {
+    if (event.key !== 'Escape' || selected.size === 0) return;
+    setSelected(new Set());
+    return true;
+  }, { priority: 20 });
 
   const handleCardClick = (index: number, card: CardModel, e: React.MouseEvent) => {
     e.preventDefault();

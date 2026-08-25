@@ -9,7 +9,13 @@ vi.mock('./useCanvasRedrawScheduler', () => ({
 vi.mock('./thumbnailPipeline', () => ({
   ThumbnailPipeline: class {
     clear() {}
+    destroy() {}
+    invalidate() {}
   },
+}));
+
+vi.mock('../../../shared/lib/thumbnailChanges', () => ({
+  listenThumbnailChanged: vi.fn().mockResolvedValue(() => {}),
 }));
 
 vi.mock('../../../controllers/zoomController', () => ({
@@ -41,5 +47,22 @@ describe('CanvasGrid scroll freezing', () => {
     view.rerender(<CanvasGrid {...props} interactive={false} />);
 
     expect(scrollContainer!.scrollTop).toBe(360);
+  });
+
+  it('keeps the sticky viewport inside the media scroll extent', () => {
+    const view = render(
+      <CanvasGrid
+        items={[]}
+        viewMode="grid"
+        targetSize={180}
+        showName
+        showExtension={false}
+        headerContent={<div>Subfolders</div>}
+      />,
+    );
+    const canvasWrap = view.container.querySelector<HTMLElement>('[data-grid-layout]');
+    const viewport = canvasWrap?.firstElementChild as HTMLElement | null;
+
+    expect(viewport?.style.maxHeight).toBe(canvasWrap?.style.height);
   });
 });

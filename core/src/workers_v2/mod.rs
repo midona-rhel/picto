@@ -228,6 +228,35 @@ pub fn reset_running(store: &Store) -> Result<usize, String> {
     reset_running_at(store, &Utc::now().to_rfc3339())
 }
 
+/// Remove thumbnail jobs that can never be claimed under the collection-cover
+/// policy. Missing member thumbnails are queued on demand when a viewport or
+/// collection editor actually requests them.
+pub fn prune_deferred_thumbnail_work(store: &Store) -> Result<usize, String> {
+    let (count, _, _) = store.transaction_if_changed(|transaction| {
+        let count = transaction.execute(
+            "DELETE FROM work_item
+             WHERE status = 'pending'
+               AND work_type = 'thumbnail'
+               AND media_item_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1 FROM library_root
+                   WHERE library_root.item_id = work_item.media_item_id
+               )
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM library_root collection_root
+                   JOIN library_item collection
+                     ON collection.item_id = collection_root.item_id
+                   WHERE collection.kind = 'collection'
+                     AND collection.cover_media_item_id = work_item.media_item_id
+               )",
+            [],
+        )?;
+        Ok((count, count != 0))
+    })?;
+    Ok(count)
+}
+
 pub fn reset_running_at(store: &Store, now: &str) -> Result<usize, String> {
     let (count, _, _) = store.transaction_if_changed(|transaction| {
         let count = transaction.execute(
@@ -253,7 +282,38 @@ pub fn claim_at(store: &Store, limit: usize, now: &str) -> Result<Vec<WorkItem>,
                     available_at, last_error
              FROM work_item
              WHERE status = 'pending' AND available_at <= ?1
-             ORDER BY available_at, work_id
+               AND (
+                   work_type <> 'thumbnail'
+                   OR media_item_id IS NULL
+                   OR EXISTS (
+                       SELECT 1 FROM library_root
+                       WHERE library_root.item_id = work_item.media_item_id
+                   )
+                   OR EXISTS (
+                       SELECT 1
+                       FROM library_root collection_root
+                       JOIN library_item collection
+                         ON collection.item_id = collection_root.item_id
+                       WHERE collection.kind = 'collection'
+                         AND work_item.media_item_id = (
+                             SELECT member.media_item_id
+                             FROM collection_member member
+                             WHERE member.collection_id = collection.item_id
+                             ORDER BY member.position_rank, member.media_item_id
+                             LIMIT 1
+                         )
+                   )
+               )
+             ORDER BY CASE work_type
+                          WHEN 'thumbnail' THEN 0
+                          WHEN 'dominant_colors' THEN 1
+                          WHEN 'perceptual_hash' THEN 2
+                          WHEN 'ai_tag' THEN 3
+                          WHEN 'blob_delete' THEN 4
+                          ELSE 5
+                      END,
+                      available_at,
+                      work_id
              LIMIT ?2",
         )?;
         let rows = statement
@@ -468,6 +528,67 @@ mod tests {
     }
 
     #[test]
+    fn deferred_collection_member_thumbnail_jobs_are_pruned() {
+        let (_directory, store) = store();
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO library_item (
+                         item_id, item_key, kind, created_at, updated_at
+                     ) VALUES (10, 'collection-10', 'collection', ?1, ?1)",
+                    [NOW],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (10, 'inbox')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_item (
+                         item_id, item_key, kind, created_at, updated_at
+                     ) VALUES (11, 'item-11', 'media', ?1, ?1)",
+                    [NOW],
+                )?;
+                transaction.execute(
+                    "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
+                     VALUES (11, 7, ?1, ?1)",
+                    [NOW],
+                )?;
+                transaction.execute(
+                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
+                     VALUES (10, 9, 1000), (10, 11, 2000)",
+                    [],
+                )?;
+                transaction.execute(
+                    "UPDATE library_item SET cover_media_item_id = 9 WHERE item_id = 10",
+                    [],
+                )?;
+                for media_item_id in [9_i64, 11] {
+                    transaction.execute(
+                        "INSERT INTO work_item (
+                             media_item_id, file_id, work_type, status, attempt_count,
+                             available_at, created_at, updated_at
+                         ) VALUES (?1, 7, 'thumbnail', 'pending', 0, ?2, ?2, ?2)",
+                        params![media_item_id, NOW],
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(prune_deferred_thumbnail_work(&store).unwrap(), 1);
+        let remaining = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT media_item_id FROM work_item WHERE work_type = 'thumbnail'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(remaining, 9);
+    }
+
+    #[test]
     fn startup_recovers_running_items() {
         let (_directory, store) = store();
         let work_id = enqueue_at(&store, WorkSpec::media(9, 7, WorkKind::DominantColors), NOW)
@@ -508,6 +629,102 @@ mod tests {
             .iter()
             .all(|item| item.status == WorkStatus::Running));
         assert_eq!(count_status(&store, "running"), 2);
+        assert_eq!(count_status(&store, "pending"), 1);
+    }
+
+    #[test]
+    fn user_visible_derivatives_outrank_older_background_analysis() {
+        let (_directory, store) = store();
+        enqueue_at(
+            &store,
+            WorkSpec::file(7, WorkKind::PerceptualHash),
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        enqueue_at(
+            &store,
+            WorkSpec::file(7, WorkKind::DominantColors),
+            "2026-01-01T00:01:00Z",
+        )
+        .unwrap();
+        enqueue_at(
+            &store,
+            WorkSpec::file(7, WorkKind::Thumbnail),
+            "2026-01-01T00:02:00Z",
+        )
+        .unwrap();
+
+        let thumbnail = claim_at(&store, 1, "2026-01-01T00:03:00Z").unwrap();
+        assert_eq!(thumbnail[0].kind, WorkKind::Thumbnail);
+        assert!(complete(&store, thumbnail[0].work_id).unwrap());
+
+        let colors = claim_at(&store, 1, "2026-01-01T00:03:00Z").unwrap();
+        assert_eq!(colors[0].kind, WorkKind::DominantColors);
+        assert!(complete(&store, colors[0].work_id).unwrap());
+
+        let phash = claim_at(&store, 1, "2026-01-01T00:03:00Z").unwrap();
+        assert_eq!(phash[0].kind, WorkKind::PerceptualHash);
+    }
+
+    #[test]
+    fn collection_members_only_generate_the_visible_cover_thumbnail_in_background() {
+        let (_directory, store) = store();
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO media_file (
+                         file_id, file_hash, mime_type, size_bytes, created_at
+                     ) VALUES (8, 'hash-8', 'image/png', 1, ?1)",
+                    [NOW],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_item (
+                         item_id, item_key, kind, created_at, updated_at
+                     ) VALUES (10, 'item-10', 'media', ?1, ?1),
+                              (20, 'collection-20', 'collection', ?1, ?1)",
+                    [NOW],
+                )?;
+                transaction.execute(
+                    "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
+                     VALUES (10, 8, ?1, ?1)",
+                    [NOW],
+                )?;
+                transaction.execute(
+                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
+                     VALUES (20, 9, 1), (20, 10, 2)",
+                    [],
+                )?;
+                transaction.execute(
+                    "UPDATE library_item SET cover_media_item_id = 9 WHERE item_id = 20",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (20, 'active')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        enqueue_at(&store, WorkSpec::media(9, 7, WorkKind::Thumbnail), NOW).unwrap();
+        enqueue_at(&store, WorkSpec::media(10, 8, WorkKind::Thumbnail), NOW).unwrap();
+        enqueue_at(
+            &store,
+            WorkSpec::media(10, 8, WorkKind::DominantColors),
+            NOW,
+        )
+        .unwrap();
+
+        let claimed = claim_at(&store, 8, NOW).unwrap();
+        assert!(claimed
+            .iter()
+            .any(|item| { item.media_item_id == Some(9) && item.kind == WorkKind::Thumbnail }));
+        assert!(claimed.iter().any(|item| {
+            item.media_item_id == Some(10) && item.kind == WorkKind::DominantColors
+        }));
+        assert!(!claimed
+            .iter()
+            .any(|item| { item.media_item_id == Some(10) && item.kind == WorkKind::Thumbnail }));
         assert_eq!(count_status(&store, "pending"), 1);
     }
 

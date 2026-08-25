@@ -4,6 +4,8 @@ import { DynamicIcon } from '../../shared/ui/DynamicIcon';
 import { foldersController } from '../../controllers/foldersController';
 import type { SidebarNodeDto } from '../../shared/types/canonical';
 import styles from './SubfolderGrid.module.css';
+import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
+import { GlassInput } from '../../shared/ui/GlassInput/GlassInput';
 
 interface SubfolderGridProps {
   childFolders: SidebarNodeDto[];
@@ -13,6 +15,9 @@ interface SubfolderGridProps {
   onSelectFolder?: (nodeId: string, event: React.MouseEvent) => void;
   onFolderContextMenu?: (nodeId: string, folder: SidebarNodeDto, position: { x: number; y: number }) => void;
   selectedNodeIds?: Set<string>;
+  renamingNodeId?: string | null;
+  onRenameFolder?: (nodeId: string, name: string) => void;
+  onCancelRename?: () => void;
 }
 
 export interface SubfolderGridHandle {
@@ -22,31 +27,40 @@ export interface SubfolderGridHandle {
 export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>(function SubfolderGrid({
   childFolders, targetSize, totalImageCount,
   onOpenFolder, onSelectFolder, onFolderContextMenu,
-  selectedNodeIds,
+  selectedNodeIds, renamingNodeId, onRenameFolder, onCancelRename,
 }, ref) {
   const [expanded, setExpanded] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
-  const [coverHashes, setCoverHashes] = useState<Map<number, string | null>>(new Map());
+  const [covers, setCovers] = useState<Map<number, { hash: string; mime: string }>>(new Map());
+  const coverRequestKey = childFolders
+    .map((folder) => parseFolderId(folder.id))
+    .filter((folderId): folderId is number => folderId != null)
+    .join(',');
 
   useEffect(() => {
     let cancelled = false;
-    const folderIds = childFolders
-      .map((folder) => parseFolderId(folder.id))
-      .filter((folderId): folderId is number => folderId != null);
+    setCovers(new Map());
+    const folderIds = coverRequestKey === ''
+      ? []
+      : coverRequestKey.split(',').map(Number);
     if (folderIds.length === 0) {
-      setCoverHashes(new Map());
+      setCovers(new Map());
       return;
     }
     void foldersController.getCoverHashes(folderIds).then((results) => {
       if (cancelled) return;
-      const next = new Map<number, string | null>(folderIds.map((folderId) => [folderId, null]));
-      for (const result of results) next.set(result.folder_id, result.entity_hash);
-      setCoverHashes(next);
+      const next = new Map<number, { hash: string; mime: string }>();
+      for (const result of results) {
+        if (result.entity_hash && result.mime_type) {
+          next.set(result.folder_id, { hash: result.entity_hash, mime: result.mime_type });
+        }
+      }
+      setCovers(next);
     }).catch(() => {
-      if (!cancelled) setCoverHashes(new Map());
+      if (!cancelled) setCovers(new Map());
     });
     return () => { cancelled = true; };
-  }, [childFolders]);
+  }, [coverRequestKey]);
 
   const handleClick = useCallback((e: React.MouseEvent, nodeId: string) => {
     e.stopPropagation();
@@ -97,7 +111,7 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
         <div className={styles.list} style={{ gridTemplateColumns: gridColumns }}>
           {childFolders.map((folder) => {
             const folderId = parseFolderId(folder.id);
-            const coverHash = folderId != null ? coverHashes.get(folderId) ?? null : null;
+            const cover = folderId != null ? covers.get(folderId) ?? null : null;
             const iconSize = Math.max(24, Math.round(clampedSize * 0.25));
 
             return (
@@ -112,12 +126,13 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
               >
                 <div className={styles.thumbnail}>
                   <div className={styles.pic1}>
-                    {coverHash ? (
-                      <img
+                    {cover ? (
+                      <ThumbnailImage
                         className={styles.coverImage}
-                        src={`media://localhost/thumb/${coverHash}.jpg`}
+                        src={`media://localhost/thumb/${cover.hash}.jpg`}
                         alt=""
                         loading="lazy"
+                        fallback={cover.mime.startsWith('font/') ? 'font' : 'broken'}
                       />
                     ) : (
                       <div className={styles.folderPlaceholder}>
@@ -135,7 +150,16 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
                   ) : (
                     <IconFolder size={19} color={folder.color ?? 'var(--color-text-tertiary)'} stroke={1.5} />
                   )}
-                  <div className={styles.name}>{folder.name}</div>
+                  {renamingNodeId === folder.id ? (
+                    <FolderRenameInput
+                      key={folder.id}
+                      folder={folder}
+                      onCommit={(name) => onRenameFolder?.(folder.id, name)}
+                      onCancel={onCancelRename}
+                    />
+                  ) : (
+                    <div className={styles.name}>{folder.name}</div>
+                  )}
                 </div>
 
                 <div className={styles.metas}>
@@ -153,6 +177,51 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
     </div>
   );
 });
+
+function FolderRenameInput({
+  folder,
+  onCommit,
+  onCancel,
+}: {
+  folder: SidebarNodeDto;
+  onCommit: (name: string) => void;
+  onCancel?: () => void;
+}) {
+  const [value, setValue] = useState(folder.name);
+  const commit = () => {
+    const name = value.trim();
+    if (name) onCommit(name);
+    else onCancel?.();
+  };
+  return (
+    <GlassInput
+      autoFocus
+      aria-label={`Rename ${folder.name}`}
+      value={value}
+      style={{
+        width: 'min(180px, 100%)',
+        minWidth: 0,
+        height: 24,
+        padding: '2px 6px',
+        textAlign: 'center',
+      }}
+      onFocus={(event) => event.currentTarget.select()}
+      onChange={(event) => setValue(event.target.value)}
+      onClick={(event) => event.stopPropagation()}
+      onDoubleClick={(event) => event.stopPropagation()}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          commit();
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          onCancel?.();
+        }
+      }}
+    />
+  );
+}
 
 function parseFolderId(nodeId: string): number | null {
   if (!nodeId.startsWith('folder:')) return null;

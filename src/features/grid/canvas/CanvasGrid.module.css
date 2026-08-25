@@ -20,6 +20,11 @@
   overflow: hidden;
 }
 
+.contentFrame {
+  position: relative;
+  width: 100%;
+}
+
 .canvasWrap {
   position: relative;
   width: 100%;

@@ -3,10 +3,25 @@
  */
 
 import { atom } from 'jotai';
+import type { FilterMatchMode } from '../shared/types/generated/application/FilterMatchMode';
+import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 
 export interface PortalState {
   open: boolean;
+  target?: ItemTarget;
   anchor?: { x: number; y: number } | null;
+  anchorPlacement?: 'left' | 'below' | 'above';
+  selectedTags?: string[];
+  excludedTags?: string[];
+  selectedFolderIds?: number[];
+  excludedFolderIds?: number[];
+  filterMatchMode?: FilterMatchMode;
+  availableFolderIds?: number[];
+  onApplyTags?: (tags: string[]) => void;
+  onApplyTagFilter?: (includedTags: string[], excludedTags: string[], mode: FilterMatchMode) => void;
+  onApplyFolders?: (folderIds: number[]) => void;
+  onApplyFolderParent?: (folderId: number | null) => void;
+  onApplyFolderFilter?: (includedFolderIds: number[], excludedFolderIds: number[], mode: FilterMatchMode) => void;
 }
 
 const closed: PortalState = { open: false, anchor: null };

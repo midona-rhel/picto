@@ -45,6 +45,7 @@ function SectionRow({
       tabIndex={0}
       aria-expanded={expanded}
       onKeyDown={(event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           onToggle();
@@ -165,6 +166,7 @@ function StandardRow({
       aria-current={active ? 'page' : undefined}
       aria-expanded={hasChildren ? expanded : undefined}
       onKeyDown={interactive ? (event) => {
+        if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault();
           onClick?.(event as unknown as React.MouseEvent);

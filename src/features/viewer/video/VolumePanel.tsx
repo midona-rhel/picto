@@ -5,7 +5,12 @@ import styles from './VideoPlayer.module.css';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
-interface Props { volume: number; muted: boolean; onVolumeChange: (v: number) => void; onMuteToggle: () => void; }
+interface Props {
+  volume: number;
+  muted: boolean;
+  onVolumeChange: (v: number) => void;
+  onMuteToggle: () => void;
+}
 
 export function VolumePanel({ volume, muted, onVolumeChange, onMuteToggle }: Props) {
   const [show, setShow] = useState(false);
@@ -37,6 +42,11 @@ export function VolumePanel({ volume, muted, onVolumeChange, onMuteToggle }: Pro
 
   return (
     <div className={styles.volumePanel} onMouseEnter={enter} onMouseLeave={leave}>
+      <KbdTooltip label={muted ? 'Unmute' : 'Mute'} shortcut="M">
+        <button className={styles.icBtn} aria-label={muted ? 'Unmute' : 'Mute'} onClick={(e) => { e.stopPropagation(); onMuteToggle(); }}>
+          <Icon size={16} />
+        </button>
+      </KbdTooltip>
       {show && (
         <div className={styles.volumePopup}>
           <div className={styles.volumePercent}>{Math.round(eff * 100)}%</div>
@@ -45,11 +55,6 @@ export function VolumePanel({ volume, muted, onVolumeChange, onMuteToggle }: Pro
           </div>
         </div>
       )}
-      <KbdTooltip label={muted ? 'Unmute' : 'Mute'} shortcut="M">
-        <button className={styles.icBtn} onClick={(e) => { e.stopPropagation(); onMuteToggle(); }}>
-          <Icon size={16} />
-        </button>
-      </KbdTooltip>
     </div>
   );
 }

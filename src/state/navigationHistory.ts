@@ -6,12 +6,36 @@
 
 import { atom, getDefaultStore } from 'jotai';
 import { activeNodeIdAtom } from './navigation';
+import {
+  gridFiltersAtom,
+  gridDrilldownAtom,
+  pendingGridIntentAtom,
+  pendingGridNavigationAtom,
+  type QueryFilters,
+} from './grid';
+import { nodeIdToGridScope } from '../shared/lib/gridScope';
+import { createEmptyItemFilters } from '../shared/lib/itemFilters';
+import type { ItemSort } from '../shared/types/generated/application/ItemSort';
+import type { GridScrollPosition } from '../shared/types/gridScroll';
 import { subscriptionsSelectionAtom, type SubscriptionsSelection } from './subscriptionsWorkspace';
+import {
+  quickLookSessionAtom,
+  viewerDisplayControlsAtom,
+  viewerDisplayStateAtom,
+  viewerExitTransitionAtom,
+  viewerSessionAtom,
+} from './viewer';
 
 const SUBSCRIPTIONS_NODE_ID = 'system:subscriptions';
 
 interface HistoryEntry {
   nodeId: string;
+  /** Optional grid rendered as a drill-down within the manager identified by nodeId. */
+  gridScopeNodeId?: string;
+  /** Canonical filters for this grid visit. Omitted for manager workspaces. */
+  filters?: QueryFilters;
+  /** Explicit presentation sort for synthetic views such as Random. */
+  sort?: ItemSort;
   /** Subject selection inside the subscriptions workspace (null = home). */
   subsSelection?: SubscriptionsSelection;
 }
@@ -38,14 +62,69 @@ export const canGoForwardAtom = atom((get) => {
 
 const store = getDefaultStore();
 
-// ── Scroll position per scope ────────────────────────────────────
-const scrollPositions = new Map<string, number>();
-
-export function saveScrollPosition(nodeId: string, scrollTop: number) {
-  scrollPositions.set(nodeId, scrollTop);
+function cloneFilters(filters: QueryFilters): QueryFilters {
+  return {
+    ...filters,
+    include_tags: [...filters.include_tags],
+    exclude_tags: [...filters.exclude_tags],
+    include_folder_ids: [...filters.include_folder_ids],
+    exclude_folder_ids: [...filters.exclude_folder_ids],
+    ratings: [...filters.ratings],
+    include_mime_types: [...filters.include_mime_types],
+    exclude_mime_types: [...filters.exclude_mime_types],
+  };
 }
 
-export function getScrollPosition(nodeId: string): number | null {
+function randomSort(): ItemSort {
+  return {
+    field: 'random',
+    direction: 'ascending',
+    random_seed: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`,
+  };
+}
+
+function filtersKey(filters: QueryFilters | undefined): string {
+  return JSON.stringify(filters ?? createEmptyItemFilters());
+}
+
+function pushEntry(entry: HistoryEntry): void {
+  const h = store.get(historyAtom);
+  const stack = h.stack.slice(0, h.cursor + 1);
+  const last = stack[stack.length - 1];
+  if (
+    last?.nodeId === entry.nodeId
+    && last.gridScopeNodeId === entry.gridScopeNodeId
+    && selectionKey(last.subsSelection) === selectionKey(entry.subsSelection)
+    && filtersKey(last.filters) === filtersKey(entry.filters)
+  ) return;
+  stack.push(entry);
+  if (stack.length > 100) stack.shift();
+  store.set(historyAtom, { stack, cursor: stack.length - 1 });
+}
+
+export function closeTransientViewers() {
+  store.set(viewerSessionAtom, null);
+  store.set(quickLookSessionAtom, null);
+  store.set(viewerDisplayStateAtom, null);
+  store.set(viewerDisplayControlsAtom, null);
+}
+
+// ── Scroll position per scope ────────────────────────────────────
+const scrollPositions = new Map<string, GridScrollPosition>();
+
+export function resetNavigationHistory(nodeId = 'system:active'): void {
+  scrollPositions.clear();
+  store.set(gridDrilldownAtom, null);
+  store.set(pendingGridIntentAtom, null);
+  store.set(pendingGridNavigationAtom, null);
+  store.set(historyAtom, { stack: [{ nodeId }], cursor: 0 });
+}
+
+export function saveScrollPosition(nodeId: string, position: GridScrollPosition) {
+  scrollPositions.set(nodeId, position);
+}
+
+export function getScrollPosition(nodeId: string): GridScrollPosition | null {
   return scrollPositions.get(nodeId) ?? null;
 }
 
@@ -69,27 +148,83 @@ export function removeHistoryEntries(nodeIds: Iterable<string>) {
 }
 
 /** Push a new node onto the history stack (called on direct scope navigation, NOT back/forward). */
-export function pushHistory(nodeId: string) {
-  const h = store.get(historyAtom);
-  // If we're not at the end, truncate forward history
-  const stack = h.stack.slice(0, h.cursor + 1);
+export function pushHistory(nodeId: string, sort?: ItemSort) {
   // Direct navigation to the subscriptions node lands on its home.
   if (nodeId === SUBSCRIPTIONS_NODE_ID) {
     store.set(subscriptionsSelectionAtom, null);
   }
-  // Don't push duplicate (for subscriptions, "same" also means same subject)
-  const last = stack[stack.length - 1];
-  if (last?.nodeId === nodeId && (nodeId !== SUBSCRIPTIONS_NODE_ID || last.subsSelection == null)) {
-    return;
-  }
-  const entry: HistoryEntry = { nodeId };
-  stack.push(entry);
-  // Cap at 100 entries
-  if (stack.length > 100) stack.shift();
-  store.set(historyAtom, { stack, cursor: stack.length - 1 });
+  pushEntry({ nodeId, sort });
   // Direct navigation = fresh start. Clear saved scroll so grid starts at top.
   // Back/forward never calls pushHistory, so their scroll positions are preserved.
   scrollPositions.delete(nodeId);
+}
+
+/** Apply a discrete filter action and make the result traversable with Back/Forward. */
+export function navigateWithGridFilters(
+  nodeId: string,
+  filters: QueryFilters,
+  ownerNodeId?: string,
+): void {
+  const nextFilters = cloneFilters(filters);
+  const activeNodeId = store.get(activeNodeIdAtom);
+  const h = store.get(historyAtom);
+  const current = h.stack[h.cursor];
+
+  // Older entries only stored the scope. Capture the outgoing filter state before appending.
+  if (current?.nodeId === activeNodeId && nodeIdToGridScope(activeNodeId)) {
+    const stack = [...h.stack];
+    stack[h.cursor] = { ...current, filters: cloneFilters(store.get(gridFiltersAtom)) };
+    store.set(historyAtom, { ...h, stack });
+  }
+  pushEntry({
+    nodeId: ownerNodeId ?? nodeId,
+    gridScopeNodeId: ownerNodeId ? nodeId : undefined,
+    filters: nextFilters,
+  });
+  scrollPositions.delete(nodeId);
+
+  if (ownerNodeId) {
+    store.set(pendingGridNavigationAtom, { nodeId, filters: nextFilters });
+    store.set(gridDrilldownAtom, { ownerNodeId, scopeNodeId: nodeId, filters: nextFilters });
+    if (activeNodeId !== ownerNodeId) store.set(activeNodeIdAtom, ownerNodeId);
+    return;
+  }
+
+  if (activeNodeId === nodeId) {
+    closeTransientViewers();
+    store.set(pendingGridIntentAtom, { type: 'filter', filters: nextFilters, restoreScroll: false });
+    return;
+  }
+  if (store.get(viewerSessionAtom) || store.get(quickLookSessionAtom)) {
+    store.set(viewerExitTransitionAtom, true);
+  }
+  store.set(pendingGridNavigationAtom, { nodeId, filters: nextFilters });
+  store.set(activeNodeIdAtom, nodeId);
+}
+
+/** Navigate to a workspace scope, leaving any item/group viewer first. */
+export function navigateToNode(nodeId: string) {
+  const hadDrilldown = store.get(gridDrilldownAtom) != null;
+  store.set(gridDrilldownAtom, null);
+  if (store.get(activeNodeIdAtom) === nodeId) {
+    closeTransientViewers();
+    store.set(viewerExitTransitionAtom, false);
+    if (hadDrilldown) pushHistory(nodeId);
+    return;
+  }
+  if (store.get(viewerSessionAtom) || store.get(quickLookSessionAtom)) {
+    store.set(viewerExitTransitionAtom, true);
+  }
+  const sort = nodeId === 'system:random' ? randomSort() : undefined;
+  if (sort) {
+    store.set(pendingGridNavigationAtom, {
+      nodeId,
+      filters: createEmptyItemFilters(),
+      sort,
+    });
+  }
+  store.set(activeNodeIdAtom, nodeId);
+  pushHistory(nodeId, sort);
 }
 
 /**
@@ -112,7 +247,42 @@ export function pushSubscriptionsHistory(selection: SubscriptionsSelection) {
 }
 
 function applyHistoryEntry(entry: HistoryEntry) {
-  store.set(activeNodeIdAtom, entry.nodeId);
+  if (store.get(viewerSessionAtom) || store.get(quickLookSessionAtom)) {
+    store.set(viewerExitTransitionAtom, true);
+  }
+  const currentNodeId = store.get(activeNodeIdAtom);
+  if (entry.gridScopeNodeId) {
+    const filters = cloneFilters(entry.filters ?? createEmptyItemFilters());
+    store.set(pendingGridNavigationAtom, {
+      nodeId: entry.gridScopeNodeId,
+      filters,
+      restoreScroll: true,
+    });
+    store.set(gridDrilldownAtom, {
+      ownerNodeId: entry.nodeId,
+      scopeNodeId: entry.gridScopeNodeId,
+      filters,
+    });
+    if (currentNodeId !== entry.nodeId) store.set(activeNodeIdAtom, entry.nodeId);
+    return;
+  }
+  store.set(gridDrilldownAtom, null);
+  if (nodeIdToGridScope(entry.nodeId)) {
+    const filters = cloneFilters(entry.filters ?? createEmptyItemFilters());
+    if (currentNodeId === entry.nodeId) {
+      store.set(pendingGridIntentAtom, { type: 'filter', filters, restoreScroll: true });
+    } else {
+      store.set(pendingGridNavigationAtom, {
+        nodeId: entry.nodeId,
+        filters,
+        sort: entry.sort,
+        restoreScroll: true,
+      });
+      store.set(activeNodeIdAtom, entry.nodeId);
+    }
+  } else {
+    store.set(activeNodeIdAtom, entry.nodeId);
+  }
   if (entry.nodeId === SUBSCRIPTIONS_NODE_ID) {
     store.set(subscriptionsSelectionAtom, entry.subsSelection ?? null);
   }

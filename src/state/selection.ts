@@ -49,29 +49,52 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
         else excludedItemIds.add(action.itemId);
         return { ...state, excludedItemIds, anchor: { kind: 'item', id: action.itemId } };
       }
-      const itemIds = new Set(state.itemIds);
+      const itemIds = state.folderNodeIds.size > 0 ? new Set<number>() : new Set(state.itemIds);
       if (itemIds.has(action.itemId)) itemIds.delete(action.itemId);
       else itemIds.add(action.itemId);
-      return { ...state, itemIds, anchor: { kind: 'item', id: action.itemId } };
+      return {
+        ...state,
+        itemIds,
+        folderNodeIds: new Set(),
+        anchor: { kind: 'item', id: action.itemId },
+      };
     }
     case 'range_items':
-      return { ...state, mode: 'explicit', itemIds: new Set(action.itemIds), excludedItemIds: new Set() };
+      return {
+        ...emptyGridSelection(),
+        itemIds: new Set(action.itemIds),
+        anchor: state.anchor?.kind === 'item' ? state.anchor : null,
+      };
     case 'replace_folders':
       return { ...emptyGridSelection(), folderNodeIds: new Set(action.ids), anchor: action.anchor == null ? null : { kind: 'folder', id: action.anchor } };
     case 'toggle_folder': {
-      const folderNodeIds = new Set(state.folderNodeIds);
+      const folderNodeIds = state.mode === 'query_results' || state.itemIds.size > 0
+        ? new Set<string>()
+        : new Set(state.folderNodeIds);
       if (folderNodeIds.has(action.id)) folderNodeIds.delete(action.id);
       else folderNodeIds.add(action.id);
-      return { ...state, folderNodeIds, anchor: { kind: 'folder', id: action.id } };
-    }
-    case 'marquee':
       return {
-        ...state,
-        mode: 'explicit',
-        excludedItemIds: new Set(),
-        itemIds: action.additive ? new Set([...state.itemIds, ...action.itemIds]) : new Set(action.itemIds),
-        folderNodeIds: action.additive ? new Set([...state.folderNodeIds, ...action.folderNodeIds]) : new Set(action.folderNodeIds),
+        ...emptyGridSelection(),
+        folderNodeIds,
+        anchor: { kind: 'folder', id: action.id },
       };
+    }
+    case 'marquee': {
+      const selectingFolders = action.folderNodeIds.size > 0;
+      const canAddToFolders = action.additive && state.mode === 'explicit' && state.itemIds.size === 0;
+      const canAddToItems = action.additive && state.mode === 'explicit' && state.folderNodeIds.size === 0;
+      return {
+        ...emptyGridSelection(),
+        itemIds: selectingFolders
+          ? new Set()
+          : canAddToItems ? new Set([...state.itemIds, ...action.itemIds]) : new Set(action.itemIds),
+        folderNodeIds: selectingFolders
+          ? canAddToFolders
+            ? new Set([...state.folderNodeIds, ...action.folderNodeIds])
+            : new Set(action.folderNodeIds)
+          : new Set(),
+      };
+    }
     case 'select_all':
       return action.totalCount > 0 ? { ...emptyGridSelection(), mode: 'query_results' } : emptyGridSelection();
     case 'toggle_query_item': {

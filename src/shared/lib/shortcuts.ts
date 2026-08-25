@@ -39,6 +39,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'file.newFolder',          label: 'New Folder',           group: 'File', keys: 'Mod+Shift+N',     description: 'Create a new folder in the sidebar' },
   { id: 'file.newSubfolder',       label: 'New Subfolder',        group: 'File', keys: 'Alt+N',           description: 'Create a subfolder under the current folder' },
   { id: 'file.newSmartFolder',     label: 'New Smart Folder',     group: 'File', keys: 'Mod+Shift+Alt+N', description: 'Create a new smart folder' },
+  { id: 'folder.autoTags',         label: 'Set Folder Auto Tags', group: 'File', keys: 'Mod+Shift+R',     description: 'Set tags applied when media enters the selected folder' },
   { id: 'file.addToFolder',        label: 'Add to Folder...',     group: 'File', keys: 'Mod+Shift+J',    description: 'Open folder picker to add selected files' },
   { id: 'file.addToLastFolder',    label: 'Add to Last Folder',   group: 'File', keys: 'Shift+D',        description: 'Add selected files to the last used folder' },
   { id: 'file.removeFromFolder',   label: 'Remove from Folder',   group: 'File', keys: 'Mod+Shift+Backspace' },
@@ -108,11 +109,13 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'rate.5', label: 'Rate 5 Stars', group: 'Rating', keys: '5', description: 'Rate selected images 5 stars' },
 
   // ── Video ──
-  { id: 'video.togglePlay',   label: 'Toggle Play/Pause', group: 'Video', keys: 'Space',     description: 'Play or pause video' },
+  { id: 'video.togglePlay',   label: 'Toggle Play/Pause', group: 'Video', keys: 'P', keys2: 'K', description: 'Play or pause video' },
+  { id: 'video.seekBackward', label: 'Seek Backward',     group: 'Video', keys: 'J',         description: 'Seek backward 5 seconds' },
+  { id: 'video.seekForward',  label: 'Seek Forward',      group: 'Video', keys: 'L',         description: 'Seek forward 5 seconds' },
   { id: 'video.volumeUp',     label: 'Volume Up',         group: 'Video', keys: 'ArrowUp',   description: 'Increase volume' },
   { id: 'video.volumeDown',   label: 'Volume Down',       group: 'Video', keys: 'ArrowDown', description: 'Decrease volume' },
   { id: 'video.toggleMute',   label: 'Toggle Mute',       group: 'Video', keys: 'M',         description: 'Mute or unmute video' },
-  { id: 'video.toggleLoop',   label: 'Toggle Loop',       group: 'Video', keys: 'L',         description: 'Toggle loop playback' },
+  { id: 'video.toggleLoop',   label: 'Toggle Loop',       group: 'Video', keys: 'Shift+L',   description: 'Toggle loop playback' },
   { id: 'video.rateIncrease', label: 'Speed Up',          group: 'Video', keys: ']',  keys2: 'Shift+.',  description: 'Increase playback speed' },
   { id: 'video.rateDecrease', label: 'Slow Down',         group: 'Video', keys: '[',  keys2: 'Shift+,',  description: 'Decrease playback speed' },
   { id: 'video.rateReset',    label: 'Reset Speed',       group: 'Video', keys: 'Backspace', description: 'Reset playback speed to 1x' },
@@ -134,8 +137,32 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
 export type KeyboardPreset = 'us' | 'eu';
 
 const STORAGE_KEY = 'picto-keyboard-preset';
+const OVERRIDES_STORAGE_KEY = 'picto-shortcut-overrides';
 
 let activePreset: KeyboardPreset = (localStorage.getItem(STORAGE_KEY) as KeyboardPreset) || 'us';
+
+export interface ShortcutBindingOverride {
+  keys?: string;
+  keys2?: string;
+}
+
+function loadOverrides(): Record<string, ShortcutBindingOverride> {
+  try {
+    const value = JSON.parse(localStorage.getItem(OVERRIDES_STORAGE_KEY) ?? '{}') as unknown;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
+    return Object.fromEntries(Object.entries(value).flatMap(([id, override]) => {
+      if (!override || typeof override !== 'object' || Array.isArray(override)) return [];
+      const candidate = override as Record<string, unknown>;
+      const keys = typeof candidate.keys === 'string' ? candidate.keys : undefined;
+      const keys2 = typeof candidate.keys2 === 'string' ? candidate.keys2 : undefined;
+      return keys === undefined && keys2 === undefined ? [] : [[id, { keys, keys2 }]];
+    }));
+  } catch {
+    return {};
+  }
+}
+
+let shortcutOverrides = loadOverrides();
 
 /** For EU-problematic shortcuts, swap keys and keys2 so the EU-friendly binding is primary. */
 const EU_SWAP_IDS = new Set([
@@ -152,9 +179,9 @@ const DEFAULT_KEY_BINDINGS = new Map(
 
 export function getKeyboardPreset(): KeyboardPreset { return activePreset; }
 
-export function setKeyboardPreset(preset: KeyboardPreset): void {
+export function setKeyboardPreset(preset: KeyboardPreset, persist = true): void {
   activePreset = preset;
-  localStorage.setItem(STORAGE_KEY, preset);
+  if (persist) localStorage.setItem(STORAGE_KEY, preset);
   // Always derive from the immutable US defaults so switching back is reliable.
   for (const def of SHORTCUT_DEFS) {
     const defaults = DEFAULT_KEY_BINDINGS.get(def.id);
@@ -165,15 +192,20 @@ export function setKeyboardPreset(preset: KeyboardPreset): void {
 }
 
 // Apply stored preset on load
-if (activePreset === 'eu') setKeyboardPreset('eu');
+if (activePreset === 'eu') setKeyboardPreset('eu', false);
 
 // ── Helpers ──
 
 export interface ShortcutGroup { name: string; items: ShortcutDef[]; }
 
+function resolveShortcut(def: ShortcutDef): ShortcutDef {
+  return { ...def, ...shortcutOverrides[def.id] };
+}
+
 export function getShortcutGroups(): ShortcutGroup[] {
   const map = new Map<string, ShortcutDef[]>();
-  for (const def of SHORTCUT_DEFS) {
+  for (const source of SHORTCUT_DEFS) {
+    const def = resolveShortcut(source);
     let list = map.get(def.group);
     if (!list) { list = []; map.set(def.group, list); }
     list.push(def);
@@ -211,7 +243,41 @@ export function formatKeysAsArray(keys: string): string[] {
 }
 
 export function getShortcut(id: string): ShortcutDef | undefined {
-  return SHORTCUT_DEFS.find((d) => d.id === id);
+  const def = SHORTCUT_DEFS.find((candidate) => candidate.id === id);
+  return def ? resolveShortcut(def) : undefined;
+}
+
+export function setShortcutBinding(id: string, slot: 'keys' | 'keys2', value: string, persist = true): void {
+  if (!SHORTCUT_DEFS.some((def) => def.id === id)) return;
+  shortcutOverrides = {
+    ...shortcutOverrides,
+    [id]: { ...shortcutOverrides[id], [slot]: value },
+  };
+  if (persist) localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(shortcutOverrides));
+}
+
+export function findShortcutConflict(id: string, value: string): ShortcutDef | undefined {
+  if (!value) return undefined;
+  return SHORTCUT_DEFS
+    .map(resolveShortcut)
+    .find((def) => def.id !== id && (def.keys === value || def.keys2 === value));
+}
+
+export function getShortcutOverrides(): Readonly<Record<string, ShortcutBindingOverride>> {
+  return structuredClone(shortcutOverrides);
+}
+
+export function replaceShortcutOverrides(
+  overrides: Readonly<Record<string, ShortcutBindingOverride>>,
+  persist = true,
+): void {
+  shortcutOverrides = structuredClone(overrides);
+  if (persist) localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(shortcutOverrides));
+}
+
+export function persistShortcutState(): void {
+  localStorage.setItem(STORAGE_KEY, activePreset);
+  localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(shortcutOverrides));
 }
 
 export function matchesShortcut(e: KeyboardEvent, keys: string): boolean {

@@ -1,44 +1,31 @@
-import { useRef, useState } from 'react';
-import { useAtom } from 'jotai';
-import {
-  IconAlertTriangle,
-  IconCircleCheck,
-  IconDotsVertical,
-  IconPlayerPause,
-  IconPlayerPlay,
-  IconPlayerStop,
-  IconRefresh,
-  IconShieldLock,
-} from '@tabler/icons-react';
-import type {
-  SubscriptionInfo,
-  SubscriptionProgressEvent,
-  SubscriptionQueryInfo,
-} from '../../../shared/types/subscriptions';
-import {
-  subscriptionsDetailModeAtom,
-  type SubscriptionDetailState,
-  type SubscriptionDetailTab,
-} from '../../../state/subscriptionsWorkspace';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { useAtomValue, useSetAtom } from 'jotai';
+import { IconChevronDown, IconChevronUp, IconDotsVertical, IconPlayerPause, IconPlayerPlay, IconPlayerStop, IconPlus } from '@tabler/icons-react';
+import type { SubscriptionCover, SubscriptionInfo, SubscriptionProgressEvent, SubscriptionQueryInfo } from '../../../shared/types/subscriptions';
+import type { SubscriptionDetailState } from '../../../state/subscriptionsWorkspace';
 import type { SubscriptionWorkspaceSnapshot } from '../../../shared/types/subscriptionsWorkspace';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
 import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
+import { folderNodesAtom } from '../../../state/sidebar';
+import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../../state/portals';
+import { TagChip } from '../../../shared/ui/TagChip/TagChip';
+import { GlassModal } from '../../../shared/ui/GlassModal/GlassModal';
+import { GlassInput } from '../../../shared/ui/GlassInput/GlassInput';
 import { ActionButton } from './ActionButton';
 import { AddQueryBar } from './AddQueryBar';
 import { HealthTab } from './HealthTab';
 import { HistoryTab } from './HistoryTab';
-import { LiveProgressCard } from './LiveProgressCard';
 import { QueryEditModal } from './QueryEditModal';
 import { QueryRow } from './QueryRow';
-import { StatusBadge } from './StatusBadge';
-import { mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
+import { SubscriptionCoverImage } from './SubscriptionCoverImage';
 import {
   describeSubscriptionState,
+  describeFailure,
   formatRelativeTime,
   getQueryAuthState,
-  getQueryFailedCount,
   getSiteLabel,
-  isQueryUpToDate,
+  getSubscriptionRunTarget,
+  isSubscriptionCompleted,
   isSubscriptionUpToDate,
 } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
@@ -50,12 +37,17 @@ export interface DetailController {
   delete: (id: string) => void;
   rename: (id: string, currentName: string) => void;
   setSchedule: (id: string, schedule: string) => void;
+  setPostsPerRun: (id: string, postsPerRun: number) => void;
+  setDestination: (id: string, destination: { target_folder_ids: number[]; automatic_tags: string[] }) => Promise<void>;
   pauseQuery: (queryId: string, paused: boolean) => void;
+  setQueryGrouping: (queryId: string, groupPosts: boolean) => void;
   deleteQuery: (queryId: string) => void;
   editQuery: (queryId: number, siteId: string, queryText: string, displayName: string | null, notes: string | null) => Promise<void>;
   addQuery: (subscriptionId: string, siteId: string, queryText: string) => Promise<void>;
   openExternalUrl: (url: string) => void;
 }
+
+type DetailTab = 'sources' | 'history' | 'problems';
 
 const SCHEDULE_OPTIONS = [
   { value: 'manual', label: 'Manual' },
@@ -64,7 +56,6 @@ const SCHEDULE_OPTIONS = [
   { value: 'monthly', label: 'Monthly' },
 ];
 
-/** "⋮" trigger for the shared subscription context menu, anchored below the button. */
 function OverflowMenuButton({ onOpen }: { onOpen: (position: { x: number; y: number }) => void }) {
   const buttonRef = useRef<HTMLButtonElement>(null);
   return (
@@ -72,7 +63,7 @@ function OverflowMenuButton({ onOpen }: { onOpen: (position: { x: number; y: num
       <button
         type="button"
         ref={buttonRef}
-        className={styles.querySmallBtn}
+        className={`${styles.querySmallBtn} ${styles.subscriptionOverflowButton}`.trim()}
         aria-label="More actions"
         onClick={() => {
           const rect = buttonRef.current?.getBoundingClientRect();
@@ -85,17 +76,100 @@ function OverflowMenuButton({ onOpen }: { onOpen: (position: { x: number; y: num
   );
 }
 
-/**
- * Single-column detail pane: header, live progress while running, then
- * Queries / Health / History as stacked dense sections. Health collapses
- * to a one-line "all healthy" note when there is nothing to fix.
- */
+function PostsPerRunInput({
+  value,
+  disabled,
+  onCommit,
+}: {
+  value: number;
+  disabled: boolean;
+  onCommit: (value: number) => void;
+}) {
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => setDraft(String(value)), [value]);
+
+  const commit = () => {
+    const parsed = Number.parseInt(draft, 10);
+    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 10_000) {
+      setDraft(String(value));
+      return;
+    }
+    if (parsed !== value) onCommit(parsed);
+  };
+
+  const step = (delta: number) => {
+    const parsed = Number.parseInt(draft, 10);
+    const current = Number.isInteger(parsed) ? parsed : value;
+    const next = Math.min(10_000, Math.max(1, current + delta));
+    setDraft(String(next));
+    if (next !== value) onCommit(next);
+  };
+
+  return (
+    <span className={styles.subscriptionPostsPerRunInput}>
+      <GlassInput
+        type="number"
+        min={1}
+        max={10_000}
+        step={1}
+        value={draft}
+        disabled={disabled}
+        aria-label="Posts per run"
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') event.currentTarget.blur();
+          if (event.key === 'Escape') {
+            setDraft(String(value));
+            event.currentTarget.blur();
+          }
+        }}
+      />
+      <span className={styles.subscriptionPostsPerRunStepper}>
+        <button
+          type="button"
+          aria-label="Increase posts per run"
+          disabled={disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => step(1)}
+        >
+          <IconChevronUp size={11} stroke={2} />
+        </button>
+        <button
+          type="button"
+          aria-label="Decrease posts per run"
+          disabled={disabled}
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => step(-1)}
+        >
+          <IconChevronDown size={11} stroke={2} />
+        </button>
+      </span>
+    </span>
+  );
+}
+
+function splitTag(tag: string): { namespace: string; subtag: string } {
+  const separator = tag.indexOf(':');
+  return separator < 0
+    ? { namespace: '', subtag: tag }
+    : { namespace: tag.slice(0, separator), subtag: tag.slice(separator + 1) };
+}
+
+function hexToRgb(hex: string | null): [number, number, number] | undefined {
+  if (!hex) return undefined;
+  const normalized = hex.replace('#', '');
+  if (!/^[0-9a-f]{6}$/i.test(normalized)) return undefined;
+  return [0, 2, 4].map((offset) => Number.parseInt(normalized.slice(offset, offset + 2), 16)) as [number, number, number];
+}
+
+/** A fixed desktop workspace: persistent identity rail and one tabbed data plane. */
 export function SubscriptionDetail({
   subscription,
   snapshot,
   progress,
   detail,
-  coverHash = null,
+  cover = null,
   busy,
   controller,
   onOpenAccounts,
@@ -106,20 +180,19 @@ export function SubscriptionDetail({
   snapshot: SubscriptionWorkspaceSnapshot;
   progress: SubscriptionProgressEvent | null;
   detail: SubscriptionDetailState;
-  /** Newest downloaded file — hero image; null falls back to an initial. */
-  coverHash?: string | null;
-  /** Legacy tab props kept out — layout is single-column now. */
-  activeTab?: SubscriptionDetailTab;
+  cover?: SubscriptionCover | null;
   busy: boolean;
   controller: DetailController;
-  onTabChange?: (tab: SubscriptionDetailTab) => void;
   onOpenAccounts: (siteId: string | null) => void;
   onLoadMoreHealth: () => void;
-  /** Opens the shared subscription context menu at a screen position. */
   onOpenMenu: (position: { x: number; y: number }) => void;
 }) {
   const [editing, setEditing] = useState<SubscriptionQueryInfo | null>(null);
-  const [mode, setMode] = useAtom(subscriptionsDetailModeAtom);
+  const [statsQuery, setStatsQuery] = useState<SubscriptionQueryInfo | null>(null);
+  const [tab, setTab] = useState<DetailTab>('sources');
+  const folders = useAtomValue(folderNodesAtom);
+  const openTagPicker = useSetAtom(tagSelectPortalAtom);
+  const openFolderPicker = useSetAtom(folderPickerPortalAtom);
 
   const metrics = snapshot.listMetrics[subscription.id];
   const running = progress != null || snapshot.runningSubscriptionIds.includes(subscription.id);
@@ -129,339 +202,311 @@ export function SubscriptionDetail({
     failedPostCount: metrics?.failedPostCount ?? 0,
     openIssueCount: metrics?.openIssueCount ?? 0,
   });
-  const openIssueCount = detail.issueTotalCount;
-  const healthy = detail.failedPostTotalCount === 0 && openIssueCount === 0;
-  const upToDate = !running && isSubscriptionUpToDate(
-    subscription,
-    detail.failedPostTotalCount,
-    openIssueCount,
-  );
-
-  // Plain-language facts for the overview
-  const lastCheckTime = subscription.queries.reduce<string | null>(
-    (latest, query) =>
-      query.last_check_time && (!latest || query.last_check_time > latest) ? query.last_check_time : latest,
+  const problemCount = detail.issueTotalCount + detail.failedPostTotalCount;
+  const upToDate = !running && isSubscriptionUpToDate(subscription, detail.failedPostTotalCount, detail.issueTotalCount);
+  const completed = !running && isSubscriptionCompleted(subscription, detail.failedPostTotalCount, detail.issueTotalCount);
+  const lastCheck = useMemo(() => subscription.queries.reduce<string | null>(
+    (latest, query) => query.last_check_time && (!latest || query.last_check_time > latest) ? query.last_check_time : latest,
     null,
-  );
-  const authAttention = subscription.queries
-    .map((query) => ({
-      query,
-      auth: getQueryAuthState({
-        query,
-        sites: snapshot.sites,
-        credentials: snapshot.credentials,
-        credentialHealth: snapshot.credentialHealth,
-      }),
-    }))
-    .find((entry) => entry.auth.tone === 'attention');
-  const failedCount = detail.failedPostTotalCount;
-  const lastRun = detail.runs[0] ?? null;
+  ), [subscription.queries]);
+  const latestRun = detail.runs[0] ?? null;
+  const persistedPostCount = subscription.queries.reduce((total, query) => total + query.posts_found, 0);
+  const traversedCount = progress?.posts_traversed ?? latestRun?.posts_traversed ?? 0;
+  const postsAddedCount = progress?.posts_added ?? latestRun?.posts_added ?? persistedPostCount;
+  const runTarget = getSubscriptionRunTarget(subscription);
+  const runTraversed = Math.min(progress?.posts_traversed ?? 0, runTarget);
+  const runProgressPercent = runTarget > 0 ? Math.min(100, (runTraversed / runTarget) * 100) : 0;
+  const failedQuery = useMemo(() => subscription.queries.reduce<SubscriptionQueryInfo | null>((latest, query) => {
+    if (!query.last_failure_message) return latest;
+    if (!latest?.last_failure_at) return query;
+    return query.last_failure_at && query.last_failure_at > latest.last_failure_at ? query : latest;
+  }, null), [subscription.queries]);
+  const concreteProblem = detail.issues.find((issue) => issue.status !== 'resolved')?.message
+    ?? describeFailure(failedQuery?.last_failure_kind ?? null, failedQuery?.last_failure_message ?? null)
+    ?? (detail.failedPostTotalCount > 0 ? `${detail.failedPostTotalCount} downloads failed` : null);
+  const statusLabel = upToDate
+    ? 'Up to date'
+    : completed
+      ? 'Completed'
+    : state === 'running'
+      ? 'Syncing'
+      : state === 'paused'
+        ? 'Paused'
+        : state === 'attention'
+          ? concreteProblem ?? 'Run interrupted'
+          : 'Idle';
+  const statusDot = state === 'running'
+    ? styles.qDotRunning
+    : state === 'paused'
+      ? styles.qDotPaused
+      : state === 'attention'
+        ? styles.qDotAttention
+        : completed
+          ? styles.qDotSuccess
+          : styles.qDotIdle;
 
-  const overviewSection = (
-    <div className={styles.overview}>
-      {running ? (
-        <div className={styles.ovStatus}>
-          <span className={`${styles.ovIcon} ${styles.ovIconRunning}`.trim()}>
-            <IconRefresh size={18} />
-          </span>
-          <div className={styles.ovStatusText}>
-            <span className={styles.ovHeadline}>Checking for new posts…</span>
-            <span className={styles.ovSub}>
-              {progress
-                ? `${progress.files_downloaded} downloaded · ${progress.ingested} added to your library so far`
-                : 'Starting the subscription run…'}
-            </span>
-          </div>
-        </div>
-      ) : subscription.paused ? (
-        <div className={styles.ovStatus}>
-          <span className={styles.ovIcon}><IconPlayerPause size={18} /></span>
-          <div className={styles.ovStatusText}>
-            <span className={styles.ovHeadline}>Paused</span>
-            <span className={styles.ovSub}>Not checking for new posts. Press Resume to pick up where it left off.</span>
-          </div>
-        </div>
-      ) : !healthy || authAttention ? (
-        <div className={styles.ovStatus}>
-          <span className={`${styles.ovIcon} ${styles.ovIconWarn}`.trim()}>
-            <IconAlertTriangle size={18} />
-          </span>
-          <div className={styles.ovStatusText}>
-            <span className={styles.ovHeadline}>Needs a look</span>
-            <span className={styles.ovSub}>
-              {failedCount > 0 &&
-                `${failedCount} post${failedCount === 1 ? '' : 's'} couldn’t be downloaded. `}
-              {authAttention &&
-                `Your ${getSiteLabel(authAttention.query.site_id, snapshot.sites)} login needs attention.`}
-              {failedCount === 0 && !authAttention && 'Something needs attention — see the technical view.'}
-            </span>
-            <span className={styles.ovActions}>
-              {authAttention && (
-                <ActionButton
-                  variant="secondary"
-                  compact
-                  onClick={() => onOpenAccounts(authAttention.query.site_id)}
-                >
-                  <IconShieldLock size={13} /> Fix login…
-                </ActionButton>
-              )}
-            </span>
-          </div>
-        </div>
-      ) : subscription.total_files === 0 &&
-        subscription.queries.some((query) => !query.completed_initial_run) ? (
-        <div className={styles.ovStatus}>
-          <span className={styles.ovIcon}><IconPlayerPlay size={18} /></span>
-          <div className={styles.ovStatusText}>
-            <span className={styles.ovHeadline}>Ready for its first sync</span>
-            <span className={styles.ovSub}>
-              Nothing has been downloaded yet. Press Run now to fetch the first posts.
-            </span>
-          </div>
-        </div>
-      ) : (
-        <div className={styles.ovStatus}>
-          <span className={`${styles.ovIcon} ${styles.ovIconOk}`.trim()}>
-            <IconCircleCheck size={18} />
-          </span>
-          <div className={styles.ovStatusText}>
-            <span className={styles.ovHeadline}>Everything is fine</span>
-            <span className={styles.ovSub}>
-              {lastCheckTime ? `Last checked ${formatRelativeTime(lastCheckTime)}` : 'Not checked yet'}
-              {' · '}
-              {subscription.total_files.toLocaleString()} files collected
-              {lastRun && lastRun.files_downloaded > 0 &&
-                ` · last run fetched ${lastRun.files_downloaded}`}
-              {lastRun && lastRun.files_skipped > 0 &&
-                ` (${lastRun.files_skipped} duplicate reused)`}
-            </span>
-          </div>
-        </div>
-      )}
+  const selectedFolders = useMemo(() => {
+    const selected = new Set(subscription.target_folder_ids);
+    return folders.filter((folder) => selected.has(Number(folder.id.slice('folder:'.length))));
+  }, [folders, subscription.target_folder_ids]);
 
-      <div className={styles.ovQueries}>
-        <span className={styles.subsectionTitle}>Queries</span>
-        {subscription.queries.length === 0 ? (
-          <div className={styles.sectionEmptyLine}>
-            Nothing yet — switch to Technical to add a tag search or an account.
-          </div>
-        ) : (
-          subscription.queries.map((query) => (
-            <div key={query.id} className={styles.ovFollowRow}>
-              <span className={styles.ovFollowName}>
-                {query.display_name?.trim() || query.query_text}
-                {!running && isQueryUpToDate(query, getQueryFailedCount(query.id, detail.failedPosts)) && (
-                  <span className={styles.upToDateChip}>Up to date</span>
-                )}
-              </span>
-              <span className={styles.ovFollowMeta}>
-                on {getSiteLabel(query.site_id, snapshot.sites)}
-                {' · '}
-                {query.files_found.toLocaleString()} files
-                {query.paused && ' · paused'}
-                {!query.completed_initial_run && ' · first sync still running'}
-              </span>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
+  const tabs: Array<{ id: DetailTab; label: string }> = [
+    { id: 'sources', label: 'Sources' },
+    { id: 'history', label: 'History' },
+    { id: 'problems', label: 'Problems' },
+  ];
 
   return (
-    <div className={styles.content}>
-      <div className={styles.hero}>
-        <div className={styles.heroTop}>
-          <div className={styles.heroIdentity}>
-            <span className={styles.heroCover}>
-              {coverHash ? (
-                <img src={mediaThumbnailUrl(coverHash)} alt="" draggable={false} />
-              ) : (
-                <span className={styles.heroCoverFallback} aria-hidden>
-                  {subscription.name.slice(0, 1).toUpperCase()}
-                </span>
-              )}
-            </span>
-          <div className={styles.titleWrap}>
-            <KbdTooltip label="Double-click to rename">
-              <span
-                className={styles.heroTitle}
-                onDoubleClick={() => controller.rename(subscription.id, subscription.name)}
-              >
-                {subscription.name}
-              </span>
-            </KbdTooltip>
-            <span className={styles.heroMeta}>
-              <StatusBadge
-                tone={upToDate ? 'success' : state}
-                label={upToDate ? 'Up to date' : state === 'running' ? 'Running' : state === 'paused' ? 'Paused' : state === 'attention' ? 'Needs attention' : 'Idle'}
+    <div className={styles.subscriptionWorkspace}>
+      <aside className={styles.subscriptionRail}>
+        <div className={styles.subscriptionIdentity}>
+          <span className={styles.subscriptionCover}>
+            {cover ? (
+              <SubscriptionCoverImage
+                fileHash={cover.file_hash}
+                crop={{
+                  focusX: cover.focus_x,
+                  focusY: cover.focus_y,
+                  zoomPercent: cover.zoom_percent,
+                }}
+                alt=""
+                draggable={false}
               />
-              <span className={styles.muted}>{subscription.total_files.toLocaleString()} files</span>
-            </span>
-          </div>
-          </div>
-          <div className={styles.heroActions}>
-            <span className={styles.fieldInline}>
-              Schedule
-              <CmSelect
-                value={subscription.schedule}
-                options={SCHEDULE_OPTIONS}
-                onChange={(schedule) => controller.setSchedule(subscription.id, schedule)}
-                width={100}
-              />
-            </span>
-            {running ? (
-              <ActionButton variant="secondary" disabled={busy} onClick={() => controller.stop(subscription.id)}>
-                <IconPlayerStop size={14} /> Stop
-              </ActionButton>
             ) : (
-              <ActionButton
-                variant="primary"
-                disabled={busy || subscription.paused || subscription.queries.length === 0}
-                onClick={() => controller.run(subscription.id)}
-              >
-                <IconPlayerPlay size={14} /> Run now
-              </ActionButton>
+              <span className={styles.subscriptionCoverFallback} aria-hidden>
+                {subscription.name.slice(0, 1).toUpperCase()}
+              </span>
             )}
-            <ActionButton
-              variant="secondary"
-              disabled={busy || running}
-              onClick={() => controller.pause(subscription.id, !subscription.paused)}
-            >
-              <IconPlayerPause size={14} /> {subscription.paused ? 'Resume' : 'Pause'}
+          </span>
+          <KbdTooltip label="Double-click to rename">
+            <span className={styles.subscriptionName} onDoubleClick={() => controller.rename(subscription.id, subscription.name)}>
+              {subscription.name}
+            </span>
+          </KbdTooltip>
+          <span className={styles.subscriptionStatus} title={state === 'attention' ? statusLabel : undefined}>
+            <span className={`${styles.qDot} ${statusDot}`.trim()} />
+            {statusLabel}
+          </span>
+        </div>
+
+        <div className={styles.subscriptionActions}>
+          {running ? (
+            <ActionButton variant="secondary" disabled={busy} onClick={() => controller.stop(subscription.id)}>
+              <IconPlayerStop size={14} /> Stop
             </ActionButton>
-            <OverflowMenuButton onOpen={onOpenMenu} />
-          </div>
-        </div>
-      </div>
-
-      {progress && mode === 'technical' && <LiveProgressCard progress={progress} />}
-
-      <div className={styles.modeToggleRow}>
-        <div className={styles.modeToggle} role="tablist" aria-label="Detail level">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'overview'}
-            className={`${styles.modeToggleBtn} ${mode === 'overview' ? styles.modeToggleBtnActive : ''}`.trim()}
-            onClick={() => setMode('overview')}
-          >
-            Overview
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={mode === 'technical'}
-            className={`${styles.modeToggleBtn} ${mode === 'technical' ? styles.modeToggleBtnActive : ''}`.trim()}
-            onClick={() => setMode('technical')}
-          >
-            Technical
-          </button>
-        </div>
-      </div>
-
-      {mode === 'overview' ? overviewSection : (
-      <div className={styles.detailSections}>
-        <section className={styles.detailSection}>
-          <div className={styles.sectionHeader}>
-            <span className={styles.sectionTitle}>Queries</span>
-          </div>
-          {subscription.queries.length > 0 && (
-            <div className={styles.qTable}>
-              <div className={`${styles.qRow} ${styles.qHeader}`}>
-                <span>Query</span>
-                <span>Site</span>
-                <span className={styles.qCellNum}>Posts</span>
-                <span className={styles.qCellNum}>Files</span>
-                <span>Last check</span>
-                <span>Status</span>
-                <span />
-              </div>
-              {subscription.queries.map((query) => {
-                const auth = getQueryAuthState({
-                  query,
-                  sites: snapshot.sites,
-                  credentials: snapshot.credentials,
-                  credentialHealth: snapshot.credentialHealth,
-                });
-                const queryRunning = running && !query.paused;
-                return (
-                  <QueryRow
-                    key={query.id}
-                    query={query}
-                    sites={snapshot.sites}
-                    running={queryRunning}
-                    paused={query.paused}
-                    failedCount={getQueryFailedCount(query.id, detail.failedPosts)}
-                    authWarning={auth.tone === 'attention' ? auth.label : null}
-                    progress={queryRunning ? progress : null}
-                    busy={busy}
-                    onPause={(paused) => controller.pauseQuery(query.id, paused)}
-                    onEdit={() => setEditing(query)}
-                    onDelete={() => controller.deleteQuery(query.id)}
-                    onOpenAuth={() => onOpenAccounts(query.site_id)}
-                  />
-                );
-              })}
-            </div>
-          )}
-          {subscription.queries.length === 0 && (
-            <div className={styles.sectionEmptyLine}>
-              Nothing followed yet — add a tag search or an account below.
-            </div>
-          )}
-          <AddQueryBar
-            sites={snapshot.sites}
-            busy={busy}
-            onAdd={(siteId, queryText) => controller.addQuery(subscription.id, siteId, queryText)}
-          />
-        </section>
-
-        <section className={styles.detailSection}>
-          <div className={styles.sectionHeader}>
-            <span className={styles.sectionTitle}>Health</span>
-          </div>
-          {detail.loading ? (
-            <div className={styles.sectionEmptyLine}>Checking…</div>
-          ) : healthy ? (
-            <div className={styles.healthyLine}>
-              <IconCircleCheck size={14} /> All healthy — no failed posts, no open issues.
-            </div>
           ) : (
-            <HealthTab
-              failedPosts={detail.failedPosts}
-              issues={detail.issues}
-              busy={busy}
-              onOpenUrl={controller.openExternalUrl}
-              onFixCredentials={(issue) => {
-                const query = subscription.queries.find((entry) => Number(entry.id) === issue.query_id);
-                onOpenAccounts(query?.site_id ?? null);
-              }}
-              onReviewQuery={(issue) => {
-                const query = subscription.queries.find((entry) => Number(entry.id) === issue.query_id);
-                if (query) setEditing(query);
-              }}
-              failedPostTotalCount={detail.failedPostTotalCount}
-              issueTotalCount={detail.issueTotalCount}
-              retryablePostCount={detail.retryablePostCount}
-              hasMore={detail.issueNextCursor != null || detail.failedPostNextCursor != null}
-              onLoadMore={onLoadMoreHealth}
+            <ActionButton variant="primary" disabled={busy || subscription.paused || subscription.queries.length === 0} onClick={() => controller.run(subscription.id)}>
+              <IconPlayerPlay size={14} /> Run now
+            </ActionButton>
+          )}
+          <ActionButton variant="secondary" disabled={busy || running} onClick={() => controller.pause(subscription.id, !subscription.paused)}>
+            <IconPlayerPause size={14} /> {subscription.paused ? 'Resume' : 'Pause'}
+          </ActionButton>
+          <OverflowMenuButton onOpen={onOpenMenu} />
+        </div>
+
+        <div
+          className={`${styles.subscriptionRunProgress} ${running ? styles.subscriptionRunProgressActive : ''}`.trim()}
+          aria-hidden={!running}
+        >
+          <div className={styles.subscriptionRunProgressLabel}>
+            <span>{runTraversed.toLocaleString()} / {runTarget.toLocaleString()} posts traversed</span>
+            <span>{(progress?.media_added ?? 0).toLocaleString()} media added</span>
+          </div>
+          <div
+            className={styles.subscriptionRunProgressTrack}
+            role={running ? 'progressbar' : undefined}
+            aria-valuemin={running ? 0 : undefined}
+            aria-valuemax={running ? runTarget : undefined}
+            aria-valuenow={running ? runTraversed : undefined}
+          >
+            <span style={{ width: `${runProgressPercent}%` }} />
+          </div>
+        </div>
+
+        <div className={styles.subscriptionProperties}>
+          <div className={styles.subscriptionProperty}><span>Posts traversed</span><strong>{traversedCount.toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>Posts added</span><strong>{postsAddedCount.toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>Files downloaded</span><strong>{(progress?.files_downloaded ?? subscription.total_files).toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>Media added</span><strong>{(progress?.media_added ?? subscription.total_files).toLocaleString()}</strong></div>
+          <div className={styles.subscriptionProperty}><span>Last check</span><strong>{formatRelativeTime(lastCheck)}</strong></div>
+          <div className={styles.subscriptionProperty}>
+            <span>Schedule</span>
+            <CmSelect value={subscription.schedule} options={SCHEDULE_OPTIONS} onChange={(schedule) => controller.setSchedule(subscription.id, schedule)} width={100} />
+          </div>
+          <div className={styles.subscriptionProperty}>
+            <span>Posts per run</span>
+            <PostsPerRunInput
+              value={subscription.posts_per_run}
+              disabled={busy || running}
+              onCommit={(postsPerRun) => controller.setPostsPerRun(subscription.id, postsPerRun)}
             />
-          )}
-        </section>
-
-        <section className={styles.detailSection}>
-          <div className={styles.sectionHeader}>
-            <span className={styles.sectionTitle}>History</span>
           </div>
-          {detail.loading ? (
-            <div className={styles.sectionEmptyLine}>Loading…</div>
-          ) : (
-            <HistoryTab runs={detail.runs} />
+        </div>
+
+        <div className={styles.subscriptionDestination}>
+          <span className={styles.subscriptionRailHeading}>New files</span>
+          <div className={styles.subscriptionRailField}>
+            <span>Automatically add to folders</span>
+            <div className={styles.subscriptionDestinationValues}>
+              {selectedFolders.map((folder) => {
+                const folderId = Number(folder.id.slice('folder:'.length));
+                return <TagChip key={folder.id} namespace="" subtag={folder.name} colorRgb={hexToRgb(folder.color ?? null)} onRemove={() => void controller.setDestination(subscription.id, {
+                  target_folder_ids: subscription.target_folder_ids.filter((id) => id !== folderId),
+                  automatic_tags: subscription.automatic_tags,
+                })} />;
+              })}
+              <button
+                type="button"
+                className={selectedFolders.length === 0 ? styles.subscriptionDestinationEmpty : styles.subscriptionDestinationAdd}
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  openFolderPicker({
+                    open: true,
+                    anchor: { x: rect.left, y: rect.top },
+                    anchorPlacement: 'above',
+                    selectedFolderIds: subscription.target_folder_ids,
+                    onApplyFolders: (target_folder_ids) => void controller.setDestination(subscription.id, { target_folder_ids, automatic_tags: subscription.automatic_tags }),
+                  });
+                }}
+              >
+                <IconPlus size={14} />{selectedFolders.length === 0 && <span>Add to folders</span>}
+              </button>
+            </div>
+          </div>
+          <div className={styles.subscriptionRailField}>
+            <span>Automatically add tags</span>
+            <div className={styles.subscriptionDestinationValues}>
+              {subscription.automatic_tags.map((tag) => {
+                const value = splitTag(tag);
+                return <TagChip key={tag} namespace={value.namespace} subtag={value.subtag} onRemove={() => void controller.setDestination(subscription.id, {
+                  target_folder_ids: subscription.target_folder_ids,
+                  automatic_tags: subscription.automatic_tags.filter((current) => current !== tag),
+                })} />;
+              })}
+              <button
+                type="button"
+                className={subscription.automatic_tags.length === 0 ? styles.subscriptionDestinationEmpty : styles.subscriptionDestinationAdd}
+                onClick={(event) => {
+                  const rect = event.currentTarget.getBoundingClientRect();
+                  openTagPicker({
+                    open: true,
+                    anchor: { x: rect.left, y: rect.top },
+                    anchorPlacement: 'above',
+                    selectedTags: subscription.automatic_tags,
+                    onApplyTags: (automatic_tags) => void controller.setDestination(subscription.id, { target_folder_ids: subscription.target_folder_ids, automatic_tags }),
+                  });
+                }}
+              >
+                <IconPlus size={14} />{subscription.automatic_tags.length === 0 && <span>Add tags</span>}
+              </button>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <section className={styles.subscriptionDataPlane}>
+        <header className={styles.subscriptionDataHeader}>
+          <div className={styles.subscriptionTabs} role="tablist" aria-label="Subscription details">
+            {tabs.map((entry) => (
+              <button
+                key={entry.id}
+                type="button"
+                role="tab"
+                aria-selected={tab === entry.id}
+                className={`${styles.subscriptionTab} ${tab === entry.id ? styles.subscriptionTabActive : ''}`.trim()}
+                onClick={() => setTab(entry.id)}
+              >
+                {entry.label}
+              </button>
+            ))}
+          </div>
+        </header>
+
+        <div className={styles.subscriptionDataBody}>
+          {tab === 'sources' && (
+            <div className={styles.subscriptionTableViewport} role="tabpanel">
+              {subscription.queries.length > 0 ? (
+                <div className={`${styles.qTable} ${styles.subscriptionTable}`.trim()}>
+                  <div className={`${styles.subscriptionTableRow} ${styles.subscriptionTableHeader} ${styles.qRow}`}>
+                    <span>Source</span>
+                    <span className={styles.qCellSite}>Site</span>
+                    <span className={styles.qCellNum}>Posts added</span>
+                    <span className={styles.qCellNum}>Media added</span>
+                    <span>Last check</span>
+                    <span />
+                  </div>
+                  {subscription.queries.map((query) => {
+                    const auth = getQueryAuthState({ query, sites: snapshot.sites, credentials: snapshot.credentials, credentialHealth: snapshot.credentialHealth });
+                    const queryRunning = running && !query.paused;
+                    return (
+                      <QueryRow
+                        key={query.id}
+                        query={query}
+                        sites={snapshot.sites}
+                        running={queryRunning}
+                        paused={query.paused}
+                        authWarning={auth.blocking ? auth.label : null}
+                        busy={busy}
+                        onPause={(paused) => controller.pauseQuery(query.id, paused)}
+                        onGrouping={(groupPosts) => controller.setQueryGrouping(query.id, groupPosts)}
+                        onEdit={() => setEditing(query)}
+                        onDelete={() => controller.deleteQuery(query.id)}
+                        onOpenAuth={() => onOpenAccounts(query.site_id)}
+                        onShowStats={() => setStatsQuery(query)}
+                      />
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className={styles.subscriptionWorkspaceEmpty}>No sources yet.</div>
+              )}
+            </div>
           )}
-        </section>
-      </div>
-      )}
+
+          {tab === 'history' && (
+            <div className={styles.subscriptionTableViewport} role="tabpanel">
+              {detail.loading ? <div className={styles.subscriptionWorkspaceEmpty}>Loading history…</div> : <HistoryTab runs={detail.runs} />}
+            </div>
+          )}
+
+          {tab === 'problems' && (
+            <div className={styles.subscriptionTableViewport} role="tabpanel">
+              {detail.loading ? (
+                <div className={styles.subscriptionWorkspaceEmpty}>Checking for problems…</div>
+              ) : problemCount === 0 ? (
+                <div className={styles.subscriptionWorkspaceEmpty}>No problems found.</div>
+              ) : (
+                <HealthTab
+                  failedPosts={detail.failedPosts}
+                  issues={detail.issues}
+                  busy={busy}
+                  onOpenUrl={controller.openExternalUrl}
+                  onFixCredentials={(issue) => {
+                    const query = subscription.queries.find((entry) => Number(entry.id) === issue.query_id);
+                    onOpenAccounts(query?.site_id ?? null);
+                  }}
+                  onReviewQuery={(issue) => {
+                    const query = subscription.queries.find((entry) => Number(entry.id) === issue.query_id);
+                    if (query) setEditing(query);
+                  }}
+                  failedPostTotalCount={detail.failedPostTotalCount}
+                  issueTotalCount={detail.issueTotalCount}
+                  retryablePostCount={detail.retryablePostCount}
+                  hasMore={detail.issueNextCursor != null || detail.failedPostNextCursor != null}
+                  onLoadMore={onLoadMoreHealth}
+                />
+              )}
+            </div>
+          )}
+        </div>
+
+        <footer className={styles.subscriptionDataFooter}>
+          {tab === 'sources' && (
+            <AddQueryBar sites={snapshot.sites} busy={busy} onAdd={(siteId, queryText) => controller.addQuery(subscription.id, siteId, queryText)} />
+          )}
+        </footer>
+      </section>
 
       <QueryEditModal
         query={editing}
@@ -470,16 +515,23 @@ export function SubscriptionDetail({
         onClose={() => setEditing(null)}
         onSave={async (input) => {
           if (!editing) return;
-          await controller.editQuery(
-            Number.parseInt(editing.id, 10),
-            input.siteId,
-            input.queryText,
-            input.displayName,
-            input.notes,
-          );
+          await controller.editQuery(Number.parseInt(editing.id, 10), input.siteId, input.queryText, input.displayName, input.notes);
           setEditing(null);
         }}
       />
+      <GlassModal open={statsQuery != null} onClose={() => setStatsQuery(null)} title="Source details" size="sm">
+        {statsQuery && (
+          <div className={styles.queryStats}>
+            <div><span>Source</span><strong>{statsQuery.display_name?.trim() || statsQuery.query_text}</strong></div>
+            <div><span>Site</span><strong>{getSiteLabel(statsQuery.site_id, snapshot.sites)}</strong></div>
+            <div><span>Posts added</span><strong>{statsQuery.posts_found.toLocaleString()}</strong></div>
+            <div><span>Media added</span><strong>{statsQuery.files_found.toLocaleString()}</strong></div>
+            <div><span>Last check</span><strong>{statsQuery.last_check_time ? formatRelativeTime(statsQuery.last_check_time) : 'Never'}</strong></div>
+            <div><span>State</span><strong>{statsQuery.paused ? 'Paused' : statsQuery.completed_initial_run ? 'Ready' : 'Initial sync'}</strong></div>
+            {statsQuery.last_failure_message && <div><span>Last error</span><strong>{statsQuery.last_failure_message}</strong></div>}
+          </div>
+        )}
+      </GlassModal>
     </div>
   );
 }

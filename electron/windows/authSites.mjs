@@ -46,6 +46,13 @@ export const AUTH_SITES = Object.freeze({
     consumerKey: 'O3hU2tMi5e4Qs5t3vezEi6L0qRORJ5y9oUpSGsrWu8iA3UCc3B',
     consumerSecret: 'sFdsK3PDdP2QpYMRAoq0oDnw0sFS24XigXmdfnaeNZpJpqAn03',
   }),
+  twitter: cookieSite(
+    'twitter',
+    'Twitter / X',
+    'https://x.com/i/flow/login',
+    'https://x.com',
+    { authenticatedCookieNames: Object.freeze(['auth_token', 'ct0']) },
+  ),
   hentaifoundry: cookieSite(
     'hentaifoundry',
     'Hentai Foundry',
@@ -68,13 +75,23 @@ export const AUTH_SITES = Object.freeze({
     'https://www.webtoons.com',
     { unauthenticatedUrlPattern: /\/(?:member\/(?:login|join)|(?:[a-z]{2}\/)?age-gate)(?:[/?#]|$)/i },
   ),
-  deviantart: cookieSite(
-    'deviantart',
-    'DeviantArt',
-    'https://www.deviantart.com/users/login',
-    'https://www.deviantart.com',
-    { unauthenticatedUrlPattern: /\/(?:users\/login|join)(?:[/?#]|$)/i },
-  ),
+  // These are gallery-dl's public application credentials and callback. Using
+  // the same OAuth client lets Picto hand the resulting refresh token straight
+  // back to gallery-dl instead of inventing a parallel DeviantArt login path.
+  deviantart: Object.freeze({
+    id: 'deviantart',
+    label: 'DeviantArt',
+    strategy: 'oauth2',
+    clientId: '5388',
+    clientSecret: '76b08c69cfb27f26d6161f9ab6d061a1',
+    authorizeUrl: 'https://www.deviantart.com/oauth2/authorize',
+    tokenUrl: 'https://www.deviantart.com/oauth2/token',
+    redirectUrl: 'https://mikf.github.io/gallery-dl/oauth-redirect.html',
+    scope: 'browse user.manage',
+    tokenField: 'refresh_token',
+    cookieUrl: 'https://www.deviantart.com',
+    cookieNames: Object.freeze(['auth', 'auth_secure', 'userinfo']),
+  }),
   patreon: cookieSite(
     'patreon',
     'Patreon',
@@ -86,16 +103,26 @@ export const AUTH_SITES = Object.freeze({
     'fanbox',
     'pixivFANBOX',
     'https://accounts.pixiv.net/login?prompt=select_account&return_to=https%3A%2F%2Fwww.fanbox.cc%2Fauth%2Fstart&source=fanbox',
-    'https://www.fanbox.cc',
-    { cookieNames: Object.freeze(['FANBOXSESSID']), authenticatedCookieNames: Object.freeze(['FANBOXSESSID']) },
+    'https://api.fanbox.cc',
+    {
+      authenticatedCookieNames: Object.freeze(['FANBOXSESSID']),
+    },
   ),
   subscribestar: cookieSite(
     'subscribestar',
     'SubscribeStar',
-    'https://www.subscribestar.com/login',
-    'https://www.subscribestar.com',
+    'https://subscribestar.art/login',
+    'https://subscribestar.art',
     { cookieNames: Object.freeze(['_personalization_id']), authenticatedCookieNames: Object.freeze(['_personalization_id']) },
   ),
+  onlyfans: Object.freeze({
+    id: 'onlyfans',
+    label: 'OnlyFans',
+    strategy: 'onlyfans',
+    loginUrl: 'https://onlyfans.com/',
+    cookieUrl: 'https://onlyfans.com',
+    cookieNames: Object.freeze(['sess', 'auth_id', 'auth_uid']),
+  }),
   idolcomplex: cookieSite(
     'idolcomplex',
     'Idol Complex',

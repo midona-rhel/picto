@@ -4,13 +4,9 @@ const EXTERNAL_NAMESPACES: &[&str] = &[
     "general",
     "creator",
     "character",
-    "person",
     "series",
-    "studio",
     "species",
-    "photoset",
     "meta",
-    "system",
     "rating",
 ];
 
@@ -34,8 +30,10 @@ pub fn parse_local(value: &str) -> Result<(String, String), String> {
 pub fn parse_external(value: &str) -> Result<(String, String), String> {
     let (namespace, subtag) = parse_local(value)?;
     let namespace = match namespace.as_str() {
-        "artist" => "creator",
+        "artist" | "contributor" => "creator",
         "copyright" => "series",
+        "metadata" => "meta",
+        "tag" | "ungrouped" => "general",
         value => value,
     };
     if EXTERNAL_NAMESPACES.contains(&namespace) {
@@ -62,6 +60,26 @@ mod tests {
         assert_eq!(
             parse_external("category:Original").unwrap(),
             ("general".to_string(), "category:original".to_string())
+        );
+        assert_eq!(
+            parse_external("metadata:Highres").unwrap(),
+            ("meta".to_string(), "highres".to_string())
+        );
+        assert_eq!(
+            parse_external("tag:Blue Eyes").unwrap(),
+            ("general".to_string(), "blue eyes".to_string())
+        );
+        assert_eq!(
+            parse_external("contributor:Editor").unwrap(),
+            ("creator".to_string(), "editor".to_string())
+        );
+        assert_eq!(
+            parse_external("lore:Backstory").unwrap(),
+            ("general".to_string(), "lore:backstory".to_string())
+        );
+        assert_eq!(
+            parse_external("studio:Example").unwrap(),
+            ("general".to_string(), "studio:example".to_string())
         );
     }
 

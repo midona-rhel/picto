@@ -15,6 +15,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom';
 import { IconPin, IconPinFilled } from '@tabler/icons-react';
 import { KbdTooltip } from '../KbdTooltip';
+import { useShortcutScope } from '../../hooks/useShortcutScope';
 import { getZoomFactor, getViewportCSS } from '../../lib/zoomCompensation';
 import styles from './OverlayShell.module.css';
 
@@ -27,6 +28,7 @@ export interface OverlayShellProps {
   onPinnedChange?: (pinned: boolean) => void;
   /** Anchor position — panel positions relative to this point. */
   anchorPosition?: { x: number; y: number } | null;
+  anchorPlacement?: 'left' | 'below' | 'above';
   header?: ReactNode;
   footer?: ReactNode;
   children: ReactNode;
@@ -43,6 +45,7 @@ export function OverlayShell({
   pinned = false,
   onPinnedChange,
   anchorPosition,
+  anchorPlacement = 'left',
   header,
   footer,
   children,
@@ -52,7 +55,7 @@ export function OverlayShell({
   const dragRef = useRef({ active: false, startX: 0, startY: 0, origX: 0, origY: 0 });
 
   // Whether this panel is right-anchored (opened from inspector)
-  const isRightAnchored = anchorPosition != null;
+  const isRightAnchored = anchorPosition != null && anchorPlacement === 'left';
 
   // Position on open
   // When right-anchored: pos.x = distance from RIGHT edge of viewport (CSS `right`)
@@ -65,30 +68,34 @@ export function OverlayShell({
       // anchorPosition comes from getBoundingClientRect (visual pixels) — convert to CSS
       const ax = anchorPosition.x / zoom;
       const ay = anchorPosition.y / zoom;
-      let r = vw - ax + MARGIN;
       let y = ay;
-      if (r < MARGIN) r = MARGIN;
-      if (vw - r - width < MARGIN) r = vw - width - MARGIN;
       if (y + height > vh - MARGIN) y = vh - height - MARGIN;
       if (y < MARGIN) y = MARGIN;
-      setPos({ x: Math.round(r), y: Math.round(y) });
+      if (anchorPlacement === 'below' || anchorPlacement === 'above') {
+        const x = Math.max(MARGIN, Math.min(vw - width - MARGIN, ax));
+        if (anchorPlacement === 'above') {
+          y = Math.max(MARGIN, ay - height - 4);
+        }
+        setPos({ x: Math.round(x), y: Math.round(y) });
+      } else {
+        let r = vw - ax + MARGIN;
+        if (r < MARGIN) r = MARGIN;
+        if (vw - r - width < MARGIN) r = vw - width - MARGIN;
+        setPos({ x: Math.round(r), y: Math.round(y) });
+      }
     } else {
       setPos({
         x: Math.round((vw - width) / 2),
         y: Math.round((vh - height) / 2),
       });
     }
-  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, anchorPosition?.x, anchorPosition?.y, anchorPlacement, width, height]);
 
-  // Escape to close
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
-    };
-    window.addEventListener('keydown', handler, true);
-    return () => window.removeEventListener('keydown', handler, true);
-  }, [open, onClose]);
+  useShortcutScope((event) => {
+    if (event.key !== 'Escape') return;
+    onClose();
+    return true;
+  }, { enabled: open, priority: 100, allowInEditable: true });
 
   // Drag logic — right-anchored panels invert horizontal drag direction
   const onDragStart = useCallback((e: React.MouseEvent) => {
@@ -137,6 +144,7 @@ export function OverlayShell({
       <div
         ref={panelRef}
         className={styles.panel}
+        data-overlay-shell=""
         style={isRightAnchored
           ? { right: pos.x, top: pos.y, width, height }
           : { left: pos.x, top: pos.y, width, height }

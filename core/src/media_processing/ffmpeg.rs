@@ -132,6 +132,51 @@ async fn run_ffmpeg_frame(
     Ok(output.stdout)
 }
 
+/// Render a normalized mono waveform on a transparent canvas as PNG bytes.
+pub async fn render_audio_waveform(
+    path: &Path,
+    target_resolution: (u32, u32),
+) -> FfmpegResult<Vec<u8>> {
+    let bin = super::ffmpeg_path::ffmpeg_path().map_err(FfmpegError::Process)?;
+    let width = target_resolution.0.max(2);
+    let height = (target_resolution.1 / 2).max(1);
+    let filter = format!(
+        "aformat=channel_layouts=mono,showwavespic=s={width}x{height}:colors=0x0072EFFF:scale=lin:draw=full:filter=peak,format=rgba"
+    );
+
+    let mut cmd = Command::new(bin.as_path());
+    cmd.kill_on_drop(true);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    cmd.args(["-v", "quiet", "-i"]).arg(path).args([
+        "-filter_complex",
+        &filter,
+        "-frames:v",
+        "1",
+        "-f",
+        "image2pipe",
+        "-c:v",
+        "png",
+        "-",
+    ]);
+
+    let output = tokio::time::timeout(FFMPEG_FRAME_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| FfmpegError::Timeout(FFMPEG_FRAME_TIMEOUT))?
+        .map_err(|error| FfmpegError::Process(format!("failed to run ffmpeg: {error}")))?;
+    if !output.status.success() || output.stdout.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(FfmpegError::DamagedOrUnusualFile(format!(
+            "ffmpeg waveform generation failed (status {}): {stderr}",
+            output.status
+        )));
+    }
+    Ok(output.stdout)
+}
+
 // --- ffprobe JSON helpers ---
 
 /// Find the first stream of a given codec_type in ffprobe JSON.
@@ -164,12 +209,42 @@ pub struct VideoProperties {
     pub has_audio: bool,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct ProbedMediaInfo {
+    pub mime: MimeType,
+    pub video: Option<VideoProperties>,
+    pub audio_duration_ms: Option<u64>,
+    pub has_audio: bool,
+}
+
+pub(crate) async fn probe_media_info(path: &Path) -> FfmpegResult<ProbedMediaInfo> {
+    let probe = run_ffprobe(path).await?;
+    let has_video = find_stream(&probe, "video").is_some();
+    let has_audio = find_stream(&probe, "audio").is_some();
+    let format_name = probe["format"]["format_name"].as_str().unwrap_or("");
+    let mime = map_ffmpeg_format_to_mime(format_name, has_video, has_audio);
+    let video = find_stream(&probe, "video").map(|video| video_properties(&probe, video));
+    let audio_duration_ms = find_stream(&probe, "audio").and_then(|audio| {
+        parse_duration_ms(&audio["duration"])
+            .or_else(|| parse_duration_ms(&probe["format"]["duration"]))
+    });
+    Ok(ProbedMediaInfo {
+        mime,
+        video,
+        audio_duration_ms,
+        has_audio,
+    })
+}
+
 /// Extract video properties from a file.
 pub async fn get_video_properties(path: &Path) -> FfmpegResult<VideoProperties> {
-    let probe = run_ffprobe(path).await?;
+    probe_media_info(path)
+        .await?
+        .video
+        .ok_or(FfmpegError::NoVideoStream)
+}
 
-    let video = find_stream(&probe, "video").ok_or(FfmpegError::NoVideoStream)?;
-
+fn video_properties(probe: &serde_json::Value, video: &serde_json::Value) -> VideoProperties {
     let width = video["width"].as_u64().unwrap_or(0) as u32;
     let height = video["height"].as_u64().unwrap_or(0) as u32;
 
@@ -193,13 +268,13 @@ pub async fn get_video_properties(path: &Path) -> FfmpegResult<VideoProperties> 
     // Handle rotation
     let (final_w, final_h) = apply_rotation(video, adj_w, adj_h);
 
-    Ok(VideoProperties {
+    VideoProperties {
         width: final_w.max(1),
         height: final_h.max(1),
         duration_ms,
         num_frames: num_frames.max(1),
         has_audio,
-    })
+    }
 }
 
 /// Estimate frame count from duration and frame rate.
@@ -274,38 +349,19 @@ fn apply_rotation(video: &serde_json::Value, width: u32, height: u32) -> (u32, u
 
 /// Get audio duration in milliseconds.
 pub async fn get_audio_duration_ms(path: &Path) -> FfmpegResult<u64> {
-    let probe = run_ffprobe(path).await?;
-
-    let audio = find_stream(&probe, "audio").ok_or(FfmpegError::NoAudioStream)?;
-
-    let duration_ms = parse_duration_ms(&audio["duration"])
-        .or_else(|| parse_duration_ms(&probe["format"]["duration"]))
+    probe_media_info(path)
+        .await?
+        .audio_duration_ms
         .ok_or_else(|| {
             FfmpegError::DamagedOrUnusualFile("Could not determine audio duration".to_string())
-        })?;
-
-    Ok(duration_ms)
+        })
 }
 
 // --- MIME detection ---
 
 /// Determine MIME type using ffprobe's format probing.
 pub async fn get_mime(path: &Path) -> FfmpegResult<MimeType> {
-    let probe = run_ffprobe(path).await?;
-
-    let format_name = probe["format"]["format_name"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-
-    let has_video = find_stream(&probe, "video").is_some();
-    let has_audio = find_stream(&probe, "audio").is_some();
-
-    Ok(map_ffmpeg_format_to_mime(
-        &format_name,
-        has_video,
-        has_audio,
-    ))
+    probe_media_info(path).await.map(|info| info.mime)
 }
 
 /// Map ffmpeg format name to MimeType.

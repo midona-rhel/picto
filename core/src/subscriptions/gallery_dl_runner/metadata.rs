@@ -107,10 +107,14 @@ fn canonical_mastodon_status_url(json: &serde_json::Value, host: &str) -> Option
 fn html_to_plain_text(raw: &str) -> Option<String> {
     static TAGS: OnceLock<regex::Regex> = OnceLock::new();
     static NUMERIC_ENTITIES: OnceLock<regex::Regex> = OnceLock::new();
+    static NAMED_ENTITIES: OnceLock<regex::Regex> = OnceLock::new();
     static SPACE_BEFORE_PUNCTUATION: OnceLock<regex::Regex> = OnceLock::new();
     let tags = TAGS.get_or_init(|| regex::Regex::new(r"(?s)<[^>]*>").expect("valid HTML regex"));
     let numeric_entities = NUMERIC_ENTITIES
         .get_or_init(|| regex::Regex::new(r"&#(x?[0-9A-Fa-f]+);").expect("valid entity regex"));
+    let named_entities = NAMED_ENTITIES.get_or_init(|| {
+        regex::Regex::new(r"&([A-Za-z][A-Za-z0-9]+);").expect("valid entity regex")
+    });
     let space_before_punctuation = SPACE_BEFORE_PUNCTUATION
         .get_or_init(|| regex::Regex::new(r"\s+([.,!?;:])").expect("valid punctuation regex"));
     let plain = tags
@@ -122,6 +126,30 @@ fn html_to_plain_text(raw: &str) -> Option<String> {
         .replace("&quot;", "\"")
         .replace("&#39;", "'")
         .replace("&apos;", "'");
+    let plain = named_entities
+        .replace_all(&plain, |captures: &regex::Captures| {
+            match &captures[1] {
+                "nbsp" => " ",
+                "amp" => "&",
+                "lt" => "<",
+                "gt" => ">",
+                "quot" => "\"",
+                "apos" | "lsquo" | "rsquo" => "'",
+                "ldquo" | "rdquo" => "\"",
+                "ndash" | "mdash" => "-",
+                "hellip" => "...",
+                "bull" => "*",
+                "middot" => "·",
+                "copy" => "©",
+                "reg" => "®",
+                "trade" => "™",
+                "laquo" => "«",
+                "raquo" => "»",
+                _ => return captures[0].to_string(),
+            }
+            .to_string()
+        })
+        .into_owned();
     let plain = numeric_entities
         .replace_all(&plain, |captures: &regex::Captures| {
             let raw = &captures[1];
@@ -136,11 +164,13 @@ fn html_to_plain_text(raw: &str) -> Option<String> {
         })
         .into_owned();
     let plain = plain.split_whitespace().collect::<Vec<_>>().join(" ");
-    let plain = space_before_punctuation.replace_all(&plain, "$1").into_owned();
+    let plain = space_before_punctuation
+        .replace_all(&plain, "$1")
+        .into_owned();
     (!plain.is_empty()).then_some(plain)
 }
 
-fn normalize_description_text(raw: &str) -> Option<String> {
+fn normalize_metadata_text(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
         return None;
@@ -206,9 +236,7 @@ fn canonical_fanbox_url(json: &serde_json::Value, post_id: Option<&str>) -> Opti
         };
         let host = url.host_str().unwrap_or_default();
         if !matches!(url.scheme(), "http" | "https")
-            || !(host == "fanbox.cc"
-                || host == "www.fanbox.cc"
-                || host.ends_with(".fanbox.cc"))
+            || !(host == "fanbox.cc" || host == "www.fanbox.cc" || host.ends_with(".fanbox.cc"))
             || url.username() != ""
             || url.password().is_some()
             || url.port().is_some()
@@ -235,10 +263,7 @@ fn canonical_subscribestar_url(json: &serde_json::Value, post_id: Option<&str>) 
             continue;
         };
         if !matches!(url.scheme(), "http" | "https")
-            || !matches!(
-                url.host_str(),
-                Some("subscribestar.com" | "www.subscribestar.com")
-            )
+            || !matches!(url.host_str(), Some("subscribestar.art"))
             || url.username() != ""
             || url.password().is_some()
             || url.port().is_some()
@@ -246,13 +271,13 @@ fn canonical_subscribestar_url(json: &serde_json::Value, post_id: Option<&str>) 
             continue;
         }
         url.set_scheme("https").ok()?;
-        url.set_host(Some("www.subscribestar.com")).ok()?;
+        url.set_host(Some("subscribestar.art")).ok()?;
         url.set_query(None);
         url.set_fragment(None);
         return Some(url.to_string());
     }
 
-    post_id.map(|post_id| format!("https://www.subscribestar.com/posts/{post_id}"))
+    post_id.map(|post_id| format!("https://subscribestar.art/posts/{post_id}"))
 }
 
 fn generic_creator_identifier(json: &serde_json::Value) -> Option<String> {
@@ -463,6 +488,8 @@ fn post_id(json: &serde_json::Value) -> Option<String> {
             .or_else(|| artstation_project_field_text(json, "project_id")),
         "deviantart" => field_text(json, "deviationid"),
         "hentaifoundry" => field_text(json, "index").filter(|index| index.parse::<u64>().is_ok()),
+        "twitter" => field_text(json, "tweet_id").or_else(|| field_text(json, "id")),
+        "subscribestar" => field_text(json, "post_id").or_else(|| field_text(json, "id")),
         _ => field_text(json, "id").or_else(|| field_text(json, "post_id")),
     }
 }
@@ -598,6 +625,14 @@ fn canonical_post_url(
                 .push(post_id)
                 .push("picto");
             return Some(url.to_string());
+        }
+        Some("twitter") => {
+            let post_id = post_id?;
+            let username = json
+                .get("author")
+                .and_then(|author| author.get("name").or_else(|| author.get("nick")))
+                .and_then(serde_json::Value::as_str)?;
+            return Some(format!("https://x.com/{username}/status/{post_id}"));
         }
         Some("baraag") => return canonical_mastodon_status_url(json, "baraag.net"),
         Some("idolcomplex") => {
@@ -784,11 +819,19 @@ pub(super) fn parse_metadata_with_url(
         json.get("artist_commentary")
             .and_then(|commentary| field_text(commentary, "original_description"))
             .or_else(|| {
-                ["description", "caption", "body", "content", "text", "html", "substring"]
-                    .into_iter()
-                    .find_map(|key| field_text(json, key))
+                [
+                    "description",
+                    "caption",
+                    "body",
+                    "content",
+                    "text",
+                    "html",
+                    "substring",
+                ]
+                .into_iter()
+                .find_map(|key| field_text(json, key))
             })
-            .and_then(|raw| normalize_description_text(&raw))
+            .and_then(|raw| normalize_metadata_text(&raw))
     };
     let title = json
         .get("artist_commentary")
@@ -803,7 +846,8 @@ pub(super) fn parse_metadata_with_url(
             (category.as_deref() == Some("tumblr"))
                 .then(|| field_text(json, "summary"))
                 .flatten()
-        });
+        })
+        .and_then(|raw| normalize_metadata_text(&raw));
     let post_id = post_id(json);
     let canonical_post_url =
         canonical_post_url(json, category.as_deref(), post_id.as_deref(), item_url);
@@ -1520,7 +1564,7 @@ mod tests {
                 "blog": {"name": "nasa"},
                 "tags": ["space", "science"],
                 "summary": "A space update",
-                "caption": "<p>A <strong>space</strong> update.</p>",
+                "caption": "<p>A <strong>space</strong> update about Roman&rsquo;s telescope.</p>",
                 "post_url": "http://nasa.tumblr.com/post/123456789/a-space-update?ref=feed",
                 "date": "2026-08-15 10:20:30 GMT",
                 "num": 2,
@@ -1532,7 +1576,10 @@ mod tests {
         assert_eq!(parsed.category.as_deref(), Some("tumblr"));
         assert_eq!(parsed.post_id.as_deref(), Some("123456789"));
         assert_eq!(parsed.title.as_deref(), Some("A space update"));
-        assert_eq!(parsed.description.as_deref(), Some("A space update."));
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("A space update about Roman's telescope.")
+        );
         assert_eq!(parsed.page_num, Some(2));
         assert_eq!(parsed.page_count, Some(3));
         assert_eq!(
@@ -1551,27 +1598,27 @@ mod tests {
 
     #[test]
     fn patreon_metadata_normalizes_creator_html_description_and_canonical_url() {
-        let parsed = parse_metadata_with_url(&json!({
-            "category": "patreon",
-            "id": 987654321,
-            "title": "Behind the scenes",
-            "content": "<p>Line <strong>one</strong>.</p><p>Line &amp; two.</p>",
-            "published_at": "2026-08-16T12:30:00+00:00",
-            "patreon_url": "http://www.patreon.com/posts/behind-the-scenes-987654321?ref=feed",
-            "tags": ["exclusive", "wip"],
-            "creator": {
-                "url": "https://www.patreon.com/c/creator-name",
-                "full_name": "Creator Name"
-            }
-        }), Some("https://cdn.patreon.com/file.jpg"));
+        let parsed = parse_metadata_with_url(
+            &json!({
+                "category": "patreon",
+                "id": 987654321,
+                "title": "Behind the scenes",
+                "content": "<p>Line <strong>one</strong>.</p><p>Line &amp; two.</p>",
+                "published_at": "2026-08-16T12:30:00+00:00",
+                "patreon_url": "http://www.patreon.com/posts/behind-the-scenes-987654321?ref=feed",
+                "tags": ["exclusive", "wip"],
+                "creator": {
+                    "url": "https://www.patreon.com/c/creator-name",
+                    "full_name": "Creator Name"
+                }
+            }),
+            Some("https://cdn.patreon.com/file.jpg"),
+        );
 
         assert_eq!(parsed.category.as_deref(), Some("patreon"));
         assert_eq!(parsed.post_id.as_deref(), Some("987654321"));
         assert_eq!(parsed.title.as_deref(), Some("Behind the scenes"));
-        assert_eq!(
-            parsed.description.as_deref(),
-            Some("Line one. Line & two.")
-        );
+        assert_eq!(parsed.description.as_deref(), Some("Line one. Line & two."));
         assert_eq!(
             parsed.created_at.as_deref(),
             Some("2026-08-16T12:30:00+00:00")
@@ -1625,6 +1672,17 @@ mod tests {
     }
 
     #[test]
+    fn generic_title_strips_html_markup() {
+        let parsed = parse_metadata(&json!({
+            "category": "patreon",
+            "id": 1,
+            "title": "<strong>A rendez vous with Trixy</strong>"
+        }));
+
+        assert_eq!(parsed.title.as_deref(), Some("A rendez vous with Trixy"));
+    }
+
+    #[test]
     fn fanbox_metadata_normalizes_creator_text_description_and_canonical_url() {
         let parsed = parse_metadata(&json!({
             "category": "fanbox",
@@ -1659,6 +1717,7 @@ mod tests {
     fn subscribestar_metadata_normalizes_creator_html_description_and_canonical_url() {
         let parsed = parse_metadata(&json!({
             "category": "subscribestar",
+            "id": 991122,
             "post_id": 778899,
             "author_name": "creator-name",
             "author_nick": "Creator Name",
@@ -1669,13 +1728,11 @@ mod tests {
 
         assert_eq!(parsed.category.as_deref(), Some("subscribestar"));
         assert_eq!(parsed.post_id.as_deref(), Some("778899"));
-        assert_eq!(
-            parsed.description.as_deref(),
-            Some("Ignored Line one.")
-        );
+        assert_eq!(parsed.item_key.as_deref(), Some("subscribestar:778899:0"));
+        assert_eq!(parsed.description.as_deref(), Some("Ignored Line one."));
         assert_eq!(
             parsed.canonical_post_url.as_deref(),
-            Some("https://www.subscribestar.com/posts/778899")
+            Some("https://subscribestar.art/posts/778899")
         );
         assert!(parsed
             .tags
@@ -1708,6 +1765,28 @@ mod tests {
             .tags
             .contains(&("creator".to_string(), "ExampleArtist".to_string())));
         assert!(parsed.tags.contains(&(String::new(), "canine".to_string())));
+    }
+
+    #[test]
+    fn twitter_metadata_uses_tweet_identity_and_creator() {
+        let parsed = parse_metadata(&json!({
+            "category": "twitter",
+            "tweet_id": "12345",
+            "id": "media-id-is-not-the-post-id",
+            "author": {"name": "OpenAI"},
+            "date": "2026-08-25T12:00:00+00:00",
+            "num": 1,
+            "count": 2
+        }));
+
+        assert_eq!(parsed.post_id.as_deref(), Some("12345"));
+        assert_eq!(
+            parsed.canonical_post_url.as_deref(),
+            Some("https://x.com/OpenAI/status/12345")
+        );
+        assert!(parsed
+            .tags
+            .contains(&("creator".to_string(), "OpenAI".to_string())));
     }
 
     #[test]

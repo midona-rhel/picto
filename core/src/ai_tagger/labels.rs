@@ -78,8 +78,8 @@ fn parse_csv_line(line: &str) -> Result<LabelEntry, String> {
         return Err("expected at least tag_id, name, and category columns".into());
     }
 
-    let name = parts[1].trim().to_string();
-    if name.is_empty() {
+    let raw_name = parts[1].trim();
+    if raw_name.is_empty() {
         return Err("tag name is empty".into());
     }
     let category: u32 = parts[2]
@@ -87,6 +87,10 @@ fn parse_csv_line(line: &str) -> Result<LabelEntry, String> {
         .parse()
         .map_err(|_| "category is not an unsigned integer".to_string())?;
     let namespace = category_to_namespace(category).to_string();
+    let name = raw_name
+        .strip_prefix(&format!("{namespace}:"))
+        .unwrap_or(raw_name)
+        .to_string();
 
     Ok(LabelEntry { name, namespace })
 }
@@ -158,7 +162,7 @@ mod tests {
         assert_eq!(entry.namespace, "character");
 
         let entry = parse_csv_line("200,rating:general,9,100").unwrap();
-        assert_eq!(entry.name, "rating:general");
+        assert_eq!(entry.name, "general");
         assert_eq!(entry.namespace, "rating");
     }
 

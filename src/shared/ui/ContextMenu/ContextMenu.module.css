@@ -23,29 +23,6 @@
   animation: menuIn 100ms cubic-bezier(0.4, 0, 0.22, 1);
 }
 
-/*
- * reference application renders floating chrome on a behind-content pseudo-element. Keeping
- * the rim separate prevents the menu's scrolling content from clipping the
- * lower highlight and lets the same theme tokens drive every floating panel.
- */
-.menu::after {
-  content: '';
-  position: absolute;
-  z-index: -1;
-  inset: 0;
-  pointer-events: none;
-  box-sizing: border-box;
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border-top: var(--glass-border-top);
-  border-right: var(--glass-border-side);
-  border-bottom: var(--glass-border-bottom);
-  border-left: var(--glass-border-side);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-panel);
-}
-
 .menuClosing {
   animation: menuOut 80ms ease-in forwards;
 }
@@ -105,6 +82,7 @@
   flex-direction: column;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 4px;
   gap: 2px;
 }
@@ -144,6 +122,14 @@
   background: color-mix(in srgb, var(--color-negative) 12%, transparent);
 }
 
+.excluded {
+  color: var(--color-negative);
+}
+
+.excluded .label {
+  text-decoration: line-through;
+}
+
 .iconSlot {
   display: flex;
   align-items: center;
@@ -179,6 +165,17 @@
   margin-left: auto;
   padding-left: 28px;
   white-space: nowrap;
+}
+
+.checkSlot {
+  display: flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-left: auto;
+  color: var(--color-text-primary);
 }
 
 .separator {

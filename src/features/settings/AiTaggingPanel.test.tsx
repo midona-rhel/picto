@@ -5,7 +5,6 @@ import { AiTaggingPanel } from './AiTaggingPanel';
 
 const mocks = vi.hoisted(() => ({
   status: vi.fn(), download: vi.fn(), cancelDownload: vi.fn(), deleteModel: vi.fn(),
-  getSettings: vi.fn(), saveSettings: vi.fn(),
 }));
 
 vi.mock('../../platform/aiTaggerApi', () => ({
@@ -13,10 +12,6 @@ vi.mock('../../platform/aiTaggerApi', () => ({
   aiTaggerDownloadModel: mocks.download,
   aiTaggerCancelDownload: mocks.cancelDownload,
   aiTaggerDeleteModel: mocks.deleteModel,
-}));
-
-vi.mock('../../controllers/settingsController', () => ({
-  settingsController: { getSettings: mocks.getSettings, saveSettings: mocks.saveSettings },
 }));
 
 const model = {
@@ -27,6 +22,7 @@ const model = {
 const settings = {
   gridTargetSize: 200, gridViewMode: 'grid', inspectorWidth: 320, colorScheme: 'dark',
   gridSortField: 'added_at', gridSortOrder: 'desc', zoomFactor: null, showTreeGuides: true,
+  showTagGroups: true, starredTags: [], sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false, aiTaggerE621Enabled: false, aiTaggerEva02Enabled: false,
   aiTaggerAutoOnImport: false, aiTaggerWriteRating: false,
   aiThresholdGeneral: 0.35, aiThresholdCharacter: 0.35, aiThresholdCopyright: 0.35,
@@ -42,7 +38,7 @@ function status(downloaded = false) {
 }
 
 async function renderPanel() {
-  const result = render(<AiTaggingPanel />);
+  const result = render(<AiTaggingPanel settings={settings} onSettingsChange={vi.fn()} />);
   await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
   return result;
 }
@@ -50,8 +46,6 @@ async function renderPanel() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.status.mockResolvedValue(status(false));
-  mocks.getSettings.mockResolvedValue(settings);
-  mocks.saveSettings.mockResolvedValue(undefined);
   mocks.download.mockResolvedValue(status(true));
   mocks.cancelDownload.mockResolvedValue(undefined);
   mocks.deleteModel.mockResolvedValue(status(false));
@@ -60,17 +54,17 @@ beforeEach(() => {
 describe('AiTaggingPanel', () => {
   it('does not expose a model enable toggle before download', async () => {
     await renderPanel();
-    await screen.findByText('Download 1 MB');
+    await screen.findByRole('button', { name: 'Download' });
     expect(screen.queryByText('Downloaded')).not.toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Download 1 MB' })).toBeInTheDocument();
+    expect(screen.getByText('test · 1 MB · Recommended')).toBeInTheDocument();
   });
 
   it('refreshes authoritative model status after download completion', async () => {
     let resolveDownload!: (value: unknown) => void;
     mocks.download.mockReturnValue(new Promise((resolve) => { resolveDownload = resolve; }));
     await renderPanel();
-    await screen.findByRole('button', { name: 'Download 1 MB' });
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Download 1 MB' }));
+    await screen.findByRole('button', { name: 'Download' });
+    await userEvent.setup().click(screen.getByRole('button', { name: 'Download' }));
     expect(mocks.download).toHaveBeenCalledWith(model.slug);
     expect(await screen.findByText('Downloading…')).toBeInTheDocument();
     await act(async () => { resolveDownload(status(true)); });
@@ -82,9 +76,25 @@ describe('AiTaggingPanel', () => {
     mocks.download.mockReturnValue(new Promise((resolve) => { resolveDownload = resolve; }));
     const user = userEvent.setup();
     await renderPanel();
-    await user.click(screen.getByRole('button', { name: 'Download 1 MB' }));
+    await user.click(screen.getByRole('button', { name: 'Download' }));
     await user.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(mocks.cancelDownload).toHaveBeenCalledWith(model.slug);
     resolveDownload(status(false));
+  });
+
+  it('presents thresholds as percentages without model marketing labels', async () => {
+    await renderPanel();
+    expect(await screen.findByLabelText('General confidence')).toHaveValue('35');
+    expect(screen.getAllByText('35%').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Accuracy over speed')).not.toBeInTheDocument();
+  });
+
+  it('places the local-processing note below the model list', async () => {
+    await renderPanel();
+    const note = await screen.findByText('Models run locally. Picto never uploads media for AI tagging.');
+    const modelList = screen.getByText('WD14').closest('[class*="blockContent"]');
+
+    expect(modelList).not.toContainElement(note);
+    expect(modelList?.nextElementSibling).toBe(note);
   });
 });

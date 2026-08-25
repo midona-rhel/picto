@@ -9,9 +9,10 @@ import type { ItemSortField } from '../shared/types/generated/application/ItemSo
 import type { ItemSummary } from '../shared/types/generated/application/ItemSummary';
 import type { SortDirection } from '../shared/types/generated/application/SortDirection';
 import type { GridViewMode } from '../shared/types/grid';
-import { activeNodeIdAtom } from './navigation';
+import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from './navigation';
 import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
 import { nodeIdToGridScope } from '../shared/lib/gridScope';
+import { createEmptyItemFilters } from '../shared/lib/itemFilters';
 
 export type SortField = ItemSortField;
 export type { SortDirection };
@@ -25,6 +26,7 @@ export interface GridViewPreferences {
   showName: boolean;
   showExtension: boolean;
   showExtensionLabel: boolean;
+  showItemCount: boolean;
   showResolution: boolean;
   fitThumbnails: boolean;
   showSubfolders: boolean;
@@ -32,7 +34,7 @@ export interface GridViewPreferences {
 
 export interface GridSessionSnapshot {
   scope: BaseScope;
-  sort: { field: SortField; direction: SortDirection };
+  sort: { field: SortField; direction: SortDirection; randomSeed?: string | null };
   searchText: string;
   filters: QueryFilters;
   view: GridViewPreferences;
@@ -48,7 +50,7 @@ export interface GridSessionSnapshot {
 }
 
 export type GridIntent =
-  | { type: 'filter'; filters: QueryFilters }
+  | { type: 'filter'; filters: QueryFilters; restoreScroll?: boolean }
   | { type: 'sort'; field: SortField; direction: SortDirection }
   | { type: 'view'; patch: Partial<GridViewPreferences> };
 
@@ -58,18 +60,13 @@ export const initialGridView: GridViewPreferences = {
   showName: true,
   showExtension: false,
   showExtensionLabel: false,
+  showItemCount: true,
   showResolution: false,
   fitThumbnails: false,
   showSubfolders: true,
 };
 
-export const initialGridFilters: QueryFilters = {
-  include_tags: [],
-  exclude_tags: [],
-  minimum_rating: null,
-  mime_prefix: null,
-  text: null,
-};
+export const initialGridFilters: QueryFilters = createEmptyItemFilters();
 
 export const gridSessionAtom = atom<GridSessionSnapshot>({
   scope: { kind: 'all' },
@@ -88,6 +85,18 @@ export const gridSessionAtom = atom<GridSessionSnapshot>({
 });
 
 export const pendingGridIntentAtom = atom<GridIntent | null>(null);
+export const pendingGridNavigationAtom = atom<{
+  nodeId: string;
+  filters: QueryFilters;
+  sort?: ItemQuery['sort'];
+  restoreScroll?: boolean;
+} | null>(null);
+/** A grid drill-down rendered inside a manager while its sidebar node stays active. */
+export const gridDrilldownAtom = atom<{
+  ownerNodeId: string;
+  scopeNodeId: string;
+  filters: QueryFilters;
+} | null>(null);
 const pick = <T>(selector: (session: GridSessionSnapshot) => T) => selectAtom(gridSessionAtom, selector);
 
 export const gridScopeAtom = pick((s) => s.scope);
@@ -100,8 +109,11 @@ export const gridTargetSizeAtom = pick((s) => s.view.targetSize);
 export const gridShowNameAtom = pick((s) => s.view.showName);
 export const gridShowExtensionAtom = pick((s) => s.view.showExtension);
 export const gridShowExtensionLabelAtom = pick((s) => s.view.showExtensionLabel);
+export const gridShowItemCountAtom = pick((s) => s.view.showItemCount);
 export const gridShowResolutionAtom = pick((s) => s.view.showResolution);
 export const gridFitThumbnailsAtom = pick((s) => s.view.fitThumbnails);
+/** Transient grid display mode. It is deliberately not a per-scope library preference. */
+export const gridGrayscaleAtom = atom(false);
 export const gridShowSubfoldersAtom = pick((s) => s.view.showSubfolders);
 export const gridItemsAtom = pick((s) => s.items);
 export const gridCursorAtom = pick((s) => s.cursor);
@@ -123,7 +135,7 @@ export const currentGridQueryAtom = atom<ItemQuery>((get) => {
     sort: {
       field: session.sort.field,
       direction: session.sort.direction,
-      random_seed: null,
+      random_seed: session.sort.randomSeed ?? null,
     },
   };
 });
@@ -138,9 +150,11 @@ export const gridReconcileContextAtom = atom((get) => ({
 
 export type GridTransitionPhase = 'idle' | 'fading_out' | 'waiting' | 'fading_in';
 export const gridTransitionPhaseAtom = atom<GridTransitionPhase>('idle');
+/** Visibility of reference application-style persistent filter chips below the titlebar. */
+export const gridFilterToolbarOpenAtom = atom(false);
 
 export const gridScopeLabelAtom = atom((get) => {
-  const nodeId = get(activeNodeIdAtom);
+  const nodeId = get(displayedSurfaceNodeIdAtom);
   const labels: Record<string, string> = {
     'system:active': 'All',
     'system:inbox': 'Inbox',
@@ -148,6 +162,7 @@ export const gridScopeLabelAtom = atom((get) => {
     'system:uncategorized': 'Uncategorized',
     'system:untagged': 'Untagged',
     'system:recent_viewed': 'Recently Viewed',
+    'system:random': 'Random',
   };
   if (labels[nodeId]) return labels[nodeId];
   return get(sidebarNodesAtom).find((node) => node.id === nodeId)?.name ?? '';

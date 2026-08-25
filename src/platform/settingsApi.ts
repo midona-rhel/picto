@@ -12,7 +12,9 @@ export interface ViewPrefsDto {
   show_resolution: boolean | null;
   show_extension: boolean | null;
   show_label: boolean | null;
+  show_item_count: boolean | null;
   thumbnail_fit: string | null;
+  show_subfolders: boolean | null;
 }
 
 export interface ViewPrefsPatch {
@@ -24,6 +26,7 @@ export interface ViewPrefsPatch {
   show_resolution?: boolean | null;
   show_extension?: boolean | null;
   show_label?: boolean | null;
+  show_item_count?: boolean | null;
   thumbnail_fit?: string | null;
   show_subfolders?: boolean | null;
 }
@@ -37,6 +40,9 @@ export interface AppSettings {
   gridSortOrder: string;
   zoomFactor: number | null;
   showTreeGuides: boolean;
+  showTagGroups: boolean;
+  starredTags: string[];
+  sidebarQuickAccess: string[];
   aiTaggerWd14Enabled: boolean;
   aiTaggerE621Enabled: boolean;
   aiTaggerEva02Enabled: boolean;
@@ -60,6 +66,9 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   gridSortOrder: 'ascending',
   zoomFactor: null,
   showTreeGuides: true,
+  showTagGroups: true,
+  starredTags: [],
+  sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false,
   aiTaggerE621Enabled: false,
   aiTaggerEva02Enabled: false,
@@ -111,6 +120,13 @@ function nullableNumberValue(value: unknown, key: string): number | null {
   return numberValue(value, key);
 }
 
+function stringArrayValue(value: unknown, key: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== 'string')) {
+    throw new Error(`Settings field "${key}" must be an array of strings.`);
+  }
+  return [...new Set(value.map((item) => item.trim()).filter(Boolean))];
+}
+
 function storedOrDefault(source: JsonObject, key: string, fallback: unknown): unknown {
   return Object.prototype.hasOwnProperty.call(source, key) ? source[key] : fallback;
 }
@@ -127,6 +143,9 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     gridSortOrder: stringValue(storedOrDefault(source, 'gridSortOrder', APP_SETTINGS_DEFAULTS.gridSortOrder), 'gridSortOrder'),
     zoomFactor: nullableNumberValue(storedOrDefault(source, 'zoomFactor', APP_SETTINGS_DEFAULTS.zoomFactor), 'zoomFactor'),
     showTreeGuides: booleanValue(storedOrDefault(source, 'showTreeGuides', APP_SETTINGS_DEFAULTS.showTreeGuides), 'showTreeGuides'),
+    showTagGroups: booleanValue(storedOrDefault(source, 'showTagGroups', APP_SETTINGS_DEFAULTS.showTagGroups), 'showTagGroups'),
+    starredTags: stringArrayValue(storedOrDefault(source, 'starredTags', APP_SETTINGS_DEFAULTS.starredTags), 'starredTags'),
+    sidebarQuickAccess: stringArrayValue(storedOrDefault(source, 'sidebarQuickAccess', APP_SETTINGS_DEFAULTS.sidebarQuickAccess), 'sidebarQuickAccess'),
     aiTaggerWd14Enabled: booleanValue(storedOrDefault(source, 'aiTaggerWd14Enabled', APP_SETTINGS_DEFAULTS.aiTaggerWd14Enabled), 'aiTaggerWd14Enabled'),
     aiTaggerE621Enabled: booleanValue(storedOrDefault(source, 'aiTaggerE621Enabled', APP_SETTINGS_DEFAULTS.aiTaggerE621Enabled), 'aiTaggerE621Enabled'),
     aiTaggerEva02Enabled: booleanValue(storedOrDefault(source, 'aiTaggerEva02Enabled', APP_SETTINGS_DEFAULTS.aiTaggerEva02Enabled), 'aiTaggerEva02Enabled'),
@@ -168,7 +187,9 @@ function parseViewPrefs(snapshot: SettingsSnapshot, scopeKey: string): { value: 
       show_resolution: nullableField(source, 'show_resolution', 'boolean'),
       show_extension: nullableField(source, 'show_extension', 'boolean'),
       show_label: nullableField(source, 'show_label', 'boolean'),
+      show_item_count: nullableField(source, 'show_item_count', 'boolean'),
       thumbnail_fit: nullableField(source, 'thumbnail_fit', 'string'),
+      show_subfolders: nullableField(source, 'show_subfolders', 'boolean'),
     },
     revision: revisionValue(snapshot.revision),
   };
@@ -216,7 +237,9 @@ export function viewPrefsToPatch(prefs: ViewPrefsDto): ViewPrefsPatch {
     show_resolution: prefs.show_resolution,
     show_extension: prefs.show_extension,
     show_label: prefs.show_label,
+    show_item_count: prefs.show_item_count,
     thumbnail_fit: prefs.thumbnail_fit,
+    show_subfolders: prefs.show_subfolders,
   };
 }
 

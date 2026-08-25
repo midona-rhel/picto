@@ -9,7 +9,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { IconSearch, IconCheck, IconLayoutSidebar } from '@tabler/icons-react';
+import { IconSearch, IconCheck, IconLayoutSidebar, IconX, IconBookmark } from '@tabler/icons-react';
 import { OverlayShell } from '../../shared/ui/OverlayShell';
 import { tagSelectPortalAtom } from '../../state/portals';
 import { selectionTargetAtom } from '../../state/selection';
@@ -22,8 +22,23 @@ import btnStyles from '../../shared/styles/actionButton.module.css';
 import { tagGroupColor, tagGroupOrder } from './tagGroupPresentation';
 import styles from './TagSelectPanel.module.css';
 import { commonItemTags } from '../../shared/lib/itemDetails';
+import { FilterLogicTabs } from '../../shared/ui/FilterLogicTabs';
+import type { FilterMatchMode } from '../../shared/types/generated/application/FilterMatchMode';
+import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu/ContextMenu';
+import { showTagItems } from '../../controllers/gridNavigationController';
+import { showErrorNotification } from '../../shared/lib/notifications';
+import {
+  buildCommonTagContextEntries,
+  tagName,
+  tagNameInGroup,
+} from './tagContextMenu';
+import {
+  replaceStarredTag,
+  setTagStarred,
+  useTagPreferences,
+} from './tagPreferences';
 
-type SidebarMode = 'selected' | 'all' | 'namespace';
+type SidebarMode = 'selected' | 'starred' | 'all' | 'namespace';
 const PAGE_SIZE = 100;
 
 
@@ -40,10 +55,15 @@ function tagRecord(name: string): CanonicalTagRecord {
 export function TagSelectPanel() {
   const portalState = useAtomValue(tagSelectPortalAtom);
   const setPortalState = useSetAtom(tagSelectPortalAtom);
-  const target = useAtomValue(selectionTargetAtom);
+  const selectionTarget = useAtomValue(selectionTargetAtom);
+  const target = portalState.target ?? selectionTarget;
   const entityData = useAtomValue(displayedInspectorItemDetailsAtom);
   const open = portalState.open;
   const anchorPosition = portalState.anchor ?? null;
+  const customTags = portalState.selectedTags;
+  const customExcludedTags = portalState.excludedTags;
+  const onApplyTags = portalState.onApplyTags;
+  const onApplyTagFilter = portalState.onApplyTagFilter;
   const closePortal = useCallback(() => setPortalState({ open: false }), [setPortalState]);
 
   const [pinned, setPinned] = useState(false);
@@ -55,17 +75,21 @@ export function TagSelectPanel() {
   const [namespaces, setNamespaces] = useState<CanonicalNamespaceSummary[]>([]);
   const [checked, setChecked] = useState<Set<string>>(new Set());    // tags to ADD
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set()); // tags to REMOVE
+  const [excluded, setExcluded] = useState<Set<string>>(new Set());
+  const [matchMode, setMatchMode] = useState<FilterMatchMode>('any');
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('all');
   const [activeNamespace, setActiveNamespace] = useState<string | null>(null);
   const [focusIdx, setFocusIdx] = useState(-1);
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const contextMenu = useContextMenu();
+  const tagPreferences = useTagPreferences();
 
   // Tags already on the selected entity (for "Selected" sidebar mode)
   const entityTagKeys = useMemo(() => {
-    return commonItemTags(entityData);
-  }, [entityData]);
+    return customTags ? new Set(customTags) : commonItemTags(entityData);
+  }, [customTags, entityData]);
 
   // Load initial tags + namespaces
   const loadTags = useCallback((search: string, ns?: string | null) => {
@@ -120,18 +144,20 @@ export function TagSelectPanel() {
       setQuery('');
       setChecked(new Set());
       setUnchecked(new Set());
+      setExcluded(new Set(customExcludedTags ?? []));
+      setMatchMode(portalState.filterMatchMode ?? 'any');
       setSidebarMode('all');
       setActiveNamespace(null);
       setFocusIdx(-1);
       loadTags('');
       setTimeout(() => searchRef.current?.focus(), 50);
     }
-  }, [open, loadTags]);
+  }, [open, loadTags, customExcludedTags, portalState.filterMatchMode]);
 
   // Sidebar mode change → reload
   useEffect(() => {
     if (!open) return;
-    if (sidebarMode === 'selected') return; // client-side filter, no reload needed
+    if (sidebarMode === 'selected' || sidebarMode === 'starred') return; // client-side views
     const ns = sidebarMode === 'namespace' ? activeNamespace : null;
     loadTags(query, ns);
   }, [sidebarMode, activeNamespace]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -139,24 +165,31 @@ export function TagSelectPanel() {
   // Display tags — "selected" mode shows entity's tags directly (not from paginated search)
   const displayTags = useMemo(() => {
     if (sidebarMode === 'selected') {
-      return (entityData?.aggregate_tags ?? []).map(tagRecord).sort((a, b) => {
+      return [...entityTagKeys].map(tagRecord).sort((a, b) => {
         const nsA = (a.namespace ?? '').toLowerCase();
         const nsB = (b.namespace ?? '').toLowerCase();
         if (nsA !== nsB) return nsA.localeCompare(nsB);
         return a.subtag.localeCompare(b.subtag);
       });
     }
+    if (sidebarMode === 'starred') {
+      return tagPreferences.starredTags.map(tagRecord).sort((left, right) => (
+        formatTag(left).localeCompare(formatTag(right))
+      ));
+    }
     return tags;
-  }, [tags, sidebarMode, entityData]);
+  }, [tags, sidebarMode, entityTagKeys, tagPreferences.starredTags]);
 
   // Namespace groups for sidebar
   const nsGroups = useMemo(() => {
-    return [...namespaces].sort((a, b) => tagGroupOrder(a.namespace) - tagGroupOrder(b.namespace));
+    return namespaces
+      .filter((group) => group.namespace !== '' && group.namespace !== 'general')
+      .sort((a, b) => tagGroupOrder(a.namespace) - tagGroupOrder(b.namespace));
   }, [namespaces]);
 
   // Estimated total count for the current view (for scroll height estimation)
   const estimatedTotal = useMemo(() => {
-    if (sidebarMode === 'selected') return displayTags.length; // client-side, exact
+    if (sidebarMode === 'selected' || sidebarMode === 'starred') return displayTags.length; // client-side, exact
     if (query.trim()) return displayTags.length; // search results, can't estimate beyond loaded
     if (sidebarMode === 'namespace' && activeNamespace != null) {
       const ns = namespaces.find((n) => n.namespace === activeNamespace);
@@ -194,6 +227,12 @@ export function TagSelectPanel() {
   }, [focusIdx, virtualizer]);
 
   const toggleTag = useCallback((tag: string) => {
+    setExcluded((current) => {
+      if (!current.has(tag)) return current;
+      const next = new Set(current);
+      next.delete(tag);
+      return next;
+    });
     const isOnEntity = entityTagKeys.has(tag);
     if (isOnEntity) {
       // Tag is already on entity — toggle unchecked (pending removal)
@@ -216,14 +255,48 @@ export function TagSelectPanel() {
     }
   }, [entityTagKeys]);
 
+  const toggleExcludedTag = useCallback((tag: string) => {
+    if (!onApplyTagFilter) return;
+    setChecked((current) => { const next = new Set(current); next.delete(tag); return next; });
+    setUnchecked((current) => {
+      const next = new Set(current);
+      if (entityTagKeys.has(tag)) next.add(tag);
+      return next;
+    });
+    setExcluded((current) => {
+      const next = new Set(current);
+      if (next.has(tag)) next.delete(tag);
+      else next.add(tag);
+      return next;
+    });
+  }, [entityTagKeys, onApplyTagFilter]);
+
   const applyTags = useCallback(() => {
-    if (!target || (checked.size === 0 && unchecked.size === 0)) return;
-    if (checked.size > 0) void entityMutations.addTargetTags(target, [...checked]);
-    if (unchecked.size > 0) void entityMutations.removeTargetTags(target, [...unchecked]);
+    const excludedChanged = onApplyTagFilter
+      && [...excluded].sort().join('\n') !== [...(customExcludedTags ?? [])].sort().join('\n');
+    const modeChanged = onApplyTagFilter && matchMode !== (portalState.filterMatchMode ?? 'any');
+    if (checked.size === 0 && unchecked.size === 0 && !excludedChanged && !modeChanged) return;
+    const next = new Set(entityTagKeys);
+    checked.forEach((tag) => next.add(tag));
+    unchecked.forEach((tag) => next.delete(tag));
+    if (onApplyTagFilter) {
+      onApplyTagFilter([...next], [...excluded], matchMode);
+    } else if (onApplyTags) {
+      onApplyTags([...next]);
+    } else {
+      if (!target) return;
+      if (checked.size > 0) void entityMutations.addTargetTags(target, [...checked]);
+      if (unchecked.size > 0) void entityMutations.removeTargetTags(target, [...unchecked]);
+    }
     if (!pinned) closePortal();
     setChecked(new Set());
     setUnchecked(new Set());
-  }, [target, checked, unchecked, pinned, closePortal]);
+  }, [target, checked, unchecked, excluded, customExcludedTags, matchMode, pinned, closePortal, onApplyTags, onApplyTagFilter, entityTagKeys, portalState.filterMatchMode]);
+
+  const excludedChanged = Boolean(onApplyTagFilter
+    && [...excluded].sort().join('\n') !== [...(customExcludedTags ?? [])].sort().join('\n'));
+  const modeChanged = Boolean(onApplyTagFilter && matchMode !== (portalState.filterMatchMode ?? 'any'));
+  const changeCount = checked.size + unchecked.size + (excludedChanged ? 1 : 0) + (modeChanged ? 1 : 0);
 
   // Keyboard
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -261,6 +334,7 @@ export function TagSelectPanel() {
       width={showSidebar ? 540 : 340}
       pinned={pinned}
       anchorPosition={anchorPosition}
+      anchorPlacement={portalState.anchorPlacement}
       onPinnedChange={setPinned}
       header={
         <>
@@ -275,6 +349,7 @@ export function TagSelectPanel() {
               onKeyDown={handleKeyDown}
             />
           </div>
+          {onApplyTagFilter ? <FilterLogicTabs value={matchMode} onChange={setMatchMode} /> : null}
           <button
             className={shellStyles.pinBtn}
             onClick={() => setShowSidebar((v) => !v)}
@@ -288,19 +363,18 @@ export function TagSelectPanel() {
       footer={
         <>
           <span className={shellStyles.kbdHint}>
-            <span className={shellStyles.kbd}>↑↓</span>
-            <span className={shellStyles.kbd}>↩</span> Select
-            <span className={shellStyles.kbd}>Tab</span>
+            <span className={shellStyles.kbd}>Click</span> Select
+            {onApplyTagFilter ? <><span className={shellStyles.kbd}>Right-click</span> Exclude</> : null}
           </span>
           <div className={btnStyles.btnGroup}>
             <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
-            {(checked.size > 0 || unchecked.size > 0) && (
+            {changeCount > 0 && (
               <button
                 className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
                 onClick={applyTags}
                 type="button"
               >
-                Apply ({checked.size + unchecked.size})
+                Apply ({changeCount})
               </button>
             )}
           </div>
@@ -326,8 +400,15 @@ export function TagSelectPanel() {
               {namespaces.reduce((sum, n) => sum + n.count, 0).toLocaleString()}
             </span>
           </div>
-          {nsGroups.length > 0 && <div className={styles.sidebarSep} />}
-          {nsGroups.map((ns) => (
+          <div
+            className={`${styles.sidebarItem} ${sidebarMode === 'starred' ? styles.sidebarItemActive : ''}`}
+            onClick={() => { setSidebarMode('starred'); setActiveNamespace(null); }}
+          >
+            <span className={styles.sidebarName}>Starred</span>
+            <span className={styles.sidebarBadge}>{tagPreferences.starredTags.length}</span>
+          </div>
+          {tagPreferences.showTagGroups && nsGroups.length > 0 && <div className={styles.sidebarSep} />}
+          {tagPreferences.showTagGroups && nsGroups.map((ns) => (
             <div
               key={ns.namespace || '__general'}
               className={`${styles.sidebarItem} ${sidebarMode === 'namespace' && activeNamespace === ns.namespace ? styles.sidebarItemActive : ''}`}
@@ -360,20 +441,54 @@ export function TagSelectPanel() {
                   const isOnEntity = entityTagKeys.has(fullTag);
                   const isPendingAdd = checked.has(fullTag);
                   const isPendingRemove = unchecked.has(fullTag);
+                  const isExcluded = excluded.has(fullTag);
                   // Show checked if: on entity and not pending removal, OR pending addition
                   const showChecked = (isOnEntity && !isPendingRemove) || isPendingAdd;
                   const isFocused = vItem.index === focusIdx;
                   return (
                     <div
                       key={vItem.index}
-                      className={`${styles.tagRow} ${isFocused ? styles.tagRowFocused : ''}`}
+                      className={`${styles.tagRow} ${isFocused ? styles.tagRowFocused : ''} ${isExcluded ? styles.tagRowExcluded : ''}`}
                       style={{ height: vItem.size, transform: `translateY(${vItem.start}px)` }}
                       onClick={() => toggleTag(fullTag)}
+                      onContextMenu={(event) => {
+                        if (onApplyTagFilter) {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          toggleExcludedTag(fullTag);
+                          return;
+                        }
+                        contextMenu.open(event, buildCommonTagContextEntries({
+                          tag,
+                          namespaces,
+                          starred: tagPreferences.starredTags.includes(fullTag),
+                          onFilter: (name) => { closePortal(); showTagItems(name); },
+                          onStarChange: (name, starred) => { void setTagStarred(name, starred); },
+                          onMoveToGroup: tag.tag_id > 0 ? (targetNamespace) => {
+                            const nextName = tagNameInGroup(tag, targetNamespace);
+                            void tagsController.rename(tag.tag_id, nextName).then(async () => {
+                              await replaceStarredTag(tagName(tag), nextName);
+                              loadTags(query, sidebarMode === 'namespace' ? activeNamespace : null);
+                            }).catch((reason: unknown) => showErrorNotification({
+                              title: 'Unable to move tag',
+                              message: reason instanceof Error ? reason.message : String(reason),
+                            }));
+                          } : undefined,
+                        }));
+                      }}
                     >
-                      <div className={`${shellStyles.checkBox} ${showChecked ? shellStyles.checkBoxChecked : ''}`}>
-                        {showChecked && <IconCheck size={10} />}
+                      <div className={`${shellStyles.checkBox} ${isExcluded ? shellStyles.checkBoxExcluded : showChecked ? (onApplyTagFilter ? shellStyles.checkBoxFilterChecked : shellStyles.checkBoxChecked) : ''}`}>
+                        {isExcluded ? <IconX size={10} /> : showChecked ? <IconCheck size={10} /> : null}
                       </div>
-                      <span className={styles.tagDot} style={{ background: tagGroupColor(tag.namespace) }} />
+                      <IconBookmark
+                        aria-hidden="true"
+                        className={styles.tagBookmark}
+                        size={13}
+                        stroke={1.6}
+                        fill="currentColor"
+                        fillOpacity={0.32}
+                        style={{ color: tagGroupColor(tag.namespace) }}
+                      />
                       <span className={styles.tagName}>
                         {query.trim() ? highlightMatch(tag.subtag ?? fullTag, query.trim()) : (tag.subtag || fullTag)}
                       </span>
@@ -386,13 +501,19 @@ export function TagSelectPanel() {
           </div>
         </div>
       </div>
+      {contextMenu.state && (
+        <ContextMenu
+          entries={contextMenu.state.entries}
+          position={contextMenu.state.position}
+          onClose={contextMenu.close}
+        />
+      )}
     </OverlayShell>
   );
 }
 
 function formatTag(tag: CanonicalTagRecord): string {
-  // Use the backend's namespace field — don't parse colons in subtag
-  return tag.namespace ? `${tag.namespace}:${tag.subtag}` : tag.subtag;
+  return tagName(tag);
 }
 
 function highlightMatch(text: string, q: string): React.ReactNode {

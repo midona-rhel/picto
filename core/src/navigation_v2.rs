@@ -10,6 +10,7 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, MutationReceipt};
 use crate::smart_v2::SmartFolderPredicate;
+use crate::store::history::HistoryDescriptor;
 
 const RANK_GAP: i64 = 1024;
 
@@ -181,35 +182,39 @@ impl Application {
         let input = PreparedSmartFolder::from_input(input)?;
         let now = Utc::now().to_rfc3339();
         let key = new_key();
-        let (smart_folder_id, revision) = self.store().transaction(|transaction| {
-            if let Some(parent_id) = input.parent_id {
-                require_smart_folder(transaction, parent_id)?;
-            }
-            let display_order = next_order(transaction, input.parent_id, None)?;
-            transaction.execute(
-                "INSERT INTO smart_folder (
-                     smart_folder_key, name, parent_id, icon, color, notes,
-                     predicate_json, sort_field, sort_order, display_order,
-                     created_at, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
-                params![
-                    key,
-                    input.name,
-                    input.parent_id,
-                    input.icon,
-                    input.color,
-                    input.notes,
-                    input.predicate_json,
-                    input.sort_field,
-                    input.sort_order,
-                    display_order,
-                    now,
-                ],
-            )?;
-            let smart_folder_id = transaction.last_insert_rowid();
-            crate::smart_v2::compile_smart_folder(transaction, smart_folder_id)?;
-            Ok(smart_folder_id)
-        })?;
+        let (smart_folder_id, revision, _) = self.undoable_transaction(
+            smart_folder_history("smart_folders.create", "Create smart folder"),
+            |transaction| {
+                if let Some(parent_id) = input.parent_id {
+                    require_smart_folder(transaction, parent_id)?;
+                }
+                let display_order = next_order(transaction, input.parent_id, None)?;
+                transaction.execute(
+                    "INSERT INTO smart_folder (
+                         smart_folder_key, name, parent_id, icon, color, notes,
+                         predicate_json, sort_field, sort_order, display_order,
+                         created_at, updated_at
+                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11)",
+                    params![
+                        key,
+                        input.name,
+                        input.parent_id,
+                        input.icon,
+                        input.color,
+                        input.notes,
+                        input.predicate_json,
+                        input.sort_field,
+                        input.sort_order,
+                        display_order,
+                        now,
+                    ],
+                )?;
+                let smart_folder_id = transaction.last_insert_rowid();
+                crate::smart_v2::compile_smart_folder(transaction, smart_folder_id)?;
+                Ok((smart_folder_id, ()))
+            },
+            |_, ()| Ok(()),
+        )?;
         Ok((
             smart_folder_id,
             smart_receipt(revision, vec![smart_folder_id], Vec::new(), None),
@@ -223,33 +228,37 @@ impl Application {
     ) -> Result<SmartFolderMutationReceipt, String> {
         let input = PreparedSmartFolder::from_input(input)?;
         let now = Utc::now().to_rfc3339();
-        let (affected, revision) = self.store().transaction(|transaction| {
-            require_smart_folder(transaction, smart_folder_id)?;
-            validate_parent(transaction, smart_folder_id, input.parent_id)?;
-            transaction.execute(
-                "UPDATE smart_folder
+        let (affected, revision, _) = self.undoable_transaction(
+            smart_folder_history("smart_folders.update", "Edit smart folder"),
+            |transaction| {
+                require_smart_folder(transaction, smart_folder_id)?;
+                validate_parent(transaction, smart_folder_id, input.parent_id)?;
+                transaction.execute(
+                    "UPDATE smart_folder
                  SET name = ?1, parent_id = ?2, icon = ?3, color = ?4, notes = ?5,
                      predicate_json = ?6, sort_field = ?7, sort_order = ?8, updated_at = ?9
                  WHERE smart_folder_id = ?10",
-                params![
-                    input.name,
-                    input.parent_id,
-                    input.icon,
-                    input.color,
-                    input.notes,
-                    input.predicate_json,
-                    input.sort_field,
-                    input.sort_order,
-                    now,
-                    smart_folder_id,
-                ],
-            )?;
-            let affected = descendant_ids(transaction, smart_folder_id)?;
-            for id in &affected {
-                crate::smart_v2::compile_smart_folder(transaction, *id)?;
-            }
-            Ok(affected)
-        })?;
+                    params![
+                        input.name,
+                        input.parent_id,
+                        input.icon,
+                        input.color,
+                        input.notes,
+                        input.predicate_json,
+                        input.sort_field,
+                        input.sort_order,
+                        now,
+                        smart_folder_id,
+                    ],
+                )?;
+                let affected = descendant_ids(transaction, smart_folder_id)?;
+                for id in &affected {
+                    crate::smart_v2::compile_smart_folder(transaction, *id)?;
+                }
+                Ok((affected, ()))
+            },
+            |_, ()| Ok(()),
+        )?;
         Ok(smart_receipt(revision, affected, Vec::new(), None))
     }
 
@@ -259,22 +268,26 @@ impl Application {
         parent_id: Option<i64>,
     ) -> Result<SmartFolderMutationReceipt, String> {
         let now = Utc::now().to_rfc3339();
-        let (affected, revision) = self.store().transaction(|transaction| {
-            require_smart_folder(transaction, smart_folder_id)?;
-            validate_parent(transaction, smart_folder_id, parent_id)?;
-            let display_order = next_order(transaction, parent_id, Some(smart_folder_id))?;
-            transaction.execute(
-                "UPDATE smart_folder
+        let (affected, revision, _) = self.undoable_transaction(
+            smart_folder_history("smart_folders.move", "Move smart folder"),
+            |transaction| {
+                require_smart_folder(transaction, smart_folder_id)?;
+                validate_parent(transaction, smart_folder_id, parent_id)?;
+                let display_order = next_order(transaction, parent_id, Some(smart_folder_id))?;
+                transaction.execute(
+                    "UPDATE smart_folder
                  SET parent_id = ?1, display_order = ?2, updated_at = ?3
                  WHERE smart_folder_id = ?4",
-                params![parent_id, display_order, now, smart_folder_id],
-            )?;
-            let affected = descendant_ids(transaction, smart_folder_id)?;
-            for id in &affected {
-                crate::smart_v2::compile_smart_folder(transaction, *id)?;
-            }
-            Ok(affected)
-        })?;
+                    params![parent_id, display_order, now, smart_folder_id],
+                )?;
+                let affected = descendant_ids(transaction, smart_folder_id)?;
+                for id in &affected {
+                    crate::smart_v2::compile_smart_folder(transaction, *id)?;
+                }
+                Ok((affected, ()))
+            },
+            |_, ()| Ok(()),
+        )?;
         Ok(smart_receipt(revision, affected, Vec::new(), None))
     }
 
@@ -288,27 +301,31 @@ impl Application {
             return Err("Smart-folder reorder contains duplicate IDs".to_string());
         }
         let now = Utc::now().to_rfc3339();
-        let (_, revision) = self.store().transaction(|transaction| {
-            if let Some(parent_id) = parent_id {
-                require_smart_folder(transaction, parent_id)?;
-            }
-            let expected = child_ids(transaction, parent_id)?;
-            if expected.len() != requested.len()
-                || expected.into_iter().collect::<BTreeSet<_>>() != requested
-            {
-                return Err(invalid(
-                    "Smart-folder reorder must contain every sibling exactly once",
-                ));
-            }
-            for (index, smart_folder_id) in smart_folder_ids.iter().enumerate() {
-                transaction.execute(
-                    "UPDATE smart_folder SET display_order = ?1, updated_at = ?2
+        let (_, revision, _) = self.undoable_transaction(
+            smart_folder_history("smart_folders.reorder", "Reorder smart folders"),
+            |transaction| {
+                if let Some(parent_id) = parent_id {
+                    require_smart_folder(transaction, parent_id)?;
+                }
+                let expected = child_ids(transaction, parent_id)?;
+                if expected.len() != requested.len()
+                    || expected.into_iter().collect::<BTreeSet<_>>() != requested
+                {
+                    return Err(invalid(
+                        "Smart-folder reorder must contain every sibling exactly once",
+                    ));
+                }
+                for (index, smart_folder_id) in smart_folder_ids.iter().enumerate() {
+                    transaction.execute(
+                        "UPDATE smart_folder SET display_order = ?1, updated_at = ?2
                      WHERE smart_folder_id = ?3",
-                    params![(index as i64 + 1) * RANK_GAP, now, smart_folder_id],
-                )?;
-            }
-            Ok(())
-        })?;
+                        params![(index as i64 + 1) * RANK_GAP, now, smart_folder_id],
+                    )?;
+                }
+                Ok(((), ()))
+            },
+            |_, ()| Ok(()),
+        )?;
         Ok(smart_receipt(
             revision,
             smart_folder_ids.to_vec(),
@@ -321,22 +338,26 @@ impl Application {
         &self,
         smart_folder_id: i64,
     ) -> Result<SmartFolderMutationReceipt, String> {
-        let ((deleted_ids, fallback), revision) = self.store().transaction(|transaction| {
-            let fallback = transaction
-                .query_row(
-                    "SELECT parent_id FROM smart_folder WHERE smart_folder_id = ?1",
+        let ((deleted_ids, fallback), revision, _) = self.undoable_transaction(
+            smart_folder_history("smart_folders.delete", "Delete smart folder"),
+            |transaction| {
+                let fallback = transaction
+                    .query_row(
+                        "SELECT parent_id FROM smart_folder WHERE smart_folder_id = ?1",
+                        [smart_folder_id],
+                        |row| row.get::<_, Option<i64>>(0),
+                    )
+                    .optional()?
+                    .ok_or_else(|| invalid("smart folder does not exist"))?;
+                let deleted_ids = descendant_ids(transaction, smart_folder_id)?;
+                transaction.execute(
+                    "DELETE FROM smart_folder WHERE smart_folder_id = ?1",
                     [smart_folder_id],
-                    |row| row.get::<_, Option<i64>>(0),
-                )
-                .optional()?
-                .ok_or_else(|| invalid("smart folder does not exist"))?;
-            let deleted_ids = descendant_ids(transaction, smart_folder_id)?;
-            transaction.execute(
-                "DELETE FROM smart_folder WHERE smart_folder_id = ?1",
-                [smart_folder_id],
-            )?;
-            Ok((deleted_ids, fallback))
-        })?;
+                )?;
+                Ok(((deleted_ids, fallback), ()))
+            },
+            |_, ()| Ok(()),
+        )?;
         Ok(smart_receipt(
             revision,
             deleted_ids.clone(),
@@ -344,6 +365,19 @@ impl Application {
             fallback,
         ))
     }
+}
+
+fn smart_folder_history(command: &str, label: &str) -> HistoryDescriptor {
+    HistoryDescriptor::new(
+        command,
+        label,
+        vec![
+            resources::SMART_FOLDERS.to_string(),
+            resources::SIDEBAR.to_string(),
+            resources::LIBRARY.to_string(),
+        ],
+        Vec::new(),
+    )
 }
 
 struct PreparedSmartFolder {
@@ -594,5 +628,15 @@ mod tests {
         assert_eq!(receipt.deleted_smart_folder_ids, vec![parent, child]);
         assert_eq!(receipt.fallback_smart_folder_id, None);
         assert!(navigation(&application).unwrap().smart_folders.is_empty());
+
+        application.undo().unwrap();
+        let restored = navigation(&application).unwrap().smart_folders;
+        assert_eq!(restored.len(), 2);
+        assert!(restored
+            .iter()
+            .any(|folder| folder.smart_folder_id == parent));
+        assert!(restored
+            .iter()
+            .any(|folder| folder.smart_folder_id == child));
     }
 }

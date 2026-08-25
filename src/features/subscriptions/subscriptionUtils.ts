@@ -8,6 +8,15 @@ import type {
   SubscriptionSiteInfo,
 } from '../../shared/types/subscriptions';
 
+const DEFAULT_SOURCE_POST_BATCH_SIZE = 100;
+
+export function getSubscriptionRunTarget(
+  subscription: SubscriptionInfo,
+): number {
+  const activeQueryCount = subscription.queries.filter((query) => !query.paused).length;
+  return activeQueryCount * (subscription.posts_per_run || DEFAULT_SOURCE_POST_BATCH_SIZE);
+}
+
 export function formatRelativeTime(value: string | null | undefined): string {
   if (!value) return 'Never';
 
@@ -66,12 +75,31 @@ export function describeSubscriptionState(input: {
   return 'idle';
 }
 
-export function isQueryUpToDate(query: SubscriptionQueryInfo, failedPostCount = 0): boolean {
+export function isQueryCompleted(query: SubscriptionQueryInfo, failedPostCount = 0): boolean {
   return !query.paused
     && query.completed_initial_run
+    && query.successful_run_count >= 1
     && query.last_success_at != null
     && query.last_failure_kind == null
     && failedPostCount === 0;
+}
+
+export function isQueryUpToDate(query: SubscriptionQueryInfo, failedPostCount = 0): boolean {
+  return query.successful_run_count >= 2
+    && query.source_history_complete
+    && isQueryCompleted(query, failedPostCount);
+}
+
+export function isSubscriptionCompleted(
+  subscription: SubscriptionInfo,
+  failedPostCount = 0,
+  openIssueCount = 0,
+): boolean {
+  return !subscription.paused
+    && subscription.queries.length > 0
+    && failedPostCount === 0
+    && openIssueCount === 0
+    && subscription.queries.every((query) => isQueryCompleted(query));
 }
 
 export function isSubscriptionUpToDate(
@@ -119,7 +147,11 @@ export function getQueryAuthState(input: {
   const blocking = broken || (site.auth_strictly_required && missing);
 
   if (blocking) {
-    return { tone: 'attention', label: missing ? 'Auth needed' : 'Auth broken', blocking: true };
+    return {
+      tone: 'attention',
+      label: missing ? 'Sign in required' : health?.last_error?.trim() || 'Sign in again',
+      blocking: true,
+    };
   }
   if (credential && (healthStatus === 'valid' || healthStatus === 'healthy')) {
     return { tone: 'running', label: 'Auth ok', blocking: false };
@@ -128,9 +160,9 @@ export function getQueryAuthState(input: {
     return { tone: 'paused', label: 'Auth saved', blocking: false };
   }
   if (site.auth_required_for_full_access) {
-    return { tone: 'attention', label: 'Auth recommended', blocking: false };
+    return { tone: 'idle', label: '', blocking: false };
   }
-  return { tone: 'idle', label: 'Optional auth', blocking: false };
+  return { tone: 'idle', label: '', blocking: false };
 }
 
 /** Human-readable, actionable text for a query's recorded failure kind. */

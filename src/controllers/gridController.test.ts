@@ -8,10 +8,12 @@ import {
   gridErrorAtom,
   gridItemsAtom,
   gridLoadingAtom,
+  gridShowSubfoldersAtom,
   gridSessionAtom,
   gridTotalCountAtom,
   gridTotalSizeBytesAtom,
 } from '../state/grid';
+import { gridSelectionAtom } from '../state/selection';
 
 const { queryItemsMock, getViewPrefsMock } = vi.hoisted(() => ({
   queryItemsMock: vi.fn(),
@@ -33,21 +35,15 @@ function item(id: number): ItemSummary {
     item_id: id,
     kind: 'media',
     lifecycle: 'active',
-    label: null,
     name: `Item ${id}`,
-    display_media_item_id: id,
     display_file_hash: `file-${id}`,
     display_mime_type: 'image/jpeg',
     pixel_width: 100,
     pixel_height: 100,
     duration_ms: null,
     frame_count: null,
-    has_audio: false,
     dominant_color_hex: null,
-    size_bytes: 100,
     rating: null,
-    captured_at: null,
-    imported_at: '2026-01-01T00:00:00Z',
     media_count: 1,
   };
 }
@@ -59,6 +55,16 @@ function page(items: ItemSummary[], visibleCount: number): ItemPage {
     visible_item_count: visibleCount,
     visible_media_count: visibleCount,
     total_size_bytes: visibleCount * 100,
+  };
+}
+
+function appendPage(items: ItemSummary[]): ItemPage {
+  return {
+    items,
+    revision: 1,
+    visible_item_count: null,
+    visible_media_count: null,
+    total_size_bytes: null,
   };
 }
 
@@ -74,7 +80,7 @@ describe('gridController pagination', () => {
       items: [item(1)],
       cursor: 1,
       totalCount: 2,
-      totalSizeBytes: 100,
+      totalSizeBytes: 200,
       status: 'idle',
       error: null,
       generation: 0,
@@ -90,6 +96,57 @@ describe('gridController pagination', () => {
     expect(getViewPrefsMock).toHaveBeenCalledWith('system:active');
   });
 
+  it('prepares the complete replacement without changing the visible session', async () => {
+    getViewPrefsMock.mockResolvedValueOnce({
+      view_mode: 'grid',
+      target_size: 333,
+      show_subfolders: false,
+    });
+    let resolvePage: ((value: ItemPage) => void) | undefined;
+    queryItemsMock.mockImplementationOnce(() => new Promise<ItemPage>((resolve) => {
+      resolvePage = resolve;
+    }));
+    store.set(gridSelectionAtom, {
+      mode: 'explicit',
+      itemIds: new Set([1]),
+      excludedItemIds: new Set<number>(),
+      folderNodeIds: new Set<string>(),
+      anchor: { kind: 'item', id: 1 },
+    });
+
+    const navigation = gridController.prepareNavigation({ kind: 'folder', folder_id: 7 });
+    await vi.waitFor(() => expect(queryItemsMock).toHaveBeenCalledOnce());
+
+    expect(store.get(gridLoadingAtom)).toBe(false);
+    expect(store.get(gridSessionAtom).scope).toEqual({ kind: 'all' });
+    expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([1]);
+    expect(store.get(gridTotalCountAtom)).toBe(2);
+    expect(store.get(gridSessionAtom).view).toEqual(expect.objectContaining({ mode: 'waterfall' }));
+    expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set([1]));
+
+    resolvePage?.(page([item(7)], 1));
+    const prepared = await navigation;
+    expect(store.get(gridSessionAtom).scope).toEqual({ kind: 'all' });
+    expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([1]);
+    expect(store.get(gridSessionAtom).view.mode).toBe('waterfall');
+    expect(prepared.session.view).toEqual(expect.objectContaining({
+      mode: 'grid',
+      targetSize: 333,
+      showSubfolders: false,
+    }));
+
+    gridController.commitNavigation(prepared);
+    expect(store.get(gridSessionAtom).scope).toEqual({ kind: 'folder', folder_id: 7 });
+    expect(store.get(gridItemsAtom).map((entry) => entry.item_id)).toEqual([7]);
+    expect(store.get(gridLoadingAtom)).toBe(false);
+    expect(store.get(gridSessionAtom).view).toEqual(expect.objectContaining({
+      mode: 'grid',
+      targetSize: 333,
+      showSubfolders: false,
+    }));
+    expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
+  });
+
   it('uses persisted manual order as the default folder presentation', async () => {
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
 
@@ -102,8 +159,50 @@ describe('gridController pagination', () => {
     });
   });
 
+  it('uses an explicit stable seed for a Random visit', async () => {
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+
+    await gridController.navigateTo({ kind: 'all' }, {
+      sort: { field: 'random', direction: 'ascending', random_seed: 'visit-1' },
+    });
+
+    expect(queryItemsMock.mock.calls[0][0].sort).toEqual({
+      field: 'random',
+      direction: 'ascending',
+      random_seed: 'visit-1',
+    });
+  });
+
+  it('restores the saved subfolder visibility for folder views', async () => {
+    getViewPrefsMock.mockResolvedValueOnce({ show_subfolders: false });
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+
+    await gridController.navigateTo({ kind: 'folder', folder_id: 7 });
+
+    expect(store.get(gridShowSubfoldersAtom)).toBe(false);
+  });
+
+  it('defaults Inbox to oldest first without overriding saved preferences', async () => {
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+
+    await gridController.navigateTo({ kind: 'inbox' });
+
+    expect(queryItemsMock.mock.calls[0][0].sort).toEqual({
+      field: 'imported_at',
+      direction: 'ascending',
+      random_seed: null,
+    });
+
+    getViewPrefsMock.mockResolvedValueOnce({ sort_field: 'imported_at', sort_order: 'descending' });
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+
+    await gridController.navigateTo({ kind: 'inbox' });
+
+    expect(queryItemsMock.mock.calls[1][0].sort.direction).toBe('descending');
+  });
+
   it('queries the replacement page contract and appends by item_id', async () => {
-    queryItemsMock.mockResolvedValueOnce(page([item(2)], 2));
+    queryItemsMock.mockResolvedValueOnce(appendPage([item(2)]));
 
     await gridController.loadNextPage();
 
@@ -119,8 +218,8 @@ describe('gridController pagination', () => {
   it('uses one guarded append path for sequential pages', async () => {
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), totalCount: 3 });
     queryItemsMock
-      .mockResolvedValueOnce(page([item(2)], 3))
-      .mockResolvedValueOnce(page([item(3)], 3));
+      .mockResolvedValueOnce(appendPage([item(2)]))
+      .mockResolvedValueOnce(appendPage([item(3)]));
 
     await gridController.loadNextPage();
     await gridController.loadNextPage();
@@ -168,10 +267,32 @@ describe('gridController pagination', () => {
     expect(query).toEqual(store.get(currentGridQueryAtom));
     expect(query).toMatchObject({
       scope: { kind: 'all' },
-      filters: { include_tags: [], exclude_tags: [], minimum_rating: null, mime_prefix: null, text: null },
+      filters: {
+        include_tags: [],
+        exclude_tags: [],
+        ratings: [],
+        include_mime_types: [],
+        exclude_mime_types: [],
+        text: null,
+        color_hex: null,
+      },
       sort: { field: 'imported_at', direction: 'descending', random_seed: null },
     });
     expect('entity_hash' in query).toBe(false);
     expect('page' in query).toBe(false);
+  });
+
+  it('settles search after 100 ms of inactivity', async () => {
+    vi.useFakeTimers();
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+
+    gridController.setSearchText('alice');
+    await vi.advanceTimersByTimeAsync(99);
+    expect(queryItemsMock).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(queryItemsMock).toHaveBeenCalledOnce();
+    expect(queryItemsMock.mock.calls[0][0].filters.text).toBe('alice');
+    vi.useRealTimers();
   });
 });

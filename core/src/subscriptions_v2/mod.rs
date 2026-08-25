@@ -12,6 +12,7 @@ use rusqlite::{params, OptionalExtension, Transaction};
 use crate::store::Store;
 
 const DOMAIN_INTERVAL_MS: i64 = 1_000;
+pub const DEFAULT_SOURCE_POST_BATCH_SIZE: u32 = 100;
 
 #[derive(Debug, Clone)]
 pub struct SubscriptionInput {
@@ -129,11 +130,28 @@ pub struct ClaimedQueryRun {
     pub domain_key: String,
     pub query_kind: String,
     pub query_text: String,
+    pub group_posts: bool,
+    pub requested_by: String,
     pub initial_post_limit: Option<i64>,
     pub periodic_post_limit: Option<i64>,
     pub initial_run_complete: bool,
     pub resume_cursor: Option<String>,
     pub attempt_count: i64,
+}
+
+impl ClaimedQueryRun {
+    /// Select the persisted source-post window for this batch.
+    pub fn source_post_batch_size(&self) -> u32 {
+        let configured = if self.initial_run_complete {
+            self.periodic_post_limit.or(self.initial_post_limit)
+        } else {
+            self.initial_post_limit.or(self.periodic_post_limit)
+        };
+        configured
+            .filter(|value| *value > 0)
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(DEFAULT_SOURCE_POST_BATCH_SIZE)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -186,6 +204,11 @@ impl DomainSchedule {
     }
 
     fn mark_started(&mut self, domain_key: String, now_ms: i64) {
+        self.next_allowed_at_ms
+            .insert(domain_key, now_ms + DOMAIN_INTERVAL_MS);
+    }
+
+    pub(crate) fn mark_finished(&mut self, domain_key: String, now_ms: i64) {
         self.next_allowed_at_ms
             .insert(domain_key, now_ms + DOMAIN_INTERVAL_MS);
     }
@@ -402,14 +425,60 @@ pub fn recover_startup(store: &Store, now: &str) -> Result<RecoveryCounts, Strin
         let query_runs = tx.execute(
             "UPDATE subscription_run_query
              SET status = 'pending', available_at = ?1, started_at = NULL,
-                 finished_at = NULL
-             WHERE status = 'running'",
+                 finished_at = NULL,
+                 attempt_count = MAX(attempt_count - 1, 0),
+                 failure_kind = NULL, error_message = NULL
+             WHERE status = 'running'
+                OR (
+                    status = 'failed'
+                    AND failure_kind = 'runtime'
+                    AND error_message = 'Subscription run interrupted'
+                    AND run_id = (
+                        SELECT MAX(candidate.run_id)
+                        FROM subscription_run candidate
+                        JOIN subscription_run_query candidate_query
+                          ON candidate_query.run_id = candidate.run_id
+                        WHERE candidate.subscription_id = (
+                            SELECT current_run.subscription_id
+                            FROM subscription_run current_run
+                            WHERE current_run.run_id = subscription_run_query.run_id
+                        )
+                          AND candidate.status = 'failed'
+                          AND candidate_query.failure_kind = 'runtime'
+                          AND candidate_query.error_message = 'Subscription run interrupted'
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM subscription_run active_run
+                        WHERE active_run.subscription_id = (
+                            SELECT current_run.subscription_id
+                            FROM subscription_run current_run
+                            WHERE current_run.run_id = subscription_run_query.run_id
+                        )
+                          AND active_run.status IN ('pending', 'running')
+                    )
+                )",
             [now],
         )?;
         let runs = tx.execute(
             "UPDATE subscription_run
              SET status = 'pending', started_at = NULL, finished_at = NULL
-             WHERE status = 'running'",
+             WHERE status = 'running'
+                OR (
+                    status = 'failed'
+                    AND EXISTS (
+                        SELECT 1
+                        FROM subscription_run_query qr
+                        WHERE qr.run_id = subscription_run.run_id
+                          AND qr.status = 'pending'
+                    )
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM subscription_run_query qr
+                        WHERE qr.run_id = subscription_run.run_id
+                          AND qr.status = 'failed'
+                    )
+                )",
             [],
         )?;
         Ok((
@@ -429,7 +498,8 @@ pub fn claim_next_query_run(
     let (claim, _, _) = store.transaction_if_changed(|tx| {
         let mut statement = tx.prepare(
             "SELECT qr.run_query_id, qr.run_id, qr.query_id, r.subscription_id,
-                    q.site_id, q.domain_key, q.query_kind, q.query_text,
+                    q.site_id, q.domain_key, q.query_kind, q.query_text, q.group_posts,
+                    r.requested_by,
                     s.initial_post_limit, s.periodic_post_limit,
                     q.initial_run_complete, COALESCE(qr.resume_cursor, q.resume_cursor),
                     qr.attempt_count
@@ -440,6 +510,14 @@ pub fn claim_next_query_run(
              WHERE qr.status = 'pending' AND qr.available_at <= ?1
                AND r.status IN ('pending', 'running')
                AND q.paused = 0 AND s.paused = 0
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM subscription_run_query active_rq
+                   JOIN subscription_query active_q
+                     ON active_q.query_id = active_rq.query_id
+                   WHERE active_rq.status = 'running'
+                     AND active_q.domain_key = q.domain_key
+               )
              ORDER BY qr.available_at, qr.run_query_id",
         )?;
         let candidates = statement
@@ -453,11 +531,13 @@ pub fn claim_next_query_run(
                     domain_key: row.get(5)?,
                     query_kind: row.get(6)?,
                     query_text: row.get(7)?,
-                    initial_post_limit: row.get(8)?,
-                    periodic_post_limit: row.get(9)?,
-                    initial_run_complete: row.get(10)?,
-                    resume_cursor: row.get(11)?,
-                    attempt_count: row.get(12)?,
+                    group_posts: row.get(8)?,
+                    requested_by: row.get(9)?,
+                    initial_post_limit: row.get(10)?,
+                    periodic_post_limit: row.get(11)?,
+                    initial_run_complete: row.get(12)?,
+                    resume_cursor: row.get(13)?,
+                    attempt_count: row.get(14)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -560,7 +640,11 @@ pub fn record_post(
                  title = COALESCE(excluded.title, source_post.title),
                  description = COALESCE(excluded.description, source_post.description),
                  captured_at = COALESCE(excluded.captured_at, source_post.captured_at),
-                 metadata_json = COALESCE(excluded.metadata_json, source_post.metadata_json),
+                 metadata_json = CASE
+                     WHEN json_extract(COALESCE(source_post.metadata_json, '{}'), '$._picto_access') = 'deferred'
+                     THEN excluded.metadata_json
+                     ELSE COALESCE(excluded.metadata_json, source_post.metadata_json)
+                 END,
                  updated_at = excluded.updated_at",
             params![
                 post.site_id,
@@ -708,7 +792,9 @@ pub fn complete_query_run_with_cursor(
         tx.execute(
             "UPDATE subscription_query
              SET last_success_at = ?1, initial_run_complete = 1,
-                 resume_cursor = COALESCE(?2, resume_cursor)
+                 resume_cursor = COALESCE(?2, resume_cursor),
+                 last_failure_at = NULL, last_failure_kind = NULL,
+                 last_failure_message = NULL
              WHERE query_id = ?3",
             params![now, resume_cursor, query_id],
         )?;
@@ -796,7 +882,22 @@ pub fn fail_query_run(
             RunState::Failed
         };
         let run_state = if retry_at.is_some() {
-            None
+            let changed = tx.execute(
+                "UPDATE subscription_run
+                 SET status = 'pending', finished_at = NULL
+                 WHERE run_id = (
+                     SELECT run_id FROM subscription_run_query
+                     WHERE run_query_id = ?1
+                 )
+                   AND status = 'running'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM subscription_run_query active
+                       WHERE active.run_id = subscription_run.run_id
+                         AND active.status = 'running'
+                   )",
+                [run_query_id],
+            )?;
+            (changed == 1).then_some(RunState::Pending)
         } else {
             settle_run_for_query(tx, run_query_id, now)?
         };
@@ -806,6 +907,42 @@ pub fn fail_query_run(
         })
     })?;
     Ok(transition)
+}
+
+pub fn interrupt_query_run(store: &Store, run_query_id: i64, now: &str) -> Result<(), String> {
+    store.transaction(|tx| {
+        let run_id: Option<i64> = tx
+            .query_row(
+                "SELECT run_id FROM subscription_run_query
+                 WHERE run_query_id = ?1 AND status = 'running'",
+                [run_query_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(run_id) = run_id else {
+            // Stop or Reset may settle/remove the row before the worker
+            // observes cancellation. That persisted state is authoritative.
+            return Ok(());
+        };
+        tx.execute(
+            "UPDATE subscription_run_query
+             SET status = 'pending', available_at = ?1, started_at = NULL,
+                 finished_at = NULL,
+                 attempt_count = MAX(attempt_count - 1, 0),
+                 failure_kind = NULL, error_message = NULL
+             WHERE run_query_id = ?2 AND status = 'running'",
+            params![now, run_query_id],
+        )?;
+        tx.execute(
+            "UPDATE subscription_run
+             SET status = 'pending', started_at = NULL, finished_at = NULL,
+                 failure_kind = NULL, error_message = NULL
+             WHERE run_id = ?1 AND status = 'running'",
+            [run_id],
+        )?;
+        Ok(())
+    })?;
+    Ok(())
 }
 
 pub fn retry_query_run(store: &Store, run_query_id: i64, available_at: &str) -> Result<(), String> {
@@ -1135,6 +1272,138 @@ mod tests {
                 .state,
             RunState::Pending
         );
+        let attempt_count: i64 = reopened
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT attempt_count FROM subscription_run_query WHERE run_query_id = ?1",
+                    [claim.run_query_id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(attempt_count, 0);
+    }
+
+    #[test]
+    fn interruption_failures_recover_without_consuming_a_retry() {
+        let (_directory, store) = store();
+        let sub = subscription(&store);
+        query(&store, sub, "q", "example.test");
+        let run = create_run(&store, sub, "manual", "2026-01-01T00:00:00Z").unwrap();
+        let claim =
+            claim_next_query_run(&store, &mut DomainSchedule::new(), "2026-01-01T00:00:01Z")
+                .unwrap()
+                .unwrap();
+        store
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE subscription_run_query
+                     SET status = 'failed', failure_kind = 'runtime',
+                         error_message = 'Subscription run interrupted',
+                         finished_at = '2026-01-01T00:00:02Z'
+                     WHERE run_query_id = ?1",
+                    [claim.run_query_id],
+                )?;
+                tx.execute(
+                    "UPDATE subscription_run
+                     SET status = 'failed', finished_at = '2026-01-01T00:00:02Z'
+                     WHERE run_id = ?1",
+                    [run.run_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            recover_startup(&store, "2026-01-01T00:00:03Z").unwrap(),
+            RecoveryCounts {
+                runs: 1,
+                query_runs: 1,
+            }
+        );
+        assert_eq!(
+            get_run(&store, run.run_id).unwrap().unwrap().state,
+            RunState::Pending
+        );
+        let recovered = get_query_run(&store, claim.run_query_id).unwrap().unwrap();
+        assert_eq!(recovered.state, RunState::Pending);
+        assert_eq!(recovered.attempt_count, 0);
+        let cleared_failure: (Option<String>, Option<String>) = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT failure_kind, error_message
+                     FROM subscription_run_query
+                     WHERE run_query_id = ?1",
+                    [claim.run_query_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(cleared_failure, (None, None));
+    }
+
+    #[test]
+    fn only_latest_interrupted_run_recovers_for_each_subscription() {
+        let (_directory, store) = store();
+        let sub = subscription(&store);
+        query(&store, sub, "q", "example.test");
+
+        let mut interrupted_runs = Vec::new();
+        for second in [0, 2] {
+            let created_at = format!("2026-01-01T00:00:0{second}Z");
+            let run = create_run(&store, sub, "manual", &created_at).unwrap();
+            let claim = claim_next_query_run(
+                &store,
+                &mut DomainSchedule::new(),
+                &format!("2026-01-01T00:00:0{}Z", second + 1),
+            )
+            .unwrap()
+            .unwrap();
+            store
+                .transaction(|tx| {
+                    tx.execute(
+                        "UPDATE subscription_run_query
+                         SET status = 'failed', failure_kind = 'runtime',
+                             error_message = 'Subscription run interrupted', finished_at = ?1
+                         WHERE run_query_id = ?2",
+                        params![created_at, claim.run_query_id],
+                    )?;
+                    tx.execute(
+                        "UPDATE subscription_run SET status = 'failed', finished_at = ?1
+                         WHERE run_id = ?2",
+                        params![created_at, run.run_id],
+                    )?;
+                    Ok(())
+                })
+                .unwrap();
+            interrupted_runs.push((run.run_id, claim.run_query_id));
+        }
+
+        assert_eq!(
+            recover_startup(&store, "2026-01-01T00:00:05Z").unwrap(),
+            RecoveryCounts {
+                runs: 1,
+                query_runs: 1,
+            }
+        );
+        let (older_run, older_query) = interrupted_runs[0];
+        let (newer_run, newer_query) = interrupted_runs[1];
+        assert_eq!(
+            get_run(&store, older_run).unwrap().unwrap().state,
+            RunState::Failed
+        );
+        assert_eq!(
+            get_query_run(&store, older_query).unwrap().unwrap().state,
+            RunState::Failed
+        );
+        assert_eq!(
+            get_run(&store, newer_run).unwrap().unwrap().state,
+            RunState::Pending
+        );
+        assert_eq!(
+            get_query_run(&store, newer_query).unwrap().unwrap().state,
+            RunState::Pending
+        );
     }
 
     #[test]
@@ -1188,6 +1457,7 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+        complete_query_run(&store, first.run_query_id, "2026-01-01T00:00:01.500Z").unwrap();
         let second = claim_next_query_run(&store, &mut schedule, "2026-01-01T00:00:02Z")
             .unwrap()
             .unwrap();
@@ -1217,8 +1487,21 @@ mod tests {
         assert_eq!(transition.query_state, RunState::Pending);
         assert_eq!(
             get_run(&store, run.run_id).unwrap().unwrap().state,
-            RunState::Running
+            RunState::Pending
         );
+        assert_eq!(transition.run_state, Some(RunState::Pending));
+        let failure: (Option<String>, Option<String>, Option<String>) = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT last_failure_at, last_failure_kind, last_failure_message
+                     FROM subscription_query WHERE subscription_id = ?1",
+                    [sub],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(failure.1.as_deref(), Some("network"));
+        assert_eq!(failure.2.as_deref(), Some("temporary"));
 
         let mut later = DomainSchedule::new();
         assert!(
@@ -1413,6 +1696,77 @@ mod tests {
     }
 
     #[test]
+    fn exhausted_source_completes_and_clears_previous_failure() {
+        let (_directory, store) = store();
+        let subscription_id = subscription(&store);
+        let query_id = query(&store, subscription_id, "q", "example.test");
+        store
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE subscription_query
+                     SET last_failure_at = 'earlier', last_failure_kind = 'network',
+                         last_failure_message = 'temporary failure'
+                     WHERE query_id = ?1",
+                    [query_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let run = create_run(&store, subscription_id, "manual", "2026-01-01T00:00:00Z").unwrap();
+        let mut schedule = DomainSchedule::new();
+        let claim = claim_next_query_run(&store, &mut schedule, "2026-01-01T00:00:01Z")
+            .unwrap()
+            .unwrap();
+
+        complete_query_run_with_cursor(
+            &store,
+            claim.run_query_id,
+            Some(""),
+            "2026-01-01T00:00:02Z",
+        )
+        .unwrap();
+
+        assert_eq!(
+            get_run(&store, run.run_id).unwrap().unwrap().state,
+            RunState::Succeeded
+        );
+        let state: (String, bool, Option<String>, Option<String>) = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT resume_cursor, initial_run_complete,
+                            last_failure_kind, last_failure_message
+                     FROM subscription_query WHERE query_id = ?1",
+                    [query_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(state, (String::new(), true, None, None));
+    }
+
+    #[test]
+    fn running_domain_is_exclusive_across_worker_schedules() {
+        let (_directory, store) = store();
+        let sub = subscription(&store);
+        query(&store, sub, "first", "same.test");
+        query(&store, sub, "second", "same.test");
+        query(&store, sub, "other", "other.test");
+        create_run(&store, sub, "manual", "2026-01-01T00:00:00Z").unwrap();
+
+        let first =
+            claim_next_query_run(&store, &mut DomainSchedule::new(), "2026-01-01T00:00:01Z")
+                .unwrap()
+                .unwrap();
+        let second =
+            claim_next_query_run(&store, &mut DomainSchedule::new(), "2026-01-01T00:00:01Z")
+                .unwrap()
+                .unwrap();
+
+        assert_eq!(first.domain_key, "same.test");
+        assert_eq!(second.domain_key, "other.test");
+    }
+
+    #[test]
     fn persisted_schedule_creates_one_due_run_and_advances() {
         let (_directory, store) = store();
         let sub = create_subscription(
@@ -1451,6 +1805,81 @@ mod tests {
             })
             .unwrap();
         assert_eq!(next, "2026-01-03T00:00:00+00:00");
+    }
+
+    #[test]
+    fn claimed_query_uses_persisted_source_post_batch_limits() {
+        let (_directory, store) = store();
+        let sub = create_subscription(
+            &store,
+            &SubscriptionInput {
+                subscription_key: "limited-sub".into(),
+                name: "Limited".into(),
+                schedule: "manual".into(),
+                paused: false,
+                initial_post_limit: Some(37),
+                periodic_post_limit: Some(19),
+            },
+            "2026-01-01T00:00:00Z",
+        )
+        .unwrap();
+        query(&store, sub, "q", "example.test");
+        create_run(&store, sub, "manual", "2026-01-01T00:00:00Z").unwrap();
+
+        let mut schedule = DomainSchedule::new();
+        let claim = claim_next_query_run(&store, &mut schedule, "2026-01-01T00:00:01Z")
+            .unwrap()
+            .unwrap();
+        assert_eq!(claim.requested_by, "manual");
+        assert_eq!(claim.source_post_batch_size(), 37);
+        complete_query_run_with_cursor(
+            &store,
+            claim.run_query_id,
+            Some("range:101"),
+            "2026-01-01T00:00:02Z",
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn successful_batch_clears_previous_query_failure() {
+        let (_directory, store) = store();
+        let sub = subscription(&store);
+        let query_id = query(&store, sub, "q", "example.test");
+        let run = create_run(&store, sub, "manual", "2026-01-01T00:00:00Z").unwrap();
+        let mut schedule = DomainSchedule::new();
+        let claim = claim_next_query_run(&store, &mut schedule, "2026-01-01T00:00:01Z")
+            .unwrap()
+            .unwrap();
+        store
+            .transaction(|tx| {
+                tx.execute(
+                    "UPDATE subscription_query
+                     SET last_failure_at = 'old', last_failure_kind = 'runtime',
+                         last_failure_message = 'old failure'
+                     WHERE query_id = ?1",
+                    [query_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        complete_query_run(&store, claim.run_query_id, "2026-01-01T00:00:02Z").unwrap();
+
+        let failure: (Option<String>, Option<String>, Option<String>) = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT last_failure_at, last_failure_kind, last_failure_message
+                     FROM subscription_query WHERE query_id = ?1",
+                    [query_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(failure, (None, None, None));
+        assert_eq!(
+            get_run(&store, run.run_id).unwrap().unwrap().state,
+            RunState::Succeeded
+        );
     }
 
     #[test]

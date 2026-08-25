@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Download gallery-dl binary for the current platform.
-# Source: https://github.com/mikf/gallery-dl/releases
+# Source: https://codeberg.org/mikf/gallery-dl/releases
 #
 # - Windows x64:  standalone .exe
 # - Linux x64:    standalone .bin
@@ -12,12 +12,11 @@
 
 set -euo pipefail
 
-VERSION="1.32.6"
-REPO="mikf/gallery-dl"
+VERSION="1.32.9"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+RUNTIME_REQUIREMENTS="${SCRIPT_DIR}/gallery-dl-runtime-requirements.txt"
 # Release assets moved to Codeberg from v1.32.0 (GitHub is a source mirror only).
 BASE_URL="https://codeberg.org/mikf/gallery-dl/releases/download/v${VERSION}"
-# Wheels are also published to PyPI — used for the macOS wheel install.
-PYPI_JSON_URL="https://pypi.org/pypi/gallery-dl/${VERSION}/json"
 DEST_DIR="vendor/gallery-dl"
 
 # ── Detect platform ──────────────────────────────────────────────────────
@@ -81,30 +80,15 @@ case "$PLATFORM" in
     ;;
 
   darwin-*)
-    # macOS: no standalone binary available.
-    # Download the Python wheel and create a wrapper script.
-    WHL_NAME="gallery_dl-${VERSION}-py3-none-any.whl"
+    # macOS debug runs the source bridge against the exact same pinned Python
+    # dependencies as the packaged sidecar.
     WHEEL_DIR="${DEST_DIR}/wheel"
 
-    echo "Downloading Python wheel (PyPI)..."
-    WHL_URL="$(curl -fsSL "$PYPI_JSON_URL" | python3 -c "import json,sys; print(next(u['url'] for u in json.load(sys.stdin)['urls'] if u['packagetype'] == 'bdist_wheel'))")"
-    download "$WHL_URL" "${DEST_DIR}/${WHL_NAME}"
-
-    # Extract wheel (it's a zip file) into wheel/ directory
-    if [ ! -d "${WHEEL_DIR}/gallery_dl" ]; then
-      echo "  Extracting wheel..."
-      mkdir -p "$WHEEL_DIR"
-      unzip -qo "${DEST_DIR}/${WHL_NAME}" -d "$WHEEL_DIR"
-    else
-      echo "  Wheel already extracted."
-    fi
-
-    # Ensure runtime deps are present inside wheel/ (the release wheel does not
-    # bundle third-party deps like requests).
     if command -v python3 >/dev/null 2>&1; then
-      echo "  Ensuring Python deps (requests)..."
-      python3 -m pip install --disable-pip-version-check --quiet --target "$WHEEL_DIR" requests || \
-        echo "  Warning: failed to preinstall requests; app will retry at runtime."
+      echo "Installing pinned gallery-dl development runtime..."
+      mkdir -p "$WHEEL_DIR"
+      python3 -m pip install --disable-pip-version-check --quiet --upgrade \
+        --target "$WHEEL_DIR" --requirement "$RUNTIME_REQUIREMENTS"
     else
       echo "  Warning: python3 not found; gallery-dl wrapper will not run."
     fi

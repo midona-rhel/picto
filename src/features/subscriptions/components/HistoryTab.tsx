@@ -16,12 +16,12 @@ export function HistoryTab({ runs }: { runs: SubscriptionRunRecord[] }) {
   const visible = showAll ? runs : runs.slice(0, INITIAL_ROWS);
 
   return (
-    <div className={styles.historyTable}>
-      <div className={`${styles.historyRow} ${styles.historyHeader}`}>
+    <div className={`${styles.subscriptionTable} ${styles.historyTable}`.trim()}>
+      <div className={`${styles.subscriptionTableRow} ${styles.subscriptionTableHeader} ${styles.historyRow}`}>
         <span>Started</span>
         <span>Status</span>
         <span className={styles.qCellNum}>Fetched</span>
-        <span className={styles.qCellNum}>Reused duplicate</span>
+        <span className={styles.qCellNum}>Reused</span>
         <span>Notes</span>
       </div>
       {visible.map((run) => {
@@ -29,7 +29,7 @@ export function HistoryTab({ runs }: { runs: SubscriptionRunRecord[] }) {
         const dotClass =
           tone === 'running' ? styles.qDotRunning : tone === 'attention' ? styles.qDotAttention : styles.qDotIdle;
         return (
-          <div key={run.run_id} className={styles.historyRow}>
+          <div key={run.run_id} className={`${styles.subscriptionTableRow} ${styles.historyRow}`.trim()}>
             <span className={styles.qCellTime}>{formatDateTime(run.started_at)}</span>
             <span className={styles.qCellStatus}>
               <span className={`${styles.qDot} ${dotClass}`.trim()} />

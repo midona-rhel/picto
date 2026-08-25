@@ -3,6 +3,7 @@
 //! The store exposes direct read and transaction boundaries. Domain behavior
 //! stays in application modules rather than growing another database facade.
 
+pub mod history;
 pub mod schema;
 
 use std::path::{Path, PathBuf};
@@ -11,11 +12,13 @@ use std::sync::{Mutex, RwLock};
 use rusqlite::{Connection, OpenFlags, Transaction};
 
 pub const DATABASE_FILE: &str = "library.sqlite";
+const MAX_IDLE_READERS: usize = 8;
 
 pub struct Store {
     root: PathBuf,
     path: PathBuf,
     writer: Mutex<Connection>,
+    readers: Mutex<Vec<Connection>>,
     consistency: RwLock<()>,
 }
 
@@ -37,6 +40,7 @@ impl Store {
             root: library_root.to_path_buf(),
             path,
             writer: Mutex::new(writer),
+            readers: Mutex::new(Vec::new()),
             consistency: RwLock::new(()),
         })
     }
@@ -63,15 +67,17 @@ impl Store {
         &self,
         operation: impl FnOnce(&Connection) -> rusqlite::Result<T>,
     ) -> Result<T, String> {
-        let _guard = self
-            .consistency
-            .read()
-            .map_err(|_| "Store consistency lock poisoned".to_string())?;
-        let connection = open_connection(&self.path, true)?;
-        operation(&connection).map_err(|error| error.to_string())
+        self.with_reader(|connection| operation(connection).map_err(|error| error.to_string()))
     }
 
     pub fn read_result<T>(
+        &self,
+        operation: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.with_reader(operation)
+    }
+
+    fn with_reader<T>(
         &self,
         operation: impl FnOnce(&Connection) -> Result<T, String>,
     ) -> Result<T, String> {
@@ -79,8 +85,22 @@ impl Store {
             .consistency
             .read()
             .map_err(|_| "Store consistency lock poisoned".to_string())?;
-        let connection = open_connection(&self.path, true)?;
-        operation(&connection)
+        let connection = self
+            .readers
+            .lock()
+            .map_err(|_| "Store reader pool lock poisoned".to_string())?
+            .pop()
+            .map(Ok)
+            .unwrap_or_else(|| open_connection(&self.path, true))?;
+        let result = operation(&connection);
+        let mut readers = self
+            .readers
+            .lock()
+            .map_err(|_| "Store reader pool lock poisoned".to_string())?;
+        if readers.len() < MAX_IDLE_READERS {
+            readers.push(connection);
+        }
+        result
     }
 
     pub fn transaction<T>(
@@ -201,13 +221,18 @@ fn open_connection(path: &Path, read_only: bool) -> Result<Connection, String> {
     };
     let connection = Connection::open_with_flags(path, flags)
         .map_err(|error| format!("Failed to open {}: {error}", path.display()))?;
+    let pragmas = if read_only {
+        "PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = 5000;
+         PRAGMA query_only = ON;"
+    } else {
+        "PRAGMA foreign_keys = ON;
+         PRAGMA busy_timeout = 5000;
+         PRAGMA journal_mode = WAL;
+         PRAGMA synchronous = NORMAL;"
+    };
     connection
-        .execute_batch(
-            "PRAGMA foreign_keys = ON;
-             PRAGMA busy_timeout = 5000;
-             PRAGMA journal_mode = WAL;
-             PRAGMA synchronous = NORMAL;",
-        )
+        .execute_batch(pragmas)
         .map_err(|error| format!("Failed to configure SQLite: {error}"))?;
     Ok(connection)
 }
@@ -235,5 +260,15 @@ mod tests {
 
         assert_eq!(revision, 1);
         assert_eq!(store.revision().unwrap(), 1);
+    }
+
+    #[test]
+    fn repeated_reads_reuse_a_configured_connection() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+
+        assert_eq!(store.revision().unwrap(), 0);
+        assert_eq!(store.revision().unwrap(), 0);
+        assert_eq!(store.readers.lock().unwrap().len(), 1);
     }
 }

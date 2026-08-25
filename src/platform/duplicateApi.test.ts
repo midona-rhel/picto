@@ -25,7 +25,7 @@ const candidate = (): Omit<DuplicatePair, 'similarity_pct' | 'status'> => ({
       decoded_information: null,
       has_alpha: null,
     },
-    item_ids: [41],
+    occurrences: [{ media_item_id: 41, root_item_id: 41, collection_id: null }],
   },
   right: {
     file: {
@@ -39,7 +39,7 @@ const candidate = (): Omit<DuplicatePair, 'similarity_pct' | 'status'> => ({
       decoded_information: null,
       has_alpha: null,
     },
-    item_ids: [92],
+    occurrences: [{ media_item_id: 92, root_item_id: 92, collection_id: null }],
   },
   decision: 'AutoTieLeft',
 });
@@ -60,7 +60,9 @@ describe('duplicateApi', () => {
     expect(invoke).toHaveBeenNthCalledWith(1, 'duplicates.scan', { distance_threshold: 7 });
     expect(invoke).toHaveBeenNthCalledWith(2, 'duplicates.list', { limit: 25 });
     expect(scan.candidate_count).toBe(2);
-    expect(page.items[0].left.item_ids).toEqual([41]);
+    expect(page.items[0].left.occurrences).toEqual([
+      { media_item_id: 41, root_item_id: 41, collection_id: null },
+    ]);
     expect(page.items[0].similarity_pct).toBe(96.875);
     expect(page.total).toBe(1);
   });
@@ -97,16 +99,21 @@ describe('duplicateApi', () => {
     await resolveDuplicatePair('smart_merge', pair);
 
     expect(invoke).toHaveBeenCalledWith('duplicates.resolve_automatically', {
-      candidate: candidate(),
+      file_id_a: 4,
+      file_id_b: 9,
     });
   });
 
-  it('does not call the backend when quality requires an explicit choice', async () => {
+  it('lets the backend make the current quality decision', async () => {
+    vi.mocked(invoke).mockResolvedValue(null);
     const pair = { ...candidate(), decision: 'NeedsChoice' as const, similarity_pct: 96.875, status: 'detected' as const };
 
     const result = await resolveDuplicatePair('smart_merge', pair);
 
-    expect(invoke).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith('duplicates.resolve_automatically', {
+      file_id_a: 4,
+      file_id_b: 9,
+    });
     expect(result.status).toBe('quality_ambiguous');
   });
 });

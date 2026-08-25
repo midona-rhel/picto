@@ -1,0 +1,39 @@
+.toolbar {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.button {
+  display: flex;
+  width: 48px;
+  height: 32px;
+  padding: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: background 200ms ease;
+}
+
+.button:hover { background: var(--color-surface-hover); }
+.button:disabled { opacity: 0.3; pointer-events: none; }
+
+.counter {
+  display: flex;
+  min-width: 60px;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-primary);
+  font: 13px/1 var(--font-family-mono);
+  font-variant-numeric: tabular-nums;
+}

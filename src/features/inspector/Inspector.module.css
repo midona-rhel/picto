@@ -3,7 +3,7 @@
 .panel {
   flex: 1;
   min-height: 0;
-  background: var(--inspector-surface, rgb(31, 32, 35));
+  background: var(--inspector-surface, var(--color-rail-surface));
   font-family: var(--inspector-font-family, var(--font-family-ui));
   display: flex;
   flex-direction: column;
@@ -23,7 +23,7 @@
   display: flex;
   flex-direction: column;
   width: 100%;
-  color: var(--inspector-text-primary, #f8f9fb);
+  color: var(--inspector-text-primary, var(--color-text-primary));
 }
 
 .actionBtn {
@@ -59,7 +59,7 @@
   composes: actionBtn;
   background: var(--color-primary);
   border-color: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
 }
 
 .actionBtnPrimary:hover {
@@ -84,7 +84,7 @@
   border: none;
   border-radius: var(--radius-md);
   background: var(--color-surface-hover);
-  color: var(--inspector-text-primary, #f8f9fb);
+  color: var(--inspector-text-primary, var(--color-text-primary));
   font-family: var(--inspector-font-family, var(--font-family-ui));
   font-size: var(--font-size-sm);
   font-weight: 400;
@@ -227,16 +227,7 @@
 .pic3 {
   position: absolute;
   border-radius: 10px;
-  background: radial-gradient(100% 100% at 50% 0%, var(--color-white-15, rgba(255,255,255,0.15)) 0%, var(--color-white-05, rgba(255,255,255,0.05)) 100%);
-}
-
-:global([data-theme="light"]) .pic1,
-:global([data-theme="light"]) .pic2,
-:global([data-theme="light"]) .pic3,
-:global([data-theme="lightgray"]) .pic1,
-:global([data-theme="lightgray"]) .pic2,
-:global([data-theme="lightgray"]) .pic3 {
-  background: linear-gradient(180deg, var(--color-black-10) 0%, var(--color-black-10) 100%);
+  background: radial-gradient(100% 100% at 50% 0%, var(--color-contrast-15) 0%, var(--color-contrast-05) 100%);
 }
 
 /* Front card — contains the collage */
@@ -248,16 +239,9 @@
   bottom: 0;
   padding: 8px;
   overflow: hidden;
-  border-top: 1px solid var(--color-white-15, rgba(255,255,255,0.15));
-  border-right: 1px solid var(--color-white-05, rgba(255,255,255,0.05));
-  border-left: 1px solid var(--color-white-05, rgba(255,255,255,0.05));
-}
-
-:global([data-theme="light"]) .pic1,
-:global([data-theme="lightgray"]) .pic1 {
-  border-top: 1px solid var(--color-black-20);
-  border-right: 1px solid var(--color-black-10);
-  border-left: 1px solid var(--color-black-10);
+  border-top: 1px solid var(--color-contrast-15);
+  border-right: 1px solid var(--color-contrast-05);
+  border-left: 1px solid var(--color-contrast-05);
 }
 
 /* Middle card peek */
@@ -268,12 +252,7 @@
   top: 6px;
   height: 2px;
   border-radius: 50% 50% 0 0;
-  background: var(--color-white-15, rgba(255,255,255,0.15));
-}
-
-:global([data-theme="light"]) .pic2,
-:global([data-theme="lightgray"]) .pic2 {
-  background: var(--color-black-20);
+  background: var(--color-contrast-15);
 }
 
 /* Back card peek */
@@ -284,12 +263,7 @@
   top: 2px;
   height: 2px;
   border-radius: 50% 50% 0 0;
-  background: var(--color-white-10, rgba(255,255,255,0.10));
-}
-
-:global([data-theme="light"]) .pic3,
-:global([data-theme="lightgray"]) .pic3 {
-  background: var(--color-black-10);
+  background: var(--color-contrast-10);
 }
 
 /* 2×2 collage grid inside pic1 */
@@ -306,15 +280,21 @@
 
 .collageCell {
   overflow: hidden;
-  background: var(--color-white-05, rgba(255, 255, 255, 0.05));
+  background: var(--color-contrast-05);
   border-radius: var(--radius-lg);
 }
 
-.collageCell img {
+.collageCell img,
+.collageCell svg {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
+}
+
+.collageCell svg {
+  box-sizing: border-box;
+  padding: 8%;
 }
 
 /* Placeholder when no images */
@@ -336,6 +316,7 @@
   max-height: 200px;
   border-radius: var(--radius-md);
   overflow: hidden;
+  background: var(--color-bg-app);
 }
 
 .previewImage {
@@ -352,7 +333,7 @@
   position: absolute;
   inset: 0;
   border-radius: var(--radius-md);
-  border: 1px solid rgba(255, 255, 255, 0.2);
+  border: 1px solid var(--color-contrast-20);
   pointer-events: none;
 }
 
@@ -410,7 +391,7 @@
   padding: 0 8px;
   border: 1px solid var(--color-border-focus);
   border-radius: var(--radius-md);
-  background: rgba(0, 0, 0, 0.2);
+  background: var(--color-control-surface);
   color: var(--color-text-primary);
   font-size: var(--font-size-sm);
   font-family: var(--font-family);
@@ -466,16 +447,16 @@
   gap: 6px;
   min-height: var(--control-height-md);
   padding: 0 10px;
-  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));
+  border: 1px solid var(--color-border-secondary);
   border-radius: var(--radius-md);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--color-contrast-03);
   color: var(--color-text-primary);
   font-size: var(--font-size-sm);
   cursor: pointer;
 }
 
 .bulkActionBtn:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-contrast-06);
 }
 
 .bulkActionDanger {

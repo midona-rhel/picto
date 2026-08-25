@@ -50,14 +50,23 @@ def _install_rule34_tag_info_adapter() -> None:
             message = None
         if message:
             if str(message).lower().startswith("missing authentication"):
-                raise self.exc.AuthRequired(
-                    "'api-key' & 'user-id'", "the API", message
+                self.log.warning(
+                    "Rule34 categorized tags require authentication; "
+                    "continuing with gallery-dl's normal tags"
                 )
-            raise self.exc.AbortExtraction(f"'{message}'")
-        if not isinstance(data, list):
-            raise self.exc.AbortExtraction(
-                "Rule34 API returned an invalid tag_info response"
+                return root
+            self.log.warning(
+                "Rule34 categorized tag lookup failed (%s); "
+                "continuing with gallery-dl's normal tags",
+                message,
             )
+            return root
+        if not isinstance(data, list):
+            self.log.warning(
+                "Rule34 categorized tag lookup returned invalid output; "
+                "continuing with gallery-dl's normal tags"
+            )
+            return root
 
         tag_info_by_id = {
             str(post.get("id")): post.get("tag_info") or ()
@@ -123,51 +132,61 @@ def _install_sankaku_cursor_adapter() -> None:
 
 
 def _install_deviantart_deviation_adapter() -> None:
-    """Expand profile results through gallery-dl's deviation extractor.
+    """Bound gallery runs by whole deviations and expose a durable cursor.
 
-    DeviantArt's profile API returns only the primary file for a deviation.
-    gallery-dl's direct-deviation extractor already expands additional media,
-    so queue each discovered profile result into that existing extractor.
+    The gallery extractor already emits every supported target in a deviation.
+    Re-queuing each result through the direct-deviation extractor repeats the
+    page, deviation, and metadata requests and merely rediscovers the same
+    archived file.
     """
     from gallery_dl.extractor import deviantart
 
     gallery = deviantart.DeviantartGalleryExtractor
-    deviation = deviantart.DeviantartDeviationExtractor
     if getattr(gallery, "_picto_expand_deviations", False):
         return
 
     original_gallery_deviations = gallery.deviations
+
     def gallery_deviations_as_children(self):
-        mature = self.config("mature", "true")
-        public_only = mature is False or str(mature).lower() in (
-            "0",
-            "false",
-            "no",
-            "off",
-        )
-        for item in original_gallery_deviations(self):
-            if isinstance(item, tuple):
-                yield item
-                continue
-            if item.get("is_deleted") or item.get("tier_access") == "locked":
-                continue
-            # DeviantArt includes mature placeholders even with
-            # mature_content=false. Their CDN token returns 403 anonymously,
-            # so they are outside the public-only source contract.
-            if public_only and item.get("is_mature"):
-                self.log.info(
-                    "Skipping mature deviation %s in public-only mode",
-                    item.get("deviationid", "?"),
-                )
-                continue
-            url = item.get("url")
-            if not url:
-                deviation_id = item.get("deviationid")
-                if not deviation_id:
+        limit = self.config("picto-post-limit")
+        limit = max(0, int(limit)) if limit else None
+        initial_skip = max(0, int(self.config("picto-post-skip") or 0))
+        skip = initial_skip
+        emitted = 0
+        exhausted = True
+        try:
+            for item in original_gallery_deviations(self):
+                if skip:
+                    skip -= 1
                     continue
-                url = f"https://www.deviantart.com/view/{deviation_id}/"
-            item["_extractor"] = deviation
-            yield url, item
+                if limit is not None and emitted >= limit:
+                    exhausted = False
+                    break
+
+                emitted += 1
+                if isinstance(item, tuple):
+                    yield item
+                    continue
+
+                deviation_id = item.get("deviationid", "?")
+                if item.get("is_deleted") or item.get("tier_access") == "locked":
+                    deferred = dict(item)
+                    deferred.setdefault("category", "deviantart")
+                    deferred["_picto_access"] = "deferred"
+                    _emit("post_traversed", metadata=deferred)
+                    self.log.warning(
+                        "Skipping post %s (currently inaccessible)",
+                        deviation_id,
+                    )
+                    continue
+
+                yield item
+        finally:
+            _emit(
+                "source_cursor",
+                cursor="" if exhausted else f"range:{initial_skip + emitted + 1}",
+                item_count=emitted,
+            )
 
     gallery.deviations = gallery_deviations_as_children
     gallery._picto_expand_deviations = True
@@ -205,6 +224,102 @@ def _install_tumblr_post_adapter() -> None:
 
     api.posts = posts_with_limit_and_cursor
     api._picto_post_cursor = True
+
+
+def _install_fanbox_pagination_compatibility() -> None:
+    """Accept FANBOX's current pagination envelope in gallery-dl.
+
+    FANBOX added named fields inside several response bodies after gallery-dl
+    1.32.9 shipped. Keep gallery-dl in charge of extraction and only unwrap
+    the response values its extractor already expects.
+    """
+    from gallery_dl import version
+    from gallery_dl.extractor import fanbox
+
+    # This is only needed by the development 1.32.9 wheel. The pinned
+    # Codeberg source already consumes FANBOX's named response fields.
+    if version.__version__ != "1.32.9":
+        return
+
+    extractor = fanbox.FanboxCreatorExtractor
+    if getattr(extractor, "_picto_pagination_envelope", False):
+        return
+
+    original_request_json = extractor.request_json
+
+    def request_json_with_pagination_envelope(self, url, *args, **kwargs):
+        response = original_request_json(self, url, *args, **kwargs)
+        body = response.get("body") if isinstance(response, dict) else None
+        if not isinstance(body, dict):
+            return response
+        envelopes = (
+            ("/post.paginateCreator", "pageUrls"),
+            ("/post.listCreator", "posts"),
+            ("/post.info", "post"),
+            ("/plan.listCreator", "plans"),
+        )
+        for endpoint, field in envelopes:
+            if endpoint in url and field in body:
+                response = dict(response)
+                response["body"] = body[field]
+                break
+        return response
+
+    extractor.request_json = request_json_with_pagination_envelope
+    extractor._picto_pagination_envelope = True
+
+
+def _install_fanbox_transport() -> None:
+    """Use gallery-dl's proposed browser-TLS transport for FANBOX only.
+
+    FANBOX accepts the captured browser session but rejects Python requests'
+    TLS fingerprint. This is the transport from gallery-dl Codeberg PR #192;
+    extraction, pagination, retries, and download ownership remain gallery-dl's.
+    """
+    from gallery_dl import exception, util
+    from gallery_dl.extractor import fanbox
+    from gallery_dl.extractor.common import Extractor
+    from gallery_dl_curl_cffi import CurlCffiSessionWrapper
+
+    extractor = fanbox.FanboxExtractor
+    if getattr(extractor, "_picto_curl_cffi_transport", False):
+        return
+    # Stop patching once gallery-dl ships a FANBOX-specific session itself.
+    if extractor._init_session is not Extractor._init_session:
+        return
+
+    def init_session(self):
+        try:
+            browser = self.config("browser") or self.browser
+            if browser and isinstance(browser, str):
+                browser = browser.lower().partition(":")[0]
+            if browser not in ("firefox", "chrome"):
+                browser = "firefox"
+
+            proxy = self.config("proxy")
+            if proxy:
+                proxy = util.build_proxy_map(proxy, self.log)
+
+            self.session = CurlCffiSessionWrapper(
+                impersonate=browser,
+                proxy=proxy,
+                trust_env=bool(self.config("proxy-env", True)),
+                requests_hosts=("downloads.fanbox.cc",),
+            )
+        except ImportError as exc:
+            raise exception.StopExtraction(
+                "curl_cffi is required for FANBOX subscriptions"
+            ) from exc
+
+        headers = self.session.headers
+        if referer := self.config("referer", self.referer):
+            headers["Referer"] = referer if isinstance(referer, str) else self.root + "/"
+        if custom_headers := self.config("headers"):
+            if isinstance(custom_headers, dict):
+                headers.update(custom_headers)
+
+    extractor._init_session = init_session
+    extractor._picto_curl_cffi_transport = True
 
 
 def _install_patreon_attachment_adapter() -> None:
@@ -278,6 +393,52 @@ def _install_patreon_attachment_adapter() -> None:
     extractor._picto_subscription_adapter = True
 
 
+def _install_subscribestar_post_adapter() -> None:
+    """Apply Picto's range to SubscribeStar posts, never attachment files."""
+    from gallery_dl import text
+    from gallery_dl.extractor import subscribestar
+
+    extractor = subscribestar.SubscribestarExtractor
+    if getattr(extractor, "_picto_source_posts", False):
+        return
+
+    def pagination_in_source_batches(self, url, params=None):
+        needle_next_page = 'data-role="infinite_scroll-next_page" href="'
+        page = self.request(url, params=params).text
+        skip = max(0, int(self.config("picto-post-skip") or 0))
+        limit = max(0, int(self.config("picto-post-limit") or 0))
+        emitted = 0
+        start = skip
+        exhausted = True
+        try:
+            while True:
+                posts = page.split('<div class="post ')[1:]
+                if not posts:
+                    return
+                for post in posts:
+                    if skip:
+                        skip -= 1
+                        continue
+                    if limit and emitted >= limit:
+                        exhausted = False
+                        return
+                    emitted += 1
+                    yield post
+
+                next_url = text.extr(posts[-1], needle_next_page, '"')
+                if not next_url:
+                    return
+                page = self.request_json(
+                    self.root + text.unescape(next_url)
+                )["html"]
+        finally:
+            cursor = "" if exhausted else f"range:{start + emitted + 1}"
+            _emit("source_cursor", cursor=cursor, item_count=emitted)
+
+    extractor._pagination = pagination_in_source_batches
+    extractor._picto_source_posts = True
+
+
 def _emit(event_type: str, **payload: Any) -> None:
     record = {"event": event_type}
     record.update(payload)
@@ -299,8 +460,27 @@ def _json_safe(value: Any) -> Any:
     return str(value)
 
 
+def _event_metadata(pathfmt) -> dict[str, Any]:
+    """Return source metadata without gallery-dl's private transport payloads.
+
+    Some extractors attach complete HTML documents to ``_page``. Sending that
+    document on every hook can turn one downloaded item into several megabytes
+    of NDJSON and delay ingestion behind data Picto never reads.
+    """
+    metadata = dict(pathfmt.kwdict)
+    metadata.pop("_page", None)
+    if isinstance(parent := metadata.get("_parent"), dict):
+        parent = dict(parent)
+        parent.pop("_page", None)
+        metadata["_parent"] = parent
+    return _json_safe(metadata)
+
+
 def _item_url(pathfmt) -> Any:
     return _json_safe(pathfmt.kwdict.get("url") or pathfmt.kwdict.get("_url"))
+
+
+_recent_download_errors: list[str] = []
 
 
 class _StderrHandler(logging.Handler):
@@ -309,6 +489,15 @@ class _StderrHandler(logging.Handler):
             msg = self.format(record)
         except Exception:
             msg = record.getMessage()
+        if record.levelno >= logging.WARNING:
+            _recent_download_errors.append(record.getMessage())
+            del _recent_download_errors[:-3]
+        _emit(
+            "gallery_log",
+            logger=record.name,
+            level=record.levelname.lower(),
+            message=record.getMessage(),
+        )
         sys.stderr.write(msg + "\n")
         sys.stderr.flush()
 
@@ -318,6 +507,24 @@ class _HookRegistry(dict):
         callbacks = []
         self[key] = callbacks
         return callbacks
+
+
+def _configure_source_window(config, request: dict[str, Any]) -> None:
+    """Install the durable Rust cursor and batch size into extractor config."""
+    if request.get("post_limit") is not None:
+        config.set((), "picto-post-limit", request["post_limit"])
+        config.set((), "picto-page-size", request["post_limit"])
+    range_start = max(1, int(request.get("range_start") or 1))
+    if source_cursor := request.get("source_cursor"):
+        config.set((), "picto-post-skip", 0)
+        config.set((), "picto-source-cursor", source_cursor)
+        config.set((), "picto-next", source_cursor)
+        if request.get("site_id") == "tumblr":
+            config.set((), "offset", source_cursor)
+    else:
+        config.set((), "picto-post-skip", range_start - 1)
+        if request.get("site_id") == "tumblr":
+            config.set((), "offset", range_start - 1)
 
 
 class PictoDownloadJob:
@@ -339,6 +546,7 @@ class PictoDownloadJob:
                 self.register_hooks(
                     {
                         "prepare": bridge._safe_hook(bridge._on_prepare),
+                        "post": bridge._safe_hook(bridge._on_post),
                         "after": bridge._safe_hook(bridge._on_after),
                         "skip": bridge._safe_hook(bridge._on_skip),
                         "error": bridge._safe_hook(bridge._on_error),
@@ -359,10 +567,17 @@ class PictoDownloadJob:
         return wrapped
 
     def _on_prepare(self, pathfmt):
+        _recent_download_errors.clear()
         _emit(
             "item_discovered",
             item_url=_item_url(pathfmt),
-            metadata=_json_safe(dict(pathfmt.kwdict)),
+            metadata=_event_metadata(pathfmt),
+        )
+
+    def _on_post(self, pathfmt):
+        _emit(
+            "post_traversed",
+            metadata=_event_metadata(pathfmt),
         )
 
     def _on_after(self, pathfmt):
@@ -370,23 +585,25 @@ class PictoDownloadJob:
             "item_downloaded",
             file_path=pathfmt.path,
             item_url=_item_url(pathfmt),
-            metadata=_json_safe(dict(pathfmt.kwdict)),
+            metadata=_event_metadata(pathfmt),
         )
 
     def _on_skip(self, pathfmt):
         _emit(
             "item_skipped_archive",
             item_url=_item_url(pathfmt),
-            metadata=_json_safe(dict(pathfmt.kwdict)),
+            metadata=_event_metadata(pathfmt),
         )
 
     def _on_error(self, pathfmt):
+        messages = list(dict.fromkeys(_recent_download_errors))
         _emit(
             "item_failed_final",
             item_url=_item_url(pathfmt),
-            metadata=_json_safe(dict(pathfmt.kwdict)),
+            metadata=_event_metadata(pathfmt),
             file_path=pathfmt.path,
             temp_path=getattr(pathfmt, "temppath", None),
+            error_message="; ".join(messages) or None,
         )
 
     def run(self) -> int:
@@ -427,13 +644,18 @@ def main() -> int:
         _install_rule34_tag_info_adapter()
         _install_deviantart_deviation_adapter()
         _install_tumblr_post_adapter()
+        _install_fanbox_transport()
+        _install_fanbox_pagination_compatibility()
         _install_patreon_attachment_adapter()
+        _install_subscribestar_post_adapter()
         import gallery_dl
         import yt_dlp
         from gallery_dl.extractor import deviantart
+        from gallery_dl.extractor import fanbox
         from gallery_dl.extractor import gelbooru_v02
         from gallery_dl.extractor import patreon
         from gallery_dl.extractor import tumblr
+        from gallery_dl.extractor import subscribestar
 
         _emit(
             "bridge_self_test",
@@ -456,9 +678,18 @@ def main() -> int:
                 "_picto_post_cursor",
                 False,
             )),
+            fanbox_transport_initialized=bool(
+                getattr(fanbox.FanboxExtractor, "_picto_curl_cffi_transport", False)
+                or fanbox.FanboxExtractor._init_session.__module__.endswith("curl_cffi_shim")
+            ),
             patreon_adapter_initialized=bool(getattr(
                 patreon.PatreonExtractor,
                 "_picto_subscription_adapter",
+                False,
+            )),
+            subscribestar_adapter_initialized=bool(getattr(
+                subscribestar.SubscribestarExtractor,
+                "_picto_source_posts",
                 False,
             )),
         )
@@ -476,8 +707,13 @@ def main() -> int:
         _install_deviantart_deviation_adapter()
     if request.get("site_id") == "tumblr":
         _install_tumblr_post_adapter()
+    if request.get("site_id") == "fanbox":
+        _install_fanbox_transport()
+        _install_fanbox_pagination_compatibility()
     if request.get("site_id") == "patreon":
         _install_patreon_attachment_adapter()
+    if request.get("site_id") == "subscribestar":
+        _install_subscribestar_post_adapter()
 
     from gallery_dl import config
 
@@ -485,10 +721,12 @@ def main() -> int:
     config.clear()
     if config_path := request.get("config_path"):
         config.load([config_path], strict=True)
-    if request.get("post_range"):
+    source_batched_sites = {"deviantart", "patreon", "subscribestar", "tumblr"}
+    if request.get("post_range") and request.get("site_id") not in source_batched_sites:
         config.set((), "post-range", request["post_range"])
     if request.get("child_range"):
         config.set((), "child-range", request["child_range"])
+    _configure_source_window(config, request)
     if request.get("abort_threshold") is not None:
         config.set((), "skip", f"abort:{request['abort_threshold']}")
     if request.get("archive_path"):

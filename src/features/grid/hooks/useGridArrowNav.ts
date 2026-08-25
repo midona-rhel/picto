@@ -8,10 +8,11 @@
  * Scrolls the target item into view.
  */
 
-import { useEffect, useRef, type RefObject } from 'react';
+import { useRef, type RefObject } from 'react';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { LayoutResult } from '../layout/types';
 import type { GridSelection, GridSelectionAction } from '../../../state/selection';
+import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
 
 const GAP = 16;
 
@@ -42,8 +43,7 @@ export function useGridArrowNav(opts: {
   const optsRef = useRef(opts);
   optsRef.current = opts;
 
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
+  useShortcutScope((e) => {
       const { items, layoutRef, containerRef, selectedItemIds, selection, dispatchSelection, viewerOpen, containerWidth, targetSize } = optsRef.current;
 
       if (viewerOpen) return;
@@ -127,9 +127,5 @@ export function useGridArrowNav(opts: {
           container.scrollTop = pos.y + pos.h - viewportH + GAP;
         }
       }
-    }
-
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, []);
+  }, { priority: 10 });
 }

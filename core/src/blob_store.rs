@@ -16,8 +16,11 @@
 
 use std::fs;
 use std::io;
+use std::io::Read as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+
+use sha2::{Digest, Sha256};
 
 #[derive(thiserror::Error, Debug)]
 pub enum BlobError {
@@ -27,6 +30,8 @@ pub enum BlobError {
     InvalidHash(String),
     #[error("Missing file extension for hash: {0}")]
     MissingExtension(String),
+    #[error("Content hash mismatch: expected {expected}, found {actual}")]
+    HashMismatch { expected: String, actual: String },
 }
 
 pub type BlobResult<T> = Result<T, BlobError>;
@@ -39,6 +44,9 @@ pub struct OrphanBlobCandidate {
 }
 
 pub fn mime_to_extension(mime: &str) -> &'static str {
+    if let Some(extension) = crate::media_processing::formats::extension_for_mime(mime) {
+        return extension;
+    }
     match mime {
         "image/jpeg" => "jpg",
         "image/png" => "png",
@@ -67,6 +75,9 @@ pub fn mime_to_extension(mime: &str) -> &'static str {
 }
 
 pub fn extension_to_mime(ext: &str) -> &'static str {
+    if let Some(format) = crate::media_processing::formats::format_for_extension(ext) {
+        return format.mime_type;
+    }
     match ext {
         "jpg" | "jpeg" => "image/jpeg",
         "png" => "image/png",
@@ -156,6 +167,96 @@ impl BlobStore {
         self.write_atomic(&path, data, true, true)
     }
 
+    /// Stream an original from disk into content-addressed storage while
+    /// verifying that the staged source still matches its recorded hash.
+    pub fn write_original_from_path(
+        &self,
+        hex_hash: &str,
+        source: &Path,
+        ext: Option<&str>,
+    ) -> BlobResult<()> {
+        let final_path = self.original_path_with_ext(hex_hash, ext)?;
+        fs::create_dir_all(&self.staging)?;
+        let mut input = fs::File::open(source)?;
+        let mut staged = if final_path.exists() {
+            None
+        } else {
+            Some(tempfile::NamedTempFile::new_in(&self.staging)?)
+        };
+        let mut hasher = Sha256::new();
+        let mut buffer = [0_u8; 1024 * 1024];
+        loop {
+            let read = input.read(&mut buffer)?;
+            if read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..read]);
+            if let Some(file) = staged.as_mut() {
+                file.write_all(&buffer[..read])?;
+            }
+        }
+        let actual = hex::encode(hasher.finalize());
+        if !hex_hash.eq_ignore_ascii_case(&actual) {
+            return Err(BlobError::HashMismatch {
+                expected: hex_hash.to_string(),
+                actual,
+            });
+        }
+        let Some(file) = staged else {
+            return Ok(());
+        };
+        file.as_file().sync_all()?;
+        if let Some(parent) = final_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if let Err(error) = file.persist(&final_path) {
+            if !final_path.exists() {
+                return Err(error.error.into());
+            }
+        }
+        #[cfg(unix)]
+        if let Some(parent) = final_path.parent() {
+            if let Ok(directory) = fs::File::open(parent) {
+                let _ = directory.sync_all();
+            }
+        }
+        Ok(())
+    }
+
+    /// Atomically move an already hashed and fsynced owned staging file into
+    /// content-addressed storage. The caller must have produced `source`
+    /// itself while calculating `hex_hash`; arbitrary external paths must use
+    /// `write_original_from_path`, which verifies their bytes while copying.
+    pub fn promote_verified_original(
+        &self,
+        hex_hash: &str,
+        source: &Path,
+        ext: Option<&str>,
+    ) -> BlobResult<PathBuf> {
+        let final_path = self.original_path_with_ext(hex_hash, ext)?;
+        if final_path.exists() {
+            fs::remove_file(source)?;
+            return Ok(final_path);
+        }
+        if let Some(parent) = final_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if let Err(error) = fs::rename(source, &final_path) {
+            if final_path.exists() {
+                fs::remove_file(source)?;
+            } else {
+                return Err(error.into());
+            }
+        }
+        #[cfg(unix)]
+        if let Some(parent) = final_path.parent() {
+            if let Ok(directory) = fs::File::open(parent) {
+                let _ = directory.sync_all();
+            }
+        }
+        Ok(final_path)
+    }
+
     /// Stage `data` in this instance's staging dir and atomically rename onto
     /// `final_path`, so a partial file can never exist at a content-addressed
     /// path. `durable` additionally fsyncs the file (and its directory) so the
@@ -168,6 +269,9 @@ impl BlobStore {
         durable: bool,
         existing_is_success: bool,
     ) -> BlobResult<()> {
+        // Startup cleanup or another Picto process may remove an idle staging
+        // directory. The write boundary must be able to recover on its own.
+        fs::create_dir_all(&self.staging)?;
         let mut file = tempfile::NamedTempFile::new_in(&self.staging)?;
         file.write_all(data)?;
         if durable {
@@ -503,6 +607,70 @@ mod tests {
         store.write_thumbnail(&hash, b"thumb", "jpg").unwrap();
 
         assert_eq!(fs::read_dir(&store.staging).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn write_recreates_a_removed_staging_directory() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let hash = test_hash();
+        fs::remove_dir_all(&store.staging).unwrap();
+
+        store.write_original(&hash, b"data", Some("png")).unwrap();
+
+        assert_eq!(store.read_original(&hash, Some("png")).unwrap(), b"data");
+    }
+
+    #[test]
+    fn write_original_from_path_streams_and_verifies_content() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let source = dir.path().join("source.bin");
+        let bytes = b"streamed original";
+        fs::write(&source, bytes).unwrap();
+        let hash = hex::encode(Sha256::digest(bytes));
+
+        store
+            .write_original_from_path(&hash, &source, Some("bin"))
+            .unwrap();
+
+        assert_eq!(store.read_original(&hash, Some("bin")).unwrap(), bytes);
+    }
+
+    #[test]
+    fn write_original_from_path_rejects_changed_content() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let source = dir.path().join("source.bin");
+        fs::write(&source, b"changed").unwrap();
+        let expected = hex::encode(Sha256::digest(b"expected"));
+
+        let error = store
+            .write_original_from_path(&expected, &source, Some("bin"))
+            .unwrap_err();
+
+        assert!(matches!(error, BlobError::HashMismatch { .. }));
+        assert!(!store
+            .original_path_with_ext(&expected, Some("bin"))
+            .unwrap()
+            .exists());
+    }
+
+    #[test]
+    fn promote_verified_original_moves_owned_staging_without_copying() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let source = dir.path().join("verified.bin");
+        let bytes = b"already verified";
+        fs::write(&source, bytes).unwrap();
+        let hash = hex::encode(Sha256::digest(bytes));
+
+        let original = store
+            .promote_verified_original(&hash, &source, Some("bin"))
+            .unwrap();
+
+        assert!(!source.exists());
+        assert_eq!(fs::read(original).unwrap(), bytes);
     }
 
     #[test]

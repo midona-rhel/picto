@@ -12,10 +12,13 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, MutationReceipt};
+use crate::store::history::HistoryDescriptor;
 
 const RANK_GAP: i64 = 1024;
+const APPLICATION_SETTINGS_KEY: &str = "application";
+const FOLDER_AUTO_TAGS_KEY: &str = "folderAutoTags";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 #[serde(transparent)]
 pub struct FolderId(#[ts(type = "number")] pub i64);
@@ -41,6 +44,23 @@ pub struct ReorderFolderChildrenInput {
 pub struct ReorderFolderItemsInput {
     pub folder_id: FolderId,
     pub item_ids: Vec<ItemId>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SortFolderTreeInput {
+    pub folder_id: FolderId,
+    #[serde(default)]
+    pub descending: bool,
+    #[serde(default)]
+    pub recursive: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SetFolderAutoTagsInput {
+    pub folder_id: FolderId,
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -85,7 +105,8 @@ impl Application {
         let parent_id = input.parent_id.map(|id| id.0);
         let now = Utc::now().to_rfc3339();
 
-        let (folder_id, revision) = self.transaction(
+        let (folder_id, revision, _) = self.undoable_transaction(
+            folder_history("folders.create", "Create folder", &[]).rebuilding_projections(),
             |transaction| {
                 if let Some(parent_id) = parent_id {
                     require_folder(transaction, parent_id)?;
@@ -116,7 +137,8 @@ impl Application {
     ) -> Result<FolderMutationReceipt, String> {
         let name = non_empty("Folder name", name)?;
         let now = Utc::now().to_rfc3339();
-        let ((), revision) = self.transaction(
+        let ((), revision, _) = self.undoable_transaction(
+            folder_history("folders.rename", "Rename folder", &[folder_id]),
             |transaction| {
                 require_folder(transaction, folder_id.0)?;
                 transaction.execute(
@@ -131,6 +153,66 @@ impl Application {
         Ok(folder_receipt(revision, vec![folder_id], Vec::new(), None))
     }
 
+    /// Clone a folder hierarchy without copying media memberships or watches.
+    pub fn duplicate_folder(
+        &self,
+        folder_id: FolderId,
+    ) -> Result<(FolderId, FolderMutationReceipt), String> {
+        let now = Utc::now().to_rfc3339();
+        let ((duplicate_id, created_ids), revision, _) = self.undoable_transaction(
+            folder_history("folders.duplicate", "Duplicate folder", &[folder_id])
+                .rebuilding_projections(),
+            |transaction| {
+                require_folder(transaction, folder_id.0)?;
+                let (name, parent_id): (String, Option<i64>) = transaction.query_row(
+                    "SELECT name, parent_id FROM folder WHERE folder_id = ?1",
+                    [folder_id.0],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                let mut created_ids = Vec::new();
+                let mut cloned_pairs = Vec::new();
+                let duplicate_id = clone_folder_tree(
+                    transaction,
+                    folder_id.0,
+                    parent_id,
+                    Some(format!("{name} copy")),
+                    &now,
+                    &mut created_ids,
+                    &mut cloned_pairs,
+                )?;
+
+                let mut settings = read_application_settings(transaction)?;
+                let mut copied_auto_tags = false;
+                for (source_id, clone_id) in cloned_pairs {
+                    let tags = exact_folder_auto_tag_names(&settings, source_id);
+                    if !tags.is_empty() {
+                        write_exact_folder_auto_tags(&mut settings, clone_id, &tags)?;
+                        copied_auto_tags = true;
+                    }
+                }
+                if copied_auto_tags {
+                    write_application_settings(transaction, &settings)?;
+                }
+
+                let mut siblings = child_folder_ids(transaction, parent_id)?;
+                siblings.retain(|candidate| *candidate != duplicate_id);
+                let source_index = siblings
+                    .iter()
+                    .position(|candidate| *candidate == folder_id.0)
+                    .ok_or_else(|| invalid("Source folder is missing from its parent"))?;
+                siblings.insert(source_index + 1, duplicate_id);
+                write_folder_order(transaction, &siblings, &now)?;
+                Ok(((duplicate_id, created_ids.clone()), created_ids))
+            },
+            |_, _| Ok(()),
+        )?;
+        let created_ids = created_ids.into_iter().map(FolderId).collect::<Vec<_>>();
+        Ok((
+            FolderId(duplicate_id),
+            folder_receipt(revision, created_ids, Vec::new(), None),
+        ))
+    }
+
     pub fn set_folder_metadata(
         &self,
         input: &FolderMetadataInput,
@@ -139,32 +221,142 @@ impl Application {
         let color = normalized_optional(input.color.as_deref());
         let notes = normalized_optional(input.notes.as_deref());
         let now = Utc::now().to_rfc3339();
-        let (_, revision, _) = self.store().transaction_if_changed(|transaction| {
-            require_folder(transaction, input.folder_id.0)?;
-            let previous: (Option<String>, Option<String>, Option<String>) = transaction
-                .query_row(
-                    "SELECT icon, color, notes FROM folder WHERE folder_id = ?1",
-                    [input.folder_id.0],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )?;
-            let next = (icon.clone(), color.clone(), notes.clone());
-            let changed = previous != next;
-            if changed {
-                transaction.execute(
-                    "UPDATE folder
-                     SET icon = ?1, color = ?2, notes = ?3, updated_at = ?4
-                     WHERE folder_id = ?5",
-                    params![icon, color, notes, now, input.folder_id.0],
-                )?;
-            }
-            Ok(((), changed))
-        })?;
+        let (_, revision, _, _) = self.undoable_transaction_if_changed(
+            folder_history("folders.set_metadata", "Edit folder", &[input.folder_id]),
+            |transaction| {
+                require_folder(transaction, input.folder_id.0)?;
+                let previous: (Option<String>, Option<String>, Option<String>) = transaction
+                    .query_row(
+                        "SELECT icon, color, notes FROM folder WHERE folder_id = ?1",
+                        [input.folder_id.0],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    )?;
+                let next = (icon.clone(), color.clone(), notes.clone());
+                let changed = previous != next;
+                if changed {
+                    transaction.execute(
+                        "UPDATE folder
+                         SET icon = ?1, color = ?2, notes = ?3, updated_at = ?4
+                         WHERE folder_id = ?5",
+                        params![icon, color, notes, now, input.folder_id.0],
+                    )?;
+                }
+                Ok(((), (), changed))
+            },
+            |_, ()| Ok(()),
+        )?;
         Ok(folder_receipt(
             revision,
             vec![input.folder_id],
             Vec::new(),
             None,
         ))
+    }
+
+    pub fn folder_auto_tags(&self, folder_id: FolderId) -> Result<Vec<String>, String> {
+        self.store().read(|connection| {
+            connection
+                .query_row(
+                    "SELECT 1 FROM folder WHERE folder_id = ?1",
+                    [folder_id.0],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .ok_or_else(|| invalid(format!("Folder {} does not exist", folder_id.0)))?;
+            let settings = read_application_settings(connection)?;
+            Ok(exact_folder_auto_tag_names(&settings, folder_id.0))
+        })
+    }
+
+    pub fn set_folder_auto_tags(
+        &self,
+        input: &SetFolderAutoTagsInput,
+    ) -> Result<FolderMutationReceipt, String> {
+        let mut normalized = input
+            .tags
+            .iter()
+            .map(|tag| crate::tag_name_v2::parse_local(tag))
+            .collect::<Result<Vec<_>, _>>()?;
+        normalized.sort();
+        normalized.dedup();
+        let names = normalized
+            .iter()
+            .map(|(namespace, subtag)| canonical_tag_name(namespace, subtag))
+            .collect::<Vec<_>>();
+        let history = HistoryDescriptor::new(
+            "folders.set_auto_tags",
+            "Set folder auto tags",
+            vec![
+                resources::FOLDERS.to_string(),
+                resources::SIDEBAR.to_string(),
+                resources::LIBRARY.to_string(),
+                resources::TAGS.to_string(),
+                resources::SMART_FOLDERS.to_string(),
+                resources::SETTINGS.to_string(),
+                format!("folder:{}", input.folder_id.0),
+            ],
+            Vec::new(),
+        )
+        .rebuilding_projections();
+
+        let ((root_ids, changed_tags), revision, _, _) = self.undoable_transaction_if_changed(
+            history,
+            |transaction| {
+                require_folder(transaction, input.folder_id.0)?;
+                let mut settings = read_application_settings(transaction)?;
+                let previous = exact_folder_auto_tag_names(&settings, input.folder_id.0);
+                let previous_set = previous.iter().cloned().collect::<BTreeSet<_>>();
+                let added = normalized
+                    .iter()
+                    .filter(|(namespace, subtag)| {
+                        !previous_set.contains(&canonical_tag_name(namespace, subtag))
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>();
+                write_exact_folder_auto_tags(&mut settings, input.folder_id.0, &names)?;
+                write_application_settings(transaction, &settings)?;
+
+                let descendants = descendant_folder_ids(transaction, input.folder_id.0)?;
+                let descendant_json = serde_json::to_string(&descendants).map_err(|error| {
+                    invalid(format!("Could not encode folder descendants: {error}"))
+                })?;
+                let root_ids = transaction
+                    .prepare(
+                        "SELECT DISTINCT item_id FROM folder_item
+                         WHERE folder_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?1))
+                         ORDER BY item_id",
+                    )?
+                    .query_map([descendant_json], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let changed_tags = if added.is_empty() {
+                    Vec::new()
+                } else {
+                    let media_ids =
+                        crate::operations_v2::media_items_for_roots(transaction, &root_ids)?;
+                    crate::operations_v2::apply_tags_in(
+                        transaction,
+                        &media_ids,
+                        &added,
+                        true,
+                        1,
+                        "folder",
+                    )?
+                };
+                let changed = previous != names || !changed_tags.is_empty();
+                Ok(((root_ids, changed_tags.clone()), changed_tags, changed))
+            },
+            |projections, changed_tags| projections.apply_tag_changes(&changed_tags, true),
+        )?;
+
+        let mut receipt = folder_receipt(revision, vec![input.folder_id], Vec::new(), None);
+        receipt.receipt.resources.extend([
+            resources::TAGS.to_string(),
+            resources::SMART_FOLDERS.to_string(),
+            resources::SETTINGS.to_string(),
+        ]);
+        receipt.receipt.item_ids = root_ids.into_iter().map(ItemId).collect();
+        let _ = changed_tags;
+        Ok(receipt)
     }
 
     pub fn move_folder(
@@ -174,7 +366,8 @@ impl Application {
     ) -> Result<FolderMutationReceipt, String> {
         let parent_id = parent_id.map(|id| id.0);
         let now = Utc::now().to_rfc3339();
-        let ((), revision) = self.transaction(
+        let ((), revision, _) = self.undoable_transaction(
+            folder_history("folders.move", "Move folder", &[folder_id]).rebuilding_projections(),
             |transaction| {
                 require_folder(transaction, folder_id.0)?;
                 if let Some(parent_id) = parent_id {
@@ -211,7 +404,8 @@ impl Application {
         let parent_id = input.parent_id.map(|id| id.0);
         let now = Utc::now().to_rfc3339();
 
-        let ((), revision) = self.transaction(
+        let ((), revision, _) = self.undoable_transaction(
+            folder_history("folders.reorder", "Reorder folders", &folder_ids),
             |transaction| {
                 if let Some(parent_id) = parent_id {
                     require_folder(transaction, parent_id)?;
@@ -239,6 +433,63 @@ impl Application {
         Ok(folder_receipt(revision, folder_ids, Vec::new(), None))
     }
 
+    pub fn sort_folder_tree(
+        &self,
+        input: &SortFolderTreeInput,
+    ) -> Result<FolderMutationReceipt, String> {
+        let now = Utc::now().to_rfc3339();
+        let (changed_ids, revision, _) = self.undoable_transaction(
+            folder_history("folders.sort_tree", "Sort folders", &[input.folder_id]),
+            |transaction| {
+                require_folder(transaction, input.folder_id.0)?;
+                let parent_id = transaction.query_row(
+                    "SELECT parent_id FROM folder WHERE folder_id = ?1",
+                    [input.folder_id.0],
+                    |row| row.get::<_, Option<i64>>(0),
+                )?;
+                let mut parent_ids = vec![parent_id];
+                if input.recursive {
+                    parent_ids.extend(
+                        descendant_folder_ids(transaction, input.folder_id.0)?
+                            .into_iter()
+                            .map(Some),
+                    );
+                }
+                parent_ids.sort_unstable();
+                parent_ids.dedup();
+
+                let mut changed_ids = BTreeSet::new();
+                for parent_id in &parent_ids {
+                    let mut children = named_child_folders(transaction, *parent_id)?;
+                    children.sort_by(|left, right| {
+                        let ordering = left
+                            .1
+                            .to_lowercase()
+                            .cmp(&right.1.to_lowercase())
+                            .then_with(|| left.0.cmp(&right.0));
+                        if input.descending {
+                            ordering.reverse()
+                        } else {
+                            ordering
+                        }
+                    });
+                    let ids = children.into_iter().map(|(id, _)| id).collect::<Vec<_>>();
+                    write_folder_order(transaction, &ids, &now)?;
+                    changed_ids.extend(ids);
+                }
+                let changed_ids = changed_ids.into_iter().collect::<Vec<_>>();
+                Ok((changed_ids.clone(), changed_ids))
+            },
+            |_, _| Ok(()),
+        )?;
+        Ok(folder_receipt(
+            revision,
+            changed_ids.into_iter().map(FolderId).collect(),
+            Vec::new(),
+            None,
+        ))
+    }
+
     pub fn reorder_folder_items(
         &self,
         input: &ReorderFolderItemsInput,
@@ -252,7 +503,12 @@ impl Application {
             return Err("Folder item reorder must contain unique item IDs".to_string());
         }
 
-        let ((), revision) = self.transaction(
+        let ((), revision, _) = self.undoable_transaction(
+            folder_history(
+                "folders.reorder_items",
+                "Reorder folder items",
+                &[input.folder_id],
+            ),
             |transaction| {
                 require_folder(transaction, input.folder_id.0)?;
                 let visible = transaction
@@ -306,7 +562,8 @@ impl Application {
         &self,
         folder_id: FolderId,
     ) -> Result<FolderMutationReceipt, String> {
-        let (item_ids, revision) = self.transaction(
+        let (item_ids, revision, _) = self.undoable_transaction(
+            folder_history("folders.sort_items", "Sort folder items", &[folder_id]),
             |transaction| {
                 require_folder(transaction, folder_id.0)?;
                 let item_ids = transaction
@@ -337,16 +594,57 @@ impl Application {
     }
 
     pub fn delete_folder(&self, folder_id: FolderId) -> Result<FolderMutationReceipt, String> {
-        let ((deleted_folder_ids, fallback_folder_id), revision) = self.transaction(
+        self.delete_folders(&[folder_id])
+    }
+
+    pub fn delete_folders(&self, folder_ids: &[FolderId]) -> Result<FolderMutationReceipt, String> {
+        let folder_ids = folder_ids.iter().copied().collect::<BTreeSet<_>>();
+        if folder_ids.is_empty() {
+            return Err("At least one folder is required".to_string());
+        }
+        let history_folder_ids = folder_ids.iter().copied().collect::<Vec<_>>();
+        let ((deleted_folder_ids, fallback_folder_id), revision, _) = self.undoable_transaction(
+            folder_history("folders.delete", "Delete folders", &history_folder_ids)
+                .rebuilding_projections(),
             |transaction| {
-                require_folder(transaction, folder_id.0)?;
-                let fallback_folder_id = transaction.query_row(
-                    "SELECT parent_id FROM folder WHERE folder_id = ?1",
-                    [folder_id.0],
-                    |row| row.get::<_, Option<i64>>(0),
-                )?;
-                let deleted_folder_ids = descendant_folder_ids(transaction, folder_id.0)?;
-                transaction.execute("DELETE FROM folder WHERE folder_id = ?1", [folder_id.0])?;
+                for folder_id in &folder_ids {
+                    require_folder(transaction, folder_id.0)?;
+                }
+
+                let mut root_folder_ids = Vec::new();
+                for candidate in &folder_ids {
+                    let mut selected_ancestor = false;
+                    for ancestor in &folder_ids {
+                        if ancestor != candidate
+                            && is_descendant(transaction, ancestor.0, candidate.0)?
+                        {
+                            selected_ancestor = true;
+                            break;
+                        }
+                    }
+                    if !selected_ancestor {
+                        root_folder_ids.push(*candidate);
+                    }
+                }
+
+                let fallback_folder_id = if root_folder_ids.len() == 1 {
+                    transaction.query_row(
+                        "SELECT parent_id FROM folder WHERE folder_id = ?1",
+                        [root_folder_ids[0].0],
+                        |row| row.get::<_, Option<i64>>(0),
+                    )?
+                } else {
+                    None
+                };
+                let mut deleted_folder_ids = BTreeSet::new();
+                for folder_id in &root_folder_ids {
+                    deleted_folder_ids.extend(descendant_folder_ids(transaction, folder_id.0)?);
+                }
+                for folder_id in root_folder_ids {
+                    transaction
+                        .execute("DELETE FROM folder WHERE folder_id = ?1", [folder_id.0])?;
+                }
+                let deleted_folder_ids = deleted_folder_ids.into_iter().collect::<Vec<_>>();
                 Ok((
                     (deleted_folder_ids.clone(), fallback_folder_id),
                     deleted_folder_ids,
@@ -386,26 +684,34 @@ impl Application {
         }
         let path = path.to_string_lossy().into_owned();
         let now = Utc::now().to_rfc3339();
-        let (_, revision, _) = self.store().transaction_if_changed(|transaction| {
-            require_folder(transaction, input.folder_id.0)?;
-            let previous: (Option<String>, bool, bool) = transaction.query_row(
-                "SELECT watch_path, watch_enabled, watch_subfolders
-                 FROM folder WHERE folder_id = ?1",
-                [input.folder_id.0],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?;
-            let changed = previous != (Some(path.clone()), true, input.include_subfolders);
-            if changed {
-                transaction.execute(
-                    "UPDATE folder
-                     SET watch_path = ?1, watch_enabled = 1,
-                         watch_subfolders = ?2, updated_at = ?3
-                     WHERE folder_id = ?4",
-                    params![path, input.include_subfolders, now, input.folder_id.0],
+        let (_, revision, _, _) = self.undoable_transaction_if_changed(
+            folder_history(
+                "folders.set_watch",
+                "Set watched folder",
+                &[input.folder_id],
+            ),
+            |transaction| {
+                require_folder(transaction, input.folder_id.0)?;
+                let previous: (Option<String>, bool, bool) = transaction.query_row(
+                    "SELECT watch_path, watch_enabled, watch_subfolders
+                     FROM folder WHERE folder_id = ?1",
+                    [input.folder_id.0],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )?;
-            }
-            Ok(((), changed))
-        })?;
+                let changed = previous != (Some(path.clone()), true, input.include_subfolders);
+                if changed {
+                    transaction.execute(
+                        "UPDATE folder
+                         SET watch_path = ?1, watch_enabled = 1,
+                             watch_subfolders = ?2, updated_at = ?3
+                         WHERE folder_id = ?4",
+                        params![path, input.include_subfolders, now, input.folder_id.0],
+                    )?;
+                }
+                Ok(((), (), changed))
+            },
+            |_, ()| Ok(()),
+        )?;
         Ok(folder_receipt(
             revision,
             vec![input.folder_id],
@@ -416,20 +722,38 @@ impl Application {
 
     pub fn clear_folder_watch(&self, folder_id: FolderId) -> Result<FolderMutationReceipt, String> {
         let now = Utc::now().to_rfc3339();
-        let (_, revision, _) = self.store().transaction_if_changed(|transaction| {
-            require_folder(transaction, folder_id.0)?;
-            let changed = transaction.execute(
-                "UPDATE folder
-                 SET watch_path = NULL, watch_enabled = 0,
-                     watch_subfolders = 0, updated_at = ?1
-                 WHERE folder_id = ?2
-                   AND (watch_path IS NOT NULL OR watch_enabled != 0 OR watch_subfolders != 0)",
-                params![now, folder_id.0],
-            )? != 0;
-            Ok(((), changed))
-        })?;
+        let (_, revision, _, _) = self.undoable_transaction_if_changed(
+            folder_history("folders.clear_watch", "Clear watched folder", &[folder_id]),
+            |transaction| {
+                require_folder(transaction, folder_id.0)?;
+                let changed = transaction.execute(
+                    "UPDATE folder
+                     SET watch_path = NULL, watch_enabled = 0,
+                         watch_subfolders = 0, updated_at = ?1
+                     WHERE folder_id = ?2
+                       AND (watch_path IS NOT NULL OR watch_enabled != 0 OR watch_subfolders != 0)",
+                    params![now, folder_id.0],
+                )? != 0;
+                Ok(((), (), changed))
+            },
+            |_, ()| Ok(()),
+        )?;
         Ok(folder_receipt(revision, vec![folder_id], Vec::new(), None))
     }
+}
+
+fn folder_history(command: &str, label: &str, folder_ids: &[FolderId]) -> HistoryDescriptor {
+    let mut resources = vec![
+        resources::FOLDERS.to_string(),
+        resources::SIDEBAR.to_string(),
+        resources::LIBRARY.to_string(),
+    ];
+    resources.extend(
+        folder_ids
+            .iter()
+            .map(|folder_id| format!("folder:{}", folder_id.0)),
+    );
+    HistoryDescriptor::new(command, label, resources, Vec::new())
 }
 
 fn folder_receipt(
@@ -458,6 +782,114 @@ fn folder_receipt(
         deleted_folder_ids,
         fallback_folder_id,
     }
+}
+
+fn canonical_tag_name(namespace: &str, subtag: &str) -> String {
+    if namespace == "general" {
+        subtag.to_string()
+    } else {
+        crate::tag_name_v2::format(namespace, subtag)
+    }
+}
+
+fn read_application_settings(
+    connection: &rusqlite::Connection,
+) -> rusqlite::Result<serde_json::Value> {
+    connection
+        .query_row(
+            "SELECT value_json FROM setting WHERE key = ?1",
+            [APPLICATION_SETTINGS_KEY],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?
+        .map(|encoded| {
+            serde_json::from_str(&encoded).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })
+        })
+        .transpose()
+        .map(|value| value.unwrap_or_else(|| serde_json::json!({})))
+}
+
+fn write_application_settings(
+    transaction: &Transaction<'_>,
+    settings: &serde_json::Value,
+) -> rusqlite::Result<()> {
+    let encoded = serde_json::to_string(settings)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    transaction.execute(
+        "INSERT INTO setting (key, value_json) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+        params![APPLICATION_SETTINGS_KEY, encoded],
+    )?;
+    Ok(())
+}
+
+fn exact_folder_auto_tag_names(settings: &serde_json::Value, folder_id: i64) -> Vec<String> {
+    settings
+        .get(FOLDER_AUTO_TAGS_KEY)
+        .and_then(serde_json::Value::as_object)
+        .and_then(|folders| folders.get(&folder_id.to_string()))
+        .and_then(serde_json::Value::as_array)
+        .map(|tags| {
+            tags.iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn write_exact_folder_auto_tags(
+    settings: &mut serde_json::Value,
+    folder_id: i64,
+    tags: &[String],
+) -> rusqlite::Result<()> {
+    let root = settings
+        .as_object_mut()
+        .ok_or_else(|| invalid("Application settings must be an object"))?;
+    let folders = root
+        .entry(FOLDER_AUTO_TAGS_KEY)
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| invalid("Folder auto tags setting must be an object"))?;
+    if tags.is_empty() {
+        folders.remove(&folder_id.to_string());
+    } else {
+        folders.insert(folder_id.to_string(), serde_json::json!(tags));
+    }
+    Ok(())
+}
+
+pub(crate) fn inherited_folder_auto_tags(
+    transaction: &Transaction<'_>,
+    folder_id: i64,
+) -> rusqlite::Result<Vec<(String, String)>> {
+    let settings = read_application_settings(transaction)?;
+    let folder_ids = transaction
+        .prepare(
+            "WITH RECURSIVE ancestors(folder_id, parent_id) AS (
+                 SELECT folder_id, parent_id FROM folder WHERE folder_id = ?1
+                 UNION ALL
+                 SELECT parent.folder_id, parent.parent_id
+                 FROM folder parent
+                 JOIN ancestors child ON child.parent_id = parent.folder_id
+             )
+             SELECT folder_id FROM ancestors",
+        )?
+        .query_map([folder_id], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut tags = BTreeSet::new();
+    for folder_id in folder_ids {
+        for tag in exact_folder_auto_tag_names(&settings, folder_id) {
+            tags.insert(crate::tag_name_v2::parse_local(&tag).map_err(invalid)?);
+        }
+    }
+    Ok(tags.into_iter().collect())
 }
 
 fn require_folder(transaction: &Transaction<'_>, folder_id: i64) -> rusqlite::Result<()> {
@@ -538,6 +970,82 @@ fn child_folder_ids(
         .collect()
 }
 
+fn named_child_folders(
+    transaction: &Transaction<'_>,
+    parent_id: Option<i64>,
+) -> rusqlite::Result<Vec<(i64, String)>> {
+    transaction
+        .prepare(
+            "SELECT folder_id, name FROM folder
+             WHERE (?1 IS NULL AND parent_id IS NULL) OR parent_id = ?1
+             ORDER BY sort_rank, folder_id",
+        )?
+        .query_map([parent_id], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect()
+}
+
+fn write_folder_order(
+    transaction: &Transaction<'_>,
+    folder_ids: &[i64],
+    updated_at: &str,
+) -> rusqlite::Result<()> {
+    for (index, folder_id) in folder_ids.iter().enumerate() {
+        transaction.execute(
+            "UPDATE folder SET sort_rank = ?1, updated_at = ?2 WHERE folder_id = ?3",
+            params![(index as i64 + 1) * RANK_GAP, updated_at, folder_id],
+        )?;
+    }
+    Ok(())
+}
+
+fn clone_folder_tree(
+    transaction: &Transaction<'_>,
+    source_id: i64,
+    parent_id: Option<i64>,
+    root_name: Option<String>,
+    now: &str,
+    created_ids: &mut Vec<i64>,
+    cloned_pairs: &mut Vec<(i64, i64)>,
+) -> rusqlite::Result<i64> {
+    let (name, icon, color, notes): (String, Option<String>, Option<String>, Option<String>) =
+        transaction.query_row(
+            "SELECT name, icon, color, notes FROM folder WHERE folder_id = ?1",
+            [source_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+    let sort_rank = next_sibling_rank(transaction, parent_id, None)?;
+    transaction.execute(
+        "INSERT INTO folder
+            (folder_key, name, parent_id, icon, color, notes, sort_rank, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
+        params![
+            new_folder_key(),
+            root_name.unwrap_or(name),
+            parent_id,
+            icon,
+            color,
+            notes,
+            sort_rank,
+            now,
+        ],
+    )?;
+    let clone_id = transaction.last_insert_rowid();
+    created_ids.push(clone_id);
+    cloned_pairs.push((source_id, clone_id));
+    for child_id in child_folder_ids(transaction, Some(source_id))? {
+        clone_folder_tree(
+            transaction,
+            child_id,
+            Some(clone_id),
+            None,
+            now,
+            created_ids,
+            cloned_pairs,
+        )?;
+    }
+    Ok(clone_id)
+}
+
 fn descendant_folder_ids(
     transaction: &Transaction<'_>,
     folder_id: i64,
@@ -602,9 +1110,10 @@ mod tests {
 
     use super::{
         CreateFolderInput, FolderId, FolderMetadataInput, FolderWatchInput,
-        ReorderFolderChildrenInput, ReorderFolderItemsInput, RANK_GAP,
+        ReorderFolderChildrenInput, ReorderFolderItemsInput, SetFolderAutoTagsInput,
+        SortFolderTreeInput, RANK_GAP,
     };
-    use crate::app::{Application, ItemId};
+    use crate::app::{Application, ItemId, ItemTarget};
     use crate::store::Store;
 
     fn fixture() -> (tempfile::TempDir, Application, i64) {
@@ -649,6 +1158,24 @@ mod tests {
         })
         .unwrap()
         .0
+    }
+
+    fn assigned_tag_names(app: &Application, media_id: i64) -> Vec<String> {
+        app.store()
+            .read(|connection| {
+                connection
+                    .prepare(
+                        "SELECT CASE WHEN t.namespace = 'general' THEN t.subtag
+                                     ELSE t.namespace || ':' || t.subtag END
+                         FROM media_tag mt
+                         JOIN tag t ON t.tag_id = mt.tag_id
+                         WHERE mt.media_item_id = ?1
+                         ORDER BY t.namespace, t.subtag",
+                    )?
+                    .query_map([media_id], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap()
     }
 
     #[test]
@@ -708,6 +1235,59 @@ mod tests {
                 assert_eq!(item_exists, 1);
                 assert_eq!(file_exists, 1);
                 assert_eq!(root_folder_items, 1);
+                Ok(())
+            })
+            .unwrap();
+
+        app.undo().unwrap();
+        app.store()
+            .read(|connection| {
+                let restored: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM folder WHERE folder_id IN (?1, ?2)",
+                    rusqlite::params![child.0, grandchild.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(restored, 2);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn deleting_multiple_selected_hierarchies_is_one_operation() {
+        let (_directory, app, _media_id) = fixture();
+        let first = create(&app, "First", None);
+        let child = create(&app, "Child", Some(first));
+        let second = create(&app, "Second", None);
+
+        let result = app.delete_folders(&[child, second, first, first]).unwrap();
+
+        assert_eq!(result.deleted_folder_ids, vec![first, child, second]);
+        assert_eq!(result.fallback_folder_id, None);
+        app.store()
+            .read(|connection| {
+                let remaining: i64 =
+                    connection.query_row("SELECT COUNT(*) FROM folder", [], |row| row.get(0))?;
+                assert_eq!(remaining, 0);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn bulk_deletion_validates_every_folder_before_deleting_any() {
+        let (_directory, app, _media_id) = fixture();
+        let existing = create(&app, "Existing", None);
+
+        assert!(app.delete_folders(&[existing, FolderId(i64::MAX)]).is_err());
+        app.store()
+            .read(|connection| {
+                let remaining: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM folder WHERE folder_id = ?1",
+                    [existing.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(remaining, 1);
                 Ok(())
             })
             .unwrap();
@@ -792,6 +1372,175 @@ mod tests {
                         Some("Reference images".to_string()),
                     )
                 );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn duplicating_folder_clones_structure_metadata_and_auto_tags_only() {
+        let (_directory, app, media_id) = fixture();
+        let source = create(&app, "Source", None);
+        let child = create(&app, "Child", Some(source));
+        app.set_folder_metadata(&FolderMetadataInput {
+            folder_id: source,
+            icon: Some("star".to_string()),
+            color: Some("#ff8800".to_string()),
+            notes: Some("Reference images".to_string()),
+        })
+        .unwrap();
+        app.set_folder_auto_tags(&SetFolderAutoTagsInput {
+            folder_id: child,
+            tags: vec!["artist:melon".to_string()],
+        })
+        .unwrap();
+        app.store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)",
+                    rusqlite::params![source.0, media_id],
+                )?;
+                transaction.execute(
+                    "UPDATE folder SET watch_path = '/tmp/source', watch_enabled = 1,
+                     watch_subfolders = 1 WHERE folder_id = ?1",
+                    [source.0],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let (duplicate, receipt) = app.duplicate_folder(source).unwrap();
+        assert_eq!(receipt.folder_ids.len(), 2);
+        let duplicate_child = app
+            .store()
+            .read(|connection| {
+                let duplicate_row: (String, Option<String>, Option<String>, Option<String>, bool) =
+                    connection.query_row(
+                        "SELECT name, icon, color, notes, watch_enabled
+                         FROM folder WHERE folder_id = ?1",
+                        [duplicate.0],
+                        |row| {
+                            Ok((
+                                row.get(0)?,
+                                row.get(1)?,
+                                row.get(2)?,
+                                row.get(3)?,
+                                row.get(4)?,
+                            ))
+                        },
+                    )?;
+                assert_eq!(
+                    duplicate_row,
+                    (
+                        "Source copy".to_string(),
+                        Some("star".to_string()),
+                        Some("#ff8800".to_string()),
+                        Some("Reference images".to_string()),
+                        false,
+                    )
+                );
+                let duplicate_child: i64 = connection.query_row(
+                    "SELECT folder_id FROM folder WHERE parent_id = ?1 AND name = 'Child'",
+                    [duplicate.0],
+                    |row| row.get(0),
+                )?;
+                let copied_memberships: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM folder_item WHERE folder_id IN (?1, ?2)",
+                    rusqlite::params![duplicate.0, duplicate_child],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(copied_memberships, 0);
+                Ok(duplicate_child)
+            })
+            .unwrap();
+        assert_eq!(
+            app.folder_auto_tags(FolderId(duplicate_child)).unwrap(),
+            vec!["artist:melon".to_string()]
+        );
+    }
+
+    #[test]
+    fn folder_auto_tags_apply_to_descendants_and_future_members_without_removal() {
+        let (_directory, app, media_id) = fixture();
+        let parent = create(&app, "Parent", None);
+        let child = create(&app, "Child", Some(parent));
+        app.store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)",
+                    rusqlite::params![child.0, media_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        app.set_folder_auto_tags(&SetFolderAutoTagsInput {
+            folder_id: parent,
+            tags: vec!["artist:melon".to_string()],
+        })
+        .unwrap();
+        assert_eq!(assigned_tag_names(&app, media_id), vec!["artist:melon"]);
+
+        app.set_folder_auto_tags(&SetFolderAutoTagsInput {
+            folder_id: parent,
+            tags: Vec::new(),
+        })
+        .unwrap();
+        assert_eq!(assigned_tag_names(&app, media_id), vec!["artist:melon"]);
+
+        app.set_folder_membership(
+            &ItemTarget::Explicit {
+                item_ids: vec![ItemId(media_id)],
+            },
+            child.0,
+            false,
+        )
+        .unwrap();
+
+        app.set_folder_auto_tags(&SetFolderAutoTagsInput {
+            folder_id: parent,
+            tags: vec!["species:slime".to_string()],
+        })
+        .unwrap();
+        assert_eq!(assigned_tag_names(&app, media_id), vec!["artist:melon"]);
+        app.set_folder_membership(
+            &ItemTarget::Explicit {
+                item_ids: vec![ItemId(media_id)],
+            },
+            child.0,
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            assigned_tag_names(&app, media_id),
+            vec!["artist:melon", "species:slime"]
+        );
+    }
+
+    #[test]
+    fn sorting_folder_tree_reorders_the_selected_sibling_level() {
+        let (_directory, app, _media_id) = fixture();
+        let zulu = create(&app, "Zulu", None);
+        let alpha = create(&app, "alpha", None);
+        let mike = create(&app, "Mike", None);
+
+        app.sort_folder_tree(&SortFolderTreeInput {
+            folder_id: zulu,
+            descending: false,
+            recursive: false,
+        })
+        .unwrap();
+
+        app.store()
+            .read(|connection| {
+                let ids = connection
+                    .prepare(
+                        "SELECT folder_id FROM folder WHERE parent_id IS NULL
+                         ORDER BY sort_rank, folder_id",
+                    )?
+                    .query_map([], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                assert_eq!(ids, vec![alpha.0, mike.0, zulu.0]);
                 Ok(())
             })
             .unwrap();

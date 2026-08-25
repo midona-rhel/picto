@@ -23,7 +23,8 @@ const api = {
   window: {
     call: (method, payload = {}) => ipcRenderer.invoke('picto:window', { method, payload }),
   },
-  popupMenu: () => ipcRenderer.invoke('picto:popup-menu'),
+  getApplicationMenu: () => ipcRenderer.invoke('picto:application-menu:get'),
+  executeApplicationMenuItem: (id) => ipcRenderer.invoke('picto:application-menu:execute', { id }),
   restartMainWindow: () => ipcRenderer.invoke('picto:restart-main-window'),
 };
 
@@ -47,6 +48,9 @@ const clipboard = {
 const shellOps = {
   showInFolder: (path) => ipcRenderer.invoke('picto:shell:showInFolder', { path }),
   openPath: (path) => ipcRenderer.invoke('picto:shell:openPath', { path }),
+  getOpenWithOptions: (path) => ipcRenderer.invoke('picto:shell:getOpenWithOptions', { path }),
+  openWithApplication: (path, applicationPath) => ipcRenderer.invoke('picto:shell:openWithApplication', { path, applicationPath }),
+  openWithChooser: (path) => ipcRenderer.invoke('picto:shell:openWithChooser', { path }),
 };
 
 const search = {

@@ -1,56 +1,55 @@
-/**
- * Thin bridge to the thumbnail decode worker.
- *
- * The main thread sends an activation plan and receives decoded bitmaps.
- */
+/** One decode-worker bridge per canvas grid. */
 
 import ThumbnailWorker from './thumbnailDecodeWorker?worker';
 
 type BitmapCallback = (fileHash: string, bitmap: ImageBitmap) => void;
 type ErrorCallback = (fileHash: string) => void;
 
-let worker: Worker | null = null;
-let bitmapCb: BitmapCallback | null = null;
-let errorCb: ErrorCallback | null = null;
+type WorkerFactory = () => Worker;
 
-function ensureWorker(): Worker | null {
-  if (worker) return worker;
-  try {
-    worker = new ThumbnailWorker();
-    worker.onmessage = (event: MessageEvent) => {
-      const msg = event.data;
-      if (msg.type === 'bitmap') bitmapCb?.(msg.fileHash, msg.bitmap);
-      else if (msg.type === 'error') errorCb?.(msg.fileHash);
-    };
-    worker.onerror = () => {
-      worker?.terminate();
-      worker = null;
-    };
-  } catch {
-    worker = null;
+export class ThumbnailDecodeClient {
+  private worker: Worker | null = null;
+
+  constructor(
+    private readonly onBitmap: BitmapCallback,
+    private readonly onError: ErrorCallback,
+    private readonly createWorker: WorkerFactory = () => new ThumbnailWorker(),
+  ) {}
+
+  private ensureWorker(): Worker | null {
+    if (this.worker) return this.worker;
+    try {
+      const worker = this.createWorker();
+      worker.onmessage = (event: MessageEvent) => {
+        const message = event.data;
+        if (message.type === 'bitmap') this.onBitmap(message.fileHash, message.bitmap);
+        else if (message.type === 'error') this.onError(message.fileHash);
+      };
+      worker.onerror = () => {
+        worker.terminate();
+        if (this.worker === worker) this.worker = null;
+      };
+      this.worker = worker;
+      return worker;
+    } catch {
+      return null;
+    }
   }
-  return worker;
-}
 
-/** Send the current set of visible tiles to the worker. */
-export function sendThumbnailPlan(entries: Array<{ fileHash: string; url: string }>): void {
-  ensureWorker()?.postMessage({ type: 'plan', entries });
-}
+  sendPlan(entries: Array<{ fileHash: string; url: string }>): void {
+    this.ensureWorker()?.postMessage({ type: 'plan', entries });
+  }
 
-/** Clear all worker state (scope change). */
-export function clearThumbnailWorker(): void {
-  worker?.postMessage({ type: 'clear' });
-}
+  invalidate(fileHash: string): void {
+    this.ensureWorker()?.postMessage({ type: 'invalidate', fileHash });
+  }
 
-export function setThumbnailBitmapCallback(cb: BitmapCallback | null): void {
-  bitmapCb = cb;
-}
+  clear(): void {
+    this.worker?.postMessage({ type: 'clear' });
+  }
 
-export function setThumbnailErrorCallback(cb: ErrorCallback | null): void {
-  errorCb = cb;
-}
-
-export function terminateThumbnailWorker(): void {
-  worker?.terminate();
-  worker = null;
+  terminate(): void {
+    this.worker?.terminate();
+    this.worker = null;
+  }
 }

@@ -1,4 +1,8 @@
-import { normalizeInvokeError } from './ipc';
+import { invoke, normalizeInvokeError } from './ipc';
+
+afterEach(() => {
+  delete (window as any).picto;
+});
 
 describe('normalizeInvokeError', () => {
   it('removes Electron transport wrappers from backend messages', () => {
@@ -13,5 +17,21 @@ describe('normalizeInvokeError', () => {
     expect(normalizeInvokeError(new Error('Open a library first.')).message).toBe(
       'Open a library first.',
     );
+  });
+
+  it('decodes the native JSON envelope in the renderer', async () => {
+    (window as any).picto = {
+      api: {
+        invoke: vi.fn().mockResolvedValue({
+          __pictoCoreJson: '{"items":[{"item_id":7}],"revision":2}',
+          __pictoNativeMs: 0.4,
+        }),
+      },
+    };
+
+    await expect(invoke('items.query', {})).resolves.toEqual({
+      items: [{ item_id: 7 }],
+      revision: 2,
+    });
   });
 });

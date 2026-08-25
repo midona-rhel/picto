@@ -1,5 +1,7 @@
 /** Desktop IPC transport bridge — wraps window.picto preload API. */
 
+import { recordIpcCall } from '../features/diagnostics/diagnosticsStore';
+
 export type UnlistenFn = () => void;
 
 export interface GpuDiagnostics {
@@ -7,6 +9,22 @@ export interface GpuDiagnostics {
   featureStatus: Record<string, string>;
   info: unknown;
   experimentalFlagsEnabled: boolean;
+}
+
+interface CoreJsonEnvelope {
+  __pictoCoreJson: string;
+  __pictoNativeMs: number;
+}
+
+function decodeInvokeResult<T>(result: unknown): { value: T; nativeDurationMs?: number } {
+  if (result && typeof result === 'object' && '__pictoCoreJson' in result) {
+    const envelope = result as CoreJsonEnvelope;
+    return {
+      value: JSON.parse(envelope.__pictoCoreJson) as T,
+      nativeDurationMs: envelope.__pictoNativeMs,
+    };
+  }
+  return { value: result as T };
 }
 
 function requireDesktop() {
@@ -25,10 +43,16 @@ export function normalizeInvokeError(error: unknown): Error {
 }
 
 export async function invoke<T = unknown>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const started = performance.now();
   try {
-    return await requireDesktop().api.invoke(command, args ?? {}) as T;
+    const transportResult = await requireDesktop().api.invoke(command, args ?? {});
+    const result = decodeInvokeResult<T>(transportResult);
+    recordIpcCall(command, performance.now() - started, undefined, result.nativeDurationMs);
+    return result.value;
   } catch (error) {
-    throw normalizeInvokeError(error);
+    const normalized = normalizeInvokeError(error);
+    recordIpcCall(command, performance.now() - started, normalized);
+    throw normalized;
   }
 }
 

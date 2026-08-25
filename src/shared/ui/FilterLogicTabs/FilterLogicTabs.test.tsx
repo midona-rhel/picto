@@ -1,0 +1,19 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+import { FilterLogicTabs } from './FilterLogicTabs';
+
+describe('FilterLogicTabs', () => {
+  it('exposes reference application-compatible any, all, and exact rules', () => {
+    const onChange = vi.fn();
+    render(<FilterLogicTabs value="any" onChange={onChange} />);
+
+    expect(screen.getByRole('button', { name: 'Match any' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByRole('button', { name: 'Match any' }).querySelector('.tabler-icon-layers-union')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Match all' }).querySelector('.tabler-icon-layers-intersect')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Match all' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Match exactly' }));
+
+    expect(onChange).toHaveBeenNthCalledWith(1, 'all');
+    expect(onChange).toHaveBeenNthCalledWith(2, 'exact');
+  });
+});

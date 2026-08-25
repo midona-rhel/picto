@@ -12,6 +12,14 @@ export const appController = {
     });
   },
 
+  subscribeThemePreview(onChange: (payload: { theme: string }) => void): Promise<() => void> {
+    return listen<{ theme: string }>('picto:theme-preview', (event) => onChange(event.payload));
+  },
+
+  publishThemePreview(theme: string): Promise<void> {
+    return (window as any).picto?.events?.emit?.('picto:theme-preview', { theme }) ?? Promise.resolve();
+  },
+
   subscribeMenuNavigate(onNavigate: (destination: string) => void): Promise<() => void> {
     return listen<string>('menu:navigate', (event) => {
       onNavigate(event.payload);

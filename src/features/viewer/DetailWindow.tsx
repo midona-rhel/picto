@@ -14,18 +14,26 @@ import {
   IconPin,
   IconPinFilled,
 } from '@tabler/icons-react';
-import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
+import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ToolbarActualSizeIcon, ToolbarCloseIcon, ToolbarFitIcon } from '../../shared/ui/icons/toolbar-icons';
+import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { useImageZoom, type ImageSize, type ZoomState } from './hooks/useImageZoom';
 import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { useRecordMediaView } from './hooks/useRecordMediaView';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
-import { VideoPlayer } from './video/VideoPlayer';
+import { DetailMediaRenderer } from './document/DetailMediaRenderer';
+import { detailRendererKind } from './document/detailRendererKind';
+import { useViewerEntityContextMenu } from './useViewerEntityContextMenu';
+import type { FlashPlaybackController } from './document/FlashPlayer';
+import { FlashControls } from './document/FlashControls';
+import type { CurrentFrameCapture } from './currentFrameCapture';
+import type { ViewerZoomControls } from '../../state/viewer';
 import { filesController } from '../../controllers/filesController';
 import { windowController } from '../../controllers/windowController';
+import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
 import styles from './DetailWindow.module.css';
 import viewerStyles from './MediaView.module.css';
 
@@ -71,6 +79,13 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [alwaysOnTop, setAlwaysOnTop] = useState(false);
   const [toolbarHidden, setToolbarHidden] = useState(true);
+  const [flashPlayback, setFlashPlayback] = useState<FlashPlaybackController | null>(null);
+  const [captureCurrentFrame, setCaptureCurrentFrame] = useState<CurrentFrameCapture | null>(null);
+  const [pdfZoomControls, setPdfZoomControls] = useState<ViewerZoomControls | null>(null);
+  const [pdfZoomPercent, setPdfZoomPercent] = useState(100);
+  const handleFrameCaptureChange = useCallback((capture: CurrentFrameCapture | null) => {
+    setCaptureCurrentFrame(capture ? () => capture : null);
+  }, []);
   const toolbarTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const currentIndexRef = useRef(currentIndex);
   currentIndexRef.current = currentIndex;
@@ -106,7 +121,19 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   }, [images, currentIndex]);
   useRecordMediaView(currentImage?.item_id);
 
-  const isVideo = currentImage?.mime?.startsWith('video/') ?? false;
+  const rendererKind = detailRendererKind(currentImage?.mime ?? '');
+  const isImage = rendererKind === 'image';
+  const usesRendererZoom = rendererKind === 'pdf' || rendererKind === 'jpeg-xl';
+  const supportsZoom = isImage || (usesRendererZoom && pdfZoomControls != null);
+  const contextMenu = useViewerEntityContextMenu({
+    hash: currentImage?.hash ?? null,
+    name: currentImage?.name,
+    mime: currentImage?.mime,
+    width: currentImage?.width,
+    height: currentImage?.height,
+    flashPlayback: rendererKind === 'flash' ? flashPlayback : null,
+    captureCurrentFrame,
+  });
   const thumbHash = currentImage?.hash ?? hash;
 
   // ── Toolbar auto-hide ──
@@ -144,8 +171,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
 
   // ── Refs ──
   const containerRef = useRef<HTMLDivElement>(null);
-  const thumbFrameRef = useRef<HTMLDivElement>(null);
-  const fullFrameRef = useRef<HTMLDivElement>(null);
+  const imageFrameRef = useRef<HTMLDivElement>(null);
   const fullImgRef = useRef<HTMLImageElement>(null);
   const navigatorRef = useRef<HTMLDivElement>(null);
   const navViewportRef = useRef<HTMLDivElement>(null);
@@ -160,7 +186,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   imageSizeRef.current = imageSize;
 
   // ── Zoom/pan ──
-  const zoom = useImageZoom(containerRef, imageSize, [thumbFrameRef, fullFrameRef]);
+  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef]);
 
   // ── Media pipeline ──
   const neighborHashes = useMemo(() => {
@@ -176,7 +202,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     hash: currentImage?.hash ?? null,
     thumbnailHash: currentImage?.hash ?? null,
     mime: currentImage?.mime ?? '',
-    isVideo,
+    isVideo: !isImage,
     imgRef: fullImgRef,
     neighborHashes,
   });
@@ -277,16 +303,13 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   }, [currentImage]);
 
   // ── Keyboard shortcuts (with EU alternatives via shortcut registry) ──
-  useEffect(() => {
+  useShortcutScope((e) => {
     const prevDef = getShortcut('view.prevImage');
     const nextDef = getShortcut('view.nextImage');
     const fitDef = getShortcut('view.fitWindow');
     const zoomInDef = getShortcut('view.zoomIn');
     const zoomOutDef = getShortcut('view.zoomOut');
     const actualDef = getShortcut('view.actualSize');
-
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       // Close window
       if (e.key === 'Escape') {
@@ -300,11 +323,17 @@ export function DetailWindow({ hash }: DetailWindowProps) {
       if (nextDef && matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
 
       // Zoom
-      if (!isVideo) {
-        if (fitDef && matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }
-        if (zoomInDef && matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale * 1.25); return; }
-        if (zoomOutDef && matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale / 1.25); return; }
-        if (actualDef && matchesShortcutDef(e, actualDef)) { e.preventDefault(); zoom.fitActual(); return; }
+      const activeZoom = usesRendererZoom ? pdfZoomControls : isImage ? {
+        fitToWindow: zoom.fitToWindow,
+        fitActual: zoom.fitActual,
+        zoomIn: () => zoom.animateZoomTo(zoom.state.scale * 1.25),
+        zoomOut: () => zoom.animateZoomTo(zoom.state.scale / 1.25),
+      } : null;
+      if (activeZoom) {
+        if (fitDef && matchesShortcutDef(e, fitDef)) { e.preventDefault(); activeZoom.fitToWindow(); return; }
+        if (zoomInDef && matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); activeZoom.zoomIn(); return; }
+        if (zoomOutDef && matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); activeZoom.zoomOut(); return; }
+        if (actualDef && matchesShortcutDef(e, actualDef)) { e.preventDefault(); activeZoom.fitActual(); return; }
       }
 
       // Always on top
@@ -320,10 +349,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
         e.preventDefault();
         handleCopyPath();
       }
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [navigate, isVideo, zoom, toggleAlwaysOnTop, handleCopyPath]);
+  }, { priority: 60 });
 
   useEffect(() => () => { if (boundaryTimerRef.current) clearTimeout(boundaryTimerRef.current); }, []);
 
@@ -337,12 +363,19 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     return name;
   }, [currentImage]);
 
-  const zoomPercent = Math.round(zoom.state.scale * 100);
+  const zoomPercent = usesRendererZoom ? pdfZoomPercent : Math.round(zoom.state.scale * 100);
+  const fitActiveViewer = usesRendererZoom ? pdfZoomControls?.fitToWindow : zoom.fitToWindow;
+  const actualActiveViewer = usesRendererZoom ? pdfZoomControls?.fitActual : zoom.fitActual;
   const thumbUrl = mediaThumbnailUrl(thumbHash);
 
   // ── Render ──
   return (
-    <div className={styles.root}>
+    <div
+      className={styles.root}
+      onContextMenuCapture={(event) => {
+        if (!(event.target as Element).closest('[data-flash-player]')) contextMenu.open(event);
+      }}
+    >
       {currentImage && (
         <div className={`${styles.toolbar} ${toolbarHidden ? styles.toolbarHidden : ''}`}>
           <div className={styles.toolbarLeft}>
@@ -355,16 +388,16 @@ export function DetailWindow({ hash }: DetailWindowProps) {
           </div>
 
           <div className={styles.toolbarRight}>
-            {!isVideo && pipeline.thumbLoaded && (
+            {supportsZoom && (usesRendererZoom || pipeline.thumbLoaded) && (
               <>
                 <span className={styles.zoomRatio}>{zoomPercent}%</span>
                 <KbdTooltip label="Actual size" shortcut="Mod+0">
-                  <button className={styles.icBtn} onClick={() => zoom.fitActual()}>
+                  <button className={styles.icBtn} onClick={actualActiveViewer}>
                     <ToolbarActualSizeIcon />
                   </button>
                 </KbdTooltip>
                 <KbdTooltip label="Fit to window" shortcut="`">
-                  <button className={styles.icBtn} onClick={() => zoom.fitToWindow()}>
+                  <button className={styles.icBtn} onClick={fitActiveViewer}>
                     <ToolbarFitIcon />
                   </button>
                 </KbdTooltip>
@@ -392,9 +425,30 @@ export function DetailWindow({ hash }: DetailWindowProps) {
         </div>
       )}
 
-      {isVideo && currentImage ? (
+      {rendererKind === 'flash' && currentImage ? (
         <div className={styles.container}>
-          <VideoPlayer key={currentImage.hash} src={mediaFileUrl(currentImage.hash, currentImage.mime)} />
+          <DetailMediaRenderer
+            hash={currentImage.hash}
+            mimeType={currentImage.mime}
+            displayName={currentImage.name}
+            onFlashPlaybackChange={setFlashPlayback}
+            onFlashContextMenu={contextMenu.open}
+            onFrameCaptureChange={handleFrameCaptureChange}
+          />
+          <FlashControls controller={flashPlayback} />
+        </div>
+      ) : !isImage && currentImage ? (
+        <div className={styles.container}>
+          <DetailMediaRenderer
+            hash={currentImage.hash}
+            mimeType={currentImage.mime}
+            displayName={currentImage.name}
+            onFlashPlaybackChange={setFlashPlayback}
+            onFlashContextMenu={contextMenu.open}
+            onFrameCaptureChange={handleFrameCaptureChange}
+            onPdfZoomControlsChange={setPdfZoomControls}
+            onPdfZoomPercentChange={setPdfZoomPercent}
+          />
         </div>
       ) : (
         <div
@@ -404,46 +458,24 @@ export function DetailWindow({ hash }: DetailWindowProps) {
         >
           {currentImage ? (
             <>
-              {/* Thumbnail frame */}
-              <div ref={thumbFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
-                <img
-                  src={pipeline.thumbUrl || thumbUrl}
-                  alt="" draggable={false}
-                  onLoad={pipeline.handleThumbLoad}
-                  style={{
-                    display: 'block',
-                    width: imageSize?.width,
-                    height: imageSize?.height,
-                    opacity: pipeline.thumbLoaded ? 1 : 0,
-                  }}
-                />
-              </div>
-
-              {/* Full-res frame */}
-              <div ref={fullFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
-                {pipeline.fullUrl && (
-                  <img
-                    ref={fullImgRef}
-                    src={pipeline.fullUrl}
-                    alt="" decoding="async" draggable={false}
-                    onLoad={pipeline.handleFullLoad}
-                    style={{
-                      display: 'block',
-                      width: imageSize?.width,
-                      height: imageSize?.height,
-                      opacity: pipeline.fullVisible ? 1 : 0,
-                      transition: 'opacity 130ms ease',
-                    }}
-                  />
-                )}
-              </div>
+              <ImageCrossfadeFrame
+                frameRef={imageFrameRef}
+                fullImageRef={fullImgRef}
+                imageSize={imageSize}
+                thumbnailUrl={pipeline.thumbUrl || thumbUrl}
+                fullUrl={pipeline.fullUrl}
+                thumbnailVisible={pipeline.thumbLoaded}
+                fullVisible={pipeline.fullVisible}
+                onThumbnailLoad={pipeline.handleThumbLoad}
+                onFullLoad={pipeline.handleFullLoad}
+              />
 
               {/* Boundary flash */}
               <div className={`${viewerStyles.boundaryLeft} ${boundaryFlash === 'left' ? viewerStyles.boundaryVisible : ''}`}>First item</div>
               <div className={`${viewerStyles.boundaryRight} ${boundaryFlash === 'right' ? viewerStyles.boundaryVisible : ''}`}>Last item</div>
 
               {/* Navigator minimap */}
-              {!isVideo && (
+              {isImage && (
                 <div ref={navigatorRef} className={viewerStyles.navigator} onMouseDown={handleNavMouseDown} style={{ display: 'none' }}>
                   <img src={thumbUrl} alt="" draggable={false} className={viewerStyles.navigatorThumb} />
                   <div ref={navViewportRef} className={viewerStyles.navigatorViewport} />
@@ -457,6 +489,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
           )}
         </div>
       )}
+      {contextMenu.menu}
     </div>
   );
 }

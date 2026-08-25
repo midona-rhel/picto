@@ -12,6 +12,7 @@ use crate::projection_v2::{
     FolderProjectionChange, ItemProjectionChange, MembershipProjectionChange, RootProjectionChange,
     StructureProjectionDelta,
 };
+use crate::store::history::HistoryDescriptor;
 
 const RANK_GAP: i64 = 1024;
 const MAX_RECEIPT_ITEM_IDS: usize = 256;
@@ -36,6 +37,7 @@ pub struct OrganizeIntoCollectionResult {
 pub struct DetachItemsInput {
     pub collection_id: ItemId,
     pub media_item_ids: Vec<ItemId>,
+    pub target_lifecycle: Option<Lifecycle>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -69,7 +71,14 @@ impl Application {
         if name.is_empty() {
             return Err("An item name cannot be empty".to_string());
         }
-        let (_, revision) = self.transaction(
+        let item_resource = resources::item(item_id.0);
+        let (_, revision, _) = self.undoable_transaction(
+            HistoryDescriptor::new(
+                "items.rename",
+                "Rename item",
+                vec![resources::LIBRARY.to_string(), item_resource.clone()],
+                vec![item_id.0],
+            ),
             |transaction| {
                 let kind: String = transaction
                     .query_row(
@@ -103,7 +112,7 @@ impl Application {
         )?;
         Ok(receipt(
             revision,
-            &[resources::LIBRARY, &resources::item(item_id.0)],
+            &[resources::LIBRARY, &item_resource],
             &[item_id.0],
         ))
     }
@@ -113,7 +122,20 @@ impl Application {
         target: &ItemTarget,
         lifecycle: Lifecycle,
     ) -> Result<MutationReceipt, String> {
-        let (item_ids, revision) = self.transaction(
+        let (item_ids, revision, _) = self.undoable_transaction(
+            HistoryDescriptor::new(
+                "items.set_lifecycle",
+                match lifecycle {
+                    Lifecycle::Trash => "Move to Trash",
+                    _ => "Change item status",
+                },
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                ],
+                vec![],
+            )
+            .rebuilding_projections(),
             |transaction| {
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
                 for item_id in &item_ids {
@@ -147,7 +169,22 @@ impl Application {
         folder_id: i64,
         present: bool,
     ) -> Result<MutationReceipt, String> {
-        let (item_ids, revision) = self.transaction(
+        let ((item_ids, _changed_tags), revision, _) = self.undoable_transaction(
+            HistoryDescriptor::new(
+                "items.set_folder",
+                if present {
+                    "Add to folder"
+                } else {
+                    "Remove from folder"
+                },
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                    resources::FOLDERS.to_string(),
+                ],
+                vec![],
+            )
+            .rebuilding_projections(),
             |transaction| {
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
                 require_folder(transaction, folder_id)?;
@@ -166,18 +203,40 @@ impl Application {
                         )?;
                     }
                 }
-                Ok((item_ids.clone(), item_ids))
+                let changed_tags = if present {
+                    let tags =
+                        crate::folders_v2::inherited_folder_auto_tags(transaction, folder_id)?;
+                    if tags.is_empty() {
+                        Vec::new()
+                    } else {
+                        let media_ids = media_items_for_roots(transaction, &item_ids)?;
+                        apply_tags_in(transaction, &media_ids, &tags, true, 1, "folder")?
+                    }
+                } else {
+                    Vec::new()
+                };
+                Ok((
+                    (item_ids.clone(), changed_tags.clone()),
+                    (item_ids, changed_tags),
+                ))
             },
-            |projections, changed_ids| {
+            |projections, (changed_ids, changed_tags)| {
                 for item_id in changed_ids {
                     projections.apply_folder_delta(folder_id, item_id, present)?;
                 }
+                projections.apply_tag_changes(&changed_tags, true)?;
                 Ok(())
             },
         )?;
         Ok(receipt(
             revision,
-            &[resources::LIBRARY, resources::SIDEBAR, resources::FOLDERS],
+            &[
+                resources::LIBRARY,
+                resources::SIDEBAR,
+                resources::FOLDERS,
+                resources::TAGS,
+                resources::SMART_FOLDERS,
+            ],
             &item_ids,
         ))
     }
@@ -194,7 +253,18 @@ impl Application {
             .map(str::to_owned);
         let now = chrono::Utc::now().to_rfc3339();
         let key = new_key("collection");
-        let ((collection_id, affected), revision) = self.transaction(
+        let ((collection_id, affected), revision, _) = self.undoable_transaction(
+            HistoryDescriptor::new(
+                "collections.organize",
+                "Create or merge group",
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                    resources::FOLDERS.to_string(),
+                ],
+                Vec::new(),
+            )
+            .rebuilding_projections(),
             |transaction| {
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, &input.target)?;
                 let mut collection_ids = Vec::new();
@@ -219,23 +289,33 @@ impl Application {
                         other => return Err(invalid(format!("Unsupported item kind '{other}'"))),
                     }
                 }
+                let mut member_groups = standalone_media_ids
+                    .iter()
+                    .map(|media_item_id| vec![*media_item_id])
+                    .collect::<Vec<_>>();
+                member_groups.extend(
+                    members_by_collection
+                        .iter()
+                        .map(|(_, members)| members.clone()),
+                );
+                require_no_collection_file_overlap(transaction, &member_groups)?;
                 if collection_ids.is_empty() && item_ids.len() < 2 {
                     return Err(invalid(
-                        "Creating a collection requires at least two standalone media items",
+                        "Creating a group requires at least two standalone media items",
                     ));
                 }
                 if collection_ids.is_empty() && input.winning_collection_id.is_some() {
                     return Err(invalid(
-                        "A winning collection can only be selected when the target contains a collection",
+                        "A winning group can only be selected when the target contains a group",
                     ));
                 }
                 let lifecycle = require_same_root_lifecycle(transaction, &item_ids)?;
                 let projected_lifecycle = parse_lifecycle(&lifecycle)?;
                 let mut delta = StructureProjectionDelta::default();
                 let collection_id = if collection_ids.is_empty() {
-                    let label = label.as_deref().ok_or_else(|| {
-                        invalid("A new collection requires a non-empty label")
-                    })?;
+                    let label = label
+                        .as_deref()
+                        .ok_or_else(|| invalid("A new group requires a non-empty label"))?;
                     let folders = folder_ids_for_roots(transaction, &item_ids)?;
                     transaction.execute(
                         "INSERT INTO library_item (item_key, kind, label, created_at, updated_at)
@@ -246,10 +326,6 @@ impl Application {
                     transaction.execute(
                         "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
                         params![collection_id, lifecycle],
-                    )?;
-                    transaction.execute(
-                        "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
-                        params![item_ids[0], collection_id],
                     )?;
                     for folder_id in &folders {
                         transaction.execute(
@@ -278,14 +354,14 @@ impl Application {
                     let collection_id = match input.winning_collection_id {
                         Some(winner) if !collection_ids.contains(&winner.0) => {
                             return Err(invalid(
-                                "The winning collection must be one of the selected collections",
+                                "The winning group must be one of the selected groups",
                             ));
                         }
                         Some(winner) => winner.0,
                         None if collection_ids.len() == 1 => collection_ids[0],
                         None => {
                             return Err(invalid(
-                                "Select which collection should own the merged members",
+                                "Select which group should own the merged members",
                             ));
                         }
                     };
@@ -293,7 +369,7 @@ impl Application {
                         && collection_ids.iter().all(|id| *id == collection_id)
                     {
                         return Err(invalid(
-                            "Organizing a collection requires at least one additional item",
+                            "Organizing a group requires at least one additional item",
                         ));
                     }
                     collection_id
@@ -318,10 +394,8 @@ impl Application {
                         |row| row.get(0),
                     )?;
                     if kind == "media" {
-                        transaction.execute(
-                            "DELETE FROM library_root WHERE item_id = ?1",
-                            [item_id],
-                        )?;
+                        transaction
+                            .execute("DELETE FROM library_root WHERE item_id = ?1", [item_id])?;
                         transaction.execute(
                             "INSERT INTO collection_member
                              (collection_id, media_item_id, position_rank)
@@ -375,10 +449,8 @@ impl Application {
                             affected.push(media_id);
                             next_position += RANK_GAP;
                         }
-                        transaction.execute(
-                            "DELETE FROM library_item WHERE item_id = ?1",
-                            [item_id],
-                        )?;
+                        transaction
+                            .execute("DELETE FROM library_item WHERE item_id = ?1", [item_id])?;
                         delta.items.push(ItemProjectionChange {
                             item_id: *item_id,
                             kind: crate::app::ItemKind::Collection,
@@ -398,6 +470,7 @@ impl Application {
                     }
                 }
 
+                sync_collection_cover(transaction, collection_id)?;
                 affected.sort_unstable();
                 affected.dedup();
                 Ok(((collection_id, affected), delta))
@@ -418,12 +491,25 @@ impl Application {
     pub fn detach_items(&self, input: DetachItemsInput) -> Result<MutationReceipt, String> {
         let media_ids = unique_ids(&input.media_item_ids)?;
         if media_ids.is_empty() {
-            return Err("No collection members were selected".to_string());
+            return Err("No group members were selected".to_string());
         }
-        let (affected, revision) = self.transaction(
+        let (affected, revision, _) = self.undoable_transaction(
+            HistoryDescriptor::new(
+                "collections.detach",
+                "Remove from group",
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                    resources::FOLDERS.to_string(),
+                ],
+                Vec::new(),
+            )
+            .rebuilding_projections(),
             |transaction| {
                 let lifecycle = require_collection_root(transaction, input.collection_id.0)?;
                 let projected_lifecycle = parse_lifecycle(&lifecycle)?;
+                let detached_lifecycle = input.target_lifecycle.unwrap_or(projected_lifecycle);
+                let detached_lifecycle_name = detached_lifecycle.as_str();
                 let folders = folder_ids_for_roots(transaction, &[input.collection_id.0])?;
                 let mut delta = StructureProjectionDelta::default();
                 for media_id in &media_ids {
@@ -434,16 +520,21 @@ impl Application {
                     )?;
                     if removed != 1 {
                         return Err(invalid(format!(
-                            "Media item {media_id} is not attached to collection {}",
+                            "Media item {media_id} is not attached to group {}",
                             input.collection_id.0
                         )));
                     }
-                    create_root_with_folders(transaction, *media_id, &lifecycle, &folders)?;
+                    create_root_with_folders(
+                        transaction,
+                        *media_id,
+                        detached_lifecycle_name,
+                        &folders,
+                    )?;
                     project_detached_root(
                         &mut delta,
                         input.collection_id.0,
                         *media_id,
-                        projected_lifecycle,
+                        detached_lifecycle,
                         &folders,
                     );
                 }
@@ -452,7 +543,7 @@ impl Application {
                 affected.push(input.collection_id.0);
                 let remaining = collection_members(transaction, input.collection_id.0)?;
                 if remaining.len() > 1 {
-                    ensure_valid_cover(transaction, input.collection_id.0, &remaining)?;
+                    sync_collection_cover(transaction, input.collection_id.0)?;
                 } else {
                     if let Some(media_id) = remaining.first().copied() {
                         transaction.execute(
@@ -488,7 +579,18 @@ impl Application {
     }
 
     pub fn ungroup_collection(&self, collection_id: ItemId) -> Result<MutationReceipt, String> {
-        let (affected, revision) = self.transaction(
+        let (affected, revision, _) = self.undoable_transaction(
+            HistoryDescriptor::new(
+                "collections.ungroup",
+                "Ungroup",
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                    resources::FOLDERS.to_string(),
+                ],
+                vec![collection_id.0],
+            )
+            .rebuilding_projections(),
             |transaction| {
                 let lifecycle = require_collection_root(transaction, collection_id.0)?;
                 let projected_lifecycle = parse_lifecycle(&lifecycle)?;
@@ -528,7 +630,16 @@ impl Application {
         input: ReorderCollectionInput,
     ) -> Result<MutationReceipt, String> {
         let media_ids = unique_ids(&input.media_item_ids)?;
-        let (_, revision) = self.transaction(
+        let (_, revision, _) = self.undoable_transaction(
+            HistoryDescriptor::new(
+                "collections.reorder",
+                "Reorder group",
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::item(input.collection_id.0),
+                ],
+                vec![input.collection_id.0],
+            ),
             |transaction| {
                 require_collection_root(transaction, input.collection_id.0)?;
                 let existing = collection_members(transaction, input.collection_id.0)?;
@@ -537,7 +648,7 @@ impl Application {
                         != media_ids.iter().copied().collect::<BTreeSet<_>>()
                 {
                     return Err(invalid(
-                        "Reorder must contain every collection member exactly once",
+                        "Reorder must contain every group member exactly once",
                     ));
                 }
                 for (index, media_id) in media_ids.iter().enumerate() {
@@ -551,6 +662,7 @@ impl Application {
                         ],
                     )?;
                 }
+                sync_collection_cover(transaction, input.collection_id.0)?;
                 Ok(((), ()))
             },
             |_, ()| Ok(()),
@@ -559,45 +671,6 @@ impl Application {
             revision,
             &[resources::LIBRARY, &resources::item(input.collection_id.0)],
             &[input.collection_id.0],
-        ))
-    }
-
-    pub fn set_collection_cover(
-        &self,
-        collection_id: ItemId,
-        media_item_id: ItemId,
-    ) -> Result<MutationReceipt, String> {
-        let (_, revision) = self.transaction(
-            |transaction| {
-                require_collection_root(transaction, collection_id.0)?;
-                let member = transaction
-                    .query_row(
-                        "SELECT 1 FROM collection_member
-                     WHERE collection_id = ?1 AND media_item_id = ?2",
-                        params![collection_id.0, media_item_id.0],
-                        |_| Ok(()),
-                    )
-                    .optional()?;
-                if member.is_none() {
-                    return Err(invalid("The selected cover is not a collection member"));
-                }
-                transaction.execute(
-                    "UPDATE library_item SET cover_media_item_id = ?1, updated_at = ?2
-                 WHERE item_id = ?3",
-                    params![
-                        media_item_id.0,
-                        chrono::Utc::now().to_rfc3339(),
-                        collection_id.0
-                    ],
-                )?;
-                Ok(((), ()))
-            },
-            |_, ()| Ok(()),
-        )?;
-        Ok(receipt(
-            revision,
-            &[resources::LIBRARY, &resources::item(collection_id.0)],
-            &[collection_id.0],
         ))
     }
 
@@ -615,7 +688,19 @@ impl Application {
         if tags.is_empty() {
             return Err("No valid tags were provided".to_string());
         }
-        let (item_ids, revision, _) = self.transaction_if_changed(
+        let (item_ids, revision, _, _) = self.undoable_transaction_if_changed(
+            HistoryDescriptor::new(
+                "items.apply_tags",
+                if add { "Add tags" } else { "Remove tags" },
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                    resources::TAGS.to_string(),
+                    resources::SMART_FOLDERS.to_string(),
+                ],
+                vec![],
+            )
+            .rebuilding_projections(),
             |transaction| {
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
                 let media_ids = media_items_for_roots(transaction, &item_ids)?;
@@ -718,7 +803,19 @@ impl Application {
                 Ok((*media_item_id, tags))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let (root_ids, revision, _) = self.transaction_if_changed(
+        let (root_ids, revision, _, _) = self.undoable_transaction_if_changed(
+            HistoryDescriptor::new(
+                "items.apply_ai_tags",
+                "Apply AI tags",
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                    resources::TAGS.to_string(),
+                    resources::SMART_FOLDERS.to_string(),
+                ],
+                vec![],
+            )
+            .rebuilding_projections(),
             |transaction| {
                 let mut root_ids = BTreeSet::new();
                 let mut changed_tags = Vec::new();
@@ -765,7 +862,29 @@ impl Application {
             .map(serde_json::to_string)
             .transpose()
             .map_err(|error| error.to_string())?;
-        let (item_ids, revision) = self.transaction(
+        let label = if patch.rating.is_some()
+            && patch.notes.is_none()
+            && patch.source_urls.is_none()
+        {
+            "Change rating"
+        } else if patch.rating.is_none() && patch.notes.is_some() && patch.source_urls.is_none() {
+            "Edit notes"
+        } else if patch.rating.is_none() && patch.notes.is_none() && patch.source_urls.is_some() {
+            "Edit source"
+        } else {
+            "Edit metadata"
+        };
+        let (item_ids, revision, _) = self.undoable_transaction(
+            HistoryDescriptor::new(
+                "items.patch_metadata",
+                label,
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                    resources::SMART_FOLDERS.to_string(),
+                ],
+                vec![],
+            ),
             |transaction| {
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
                 let media_ids = media_items_for_roots(transaction, &item_ids)?;
@@ -807,100 +926,165 @@ impl Application {
     }
 
     pub fn delete_items(&self, target: &ItemTarget) -> Result<DeleteItemsResult, String> {
+        // Permanent media deletion is deliberately outside application
+        // history. It removes unreferenced blobs and must never imply a
+        // recoverable Undo action.
         let ((freed_file_hashes, item_ids), revision) = self.transaction(
             |transaction| {
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
+                let roots_json = serde_json::to_string(&item_ids).map_err(|error| {
+                    invalid(format!("Could not encode deleted root IDs: {error}"))
+                })?;
                 let mut delete_items = BTreeSet::new();
                 let mut delta = StructureProjectionDelta::default();
-                for item_id in &item_ids {
-                    require_root(transaction, *item_id)?;
-                    let folders = folder_ids_for_roots(transaction, &[*item_id])?;
-                    delete_items.insert(*item_id);
-                    let members = collection_members(transaction, *item_id)?;
-                    if members.is_empty() {
-                        delta.items.push(ItemProjectionChange {
-                            item_id: *item_id,
-                            kind: crate::app::ItemKind::Media,
-                            present: false,
-                        });
-                    } else {
-                        delta.items.push(ItemProjectionChange {
-                            item_id: *item_id,
-                            kind: crate::app::ItemKind::Collection,
-                            present: false,
-                        });
-                        for member in members {
-                            delete_items.insert(member);
+                {
+                    let mut statement = transaction.prepare(
+                        "SELECT lr.item_id, li.kind, cm.media_item_id
+                         FROM json_each(?1) requested
+                         JOIN library_root lr
+                           ON lr.item_id = CAST(requested.value AS INTEGER)
+                         JOIN library_item li ON li.item_id = lr.item_id
+                         LEFT JOIN collection_member cm ON cm.collection_id = lr.item_id
+                         ORDER BY CAST(requested.key AS INTEGER), cm.position_rank, cm.media_item_id",
+                    )?;
+                    let rows = statement.query_map([&roots_json], |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, Option<i64>>(2)?,
+                        ))
+                    })?;
+                    let mut projected_roots = BTreeSet::new();
+                    for row in rows {
+                        let (root_id, kind, member_id) = row?;
+                        delete_items.insert(root_id);
+                        if projected_roots.insert(root_id) {
+                            let kind = match kind.as_str() {
+                                "media" => crate::app::ItemKind::Media,
+                                "collection" => crate::app::ItemKind::Collection,
+                                other => {
+                                    return Err(invalid(format!(
+                                        "Unsupported item kind '{other}'"
+                                    )))
+                                }
+                            };
+                            delta.items.push(ItemProjectionChange {
+                                item_id: root_id,
+                                kind,
+                                present: false,
+                            });
+                            delta.roots.push(RootProjectionChange {
+                                item_id: root_id,
+                                lifecycle: None,
+                            });
+                        }
+                        if let Some(member_id) = member_id {
+                            delete_items.insert(member_id);
                             delta.memberships.push(MembershipProjectionChange {
-                                collection_id: *item_id,
-                                media_id: member,
+                                collection_id: root_id,
+                                media_id: member_id,
                                 present: false,
                             });
                             delta.items.push(ItemProjectionChange {
-                                item_id: member,
+                                item_id: member_id,
                                 kind: crate::app::ItemKind::Media,
                                 present: false,
                             });
                         }
                     }
-                    delta.roots.push(RootProjectionChange {
-                        item_id: *item_id,
-                        lifecycle: None,
-                    });
-                    delta.folders.extend(folders.into_iter().map(|folder_id| {
-                        FolderProjectionChange {
+                    if projected_roots.len() != item_ids.len() {
+                        return Err(invalid("A targeted item is not a library root"));
+                    }
+                }
+                {
+                    let mut statement = transaction.prepare(
+                        "SELECT fi.item_id, fi.folder_id
+                         FROM folder_item fi
+                         JOIN json_each(?1) requested
+                           ON fi.item_id = CAST(requested.value AS INTEGER)
+                         ORDER BY CAST(requested.key AS INTEGER), fi.folder_id",
+                    )?;
+                    let rows = statement.query_map([&roots_json], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                    })?;
+                    for row in rows {
+                        let (item_id, folder_id) = row?;
+                        delta.folders.push(FolderProjectionChange {
                             folder_id,
-                            item_id: *item_id,
+                            item_id,
                             present: false,
-                        }
-                    }));
+                        });
+                    }
                 }
                 let affected_item_ids = delete_items.iter().copied().collect::<Vec<_>>();
                 let affected_json = serde_json::to_string(&affected_item_ids).map_err(|error| {
                     invalid(format!("Could not encode deleted item IDs: {error}"))
                 })?;
-                let candidate_files = {
+                let candidate_file_ids = {
                     let mut statement = transaction.prepare(
-                        "SELECT DISTINCT mf.file_id, mf.file_hash
+                        "SELECT DISTINCT mf.file_id
                          FROM media_asset ma
                          JOIN media_file mf ON mf.file_id = ma.file_id
                          WHERE ma.item_id IN (
                              SELECT CAST(value AS INTEGER) FROM json_each(?1)
                          )",
                     )?;
-                    let files = statement
-                        .query_map([affected_json], |row| {
-                            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-                        })?
+                    let file_ids = statement
+                        .query_map([&affected_json], |row| row.get::<_, i64>(0))?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
-                    files
+                    file_ids
                 };
-                for item_id in delete_items {
-                    transaction.execute(
-                        "UPDATE source_item
-                     SET state = 'deleted', media_item_id = NULL, updated_at = ?1
-                     WHERE media_item_id = ?2",
-                        params![chrono::Utc::now().to_rfc3339(), item_id],
-                    )?;
-                    transaction
-                        .execute("DELETE FROM library_item WHERE item_id = ?1", [item_id])?;
-                }
                 let now = chrono::Utc::now().to_rfc3339();
-                let mut hashes = Vec::new();
-                for (file_id, hash) in candidate_files {
-                    let referenced: bool = transaction.query_row(
-                        "SELECT EXISTS(
-                             SELECT 1 FROM media_asset WHERE file_id = ?1
-                         )",
-                        [file_id],
-                        |row| row.get(0),
+                transaction.execute(
+                    "UPDATE source_item
+                     SET state = 'deleted', media_item_id = NULL, updated_at = ?1
+                     WHERE media_item_id IN (
+                         SELECT CAST(value AS INTEGER) FROM json_each(?2)
+                     )",
+                    params![&now, &affected_json],
+                )?;
+                transaction.execute(
+                    "DELETE FROM library_item
+                     WHERE item_id IN (
+                         SELECT CAST(value AS INTEGER) FROM json_each(?1)
+                     )",
+                    [&affected_json],
+                )?;
+
+                let candidate_files_json = serde_json::to_string(&candidate_file_ids)
+                    .map_err(|error| invalid(format!("Could not encode deleted files: {error}")))?;
+                let hashes = {
+                    let mut statement = transaction.prepare(
+                        "DELETE FROM media_file
+                         WHERE file_id IN (
+                             SELECT CAST(value AS INTEGER) FROM json_each(?1)
+                         )
+                           AND NOT EXISTS (
+                               SELECT 1 FROM media_asset
+                               WHERE media_asset.file_id = media_file.file_id
+                           )
+                         RETURNING file_hash",
                     )?;
-                    if !referenced {
-                        crate::workers_v2::enqueue_blob_delete_in(transaction, &hash, &now)?;
-                        transaction
-                            .execute("DELETE FROM media_file WHERE file_id = ?1", [file_id])?;
-                        hashes.push(hash);
-                    }
+                    let hashes = statement
+                        .query_map([candidate_files_json], |row| row.get::<_, String>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    hashes
+                };
+                if !hashes.is_empty() {
+                    let hashes_json = serde_json::to_string(&hashes).map_err(|error| {
+                        invalid(format!("Could not encode deleted file hashes: {error}"))
+                    })?;
+                    transaction.execute(
+                        "INSERT INTO work_item (
+                             file_hash, work_type, status, attempt_count,
+                             available_at, created_at, updated_at
+                         )
+                         SELECT value, 'blob_delete', 'pending', 0, ?2, ?2, ?2
+                         FROM json_each(?1) WHERE 1
+                         ON CONFLICT(file_hash, work_type) WHERE file_hash IS NOT NULL
+                         DO NOTHING",
+                        params![hashes_json, now],
+                    )?;
                 }
                 Ok(((hashes, affected_item_ids), delta))
             },
@@ -977,7 +1161,7 @@ fn require_collection_root(
             |row| row.get(0),
         )
         .optional()?
-        .ok_or_else(|| invalid(format!("Item {item_id} is not a collection root")))
+        .ok_or_else(|| invalid(format!("Item {item_id} is not a group root")))
 }
 
 fn require_standalone_media_root(
@@ -1005,7 +1189,7 @@ fn require_same_root_lifecycle(
     for item_id in item_ids {
         let current = require_root(transaction, *item_id)?;
         if lifecycle.as_ref().is_some_and(|value| value != &current) {
-            return Err(invalid("Collection members must share one lifecycle"));
+            return Err(invalid("Group members must share one lifecycle"));
         }
         lifecycle = Some(current);
     }
@@ -1049,6 +1233,32 @@ fn collection_members(
     members
 }
 
+fn require_no_collection_file_overlap(
+    transaction: &Transaction<'_>,
+    member_groups: &[Vec<i64>],
+) -> rusqlite::Result<()> {
+    let mut file_ids = BTreeSet::new();
+    for members in member_groups {
+        let mut group_file_ids = BTreeSet::new();
+        for media_item_id in members {
+            let file_id: i64 = transaction.query_row(
+                "SELECT file_id FROM media_asset WHERE item_id = ?1",
+                [media_item_id],
+                |row| row.get(0),
+            )?;
+            group_file_ids.insert(file_id);
+        }
+        for file_id in group_file_ids {
+            if !file_ids.insert(file_id) {
+                return Err(invalid(
+                    "A group cannot contain the same physical file more than once",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn create_root_with_folders(
     transaction: &Transaction<'_>,
     item_id: i64,
@@ -1069,22 +1279,24 @@ fn create_root_with_folders(
     Ok(())
 }
 
-fn ensure_valid_cover(
+pub(crate) fn sync_collection_cover(
     transaction: &Transaction<'_>,
     collection_id: i64,
-    members: &[i64],
 ) -> rusqlite::Result<()> {
-    let cover = transaction.query_row(
-        "SELECT cover_media_item_id FROM library_item WHERE item_id = ?1",
-        [collection_id],
-        |row| row.get::<_, Option<i64>>(0),
+    let first_member = transaction
+        .query_row(
+            "SELECT media_item_id FROM collection_member
+             WHERE collection_id = ?1
+             ORDER BY position_rank, media_item_id
+             LIMIT 1",
+            [collection_id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()?;
+    transaction.execute(
+        "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
+        params![first_member, collection_id],
     )?;
-    if !cover.is_some_and(|cover| members.contains(&cover)) {
-        transaction.execute(
-            "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
-            params![members[0], collection_id],
-        )?;
-    }
     Ok(())
 }
 
@@ -1136,7 +1348,7 @@ fn project_removed_collection(
         }));
 }
 
-fn media_items_for_roots(
+pub(crate) fn media_items_for_roots(
     transaction: &Transaction<'_>,
     root_ids: &[i64],
 ) -> rusqlite::Result<Vec<i64>> {
@@ -1160,7 +1372,7 @@ fn media_items_for_roots(
     Ok(media_ids.into_iter().collect())
 }
 
-fn apply_tags_in(
+pub(crate) fn apply_tags_in(
     transaction: &Transaction<'_>,
     media_ids: &[i64],
     tags: &[(String, String)],
@@ -1389,6 +1601,7 @@ mod tests {
             .detach_items(DetachItemsInput {
                 collection_id: grouped.collection_id,
                 media_item_ids: vec![ids[0]],
+                target_lifecycle: None,
             })
             .unwrap();
         assert_eq!(
@@ -1428,6 +1641,89 @@ mod tests {
     }
 
     #[test]
+    fn grouping_round_trips_through_application_history() {
+        let (_directory, app, ids) = fixture();
+        let grouped = organize(&app, &ids[..2], Some("Post"), None);
+
+        app.undo().unwrap();
+        app.store()
+            .read(|connection| {
+                let roots: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM library_root WHERE item_id IN (?1, ?2)",
+                    params![ids[0].0, ids[1].0],
+                    |row| row.get(0),
+                )?;
+                let collection: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM library_item WHERE item_id = ?1",
+                    [grouped.collection_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(roots, 2);
+                assert_eq!(collection, 0);
+                Ok(())
+            })
+            .unwrap();
+
+        app.redo().unwrap();
+        app.store()
+            .read(|connection| {
+                let members: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM collection_member WHERE collection_id = ?1",
+                    [grouped.collection_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(members, 2);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn detaching_to_trash_only_changes_the_selected_members_lifecycle() {
+        let (_directory, app, ids) = fixture();
+        let grouped = organize(&app, &ids, Some("Post"), None);
+
+        app.detach_items(DetachItemsInput {
+            collection_id: grouped.collection_id,
+            media_item_ids: vec![ids[0]],
+            target_lifecycle: Some(Lifecycle::Trash),
+        })
+        .unwrap();
+
+        app.store()
+            .read(|connection| {
+                let detached_lifecycle: String = connection.query_row(
+                    "SELECT lifecycle FROM library_root WHERE item_id = ?1",
+                    [ids[0].0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(detached_lifecycle, "trash");
+
+                let collection_lifecycle: String = connection.query_row(
+                    "SELECT lifecycle FROM library_root WHERE item_id = ?1",
+                    [grouped.collection_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(collection_lifecycle, "active");
+
+                let remaining_members: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM collection_member WHERE collection_id = ?1",
+                    [grouped.collection_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(remaining_members, 2);
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(app.projections().trash_bitmap().contains(ids[0].0 as u32));
+        assert!(app
+            .projections()
+            .active_bitmap()
+            .contains(grouped.collection_id.0 as u32));
+    }
+
+    #[test]
     fn organizing_media_into_existing_collection_preserves_winner_structure() {
         let (_directory, app, ids) = fixture();
         let grouped = organize(&app, &ids[..2], Some("Post"), None);
@@ -1464,6 +1760,98 @@ mod tests {
     }
 
     #[test]
+    fn user_cannot_create_collection_with_repeated_physical_file() {
+        let (_directory, app, ids) = fixture();
+        app.store()
+            .transaction(|transaction| {
+                let first_file_id: i64 = transaction.query_row(
+                    "SELECT file_id FROM media_asset WHERE item_id = ?1",
+                    [ids[0].0],
+                    |row| row.get(0),
+                )?;
+                transaction.execute(
+                    "UPDATE media_asset SET file_id = ?1 WHERE item_id = ?2",
+                    params![first_file_id, ids[1].0],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let error = app
+            .organize_into_collection(OrganizeIntoCollectionInput {
+                target: ItemTarget::Explicit {
+                    item_ids: ids[..2].to_vec(),
+                },
+                label: Some("Repeated".to_string()),
+                winning_collection_id: None,
+            })
+            .unwrap_err();
+        assert!(error.contains("same physical file more than once"));
+    }
+
+    #[test]
+    fn user_cannot_add_a_repeated_physical_file_to_a_collection() {
+        let (_directory, app, ids) = fixture();
+        let grouped = organize(&app, &ids[..2], Some("Existing"), None);
+        app.store()
+            .transaction(|transaction| {
+                let member_file_id: i64 = transaction.query_row(
+                    "SELECT file_id FROM media_asset WHERE item_id = ?1",
+                    [ids[0].0],
+                    |row| row.get(0),
+                )?;
+                transaction.execute(
+                    "UPDATE media_asset SET file_id = ?1 WHERE item_id = ?2",
+                    params![member_file_id, ids[2].0],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let error = app
+            .organize_into_collection(OrganizeIntoCollectionInput {
+                target: ItemTarget::Explicit {
+                    item_ids: vec![grouped.collection_id, ids[2]],
+                },
+                label: None,
+                winning_collection_id: None,
+            })
+            .unwrap_err();
+        assert!(error.contains("same physical file more than once"));
+    }
+
+    #[test]
+    fn existing_source_repetition_does_not_block_adding_a_unique_item() {
+        let (_directory, app, ids) = fixture();
+        let grouped = organize(&app, &ids[..2], Some("Source post"), None);
+        app.store()
+            .transaction(|transaction| {
+                let first_file_id: i64 = transaction.query_row(
+                    "SELECT file_id FROM media_asset WHERE item_id = ?1",
+                    [ids[0].0],
+                    |row| row.get(0),
+                )?;
+                transaction.execute(
+                    "UPDATE media_asset SET file_id = ?1 WHERE item_id = ?2",
+                    params![first_file_id, ids[1].0],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let result = app
+            .organize_into_collection(OrganizeIntoCollectionInput {
+                target: ItemTarget::Explicit {
+                    item_ids: vec![grouped.collection_id, ids[2]],
+                },
+                label: None,
+                winning_collection_id: None,
+            })
+            .unwrap();
+        assert_eq!(result.collection_id, grouped.collection_id);
+    }
+
+    #[test]
     fn collection_reorder_persists_the_complete_member_order() {
         let (_directory, app, ids) = fixture();
         let grouped = organize(&app, &ids, Some("Post"), None);
@@ -1484,6 +1872,18 @@ mod tests {
                 .collect::<Vec<_>>(),
             reordered
         );
+        assert_eq!(details.cover_media_item_id, Some(reordered[0]));
+        let cached_cover = app
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT cover_media_item_id FROM library_item WHERE item_id = ?1",
+                    [grouped.collection_id.0],
+                    |row| row.get::<_, Option<i64>>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(cached_cover, Some(reordered[0].0));
     }
 
     #[test]
@@ -1503,7 +1903,7 @@ mod tests {
         assert!(missing_winner
             .unwrap_err()
             .to_string()
-            .contains("which collection should own"));
+            .contains("which group should own"));
 
         let merged = app
             .organize_into_collection(OrganizeIntoCollectionInput {
@@ -1667,6 +2067,19 @@ mod tests {
                 (ids[1].0, "second".to_string())
             ]
         );
+
+        app.undo().unwrap();
+        let remaining = app
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT COUNT(*) FROM media_tag WHERE source = 'ai'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(remaining, 0);
     }
 
     #[test]
@@ -1768,6 +2181,155 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 assert_eq!(unrelated_orphan, 1);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn deleting_media_tombstones_its_source_but_retains_a_shared_file() {
+        let (_directory, app, ids) = fixture();
+        let ((shared_item_id, shared_file_id), _) = app
+            .store()
+            .transaction(|transaction| {
+                let file_id: i64 = transaction.query_row(
+                    "SELECT file_id FROM media_asset WHERE item_id = ?1",
+                    [ids[0].0],
+                    |row| row.get(0),
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_item
+                         (item_key, kind, created_at, updated_at)
+                     VALUES ('shared-file-item', 'media', 'now', 'now')",
+                    [],
+                )?;
+                let shared_item_id = transaction.last_insert_rowid();
+                transaction.execute(
+                    "INSERT INTO media_asset
+                         (item_id, file_id, imported_at, updated_at)
+                     VALUES (?1, ?2, 'now', 'now')",
+                    params![shared_item_id, file_id],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle)
+                     VALUES (?1, 'active')",
+                    [shared_item_id],
+                )?;
+                transaction.execute(
+                    "INSERT INTO source_post
+                         (site_id, post_key, created_at, updated_at)
+                     VALUES ('test', 'delete-source', 'now', 'now')",
+                    [],
+                )?;
+                let source_post_id = transaction.last_insert_rowid();
+                transaction.execute(
+                    "INSERT INTO source_item
+                         (source_post_id, item_key, position, media_item_id,
+                          state, created_at, updated_at)
+                     VALUES (?1, 'source-media', 0, ?2, 'ingested', 'now', 'now')",
+                    params![source_post_id, ids[0].0],
+                )?;
+                Ok((shared_item_id, file_id))
+            })
+            .unwrap();
+
+        let result = app
+            .delete_items(&ItemTarget::Explicit {
+                item_ids: vec![ids[0]],
+            })
+            .unwrap();
+
+        assert!(result.freed_file_hashes.is_empty());
+        app.store()
+            .read(|connection| {
+                let source: (String, Option<i64>) = connection.query_row(
+                    "SELECT state, media_item_id FROM source_item
+                     WHERE item_key = 'source-media'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(source, ("deleted".to_string(), None));
+                let shared_item: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM media_asset
+                     WHERE item_id = ?1 AND file_id = ?2",
+                    params![shared_item_id, shared_file_id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(shared_item, 1);
+                let blob_deletes: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM work_item
+                     WHERE work_type = 'blob_delete'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(blob_deletes, 0);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn deleting_an_empty_collection_removes_the_collection_projection() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(directory.path()).unwrap());
+        let (collection_id, _) = store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO library_item
+                         (item_key, kind, created_at, updated_at)
+                     VALUES ('empty-collection', 'collection', 'now', 'now')",
+                    [],
+                )?;
+                let collection_id = transaction.last_insert_rowid();
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle)
+                     VALUES (?1, 'active')",
+                    [collection_id],
+                )?;
+                Ok(collection_id)
+            })
+            .unwrap();
+        let app = Application::new(store);
+        assert!(app
+            .projections()
+            .active_bitmap()
+            .contains(collection_id as u32));
+
+        let result = app
+            .delete_items(&ItemTarget::Explicit {
+                item_ids: vec![ItemId(collection_id)],
+            })
+            .unwrap();
+
+        assert!(result.freed_file_hashes.is_empty());
+        assert!(!app
+            .projections()
+            .active_bitmap()
+            .contains(collection_id as u32));
+    }
+
+    #[test]
+    fn query_target_delete_respects_excluded_roots() {
+        let (_directory, app, ids) = fixture();
+        let result = app
+            .delete_items(&ItemTarget::Query {
+                query: ItemQuery {
+                    scope: ItemScope::All,
+                    filters: ItemFilters::default(),
+                    sort: ItemSort::default(),
+                },
+                excluded_item_ids: vec![ids[0]],
+            })
+            .unwrap();
+
+        assert_eq!(result.freed_file_hashes.len(), 2);
+        app.store()
+            .read(|connection| {
+                let surviving_roots: Vec<i64> = connection
+                    .prepare("SELECT item_id FROM library_root ORDER BY item_id")?
+                    .query_map([], |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                assert_eq!(surviving_roots, vec![ids[0].0]);
                 Ok(())
             })
             .unwrap();

@@ -80,9 +80,8 @@ export function useMediaImagePipeline({
     let cancelled = false;
 
     const img = new Image();
-    img.onload = () => {
+    const commitThumbnail = () => {
       if (cancelled) return;
-      // New thumbnail is decoded — commit the swap
       setDisplayedHash(hash);
       setDisplayedThumbnailHash(requestedThumbnailHash);
       setThumbUrl(newThumbUrl);
@@ -92,6 +91,10 @@ export function useMediaImagePipeline({
       // Reset full-res image opacity
       const fullImg = imgRef.current;
       if (fullImg) { fullImg.style.transition = 'none'; fullImg.style.opacity = '0'; }
+    };
+    img.onload = () => {
+      if (typeof img.decode === 'function') img.decode().then(commitThumbnail).catch(commitThumbnail);
+      else commitThumbnail();
     };
     img.onerror = () => {
       if (cancelled) return;
@@ -134,13 +137,21 @@ export function useMediaImagePipeline({
     for (const h of neighborHashes) { const img = new Image(); img.src = mediaThumbnailUrl(h); }
   }, [neighborHashes]);
 
-  const handleThumbLoad = useCallback((_e: SyntheticEvent<HTMLImageElement>) => {
-    setThumbLoaded(true);
+  const handleThumbLoad = useCallback((e: SyntheticEvent<HTMLImageElement>) => {
+    const img = e.currentTarget;
+    const reveal = () => setThumbLoaded(true);
+    if (typeof img.decode === 'function') img.decode().then(reveal).catch(reveal);
+    else reveal();
   }, []);
 
   const handleFullLoad = useCallback((e: SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
-    const reveal = () => { img.style.transition = 'opacity 130ms ease-out'; img.style.opacity = '1'; setFullVisible(true); };
+    const reveal = () => {
+      img.style.display = '';
+      img.style.transition = 'opacity 130ms ease-out';
+      img.style.opacity = '1';
+      setFullVisible(true);
+    };
     if (typeof img.decode === 'function') { img.decode().then(reveal).catch(reveal); }
     else { reveal(); }
   }, []);

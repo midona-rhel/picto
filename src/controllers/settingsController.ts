@@ -15,6 +15,7 @@ import type {
   ViewPrefsPatch,
 } from '../platform/settingsApi';
 import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
+import { announceUndoableMutation } from '../runtime/historyRuntime';
 
 export type { AppSettings, ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 
@@ -25,16 +26,22 @@ export const settingsController = {
 
   getSettingsSnapshot,
 
-  saveSettings(settings: Partial<AppSettings>): Promise<MutationReceipt> {
-    return saveSettings(settings);
+  async saveSettings(settings: Partial<AppSettings>): Promise<MutationReceipt> {
+    const receipt = await saveSettings(settings);
+    await announceUndoableMutation('settings.patch');
+    return receipt;
   },
 
-  patchSettings(settings: Partial<AppSettings>): Promise<MutationReceipt> {
-    return patchSettings(settings);
+  async patchSettings(settings: Partial<AppSettings>): Promise<MutationReceipt> {
+    const receipt = await patchSettings(settings);
+    await announceUndoableMutation('settings.patch');
+    return receipt;
   },
 
-  replaceSettings(settings: AppSettings): Promise<MutationReceipt> {
-    return replaceSettings(settings);
+  async replaceSettings(settings: AppSettings): Promise<MutationReceipt> {
+    const receipt = await replaceSettings(settings);
+    await announceUndoableMutation('settings.replace');
+    return receipt;
   },
 
   getViewPrefs(scopeKey: string): Promise<ViewPrefsDto> {
@@ -45,7 +52,7 @@ export const settingsController = {
 
   viewPrefsToPatch,
 
-  setViewPrefs(scopeKey: string, patch: ViewPrefsPatch): Promise<MutationReceipt> {
+  async setViewPrefs(scopeKey: string, patch: ViewPrefsPatch): Promise<MutationReceipt> {
     return setViewPrefs(scopeKey, patch);
   },
 };

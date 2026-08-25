@@ -10,21 +10,15 @@ function item(
     item_id: itemId,
     kind,
     lifecycle: 'active',
-    label: null,
     name: null,
-    display_media_item_id: itemId,
     display_file_hash: displayFileHash,
     display_mime_type: 'image/png',
     pixel_width: 100,
     pixel_height: 100,
     duration_ms: null,
     frame_count: null,
-    has_audio: false,
     dominant_color_hex: null,
-    size_bytes: 1,
     rating: null,
-    captured_at: null,
-    imported_at: null,
     media_count: 1,
   };
 }
@@ -41,18 +35,34 @@ describe('adaptGridItem', () => {
     expect(first.mime).toBe('image/png');
   });
 
+  it('carries group identity and membership count into the paint model', () => {
+    const group = item(20, 'cover-file', 'collection');
+    group.media_count = 37;
+
+    expect(adaptGridItem(group)).toMatchObject({ kind: 'collection', mediaCount: 37 });
+  });
+
   it('resolves interactions from painted identity instead of source-array position', () => {
     const media = item(10, 'media-file');
-    const collection = item(20, 'cover-file', 'collection');
-    const painted = [adaptGridItem(media), adaptGridItem(collection)];
+    const group = item(20, 'cover-file', 'collection');
+    const painted = [adaptGridItem(media), adaptGridItem(group)];
 
-    expect(resolveRenderedGridItem(painted, [collection, media], 0)).toEqual({
+    expect(resolveRenderedGridItem(painted, [group, media], 0)).toEqual({
       index: 1,
       item: media,
     });
-    expect(resolveRenderedGridItem(painted, [collection, media], 1)).toEqual({
+    expect(resolveRenderedGridItem(painted, [group, media], 1)).toEqual({
       index: 0,
-      item: collection,
+      item: group,
     });
+  });
+
+  it('gives audio waveform tiles reference application\'s two-to-one geometry', () => {
+    const audio = item(30, 'audio-file');
+    audio.display_mime_type = 'audio/mpeg';
+    audio.pixel_width = null;
+    audio.pixel_height = null;
+
+    expect(adaptGridItem(audio).aspectRatio).toBe(2);
   });
 });

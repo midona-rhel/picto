@@ -41,6 +41,7 @@ pub struct SetCredentialInput {
     pub username: Option<String>,
     pub password: Option<String>,
     pub cookies: Option<HashMap<String, String>>,
+    pub headers: Option<HashMap<String, String>>,
     pub oauth_token: Option<String>,
 }
 
@@ -145,6 +146,7 @@ pub fn set_credential(
         username: input.username,
         password: input.password,
         cookies: input.cookies,
+        headers: input.headers,
         oauth_token: input.oauth_token,
     };
     validate_secret(&credential)?;

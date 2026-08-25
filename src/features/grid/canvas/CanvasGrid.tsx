@@ -14,8 +14,15 @@ import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 
 import { ThumbnailPipeline, type PlanTile } from './thumbnailPipeline';
 import { ThumbnailRevealTracker } from './thumbnailRevealTracker';
+import { listenThumbnailChanged } from '../../../shared/lib/thumbnailChanges';
 import { zoomController } from '../../../controllers/zoomController';
-import { collectThumbnailActivation, estimateGridScrollHeight, GridLayoutRuntime } from './gridLayoutModel';
+import {
+  captureGridScrollPosition,
+  collectThumbnailActivation,
+  estimateGridScrollHeight,
+  GridLayoutRuntime,
+  restoreGridScrollTop,
+} from './gridLayoutModel';
 import { createDragOwnerId, startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive, isDragOwnedBy, startNativeDrag as startNativeDragFn, setInternalDragOrigin } from '../dragState';
 import { hitTestTile, computeReorderTarget } from './hitTesting';
 import { DragGhost } from '../DragGhost';
@@ -28,8 +35,10 @@ import {
   resolveCanvasScrollDirection,
   CANVAS_SCROLL_IDLE_DELAY_MS,
 } from './scrollState';
+import type { GridScrollPosition } from '../../../shared/types/gridScroll';
 import { useCanvasRedrawScheduler } from './useCanvasRedrawScheduler';
 import { snapshotViewport, ensureCanvasSize } from './canvasViewportUtils';
+import { useCanvasViewport } from './useCanvasViewport';
 import styles from './CanvasGrid.module.css';
 import type { ItemScope } from '../../../shared/types/generated/application/ItemScope';
 import { resolveRenderedGridItem } from './renderItemAdapter';
@@ -72,7 +81,7 @@ function resolveGridScrollAnchor(args: {
   return Math.max(0, nextPosition.y - (previousPosition.y - scrollTop));
 }
 
-function planFolderReorder(
+export function planFolderReorder(
   orderedItemIds: number[],
   draggedItemIds: ReadonlySet<number>,
   dropIndex: number,
@@ -104,8 +113,6 @@ function toLayoutCoords(clientX: number, clientY: number, container: HTMLDivElem
 const ZOOM_BTN_SIZE = 24;
 const HOVER_PREVIEW_DELAY_MS = 200;
 const HOVER_HIDE_DELAY_MS = 90;
-const GRID_RESIZE_SETTLE_MS = 180;
-
 export interface CanvasGridProps {
   items: CanonicalEntityGridItem[];
   viewMode: GridViewMode;
@@ -113,8 +120,10 @@ export interface CanvasGridProps {
   showName: boolean;
   showExtension: boolean;
   showExtensionLabel?: boolean;
+  showItemCount?: boolean;
   showResolution?: boolean;
   fitThumbnails?: boolean;
+  grayscale?: boolean;
   /** Complete query result count used to preserve full-library scroll range. */
   totalCount?: number | null;
   onTileClick?: (index: number, item: CanonicalEntityGridItem, event?: React.MouseEvent) => void;
@@ -124,11 +133,10 @@ export interface CanvasGridProps {
   onEmptyContextMenu?: (position: { x: number; y: number }) => void;
   onLoadMore?: () => void;
   onFirstPaint?: () => void;
-  onScrollTopChange?: (scrollTop: number) => void;
+  onScrollPositionChange?: (position: GridScrollPosition) => void;
   interactive?: boolean;
-  suppressTileReveal?: boolean;
   /** Restore scroll position on first paint (e.g., after back/forward navigation). */
-  initialScrollTop?: number | null;
+  initialScrollPosition?: GridScrollPosition | null;
   selectedItemIds?: Set<number>;
   selectedFolderNodeIds?: Set<string>;
   onSelectionChange?: (itemIds: Set<number>) => void;
@@ -138,7 +146,9 @@ export interface CanvasGridProps {
   headerContent?: React.ReactNode;
   /** Current scope for drag-and-drop context. */
   dragSourceScope?: ItemScope | null;
-  /** Optional local reorder owner for reusable grids such as collection editing. */
+  /** Intentional layout changes, such as panel visibility or the filter row, commit immediately. */
+  viewportCommitKey?: unknown;
+  /** Optional local reorder owner for reusable grids such as group editing. */
   onReorder?: (orderedItemIds: number[]) => void;
   /** Expose the scroll container ref to parent. */
   onContainerRef?: (el: HTMLDivElement | null) => void;
@@ -158,8 +168,10 @@ export function CanvasGrid({
   showName,
   showExtension,
   showExtensionLabel = false,
+  showItemCount = true,
   showResolution = false,
   fitThumbnails = false,
+  grayscale = false,
   totalCount = null,
   onTileClick,
   onTileDoubleClick,
@@ -169,14 +181,14 @@ export function CanvasGrid({
   onSelectionChange,
   onLoadMore,
   onFirstPaint,
-  onScrollTopChange,
+  onScrollPositionChange,
   interactive = true,
-  suppressTileReveal = false,
-  initialScrollTop = null,
+  initialScrollPosition = null,
   selectedItemIds = EMPTY_ITEM_ID_SET,
   selectedFolderNodeIds = EMPTY_FOLDER_NODE_SET,
   headerContent,
   dragSourceScope = null,
+  viewportCommitKey,
   onReorder,
   onContainerRef,
   onLayoutChange,
@@ -196,11 +208,10 @@ export function CanvasGrid({
   const headerRef = useRef<HTMLDivElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const contentFrameRef = useRef<HTMLDivElement>(null);
   const viewportLayerRef = useRef<HTMLDivElement>(null);
   const pipelineRef = useRef<ThumbnailPipeline | null>(null);
   const revealTrackerRef = useRef(new ThumbnailRevealTracker());
-  const suppressTileRevealRef = useRef(suppressTileReveal);
-  const suppressRevealUntilRef = useRef(0);
 
   // Reusable per-frame buffers — avoids allocating new arrays/sets every draw call.
   const activeTilesRef = useRef<number[]>([]);
@@ -217,6 +228,8 @@ export function CanvasGrid({
   // Cache theme CSS values — avoids getComputedStyle() on every draw frame
   const cachedThemeRef = useRef({
     placeholderBg: 'rgba(255,255,255,0.04)',
+    opaqueBg: '#27282d',
+    isLight: false,
     borderRadius: 4,
     textPrimary: 'rgba(255,255,255,0.92)',
     textTertiary: 'rgba(255,255,255,0.36)',
@@ -230,6 +243,8 @@ export function CanvasGrid({
     const s = getComputedStyle(el);
     cachedThemeRef.current = {
       placeholderBg: s.getPropertyValue('--color-surface-2').trim() || 'rgba(255,255,255,0.04)',
+      opaqueBg: s.getPropertyValue('--color-bg-app').trim() || '#27282d',
+      isLight: getComputedStyle(document.documentElement).colorScheme === 'light',
       borderRadius: 4,
       textPrimary: s.getPropertyValue('--color-text-primary').trim() || 'rgba(255,255,255,0.92)',
       textTertiary: s.getPropertyValue('--color-text-tertiary').trim() || 'rgba(255,255,255,0.36)',
@@ -254,9 +269,6 @@ export function CanvasGrid({
   const dragJustEndedRef = useRef(false);
   const tileDragRef = useRef<{ tileIdx: number; startClientX: number; startClientY: number } | null>(null);
   const reorderDropRef = useRef<{ dropIndex: number; dropSide: 'left' | 'right' } | null>(null);
-  // True when the overlay canvas currently has no painted content — lets
-  // scroll frames skip the overlay redraw entirely (selection borders are
-  // viewport-space, so a non-empty overlay must redraw every scroll frame).
   const overlayBlankRef = useRef(true);
   const autoScrollRef = useRef<number | null>(null);
   const autoScrollSpeedRef = useRef(0);
@@ -264,18 +276,33 @@ export function CanvasGrid({
   const hoverHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [hoverPreview, setHoverPreview] = useState<{ fileHash: string; mime: string } | null>(null);
   const [marqueeVisual, setMarqueeVisual] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
-  const [dragGhost, setDragGhost] = useState<{ x: number; y: number; count: number; thumbnailHashes: string[] } | null>(null);
+  const [dragGhost, setDragGhost] = useState<{
+    x: number;
+    y: number;
+    count: number;
+    thumbnailHashes: string[];
+    thumbnailBackgrounds: (string | null)[];
+    fontHashes: string[];
+  } | null>(null);
   const firstPaintRef = useRef(false);
   const onLoadMoreRef = useRef(onLoadMore);
-  const onScrollTopChangeRef = useRef(onScrollTopChange);
+  const onFirstPaintRef = useRef(onFirstPaint);
+  const onScrollPositionChangeRef = useRef(onScrollPositionChange);
   onLoadMoreRef.current = onLoadMore;
-  onScrollTopChangeRef.current = onScrollTopChange;
+  onFirstPaintRef.current = onFirstPaint;
+  onScrollPositionChangeRef.current = onScrollPositionChange;
 
-  // Width changes settle before layout; height changes size the sticky canvas
-  // imperatively and never enter React state.
-  const [layoutWidth, setLayoutWidth] = useState({ width: 0, scrollbarWidth: 0 });
-  const [headerHeight, setHeaderHeight] = useState(0);
-  const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const resizeRedrawRef = useRef<() => void>(() => {});
+  const viewportRefs = useMemo(() => ({
+    container: containerRef,
+    contentFrame: contentFrameRef,
+    viewportLayer: viewportLayerRef,
+    baseCanvas: baseCanvasRef,
+    overlayCanvas: overlayCanvasRef,
+    header: headerRef,
+    redraw: resizeRedrawRef,
+  }), []);
+  const { layoutWidth, headerHeight, committedSizeRef } = useCanvasViewport(viewportRefs, headerContent, viewportCommitKey);
 
   const textHeight = (showName ? TEXT_NAME_ROW_H : 0) + (showResolution ? TEXT_NAME_ROW_H : 0);
 
@@ -311,7 +338,7 @@ export function CanvasGrid({
   //
   // useLayoutEffect so we run before the browser paints / clamps scrollTop.
   // lastScrollTopRef is the pre-layout scroll position (kept in sync by
-  // handleScroll and the initialScrollTop restore).
+  // handleScroll and the initial scroll restore).
   const selectedItemIdsRef = useRef(selectedItemIds);
   selectedItemIdsRef.current = selectedItemIds;
 
@@ -351,34 +378,51 @@ export function CanvasGrid({
       markDirty('base');
     }, (fileHash) => {
       const now = performance.now();
-      const suppress = suppressTileRevealRef.current || now < suppressRevealUntilRef.current;
       for (const item of renderItemsRef.current) {
-        if (item.thumbnailHash === fileHash) revealTrackerRef.current.onBitmapAvailable(item.hash, now, suppress);
+        if (item.thumbnailHash === fileHash) revealTrackerRef.current.onBitmapAvailable(item.hash, now);
       }
     });
     pipelineRef.current = pipeline;
     return () => {
-      pipeline.clear();
+      pipeline.destroy();
       revealTrackerRef.current.clear();
       pipelineRef.current = null;
       if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null; }
     };
   }, []);
 
+  useEffect(() => {
+    let removeIpcListener: (() => void) | undefined;
+    void listenThumbnailChanged((fileHash) => pipelineRef.current?.invalidate(fileHash))
+      .then((remove) => { removeIpcListener = remove; })
+      .catch(() => {});
+    return () => {
+      removeIpcListener?.();
+    };
+  }, []);
+
   // Track previous items length separately for the scroll reset decision.
   // prevItemsRef is updated in useLayoutEffect (runs first), so we need our own tracker.
   const prevItemsLengthForScrollRef = useRef(0);
-  useEffect(() => {
+  // Restore while the workspace surface is still hidden and before the browser
+  // can paint the replacement grid. A passive effect exposes the scroll jump
+  // during the first frames of the incoming fade.
+  useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     const prevLen = prevItemsLengthForScrollRef.current;
     prevItemsLengthForScrollRef.current = items.length;
 
-    if (initialScrollTop != null && initialScrollTop > 0) {
-      // Restore scroll position from back/forward navigation
+    if (initialScrollPosition != null) {
+      // Restore relative progress against the current estimated full result.
       firstPaintRef.current = false;
-      container.scrollTop = initialScrollTop;
-      lastScrollTopRef.current = initialScrollTop;
+      const next = restoreGridScrollTop(
+        initialScrollPosition,
+        headerHeight + estimatedScrollHeight,
+        container.clientHeight,
+      );
+      container.scrollTop = next;
+      lastScrollTopRef.current = next;
     } else if (prevLen === 0 || items.length === 0) {
       // Fresh navigation or cleared → start at top
       firstPaintRef.current = false;
@@ -386,29 +430,16 @@ export function CanvasGrid({
       lastScrollTopRef.current = 0;
     }
     // Otherwise: items grew/changed incrementally — don't touch scroll or firstPaint
-  }, [items]); // eslint-disable-line react-hooks/exhaustive-deps -- initialScrollTop read once per items change
+  }, [estimatedScrollHeight, headerHeight, initialScrollPosition, items]);
 
   // ── Draw functions ──
-  // Suppress thumbnail fade animation during grid transitions.
-  // Thumbnails loaded during fade-out/fade-in appear instantly.
-  const prevSuppressRef = useRef(suppressTileReveal);
-  useEffect(() => {
-    suppressTileRevealRef.current = suppressTileReveal;
-    // When transition ends (suppress goes false), keep suppressing for 500ms
-    // to cover thumbnails still in flight from the transition period.
-    if (prevSuppressRef.current && !suppressTileReveal) {
-      suppressRevealUntilRef.current = performance.now() + 500;
-    }
-    prevSuppressRef.current = suppressTileReveal;
-  }, [suppressTileReveal]);
-
   const drawBase = useCallback(() => {
     const container = containerRef.current;
     const canvas = baseCanvasRef.current;
     const pipeline = pipelineRef.current;
     if (!container || !canvas || !pipeline) return;
 
-    const vp = snapshotViewport(container);
+    const vp = snapshotViewport(container, committedSizeRef.current);
     const ctx = canvas.getContext('2d', { desynchronized: true });
     if (!ctx) return;
 
@@ -453,15 +484,13 @@ export function CanvasGrid({
 
     // Send plan to worker — deduplicates internally, only posts when visible set changes.
     pipeline.updatePlan(planTiles, scrollTop + vp.viewportHeight / 2);
-    const suppressReveal = suppressTileRevealRef.current || now < suppressRevealUntilRef.current;
     revealTrackerRef.current.updateViewport(
       viewportHashes,
       now,
       (itemId) => {
         const item = layoutModel.items.find((candidate) => candidate.hash === itemId);
-        return item != null && pipeline.get(item.thumbnailHash)?.thumb != null;
+        return item != null && (item.mime.startsWith('font/') || pipeline.get(item.thumbnailHash)?.thumb != null);
       },
-      suppressReveal,
     );
 
     const drawCtx: DrawContext = {
@@ -476,16 +505,18 @@ export function CanvasGrid({
       positions: layoutModel.positions,
       items: layoutModel.items,
       atlasGet: (hash) => pipeline.get(hash),
-      now,
+      revealProgress: (entityHash) => revealTrackerRef.current.getProgress(entityHash, now),
       activeTiles,
       draw: drawCtx,
       theme: cachedThemeRef.current,
       viewMode,
       fitThumbnails,
+      grayscale,
       showTileName: showName,
       showResolution,
       showExtension,
       showExtensionLabel,
+      showItemCount,
     });
 
     ctx.restore();
@@ -500,18 +531,19 @@ export function CanvasGrid({
     }
 
     // First paint notification
-    if (!firstPaintRef.current && activeTiles.length > 0) {
+    const notifyFirstPaint = onFirstPaintRef.current;
+    if (!firstPaintRef.current && notifyFirstPaint) {
       firstPaintRef.current = true;
-      onFirstPaint?.();
+      notifyFirstPaint();
     }
-  }, [layoutModel, viewMode, fitThumbnails, showName, showExtension, showExtensionLabel, showResolution, suppressTileReveal, textHeight, headerHeight]);
+  }, [layoutModel, viewMode, fitThumbnails, grayscale, showName, showExtension, showExtensionLabel, showItemCount, showResolution, textHeight, headerHeight]);
 
   const drawOverlay = useCallback(() => {
     const container = containerRef.current;
     const canvas = overlayCanvasRef.current;
     if (!container || !canvas) return;
 
-    const vp = snapshotViewport(container);
+    const vp = snapshotViewport(container, committedSizeRef.current);
     const ctx = canvas.getContext('2d', { desynchronized: true });
     if (!ctx) return;
 
@@ -622,8 +654,6 @@ export function CanvasGrid({
       }
     }
 
-    // Coarse blank flags — conservative: a selection that is offscreen still
-    // counts as content so scrolling it into view redraws correctly.
     overlayBlankRef.current =
       selectedItemIds.size === 0 &&
       hoveredTileRef.current == null &&
@@ -641,70 +671,20 @@ export function CanvasGrid({
     drawBaseRef,
     drawOverlayRef,
   });
-
-  // ── Resize observer ──
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-
-    const sizeViewport = () => {
-      if (viewportLayerRef.current) viewportLayerRef.current.style.height = `${container.clientHeight}px`;
-      markDirty('both');
-    };
-    const settleWidth = () => {
-      const w = container.clientWidth;
-      const sbw = container.offsetWidth - w;
-      setLayoutWidth((current) => (
-        current.width === w && current.scrollbarWidth === sbw
-          ? current
-          : { width: w, scrollbarWidth: sbw }
-      ));
-    };
-
-    sizeViewport();
-    settleWidth();
-    const observer = new ResizeObserver(() => {
-      sizeViewport();
-      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
-      resizeTimerRef.current = setTimeout(() => {
-        resizeTimerRef.current = null;
-        settleWidth();
-      }, GRID_RESIZE_SETTLE_MS);
-    });
-    observer.observe(container);
-
-    // Re-measure when page zoom changes (Cmd+/Cmd-) — DPR changes with zoom
-    const dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
-    const handleDprChange = sizeViewport;
-    dprQuery.addEventListener('change', handleDprChange);
-
-    return () => {
-      observer.disconnect();
-      dprQuery.removeEventListener('change', handleDprChange);
-      if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
-    };
-  }, [markDirty]);
-
-  // ── Header height observer ──
-  useEffect(() => {
-    const el = headerRef.current;
-    if (!el) { setHeaderHeight(0); return; }
-    const measure = () => setHeaderHeight(el.offsetHeight);
-    measure();
-    const ro = new ResizeObserver(measure);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [headerContent]);
+  resizeRedrawRef.current = () => markDirty('both');
 
   // ── Redraw on layout/prop changes ──
   useEffect(() => { markDirty('both'); }, [layoutModel, markDirty]);
-  useEffect(() => { markDirty('base'); }, [showName, showExtension, showResolution, viewMode, fitThumbnails, suppressTileReveal, markDirty]);
+  useEffect(() => {
+    if (!firstPaintRef.current && onFirstPaint) markDirty('base');
+  }, [markDirty, onFirstPaint]);
+  useEffect(() => { markDirty('base'); }, [showName, showExtension, showExtensionLabel, showItemCount, showResolution, viewMode, fitThumbnails, markDirty]);
   useEffect(() => { markDirty('overlay'); }, [selectedItemIds, markDirty]);
   useEffect(() => { markDirty('both'); }, [headerHeight, markDirty]);
 
   // ── Redraw on theme change (canvas reads CSS variables, not reactive to theme) ──
-  // Deliberately NOT observing the style attribute: AppShell writes
-  // --inspector-width to it on every mousemove during inspector resize
+  // Deliberately NOT observing the style attribute: AppShell writes its
+  // shell-local --inspector-width on every mousemove during inspector resize
   // (covered by the ResizeObserver), and zoom redraws come from the
   // explicit zoomController subscription below.
   useEffect(() => {
@@ -757,7 +737,16 @@ export function CanvasGrid({
         const iconUrl = createNativeDragImageUrl(
           fileHashes,
           state.itemIds.length,
-          (fileHash) => pipelineRef.current?.get(fileHash)?.thumb ?? null,
+          (fileHash) => {
+            const item = itemsRef.current.find((candidate) => candidate.display_file_hash === fileHash);
+            if (item?.display_mime_type.startsWith('font/')) return 'font';
+            const entry = pipelineRef.current?.get(fileHash);
+            return entry?.state === 'error' ? 'broken' : entry?.thumb ?? null;
+          },
+          cachedThemeRef.current.opaqueBg,
+          (fileHash) => itemsRef.current.find(
+            (candidate) => candidate.display_file_hash === fileHash,
+          )?.dominant_color_hex ?? null,
         );
 
         setInternalDragOrigin(true);
@@ -841,7 +830,11 @@ export function CanvasGrid({
     const scrollTop = container.scrollTop;
     if (!interactive) {
       lastScrollTopRef.current = scrollTop;
-      onScrollTopChangeRef.current?.(scrollTop);
+      onScrollPositionChangeRef.current?.(captureGridScrollPosition(
+        scrollTop,
+        headerHeightRef.current + estimatedScrollHeight,
+        container.clientHeight,
+      ));
       markDirty('both');
       return;
     }
@@ -869,10 +862,11 @@ export function CanvasGrid({
     // Always clear preview on scroll — the tile moved away from cursor
     setHoverPreview(null);
 
-    onScrollTopChangeRef.current?.(scrollTop);
-    // Skip the overlay redraw when it has nothing to paint (common case:
-    // selection-free scrolling). The !overlayBlankRef term guarantees one
-    // clearing redraw after content disappears (e.g. hover button above).
+    onScrollPositionChangeRef.current?.(captureGridScrollPosition(
+      scrollTop,
+      headerHeightRef.current + estimatedScrollHeight,
+      container.clientHeight,
+    ));
     const overlayNeedsRedraw =
       selectedItemIdsRef.current.size > 0 ||
       reorderDropRef.current != null ||
@@ -893,7 +887,7 @@ export function CanvasGrid({
     if (distanceFromLoadedEnd < container.clientHeight * 3) {
       onLoadMoreRef.current?.();
     }
-  }, [interactive, layoutModel.totalHeight, markDirty]);
+  }, [estimatedScrollHeight, interactive, layoutModel.totalHeight, markDirty]);
 
   // Continue filling the runway after each append, including when the user
   // drags the scrollbar into an estimated-but-not-yet-loaded region.
@@ -1161,8 +1155,15 @@ export function CanvasGrid({
           const thumbHashes = itemIds.slice(0, 3).map((id) => {
             return items.find((candidate) => candidate.item_id === id)?.display_file_hash ?? '';
           });
+          const fontHashes = itemIds.slice(0, 3).flatMap((id) => {
+            const candidate = items.find((entry) => entry.item_id === id);
+            return candidate?.display_mime_type.startsWith('font/') ? [candidate.display_file_hash] : [];
+          });
+          const thumbnailBackgrounds = itemIds.slice(0, 3).map((id) => (
+            items.find((candidate) => candidate.item_id === id)?.dominant_color_hex ?? null
+          ));
           startDrag(itemIds, e.clientX, e.clientY, dragSourceScope, dragOwnerIdRef.current);
-          setDragGhost({ x: e.clientX, y: e.clientY, count: itemIds.length, thumbnailHashes: thumbHashes });
+          setDragGhost({ x: e.clientX, y: e.clientY, count: itemIds.length, thumbnailHashes: thumbHashes, thumbnailBackgrounds, fontHashes });
           reorderDropRef.current = null;
           tileDragRef.current = null;
         }
@@ -1249,7 +1250,8 @@ export function CanvasGrid({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       >
-        {headerContent && <div ref={headerRef}>{headerContent}</div>}
+        <div ref={contentFrameRef} className={styles.contentFrame}>
+          {headerContent && <div ref={headerRef}>{headerContent}</div>}
         {marqueeVisual && (
           <div className={styles.marquee} style={{
             left: marqueeVisual.left,
@@ -1299,23 +1301,25 @@ export function CanvasGrid({
             />
           );
         })()}
-        <div
-          className={styles.canvasWrap}
-          data-grid-layout
-          style={{ height: `${estimatedScrollHeight}px` }}
-        >
           <div
-            ref={viewportLayerRef}
-            className={styles.viewportLayer}
+            className={styles.canvasWrap}
+            data-grid-layout
+            style={{ height: `${estimatedScrollHeight}px` }}
           >
-            <canvas
-              ref={baseCanvasRef}
-              className={styles.baseCanvas}
-            />
-            <canvas
-              ref={overlayCanvasRef}
-              className={styles.overlayCanvas}
-            />
+            <div
+              ref={viewportLayerRef}
+              className={styles.viewportLayer}
+              style={{ maxHeight: `${estimatedScrollHeight}px` }}
+            >
+              <canvas
+                ref={baseCanvasRef}
+                className={styles.baseCanvas}
+              />
+              <canvas
+                ref={overlayCanvasRef}
+                className={styles.overlayCanvas}
+              />
+            </div>
           </div>
         </div>
       </div>
@@ -1325,6 +1329,8 @@ export function CanvasGrid({
           x={dragGhost.x}
           y={dragGhost.y}
           thumbnailHashes={dragGhost.thumbnailHashes}
+          thumbnailBackgrounds={dragGhost.thumbnailBackgrounds}
+          fontHashes={dragGhost.fontHashes}
           count={dragGhost.count}
         />
       )}

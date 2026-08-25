@@ -13,7 +13,8 @@
 type PlanEntry = { fileHash: string; url: string };
 type PlanMessage = { type: 'plan'; entries: PlanEntry[] };
 type ClearMessage = { type: 'clear' };
-type IncomingMessage = PlanMessage | ClearMessage;
+type InvalidateMessage = { type: 'invalidate'; fileHash: string };
+type IncomingMessage = PlanMessage | ClearMessage | InvalidateMessage;
 
 // ── State ───────────────────────────────────────────────────────
 
@@ -40,7 +41,7 @@ function handlePlan(entries: PlanEntry[]): void {
 
   // Cancel loads no longer in plan
   for (const [fileHash, controller] of inFlight) {
-    if (!nextFileHashes.has(fileHash)) {
+    if (!nextFileHashes.has(fileHash) || currentPlan.get(fileHash) !== nextUrls.get(fileHash)) {
       controller.abort();
       inFlight.delete(fileHash);
     }
@@ -62,6 +63,13 @@ function handleClear(): void {
   delivered.clear();
   failCounts.clear();
   currentPlan.clear();
+}
+
+function handleInvalidate(fileHash: string): void {
+  inFlight.get(fileHash)?.abort();
+  inFlight.delete(fileHash);
+  delivered.delete(fileHash);
+  failCounts.delete(fileHash);
 }
 
 // ── Loading ─────────────────────────────────────────────────────
@@ -110,4 +118,5 @@ ctx.onmessage = (event: MessageEvent<IncomingMessage>) => {
   const msg = event.data;
   if (msg.type === 'plan') handlePlan(msg.entries);
   else if (msg.type === 'clear') handleClear();
+  else if (msg.type === 'invalidate') handleInvalidate(msg.fileHash);
 };

@@ -3,8 +3,11 @@
 Picto is an Electron media library backed by SQLite. SQLite is the source of truth; Roaring
 bitmaps are rebuildable projections used to keep lookups fast.
 
-Visible library items are either standalone media items or collections. Media assets are images or
-videos only. A collection is a first-class root item: it owns lifecycle and folder membership, and
+Visible library items are either standalone media items or collections. Media assets may be images,
+video, audio, 3D, design-source, font, RAW, document, or web files. Acceptance does not imply that a
+detail renderer exists yet; unsupported previews retain the original bytes and metadata. ZIP files
+are safely expanded into a collection and are never stored as opaque library items. A collection is
+a first-class root item: it owns lifecycle and folder membership, and
 its members inherit both. Collection operations apply to all members unless a member is detached.
 `All` is the accepted active library only; Inbox and Trash are separate lifecycle scopes and must
 not appear in All, folders, smart folders, library search, or those counts.

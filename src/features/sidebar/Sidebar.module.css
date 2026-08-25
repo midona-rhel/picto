@@ -60,7 +60,7 @@
   width: 100%;
   height: 28px;
   padding: 0;
-  background: var(--color-black-20);
+  background: var(--color-control-surface);
   border: 1px solid var(--sidebar-border-color, var(--color-border-secondary));
   border-radius: 6px;
 }
@@ -72,7 +72,7 @@
   width: 16px;
   height: 16px;
   transform: translateY(-50%);
-  color: rgb(247, 248, 248);
+  color: var(--sidebar-text-primary, var(--color-text-primary));
   opacity: 1;
   pointer-events: none;
 }

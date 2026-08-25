@@ -4,4 +4,4 @@ import type { ItemId } from "./ItemId";
 import type { ItemKind } from "./ItemKind";
 import type { Lifecycle } from "./Lifecycle";
 
-export type ItemSummary = { item_id: ItemId, kind: ItemKind, lifecycle: Lifecycle, label: string | null, name: string | null, display_media_item_id: ItemId, display_file_hash: FileHash, display_mime_type: string, pixel_width: number | null, pixel_height: number | null, duration_ms: number | null, frame_count: number | null, has_audio: boolean, dominant_color_hex: string | null, size_bytes: number, rating: number | null, captured_at: string | null, imported_at: string | null, media_count: number, };
+export type ItemSummary = { item_id: ItemId, kind: ItemKind, lifecycle: Lifecycle, name: string | null, display_file_hash: FileHash, display_mime_type: string, pixel_width: number | null, pixel_height: number | null, duration_ms: number | null, frame_count: number | null, dominant_color_hex: string | null, rating: number | null, media_count: number, };

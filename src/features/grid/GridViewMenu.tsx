@@ -13,6 +13,8 @@ import {
   gridViewModeAtom, gridSortFieldAtom, gridSortDirectionAtom,
   gridShowNameAtom, gridShowExtensionAtom, gridShowResolutionAtom,
   gridShowExtensionLabelAtom, gridFitThumbnailsAtom, gridScopeAtom,
+  gridShowItemCountAtom,
+  gridGrayscaleAtom,
   type SortField, type SortDirection, type GridViewMode,
 } from '../../state/grid';
 import { sidebarCollapsedAtom } from '../../state/navigation';
@@ -106,7 +108,11 @@ function DisplayPanel() {
   const showRes = useAtomValue(gridShowResolutionAtom);
   const showExt = useAtomValue(gridShowExtensionAtom);
   const showExtLabel = useAtomValue(gridShowExtensionLabelAtom);
+  const showItemCount = useAtomValue(gridShowItemCountAtom);
+  const scope = useAtomValue(gridScopeAtom);
   const fitThumbs = useAtomValue(gridFitThumbnailsAtom);
+  const grayscale = useAtomValue(gridGrayscaleAtom);
+  const setGrayscale = useSetAtom(gridGrayscaleAtom);
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
   const inspectorCollapsed = useAtomValue(inspectorCollapsedAtom);
@@ -125,9 +131,14 @@ function DisplayPanel() {
       {toggle('Show Name', showName, () => { gridController.updateView({ showName: !showName }); gridController.saveViewPref({ show_name: !showName }); })}
       {toggle('Show Resolution', showRes, () => { gridController.updateView({ showResolution: !showRes }); gridController.saveViewPref({ show_resolution: !showRes }); })}
       {toggle('Show Extension', showExt, () => { gridController.updateView({ showExtension: !showExt }); gridController.saveViewPref({ show_extension: !showExt }); })}
-      {toggle('Show Label', showExtLabel, () => { gridController.updateView({ showExtensionLabel: !showExtLabel }); gridController.saveViewPref({ show_label: !showExtLabel }); })}
+      {toggle('Show File Type', showExtLabel, () => { gridController.updateView({ showExtensionLabel: !showExtLabel }); gridController.saveViewPref({ show_label: !showExtLabel }); })}
+      {toggle('Show Item Count', showItemCount, () => { gridController.updateView({ showItemCount: !showItemCount }); gridController.saveViewPref({ show_item_count: !showItemCount }); })}
       {toggle('Fit Thumbnails', fitThumbs, () => { gridController.updateView({ fitThumbnails: !fitThumbs }); gridController.saveViewPref({ thumbnail_fit: !fitThumbs ? 'cover' : 'contain' }); }, viewMode !== 'grid')}
-      {toggle('Show Subfolders', showSubfolders, () => gridController.updateView({ showSubfolders: !showSubfolders }))}
+      {toggle('Grayscale Preview', grayscale, () => setGrayscale(!grayscale))}
+      {scope.kind === 'folder' && toggle('Show Subfolders', showSubfolders, () => {
+        gridController.updateView({ showSubfolders: !showSubfolders });
+        gridController.saveViewPref({ show_subfolders: !showSubfolders });
+      })}
 
       <div className={s.sep} />
 

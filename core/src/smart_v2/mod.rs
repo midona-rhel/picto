@@ -61,6 +61,18 @@ pub fn compile_smart_folder(
     compile_predicate(connection, &predicate)
 }
 
+pub(crate) fn count_smart_folder(
+    connection: &Connection,
+    smart_folder_id: i64,
+) -> rusqlite::Result<i64> {
+    let (sql, arguments) = compile_smart_folder_sql(connection, smart_folder_id, 0)?;
+    connection.query_row(
+        &format!("SELECT COUNT(*) FROM ({sql})"),
+        rusqlite::params_from_iter(arguments),
+        |row| row.get(0),
+    )
+}
+
 pub(crate) fn compile_smart_folder_sql(
     connection: &Connection,
     smart_folder_id: i64,
@@ -580,6 +592,7 @@ mod tests {
         );
 
         assert_eq!(compile_smart_folder(&connection, 11).unwrap(), vec![1]);
+        assert_eq!(count_smart_folder(&connection, 11).unwrap(), 1);
     }
 
     #[test]

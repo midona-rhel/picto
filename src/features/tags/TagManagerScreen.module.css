@@ -58,18 +58,23 @@
 
 .titlebarSearch input:focus {
   border-color: var(--color-primary-60);
-  background: var(--color-black-20);
+  background: var(--color-control-surface);
 }
 
 .titlebarSearch input::placeholder { color: var(--color-text-tertiary); }
 
-.titlebarSearch button,
 .iconButton {
+  composes: iconBtn from '../../shared/styles/iconButton.module.css';
+}
+
+.titlebarSearch button {
+  position: absolute;
+  right: 1px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   border: 0;
   border-radius: 5px;
@@ -78,16 +83,7 @@
   cursor: pointer;
 }
 
-.titlebarSearch button {
-  position: absolute;
-  right: 1px;
-  width: 24px;
-  height: 24px;
-}
-
-.titlebarSearch button:hover,
-.iconButton:hover { background: var(--color-subtle-overlay); color: var(--color-text-primary); }
-.iconButton:disabled { opacity: .35; pointer-events: none; }
+.titlebarSearch button:hover { background: var(--color-subtle-overlay); color: var(--color-text-primary); }
 
 .error {
   margin: 12px 24px 0;
@@ -111,6 +107,7 @@
   flex: 0 0 240px;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   box-sizing: border-box;
   padding: 12px 0;
   background: var(--color-bg-app);
@@ -123,6 +120,7 @@
   align-items: center;
   margin: 12px 12px 2px;
   padding-left: 4px;
+  justify-content: space-between;
   color: var(--color-text-tertiary);
   font-size: 12px;
 }
@@ -152,6 +150,33 @@
 .groupIdentity svg { flex: 0 0 auto; }
 .groupName { overflow: hidden; color: var(--color-text-primary); text-overflow: ellipsis; white-space: nowrap; }
 
+.cleanupTagsButton {
+  width: calc(100% - 24px);
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 12px 0;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font: 12px/26px var(--font-family-ui);
+  text-align: left;
+}
+
+.cleanupTagsButton:hover:not(:disabled) {
+  background: var(--color-surface-hover);
+  color: var(--color-negative);
+}
+
+.cleanupTagsButton:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
 .browseSurface {
   min-width: 0;
   min-height: 0;
@@ -179,12 +204,14 @@
   min-height: 0;
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding-bottom: 24px;
 }
 
 .tagListInner {
   position: relative;
   width: 100%;
+  animation: tagViewFadeIn 90ms var(--ease-default) both;
 }
 
 .tagVirtualRow {
@@ -210,7 +237,6 @@
   cursor: pointer;
   text-align: left;
   font: 13px/26px var(--font-family-ui);
-  animation: tagFadeIn 100ms ease-out both;
 }
 
 .tagCard:hover {
@@ -236,18 +262,23 @@
 }
 
 .tagCardCount { margin-left: 6px; opacity: .5; font: 12px var(--font-family-mono); }
+.starredIcon { flex: 0 0 auto; margin-left: auto; color: var(--color-warning); }
 .tagCard:hover .tagDot, .tagCard:hover .tagName { opacity: 1; }
 
 .tagSkeleton {
   height: 26px;
   border-radius: 6px;
-  background: linear-gradient(90deg, rgba(247, 248, 248, .035), rgba(247, 248, 248, .075), rgba(247, 248, 248, .035));
+  background: linear-gradient(90deg, var(--color-contrast-03), var(--color-contrast-08), var(--color-contrast-03));
   background-size: 200% 100%;
   animation: tagSkeleton 800ms ease-in-out infinite;
 }
 
-@keyframes tagFadeIn { from { opacity: 0; } to { opacity: 1; } }
+@keyframes tagViewFadeIn { from { opacity: 0; } to { opacity: 1; } }
 @keyframes tagSkeleton { from { background-position: 100% 0; } to { background-position: -100% 0; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .tagListInner { animation: none; }
+}
 
 .editor { display: flex; flex-direction: column; gap: 18px; }
 .editorIntro { gap: 10px; }
@@ -258,13 +289,13 @@
 .sectionHeader h2 { margin: 0; font-size: 13px; font-weight: 600; }
 .editorActions { gap: 8px; padding-top: 2px; border-top: 1px solid var(--color-border-secondary); }
 
-.relationList { max-height: 150px; overflow-y: auto; }
+.relationList { max-height: 150px; overflow-y: auto; scrollbar-gutter: stable; }
 .relationRow { gap: 8px; min-height: 32px; padding: 2px 0; }
 .relationKind { margin-left: auto; color: var(--color-text-secondary); font-size: 11px; }
 .relationEmpty { color: var(--color-text-tertiary); font-size: var(--font-size-sm); }
 
 .pickerBody { display: flex; min-height: 260px; flex-direction: column; gap: 10px; }
-.pickerResults { min-height: 0; flex: 1; overflow-y: auto; }
+.pickerResults { min-height: 0; flex: 1; overflow-y: auto; scrollbar-gutter: stable; }
 .pickerResult {
   width: 100%;
   min-height: 36px;

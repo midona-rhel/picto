@@ -48,7 +48,7 @@
   width: 100%;
 }
 
-:global(html:not([data-grid-drag-active])) .row:hover::before {
+:global(html:not([data-grid-drag-active]):not([data-sidebar-drag-active])) .row:hover::before {
   background: var(--sidebar-list-highlight-hover-bg);
   opacity: 1;
 }
@@ -140,7 +140,8 @@
   opacity: 0.8;
 }
 
-.row:hover .icon,
+:global(html:not([data-grid-drag-active]):not([data-sidebar-drag-active])) .row:hover .icon,
+.row[data-drop-highlighted='true'] .icon,
 .active .icon {
   opacity: 1;
 }
@@ -218,7 +219,7 @@
   left: 0;
 }
 
-.section:hover .sectionTitleRow::before,
+:global(html:not([data-grid-drag-active]):not([data-sidebar-drag-active])) .section:hover .sectionTitleRow::before,
 .section:focus-visible .sectionTitleRow::before {
   background: var(--sidebar-list-highlight-hover-bg);
   opacity: 1;
@@ -241,7 +242,7 @@
   line-height: 24px;
 }
 
-.section:hover .sectionTitle,
+:global(html:not([data-grid-drag-active]):not([data-sidebar-drag-active])) .section:hover .sectionTitle,
 .section:focus-visible .sectionTitle {
   color: var(--sidebar-text-primary, var(--color-text-primary));
 }
@@ -262,7 +263,7 @@
   color: var(--sidebar-section-text, var(--color-text-tertiary));
 }
 
-.section:hover .sectionArrow,
+:global(html:not([data-grid-drag-active]):not([data-sidebar-drag-active])) .section:hover .sectionArrow,
 .section:focus-visible .sectionArrow {
   opacity: 0.7;
 }
@@ -296,7 +297,7 @@
   transition: opacity var(--duration-normal) var(--ease-default);
 }
 
-.section:hover .sectionAddBtn {
+:global(html:not([data-grid-drag-active]):not([data-sidebar-drag-active])) .section:hover .sectionAddBtn {
   opacity: 0.85;
 }
 

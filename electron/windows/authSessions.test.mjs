@@ -34,6 +34,11 @@ function createBrowserWindowMock({ pageResult = false, cookies = [] } = {}) {
         }),
         session: {
           clearStorageData: vi.fn(async () => {}),
+          webRequest: {
+            onBeforeSendHeaders: vi.fn((filter, handler) => {
+              this.beforeSendHeaders = filter ? handler : null;
+            }),
+          },
           cookies: {
             get: vi.fn(async () => (typeof cookies === 'function' ? cookies() : cookies)),
           },
@@ -68,12 +73,28 @@ function createHarness(browser, overrides = {}) {
     persistCredential,
     beginPixivOAuth,
     completePixivOAuth,
+    launchOnlyFansAuth: null,
     ...overrides,
   });
   return { sessions, persistCredential, beginPixivOAuth, completePixivOAuth };
 }
 
 describe('direct-site authentication', () => {
+  it('opens Twitter / X at its direct-site login and captures its session cookies', () => {
+    expect(resolveAuthSite('twitter')).toMatchObject({
+      loginUrl: 'https://x.com/i/flow/login',
+      cookieUrl: 'https://x.com',
+      authenticatedCookieNames: ['auth_token', 'ct0'],
+    });
+  });
+
+  it('captures SubscribeStar cookies from the same host used by its downloader', () => {
+    expect(resolveAuthSite('subscribestar')).toMatchObject({
+      loginUrl: 'https://subscribestar.art/login',
+      cookieUrl: 'https://subscribestar.art',
+    });
+  });
+
   it('rejects unsupported sites without creating a browser window', async () => {
     const browser = createBrowserWindowMock();
     const { sessions } = createHarness(browser);
@@ -115,6 +136,7 @@ describe('direct-site authentication', () => {
       username: null,
       password: null,
       cookies: { _session: 'secret', user: '42' },
+      headers: null,
       oauth_token: null,
     });
     expect(browser.instances[0].messages.some((message) => Object.hasOwn(message, 'credential'))).toBe(false);
@@ -136,6 +158,137 @@ describe('direct-site authentication', () => {
     await settle();
 
     expect(persistCredential.mock.calls[0][0].cookies).toEqual({ a: 'required-a', b: 'required-b' });
+  });
+
+  it('captures the complete OnlyFans browser session from an authenticated API request', async () => {
+    const browser = createBrowserWindowMock({
+      cookies: [
+        { name: 'sess', value: 'session' },
+        { name: 'auth_id', value: '42' },
+        { name: 'auth_uid', value: '42' },
+        { name: 'analytics', value: 'ignored' },
+      ],
+    });
+    const { sessions, persistCredential } = createHarness(browser);
+
+    await sessions.startAuthSession('onlyfans');
+    browser.instances[0].beforeSendHeaders({
+      requestHeaders: { 'X-BC': 'browser-signature', 'User-Agent': 'OnlyFans browser' },
+    }, vi.fn());
+    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    await settle();
+
+    expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
+      site_id: 'onlyfans',
+      credential_type: 'cookies',
+      cookies: { sess: 'session', auth_id: '42', auth_uid: '42' },
+      headers: { 'x-bc': 'browser-signature', 'user-agent': 'OnlyFans browser' },
+    }));
+    expect(sessions.getAuthSessionState().status).toBe('completed');
+  });
+
+  it('uses an external browser for OnlyFans and persists only the captured session', async () => {
+    const browser = createBrowserWindowMock();
+    let resolveCompletion;
+    const completion = new Promise((resolve) => { resolveCompletion = resolve; });
+    const close = vi.fn(async () => {});
+    const launchOnlyFansAuth = vi.fn(async () => ({ completion, close }));
+    const { sessions, persistCredential } = createHarness(browser, { launchOnlyFansAuth });
+
+    const state = await sessions.startAuthSession('onlyfans');
+    expect(state.status).toBe('active');
+    expect(browser.instances).toHaveLength(0);
+    resolveCompletion({
+      site_category: 'onlyfans',
+      credential_type: 'cookies',
+      cookies: { sess: 'session', auth_id: '42' },
+      headers: { 'x-bc': 'signature', 'user-agent': 'Chrome' },
+    });
+    await settle();
+
+    expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
+      site_id: 'onlyfans',
+      cookies: { sess: 'session', auth_id: '42' },
+      headers: { 'x-bc': 'signature', 'user-agent': 'Chrome' },
+    }));
+    expect(close).toHaveBeenCalledOnce();
+    expect(sessions.getAuthSessionState().status).toBe('completed');
+  });
+
+  it('validates and saves a manually supplied OnlyFans session', async () => {
+    const browser = createBrowserWindowMock();
+    const { sessions, persistCredential } = createHarness(browser);
+
+    await sessions.saveManualOnlyFansCredential({
+      cookie: 'analytics=ignored; sess=session; auth_id=42; auth_uid=42',
+      user_agent: 'Chrome browser',
+      x_bc: 'signature',
+    });
+
+    expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
+      site_id: 'onlyfans',
+      credential_type: 'cookies',
+      cookies: { sess: 'session', auth_id: '42', auth_uid: '42' },
+      headers: { 'x-bc': 'signature', 'user-agent': 'Chrome browser' },
+    }));
+    expect(sessions.getAuthSessionState().status).toBe('completed');
+  });
+
+  it('does not save a FANBOX cookie before the login redirects to FANBOX', async () => {
+    const browser = createBrowserWindowMock({
+      cookies: [
+        { name: 'FANBOXSESSID', value: 'session', domain: '.fanbox.cc' },
+      ],
+    });
+    const { sessions, persistCredential } = createHarness(browser);
+
+    await sessions.startAuthSession('fanbox');
+    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    await settle();
+
+    expect(persistCredential).not.toHaveBeenCalled();
+    expect(sessions.getAuthSessionState().status).toBe('active');
+  });
+
+  it('saves a FANBOX cookie after the login redirects to FANBOX', async () => {
+    const browser = createBrowserWindowMock({
+      pageResult: true,
+      cookies: [
+        { name: 'FANBOXSESSID', value: 'valid', domain: '.fanbox.cc' },
+        { name: '__cf_bm', value: 'browser-session', domain: '.fanbox.cc' },
+      ],
+    });
+    const { sessions, persistCredential } = createHarness(browser);
+
+    await sessions.startAuthSession('fanbox');
+    browser.instances[0].loadedUrl = 'https://www.fanbox.cc/';
+    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    await settle();
+
+    expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
+      site_id: 'fanbox',
+      credential_type: 'cookies',
+      cookies: { FANBOXSESSID: 'valid', __cf_bm: 'browser-session' },
+    }));
+    expect(sessions.getAuthSessionState().status).toBe('completed');
+  });
+
+  it('does not treat FANBOX guest cookies as an authenticated login', async () => {
+    const browser = createBrowserWindowMock({
+      pageResult: false,
+      cookies: [
+        { name: 'FANBOXSESSID', value: 'guest', domain: '.fanbox.cc' },
+      ],
+    });
+    const { sessions, persistCredential } = createHarness(browser);
+
+    await sessions.startAuthSession('fanbox');
+    browser.instances[0].loadedUrl = 'https://www.fanbox.cc/';
+    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    await settle();
+
+    expect(persistCredential).not.toHaveBeenCalled();
+    expect(sessions.getAuthSessionState().status).toBe('active');
   });
 
   it('reads booru API credentials from account settings after login', async () => {
@@ -222,6 +375,42 @@ describe('direct-site authentication', () => {
 
     expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
       site_id: 'baraag', credential_type: 'oauth_token', oauth_token: 'access',
+    }));
+  });
+
+  it('uses gallery-dl DeviantArt OAuth and keeps its refresh token plus session cookies', async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ access_token: 'temporary-access', refresh_token: 'durable-refresh' }),
+    });
+    const browser = createBrowserWindowMock({
+      cookies: [
+        { name: 'auth', value: 'auth-cookie' },
+        { name: 'auth_secure', value: 'secure-cookie' },
+        { name: 'userinfo', value: 'user-cookie' },
+        { name: 'unrelated', value: 'ignored' },
+      ],
+    });
+    const { sessions, persistCredential } = createHarness(browser, { fetchImpl });
+
+    await sessions.startAuthSession('deviantart');
+    const authUrl = new URL(browser.instances[0].loadedUrl);
+    expect(authUrl.origin + authUrl.pathname).toBe('https://www.deviantart.com/oauth2/authorize');
+    expect(authUrl.searchParams.get('redirect_uri')).toBe('https://mikf.github.io/gallery-dl/oauth-redirect.html');
+    const callback = `https://mikf.github.io/gallery-dl/oauth-redirect.html?code=code&state=${authUrl.searchParams.get('state')}`;
+    await browser.instances[0].webContents.listeners.get('will-redirect')({ preventDefault: vi.fn() }, callback);
+    await settle();
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
+      site_id: 'deviantart',
+      credential_type: 'oauth_token',
+      oauth_token: 'durable-refresh',
+      cookies: {
+        auth: 'auth-cookie',
+        auth_secure: 'secure-cookie',
+        userinfo: 'user-cookie',
+      },
     }));
   });
 

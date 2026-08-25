@@ -4,6 +4,8 @@ import { getDefaultStore } from 'jotai';
 import { queryItems } from '../platform/entityApi';
 import { getViewPrefs, setViewPrefs } from '../platform/settingsApi';
 import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
+import type { ItemSort } from '../shared/types/generated/application/ItemSort';
+import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
 import { clearSelectionAtom } from '../state/selection';
 import {
   currentGridQueryAtom,
@@ -22,8 +24,13 @@ import {
 
 const store = getDefaultStore();
 const PAGE_SIZE = 500;
-const SEARCH_DEBOUNCE_MS = 300;
+const SEARCH_DEBOUNCE_MS = 100;
 const VIEW_PREFS_SAVE_DEBOUNCE_MS = 500;
+
+export interface PreparedGridNavigation {
+  scopeKey: string;
+  session: GridSessionSnapshot;
+}
 
 function scopeToKey(scope: BaseScope): string {
   switch (scope.kind) {
@@ -57,8 +64,11 @@ function viewFromPreferences(
     showResolution: (value('show_resolution') as boolean) ?? initialGridView.showResolution,
     showExtension: (value('show_extension') as boolean) ?? initialGridView.showExtension,
     showExtensionLabel: (value('show_label') as boolean) ?? initialGridView.showExtensionLabel,
+    showItemCount: (value('show_item_count') as boolean) ?? initialGridView.showItemCount,
     fitThumbnails: value('thumbnail_fit') === 'cover',
-    showSubfolders: scope.kind === 'folder' ? initialGridView.showSubfolders : false,
+    showSubfolders: scope.kind === 'folder'
+      ? (value('show_subfolders') as boolean) ?? initialGridView.showSubfolders
+      : false,
   };
 }
 
@@ -82,9 +92,49 @@ function preferenceSortDirection(value: string | null): SortDirection {
 }
 
 function defaultSort(scope: BaseScope): { field: SortField; direction: SortDirection } {
-  return scope.kind === 'folder'
-    ? { field: 'folder_order', direction: 'ascending' }
-    : { field: 'imported_at', direction: 'descending' };
+  if (scope.kind === 'folder') return { field: 'folder_order', direction: 'ascending' };
+  if (scope.kind === 'inbox') return { field: 'imported_at', direction: 'ascending' };
+  return { field: 'imported_at', direction: 'descending' };
+}
+
+function stateFromPreferences(scope: BaseScope, prefs: ViewPrefsDto | null) {
+  const fallbackSort = defaultSort(scope);
+  const field = prefs?.sort_field == null
+    ? fallbackSort.field
+    : preferenceSortField(prefs.sort_field);
+  return {
+    sort: {
+      field,
+      direction: prefs?.sort_order == null
+        ? (field === 'folder_order' ? 'ascending' : fallbackSort.direction)
+        : preferenceSortDirection(prefs.sort_order),
+    },
+    view: viewFromPreferences(scope, prefs),
+  };
+}
+
+function cloneFilters(filters: QueryFilters): QueryFilters {
+  return {
+    ...filters,
+    include_tags: [...filters.include_tags],
+    exclude_tags: [...filters.exclude_tags],
+  };
+}
+
+function queryForSession(session: GridSessionSnapshot): ItemQuery {
+  const searchText = session.searchText.trim();
+  return {
+    scope: session.scope,
+    filters: {
+      ...session.filters,
+      text: searchText || session.filters.text || null,
+    },
+    sort: {
+      field: session.sort.field,
+      direction: session.sort.direction,
+      random_seed: session.sort.randomSeed ?? null,
+    },
+  };
 }
 
 class GridSessionController {
@@ -92,44 +142,80 @@ class GridSessionController {
   private preferenceTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingPreferencePatch: ViewPrefsPatch = {};
   private scopeKey = '';
+  private navigationRequest = 0;
 
-  async navigateTo(scope: BaseScope): Promise<void> {
+  async navigateTo(scope: BaseScope, options?: { filters?: QueryFilters; sort?: ItemSort }): Promise<void> {
+    const request = ++this.navigationRequest;
+    const prepared = await this.prepareNavigation(scope, options);
+    if (request !== this.navigationRequest) return;
+    this.commitNavigation(prepared);
+  }
+
+  /** Fetch a complete destination without exposing partial state to mounted consumers. */
+  async prepareNavigation(
+    scope: BaseScope,
+    options?: { filters?: QueryFilters; sort?: ItemSort },
+  ): Promise<PreparedGridNavigation> {
     this.cancelSearch();
-    store.set(clearSelectionAtom);
-    const key = scopeToKey(scope);
-    this.scopeKey = key;
-    const generation = store.get(gridSessionAtom).generation + 1;
-    updateSession({
+    const current = store.get(gridSessionAtom);
+    const scopeKey = scopeToKey(scope);
+    const prefs = await getViewPrefs(scopeKey).catch(() => null);
+    const preferred = stateFromPreferences(scope, prefs);
+    const session: GridSessionSnapshot = {
+      ...current,
       scope,
       searchText: '',
-      filters: { ...initialGridFilters },
-      active: true,
-      generation,
-      status: 'loading',
-      error: null,
+      filters: cloneFilters(options?.filters ?? initialGridFilters),
+      sort: options?.sort ? {
+        field: options.sort.field,
+        direction: options.sort.direction,
+        randomSeed: options.sort.random_seed,
+      } : preferred.sort,
+      view: preferred.view,
       items: [],
       cursor: null,
       totalCount: null,
       totalSizeBytes: null,
-    });
+      status: 'loading',
+      error: null,
+      generation: current.generation + 1,
+      active: true,
+    };
 
-    const prefs = await getViewPrefs(key).catch(() => null);
-    if (store.get(gridSessionAtom).generation !== generation) return;
-    const sortField = prefs?.sort_field ?? null;
-    const sortOrder = prefs?.sort_order ?? null;
-    const fallbackSort = defaultSort(scope);
-    const field = sortField == null ? fallbackSort.field : preferenceSortField(sortField);
-    updateSession((current) => ({
-      ...current,
-      sort: {
-        field,
-        direction: sortOrder == null
-          ? (field === 'folder_order' ? 'ascending' : fallbackSort.direction)
-          : preferenceSortDirection(sortOrder),
-      },
-      view: viewFromPreferences(scope, prefs),
-    }));
-    await this.loadFirstPage({ generation });
+    try {
+      const result = await queryItems(queryForSession(session), { offset: 0, limit: PAGE_SIZE });
+      if (result.visible_item_count == null || result.total_size_bytes == null) {
+        throw new Error('The first grid page did not include exact totals');
+      }
+      return {
+        scopeKey,
+        session: {
+          ...session,
+          items: result.items,
+          cursor: nextOffset(result.items.length, result.visible_item_count),
+          totalCount: result.visible_item_count,
+          totalSizeBytes: result.total_size_bytes,
+          status: 'idle',
+        },
+      };
+    } catch (error) {
+      return {
+        scopeKey,
+        session: {
+          ...session,
+          status: 'error',
+          error: error instanceof Error ? error.message : String(error),
+        },
+      };
+    }
+  }
+
+  /** Commit every grid-facing value synchronously while the workspace is hidden. */
+  commitNavigation(prepared: PreparedGridNavigation): void {
+    this.navigationRequest += 1;
+    this.scopeKey = prepared.scopeKey;
+    store.set(clearSelectionAtom);
+    store.set(gridSessionAtom, prepared.session);
   }
 
   deactivate(): void {
@@ -210,6 +296,9 @@ class GridSessionController {
     try {
       const result = await queryItems(store.get(currentGridQueryAtom), { offset: 0, limit: PAGE_SIZE });
       if (store.get(gridSessionAtom).generation !== generation) return;
+      if (result.visible_item_count == null || result.total_size_bytes == null) {
+        throw new Error('The first grid page did not include exact totals');
+      }
       updateSession({
         items: result.items,
         cursor: nextOffset(result.items.length, result.visible_item_count),
@@ -234,11 +323,12 @@ class GridSessionController {
       const current = store.get(gridSessionAtom);
       if (current.generation !== generation || current.cursor !== offset) return;
       const items = [...current.items, ...result.items];
+      const totalCount = current.totalCount ?? result.visible_item_count ?? items.length;
       updateSession({
         items,
-        cursor: nextOffset(items.length, result.visible_item_count),
-        totalCount: result.visible_item_count,
-        totalSizeBytes: result.total_size_bytes,
+        cursor: nextOffset(items.length, totalCount),
+        totalCount,
+        totalSizeBytes: current.totalSizeBytes ?? result.total_size_bytes,
         status: 'idle',
       });
     } catch (error) {
@@ -276,7 +366,13 @@ class GridSessionController {
   }
 
   private setSortNow(field: SortField, direction: SortDirection): void {
-    updateSession({ sort: { field, direction } });
+    updateSession({
+      sort: {
+        field,
+        direction,
+        randomSeed: field === 'random' ? createRandomSeed() : null,
+      },
+    });
     this.saveViewPref({ sort_field: field, sort_order: direction });
     void this.loadFirstPage({ preserveItems: true });
   }
@@ -286,6 +382,10 @@ class GridSessionController {
     clearTimeout(this.searchTimer);
     this.searchTimer = null;
   }
+}
+
+function createRandomSeed(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
 }
 
 function nextOffset(loaded: number, visibleCount: number): number | null {

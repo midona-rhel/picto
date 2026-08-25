@@ -1,4 +1,5 @@
 import { createPortal } from 'react-dom';
+import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
 import {
   DRAG_GHOST_BADGE_HEIGHT,
   DRAG_GHOST_BADGE_MIN_WIDTH,
@@ -15,10 +16,12 @@ interface DragGhostProps {
   x: number;
   y: number;
   thumbnailHashes: string[];
+  thumbnailBackgrounds?: readonly (string | null)[];
+  fontHashes?: readonly string[];
   count: number;
 }
 
-export function DragGhost({ x, y, thumbnailHashes, count }: DragGhostProps) {
+export function DragGhost({ x, y, thumbnailHashes, thumbnailBackgrounds = [], fontHashes = [], count }: DragGhostProps) {
   const stackCount = dragGhostStackCount(thumbnailHashes.length);
   const thumbs = thumbnailHashes.slice(0, 3);
 
@@ -33,10 +36,11 @@ export function DragGhost({ x, y, thumbnailHashes, count }: DragGhostProps) {
     }}>
       <div style={{ position: 'relative', width: 48 + (stackCount - 1) * DRAG_GHOST_STACK_OFFSET, height: 48 + (stackCount - 1) * DRAG_GHOST_STACK_OFFSET }}>
         {thumbs.map((hash, i) => (
-          <img
+          <ThumbnailImage
             key={hash}
             src={`media://localhost/thumb/${hash}.jpg`}
             draggable={false}
+            fallback={fontHashes.includes(hash) ? 'font' : 'broken'}
             style={{
               position: 'absolute',
               top: i * DRAG_GHOST_STACK_OFFSET,
@@ -47,6 +51,7 @@ export function DragGhost({ x, y, thumbnailHashes, count }: DragGhostProps) {
               borderRadius: DRAG_GHOST_RADIUS,
               border: `1px solid ${DRAG_GHOST_BORDER}`,
               boxShadow: DRAG_GHOST_SHADOW,
+              background: thumbnailBackgrounds[i] ?? 'var(--color-bg-app)',
             }}
           />
         ))}

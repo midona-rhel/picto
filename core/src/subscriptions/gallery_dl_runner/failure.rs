@@ -151,6 +151,10 @@ fn is_error_line(line: &str) -> bool {
     false
 }
 
+pub fn has_error_lines(stderr: &str) -> bool {
+    stderr.lines().any(is_error_line)
+}
+
 /// The lines that carry the actual failure. The bridge logs everything at
 /// DEBUG (urllib3 request lines full of incidental 403s/404s), so classifying
 /// the whole blob misattributes failures — only error-bearing lines count.
@@ -184,6 +188,7 @@ pub fn classify_failure(stderr: &str) -> FailureKind {
         || lower.contains("403")
         || lower.contains("forbidden")
         || lower.contains("unauthorized")
+        || lower.contains("authenticationerror")
         || lower.contains("authrequired")
         || lower.contains("missing authentication")
         || lower.contains("login required")
@@ -319,6 +324,16 @@ mod tests {
     }
 
     #[test]
+    fn warning_only_skips_are_not_extractor_errors() {
+        assert!(!has_error_lines(
+            "[fanbox][WARNING] Skipping post 123 (HttpError: '403 Forbidden')"
+        ));
+        assert!(has_error_lines(
+            "[fanbox][ERROR] AuthenticationError: Login required"
+        ));
+    }
+
+    #[test]
     fn auth_failures_share_the_credential_blocked_issue_key() {
         assert_eq!(FailureKind::Unauthorized.issue_kind(), "credential_blocked");
         assert_eq!(FailureKind::Expired.issue_kind(), "credential_blocked");
@@ -373,6 +388,16 @@ mod tests {
         let stderr = "[urllib3.connectionpool][DEBUG] GET /posts 200\n\
                       [pixiv][error] 403 Forbidden\n";
         assert_eq!(classify_failure(stderr), FailureKind::Unauthorized);
+    }
+
+    #[test]
+    fn gallery_dl_authentication_error_is_unauthorized() {
+        assert_eq!(
+            classify_failure(
+                "gallery_dl.exception.AuthenticationError: FANBOX session was rejected"
+            ),
+            FailureKind::Unauthorized
+        );
     }
 
     #[test]

@@ -16,13 +16,14 @@ enum MediaAdapterKind {
     Procreate,
     Svg,
     Pdf,
-    OfficePptx,
+    OfficeOpenXml,
     Flash,
     Psd,
     Ugoira,
     Video,
     Animation,
     Image,
+    JpegXl,
     Audio,
     Unsupported,
 }
@@ -36,9 +37,10 @@ fn adapter_for(mime: MimeType) -> MediaAdapterKind {
         MimeType::ApplicationProcreate => MediaAdapterKind::Procreate,
         MimeType::ImageSvg => MediaAdapterKind::Svg,
         MimeType::ApplicationPdf => MediaAdapterKind::Pdf,
-        MimeType::ApplicationPptx => MediaAdapterKind::OfficePptx,
+        MimeType::ApplicationDocx | MimeType::ApplicationPptx => MediaAdapterKind::OfficeOpenXml,
         MimeType::ApplicationFlash => MediaAdapterKind::Flash,
         MimeType::ApplicationPsd => MediaAdapterKind::Psd,
+        MimeType::ImageJxl => MediaAdapterKind::JpegXl,
         MimeType::AnimationUgoira => MediaAdapterKind::Ugoira,
         MimeType::AnimationGif | MimeType::AnimationApng | MimeType::AnimationWebp => {
             MediaAdapterKind::Animation
@@ -101,10 +103,12 @@ pub(crate) async fn populate_file_info(path: &Path, info: &mut FileInfo) {
                 info.height = h;
             }
         }
-        MediaAdapterKind::OfficePptx => {
-            let (_nw, (w, h)) = office::get_pptx_info(path);
-            info.width = w;
-            info.height = h;
+        MediaAdapterKind::OfficeOpenXml => {
+            if info.mime == MimeType::ApplicationPptx {
+                let (_nw, (w, h)) = office::get_pptx_info(path);
+                info.width = w;
+                info.height = h;
+            }
         }
         MediaAdapterKind::Flash => {
             if let Ok(((w, h), dur, nf)) = specialty::get_flash_properties(path) {
@@ -147,6 +151,12 @@ pub(crate) async fn populate_file_info(path: &Path, info: &mut FileInfo) {
         }
         MediaAdapterKind::Image => {
             if let Ok((w, h)) = get_image_dimensions(path) {
+                info.width = Some(w);
+                info.height = Some(h);
+            }
+        }
+        MediaAdapterKind::JpegXl => {
+            if let Ok((w, h)) = super::jxl::dimensions(path) {
                 info.width = Some(w);
                 info.height = Some(h);
             }
@@ -200,7 +210,7 @@ pub(crate) async fn generate_thumbnail_with_adapter(
         MediaAdapterKind::Pdf => Err(FileError::Thumbnail(
             "PDF thumbnail generation not supported".to_string(),
         )),
-        MediaAdapterKind::OfficePptx => as_jpg(office::generate_thumbnail_from_office(
+        MediaAdapterKind::OfficeOpenXml => as_jpg(office::generate_thumbnail_from_office(
             path,
             target_resolution,
         )),
@@ -209,6 +219,11 @@ pub(crate) async fn generate_thumbnail_with_adapter(
         )),
         MediaAdapterKind::Psd | MediaAdapterKind::Image => {
             generate_image_thumbnail(path, target_resolution)
+        }
+        MediaAdapterKind::JpegXl => {
+            let decoded = super::jxl::decode(path)?;
+            super::thumbnail::generate_thumbnail_from_decoded_image(&decoded, target_resolution)
+                .map(|(bytes, extension)| (bytes, extension.to_string()))
         }
         MediaAdapterKind::Ugoira => {
             let frame_index = num_frames
@@ -227,7 +242,7 @@ pub(crate) async fn generate_thumbnail_with_adapter(
             ))
         }
         MediaAdapterKind::Animation => generate_image_thumbnail(path, target_resolution),
-        MediaAdapterKind::Video | MediaAdapterKind::Audio => {
+        MediaAdapterKind::Video => {
             let dur = duration_ms.filter(|&ms| ms > 0);
             match ffmpeg::render_video_thumbnail(path, target_resolution, percentage_in, dur).await
             {
@@ -247,6 +262,10 @@ pub(crate) async fn generate_thumbnail_with_adapter(
                 }
             }
         }
+        MediaAdapterKind::Audio => ffmpeg::render_audio_waveform(path, target_resolution)
+            .await
+            .map(|bytes| (bytes, "png".into()))
+            .map_err(|error| FileError::Thumbnail(error.to_string())),
         MediaAdapterKind::Unsupported => Err(FileError::Thumbnail(format!(
             "No thumbnail adapter for {:?}",
             mime

@@ -13,9 +13,10 @@ export function createMenuManager({
   openLibraryManager,
   sendToFocusedWindow,
   sendToMainWindow,
+  platform = process.platform,
 }) {
   function buildAppMenu() {
-    const isMac = process.platform === 'darwin';
+    const isMac = platform === 'darwin';
     const config = getCachedConfig();
 
     const pinned = config.pinnedLibraries || [];
@@ -105,7 +106,7 @@ export function createMenuManager({
           {
             label: 'New Library…',
             accelerator: 'CmdOrCtrl+N',
-            click: () => sendToFocusedWindow('menu:create-library'),
+            click: () => openLibraryManager(),
           },
           {
             label: 'Open Library…',
@@ -146,12 +147,12 @@ export function createMenuManager({
           {
             label: 'Import Files…',
             accelerator: 'CmdOrCtrl+I',
-            click: () => sendToFocusedWindow('menu:import-files'),
+            click: () => sendToMainWindow('menu:import-files'),
           },
           {
             label: 'Import Folder…',
             accelerator: 'Shift+CmdOrCtrl+I',
-            click: () => sendToFocusedWindow('menu:import-folder'),
+            click: () => sendToMainWindow('menu:import-folder'),
           },
           { type: 'separator' },
           {
@@ -182,12 +183,12 @@ export function createMenuManager({
           {
             label: 'Undo',
             accelerator: 'CmdOrCtrl+Z',
-            click: () => sendToMainWindow('menu:undo'),
+            click: () => sendToFocusedWindow('menu:undo'),
           },
           {
             label: 'Redo',
             accelerator: isMac ? 'Shift+Cmd+Z' : 'Ctrl+Y',
-            click: () => sendToMainWindow('menu:redo'),
+            click: () => sendToFocusedWindow('menu:redo'),
           },
           { type: 'separator' },
           { role: 'cut' },
@@ -232,6 +233,12 @@ export function createMenuManager({
           {
             label: 'Duplicates',
             click: () => sendToFocusedWindow('menu:navigate', 'duplicates'),
+          },
+          { type: 'separator' },
+          {
+            label: 'Log Window',
+            accelerator: 'CmdOrCtrl+Shift+L',
+            click: () => sendToMainWindow('menu:toggle-diagnostics'),
           },
           { type: 'separator' },
           ...(isDev ? [

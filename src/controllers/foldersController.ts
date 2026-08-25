@@ -5,19 +5,24 @@ import {
   addMedia,
   clearFolderWatchConfig,
   createFolder,
-  deleteFolder,
-  getFolderCoverHash,
+  deleteFolders,
+  duplicateFolder,
+  getFolderCover,
+  getFolderAutoTags,
   moveFolder,
   renameFolder,
   reorderFolderChildren,
   setFolderMetadata,
+  setFolderAutoTags,
   setFolderWatchConfig,
   sortFolderItemsByName,
+  sortFolderTree,
 } from '../platform/folderApi';
 import type { FolderMutationReceipt } from '../shared/types/generated/application/FolderMutationReceipt';
 import { activeNodeIdAtom } from '../state/navigation';
-import { removeHistoryEntries, pushHistory } from '../state/navigationHistory';
+import { navigateToNode, removeHistoryEntries } from '../state/navigationHistory';
 import { sidebarNodesAtom } from '../state/sidebar';
+import { announceUndoableMutation } from '../runtime/historyRuntime';
 
 const store = getDefaultStore();
 
@@ -40,8 +45,7 @@ function settleDeletedFolders(receipts: FolderMutationReceipt[]): void {
     const fallbackNodeId = activeReceipt.fallback_folder_id == null
       ? 'system:active'
       : folderNodeId(activeReceipt.fallback_folder_id);
-    store.set(activeNodeIdAtom, fallbackNodeId);
-    pushHistory(fallbackNodeId);
+    navigateToNode(fallbackNodeId);
   }
 }
 
@@ -67,11 +71,19 @@ export function bulkFolderDeletionMessage(selectedCount: number): string {
 export const foldersController = {
   async create(name: string, parentId?: number | null): Promise<string> {
     const result = await createFolder({ name, parent_id: parentId ?? null });
+    await announceUndoableMutation('folders.create');
     return folderNodeId(result.folder_id);
   },
 
   async rename(folderId: number, newName: string): Promise<void> {
     await renameFolder(folderId, newName);
+    await announceUndoableMutation('folders.rename');
+  },
+
+  async duplicate(folderId: number): Promise<string> {
+    const result = await duplicateFolder(folderId);
+    await announceUndoableMutation('folders.duplicate');
+    return folderNodeId(result.folder_id);
   },
 
   async delete(folderId: number): Promise<void> {
@@ -79,23 +91,33 @@ export const foldersController = {
   },
 
   async deleteMany(folderIds: number[]): Promise<void> {
-    const receipts: FolderMutationReceipt[] = [];
-    for (const folderId of [...new Set(folderIds)]) {
-      receipts.push(await deleteFolder(folderId));
-    }
-    settleDeletedFolders(receipts);
+    const receipt = await deleteFolders([...new Set(folderIds)]);
+    settleDeletedFolders([receipt]);
+    await announceUndoableMutation('folders.delete');
   },
 
   async applyColor(folderId: number, color: string | null): Promise<void> {
     await setFolderMetadata({ ...folderMetadata(folderId), color });
+    await announceUndoableMutation('folders.set_metadata');
   },
 
   async applyIcon(folderId: number, icon: string | null): Promise<void> {
     await setFolderMetadata({ ...folderMetadata(folderId), icon });
+    await announceUndoableMutation('folders.set_metadata');
   },
 
   async applyNotes(folderId: number, notes: string | null): Promise<void> {
     await setFolderMetadata({ ...folderMetadata(folderId), notes });
+    await announceUndoableMutation('folders.set_metadata');
+  },
+
+  getAutoTags(folderId: number): Promise<string[]> {
+    return getFolderAutoTags(folderId);
+  },
+
+  async setAutoTags(folderId: number, tags: string[]): Promise<void> {
+    await setFolderAutoTags(folderId, tags);
+    await announceUndoableMutation('folders.set_auto_tags');
   },
 
   async move(folderId: number, parentFolderId: number | null, moves: [number, number][]) {
@@ -106,10 +128,17 @@ export const foldersController = {
         .map(([siblingId]) => siblingId);
       await reorderFolderChildren(parentFolderId, orderedIds);
     }
+    await announceUndoableMutation(moves.length > 0 ? 'folders.reorder' : 'folders.move');
   },
 
   async sortByName(folderId: number): Promise<void> {
     await sortFolderItemsByName(folderId);
+    await announceUndoableMutation('folders.sort_items');
+  },
+
+  async sortTree(folderId: number, descending: boolean, recursive: boolean): Promise<void> {
+    await sortFolderTree(folderId, descending, recursive);
+    await announceUndoableMutation('folders.sort_tree');
   },
 
   async addMedia(folderPath: string, parentFolderId: number | null): Promise<void> {
@@ -121,14 +150,14 @@ export const foldersController = {
   },
 
   getCoverHash(folderId: number): Promise<string | null> {
-    return getFolderCoverHash(folderId);
+    return getFolderCover(folderId).then((cover) => cover?.entity_hash ?? null);
   },
 
-  async getCoverHashes(folderIds: number[]): Promise<Array<{ folder_id: number; entity_hash: string | null }>> {
-    return Promise.all(folderIds.map(async (folderId) => ({
-      folder_id: folderId,
-      entity_hash: await getFolderCoverHash(folderId),
-    })));
+  async getCoverHashes(folderIds: number[]): Promise<Array<{ folder_id: number; entity_hash: string | null; mime_type: string | null }>> {
+    return Promise.all(folderIds.map(async (folderId) => {
+      const cover = await getFolderCover(folderId);
+      return { folder_id: folderId, entity_hash: cover?.entity_hash ?? null, mime_type: cover?.mime_type ?? null };
+    }));
   },
 
   async setWatchConfig(folderId: number, config: {
@@ -139,12 +168,15 @@ export const foldersController = {
   }): Promise<void> {
     if (!config.enabled) {
       await clearFolderWatchConfig(folderId);
+      await announceUndoableMutation('folders.clear_watch');
       return;
     }
     await setFolderWatchConfig(folderId, config.watchPath, config.subfolders);
+    await announceUndoableMutation('folders.set_watch');
   },
 
   async clearWatchConfig(folderId: number): Promise<void> {
     await clearFolderWatchConfig(folderId);
+    await announceUndoableMutation('folders.clear_watch');
   },
 };

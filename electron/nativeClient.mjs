@@ -25,13 +25,26 @@ export async function closeLibrary() {
 }
 
 export async function invoke(command, args = {}) {
-  const resultJson = await binding.invoke(command, JSON.stringify(args ?? {}));
+  const resultJson = await invokeSerialized(command, args);
   if (resultJson == null || resultJson === 'null' || resultJson === '') return null;
   return JSON.parse(resultJson);
 }
 
+export function invokeSerialized(command, args = {}) {
+  return binding.invoke(command, JSON.stringify(args ?? {}));
+}
+
 export function startNativeDrag(windowHandle, filePaths, iconRgba, iconWidth, iconHeight) {
   return binding.startNativeDrag(windowHandle, filePaths, iconRgba, iconWidth, iconHeight);
+}
+
+export function getAssociatedApplications(filePath) {
+  const result = binding.getAssociatedApplications(filePath);
+  return JSON.parse(result || '[]');
+}
+
+export function openWithApplication(applicationPath, filePath) {
+  return binding.openWithApplication(applicationPath, filePath);
 }
 
 export function onNativeEvent(handler) {

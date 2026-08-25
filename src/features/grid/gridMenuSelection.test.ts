@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { ItemTarget } from '../../shared/types/generated/application/ItemTarget';
 import { resolveContextMenuTarget } from './gridMenuSelection';
+import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
 
 describe('resolveContextMenuTarget', () => {
   it('captures the explicitly selected item IDs instead of a stale target', () => {
@@ -17,13 +18,7 @@ describe('resolveContextMenuTarget', () => {
       kind: 'query',
       query: {
         scope: { kind: 'all' },
-        filters: {
-          include_tags: [],
-          exclude_tags: [],
-          minimum_rating: null,
-          mime_prefix: null,
-          text: null,
-        },
+        filters: createEmptyItemFilters(),
         sort: { field: 'imported_at', direction: 'descending', random_seed: null },
       },
       excluded_item_ids: [9],

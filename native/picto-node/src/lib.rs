@@ -4,6 +4,8 @@ use napi::threadsafe_function::{
 };
 use napi_derive::napi;
 use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::ffi::{CStr, CString};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -19,6 +21,53 @@ extern "C" {
         icon_width: std::ffi::c_int,
         icon_height: std::ffi::c_int,
     );
+    fn picto_get_associated_applications(file_path: *const std::ffi::c_char) -> *const std::ffi::c_char;
+    fn picto_free_string(value: *const std::ffi::c_char);
+    fn picto_open_with_application(
+        application_path: *const std::ffi::c_char,
+        file_path: *const std::ffi::c_char,
+    ) -> bool;
+}
+
+#[napi]
+pub fn get_associated_applications(file_path: String) -> Result<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let path = CString::new(file_path).map_err(|_| Error::from_reason("Invalid file path"))?;
+        let value = unsafe { picto_get_associated_applications(path.as_ptr()) };
+        if value.is_null() {
+            return Err(Error::from_reason("Could not resolve associated applications"));
+        }
+        let result = unsafe { CStr::from_ptr(value) }.to_string_lossy().into_owned();
+        unsafe { picto_free_string(value) };
+        return Ok(result);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = file_path;
+        Ok("[]".to_string())
+    }
+}
+
+#[napi]
+pub fn open_with_application(application_path: String, file_path: String) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        let application = CString::new(application_path)
+            .map_err(|_| Error::from_reason("Invalid application path"))?;
+        let file = CString::new(file_path).map_err(|_| Error::from_reason("Invalid file path"))?;
+        if !unsafe { picto_open_with_application(application.as_ptr(), file.as_ptr()) } {
+            return Err(Error::from_reason("Could not open file with the selected application"));
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (application_path, file_path);
+        Err(Error::from_reason("Application selection is not supported on this platform yet"))
+    }
 }
 
 /// Start a native file drag on macOS with a single composite icon.

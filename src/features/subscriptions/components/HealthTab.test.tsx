@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import { MantineProvider } from '@mantine/core';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import type { FailedPostGroup, SubscriptionIssueRecord } from '../../../shared/types/subscriptions';
@@ -48,7 +49,8 @@ describe('HealthTab', () => {
     const onReviewQuery = vi.fn();
 
     render(
-      <HealthTab
+      <MantineProvider>
+        <HealthTab
         failedPosts={[failedPost]}
         issues={[
           issue(1, 'retry_now'),
@@ -67,16 +69,20 @@ describe('HealthTab', () => {
         retryablePostCount={250}
         hasMore
         onLoadMore={vi.fn()}
-      />,
+        />
+      </MantineProvider>,
     );
 
-    expect(screen.getByText('Failed posts (250)')).toBeInTheDocument();
-    expect(screen.getByText(/Retries automatically/)).toBeInTheDocument();
+    expect(screen.getByText('Status')).toBeInTheDocument();
+    expect(screen.getByText('Error message')).toBeInTheDocument();
+    expect(screen.getByText('1 failed')).toBeInTheDocument();
+    expect(screen.getByText('Download failed')).toHaveAttribute('title', 'Download failed');
+    expect(screen.getByText('retry automatically')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Retry all' })).toHaveLength(1);
 
     await user.click(screen.getByRole('button', { name: 'Retry all' }));
     await user.click(screen.getByRole('button', { name: 'Fix login' }));
-    await user.click(screen.getByRole('button', { name: 'Review query' }));
+    await user.click(screen.getByRole('button', { name: 'Review source' }));
 
     expect(onRetryAll).toHaveBeenCalledOnce();
     expect(onFixCredentials).toHaveBeenCalledWith(expect.objectContaining({ issue_id: 2 }));

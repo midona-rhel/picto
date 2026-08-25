@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { createStore, Provider } from 'jotai';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
@@ -43,7 +43,7 @@ describe('ViewerToolbar live zoom display', () => {
     expect(store.get(viewerDisplayStateAtom)?.zoomPercent).toBe(100);
   });
 
-  it('uses the same detail toolbar for collections without media-only controls', () => {
+  it('uses the same detail toolbar for groups without media-only controls', () => {
     const store = createStore();
     const navigate = vi.fn();
     const edit = vi.fn();
@@ -59,10 +59,39 @@ describe('ViewerToolbar live zoom display', () => {
     expect(screen.queryByRole('slider', { name: 'Zoom' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Fit to window' })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Actual size' })).not.toBeInTheDocument();
-    screen.getByRole('button', { name: 'Edit collection' }).click();
+    const editButton = screen.getByRole('button', { name: 'Edit group' });
+    expect(editButton.querySelector('[data-picto-icon="group-edit"]')).toBeInTheDocument();
+    editButton.click();
     screen.getByRole('button', { name: 'Previous' }).click();
     screen.getByRole('button', { name: 'Next' }).click();
     expect(edit).toHaveBeenCalledOnce();
     expect(navigate.mock.calls).toEqual([[-1], [1]]);
+  });
+
+  it('exposes reference application-style zoom levels and toggles actual/fit on right click', () => {
+    const store = createStore();
+    const fitToWindow = vi.fn();
+    const setZoomScale = vi.fn();
+    store.set(viewerDisplayStateAtom, { currentIndex: 0, total: 1, zoomPercent: 100 });
+    store.set(viewerDisplayControlsAtom, {
+      close: vi.fn(),
+      zoom: {
+        fitToWindow,
+        fitActual: vi.fn(),
+        zoomIn: vi.fn(),
+        zoomOut: vi.fn(),
+        setZoomScale,
+        subscribeZoomScale: () => vi.fn(),
+      },
+    });
+
+    render(<Provider store={store}><ViewerToolbar /></Provider>);
+    const zoomLabel = screen.getByRole('button', { name: '100%' });
+    fireEvent.click(zoomLabel, { clientX: 20, clientY: 20 });
+    fireEvent.click(screen.getByRole('menuitem', { name: '25%' }));
+    expect(setZoomScale).toHaveBeenCalledWith(0.25);
+
+    fireEvent.contextMenu(zoomLabel);
+    expect(fitToWindow).toHaveBeenCalledOnce();
   });
 });

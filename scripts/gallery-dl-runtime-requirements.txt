@@ -1,0 +1,5 @@
+# One gallery-dl runtime for development and packaged sidecars.
+gallery-dl @ https://codeberg.org/mikf/gallery-dl/archive/d05a77933a89a31ff9d57a2c12cda2ee336845e6.zip
+curl_cffi>=0.9.0
+requests==2.32.4
+yt-dlp==2026.8.19

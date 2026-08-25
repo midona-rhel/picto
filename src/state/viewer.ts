@@ -23,6 +23,9 @@ export const viewerOpenAtom = atom((get) => get(viewerSessionAtom) != null);
 /** null = quicklook closed. */
 export const quickLookSessionAtom = atom<ViewerSession | null>(null);
 
+/** True while an outgoing viewer/editor is being replaced by another workspace scope. */
+export const viewerExitTransitionAtom = atom(false);
+
 // ── Viewer ↔ toolbar communication atoms ──
 
 export interface ViewerDisplayState {

@@ -20,7 +20,9 @@ coverage/
 # Downloaded runtime dependencies
 /vendor/ffmpeg/
 /vendor/gallery-dl/
+/vendor/onlyfans/
 /vendor/onnxruntime/
+/public/vendor/ruffle/
 
 # Local runtime and verification output
 /artifacts/

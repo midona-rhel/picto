@@ -290,8 +290,10 @@ export function createLibraryHostService({
     const existing = config.libraryMeta[libraryPath] ?? {};
     if ('icon' in meta) existing.icon = meta.icon;
     if ('color' in meta) existing.color = meta.color;
+    if ('imageHash' in meta) existing.imageHash = meta.imageHash;
     config.libraryMeta[libraryPath] = existing;
     await saveGlobalConfig(config);
+    sendToAllWindows('library-meta-changed', { path: libraryPath });
   }
 
   async function initializeInitialLibrary(libraryPath) {

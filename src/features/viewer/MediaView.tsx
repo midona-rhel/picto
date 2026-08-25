@@ -11,16 +11,23 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useSetAtom } from 'jotai';
 import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
-import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
+import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
-import { viewerDisplayStateAtom, viewerDisplayControlsAtom } from '../../state/viewer';
+import { viewerDisplayStateAtom, viewerDisplayControlsAtom, type ViewerZoomControls } from '../../state/viewer';
 import * as entityMutations from '../../controllers/entityMutations';
 import { useImageZoom, type ImageSize } from './hooks/useImageZoom';
 import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
 import { useRecordMediaView } from './hooks/useRecordMediaView';
-import { VideoPlayer } from './video/VideoPlayer';
+import { DetailMediaRenderer } from './document/DetailMediaRenderer';
+import { detailRendererKind } from './document/detailRendererKind';
+import { useViewerEntityContextMenu } from './useViewerEntityContextMenu';
+import type { FlashPlaybackController } from './document/FlashPlayer';
+import { FlashControls } from './document/FlashControls';
+import type { CurrentFrameCapture } from './currentFrameCapture';
+import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
 import styles from './MediaView.module.css';
 
 export interface MediaViewProps {
@@ -49,17 +56,37 @@ export function MediaView({
   const effectiveRatingItemId = ratingItemId === undefined ? currentItemId : ratingItemId;
   useRecordMediaView(effectiveRecordItemId);
   const currentMime = currentItem?.display_mime_type ?? '';
-  const isVideo = currentMime.startsWith('video/');
+  const rendererKind = detailRendererKind(currentMime);
+  const isImage = rendererKind === 'image';
+  const usesRendererZoom = rendererKind === 'pdf' || rendererKind === 'jpeg-xl';
   const total = totalCount ?? items.length;
   const thumbHash = currentHash;
+  const [flashPlayback, setFlashPlayback] = useState<FlashPlaybackController | null>(null);
+  const [captureCurrentFrame, setCaptureCurrentFrame] = useState<CurrentFrameCapture | null>(null);
+  const [pdfZoomControls, setPdfZoomControls] = useState<ViewerZoomControls | null>(null);
+  const [pdfZoomPercent, setPdfZoomPercent] = useState(100);
+  const handleFrameCaptureChange = useCallback((capture: CurrentFrameCapture | null) => {
+    setCaptureCurrentFrame(capture ? () => capture : null);
+  }, []);
 
   const setDisplayState = useSetAtom(viewerDisplayStateAtom);
   const setDisplayControls = useSetAtom(viewerDisplayControlsAtom);
+  const contextMenu = useViewerEntityContextMenu({
+    hash: currentItem?.display_file_hash ?? null,
+    itemId: effectiveRatingItemId,
+    kind: currentItem?.kind,
+    lifecycle: currentItem?.lifecycle,
+    name: currentItem?.name,
+    mime: currentMime,
+    width: currentItem?.pixel_width,
+    height: currentItem?.pixel_height,
+    flashPlayback: rendererKind === 'flash' ? flashPlayback : null,
+    captureCurrentFrame,
+  });
 
   // ── Refs ──
   const containerRef = useRef<HTMLDivElement>(null);
-  const thumbFrameRef = useRef<HTMLDivElement>(null);
-  const fullFrameRef = useRef<HTMLDivElement>(null);
+  const imageFrameRef = useRef<HTMLDivElement>(null);
   const fullImgRef = useRef<HTMLImageElement>(null);
   const navigatorRef = useRef<HTMLDivElement>(null);
   const navViewportRef = useRef<HTMLDivElement>(null);
@@ -78,7 +105,7 @@ export function MediaView({
     hash: currentHash || null,
     thumbnailHash: currentItem?.display_file_hash ?? null,
     mime: currentMime,
-    isVideo,
+    isVideo: !isImage,
     imgRef: fullImgRef,
     neighborHashes,
   });
@@ -96,7 +123,7 @@ export function MediaView({
   imageSizeRef.current = imageSize;
 
   // ── Zoom/pan ──
-  const zoom = useImageZoom(containerRef, imageSize, [thumbFrameRef, fullFrameRef]);
+  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef]);
 
   // Fit image when displayed hash changes (not when requested hash changes).
   useLayoutEffect(() => {
@@ -135,8 +162,12 @@ export function MediaView({
   const zoomPercent = Math.round(zoom.state.scale * 100);
 
   useEffect(() => {
-    setDisplayState({ currentIndex, total, zoomPercent });
-  }, [currentIndex, total, zoomPercent, setDisplayState]);
+    setDisplayState({
+      currentIndex,
+      total,
+      zoomPercent: usesRendererZoom ? pdfZoomPercent : isImage ? zoomPercent : undefined,
+    });
+  }, [currentIndex, isImage, pdfZoomPercent, total, usesRendererZoom, zoomPercent, setDisplayState]);
 
   // Zoom % updates only on committed state (after 96ms debounce).
   // Live per-frame updates removed — settle-only is sufficient.
@@ -146,21 +177,21 @@ export function MediaView({
       close: () => onClose(currentItemId),
       backLabel,
       navigate,
-      zoom: {
+      zoom: usesRendererZoom ? pdfZoomControls ?? undefined : isImage ? {
         fitToWindow: zoom.fitToWindow,
         fitActual: zoom.fitActual,
         zoomIn: () => zoom.animateZoomTo(zoom.state.scale * 1.25),
         zoomOut: () => zoom.animateZoomTo(zoom.state.scale / 1.25),
         setZoomScale: (s) => zoom.zoomTo(s),
         subscribeZoomScale: zoom.subscribeLiveScale,
-      },
+      } : undefined,
     });
-  }, [backLabel, currentItemId, navigate, onClose, zoom, setDisplayControls]);
+  }, [backLabel, currentItemId, isImage, navigate, onClose, pdfZoomControls, setDisplayControls, usesRendererZoom, zoom]);
 
   useEffect(() => () => { setDisplayState(null); setDisplayControls(null); }, [setDisplayState, setDisplayControls]);
 
   // ── Keyboard — uses registry defs so EU keys2 alternatives work ──
-  useEffect(() => {
+  useShortcutScope((e) => {
     const closeDef = getShortcut('view.closeDetail')!;
     const detailDef = getShortcut('view.detailView')!;
     const quicklookDef = getShortcut('view.quicklook')!;
@@ -171,26 +202,26 @@ export function MediaView({
     const zoomOutDef = getShortcut('view.zoomOut')!;
     const actualDef = getShortcut('view.actualSize')!;
 
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-
       if (matchesShortcutDef(e, closeDef) || matchesShortcutDef(e, detailDef) || matchesShortcutDef(e, quicklookDef)) { e.preventDefault(); onClose(currentItemId); return; }
       if (matchesShortcutDef(e, prevDef)) { e.preventDefault(); navigate(-1); return; }
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
-      if (matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }
-      if (matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale * 1.25); return; }
-      if (matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale / 1.25); return; }
-      if (matchesShortcutDef(e, actualDef)) { e.preventDefault(); zoom.fitActual(); return; }
+      const activeZoom = usesRendererZoom ? pdfZoomControls : isImage ? {
+        fitToWindow: zoom.fitToWindow,
+        fitActual: zoom.fitActual,
+        zoomIn: () => zoom.animateZoomTo(zoom.state.scale * 1.25),
+        zoomOut: () => zoom.animateZoomTo(zoom.state.scale / 1.25),
+      } : null;
+      if (activeZoom && matchesShortcutDef(e, fitDef)) { e.preventDefault(); activeZoom.fitToWindow(); return; }
+      if (activeZoom && matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); activeZoom.zoomIn(); return; }
+      if (activeZoom && matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); activeZoom.zoomOut(); return; }
+      if (activeZoom && matchesShortcutDef(e, actualDef)) { e.preventDefault(); activeZoom.fitActual(); return; }
 
       // Rating: 0-5 (no modifiers)
       if (effectiveRatingItemId != null && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key >= '0' && e.key <= '5') {
         e.preventDefault();
         void entityMutations.setItemRating(effectiveRatingItemId, parseInt(e.key, 10));
       }
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [currentItemId, effectiveRatingItemId, navigate, onClose, zoom]);
+  }, { priority: 50 });
 
   useEffect(() => () => { if (boundaryTimerRef.current) clearTimeout(boundaryTimerRef.current); }, []);
 
@@ -199,46 +230,50 @@ export function MediaView({
   const thumbUrl = mediaThumbnailUrl(thumbHash);
 
   return (
-    <div className={styles.mediaView}>
-      {isVideo ? (
-        <VideoPlayer key={currentHash} src={mediaFileUrl(thumbHash, currentMime)} />
+    <div
+      className={styles.mediaView}
+      onContextMenuCapture={(event) => {
+        if (!(event.target as Element).closest('[data-flash-player]')) contextMenu.open(event);
+      }}
+    >
+      {rendererKind === 'flash' ? (
+        <div className={styles.zoomContainer}>
+          <DetailMediaRenderer
+            hash={currentHash}
+            mimeType={currentMime}
+            displayName={currentItem.name}
+            onFlashPlaybackChange={setFlashPlayback}
+            onFlashContextMenu={contextMenu.open}
+            onFrameCaptureChange={handleFrameCaptureChange}
+          />
+          <FlashControls controller={flashPlayback} />
+        </div>
+      ) : !isImage ? (
+        <DetailMediaRenderer
+          hash={currentHash}
+          mimeType={currentMime}
+          displayName={currentItem.name}
+          onFlashPlaybackChange={setFlashPlayback}
+          onFlashContextMenu={contextMenu.open}
+          onFrameCaptureChange={handleFrameCaptureChange}
+          onPdfZoomControlsChange={setPdfZoomControls}
+          onPdfZoomPercentChange={setPdfZoomPercent}
+        />
       ) : (
         <div ref={containerRef} className={`${styles.zoomContainer} ${zoom.isDragging ? styles.dragging : ''}`}
           onMouseDown={zoom.handlers.onMouseDown}>
 
-          {/* Thumbnail frame — at center, zoom hook applies translate(calc(-50% + tx) scale(s)) */}
-          <div ref={thumbFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
-            <img
-              src={pipeline.thumbUrl || thumbUrl}
-              alt="" draggable={false}
-              onLoad={pipeline.handleThumbLoad}
-              style={{
-                display: 'block',
-                width: imageSize?.width,
-                height: imageSize?.height,
-                opacity: pipeline.thumbLoaded ? 1 : 0,
-              }}
-            />
-          </div>
-
-          {/* Full-res frame — same position, fades in */}
-          <div ref={fullFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
-            {pipeline.fullUrl && (
-              <img
-                ref={fullImgRef}
-                src={pipeline.fullUrl}
-                alt="" decoding="async" draggable={false}
-                onLoad={pipeline.handleFullLoad}
-                style={{
-                  display: 'block',
-                  width: imageSize?.width,
-                  height: imageSize?.height,
-                  opacity: pipeline.fullVisible ? 1 : 0,
-                  transition: 'opacity 130ms ease',
-                }}
-              />
-            )}
-          </div>
+          <ImageCrossfadeFrame
+            frameRef={imageFrameRef}
+            fullImageRef={fullImgRef}
+            imageSize={imageSize}
+            thumbnailUrl={pipeline.thumbUrl || thumbUrl}
+            fullUrl={pipeline.fullUrl}
+            thumbnailVisible={pipeline.thumbLoaded}
+            fullVisible={pipeline.fullVisible}
+            onThumbnailLoad={pipeline.handleThumbLoad}
+            onFullLoad={pipeline.handleFullLoad}
+          />
 
           {/* Boundary flash */}
           <div className={`${styles.boundaryLeft} ${boundaryFlash === 'left' ? styles.boundaryVisible : ''}`}>First item</div>
@@ -251,6 +286,7 @@ export function MediaView({
           </div>
         </div>
       )}
+      {contextMenu.menu}
     </div>
   );
 }

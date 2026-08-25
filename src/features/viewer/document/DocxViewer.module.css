@@ -1,0 +1,17 @@
+.document {
+  display: grid;
+  gap: 24px;
+  justify-items: center;
+  min-width: min-content;
+}
+
+.document :global(.docx-wrapper) {
+  display: contents;
+  padding: 0 !important;
+  background: transparent !important;
+}
+
+.document :global(section.docx) {
+  margin: 0 !important;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, .32) !important;
+}

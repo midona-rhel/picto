@@ -4,11 +4,45 @@ use chrono::Utc;
 use rusqlite::{params, OptionalExtension, Transaction};
 
 use crate::app::{resources, Application, ItemId, MutationReceipt};
+use crate::store::history::HistoryDescriptor;
 
 impl Application {
     /// Record a view for a visible root item.
     pub fn record_recent_view(&self, root_item_id: ItemId) -> Result<MutationReceipt, String> {
         self.record_recent_view_at(root_item_id, &Utc::now().to_rfc3339())
+    }
+
+    /// Clear the persisted Recently Viewed history without changing library items.
+    pub fn clear_recent_views(&self) -> Result<MutationReceipt, String> {
+        let (item_ids, revision, _, _) = self.undoable_transaction_if_changed(
+            HistoryDescriptor::new(
+                "items.clear_recent_views",
+                "Clear recently viewed",
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                ],
+                Vec::new(),
+            ),
+            |transaction| {
+                let item_ids = transaction
+                    .prepare("SELECT item_id FROM media_view ORDER BY item_id")?
+                    .query_map([], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let changed = transaction.execute("DELETE FROM media_view", [])? > 0;
+                Ok((item_ids, (), changed))
+            },
+            |_, ()| Ok(()),
+        )?;
+
+        Ok(MutationReceipt {
+            revision,
+            resources: vec![
+                resources::LIBRARY.to_string(),
+                resources::SIDEBAR.to_string(),
+            ],
+            item_ids: item_ids.into_iter().map(ItemId).collect(),
+        })
     }
 
     fn record_recent_view_at(
@@ -222,5 +256,47 @@ mod tests {
             })
             .unwrap();
         assert_eq!(stored, 10);
+    }
+
+    #[test]
+    fn clears_recent_history_through_one_canonical_mutation() {
+        let (_directory, application) = fixture();
+        application
+            .record_recent_view_at(ItemId(1), "2026-08-23T10:00:00Z")
+            .unwrap();
+        application
+            .record_recent_view_at(ItemId(10), "2026-08-23T11:00:00Z")
+            .unwrap();
+
+        let receipt = application.clear_recent_views().unwrap();
+        assert_eq!(receipt.item_ids, vec![ItemId(1), ItemId(10)]);
+        assert_eq!(
+            receipt.resources,
+            vec![resources::LIBRARY, resources::SIDEBAR]
+        );
+        let count: i64 = application
+            .store()
+            .read(|connection| {
+                connection.query_row("SELECT COUNT(*) FROM media_view", [], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(count, 0);
+
+        application.undo().unwrap();
+        let restored: i64 = application
+            .store()
+            .read(|connection| {
+                connection.query_row("SELECT COUNT(*) FROM media_view", [], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(restored, 2);
+
+        let unchanged = application.clear_recent_views().unwrap();
+        assert!(unchanged.revision > receipt.revision);
+        assert_eq!(unchanged.item_ids, vec![ItemId(1), ItemId(10)]);
+
+        let no_op = application.clear_recent_views().unwrap();
+        assert_eq!(no_op.revision, unchanged.revision);
+        assert!(no_op.item_ids.is_empty());
     }
 }

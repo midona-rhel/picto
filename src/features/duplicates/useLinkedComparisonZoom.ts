@@ -204,24 +204,6 @@ export function useLinkedComparisonZoom({
     };
   }, [center, fitScales, imageSizes, paneSizes, zoom]);
 
-  const differenceFrameStyle = useCallback((side: ComparisonSide, aspectRatio: number): CSSProperties => {
-    const pane = paneSizes[side];
-    if (pane.width <= 0 || pane.height <= 0 || aspectRatio <= 0) return { inset: 0 };
-    const width = Math.min(pane.width, pane.height * aspectRatio);
-    const height = width / aspectRatio;
-    const displayedWidth = width * zoom;
-    const displayedHeight = height * zoom;
-    const maxTx = Math.max(0, (displayedWidth - pane.width) / 2);
-    const maxTy = Math.max(0, (displayedHeight - pane.height) / 2);
-    const tx = clamp((0.5 - center.x) * displayedWidth, -maxTx, maxTx);
-    const ty = clamp((0.5 - center.y) * displayedHeight, -maxTy, maxTy);
-    return {
-      width,
-      height,
-      transform: `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(${zoom})`,
-    };
-  }, [center, paneSizes, zoom]);
-
   return {
     zoomPercent: Math.round(zoom * 100),
     isFit: Math.abs(zoom - 1) < 0.001,
@@ -231,7 +213,6 @@ export function useLinkedComparisonZoom({
     setZoomPercent,
     fit,
     frameStyle,
-    differenceFrameStyle,
     handlers: { onPointerDown, onPointerMove, onPointerUp },
   };
 }

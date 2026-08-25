@@ -12,6 +12,7 @@ export function startSidebarSettle(): () => void {
     libraryInvalidation.register('sidebar', refresh),
     libraryInvalidation.register('folders', refresh),
     libraryInvalidation.register('smart_folders', refresh),
+    libraryInvalidation.register('tags', refresh),
   ];
 
   return () => {

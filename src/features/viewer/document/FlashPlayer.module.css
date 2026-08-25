@@ -1,0 +1,35 @@
+.stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background: var(--color-bg-app);
+  color: var(--color-text-primary);
+  font-family: var(--font-family-ui);
+}
+
+.host {
+  position: absolute;
+  inset: 0;
+}
+
+.player {
+  display: block;
+  width: 100%;
+  height: 100%;
+  background: #000;
+}
+
+.message {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: var(--color-bg-app);
+  color: var(--color-text-secondary);
+  font: 500 13px/1.5 var(--font-family-ui);
+  line-height: 1.5;
+  text-align: center;
+}

@@ -40,6 +40,7 @@ export function QueryEditModal({
 
   const site = sites.find((entry) => entry.id === siteId) ?? null;
   const canSave = siteId !== '' && queryText.trim() !== '' && !busy;
+  const queryLabel = site?.supports_query ? 'Search' : 'Account';
 
   return (
     <GlassModal
@@ -76,7 +77,7 @@ export function QueryEditModal({
         />
       </div>
       <div className={styles.formField}>
-        <span className={styles.label}>{site?.supports_query ? 'Search tags' : 'Account'}</span>
+        <span className={styles.label}>{queryLabel}</span>
         <TagAutocompleteInput
           siteId={siteId}
           value={queryText}

@@ -1,5 +1,6 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { getStaticAuthLoginRoutes, resolveAuthSite } from './authSites.mjs';
+import { createManualOnlyFansCredential, launchExternalOnlyFansAuth } from './externalOnlyFansAuth.mjs';
 
 const OAUTH_CALLBACK_URL = 'https://picto.app/oauth/callback';
 const POLL_INTERVAL_MS = 750;
@@ -143,6 +144,24 @@ async function hasAuthenticatedDomSignal(webContents) {
   `, true);
 }
 
+async function hasAuthenticatedFanboxSession(webContents) {
+  return webContents.executeJavaScript(String.raw`
+    (async () => {
+      try {
+        const response = await fetch('https://api.fanbox.cc/creator.listFollowing', {
+          credentials: 'include',
+          headers: { accept: 'application/json' },
+        });
+        if (!response.ok) return false;
+        const payload = await response.json();
+        return payload && payload.body !== null && payload.body !== undefined;
+      } catch {
+        return false;
+      }
+    })()
+  `, true);
+}
+
 function createCookieAdapter(site) {
   return {
     async prepare() {
@@ -168,6 +187,16 @@ function createCookieAdapter(site) {
         .filter(([, value]) => value));
       if ((site.cookieNames ?? []).some((name) => !cookies[name]) || Object.keys(cookies).length === 0) {
         return { status: 'active', message: `Log in with ${site.label} to continue.` };
+      }
+      if (site.id === 'fanbox') {
+        let currentHost = '';
+        try { currentHost = new URL(currentUrl).hostname.toLowerCase(); } catch {}
+        if (currentHost !== 'fanbox.cc' && !currentHost.endsWith('.fanbox.cc')) {
+          return { status: 'active', message: `Log in with ${site.label} to continue.` };
+        }
+        if (!(await hasAuthenticatedFanboxSession(contents))) {
+          return { status: 'active', message: `Log in with ${site.label} to continue.` };
+        }
       }
       return {
         credential: { site_category: site.id, credential_type: 'cookies', cookies },
@@ -224,6 +253,50 @@ function createAccountApiAdapter(site) {
   };
 }
 
+function createOnlyFansAdapter(site) {
+  let capturedHeaders = null;
+  let webRequest = null;
+  return {
+    async prepare() {
+      return { url: site.loginUrl, message: `Log in with ${site.label} in the popup window.` };
+    },
+    bind(contents) {
+      webRequest = contents.session.webRequest;
+      webRequest.onBeforeSendHeaders({ urls: ['https://onlyfans.com/api2/v2/*'] }, (details, callback) => {
+        const entries = Object.entries(details.requestHeaders ?? {});
+        const read = (name) => entries.find(([key]) => key.toLowerCase() === name)?.[1];
+        const xBc = read('x-bc');
+        const userAgent = read('user-agent') || sanitizeUserAgent(contents.getUserAgent?.());
+        if (xBc && userAgent) capturedHeaders = { 'x-bc': String(xBc), 'user-agent': String(userAgent) };
+        callback({ requestHeaders: details.requestHeaders });
+      });
+    },
+    dispose() {
+      webRequest?.onBeforeSendHeaders(null);
+      webRequest = null;
+    },
+    async inspect(contents) {
+      const stored = await contents.session.cookies.get({ url: site.cookieUrl });
+      const values = new Map(stored.map((cookie) => [cookie.name, String(cookie.value || '').trim()]));
+      if (!values.get('sess') || !values.get('auth_id') || !capturedHeaders) {
+        return { status: 'active', message: `Log in with ${site.label} to continue.` };
+      }
+      const cookies = Object.fromEntries(site.cookieNames
+        .map((name) => [name, values.get(name)])
+        .filter(([, value]) => value));
+      return {
+        credential: {
+          site_category: site.id,
+          credential_type: 'cookies',
+          cookies,
+          headers: capturedHeaders,
+        },
+        message: `${site.label} session captured.`,
+      };
+    },
+  };
+}
+
 function createOAuthAdapter(site, fetchImpl) {
   let authorizationUrl;
   let requestToken;
@@ -235,19 +308,25 @@ function createOAuthAdapter(site, fetchImpl) {
     async prepare() {
       if (site.strategy === 'oauth2') {
         oauthState = randomUUID();
-        const registration = await responseJson(await fetchImpl(site.registerUrl, {
-          method: 'POST',
-          headers: { accept: 'application/json', 'content-type': 'application/json' },
-          body: JSON.stringify({ client_name: 'Picto', redirect_uris: OAUTH_CALLBACK_URL, scopes: 'read' }),
-        }), `${site.label} application registration`);
-        clientId = registration.client_id;
-        clientSecret = registration.client_secret;
+        const redirectUri = site.redirectUrl ?? OAUTH_CALLBACK_URL;
+        if (site.clientId && site.clientSecret) {
+          clientId = site.clientId;
+          clientSecret = site.clientSecret;
+        } else {
+          const registration = await responseJson(await fetchImpl(site.registerUrl, {
+            method: 'POST',
+            headers: { accept: 'application/json', 'content-type': 'application/json' },
+            body: JSON.stringify({ client_name: 'Picto', redirect_uris: redirectUri, scopes: site.scope ?? 'read' }),
+          }), `${site.label} application registration`);
+          clientId = registration.client_id;
+          clientSecret = registration.client_secret;
+        }
         if (!clientId || !clientSecret) throw new Error(`${site.label} application registration returned no client credentials.`);
         authorizationUrl = `${site.authorizeUrl}?${formBody({
           client_id: clientId,
-          redirect_uri: OAUTH_CALLBACK_URL,
+          redirect_uri: redirectUri,
           response_type: 'code',
-          scope: 'read',
+          scope: site.scope ?? 'read',
           state: oauthState,
         })}`;
       } else {
@@ -271,26 +350,37 @@ function createOAuthAdapter(site, fetchImpl) {
     handles(url) {
       try {
         const parsed = new URL(url);
-        const callback = new URL(OAUTH_CALLBACK_URL);
+        const callback = new URL(site.redirectUrl ?? OAUTH_CALLBACK_URL);
         return parsed.origin === callback.origin && parsed.pathname === callback.pathname;
       } catch {
         return false;
       }
     },
-    async complete(url) {
+    async complete(url, contents) {
       const params = new URL(url).searchParams;
       if (site.strategy === 'oauth2') {
         if (params.get('state') !== oauthState) throw new Error(`${site.label} OAuth state did not match.`);
         const code = params.get('code');
         if (!code) throw new Error(`No code in ${site.label} OAuth callback.`);
+        const redirectUri = site.redirectUrl ?? OAUTH_CALLBACK_URL;
         const token = await responseJson(await fetchImpl(site.tokenUrl, {
           method: 'POST',
           headers: { accept: 'application/json', 'content-type': 'application/x-www-form-urlencoded' },
-          body: formBody({ client_id: clientId, client_secret: clientSecret, grant_type: 'authorization_code', code, redirect_uri: OAUTH_CALLBACK_URL }),
+          body: formBody({ client_id: clientId, client_secret: clientSecret, grant_type: 'authorization_code', code, redirect_uri: redirectUri }),
         }), `${site.label} token exchange`);
-        if (!token.access_token) throw new Error(`${site.label} token response was incomplete.`);
+        const oauthToken = token[site.tokenField ?? 'access_token'];
+        if (!oauthToken) throw new Error(`${site.label} token response was incomplete.`);
+        let cookies = null;
+        if (site.cookieUrl && contents?.session?.cookies) {
+          const stored = await contents.session.cookies.get({ url: site.cookieUrl });
+          const allowed = new Set(site.cookieNames ?? stored.map((cookie) => cookie.name));
+          cookies = Object.fromEntries(stored
+            .filter((cookie) => allowed.has(cookie.name) && cookie.value)
+            .map((cookie) => [cookie.name, cookie.value]));
+          if (Object.keys(cookies).length === 0) cookies = null;
+        }
         return {
-          credential: { site_category: site.id, credential_type: 'oauth_token', oauth_token: token.access_token },
+          credential: { site_category: site.id, credential_type: 'oauth_token', oauth_token: oauthToken, cookies },
           message: `${site.label} authorization completed.`,
         };
       }
@@ -350,6 +440,7 @@ function createPixivAdapter(site, beginPixivOAuth, completePixivOAuth) {
 
 function createAdapter(site, dependencies) {
   if (site.strategy === 'cookies') return createCookieAdapter(site);
+  if (site.strategy === 'onlyfans') return createOnlyFansAdapter(site);
   if (site.strategy === 'account_api') return createAccountApiAdapter(site);
   if (site.strategy === 'oauth1' || site.strategy === 'oauth2') return createOAuthAdapter(site, dependencies.fetchImpl);
   if (site.strategy === 'pixiv') return createPixivAdapter(site, dependencies.beginPixivOAuth, dependencies.completePixivOAuth);
@@ -360,11 +451,13 @@ export function createAuthSessions({
   BrowserWindow,
   getMainWindow,
   fetchImpl = fetch,
+  launchOnlyFansAuth = launchExternalOnlyFansAuth,
   persistCredential = async () => { throw new Error('Credential persistence is unavailable.'); },
   beginPixivOAuth = async () => { throw new Error('Pixiv OAuth is unavailable.'); },
   completePixivOAuth = async () => { throw new Error('Pixiv OAuth is unavailable.'); },
 }) {
   let popup = null;
+  let externalAuth = null;
   let adapter = null;
   let pollTimer = null;
   let closing = false;
@@ -391,9 +484,13 @@ export function createAuthSessions({
     if (pollTimer != null) clearInterval(pollTimer);
     pollTimer = null;
     const current = popup;
+    const currentExternal = externalAuth;
+    adapter?.dispose?.();
     popup = null;
+    externalAuth = null;
     adapter = null;
     inspecting = false;
+    await currentExternal?.close?.();
     if (!current || current.isDestroyed()) return;
     if (clearStorage) {
       try { await current.webContents.session.clearStorageData(); } catch {}
@@ -417,6 +514,7 @@ export function createAuthSessions({
           username: credential.username ?? null,
           password: credential.password ?? null,
           cookies: credential.cookies ?? null,
+          headers: credential.headers ?? null,
           oauth_token: credential.oauth_token ?? null,
         });
       }
@@ -502,6 +600,7 @@ export function createAuthSessions({
 
   function bindWindow(site, authWindow) {
     const contents = authWindow.webContents;
+    adapter?.bind?.(contents);
     contents.on('page-title-updated', (_event, title) => emit({ title }));
     contents.on('did-navigate', (_event, url) => {
       emit({ status: 'loading', current_url: url });
@@ -544,6 +643,36 @@ export function createAuthSessions({
     completed = false;
     finishing = false;
     inspecting = false;
+    if (site.strategy === 'onlyfans' && launchOnlyFansAuth) {
+      emit({
+        site_category: site.id,
+        status: 'starting',
+        title: `Login: ${site.label}`,
+        current_url: site.loginUrl,
+        message: 'Opening OnlyFans in an external browser…',
+      });
+      try {
+        const session = await launchOnlyFansAuth({
+          onStatus: (message) => emit({ status: 'active', current_url: site.loginUrl, message }),
+        });
+        externalAuth = session;
+        emit({
+          status: 'active',
+          current_url: site.loginUrl,
+          message: 'Complete the OnlyFans login in the external browser.',
+        });
+        void session.completion.then(async (credential) => {
+          if (externalAuth !== session || completed) return;
+          await finish({ credential, message: `${site.label} session captured.` });
+        }).catch((error) => {
+          if (externalAuth !== session || completed) return;
+          emit({ status: 'error', message: error instanceof Error ? error.message : `${site.label} login failed.` });
+        });
+      } catch (error) {
+        emit({ status: 'error', message: error instanceof Error ? error.message : `${site.label} login setup failed.` });
+      }
+      return state;
+    }
     adapter = createAdapter(site, { fetchImpl, beginPixivOAuth, completePixivOAuth });
     const authWindow = createPopup(site);
     bindWindow(site, authWindow);
@@ -567,6 +696,22 @@ export function createAuthSessions({
     return state;
   }
 
+  async function saveManualOnlyFansCredential(input) {
+    await cancelAuthSession();
+    const credential = createManualOnlyFansCredential(input ?? {});
+    completed = false;
+    finishing = false;
+    emit({
+      site_category: 'onlyfans',
+      status: 'loading',
+      title: 'Login: OnlyFans',
+      current_url: null,
+      message: 'Saving OnlyFans login securely…',
+    });
+    await finish({ credential, message: 'OnlyFans session saved.' });
+    return state;
+  }
+
   async function cancelAuthSession() {
     await closePopup();
     completed = false;
@@ -583,6 +728,7 @@ export function createAuthSessions({
   return {
     startAuthSession,
     cancelAuthSession,
+    saveManualOnlyFansCredential,
     getAuthSessionState: () => state,
   };
 }

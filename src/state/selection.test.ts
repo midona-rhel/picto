@@ -21,21 +21,15 @@ function buildGridItem(itemId: number, fileHash: string): ItemSummary {
     item_id: itemId,
     kind: 'media',
     lifecycle: 'active',
-    label: null,
     name: 'Item',
-    display_media_item_id: itemId,
     display_file_hash: fileHash,
     display_mime_type: 'image/jpeg',
     pixel_width: 100,
     pixel_height: 100,
     duration_ms: null,
     frame_count: null,
-    has_audio: false,
     dominant_color_hex: null,
-    size_bytes: 100,
     rating: null,
-    captured_at: '2026-01-01T00:00:00Z',
-    imported_at: '2026-01-01T00:00:00Z',
     media_count: 1,
   };
 }
@@ -80,12 +74,25 @@ describe('selection state', () => {
     expect(excluded.anchor).toEqual({ kind: 'item', id: 42 });
   });
 
-  it('keeps item and folder marquee hits in separate sets', () => {
+  it('does not mix folder and media marquee selection', () => {
     const selection = reduceGridSelection(emptyGridSelection(), {
       type: 'marquee', itemIds: new Set([7]), folderNodeIds: new Set(['folder:2']), additive: false,
     });
-    expect(selection.itemIds).toEqual(new Set([7]));
+    expect(selection.itemIds).toEqual(new Set());
     expect(selection.folderNodeIds).toEqual(new Set(['folder:2']));
+  });
+
+  it('switches selection domains instead of mixing folders and media', () => {
+    const itemSelection = reduceGridSelection(emptyGridSelection(), {
+      type: 'replace_items', itemIds: new Set([7]), anchor: 7,
+    });
+    const folderSelection = reduceGridSelection(itemSelection, { type: 'toggle_folder', id: 'folder:2' });
+    expect(folderSelection.itemIds).toEqual(new Set());
+    expect(folderSelection.folderNodeIds).toEqual(new Set(['folder:2']));
+
+    const nextItemSelection = reduceGridSelection(folderSelection, { type: 'toggle_item', itemId: 8 });
+    expect(nextItemSelection.itemIds).toEqual(new Set([8]));
+    expect(nextItemSelection.folderNodeIds).toEqual(new Set());
   });
 
   it('keeps subfolder selection out of item targets', () => {

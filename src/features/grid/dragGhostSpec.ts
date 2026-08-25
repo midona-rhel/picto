@@ -1,4 +1,6 @@
 import { GRID_BADGE_FONT, GRID_SELECTION_COLOR } from './gridAppearance';
+import { drawBrokenThumbnail } from '../../shared/ui/ThumbnailImage/drawBrokenThumbnail';
+import { drawFontThumbnail } from '../../shared/ui/ThumbnailImage/drawFontThumbnail';
 
 export const DRAG_GHOST_THUMB_SIZE = 44;
 export const DRAG_GHOST_STACK_OFFSET = 3;
@@ -19,7 +21,9 @@ export function formatDragGhostCount(count: number): string {
 export function createNativeDragImageUrl(
   fileHashes: string[],
   count: number,
-  getBitmap: (fileHash: string) => ImageBitmap | null,
+  getBitmap: (fileHash: string) => ImageBitmap | 'broken' | 'font' | null,
+  background = '#27282d',
+  getBackground: (fileHash: string) => string | null = () => null,
 ): string {
   const stackCount = dragGhostStackCount(fileHashes.length);
   const width = DRAG_GHOST_THUMB_SIZE + (stackCount - 1) * DRAG_GHOST_STACK_OFFSET + 14;
@@ -31,15 +35,24 @@ export function createNativeDragImageUrl(
   if (!context) return '';
 
   for (let i = 0; i < stackCount; i++) {
-    const bitmap = getBitmap(fileHashes[i]);
-    if (!bitmap) continue;
+    const thumbnail = getBitmap(fileHashes[i]);
+    if (!thumbnail) continue;
     const x = i * DRAG_GHOST_STACK_OFFSET;
     const y = i * DRAG_GHOST_STACK_OFFSET + 6;
     context.save();
     context.beginPath();
     context.roundRect(x, y, DRAG_GHOST_THUMB_SIZE, DRAG_GHOST_THUMB_SIZE, DRAG_GHOST_RADIUS);
     context.clip();
-    context.drawImage(bitmap, x, y, DRAG_GHOST_THUMB_SIZE, DRAG_GHOST_THUMB_SIZE);
+    const matte = getBackground(fileHashes[i]) ?? background;
+    context.fillStyle = matte;
+    context.fillRect(x, y, DRAG_GHOST_THUMB_SIZE, DRAG_GHOST_THUMB_SIZE);
+    if (thumbnail === 'font') {
+      drawFontThumbnail(context, x, y, DRAG_GHOST_THUMB_SIZE, DRAG_GHOST_THUMB_SIZE, matte);
+    } else if (thumbnail === 'broken') {
+      drawBrokenThumbnail(context, x, y, DRAG_GHOST_THUMB_SIZE, DRAG_GHOST_THUMB_SIZE, matte);
+    } else {
+      context.drawImage(thumbnail, x, y, DRAG_GHOST_THUMB_SIZE, DRAG_GHOST_THUMB_SIZE);
+    }
     context.restore();
     context.strokeStyle = DRAG_GHOST_BORDER;
     context.lineWidth = 1;

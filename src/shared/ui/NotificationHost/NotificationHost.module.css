@@ -1,0 +1,121 @@
+.layer {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-notification);
+  pointer-events: none;
+}
+
+.notification {
+  position: absolute;
+  top: 48px;
+  left: 50%;
+  display: flex;
+  align-items: center;
+  min-width: 100px;
+  max-width: min(640px, calc(100vw - 24px));
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 8px;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  background: var(--glass-bg);
+  border-top: var(--glass-border-top);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  transform: translate(-50%, 0);
+  opacity: 1;
+  pointer-events: auto;
+  transition:
+    transform 400ms cubic-bezier(0, 1.1, 0.79, 1.03),
+    opacity 400ms cubic-bezier(0, 1.1, 0.79, 1.03);
+}
+
+.hidden {
+  transform: translate(-50%, -48px);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.visible {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+
+.statusIcon {
+  flex: 0 0 24px;
+  margin-right: 4px;
+}
+
+.success .statusIcon { color: #30d159; }
+.warning .statusIcon { color: #ff9f0a; }
+.error .statusIcon { color: #ff453a; }
+.info .statusIcon { color: var(--color-primary); }
+
+.message {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-family: var(--font-family);
+  font-size: 13px;
+  line-height: 36px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.title,
+.detail {
+  font-weight: 400;
+}
+
+.action {
+  margin-left: 12px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.close {
+  position: relative;
+  display: grid;
+  flex: 0 0 24px;
+  width: 24px;
+  height: 24px;
+  margin-left: 24px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  background: transparent;
+  opacity: 0.7;
+  cursor: pointer;
+}
+
+.close::before {
+  position: absolute;
+  right: calc(100% + 12px);
+  width: 1px;
+  height: 16px;
+  background: var(--color-border-secondary);
+  content: '';
+}
+
+.close:hover,
+.close:focus-visible {
+  background: var(--color-hover-overlay);
+  opacity: 1;
+  outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notification { transition: none; }
+}

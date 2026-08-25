@@ -5,12 +5,15 @@ import { DetailWindow } from '../features/viewer/DetailWindow';
 import '@mantine/core/styles.css';
 import '../shared/styles/tokens.css';
 import '../app/globals.css';
+import { startThemeRuntime } from '../runtime/themeRuntime';
+
+startThemeRuntime();
 
 const hash = new URLSearchParams(window.location.search).get('hash');
 
 function DetailApp() {
   return (
-    <MantineProvider forceColorScheme="dark" cssVariablesSelector=":root:root">
+    <MantineProvider defaultColorScheme="dark" cssVariablesSelector=":root:root">
       {hash ? (
         <DetailWindow hash={hash} />
       ) : (

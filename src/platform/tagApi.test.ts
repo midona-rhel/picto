@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   deleteTag,
+  deleteUnusedTags,
   getNamespaceSummary,
+  getUnusedTagCount,
   getTagRelations,
   getTagsPaginated,
   manageTagAlias,
@@ -39,6 +41,7 @@ describe('tagApi pagination', () => {
   it('uses replacement tag commands and generated payload shapes', async () => {
     vi.mocked(invoke).mockImplementation(async (command) => {
       if (command === 'tags.namespace_counts') return [['', 2], ['character', 3]];
+      if (command === 'tags.unused_count') return 4;
       if (command === 'tags.relations') {
         return {
           aliases: [
@@ -56,6 +59,7 @@ describe('tagApi pagination', () => {
       { namespace: '', count: 2 },
       { namespace: 'character', count: 3 },
     ]);
+    await expect(getUnusedTagCount()).resolves.toBe(4);
     await expect(getTagRelations(7)).resolves.toEqual({
       aliases: [
         { tag_id: 8, namespace: 'character', subtag: 'alice', relation: 'alias_incoming' },
@@ -66,13 +70,16 @@ describe('tagApi pagination', () => {
     await expect(renameTag(7, 'character:renamed')).resolves.toEqual(expect.any(Object));
     await expect(mergeTags(7, 'character:alice')).resolves.toEqual(expect.any(Object));
     await expect(deleteTag(7)).resolves.toEqual(expect.any(Object));
+    await expect(deleteUnusedTags()).resolves.toEqual(expect.any(Object));
     await expect(manageTagAlias(8, 7)).resolves.toEqual(expect.any(Object));
     await expect(manageTagImplication(7, 9, false)).resolves.toEqual(expect.any(Object));
 
     expect(invoke).toHaveBeenCalledWith('tags.namespace_counts');
+    expect(invoke).toHaveBeenCalledWith('tags.unused_count');
     expect(invoke).toHaveBeenCalledWith('tags.relations', { tag_id: 7 });
     expect(invoke).toHaveBeenCalledWith('tags.rename_or_merge', { tag_id: 7, name: 'character:renamed' });
     expect(invoke).toHaveBeenCalledWith('tags.delete', { tag_id: 7 });
+    expect(invoke).toHaveBeenCalledWith('tags.delete_unused', {});
     expect(invoke).toHaveBeenCalledWith('tags.set_alias', { from_tag_id: 8, to_tag_id: 7 });
     expect(invoke).toHaveBeenCalledWith('tags.set_implication', {
       child_tag_id: 7,

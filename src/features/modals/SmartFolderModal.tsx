@@ -49,7 +49,7 @@ function IconPickerPopover({ value, onChange }: { value: string | null; onChange
           height: 32, padding: '0 10px',
           border: '1px solid var(--color-border-primary)',
           borderRadius: 'var(--radius-sm)',
-          background: 'var(--color-black-20)',
+          background: 'var(--color-control-surface)',
           color: 'var(--color-text-primary)',
           fontSize: 'var(--font-size-md)',
           cursor: 'pointer', width: '100%',
@@ -63,7 +63,7 @@ function IconPickerPopover({ value, onChange }: { value: string | null; onChange
           <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onClick={() => setOpen(false)} />
           <div style={{
             position: 'fixed', top: pos.top, left: pos.left,
-            width: pos.width, maxHeight: 300, overflowY: 'auto',
+            width: pos.width, maxHeight: 300, overflowY: 'auto', scrollbarGutter: 'stable',
             zIndex: 9999,
             background: 'var(--glass-bg)', backdropFilter: 'var(--glass-blur)',
             border: '1px solid var(--color-border-secondary)',

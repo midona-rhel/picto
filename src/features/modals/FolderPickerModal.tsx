@@ -97,14 +97,13 @@ export function FolderPickerModal() {
     }
   }, [memberOf]);
 
-  const applyFolders = useCallback(() => {
+  const applyFolders = useCallback(async () => {
     if (!target || (checked.size === 0 && unchecked.size === 0)) return;
-    for (const folderId of checked) {
-      void entityMutations.updateTargetFolderMembership(target, folderId, 'add');
-    }
-    for (const folderId of unchecked) {
-      void entityMutations.updateTargetFolderMembership(target, folderId, 'remove');
-    }
+    await Promise.all([
+      ...[...checked].map((folderId) => entityMutations.updateTargetFolderMembership(target, folderId, 'add')),
+      ...[...unchecked].map((folderId) => entityMutations.updateTargetFolderMembership(target, folderId, 'remove')),
+    ]);
+    entityMutations.settleSelectionAfterMutation();
     if (checked.size > 0) recordRecent([...checked].map(String));
     close();
     setChecked(new Set());

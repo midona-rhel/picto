@@ -3,7 +3,6 @@ import type { ItemPage } from '../shared/types/generated/application/ItemPage';
 import type { ItemPageRequest } from '../shared/types/generated/application/ItemPageRequest';
 import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
 import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
-import type { CollectionCoverInput } from '../shared/types/generated/application/CollectionCoverInput';
 import type { DetachItemsInput } from '../shared/types/generated/application/DetachItemsInput';
 import type { OrganizeIntoCollectionInput } from '../shared/types/generated/application/OrganizeIntoCollectionInput';
 import type { OrganizeIntoCollectionResult } from '../shared/types/generated/application/OrganizeIntoCollectionResult';
@@ -21,6 +20,10 @@ export function queryItems(query: ItemQuery, page: ItemPageRequest): Promise<Ite
 
 export function recordMediaView(itemId: number): Promise<unknown> {
   return invoke('items.record_view', { item_id: itemId });
+}
+
+export function clearRecentViews(): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('items.clear_recent_views', {});
 }
 
 export function renameItem(itemId: number, name: string): Promise<MutationReceipt> {
@@ -57,7 +60,7 @@ export function getSelectionSummary(target: ItemTarget): Promise<ReplacementSele
   return invoke<ReplacementSelectionSummary>('items.selection_summary', { target });
 }
 
-export function organizeIntoCollection(input: OrganizeIntoCollectionInput): Promise<OrganizeIntoCollectionResult> {
+export function organizeIntoGroup(input: OrganizeIntoCollectionInput): Promise<OrganizeIntoCollectionResult> {
   return invoke<OrganizeIntoCollectionResult>('items.organize_into_collection', input);
 }
 
@@ -65,14 +68,10 @@ export function detachItems(input: DetachItemsInput): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('items.detach', input);
 }
 
-export function ungroupCollection(itemId: number): Promise<MutationReceipt> {
+export function ungroup(itemId: number): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('items.ungroup', { item_id: itemId });
 }
 
-export function reorderCollection(input: ReorderCollectionInput): Promise<MutationReceipt> {
+export function reorderGroup(input: ReorderCollectionInput): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('items.reorder_collection', input);
-}
-
-export function setCollectionCover(input: CollectionCoverInput): Promise<MutationReceipt> {
-  return invoke<MutationReceipt>('items.set_collection_cover', input);
 }

@@ -2,89 +2,84 @@
 
 [← User Guide](README.md)
 
-Picto supports a wide range of media formats. Thumbnails are generated automatically for all supported types.
+Picto separates **acceptance** from **preview support**. Every extension below can be imported and
+preserved in the library. A format may still open through its default application when Picto does
+not yet have an internal thumbnail or viewer adapter.
 
-## Images
+The executable source of truth is `core/src/media_processing/formats.rs`; preview capabilities are
+owned separately by `core/src/media_capabilities.rs`. This page must change with those registries.
 
-| Format | Extensions | Notes |
-|--------|-----------|-------|
-| JPEG | `.jpg`, `.jpeg` | Most common photo format |
-| PNG | `.png` | Lossless with transparency |
-| GIF | `.gif` | Static and animated |
-| WebP | `.webp` | Static and animated, modern compression |
-| AVIF | `.avif` | Next-gen format, best compression |
-| JPEG XL | `.jxl` | Modern JPEG successor, static and animated |
-| TIFF | `.tiff`, `.tif` | High-quality archival format |
-| BMP | `.bmp` | Uncompressed bitmap |
-| ICO | `.ico` | Icon format |
-| QOI | `.qoi` | Fast lossless format |
-| SVG | `.svg` | Vector graphics (rasterized for display) |
-| HEIF/HEIC | `.heif`, `.heic` | Apple's high-efficiency format |
-| APNG | `.apng` | Animated PNG |
+## Images and textures
+
+`.jpg`, `.jpeg`, `.jpe`, `.jfif`, `.png`, `.apng`, `.gif`, `.webp`, `.bmp`, `.dib`, `.tif`,
+`.tiff`, `.svg`, `.svgz`, `.ico`, `.icns`, `.cur`, `.heic`, `.heics`, `.heif`, `.heifs`, `.hif`,
+`.avif`, `.avifs`, `.jxl`, `.qoi`, `.base64`, `.insp`, `.svga`, `.pag`, `.lottie`, `.dds`, `.exr`,
+`.hdr`, `.tga`, `.iff`, `.lbm`.
 
 ## Video
 
-| Format | Extensions | Notes |
-|--------|-----------|-------|
-| MP4 | `.mp4` | Most widely supported video format |
-| WebM | `.webm` | Web-optimized video |
-| MKV | `.mkv` | Matroska container, supports many codecs |
-| MOV | `.mov` | Apple QuickTime |
-| AVI | `.avi` | Legacy Windows video |
-| FLV | `.flv` | Flash video |
-| OGV | `.ogv` | Ogg video |
-| MPEG | `.mpeg`, `.mpg` | Standard MPEG video |
-| WMV | `.wmv` | Windows Media Video |
+`.mp4`, `.m4v`, `.webm`, `.mkv`, `.mov`, `.qt`, `.avi`, `.flv`, `.f4v`, `.wmv`, `.ogv`, `.mpeg`,
+`.mpg`, `.mpe`, `.rm`, `.rmvb`, `.3gp`, `.3g2`, `.ts`, `.mts`, `.m2ts`.
 
-Video thumbnails are generated from a representative frame using FFmpeg.
-
-## Creative / Project Files
-
-| Format | Extensions | Notes |
-|--------|-----------|-------|
-| PSD | `.psd` | Adobe Photoshop |
-| CLIP | `.clip` | Clip Studio Paint |
-| Krita | `.kra` | Krita |
-| Paint.NET | `.pdn` | Paint.NET |
-| XCF | `.xcf` | GIMP |
-| SAI2 | `.sai2` | Paint Tool SAI v2 |
-
-Thumbnails are extracted from embedded previews in these files.
-
-## Documents
-
-| Format | Extensions | Notes |
-|--------|-----------|-------|
-| PDF | `.pdf` | Portable Document Format |
-| EPUB | `.epub` | E-book format |
-| DjVu | `.djvu` | Scanned document format |
-| CBZ | `.cbz` | Comic book archive (ZIP) |
+Video thumbnails and the internal viewer use FFmpeg-compatible decoding. Whether a particular file
+plays depends on its codecs as well as its container extension.
 
 ## Audio
 
-| Format | Extensions | Notes |
-|--------|-----------|-------|
-| MP3 | `.mp3` | Standard audio |
-| OGG | `.ogg` | Ogg Vorbis |
-| FLAC | `.flac` | Lossless audio |
-| WAV | `.wav` | Uncompressed audio |
-| WMA | `.wma` | Windows Media Audio |
-| M4A | `.m4a` | AAC audio |
+`.aac`, `.flac`, `.m4a`, `.mp3`, `.ogg`, `.oga`, `.opus`, `.wav`, `.wave`, `.wma`, `.mka`, `.wv`,
+`.tta`.
 
-## Animation Formats
+Audio files are accepted and preserved. They currently use metadata/file presentation rather than
+inventing a still-image thumbnail.
 
-| Format | Extensions | Notes |
-|--------|-----------|-------|
-| Animated GIF | `.gif` | Classic animation format |
-| Animated WebP | `.webp` | Modern animated format |
-| Animated APNG | `.apng` | Animated PNG |
-| Animated JXL | `.jxl` | JPEG XL animation |
-| Ugoira | `.ugoira` | Pixiv animation format |
+## 3D
 
-## Export Formats
+`.fbx`, `.obj`, `.3ds`, `.3mf`, `.dae`, `.ifc`, `.ply`, `.stl`, `.glb`, `.gltf`, `.vrm`.
 
-When [exporting](exporting.md), you can convert to:
-- PNG (lossless)
-- JPEG (lossy, quality 1-100)
-- WebP (lossy, quality 1-100)
-- AVIF (lossy, quality 1-100)
+## Creative and project files
+
+`.af`, `.afdesign`, `.afphoto`, `.afpub`, `.ai`, `.c4d`, `.cdr`, `.clip`, `.dwg`, `.graffle`,
+`.idml`, `.indd`, `.indt`, `.mindnode`, `.psd`, `.psb`, `.psdt`, `.pxd`, `.principle`, `.sketch`,
+`.skt`, `.skp`, `.xd`, `.xmind`, `.sai2`, `.kra`, `.xcf`, `.procreate`, `.pdn`.
+
+Picto currently extracts internal thumbnails for PSD, Clip Studio, Krita, Paint.NET and Procreate
+files where a valid embedded preview is available. Other project files remain preserved and can be
+opened externally.
+
+## Fonts and camera RAW
+
+Fonts: `.ttf`, `.ttc`, `.otf`, `.woff`.
+
+Camera RAW: `.3fr`, `.arw`, `.cr2`, `.cr3`, `.crw`, `.dng`, `.erf`, `.mrw`, `.nef`, `.nrw`, `.orf`,
+`.pef`, `.raf`, `.raw`, `.rw2`, `.sr2`, `.srw`, `.x3f`.
+
+## Documents, web files, and archives
+
+`.txt`, `.md`, `.markdown`, `.json`, `.rtf`, `.key`, `.numbers`, `.pages`, `.pdf`, `.potx`, `.ppt`,
+`.pptx`, `.xls`, `.xlsx`, `.doc`, `.docx`, `.eddx`, `.emmx`, `.html`, `.htm`, `.mhtml`, `.url`,
+`.zip`, `.epub`, `.cbz`, `.djvu`, `.djv`, `.swf`, `.eps`.
+
+PDF, DOCX, PPTX, plain text, Markdown, JSON, RTF, EPUB, CBZ and DjVu have read-only internal
+viewers built on the same document shell. JPEG XL has native decode, thumbnails, image analysis and
+the standard image viewer. DOCX/PPTX use embedded thumbnails when the file supplies one; EPUB/CBZ
+use archive cover/page previews. Legacy DOC/PPT and spreadsheet formats remain accepted library
+files and open externally rather than being misrouted through the image viewer.
+
+## Additional production formats
+
+`.cube`, `.3dl`, `.ies`, `.livp`.
+
+## Current preview tiers
+
+| Tier | Current behavior |
+| --- | --- |
+| Native raster | Internal preview, thumbnail, dominant colors and perceptual hash for supported static raster images |
+| Animated/video | Internal viewer and FFmpeg thumbnail where the installed decoder supports the contained codec |
+| Embedded-preview adapter | Thumbnail extracted from supported SVG/project/document/archive formats |
+| Read-only document | Internal selectable/pageable viewer with shared Picto navigation chrome |
+| Accepted file | Preserved in the library, with file actions and external opening; no fabricated preview |
+
+## Export formats
+
+Picto can export the original file or convert supported raster input to PNG, JPEG, WebP, or AVIF.
+JPEG, WebP, and AVIF expose quality controls.

@@ -1,0 +1,38 @@
+import { describe, expect, it, vi } from 'vitest';
+import { ThumbnailDecodeClient } from './thumbnailDecodeClient';
+
+function fakeWorker() {
+  return {
+    onmessage: null as ((event: MessageEvent) => void) | null,
+    onerror: null as ((event: Event) => void) | null,
+    postMessage: vi.fn(),
+    terminate: vi.fn(),
+  };
+}
+
+describe('ThumbnailDecodeClient', () => {
+  it('keeps plans and callbacks isolated per canvas owner', () => {
+    const firstWorker = fakeWorker();
+    const secondWorker = fakeWorker();
+    const firstBitmap = vi.fn();
+    const secondBitmap = vi.fn();
+    const first = new ThumbnailDecodeClient(firstBitmap, vi.fn(), () => firstWorker as unknown as Worker);
+    const second = new ThumbnailDecodeClient(secondBitmap, vi.fn(), () => secondWorker as unknown as Worker);
+
+    first.sendPlan([{ fileHash: 'first', url: '/first' }]);
+    second.sendPlan([{ fileHash: 'second', url: '/second' }]);
+    firstWorker.onmessage?.({ data: { type: 'bitmap', fileHash: 'first', bitmap: {} } } as MessageEvent);
+
+    expect(firstWorker.postMessage).toHaveBeenCalledWith({ type: 'plan', entries: [{ fileHash: 'first', url: '/first' }] });
+    expect(secondWorker.postMessage).toHaveBeenCalledWith({ type: 'plan', entries: [{ fileHash: 'second', url: '/second' }] });
+    expect(firstBitmap).toHaveBeenCalledWith('first', {});
+    expect(secondBitmap).not.toHaveBeenCalled();
+
+    first.invalidate('first');
+    expect(firstWorker.postMessage).toHaveBeenCalledWith({ type: 'invalidate', fileHash: 'first' });
+
+    first.terminate();
+    expect(firstWorker.terminate).toHaveBeenCalledOnce();
+    expect(secondWorker.terminate).not.toHaveBeenCalled();
+  });
+});

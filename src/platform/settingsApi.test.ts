@@ -27,6 +27,8 @@ describe('settings API', () => {
     expect(snapshot.revision).toBe(12);
     expect(snapshot.value.colorScheme).toBe('light');
     expect(snapshot.value.showTreeGuides).toBe(false);
+    expect(snapshot.value.showTagGroups).toBe(true);
+    expect(snapshot.value.starredTags).toEqual([]);
     expect(snapshot.value.aiTaggerAutoOnImport).toBe(false);
   });
 
@@ -34,6 +36,12 @@ describe('settings API', () => {
     invoke.mockResolvedValue({ value: { showTreeGuides: 'yes' }, revision: 1 });
 
     await expect(getSettingsSnapshot()).rejects.toThrow('showTreeGuides');
+  });
+
+  it('rejects malformed starred tag preferences', async () => {
+    invoke.mockResolvedValue({ value: { starredTags: ['creator:alice', 2] }, revision: 1 });
+
+    await expect(getSettingsSnapshot()).rejects.toThrow('starredTags');
   });
 
   it('uses replacement settings and view commands with their value payloads', async () => {
@@ -68,7 +76,9 @@ describe('settings API', () => {
       show_resolution: null,
       show_extension: null,
       show_label: null,
+      show_item_count: null,
       thumbnail_fit: null,
+      show_subfolders: null,
     });
     expect(invoke).toHaveBeenCalledWith('settings.view.get', { scope: 'folder:4' });
   });

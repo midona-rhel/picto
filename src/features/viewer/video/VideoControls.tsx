@@ -17,13 +17,14 @@ interface Props {
   onSeekStart?: () => void;
   onSeekEnd?: () => void;
   onToggleFullscreen?: () => void;
+  waveformSrc?: string;
 }
 
-export function VideoControls({ state, actions, onSeekStart, onSeekEnd, onToggleFullscreen }: Props) {
+export function VideoControls({ state, actions, onSeekStart, onSeekEnd, onToggleFullscreen, waveformSrc }: Props) {
   return (
     <div className={styles.controls} onClick={(e) => e.stopPropagation()}>
       <ProgressBar currentTime={state.currentTime} duration={state.duration} buffered={state.buffered}
-        onSeek={actions.seek} onSeekStart={onSeekStart} onSeekEnd={onSeekEnd} />
+        onSeek={actions.seek} onSeekStart={onSeekStart} onSeekEnd={onSeekEnd} waveformSrc={waveformSrc} />
       <div className={styles.buttonRow}>
         <div className={styles.buttonRowLeft}>
           <KbdTooltip label={state.isPlaying ? 'Pause' : 'Play'} shortcut="Space">

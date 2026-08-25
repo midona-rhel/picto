@@ -10,6 +10,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { OverlayShell } from '../../shared/ui/OverlayShell';
 import { FolderTree, buildTree, flattenVisibleIds } from '../../shared/ui/FolderTree';
+import { IconCheck, IconFolder, IconFolderPlus, IconSearch } from '@tabler/icons-react';
 import { folderPickerPortalAtom } from '../../state/portals';
 import { selectionTargetAtom } from '../../state/selection';
 import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
@@ -17,30 +18,50 @@ import { folderNodesAtom } from '../../state/sidebar';
 import * as entityMutations from '../../controllers/entityMutations';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import btnStyles from '../../shared/styles/actionButton.module.css';
+import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
+import { GlassModal, modalStyles } from '../../shared/ui/GlassModal/GlassModal';
+import { foldersController } from '../../controllers/foldersController';
+import { FilterLogicTabs } from '../../shared/ui/FilterLogicTabs';
+import type { FilterMatchMode } from '../../shared/types/generated/application/FilterMatchMode';
 
 export function FolderPickerPanel() {
   const portalState = useAtomValue(folderPickerPortalAtom);
   const setPortalState = useSetAtom(folderPickerPortalAtom);
-  const target = useAtomValue(selectionTargetAtom);
+  const selectionTarget = useAtomValue(selectionTargetAtom);
+  const target = portalState.target ?? selectionTarget;
   const folderNodes = useAtomValue(folderNodesAtom);
   const entityData = useAtomValue(displayedInspectorItemDetailsAtom);
   const open = portalState.open;
   const anchor = portalState.anchor ?? null;
+  const filterSelection = portalState.onApplyFolderFilter != null;
+  const parentSelection = portalState.onApplyFolderParent != null;
+  const customSelection = filterSelection || portalState.onApplyFolders != null || parentSelection;
   const close = useCallback(() => setPortalState({ open: false }), [setPortalState]);
 
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [excluded, setExcluded] = useState<Set<number>>(new Set());
+  const [rootSelected, setRootSelected] = useState(false);
+  const [matchMode, setMatchMode] = useState<FilterMatchMode>('any');
   const [pinned, setPinned] = useState(false);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const searchRef = useRef<HTMLInputElement>(null);
   const lastClickedRef = useRef<number | null>(null);
+  const contextMenu = useContextMenu();
+  const [createTarget, setCreateTarget] = useState<{ parentId: number | null; title: string } | null>(null);
+  const [folderName, setFolderName] = useState('');
 
   const memberOf = useMemo(() => {
-    return new Set(entityData?.folder_ids ?? []);
-  }, [entityData]);
+    return new Set(customSelection ? [] : (entityData?.folder_ids ?? []));
+  }, [customSelection, entityData]);
 
   // Build tree + flat visible IDs for range selection
-  const tree = useMemo(() => buildTree(folderNodes), [folderNodes]);
+  const availableFolders = useMemo(() => {
+    if (!portalState.availableFolderIds) return folderNodes;
+    const available = new Set(portalState.availableFolderIds);
+    return folderNodes.filter((node) => available.has(Number(node.id.slice(7))));
+  }, [folderNodes, portalState.availableFolderIds]);
+  const tree = useMemo(() => buildTree(availableFolders), [availableFolders]);
   const searchLower = query.trim().toLowerCase();
   const flatIds = useMemo(
     () => flattenVisibleIds(tree, expanded, searchLower),
@@ -57,13 +78,29 @@ export function FolderPickerPanel() {
   useEffect(() => {
     if (open) {
       setQuery('');
-      setSelected(new Set());
+      setSelected(customSelection ? new Set(portalState.selectedFolderIds ?? []) : new Set());
+      setRootSelected(parentSelection && (portalState.selectedFolderIds?.length ?? 0) === 0);
+      setExcluded(filterSelection ? new Set(portalState.excludedFolderIds ?? []) : new Set());
+      setMatchMode(portalState.filterMatchMode ?? 'any');
       lastClickedRef.current = null;
       setTimeout(() => searchRef.current?.focus(), 50);
     }
-  }, [open]);
+  }, [open, customSelection, filterSelection, parentSelection, portalState.selectedFolderIds, portalState.excludedFolderIds, portalState.filterMatchMode]);
 
   const handleToggle = useCallback((folderId: number, event: React.MouseEvent) => {
+    if (parentSelection) {
+      setSelected(new Set([folderId]));
+      setRootSelected(false);
+      return;
+    }
+    if (filterSelection) {
+      setExcluded((prev) => {
+        if (!prev.has(folderId)) return prev;
+        const next = new Set(prev);
+        next.delete(folderId);
+        return next;
+      });
+    }
     if (event.shiftKey && lastClickedRef.current != null) {
       const startIdx = flatIds.indexOf(lastClickedRef.current);
       const endIdx = flatIds.indexOf(folderId);
@@ -75,7 +112,7 @@ export function FolderPickerPanel() {
           return next;
         });
       }
-    } else if (event.metaKey || event.ctrlKey) {
+    } else if (customSelection || event.metaKey || event.ctrlKey) {
       setSelected((prev) => {
         const next = new Set(prev);
         if (next.has(folderId)) next.delete(folderId); else next.add(folderId);
@@ -86,15 +123,71 @@ export function FolderPickerPanel() {
       setSelected(new Set([folderId]));
       lastClickedRef.current = folderId;
     }
-  }, [flatIds]);
+  }, [flatIds, customSelection, filterSelection, parentSelection]);
+
+  const handleExclude = useCallback((folderId: number) => {
+    if (!filterSelection) return;
+    setSelected((prev) => {
+      if (!prev.has(folderId)) return prev;
+      const next = new Set(prev);
+      next.delete(folderId);
+      return next;
+    });
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(folderId)) next.delete(folderId); else next.add(folderId);
+      return next;
+    });
+  }, [filterSelection]);
+
+  const openFolderContextMenu = useCallback((folderId: number, event: React.MouseEvent) => {
+    const node = folderNodes.find((candidate) => candidate.id === `folder:${folderId}`);
+    const parentId = node?.parent_id?.startsWith('folder:')
+      ? Number(node.parent_id.slice(7))
+      : null;
+    const openCreate = (targetParentId: number | null, title: string) => {
+      setFolderName('');
+      setCreateTarget({ parentId: targetParentId, title });
+    };
+    contextMenu.open(event, [
+      {
+        label: 'New Subfolder',
+        icon: <IconFolderPlus size={14} />,
+        action: () => openCreate(folderId, 'New Subfolder'),
+      },
+      {
+        label: 'New Sibling Folder',
+        icon: <IconFolderPlus size={14} />,
+        action: () => openCreate(parentId, 'New Sibling Folder'),
+      },
+    ], { showSearch: false });
+  }, [contextMenu, folderNodes]);
+
+  const createNamedFolder = useCallback(async () => {
+    const name = folderName.trim();
+    if (!name || !createTarget) return;
+    const nodeId = await foldersController.create(name, createTarget.parentId);
+    const folderId = Number(nodeId.slice(7));
+    setSelected(new Set([folderId]));
+    setRootSelected(false);
+    setCreateTarget(null);
+  }, [createTarget, folderName]);
 
   const applyFolders = useCallback(() => {
-    if (!target || selected.size === 0) return;
-    for (const folderId of selected) {
-      void entityMutations.updateTargetFolderMembership(target, folderId, 'add');
+    if (portalState.onApplyFolderFilter) {
+      portalState.onApplyFolderFilter([...selected], [...excluded], matchMode);
+    } else if (portalState.onApplyFolderParent) {
+      portalState.onApplyFolderParent(rootSelected ? null : [...selected][0] ?? null);
+    } else if (portalState.onApplyFolders) {
+      portalState.onApplyFolders([...selected]);
+    } else {
+      if (!target || selected.size === 0) return;
+      for (const folderId of selected) {
+        void entityMutations.updateTargetFolderMembership(target, folderId, 'add');
+      }
     }
     close();
-  }, [target, selected, close]);
+  }, [target, selected, excluded, rootSelected, matchMode, close, portalState]);
 
   if (!open) return null;
 
@@ -107,43 +200,96 @@ export function FolderPickerPanel() {
       pinned={pinned}
       onPinnedChange={setPinned}
       anchorPosition={anchor}
+      anchorPlacement={portalState.anchorPlacement}
       header={
-        <div className={shellStyles.searchRow} style={{ flex: 1 }}>
-          <input
-            ref={searchRef}
-            className={shellStyles.searchInput}
-            placeholder="Search folders..."
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-        </div>
+        <>
+          <div className={shellStyles.searchRow} style={{ flex: 1 }}>
+            <IconSearch size={14} className={shellStyles.searchIcon} />
+            <input
+              ref={searchRef}
+              className={shellStyles.searchInput}
+              placeholder="Search folders..."
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+          {filterSelection ? <FilterLogicTabs value={matchMode} onChange={setMatchMode} /> : null}
+        </>
       }
       footer={
         <>
           <span className={shellStyles.kbdHint}>
-            <span className={shellStyles.kbd}>Esc</span> close
+            <span className={shellStyles.kbd}>Click</span> Select
+            {filterSelection ? <><span className={shellStyles.kbd}>Right-click</span> Exclude</> : null}
           </span>
           <div className={btnStyles.btnGroup}>
-            {selected.size > 0 && (
+            {(customSelection || selected.size > 0) && (
               <button
                 className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
                 onClick={applyFolders}
                 type="button"
               >
-                Add ({selected.size})
+                {parentSelection ? 'Move' : customSelection ? `Apply (${selected.size})` : `Add (${selected.size})`}
               </button>
             )}
           </div>
         </>
       }
     >
+      {parentSelection && (!query || 'Library'.toLowerCase().includes(query.toLowerCase())) ? (
+        <div
+          className={`${shellStyles.checkRow} ${rootSelected ? shellStyles.checkRowActive : ''}`}
+          onClick={() => { setSelected(new Set()); setRootSelected(true); }}
+        >
+          <div className={`${shellStyles.checkBox} ${rootSelected ? shellStyles.checkBoxChecked : ''}`}>
+            {rootSelected ? <IconCheck size={10} /> : null}
+          </div>
+          <IconFolder size={14} />
+          <span className={shellStyles.checkLabel}>Library</span>
+        </div>
+      ) : null}
       <FolderTree
-        nodes={folderNodes}
+        nodes={availableFolders}
         selected={selected}
         onToggle={handleToggle}
+        excluded={filterSelection ? excluded : undefined}
+        filterSelection={filterSelection}
+        onExclude={filterSelection ? handleExclude : undefined}
+        onContextMenu={filterSelection ? undefined : openFolderContextMenu}
         search={query}
         memberOf={memberOf}
       />
+      {contextMenu.state ? (
+        <ContextMenu
+          entries={contextMenu.state.entries}
+          position={contextMenu.state.position}
+          showSearch={contextMenu.state.showSearch}
+          onClose={contextMenu.close}
+        />
+      ) : null}
+      <GlassModal
+        open={createTarget != null}
+        onClose={() => setCreateTarget(null)}
+        title={createTarget?.title ?? 'New Folder'}
+        size="sm"
+        footer={(
+          <>
+            <button type="button" className={modalStyles.btn} onClick={() => setCreateTarget(null)}>Cancel</button>
+            <button type="submit" form="folder-picker-create-form" className={`${modalStyles.btn} ${modalStyles.btnPrimary}`} disabled={!folderName.trim()}>Create</button>
+          </>
+        )}
+      >
+        <form id="folder-picker-create-form" onSubmit={(event) => { event.preventDefault(); void createNamedFolder(); }}>
+          <input
+            autoFocus
+            className={modalStyles.textInput}
+            aria-label="Folder name"
+            placeholder="Folder name"
+            value={folderName}
+            onChange={(event) => setFolderName(event.target.value)}
+          />
+        </form>
+      </GlassModal>
     </OverlayShell>
   );
 }

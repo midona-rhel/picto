@@ -25,3 +25,26 @@
   border-bottom: var(--glass-border-bottom);
   border-left: var(--glass-border-side);
 }
+
+/* One chrome implementation for every in-window floating surface. */
+.floatingGlassSurface {
+  isolation: isolate;
+}
+
+.floatingGlassSurface::after {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  pointer-events: none;
+  box-sizing: border-box;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-top: var(--glass-border-top);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+}

@@ -1,7 +1,6 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MantineProvider } from '@mantine/core';
-import { Notifications, notifications } from '@mantine/notifications';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   getDuplicateItemDetails,
@@ -11,7 +10,20 @@ import {
   type DuplicatePair,
 } from '../../platform/duplicateApi';
 import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
+import { clearNotifications } from '../../shared/lib/notifications';
+import { NotificationHost } from '../../shared/ui/NotificationHost/NotificationHost';
 import { DuplicatesScreen, DuplicatesToolbar } from './DuplicatesScreen';
+
+const openDefaultAppForHash = vi.hoisted(() => vi.fn());
+const openDetailWindow = vi.hoisted(() => vi.fn());
+
+vi.mock('../../controllers/filesController', () => ({
+  filesController: { openDefaultAppForHash },
+}));
+
+vi.mock('../../controllers/windowController', () => ({
+  windowController: { openDetailWindow },
+}));
 
 vi.mock('../../platform/duplicateApi', () => ({
   getDuplicateItemDetails: vi.fn(),
@@ -39,8 +51,14 @@ function pair(decision: DuplicatePair['decision'] = 'NeedsChoice'): DuplicatePai
     file_id_a: 1,
     file_id_b: 2,
     distance: 5,
-    left: { file: file(1, 'left'), item_ids: [11] },
-    right: { file: file(2, 'right'), item_ids: [22] },
+    left: {
+      file: file(1, 'left'),
+      occurrences: [{ media_item_id: 11, root_item_id: 11, collection_id: null }],
+    },
+    right: {
+      file: file(2, 'right'),
+      occurrences: [{ media_item_id: 22, root_item_id: 22, collection_id: null }],
+    },
     decision,
     similarity_pct: 98.046875,
     status: 'detected',
@@ -84,7 +102,7 @@ function details(itemId: number, hash: string, name: string): ItemDetails {
 function renderScreen(withNotifications = false) {
   return render(
     <MantineProvider forceColorScheme="dark">
-      {withNotifications && <Notifications />}
+      {withNotifications && <NotificationHost />}
       <DuplicatesToolbar />
       <DuplicatesScreen />
     </MantineProvider>,
@@ -94,7 +112,7 @@ function renderScreen(withNotifications = false) {
 describe('DuplicatesScreen', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    notifications.clean();
+    clearNotifications();
     vi.mocked(getDuplicatePairs).mockResolvedValue({
       items: [pair()],
       next_cursor: null,
@@ -126,10 +144,57 @@ describe('DuplicatesScreen', () => {
     expect(getDuplicateItemDetails).toHaveBeenCalledWith(11);
     expect(getDuplicateItemDetails).toHaveBeenCalledWith(22);
     expect(screen.getByText('98% match')).toBeInTheDocument();
+    expect(screen.getAllByText('Created')).toHaveLength(2);
+    expect(screen.getAllByText('Added')).toHaveLength(2);
     expect(screen.getByTestId('left-preview-layers').querySelector('img')).toHaveAttribute(
       'src',
       'media://localhost/thumb/left.jpg',
     );
+  });
+
+  it('loads an attached duplicate occurrence through its group root', async () => {
+    const groupPair = pair();
+    groupPair.left.occurrences = [{
+      media_item_id: 11,
+      root_item_id: 100,
+      collection_id: 100,
+    }];
+    vi.mocked(getDuplicatePairs).mockResolvedValue({
+      items: [groupPair],
+      next_cursor: null,
+      has_more: false,
+      total: 1,
+    });
+    vi.mocked(getDuplicateItemDetails).mockImplementation(async (itemId) => {
+      if (itemId !== 100) return details(itemId, 'right', 'Right image');
+      const group = details(11, 'left', 'Member image');
+      return {
+        ...group,
+        item_id: 100,
+        kind: 'collection',
+        label: 'Source post',
+        media: group.media.map((media) => ({ ...media, media_item_id: 11 })),
+      };
+    });
+
+    await act(async () => { renderScreen(); });
+
+    expect(await screen.findByText('Member image')).toBeInTheDocument();
+    expect(screen.getByText('Source post')).toBeInTheDocument();
+    expect(getDuplicateItemDetails).toHaveBeenCalledWith(100);
+    expect(getDuplicateItemDetails).not.toHaveBeenCalledWith(11);
+  });
+
+  it('reuses shared entity open actions for duplicate candidates', async () => {
+    await act(async () => { renderScreen(); });
+    await screen.findByText('Left image');
+
+    fireEvent.contextMenu(screen.getByText('Left candidate').closest('article')!);
+    expect(screen.getByRole('menuitem', { name: /Open with Default App/ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /Open in New Window/ })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('menuitem', { name: /Open with Default App/ }));
+    expect(openDefaultAppForHash).toHaveBeenCalledWith('left');
   });
 
   it('resolves a pair through the replacement candidate contract', async () => {
@@ -180,14 +245,89 @@ describe('DuplicatesScreen', () => {
     const user = userEvent.setup();
     await act(async () => { renderScreen(); });
     await screen.findByText('Left image');
+    await user.click(screen.getByRole('button', { name: 'Zoom out' }));
+    const leftTransform = screen.getByTestId('left-preview-layers').style.transform;
+    const rightTransform = screen.getByTestId('right-preview-layers').style.transform;
     const control = screen.getByRole('button', { name: 'Highlight differences' });
 
     await user.hover(control);
-    expect(screen.getByTestId('left-difference-composite')).toBeInTheDocument();
-    expect(screen.getByTestId('right-difference-composite')).toBeInTheDocument();
+    expect(screen.getByTestId('left-difference-composite').style.transform).toBe(leftTransform);
+    expect(screen.getByTestId('right-difference-composite').style.transform).toBe(rightTransform);
 
     await user.unhover(control);
     expect(screen.queryByTestId('left-difference-composite')).not.toBeInTheDocument();
+  });
+
+  it('previews the exact Smart Merge survivor while the action is hovered', async () => {
+    const automaticPair = pair('LeftBetter');
+    vi.mocked(getDuplicatePairs).mockResolvedValue({
+      items: [automaticPair],
+      next_cursor: null,
+      has_more: false,
+      total: 1,
+    });
+    const user = userEvent.setup();
+    await act(async () => { renderScreen(); });
+    await screen.findByText('Left image');
+
+    await user.hover(screen.getByRole('button', { name: 'Smart merge' }));
+
+    const leftCard = screen.getByText('Left candidate').closest('article');
+    const rightCard = screen.getByText('Right candidate').closest('article');
+    expect(leftCard).toHaveAttribute('data-smart-merge-survivor', 'true');
+    expect(rightCard).not.toHaveAttribute('data-smart-merge-survivor');
+
+    await user.unhover(screen.getByRole('button', { name: 'Smart merge' }));
+    expect(leftCard).not.toHaveAttribute('data-smart-merge-survivor');
+    expect(rightCard).not.toHaveAttribute('data-smart-merge-survivor');
+  });
+
+  it('clears the Smart Merge preview when the action is pressed', async () => {
+    vi.mocked(getDuplicatePairs).mockResolvedValue({
+      items: [pair('RightBetter')],
+      next_cursor: null,
+      has_more: false,
+      total: 1,
+    });
+    let finishMerge!: (result: Awaited<ReturnType<typeof resolveDuplicatePair>>) => void;
+    vi.mocked(resolveDuplicatePair).mockImplementationOnce(() => new Promise((resolve) => { finishMerge = resolve; }));
+    const user = userEvent.setup();
+    await act(async () => { renderScreen(); });
+    await screen.findByText('Right image');
+    const button = screen.getByRole('button', { name: 'Smart merge' });
+    const rightCard = screen.getByText('Right candidate').closest('article');
+
+    await user.hover(button);
+    expect(rightCard).toHaveAttribute('data-smart-merge-survivor', 'true');
+    await user.click(button);
+    expect(rightCard).not.toHaveAttribute('data-smart-merge-survivor');
+
+    await act(async () => {
+      finishMerge({
+        status: 'resolved',
+        choice: { KeepFile: { winner_file_id: 2 } },
+        affected_item_ids: [11, 22],
+        freed_file_hash: 'left',
+        receipt: { revision: 3, resources: ['duplicates'], item_ids: [11, 22] },
+      });
+    });
+    expect(rightCard).not.toHaveAttribute('data-smart-merge-survivor');
+  });
+
+  it('restores a full-resolution candidate even if its image element was hidden', async () => {
+    await act(async () => { renderScreen(); });
+    await screen.findByText('Left image');
+    const fullImage = await waitFor(() => {
+      const image = document.querySelector<HTMLImageElement>('img[src="media://localhost/file/left.png"]');
+      expect(image).not.toBeNull();
+      return image!;
+    });
+
+    fullImage.style.display = 'none';
+    fireEvent.load(fullImage);
+
+    expect(fullImage.style.display).toBe('');
+    expect(fullImage.style.opacity).toBe('1');
   });
 
   it('keeps decisions disabled while logical details are loading', async () => {
@@ -217,6 +357,6 @@ describe('DuplicatesScreen', () => {
       receipt: { revision: 2, resources: ['duplicates'], item_ids: [] },
     });
     await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument());
-    expect(await screen.findByRole('alert')).toHaveTextContent('Scan complete - no new review pairs');
+    expect(await screen.findByRole('status')).toHaveTextContent('Scan complete - no new review pairs');
   });
 });

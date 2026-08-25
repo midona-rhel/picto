@@ -11,14 +11,18 @@ use ts_rs::TS;
 use crate::app::{
     Application, FileHash, ItemId, ItemQuery, ItemTarget, Lifecycle, MutationReceipt,
 };
-use crate::duplicates_v2::{DuplicateCandidate, ResolutionChoice};
+use crate::duplicates_v2::ResolutionChoice;
 use crate::folders_v2::{
-    FolderId, FolderMetadataInput, FolderMutationReceipt, FolderWatchInput, ReorderFolderItemsInput,
+    FolderId, FolderMetadataInput, FolderMutationReceipt, FolderWatchInput,
+    ReorderFolderItemsInput, SetFolderAutoTagsInput, SortFolderTreeInput,
 };
 use crate::navigation_v2::{CreateSmartFolderInput, SmartFolderMutationReceipt};
 use crate::operations_v2::MediaMetadataPatch;
 use crate::query_v2::ItemPageRequest;
-use crate::subscription_catalog_v2::{NewSubscription, NewSubscriptionQuery};
+use crate::subscription_catalog_v2::{
+    NewSubscription, NewSubscriptionQuery, SubscriptionCoverCandidateCursor,
+    SubscriptionCoverSelection, SubscriptionDestinationPolicy,
+};
 
 pub fn dispatch(
     application: &Application,
@@ -61,6 +65,7 @@ pub fn dispatch(
             )?)
         }
         "tags.namespace_counts" => read(crate::tags_v2::namespace_counts(application)?),
+        "tags.unused_count" => read(crate::tags_v2::unused_count(application)?),
         "tags.relations" => {
             let input: TagInput = parse(args_json)?;
             read(crate::tags_v2::relations(application, input.tag_id)?)
@@ -73,6 +78,17 @@ pub fn dispatch(
             )?)
         }
         "subscriptions.list" => read(crate::subscription_catalog_v2::list(application)?),
+        "subscriptions.cover.candidates" => {
+            let input: SubscriptionCoverCandidatesInput = parse(args_json)?;
+            read(
+                crate::subscription_catalog_v2::subscription_cover_candidates(
+                    application,
+                    input.subscription_id,
+                    input.cursor.as_ref(),
+                    input.limit,
+                )?,
+            )
+        }
         "subscriptions.runs.list" => {
             let input: SubscriptionRunsInput = parse(args_json)?;
             read(crate::subscription_activity_v2::list_runs(
@@ -107,6 +123,15 @@ pub fn dispatch(
         "auth.credentials.list" => read(crate::auth_v2::list_credentials(application.store())?),
         "auth.health.list" => read(crate::auth_v2::list_health(application.store())?),
         "settings.get" => read(crate::settings_v2::application_settings(application)?),
+        "history.state" => read(application.history_state()?),
+        "history.undo" => {
+            let output = application.undo()?;
+            publish_nested(application, output, |output| &output.receipt)
+        }
+        "history.redo" => {
+            let output = application.redo()?;
+            publish_nested(application, output, |output| &output.receipt)
+        }
         "settings.view.get" => {
             let input: ScopeInput = parse(args_json)?;
             read(crate::settings_v2::view_preferences(
@@ -144,6 +169,7 @@ pub fn dispatch(
             let input: ItemInput = parse(args_json)?;
             publish(application, application.record_recent_view(input.item_id)?)
         }
+        "items.clear_recent_views" => publish(application, application.clear_recent_views()?),
 
         "items.rename" => {
             let input: ItemNameInput = parse(args_json)?;
@@ -180,13 +206,6 @@ pub fn dispatch(
             application,
             application.reorder_collection(parse(args_json)?)?,
         ),
-        "items.set_collection_cover" => {
-            let input: CollectionCoverInput = parse(args_json)?;
-            publish(
-                application,
-                application.set_collection_cover(input.collection_id, input.media_item_id)?,
-            )
-        }
         "items.apply_tags" => {
             let input: ApplyTagsInput = parse(args_json)?;
             publish(
@@ -223,9 +242,22 @@ pub fn dispatch(
                 application.rename_folder(input.folder_id, &input.name)?,
             )
         }
+        "folders.duplicate" => {
+            let input: FolderInput = parse(args_json)?;
+            let (folder_id, receipt) = application.duplicate_folder(input.folder_id)?;
+            publish_folder(application, CreatedFolder { folder_id, receipt })
+        }
         "folders.metadata.set" => publish_folder(
             application,
             application.set_folder_metadata(&parse::<FolderMetadataInput>(args_json)?)?,
+        ),
+        "folders.auto_tags.get" => {
+            let input: FolderInput = parse(args_json)?;
+            read(application.folder_auto_tags(input.folder_id))
+        }
+        "folders.auto_tags.set" => publish_folder(
+            application,
+            application.set_folder_auto_tags(&parse::<SetFolderAutoTagsInput>(args_json)?)?,
         ),
         "folders.move" => {
             let input: MoveFolderInput = parse(args_json)?;
@@ -237,6 +269,10 @@ pub fn dispatch(
         "folders.reorder" => publish_folder(
             application,
             application.reorder_folder_children(&parse(args_json)?)?,
+        ),
+        "folders.sort_tree" => publish_folder(
+            application,
+            application.sort_folder_tree(&parse::<SortFolderTreeInput>(args_json)?)?,
         ),
         "folders.items.reorder" => publish_folder(
             application,
@@ -250,8 +286,8 @@ pub fn dispatch(
             )
         }
         "folders.delete" => {
-            let input: FolderInput = parse(args_json)?;
-            publish_folder(application, application.delete_folder(input.folder_id)?)
+            let input: FolderIdsInput = parse(args_json)?;
+            publish_folder(application, application.delete_folders(&input.folder_ids)?)
         }
         "folders.watch.set" => {
             let input: FolderWatchInput = parse(args_json)?;
@@ -335,6 +371,7 @@ pub fn dispatch(
             let input: TagInput = parse(args_json)?;
             publish(application, application.delete_tag(input.tag_id)?)
         }
+        "tags.delete_unused" => publish(application, application.delete_unused_tags()?),
 
         "duplicates.scan" => {
             let input: ScanDuplicatesInput = parse(args_json)?;
@@ -353,9 +390,14 @@ pub fn dispatch(
         }
         "duplicates.resolve_automatically" => {
             let input: AutomaticDuplicateInput = parse(args_json)?;
-            let output =
-                crate::duplicates_v2::resolve_automatically(application, &input.candidate)?;
-            publish_nested(application, output, |output| &output.receipt)
+            match crate::duplicates_v2::resolve_automatically(
+                application,
+                input.file_id_a,
+                input.file_id_b,
+            )? {
+                Some(output) => publish_nested(application, output, |output| &output.receipt),
+                None => read(Option::<crate::duplicates_v2::ResolutionResult>::None),
+            }
         }
 
         "subscriptions.create" => {
@@ -390,6 +432,13 @@ pub fn dispatch(
                 application.pause_subscription_query(input.query_id, input.paused)?,
             )
         }
+        "subscriptions.queries.grouping" => {
+            let input: SetSubscriptionQueryGroupingInput = parse(args_json)?;
+            publish(
+                application,
+                application.set_subscription_query_grouping(input.query_id, input.group_posts)?,
+            )
+        }
         "subscriptions.queries.delete" => {
             let input: SubscriptionQueryInput = parse(args_json)?;
             publish(
@@ -420,6 +469,29 @@ pub fn dispatch(
                     &input.schedule,
                     &now(),
                 )?,
+            )
+        }
+        "subscriptions.posts_per_run" => {
+            let input: SubscriptionPostsPerRunInput = parse(args_json)?;
+            publish(
+                application,
+                application
+                    .set_subscription_posts_per_run(input.subscription_id, input.posts_per_run)?,
+            )
+        }
+        "subscriptions.destination" => {
+            let input: SubscriptionDestinationInput = parse(args_json)?;
+            publish(
+                application,
+                application
+                    .set_subscription_destination(input.subscription_id, &input.destination)?,
+            )
+        }
+        "subscriptions.cover.set" => {
+            let input: SubscriptionCoverInput = parse(args_json)?;
+            publish(
+                application,
+                application.set_subscription_cover(input.subscription_id, &input.cover)?,
             )
         }
         "subscriptions.delete" => {
@@ -491,6 +563,9 @@ pub async fn dispatch_async(
     command: &str,
     args_json: &str,
 ) -> Result<String, String> {
+    if command == "diagnostics.snapshot" {
+        return read(crate::diagnostics_v2::snapshot(application)?);
+    }
     match command {
         "subscriptions.reset" => {
             let input: SubscriptionInput = parse(args_json)?;
@@ -522,6 +597,7 @@ pub async fn dispatch_async(
                     username: None,
                     password: None,
                     cookies,
+                    headers: None,
                     oauth_token: Some(refresh_token),
                 },
                 &now(),
@@ -566,10 +642,18 @@ pub async fn dispatch_async(
         }
         _ => {}
     }
-    if command == "media.ensure_thumbnail" {
+    if command == "media.request_thumbnail" {
+        let input: FileHashInput = parse(args_json)?;
+        return read(crate::media_io_v2::request_thumbnail(
+            application.store(),
+            application.blobs(),
+            &input.file_hash,
+        )?);
+    }
+    if command == "media.render_thumbnail_now" {
         let input: FileHashInput = parse(args_json)?;
         return read(
-            crate::media_io_v2::ensure_thumbnail(
+            crate::media_io_v2::render_thumbnail_now(
                 application.store(),
                 application.blobs(),
                 &input.file_hash,
@@ -777,12 +861,6 @@ pub struct FolderMembershipInput {
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
-pub struct CollectionCoverInput {
-    collection_id: ItemId,
-    media_item_id: ItemId,
-}
-#[derive(Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ApplyTagsInput {
     target: ItemTarget,
     tags: Vec<String>,
@@ -863,12 +941,20 @@ pub struct ResolveDuplicateInput {
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct AutomaticDuplicateInput {
-    candidate: DuplicateCandidate,
+    #[ts(type = "number")]
+    file_id_a: i64,
+    #[ts(type = "number")]
+    file_id_b: i64,
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct FolderInput {
     folder_id: FolderId,
+}
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct FolderIdsInput {
+    folder_ids: Vec<FolderId>,
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -934,6 +1020,13 @@ pub struct PauseSubscriptionQueryInput {
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SetSubscriptionQueryGroupingInput {
+    #[ts(type = "number")]
+    query_id: i64,
+    group_posts: bool,
+}
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionQueryInput {
     #[ts(type = "number")]
     query_id: i64,
@@ -943,6 +1036,16 @@ pub struct SubscriptionQueryInput {
 pub struct SubscriptionInput {
     #[ts(type = "number")]
     subscription_id: i64,
+}
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SubscriptionCoverCandidatesInput {
+    #[ts(type = "number")]
+    subscription_id: i64,
+    cursor: Option<SubscriptionCoverCandidateCursor>,
+    #[serde(default = "default_cover_candidate_limit")]
+    #[ts(type = "number")]
+    limit: i64,
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -982,6 +1085,28 @@ pub struct ScheduleSubscriptionInput {
     #[ts(type = "number")]
     subscription_id: i64,
     schedule: String,
+}
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SubscriptionPostsPerRunInput {
+    #[ts(type = "number")]
+    subscription_id: i64,
+    #[ts(type = "number")]
+    posts_per_run: i64,
+}
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SubscriptionDestinationInput {
+    #[ts(type = "number")]
+    subscription_id: i64,
+    destination: SubscriptionDestinationPolicy,
+}
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SubscriptionCoverInput {
+    #[ts(type = "number")]
+    subscription_id: i64,
+    cover: SubscriptionCoverSelection,
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -1033,6 +1158,10 @@ pub struct EmptyOutput {}
 
 fn default_limit() -> i64 {
     100
+}
+
+fn default_cover_candidate_limit() -> i64 {
+    200
 }
 fn default_page_limit() -> usize {
     100
@@ -1105,8 +1234,8 @@ mod tests {
     #[test]
     fn dispatch_uses_canonical_scope_and_reconciles_after_mutation() {
         let (_directory, application, item_id) = fixture();
-        assert_eq!(page(&application, "all").visible_item_count, 1);
-        assert_eq!(page(&application, "inbox").visible_item_count, 0);
+        assert_eq!(page(&application, "all").visible_item_count, Some(1));
+        assert_eq!(page(&application, "inbox").visible_item_count, Some(0));
 
         let output = dispatch(
             &application,
@@ -1123,8 +1252,77 @@ mod tests {
             .resources
             .iter()
             .any(|resource| resource == "library"));
-        assert_eq!(page(&application, "all").visible_item_count, 0);
-        assert_eq!(page(&application, "inbox").visible_item_count, 1);
+        assert_eq!(page(&application, "all").visible_item_count, Some(0));
+        assert_eq!(page(&application, "inbox").visible_item_count, Some(1));
+
+        dispatch(&application, "history.undo", "{}").unwrap();
+        assert_eq!(page(&application, "all").visible_item_count, Some(1));
+        assert_eq!(page(&application, "inbox").visible_item_count, Some(0));
+    }
+
+    #[test]
+    fn tag_history_rebuilds_projection_state() {
+        let (_directory, application, item_id) = fixture();
+        assert_eq!(page(&application, "untagged").visible_item_count, Some(1));
+        dispatch(
+            &application,
+            "items.apply_tags",
+            &format!(
+                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"tags":["general:test"],"add":true,"provenance_mask":1}}"#,
+                item_id.0
+            ),
+        )
+        .unwrap();
+        assert_eq!(page(&application, "untagged").visible_item_count, Some(0));
+
+        dispatch(&application, "history.undo", "{}").unwrap();
+        assert_eq!(page(&application, "untagged").visible_item_count, Some(1));
+        dispatch(&application, "history.redo", "{}").unwrap();
+        assert_eq!(page(&application, "untagged").visible_item_count, Some(0));
+    }
+
+    #[test]
+    fn rename_history_round_trips_through_ipc() {
+        let (_directory, application, item_id) = fixture();
+        dispatch(
+            &application,
+            "items.rename",
+            &format!(r#"{{"item_id":{},"name":"After"}}"#, item_id.0),
+        )
+        .unwrap();
+
+        let state: serde_json::Value =
+            serde_json::from_str(&dispatch(&application, "history.state", "{}").unwrap()).unwrap();
+        assert_eq!(state["undo"]["label"], "Rename item");
+        assert!(state["redo"].is_null());
+
+        let undo: serde_json::Value =
+            serde_json::from_str(&dispatch(&application, "history.undo", "{}").unwrap()).unwrap();
+        assert_eq!(undo["entry"]["label"], "Rename item");
+        let name: Option<String> = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT name FROM media_asset WHERE item_id = ?1",
+                    [item_id.0],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(name, None);
+
+        dispatch(&application, "history.redo", "{}").unwrap();
+        let name: String = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT name FROM media_asset WHERE item_id = ?1",
+                    [item_id.0],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(name, "After");
     }
 
     #[test]

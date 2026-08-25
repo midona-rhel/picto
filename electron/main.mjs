@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import fsModule from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initRuntime, invoke, onNativeEvent, openLibrary, closeLibrary, startNativeDrag } from './nativeClient.mjs';
+import { getAssociatedApplications, initRuntime, invoke, invokeSerialized, onNativeEvent, openLibrary, closeLibrary, openWithApplication, startNativeDrag } from './nativeClient.mjs';
 import {
   addLibraryToHistory,
   getCachedConfig,
@@ -15,11 +15,16 @@ import {
 } from './globalConfig.mjs';
 import { createMediaProtocolService, isValidHash } from './protocol/media.mjs';
 import { createWindowManager } from './windows/windowManager.mjs';
-import { setMainWindow } from './services/logForwarder.mjs';
+import { installConsoleForwarding, setMainWindow } from './services/logForwarder.mjs';
 import { createMenuManager } from './windows/menu.mjs';
 import { createLibraryHostService } from './services/libraryHostService.mjs';
 import { registerIpcHandlers } from './ipc/registerHandlers.mjs';
 import { createAutoUpdaterService } from './services/autoUpdater.mjs';
+import { createFlashThumbnailService } from './services/flashThumbnailService.mjs';
+import { createPdfThumbnailService } from './services/pdfThumbnailService.mjs';
+import { createDocumentThumbnailService } from './services/documentThumbnailService.mjs';
+
+installConsoleForwarding();
 
 const isPackagedSmoke = process.env.PICTO_PACKAGED_SMOKE === '1';
 const isE2E = process.env.PICTO_E2E === '1';
@@ -143,6 +148,7 @@ if (app.isPackaged) {
     : path.dirname(process.execPath);
   process.env.PICTO_FFMPEG_DIR = sidecarBase;
   process.env.PICTO_GALLERY_DL_DIR = path.join(sidecarBase, 'gallery-dl');
+  process.env.PICTO_ONLYFANS_DIR = path.join(sidecarBase, 'onlyfans');
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -155,12 +161,40 @@ const setCurrentLibraryRoot = (nextRoot) => {
   currentLibraryRoot = nextRoot;
 };
 
+const flashThumbnail = createFlashThumbnailService({
+  BrowserWindow,
+  app,
+  path,
+  isDev,
+  devUrl: DEV_URL,
+});
+const pdfThumbnail = createPdfThumbnailService({
+  BrowserWindow,
+  app,
+  path,
+  isDev,
+  devUrl: DEV_URL,
+});
+const documentThumbnail = createDocumentThumbnailService({
+  BrowserWindow,
+  app,
+  path,
+  isDev,
+  devUrl: DEV_URL,
+});
+
 const mediaProtocol = createMediaProtocolService({
   protocol,
   path,
   invoke,
   isDev,
   getCurrentLibraryRoot,
+  flashThumbnail,
+  pdfThumbnail,
+  documentThumbnail,
+  onThumbnailReady: (fileHash) => {
+    windowManager.sendToAllWindows('picto:thumbnail-changed', { fileHash });
+  },
 });
 
 
@@ -259,12 +293,18 @@ registerIpcHandlers({
   nativeTheme,
   screen,
   invoke,
+  invokeSerialized,
   isValidHash,
   buildBlobPath: mediaProtocol.buildBlobPath,
+  setThumbnail: mediaProtocol.setThumbnail,
+  regenerateThumbnail: mediaProtocol.regenerateThumbnail,
   windowManager,
   libraryService: libraryHost,
   updaterService,
   startNativeDrag,
+  getAssociatedApplications,
+  openWithApplication,
+  isDev,
 });
 
 function wireNativeEvents() {

@@ -4,6 +4,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 4px 0;
 }
 
@@ -67,6 +68,15 @@
 
 .row:hover .name {
   opacity: 1;
+}
+
+.rowExcluded {
+  color: var(--color-text-primary);
+  opacity: 0.58;
+}
+
+.rowExcluded .name {
+  opacity: 0.7;
 }
 
 .count {

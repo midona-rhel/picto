@@ -105,6 +105,29 @@ async fn test_audio_duration() {
 }
 
 #[tokio::test]
+async fn test_render_audio_waveform() {
+    let bytes =
+        picto_core::media_processing::ffmpeg::render_audio_waveform(test_audio(), (512, 512))
+            .await
+            .expect("render_audio_waveform failed");
+
+    assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+    let image = image::load_from_memory(&bytes).expect("waveform is not a valid image");
+    assert_eq!((image.width(), image.height()), (512, 256));
+    let pixels = image.to_rgba8();
+    assert!(
+        pixels.pixels().any(|pixel| pixel[3] == 0),
+        "waveform background should be transparent"
+    );
+    assert!(
+        pixels
+            .pixels()
+            .any(|pixel| pixel[2] > pixel[0] && pixel[2] > pixel[1] && pixel[3] > 0),
+        "waveform should contain visible blue samples"
+    );
+}
+
+#[tokio::test]
 async fn test_mime_detection_video() {
     let video = test_video();
     let mime = picto_core::media_processing::ffmpeg::get_mime(video)

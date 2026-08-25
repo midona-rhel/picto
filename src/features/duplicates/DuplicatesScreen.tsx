@@ -26,6 +26,7 @@ import type { MediaDetails } from '../../shared/types/generated/application/Medi
 import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { showErrorNotification, showInfoNotification, showWarningNotification } from '../../shared/lib/notifications';
 import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
+import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import btnStyles from '../../shared/styles/actionButton.module.css';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
@@ -39,6 +40,10 @@ import {
   TitlebarZoomSlider,
 } from '../../shared/ui/TitlebarControls';
 import { useLinkedComparisonZoom } from './useLinkedComparisonZoom';
+import { filesController } from '../../controllers/filesController';
+import { windowController } from '../../controllers/windowController';
+import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu/ContextMenu';
+import { buildEntityOpenContextEntries } from '../grid/gridContextMenu';
 import styles from './DuplicatesScreen.module.css';
 
 const LOADING_MESSAGE_DELAY_MS = 200;
@@ -130,6 +135,14 @@ interface SideState {
   media: MediaDetails | null;
 }
 
+type ComparisonSide = 'left' | 'right';
+
+function smartMergeWinner(decision: DuplicatePair['decision']): ComparisonSide | null {
+  if (decision === 'LeftBetter' || decision === 'AutoTieLeft') return 'left';
+  if (decision === 'RightBetter' || decision === 'AutoTieRight') return 'right';
+  return null;
+}
+
 function useDelayedFlag(active: boolean, delayMs = LOADING_MESSAGE_DELAY_MS): boolean {
   const [visible, setVisible] = useState(false);
   useEffect(() => {
@@ -159,17 +172,19 @@ function mediaForFile(details: ItemDetails, fileHash: string): MediaDetails | nu
 }
 
 function sideIdentity(side: CandidateSide): number | null {
-  return side.item_ids[0] ?? null;
+  return side.occurrences[0]?.root_item_id ?? null;
 }
 
 interface MediaCardProps {
-  side: 'left' | 'right';
+  side: ComparisonSide;
   file: FileQuality;
+  occurrenceCount: number;
   details: SideState;
   previewRef: RefObject<HTMLDivElement>;
   zoom: ReturnType<typeof useLinkedComparisonZoom>;
   differenceActive: boolean;
   differenceFiles: { left: FileQuality; right: FileQuality } | null;
+  smartMergeSurvivor: boolean;
   loading: boolean;
   onKeep: () => void;
   disabled: boolean;
@@ -184,15 +199,12 @@ function DifferenceComposite({
   files: { left: FileQuality; right: FileQuality };
   zoom: ReturnType<typeof useLinkedComparisonZoom>;
 }) {
-  const aspectRatio = files.left.pixel_width && files.left.pixel_height
-    ? files.left.pixel_width / files.left.pixel_height
-    : 1;
   const imageUrl = (file: FileQuality) => mediaFileUrl(file.file_hash, file.mime_type);
   const fallback = (file: FileQuality) => mediaThumbnailUrl(file.file_hash);
   return (
     <div
       className={`${styles.previewLayers} ${styles.differenceComposite}`}
-      style={zoom.differenceFrameStyle(side, aspectRatio)}
+      style={zoom.frameStyle(side)}
       data-testid={`${side}-difference-composite`}
     >
       <img
@@ -215,16 +227,19 @@ function DifferenceComposite({
 function MediaCard({
   side,
   file,
+  occurrenceCount,
   details,
   previewRef,
   zoom,
   differenceActive,
   differenceFiles,
+  smartMergeSurvivor,
   loading,
   onKeep,
   disabled,
 }: MediaCardProps) {
   const label = side === 'left' ? 'Left candidate' : 'Right candidate';
+  const contextMenu = useContextMenu();
   const fullImgRef = useRef<HTMLImageElement>(null);
   const pipeline = useMediaImagePipeline({
     hash: file.file_hash,
@@ -236,7 +251,19 @@ function MediaCard({
   const thumbnailUrl = mediaThumbnailUrl(file.file_hash);
   const media = details.media;
   return (
-    <article className={styles.mediaCard}>
+    <article
+      className={`${styles.mediaCard} ${smartMergeSurvivor ? styles.mergePreview : ''}`}
+      data-smart-merge-survivor={smartMergeSurvivor || undefined}
+      onContextMenu={(event) => contextMenu.open(event, buildEntityOpenContextEntries({
+        hash: file.file_hash,
+        onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
+        onOpenNewWindow: (hash) => { void windowController.openDetailWindow({
+          hash,
+          width: file.pixel_width,
+          height: file.pixel_height,
+        }); },
+      }), { showSearch: false })}
+    >
       <header className={styles.cardHeader}>
         <span className={styles.sideLabel}>{label}</span>
         <KbdTooltip label={`Keep ${side}`} shortcut={side === 'left' ? 'L' : 'R'}>
@@ -269,10 +296,10 @@ function MediaCard({
             {pipeline.fullUrl && (
               <img
                 ref={fullImgRef}
-                className={styles.fullImage}
+                key={pipeline.fullUrl}
+                className={`${styles.fullImage} ${pipeline.fullVisible ? styles.fullImageVisible : ''}`}
                 src={pipeline.fullUrl}
                 onLoad={pipeline.handleFullLoad}
-                onError={(event) => { event.currentTarget.style.display = 'none'; }}
                 alt=""
                 decoding="async"
                 draggable={false}
@@ -293,8 +320,24 @@ function MediaCard({
         <PropertyRow label="Format" value={file.mime_type} />
         <PropertyRow label="Rating" value={media?.rating == null ? 'Unrated' : String(media.rating)} />
         <PropertyRow label="Tags" value={String(media?.tags.length ?? 0)} />
+        <PropertyRow
+          label="Created"
+          value={media?.captured_at ? new Date(media.captured_at).toLocaleDateString() : 'Unknown'}
+        />
         <PropertyRow label="Added" value={media ? new Date(media.imported_at).toLocaleDateString() : 'Unknown'} />
+        {details.item?.kind === 'collection' && (
+          <PropertyRow label="Group" value={details.item.label ?? `Group ${details.item.item_id}`} />
+        )}
+        <PropertyRow label="Occurrences" value={String(occurrenceCount)} />
       </div>
+      {contextMenu.state && (
+        <ContextMenu
+          entries={contextMenu.state.entries}
+          position={contextMenu.state.position}
+          onClose={contextMenu.close}
+          showSearch={contextMenu.state.showSearch}
+        />
+      )}
     </article>
   );
 }
@@ -314,6 +357,8 @@ export function DuplicatesScreen() {
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [differenceHovered, setDifferenceHovered] = useState(false);
   const [differenceFocused, setDifferenceFocused] = useState(false);
+  const [smartMergeHovered, setSmartMergeHovered] = useState(false);
+  const [smartMergeFocused, setSmartMergeFocused] = useState(false);
   const requestIdRef = useRef(0);
   const scanningRef = useRef(false);
   const leftPreviewRef = useRef<HTMLDivElement>(null);
@@ -334,6 +379,11 @@ export function DuplicatesScreen() {
   });
   const differenceFiles = currentPair ? { left: currentPair.left.file, right: currentPair.right.file } : null;
   const differenceActive = !metadataLoading && (differenceHovered || differenceFocused);
+  const mergeWinner = currentPair ? smartMergeWinner(currentPair.decision) : null;
+  const mergePreviewActive = !metadataLoading
+    && !resolving
+    && mergeWinner != null
+    && (smartMergeHovered || smartMergeFocused);
   const showLoadingMessage = useDelayedFlag(loading);
   const showScanProgress = useDelayedFlag(scanning);
 
@@ -496,12 +546,9 @@ export function DuplicatesScreen() {
     zoom.zoomPercent,
   ]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      const target = event.target as HTMLElement | null;
-      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return;
-      if (event.key === 'ArrowLeft') goPrevious();
-      if (event.key === 'ArrowRight') goNext();
+  useShortcutScope((event) => {
+      if (event.key === 'ArrowLeft') { goPrevious(); return true; }
+      if (event.key === 'ArrowRight') { goNext(); return true; }
       if (!currentPair || resolving || metadataLoading) return;
       const shortcuts: Partial<Record<string, DuplicateAction>> = {
         l: 'keep_left',
@@ -510,11 +557,11 @@ export function DuplicatesScreen() {
         n: 'not_duplicate',
       };
       const action = shortcuts[event.key.toLowerCase()];
-      if (action) void finishResolution(currentPair, action);
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [currentPair, finishResolution, goNext, goPrevious, metadataLoading, resolving]);
+      if (action) {
+        void finishResolution(currentPair, action);
+        return true;
+      }
+  }, { priority: 30 });
 
   if (loading) {
     return (
@@ -555,8 +602,8 @@ export function DuplicatesScreen() {
       )}
 
       <div className={styles.comparison}>
-        <MediaCard side="left" file={currentPair.left.file} previewRef={leftPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} details={left} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_left')} />
-        <MediaCard side="right" file={currentPair.right.file} previewRef={rightPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} details={right} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_right')} />
+        <MediaCard side="left" file={currentPair.left.file} occurrenceCount={currentPair.left.occurrences.length} previewRef={leftPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'left'} details={left} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_left')} />
+        <MediaCard side="right" file={currentPair.right.file} occurrenceCount={currentPair.right.occurrences.length} previewRef={rightPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'right'} details={right} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_right')} />
       </div>
 
       <footer className={styles.footer}>
@@ -565,8 +612,22 @@ export function DuplicatesScreen() {
             <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'not_duplicate')} disabled={resolving || metadataLoading}><IconX size={15} /> Not duplicates</button>
           </KbdTooltip>
           <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'keep_both')} disabled={resolving || metadataLoading}><IconCopy size={15} /> Keep both</button>
-          <KbdTooltip label="Keep the stronger file and merge metadata" shortcut="S">
-            <button className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={() => void finishResolution(currentPair, 'smart_merge')} disabled={resolving || metadataLoading}><IconArrowsJoin size={16} /> Smart merge</button>
+          <KbdTooltip label="Keep the stronger file and preserve item metadata" shortcut="S">
+            <button
+              className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
+              onClick={() => {
+                setSmartMergeHovered(false);
+                setSmartMergeFocused(false);
+                void finishResolution(currentPair, 'smart_merge');
+              }}
+              onMouseEnter={() => setSmartMergeHovered(true)}
+              onMouseLeave={() => setSmartMergeHovered(false)}
+              onFocus={() => setSmartMergeFocused(true)}
+              onBlur={() => setSmartMergeFocused(false)}
+              disabled={resolving || metadataLoading}
+            >
+              <IconArrowsJoin size={16} /> Smart merge
+            </button>
           </KbdTooltip>
           <span className={styles.similarity}>{currentPair.similarity_pct.toFixed(0)}% match</span>
         </div>

@@ -4,8 +4,9 @@
  */
 
 import { useState, useCallback, useRef, useMemo } from 'react';
-import { getShortcutGroups, formatKeysDisplay, SHORTCUT_DEFS } from '../../shared/lib/shortcuts';
-import type { ShortcutDef, ShortcutGroup } from '../../shared/lib/shortcuts';
+import { findShortcutConflict, formatKeysDisplay, getShortcutGroups, setShortcutBinding } from '../../shared/lib/shortcuts';
+import type { ShortcutGroup } from '../../shared/lib/shortcuts';
+import { useShortcutSuspension } from '../../shared/hooks/useShortcutScope';
 import styles from './ShortcutsPanel.module.css';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
@@ -34,6 +35,7 @@ function ShortcutInput({ value, onChange, conflict }: { value: string; onChange:
   const [editing, setEditing] = useState(false);
   const [temp, setTemp] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  useShortcutSuspension(editing);
   const display = editing ? (temp || 'Press keys') : formatKeysDisplay(value);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -79,36 +81,40 @@ function filterGroups(groups: ShortcutGroup[], query: string): ShortcutGroup[] {
     .filter((g) => g.items.length > 0);
 }
 
-export function ShortcutsPanel() {
-  const groups = useMemo(() => getShortcutGroups(), []);
+export function ShortcutsPanel({ onDirty }: { onDirty?: () => void }) {
+  const [, setRegistryRevision] = useState(0);
+  const groups = getShortcutGroups();
   const [search, setSearch] = useState('');
-  const [overrides, setOverrides] = useState<Record<string, string>>({});
-  const [overrides2, setOverrides2] = useState<Record<string, string>>({});
   const [conflicts, setConflicts] = useState<Record<string, string>>({});
 
-  const getKeys = useCallback((def: ShortcutDef) => overrides[def.id] ?? def.keys, [overrides]);
-  const getKeys2 = useCallback((def: ShortcutDef) => overrides2[def.id] ?? def.keys2 ?? '', [overrides2]);
   const filtered = useMemo(() => filterGroups(groups, search), [groups, search]);
 
   const handleChange = useCallback((id: string, newKeys: string) => {
-    if (newKeys) {
-      const conflicting = SHORTCUT_DEFS.find((d) => d.id !== id && (overrides[d.id] ?? d.keys) === newKeys);
-      if (conflicting) {
-        setConflicts((p) => ({ ...p, [id]: conflicting.label }));
-        setTimeout(() => {
-          setConflicts((p) => { const n = { ...p }; delete n[id]; return n; });
-          setOverrides((p) => { const n = { ...p }; delete n[id]; return n; });
-        }, 1500);
-        setOverrides((p) => ({ ...p, [id]: newKeys }));
-        return;
-      }
+    const conflicting = findShortcutConflict(id, newKeys);
+    if (conflicting) {
+      setConflicts((current) => ({ ...current, [id]: conflicting.label }));
+      setTimeout(() => setConflicts((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      }), 1500);
+      return;
     }
-    setOverrides((p) => ({ ...p, [id]: newKeys }));
-  }, [overrides]);
+    setShortcutBinding(id, 'keys', newKeys, false);
+    setRegistryRevision((value) => value + 1);
+    onDirty?.();
+  }, [onDirty]);
 
   const handleChange2 = useCallback((id: string, newKeys: string) => {
-    setOverrides2((p) => ({ ...p, [id]: newKeys }));
-  }, []);
+    const conflicting = findShortcutConflict(id, newKeys);
+    if (conflicting) {
+      setConflicts((current) => ({ ...current, [id]: conflicting.label }));
+      return;
+    }
+    setShortcutBinding(id, 'keys2', newKeys, false);
+    setRegistryRevision((value) => value + 1);
+    onDirty?.();
+  }, [onDirty]);
 
   return (
     <div className={styles.root}>
@@ -131,10 +137,10 @@ export function ShortcutsPanel() {
                     {def.description && <div className={styles.labelDesc}>{def.description}</div>}
                   </div>
                   <div className={styles.binding}>
-                    <ShortcutInput value={getKeys(def)} onChange={(k) => handleChange(def.id, k)} conflict={conflicts[def.id] ?? null} />
+                    <ShortcutInput value={def.keys} onChange={(k) => handleChange(def.id, k)} conflict={conflicts[def.id] ?? null} />
                   </div>
                   <div className={styles.binding}>
-                    <ShortcutInput value={getKeys2(def)} onChange={(k) => handleChange2(def.id, k)} />
+                    <ShortcutInput value={def.keys2 ?? ''} onChange={(k) => handleChange2(def.id, k)} conflict={conflicts[def.id] ?? null} />
                   </div>
                 </div>
               ))}

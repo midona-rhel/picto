@@ -10,12 +10,13 @@ import { createPortal } from 'react-dom';
 import { IconX } from '@tabler/icons-react';
 import styles from './GlassModal.module.css';
 import btnStyles from '../../styles/actionButton.module.css';
+import { useShortcutScope } from '../../hooks/useShortcutScope';
 
 export interface GlassModalProps {
   open: boolean;
   onClose: () => void;
   title: string;
-  size?: 'sm' | 'md' | 'lg';
+  size?: 'sm' | 'md' | 'lg' | 'xl';
   /** Remove default body padding (for edge-to-edge content like trees/lists). */
   flush?: boolean;
   footer?: ReactNode;
@@ -46,19 +47,21 @@ export function GlassModal({ open, onClose, title, size = 'md', flush = false, f
     setTimeout(() => { setVisible(false); setClosing(false); onClose(); }, EXIT_MS);
   }, [closing, onClose]);
 
-  // Escape to close
-  useEffect(() => {
-    if (!visible) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); startClose(); }
-    };
-    window.addEventListener('keydown', handler, true);
-    return () => window.removeEventListener('keydown', handler, true);
-  }, [visible, startClose]);
+  useShortcutScope((event) => {
+    if (event.key !== 'Escape') return;
+    startClose();
+    return true;
+  }, { enabled: visible, priority: 100, allowInEditable: true });
 
   if (!visible) return null;
 
-  const sizeClass = size === 'sm' ? styles.sm : size === 'lg' ? styles.lg : styles.md;
+  const sizeClass = size === 'sm'
+    ? styles.sm
+    : size === 'lg'
+      ? styles.lg
+      : size === 'xl'
+        ? styles.xl
+        : styles.md;
 
   return createPortal(
     <div

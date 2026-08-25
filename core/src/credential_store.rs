@@ -50,6 +50,9 @@ pub struct SiteCredential {
     pub password: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cookies: Option<HashMap<String, String>>,
+    /// Browser request headers required to reuse a captured direct-site session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub oauth_token: Option<String>,
 }
@@ -250,6 +253,7 @@ mod tests {
                 ("user_id".to_string(), "123456".to_string()),
                 ("pass_hash".to_string(), "session".to_string()),
             ])),
+            headers: None,
             oauth_token: None,
         };
         let auth = build_extractor_auth(&credential);
@@ -269,6 +273,7 @@ mod tests {
                 "PHPSESSID".to_string(),
                 "session".to_string(),
             )])),
+            headers: None,
             oauth_token: Some("refresh-token".to_string()),
         };
         let auth = build_extractor_auth(&credential);
@@ -284,6 +289,7 @@ mod tests {
             username: None,
             password: None,
             cookies: None,
+            headers: None,
             oauth_token: Some("baraag-access-token".to_string()),
         };
         let auth = build_extractor_auth(&credential);
@@ -299,6 +305,7 @@ mod tests {
             username: None,
             password: Some("tumblr-access-token-secret".to_string()),
             cookies: None,
+            headers: None,
             oauth_token: Some("tumblr-access-token".to_string()),
         };
         let auth = build_extractor_auth(&credential);
@@ -318,11 +325,31 @@ mod tests {
                 ("a".to_string(), "session-a".to_string()),
                 ("b".to_string(), "session-b".to_string()),
             ])),
+            headers: None,
             oauth_token: None,
         };
         let auth = build_extractor_auth(&credential);
         assert_eq!(auth["cookies"]["a"], "session-a");
         assert_eq!(auth["cookies"]["b"], "session-b");
         assert_eq!(auth.as_object().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn fanbox_auth_preserves_the_direct_site_session() {
+        let credential = SiteCredential {
+            site_category: "fanbox".to_string(),
+            credential_type: CredentialType::Cookies,
+            username: None,
+            password: None,
+            cookies: Some(HashMap::from([
+                ("FANBOXSESSID".to_string(), "session".to_string()),
+                ("cf_clearance".to_string(), "browser-bound".to_string()),
+            ])),
+            headers: None,
+            oauth_token: None,
+        };
+        let auth = build_extractor_auth(&credential);
+        assert_eq!(auth["cookies"]["FANBOXSESSID"], "session");
+        assert_eq!(auth["cookies"]["cf_clearance"], "browser-bound");
     }
 }

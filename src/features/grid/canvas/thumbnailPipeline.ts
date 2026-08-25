@@ -11,13 +11,7 @@
  * separately by ThumbnailRevealTracker.
  */
 
-import {
-  sendThumbnailPlan,
-  clearThumbnailWorker,
-  setThumbnailBitmapCallback,
-  setThumbnailErrorCallback,
-  terminateThumbnailWorker,
-} from './thumbnailDecodeClient';
+import { ThumbnailDecodeClient } from './thumbnailDecodeClient';
 import { mediaFileUrl } from '../../../shared/lib/mediaUrl';
 import type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
 import {
@@ -29,8 +23,6 @@ import {
 export type { PlanTile } from './thumbnailPlan';
 
 export type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
-
-export const THUMBNAIL_PIPELINE_REVEAL_MS = 250;
 
 /** If a tile exceeds this size in either axis, load the full original instead of the 512px thumb. */
 const FULL_QUALITY_THRESHOLD_PX = 752;
@@ -45,6 +37,8 @@ export class ThumbnailPipeline {
   private onBitmapAvailable: (hash: string) => void;
   private destroyed = false;
   private totalBytes = 0;
+  private readonly decoder: ThumbnailDecodeClient;
+  private readonly revisions = new Map<string, number>();
 
   // ── Plan deduplication ──
   // Only send plan to worker when the visible hash set actually changes.
@@ -56,8 +50,10 @@ export class ThumbnailPipeline {
   constructor(onDirty: () => void = () => {}, onBitmapAvailable: (hash: string) => void = () => {}) {
     this.onDirty = onDirty;
     this.onBitmapAvailable = onBitmapAvailable;
-    setThumbnailBitmapCallback((hash, bitmap) => this.handleBitmap(hash, bitmap));
-    setThumbnailErrorCallback((hash) => this.handleError(hash));
+    this.decoder = new ThumbnailDecodeClient(
+      (hash, bitmap) => this.handleBitmap(hash, bitmap),
+      (hash) => this.handleError(hash),
+    );
   }
 
   setOnDirty(onDirty: () => void): void {
@@ -93,7 +89,10 @@ export class ThumbnailPipeline {
       const t = tiles[i];
       const isImage = t.mime.startsWith('image/') && t.mime !== 'image/gif';
       const needsFull = isImage && (t.w > FULL_QUALITY_THRESHOLD_PX || t.h > FULL_QUALITY_THRESHOLD_PX);
-      const url = needsFull ? mediaFileUrl(t.fileHash, t.mime) : mediaThumbnailUrl(t.fileHash);
+      const revision = this.revisions.get(t.fileHash) ?? 0;
+      const url = needsFull
+        ? mediaFileUrl(t.fileHash, t.mime)
+        : `${mediaThumbnailUrl(t.fileHash)}?v=${revision}`;
       if (buf[i]) {
         buf[i].fileHash = t.fileHash;
         buf[i].url = url;
@@ -101,12 +100,25 @@ export class ThumbnailPipeline {
         buf[i] = { fileHash: t.fileHash, url };
       }
     }
-    sendThumbnailPlan(buf);
+    this.decoder.sendPlan(buf);
   }
 
   /** Get a cached entry for drawing. Returns null if no bitmap received yet. */
   get(hash: string): ThumbnailPipelineEntry | null {
     return this.cache.get(hash) ?? null;
+  }
+
+  invalidate(hash: string): void {
+    const entry = this.cache.get(hash);
+    if (entry?.thumb) {
+      this.totalBytes -= entry.bytes;
+      entry.thumb.close();
+    }
+    this.cache.delete(hash);
+    this.revisions.set(hash, (this.revisions.get(hash) ?? 0) + 1);
+    this.lastPlanFingerprint = -1;
+    this.decoder.invalidate(hash);
+    this.onDirty();
   }
 
   /** Close bitmaps for tiles no longer in the decode activation zone. */
@@ -127,7 +139,7 @@ export class ThumbnailPipeline {
   clear(): void {
     this.destroyed = true;
     this.lastPlanFingerprint = -1;
-    clearThumbnailWorker();
+    this.decoder.clear();
     for (const entry of this.cache.values()) entry.thumb?.close();
     this.cache.clear();
     this.totalBytes = 0;
@@ -136,7 +148,7 @@ export class ThumbnailPipeline {
   /** Destroy worker entirely (unmount). */
   destroy(): void {
     this.clear();
-    terminateThumbnailWorker();
+    this.decoder.terminate();
   }
 
   // ── Worker callbacks ────────────────────────────────────────────
@@ -146,7 +158,7 @@ export class ThumbnailPipeline {
 
     let entry = this.cache.get(hash);
     if (!entry) {
-      entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0, animateIn: false, revealStartedAt: 0 };
+      entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0 };
       this.cache.set(hash, entry);
     }
 
@@ -160,8 +172,6 @@ export class ThumbnailPipeline {
     entry.bytes = bitmap.width * bitmap.height * 4;
     this.totalBytes += entry.bytes;
     entry.state = 'shown';
-    entry.animateIn = !isUpgrade;
-    entry.revealStartedAt = performance.now();
 
     if (!isUpgrade) this.onBitmapAvailable(hash);
     this.onDirty();
@@ -170,9 +180,10 @@ export class ThumbnailPipeline {
   private handleError(hash: string): void {
     let entry = this.cache.get(hash);
     if (!entry) {
-      entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0, animateIn: false, revealStartedAt: 0 };
+      entry = { thumb: null, state: 'idle', lastAccessed: 0, bytes: 0 };
       this.cache.set(hash, entry);
     }
     entry.state = 'error';
+    this.onDirty();
   }
 }

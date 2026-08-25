@@ -73,14 +73,18 @@ describe('SidebarRow', () => {
   });
 
   it.each(['folder', 'smart_folder'] as const)('keeps the count in place while %s label is replaced for rename', (variant) => {
+    const onClick = vi.fn();
     render(
-      <SidebarRow variant={variant} icon={<span />} count={12} onClick={vi.fn()}>
+      <SidebarRow variant={variant} icon={<span />} count={12} onClick={onClick}>
         <input aria-label={`Rename ${variant}`} />
       </SidebarRow>,
     );
 
-    expect(screen.getByRole('textbox', { name: `Rename ${variant}` })).toBeInTheDocument();
+    const input = screen.getByRole('textbox', { name: `Rename ${variant}` });
+    expect(input).toBeInTheDocument();
     expect(screen.getByText('12')).toBeInTheDocument();
+    expect(fireEvent.keyDown(input, { key: ' ' })).toBe(true);
+    expect(onClick).not.toHaveBeenCalled();
   });
 
   it('keeps a no-count system row keyboard-selectable', () => {

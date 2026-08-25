@@ -62,14 +62,22 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
             }
         }
     }
-    // The release source is deliberately public-only. Exclude mature/private
-    // stubs that DeviantArt lists to anonymous API clients but whose CDN URLs
-    // reject downloads, and preserve the quality authorized by signed URLs.
+    // Keep gallery-dl in charge of DeviantArt access and URL signing. Captured
+    // direct-site cookies are merged below; Picto only disables its own
+    // quality rewrite so the source-authorized representation is preserved.
     if opts.site_id == "deviantart" {
-        extractor.insert(
-            "deviantart".into(),
-            serde_json::json!({"mature": false, "quality": null}),
-        );
+        let mut deviantart = serde_json::Map::new();
+        deviantart.insert("quality".into(), serde_json::Value::Null);
+        if let Some(limit) = opts.post_limit.filter(|limit| *limit > 0) {
+            deviantart.insert("picto-post-limit".into(), serde_json::json!(limit));
+        }
+        if opts.range_start > 1 {
+            deviantart.insert(
+                "picto-post-skip".into(),
+                serde_json::json!(opts.range_start - 1),
+            );
+        }
+        extractor.insert("deviantart".into(), serde_json::Value::Object(deviantart));
     }
     if opts.site_id == "tumblr" {
         let mut tumblr = serde_json::Map::new();
@@ -80,13 +88,6 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
         if let Some(limit) = opts.post_limit.filter(|limit| *limit > 0) {
             tumblr.insert("picto-post-limit".into(), serde_json::json!(limit));
         }
-        tumblr.insert("reblogs".into(), serde_json::json!(false));
-        // Tumblr photo posts are commonly represented as text posts with
-        // images embedded in the body. Keep gallery-dl's inline extraction on
-        // so those images are not silently discarded.
-        tumblr.insert("inline".into(), serde_json::json!(true));
-        tumblr.insert("external".into(), serde_json::json!(false));
-        tumblr.insert("original".into(), serde_json::json!(true));
         extractor.insert("tumblr".into(), serde_json::Value::Object(tumblr));
     }
     // ArtStation's generic gallery-dl post range counts assets, not projects,
@@ -301,9 +302,37 @@ mod tests {
         let config = build_config(&opts, std::path::Path::new("/tmp"));
         assert!(config["extractor"]["deviantart"]["quality"].is_null());
         assert_eq!(
-            config["extractor"]["deviantart"]["mature"].as_bool(),
-            Some(false)
+            config["extractor"]["deviantart"]["picto-post-limit"].as_u64(),
+            Some(1)
         );
+        assert!(config["extractor"]["deviantart"]
+            .get("picto-post-skip")
+            .is_none());
+        assert!(config["extractor"]["deviantart"].get("jwt").is_none());
+        assert!(config["extractor"]["deviantart"].get("mature").is_none());
+    }
+
+    #[test]
+    fn deviantart_uses_the_persisted_post_offset_for_continuation() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "deviantart".to_string(),
+            url: "https://www.deviantart.com/artist/gallery/".to_string(),
+            post_limit: Some(100),
+            range_start: 101,
+            source_cursor: Some("range:101".to_string()),
+            abort_threshold: None,
+            auth: None,
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        let deviantart = &config["extractor"]["deviantart"];
+        assert_eq!(deviantart["picto-post-limit"].as_u64(), Some(100));
+        assert_eq!(deviantart["picto-post-skip"].as_u64(), Some(100));
     }
 
     #[test]
@@ -381,10 +410,10 @@ mod tests {
         let tumblr = &config["extractor"]["tumblr"];
         assert_eq!(tumblr["offset"].as_u64(), Some(4));
         assert_eq!(tumblr["picto-post-limit"].as_u64(), Some(2));
-        assert_eq!(tumblr["reblogs"].as_bool(), Some(false));
-        assert_eq!(tumblr["inline"].as_bool(), Some(true));
-        assert_eq!(tumblr["external"].as_bool(), Some(false));
-        assert_eq!(tumblr["original"].as_bool(), Some(true));
+        assert!(tumblr.get("reblogs").is_none());
+        assert!(tumblr.get("inline").is_none());
+        assert!(tumblr.get("external").is_none());
+        assert!(tumblr.get("original").is_none());
     }
 
     #[test]
@@ -499,7 +528,9 @@ mod tests {
             config["extractor"]["patreon"]["picto-post-limit"].as_u64(),
             Some(100)
         );
-        assert!(config["extractor"]["patreon"].get("picto-post-skip").is_none());
+        assert!(config["extractor"]["patreon"]
+            .get("picto-post-skip")
+            .is_none());
     }
 
     #[test]

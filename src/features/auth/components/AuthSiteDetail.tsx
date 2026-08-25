@@ -1,17 +1,9 @@
-import type { AuthSessionState } from '../../../shared/types/subscriptions';
+import { useEffect, useState, type FormEvent } from 'react';
+import type { AuthSessionState, OnlyFansManualAuthInput } from '../../../shared/types/subscriptions';
 import type { AuthSiteSnapshot } from '../../../shared/types/subscriptionsWorkspace';
-import { authStatusLabel, authTone, formatRelativeTime } from '../authUtils';
+import { GlassInput } from '../../../shared/ui/GlassInput/GlassInput';
+import { formatRelativeTime } from '../authUtils';
 import styles from '../AuthWorkspace.module.css';
-
-function badgeClass(tone: 'running' | 'paused' | 'attention' | 'idle'): string {
-  return tone === 'running'
-    ? styles.statusRunning
-    : tone === 'paused'
-      ? styles.statusPaused
-      : tone === 'attention'
-        ? styles.statusAttention
-        : styles.statusIdle;
-}
 
 export function AuthSiteDetail({
   entry,
@@ -19,6 +11,7 @@ export function AuthSiteDetail({
   busy,
   message,
   onStartLogin,
+  onSaveManualOnlyFans,
   onCancelLogin,
   onRemoveCredential,
 }: {
@@ -27,12 +20,25 @@ export function AuthSiteDetail({
   busy: boolean;
   message: string | null;
   onStartLogin: () => Promise<void>;
+  onSaveManualOnlyFans: (input: OnlyFansManualAuthInput) => Promise<void>;
   onCancelLogin: () => Promise<void>;
   onRemoveCredential: () => Promise<void>;
 }) {
+  const [manualOpen, setManualOpen] = useState(false);
+  const [cookie, setCookie] = useState('');
+  const [userAgent, setUserAgent] = useState('');
+  const [xBc, setXBc] = useState('');
+
+  useEffect(() => {
+    setManualOpen(false);
+    setCookie('');
+    setUserAgent('');
+    setXBc('');
+  }, [entry?.site.id]);
+
   if (!entry) {
     return (
-      <main className={styles.content}>
+      <main className={styles.detail}>
         <div className={styles.emptyState}>
           <div className={styles.sectionTitle}>Select a site</div>
           <div className={styles.muted}>Authentication is managed per site here, not per subscription.</div>
@@ -41,41 +47,56 @@ export function AuthSiteDetail({
     );
   }
 
-  const tone = authTone(entry.health, Boolean(entry.credential), entry.issues.length > 0);
   const sessionActive = session.site_category === entry.site.credential_owner_site_id && (
     session.status === 'starting' || session.status === 'active' || session.status === 'loading'
   );
   const hasEmbeddedSession = session.site_category === entry.site.credential_owner_site_id && (
     session.status === 'starting' || session.status === 'active' || session.status === 'loading' || session.status === 'error'
   );
+  const concreteIssue = entry.health?.last_error ?? entry.issues[0]?.message ?? '';
+  const notice = concreteIssue || message || '';
+  const accountState = entry.credential ? 'Signed in' : 'Not signed in';
+  const usageLabel = entry.queryCount === 0
+    ? 'Not used by a subscription'
+    : `${entry.queryCount} ${entry.queryCount === 1 ? 'query' : 'queries'}`;
+  const loginDescription = entry.site.id === 'pixiv'
+    ? 'Sign in on Pixiv. Picto captures the OAuth session when the site completes authentication.'
+    : entry.site.credential_types.includes('api_key')
+      ? `Sign in on ${entry.site.name}. Picto retrieves and stores the account API credential.`
+      : `Sign in on ${entry.site.name}. Picto stores the resulting browser session securely.`;
+  const isOnlyFans = entry.site.id === 'onlyfans';
+
+  async function submitManualOnlyFans(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await onSaveManualOnlyFans({ cookie, user_agent: userAgent, x_bc: xBc });
+    setCookie('');
+    setUserAgent('');
+    setXBc('');
+    setManualOpen(false);
+  }
 
   return (
-    <main className={styles.content}>
-      <section className={styles.hero}>
-        <div className={styles.heroTop}>
+    <main className={styles.detail}>
+      <header className={styles.detailHeader}>
+          <span className={styles.detailMark} aria-hidden="true">{entry.site.name.slice(0, 1)}</span>
           <div className={styles.titleWrap}>
             <div className={styles.heroTitle}>{entry.site.name}</div>
             <div className={styles.subtitle}>{entry.site.domain}</div>
           </div>
-          <span className={`${styles.statusBadge} ${badgeClass(tone)}`.trim()}>
-            {authStatusLabel(entry.health, Boolean(entry.credential), entry.site)}
-          </span>
-        </div>
+          <span className={styles.detailStatus}>{accountState}</span>
+      </header>
 
-        <div className={styles.detailMeta}>
-          <span className={styles.smallBadge}>{entry.credential?.credential_type ?? 'not configured'}</span>
-          {entry.queryCount > 0 && <span className={styles.smallBadge}>{entry.queryCount} {entry.queryCount === 1 ? 'query uses' : 'queries use'} this site</span>}
-          {entry.health?.last_checked_at && <span className={styles.smallBadge}>checked {formatRelativeTime(entry.health.last_checked_at)}</span>}
-        </div>
-
-        <div className={styles.muted}>
-          {entry.site.auth_required_for_full_access
-            ? 'This site commonly requires authentication for full access or stable subscription runs.'
-            : 'Authentication is optional for this site, but storing it here keeps subscriptions predictable.'}
-        </div>
+      <div className={styles.detailBody}>
+        <section className={styles.accountPanel} aria-label="Account details">
+          <dl className={styles.factGrid}>
+            <dt>Account</dt><dd>{accountState}</dd>
+            <dt>Credential</dt><dd>{entry.credential?.credential_type ?? 'Not configured'}</dd>
+            <dt>Subscriptions</dt><dd>{usageLabel}</dd>
+            <dt>Last checked</dt><dd>{entry.health?.last_checked_at ? formatRelativeTime(entry.health.last_checked_at) : 'Never'}</dd>
+          </dl>
 
         <div className={styles.inlineActions}>
-          <button type="button" className={styles.button} disabled={busy} onClick={() => { void onStartLogin(); }}>
+          <button type="button" className={styles.buttonPrimary} disabled={busy || sessionActive} onClick={() => { void onStartLogin(); }}>
             {sessionActive ? 'Logging in…' : entry.credential ? 'Refresh Login' : 'Log In'}
           </button>
           {sessionActive && (
@@ -85,60 +106,72 @@ export function AuthSiteDetail({
           )}
           {entry.credential && (
             <button type="button" className={styles.buttonDanger} disabled={busy} onClick={() => { void onRemoveCredential(); }}>
-              Remove Credential
+              Remove
             </button>
           )}
         </div>
-        {entry.health?.last_error && <div className={styles.errorBanner}>{entry.health.last_error}</div>}
-        {message && <div className={styles.panel}>{message}</div>}
-      </section>
-
-      <section className={styles.panel}>
-          <div className={styles.sectionHeader}>
-            <div className={styles.sectionTitle}>Site Login</div>
-          </div>
-          <div className={styles.muted}>
-            {entry.site.id === 'pixiv'
-              ? 'Sign in on Pixiv and Picto will capture the OAuth session automatically.'
-              : entry.site.credential_types.includes('api_key')
-                ? `Sign in on ${entry.site.name}; Picto will retrieve the account API credential automatically.`
-                : `Sign in on ${entry.site.name}; Picto will retain the resulting session for gallery-dl.`}
-          </div>
-          <div className={styles.emptyState}>
-            <div className={styles.sectionTitle}>{hasEmbeddedSession ? 'Login in progress' : 'No active login'}</div>
-            <div className={styles.muted}>
-              {hasEmbeddedSession
-                ? 'Complete authentication in the site window. Picto will save the resulting session automatically.'
-                : 'Start login to open the real site in a separate window.'}
+          {isOnlyFans && (
+            <div className={styles.manualAuth}>
+              <button
+                type="button"
+                className={styles.manualToggle}
+                disabled={busy || sessionActive}
+                onClick={() => setManualOpen((open) => !open)}
+              >
+                {manualOpen ? 'Hide manual login' : 'Enter session manually…'}
+              </button>
+              {manualOpen && (
+                <form className={styles.manualForm} onSubmit={(event) => { void submitManualOnlyFans(event); }}>
+                  <label>
+                    <span>Cookie</span>
+                    <GlassInput type="password" value={cookie} onChange={(event) => setCookie(event.target.value)} autoComplete="off" spellCheck={false} required />
+                  </label>
+                  <label>
+                    <span>User-Agent</span>
+                    <GlassInput value={userAgent} onChange={(event) => setUserAgent(event.target.value)} autoComplete="off" spellCheck={false} required />
+                  </label>
+                  <label>
+                    <span>X-BC</span>
+                    <GlassInput type="password" value={xBc} onChange={(event) => setXBc(event.target.value)} autoComplete="off" spellCheck={false} required />
+                  </label>
+                  <button type="submit" className={styles.buttonSecondary} disabled={busy}>Save Session</button>
+                </form>
+              )}
             </div>
+          )}
+          <div className={styles.noticeSlot} data-visible={Boolean(notice)} aria-live="polite">
+            {notice || '\u00a0'}
           </div>
-          <div className={styles.muted}>
-            {hasEmbeddedSession
-              ? session.message ?? session.current_url ?? 'Waiting for the site session…'
-              : 'The login flow opens in a separate window, not inside this pane.'}
-          </div>
-      </section>
+        </section>
 
-      <section className={styles.panel}>
-        <div className={styles.sectionHeader}>
+        <section className={styles.loginPanel}>
+          <div className={styles.sectionTitle}>Sign in</div>
+          <p className={styles.helper}>{loginDescription}</p>
+          <div className={styles.sessionSlot} data-visible={hasEmbeddedSession} aria-live="polite">
+            {hasEmbeddedSession && (
+              <>
+                <span className={styles.sessionPulse} aria-hidden="true" />
+                <span>{session.message ?? session.current_url ?? 'Waiting for the site…'}</span>
+              </>
+            )}
+          </div>
+        </section>
+
+        <section className={styles.issuesPanel}>
           <div className={styles.sectionTitle}>Runtime Issues</div>
-        </div>
-        {entry.issues.length === 0 ? (
-          <div className={styles.emptyState}>
-            <div className={styles.sectionTitle}>No auth issues</div>
-            <div className={styles.muted}>Credential and session-related subscription failures will surface here.</div>
+          <div className={styles.issueList}>
+            {entry.issues.length === 0 ? (
+              <div className={styles.emptyIssue}>No authentication issues</div>
+            ) : entry.issues.map((issue) => (
+              <article key={issue.issue_id} className={styles.issueCard}>
+                <strong>{issue.message}</strong>
+                {issue.detail && <span>{issue.detail}</span>}
+                <span>Seen {formatRelativeTime(issue.last_seen_at)}</span>
+              </article>
+            ))}
           </div>
-        ) : (
-          entry.issues.map((issue) => (
-            <div key={issue.issue_id} className={styles.issueCard}>
-              <div className={styles.sectionTitle}>{issue.issue_kind}</div>
-              <div>{issue.message}</div>
-              {issue.detail && <div className={styles.muted}>{issue.detail}</div>}
-              <div className={styles.muted}>Seen {formatRelativeTime(issue.last_seen_at)}</div>
-            </div>
-          ))
-        )}
-      </section>
+        </section>
+      </div>
     </main>
   );
 }

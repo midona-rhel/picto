@@ -13,20 +13,22 @@ import {
   IconCopy, IconUpload, IconDownload,
   IconPhoto, IconInbox, IconTrash,
   IconClock, IconBookmark,
+  IconArrowsShuffle,
   IconFilter, IconX,
+  IconStar, IconStarOff, IconTags,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
   IconNewSubfolder, IconRename, IconSort, IconExpand, IconCollapse,
-  IconExpandAll, IconChangeIcon, IconWatchFolder,
+  IconExpandAll, IconCollapseAll, IconChangeIcon, IconWatchFolder,
   IconFolderQuestionCustom, IconBookmarkQuestionCustom,
 } from '../../shared/ui/icons/sidebar-menu-icons';
 import {
   sidebarNodesAtom, systemNodesAtom, folderNodesAtom,
   smartFolderNodesAtom, sidebarLoadingAtom,
 } from '../../state/sidebar';
-import { activeNodeIdAtom } from '../../state/navigation';
-import { pushHistory } from '../../state/navigationHistory';
+import { displayedSurfaceNodeIdAtom } from '../../state/navigation';
+import { navigateToNode } from '../../state/navigationHistory';
 import { sidebarController } from '../../controllers/sidebarController';
 import {
   bulkFolderDeletionMessage,
@@ -46,10 +48,28 @@ import type { SidebarNodeDto, SmartFolderCommandPayload, SmartFolderPredicate } 
 import type { EntityTarget } from '../../shared/types/canonical';
 import type { ItemScope } from '../../shared/types/generated/application/ItemScope';
 import { filterSidebarTree } from './treeFilter';
+import * as entityMutations from '../../controllers/entityMutations';
+import { clearRecentViews } from '../../platform/entityApi';
+import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
+import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
+import { announceUndoableMutation } from '../../runtime/historyRuntime';
+import { formatKeysDisplay, getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
+import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import {
+  addQuickAccess,
+  removeQuickAccess,
+  reorderQuickAccess,
+  useQuickAccess,
+} from './quickAccessPreferences';
 import styles from './Sidebar.module.css';
 
 const IC = 19;
 const FILL = { stroke: 1.2, fill: 'currentColor', fillOpacity: 0.15 } as const;
+
+function kbd(id: string): string | undefined {
+  const shortcut = getShortcut(id);
+  return shortcut ? formatKeysDisplay(shortcut.keys) : undefined;
+}
 
 const SYSTEM_ICONS: Record<string, TablerIcon> = {
   'system:active':        IconPhoto,
@@ -57,6 +77,7 @@ const SYSTEM_ICONS: Record<string, TablerIcon> = {
   'system:uncategorized': IconFolderQuestionCustom as unknown as TablerIcon,
   'system:untagged':      IconBookmarkQuestionCustom as unknown as TablerIcon,
   'system:tag_manager':   IconBookmark,
+  'system:random':        IconArrowsShuffle,
   'system:recent_viewed': IconClock,
   'system:subscriptions': IconDownload,
   'system:duplicates':    IconCopy,
@@ -64,6 +85,57 @@ const SYSTEM_ICONS: Record<string, TablerIcon> = {
 };
 
 const store = getDefaultStore();
+
+export function resolveSidebarTreeDrop(
+  element: HTMLElement | null,
+  pointerY: number,
+  draggedNodeId: string,
+  nodes: SidebarNodeDto[],
+): { targetId: string; position: 'before' | 'inside' | 'after' } | null {
+  if (!element) return null;
+  const smart = draggedNodeId.startsWith('smart:');
+  const attr = smart ? 'data-smart-drop-id' : 'data-folder-drop-id';
+  const row = element.closest<HTMLElement>(`[${attr}]`);
+  if (!row) return null;
+  const rawId = smart ? row.dataset.smartDropId : row.dataset.folderDropId;
+  const targetId = rawId ? `${smart ? 'smart:' : 'folder:'}${rawId}` : null;
+  if (!targetId || targetId === draggedNodeId || isDescendantOf(targetId, draggedNodeId, nodes)) return null;
+  const rect = row.getBoundingClientRect();
+  const ratio = (pointerY - rect.top) / rect.height;
+  return {
+    targetId,
+    position: ratio < 0.3 ? 'before' : ratio > 0.7 ? 'after' : 'inside',
+  };
+}
+
+export function availableFolderMoveTargets(nodes: SidebarNodeDto[], movingFolderId: number): number[] {
+  const parentById = new Map<number, number | null>();
+  for (const node of nodes) {
+    const id = parseFolderId(node.id);
+    if (id == null) continue;
+    parentById.set(id, parseFolderId(node.parent_id ?? ''));
+  }
+  return [...parentById.keys()].filter((candidate) => {
+    if (candidate === movingFolderId) return false;
+    let ancestor: number | null | undefined = candidate;
+    while (ancestor != null) {
+      if (ancestor === movingFolderId) return false;
+      ancestor = parentById.get(ancestor);
+    }
+    return true;
+  });
+}
+
+export function availableTreeMoveTargetIds(
+  nodes: SidebarNodeDto[],
+  movingNodeIds: readonly string[],
+): string[] {
+  return nodes
+    .map((node) => node.id)
+    .filter((candidate) => movingNodeIds.every((movingId) => (
+      candidate !== movingId && !isDescendantOf(candidate, movingId, nodes)
+    )));
+}
 
 /** Fixed display order for all system scopes. */
 const SYSTEM_SCOPE_ORDER = [
@@ -73,6 +145,7 @@ const SYSTEM_SCOPE_ORDER = [
   'system:uncategorized',
   'system:untagged',
   'system:tag_manager',
+  'system:random',
   'system:subscriptions',
   'system:duplicates',
   'system:trash',
@@ -84,18 +157,29 @@ const LABEL_OVERRIDES: Record<string, string> = {
 
 const EXPAND_FILTERED_TREE = new Set<string>();
 
+export function nextSidebarSelection(
+  current: ReadonlySet<string>,
+  clickedId: string,
+  mode: 'replace' | 'toggle' | 'range',
+  rangeIds: readonly string[] = [],
+): Set<string> {
+  if (mode === 'replace') return new Set([clickedId]);
+  const next = new Set(current);
+  if (mode === 'toggle') {
+    if (next.has(clickedId)) next.delete(clickedId);
+    else next.add(clickedId);
+    return next;
+  }
+  for (const id of rangeIds) next.add(id);
+  return next;
+}
+
 function queryTarget(scope: ItemScope): EntityTarget {
   return {
     kind: 'query',
     query: {
       scope,
-      filters: {
-        include_tags: [],
-        exclude_tags: [],
-        minimum_rating: null,
-        mime_prefix: null,
-        text: null,
-      },
+      filters: createEmptyItemFilters(),
       sort: { field: 'imported_at', direction: 'descending', random_seed: null },
     },
     excluded_item_ids: [],
@@ -108,9 +192,11 @@ export function Sidebar() {
   const folderNodes = useAtomValue(folderNodesAtom);
   const smartFolderNodes = useAtomValue(smartFolderNodesAtom);
   const loading = useAtomValue(sidebarLoadingAtom);
-  const activeNodeId = useAtomValue(activeNodeIdAtom);
-  const setActiveNodeId = useSetAtom(activeNodeIdAtom);
+  const activeNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
+  const quickAccessIds = useQuickAccess();
   const setSmartFolderModal = useSetAtom(smartFolderModalAtom);
+  const setFolderPortal = useSetAtom(folderPickerPortalAtom);
+  const setTagPortal = useSetAtom(tagSelectPortalAtom);
 
   const [collapsed, toggleCollapse] = usePersistedSet('picto-sidebar-collapsed');
   const [treeFilter, setTreeFilter] = useState('');
@@ -155,6 +241,7 @@ export function Sidebar() {
       // Activate drag
       const node = [...folderNodes, ...smartFolderNodes].find((n) => n.id === drag.nodeId);
       if (!folderDragState?.active) {
+        document.documentElement.setAttribute('data-sidebar-drag-active', 'true');
         setFolderDragState({
           active: true,
           draggedNodeId: drag.nodeId,
@@ -171,33 +258,19 @@ export function Sidebar() {
         document.body.style.cursor = 'grabbing';
       } else {
         // Find drop target via elementFromPoint
-        const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-        let dropTargetId: string | null = null;
-        let dropPosition: 'before' | 'inside' | 'after' | null = null;
-        const dropAttr = isSmartDrag ? 'data-smart-drop-id' : 'data-folder-drop-id';
-        const targetRow = el?.closest(`[${dropAttr}]`) as HTMLElement | null;
-        if (targetRow) {
-          const rawId = isSmartDrag
-            ? targetRow.dataset.smartDropId
-            : targetRow.dataset.folderDropId;
-          const prefix = isSmartDrag ? 'smart:' : 'folder:';
-          const targetNodeId = rawId ? `${prefix}${rawId}` : null;
-          if (targetNodeId && targetNodeId !== drag.nodeId && !isDescendantOf(targetNodeId, drag.nodeId, nodePool)) {
-            dropTargetId = targetNodeId;
-            const rect = targetRow.getBoundingClientRect();
-            const ratio = (e.clientY - rect.top) / rect.height;
-            if (ratio < 0.3) dropPosition = 'before';
-            else if (ratio > 0.7) dropPosition = 'after';
-            else dropPosition = 'inside';
-          }
-        }
+        const resolved = resolveSidebarTreeDrop(
+          document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null,
+          e.clientY,
+          drag.nodeId,
+          nodePool,
+        );
 
         setFolderDragState((prev) => prev ? {
           ...prev,
           ghostX: e.clientX,
           ghostY: e.clientY,
-          dropTargetId,
-          dropPosition,
+          dropTargetId: resolved?.targetId ?? null,
+          dropPosition: resolved?.position ?? null,
         } : null);
       }
     };
@@ -206,6 +279,7 @@ export function Sidebar() {
       const drag = folderDragRef.current;
       folderDragRef.current = null;
       document.body.style.cursor = '';
+      document.documentElement.removeAttribute('data-sidebar-drag-active');
 
       if (folderDragState?.active && drag) {
         const { dropTargetId, dropPosition } = folderDragState;
@@ -285,6 +359,7 @@ export function Sidebar() {
     window.addEventListener('mousemove', onMove);
     window.addEventListener('mouseup', onUp);
     return () => {
+      document.documentElement.removeAttribute('data-sidebar-drag-active');
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
@@ -327,6 +402,53 @@ export function Sidebar() {
     }
   }, []);
 
+  const openFolderAutoTags = useCallback(async (
+    folderIds: number[],
+    anchor: { x: number; y: number } | null,
+  ) => {
+    if (folderIds.length === 0) return;
+    const configured = await Promise.all(folderIds.map((folderId) => foldersController.getAutoTags(folderId)));
+    const common = configured.slice(1).reduce(
+      (tags, current) => tags.filter((tag) => current.includes(tag)),
+      configured[0] ?? [],
+    );
+    setTagPortal({
+      open: true,
+      anchor,
+      selectedTags: common,
+      onApplyTags: (nextTags) => {
+        void Promise.all(folderIds.map((folderId) => foldersController.setAutoTags(folderId, nextTags)));
+      },
+    });
+  }, [setTagPortal]);
+
+  useShortcutScope((event) => {
+    const newFolder = getShortcut('file.newFolder');
+    const newSubfolder = getShortcut('file.newSubfolder');
+    const autoTags = getShortcut('folder.autoTags');
+    if (newFolder && matchesShortcutDef(event, newFolder)) {
+      event.preventDefault();
+      void createFolderAndRename();
+      return;
+    }
+    const selectedFolderIds = [...sidebarSelection]
+      .map(parseFolderId)
+      .filter((id): id is number => id != null);
+    const activeFolderId = parseFolderId(activeNodeId ?? '');
+    const targetFolderIds = selectedFolderIds.length > 0
+      ? selectedFolderIds
+      : activeFolderId == null ? [] : [activeFolderId];
+    if (newSubfolder && matchesShortcutDef(event, newSubfolder) && targetFolderIds.length === 1) {
+      event.preventDefault();
+      void createFolderAndRename(targetFolderIds[0]);
+      return;
+    }
+    if (autoTags && matchesShortcutDef(event, autoTags) && targetFolderIds.length > 0) {
+      event.preventDefault();
+      void openFolderAutoTags(targetFolderIds, null);
+    }
+  }, { priority: 20 });
+
   const openSmartFolderModal = useCallback((mode: 'create' | 'edit', initial?: {
     id?: number;
     name?: string;
@@ -341,32 +463,26 @@ export function Sidebar() {
   }, [setSmartFolderModal]);
 
   const navigate = useCallback((id: string) => {
-    setActiveNodeId(id);
-    pushHistory(id);
-  }, [setActiveNodeId]);
+    navigateToNode(id);
+  }, []);
 
-  const toggleCollapseAll = useCallback(() => {
-    // If any folder is expanded, collapse all. Otherwise expand all.
-    const folderIds = folderNodes.map((n) => n.id);
-    const anyExpanded = folderIds.some((id) => !collapsed.has(id));
-    if (anyExpanded) {
-      folderIds.forEach((id) => { if (!collapsed.has(id)) toggleCollapse(id); });
-    } else {
-      folderIds.forEach((id) => { if (collapsed.has(id)) toggleCollapse(id); });
+  const setNodesExpanded = useCallback((nodeIds: readonly string[], expanded: boolean) => {
+    for (const id of nodeIds) {
+      if (collapsed.has(id) === expanded) toggleCollapse(id);
     }
-  }, [folderNodes, collapsed, toggleCollapse]);
+  }, [collapsed, toggleCollapse]);
+
+  const expandableNodeIds = useCallback((treeNodes: SidebarNodeDto[]) => {
+    const parentIds = new Set(treeNodes.map((node) => node.parent_id).filter(Boolean));
+    return treeNodes.filter((node) => parentIds.has(node.id)).map((node) => node.id);
+  }, []);
 
   const orderedSystemNodes = useMemo(() => {
     const byId = new Map(systemNodes.map((n) => [n.id, n]));
     const result: SidebarNodeDto[] = [];
     for (const id of SYSTEM_SCOPE_ORDER) {
       const node = byId.get(id);
-      if (node) {
-        result.push(node);
-      } else if (id === 'system:tag_manager') {
-        // Placeholder — not from backend
-        result.push({ id, name: 'Tags', count: null, selectable: true, sort_order: 0 } as SidebarNodeDto);
-      }
+      if (node) result.push(node);
     }
     return result;
   }, [systemNodes]);
@@ -388,6 +504,13 @@ export function Sidebar() {
     () => buildTreeRenderList(visibleSmartFolderNodes, 'section:smart_folders', treeCollapsed),
     [visibleSmartFolderNodes, treeCollapsed],
   );
+  const quickAccessNodes = useMemo(() => {
+    const byId = new Map([...folderNodes, ...smartFolderNodes].map((node) => [node.id, node]));
+    return quickAccessIds.flatMap((id) => {
+      const node = byId.get(id);
+      return node ? [node] : [];
+    });
+  }, [folderNodes, quickAccessIds, smartFolderNodes]);
 
   /** Multi-select-aware click handler for folder / smart folder rows. */
   const handleRowClick = useCallback((id: string, e: React.MouseEvent) => {
@@ -395,12 +518,7 @@ export function Sidebar() {
     const isShift = e.shiftKey;
 
     if (isMod) {
-      // Toggle in selection
-      setSidebarSelection((prev) => {
-        const next = new Set(prev);
-        if (next.has(id)) next.delete(id); else next.add(id);
-        return next;
-      });
+      setSidebarSelection((prev) => nextSidebarSelection(prev, id, 'toggle'));
       lastClickedRef.current = id;
       return; // don't navigate
     }
@@ -419,18 +537,14 @@ export function Sidebar() {
         if (fromIdx >= 0 && toIdx >= 0) {
           const lo = Math.min(fromIdx, toIdx);
           const hi = Math.max(fromIdx, toIdx);
-          setSidebarSelection((prev) => {
-            const next = new Set(prev);
-            for (let i = lo; i <= hi; i++) next.add(ids[i]);
-            return next;
-          });
+          setSidebarSelection((prev) => nextSidebarSelection(prev, id, 'range', ids.slice(lo, hi + 1)));
           return; // don't navigate
         }
       }
     }
 
-    // Plain click — navigate and clear selection
-    setSidebarSelection(new Set());
+    // The active row is also the first selection anchor for Cmd/Ctrl and Shift selection.
+    setSidebarSelection((prev) => nextSidebarSelection(prev, id, 'replace'));
     lastClickedRef.current = id;
     navigate(id);
   }, [navigate, folderList, smartList]);
@@ -443,11 +557,35 @@ export function Sidebar() {
     if (folderId == null) return;
     const isExpanded = !collapsed.has(node.id);
     const hasChildren = folderList.some(({ node: n }) => n.parent_id === node.id);
+    const allExpandableIds = expandableNodeIds(folderNodes);
+    const anyTreeExpanded = allExpandableIds.some((id) => !collapsed.has(id));
     const entries: MenuEntry[] = [
-      { label: 'New Folder', icon: <IconFolderPlus size={14} />, action: () => { void createFolderAndRename(); } },
-      { label: 'New Subfolder', icon: <IconNewSubfolder size={14} />, action: () => { void createFolderAndRename(folderId); } },
+      { label: 'New Folder', icon: <IconFolderPlus size={14} />, shortcut: kbd('file.newFolder'), action: () => { void createFolderAndRename(); } },
+      { label: 'New Subfolder', icon: <IconNewSubfolder size={14} />, shortcut: kbd('file.newSubfolder'), action: () => { void createFolderAndRename(folderId); } },
       { separator: true },
-      { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
+      { label: quickAccessIds.includes(node.id) ? 'Remove from Quick Access' : 'Add to Quick Access', icon: quickAccessIds.includes(node.id) ? <IconStarOff size={14} /> : <IconStar size={14} />, action: () => {
+        void (quickAccessIds.includes(node.id) ? removeQuickAccess(node.id) : addQuickAccess(node.id));
+      } },
+      { label: 'Rename', icon: <IconRename size={14} />, shortcut: kbd('edit.rename'), action: () => folderRename.startRename(node.id, node.name) },
+      { label: 'Move to...', icon: <IconFolderOpen size={14} />, action: () => {
+        const currentParentId = parseFolderId(node.parent_id ?? '');
+        setFolderPortal({
+          open: true,
+          anchor: { x: e.clientX, y: e.clientY },
+          selectedFolderIds: currentParentId == null ? [] : [currentParentId],
+          availableFolderIds: availableFolderMoveTargets(folderNodes, folderId),
+          onApplyFolderParent: (parentId) => { void foldersController.move(folderId, parentId, []); },
+        });
+      } },
+      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => {
+        void foldersController.duplicate(folderId).then((duplicateNodeId) => {
+          const duplicateName = `${node.name} copy`;
+          folderRename.startRename(duplicateNodeId, duplicateName);
+        });
+      } },
+      { label: 'Set Auto Tags...', icon: <IconTags size={14} />, shortcut: kbd('folder.autoTags'), action: () => {
+        void openFolderAutoTags([folderId], { x: e.clientX, y: e.clientY });
+      } },
       { separator: true },
       { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => {
         void (async () => {
@@ -468,7 +606,7 @@ export function Sidebar() {
         store.set(folderWatchModalAtom, { open: true, folderId, initial: {} });
       } },
       ...((node.meta as Record<string, unknown> | null)?.watch_enabled ? [{
-        label: 'Remove Watched Folder', icon: <IconWatchFolder size={14} />, danger: true,
+        label: 'Remove Watched Folder', icon: <IconWatchFolder size={14} />,
         action: () => {
           store.set(confirmModalAtom, {
             open: true, title: 'Remove Watch', danger: true, confirmLabel: 'Remove',
@@ -478,11 +616,22 @@ export function Sidebar() {
         },
       } as MenuEntry] : []),
       { separator: true },
-      { label: 'Sort by Name', icon: <IconSort size={14} />, action: () => { void foldersController.sortByName(folderId); } },
+      { submenu: true, label: 'Sort Folders', icon: <IconSort size={14} />, children: [
+        { label: 'This Level A–Z', action: () => { void foldersController.sortTree(folderId, false, false); } },
+        { label: 'This Level Z–A', action: () => { void foldersController.sortTree(folderId, true, false); } },
+        { label: 'This Level and Descendants A–Z', action: () => { void foldersController.sortTree(folderId, false, true); } },
+        { label: 'This Level and Descendants Z–A', action: () => { void foldersController.sortTree(folderId, true, true); } },
+      ] },
+      { label: 'Sort Contents by Name', icon: <IconSort size={14} />, action: () => { void foldersController.sortByName(folderId); } },
       { label: isExpanded ? 'Collapse Folder' : 'Expand Folder', icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
         action: () => { if (hasChildren) toggleCollapse(node.id); },
         disabled: !hasChildren },
-      { label: 'Expand/Collapse All', icon: <IconExpandAll size={14} />, action: () => toggleCollapseAll() },
+      {
+        label: anyTreeExpanded ? 'Collapse All Folders' : 'Expand All Folders',
+        icon: anyTreeExpanded ? <IconCollapseAll size={14} /> : <IconExpandAll size={14} />,
+        action: () => setNodesExpanded(allExpandableIds, !anyTreeExpanded),
+        disabled: allExpandableIds.length === 0,
+      },
       { separator: true },
       { submenu: true, label: 'Change Icon', icon: <IconChangeIcon size={14} />, children: [
         { custom: true, key: 'folder-icon', render: () => (
@@ -493,7 +642,7 @@ export function Sidebar() {
         <ColorPicker value={node.color ?? null} onChange={(hex) => foldersController.applyColor(folderId, hex)} />
       ) },
       { separator: true },
-      { label: 'Export...', icon: <IconUpload size={14} />, action: () => {
+      { label: 'Export to Computer...', icon: <IconUpload size={14} />, shortcut: kbd('file.export'), action: () => {
         store.set(exportModalAtom, {
           open: true, fileCount: node.count ?? 0,
           target: queryTarget({ kind: 'folder', folder_id: folderId }),
@@ -509,7 +658,7 @@ export function Sidebar() {
       } },
     ];
     contextMenu.open(e, entries);
-  }, [contextMenu, folderRename, collapsed, toggleCollapse]);
+  }, [contextMenu, folderRename, collapsed, toggleCollapse, folderNodes, setFolderPortal, expandableNodeIds, setNodesExpanded, quickAccessIds, openFolderAutoTags]);
 
   const openSmartFolderMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
     setContextMenuNodeId(node.id);
@@ -517,6 +666,11 @@ export function Sidebar() {
     const sfIdNum = parseSmartFolderIdNum(node.id);
     if (sfId == null) return;
     const currentPayload = buildSmartFolderPayloadFromNode(node);
+    const isExpanded = !collapsed.has(node.id);
+    const hasChildren = smartList.some(({ node: child }) => child.parent_id === node.id);
+    const allExpandableIds = expandableNodeIds(smartFolderNodes);
+    const anyTreeExpanded = allExpandableIds.some((id) => !collapsed.has(id));
+    const moveTargets = availableTreeMoveTargetIds(smartFolderNodes, [node.id]);
     const entries: MenuEntry[] = [
       {
         label: 'Edit Smart Folder...',
@@ -533,7 +687,56 @@ export function Sidebar() {
         }),
       },
       { separator: true },
+      { label: quickAccessIds.includes(node.id) ? 'Remove from Quick Access' : 'Add to Quick Access', icon: quickAccessIds.includes(node.id) ? <IconStarOff size={14} /> : <IconStar size={14} />, action: () => {
+        void (quickAccessIds.includes(node.id) ? removeQuickAccess(node.id) : addQuickAccess(node.id));
+      } },
       { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
+      { submenu: true, label: 'Move to...', icon: <IconFolderOpen size={14} />, children: [
+        { label: 'Top Level', action: () => { if (sfIdNum != null) void smartFoldersController.move(sfIdNum, null, []); } },
+        ...moveTargets.map((targetNodeId) => {
+          const target = smartFolderNodes.find((candidate) => candidate.id === targetNodeId)!;
+          return {
+            label: target.name,
+            action: () => {
+              const targetId = parseSmartFolderIdNum(targetNodeId);
+              if (sfIdNum != null && targetId != null) void smartFoldersController.move(sfIdNum, targetId, []);
+            },
+          } as MenuEntry;
+        }),
+      ] },
+      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => {
+        void (async () => {
+          const name = `${node.name} copy`;
+          const duplicateId = await smartFoldersController.create({
+            ...currentPayload,
+            smart_folder_id: 0,
+            name,
+          });
+          folderRename.startRename(duplicateId, name);
+        })();
+      } },
+      { separator: true },
+      {
+        label: 'Sort Results by Name', icon: <IconSort size={14} />, action: () => {
+          if (sfIdNum != null) void smartFoldersController.update(sfIdNum, {
+            ...currentPayload,
+            sort_field: 'name',
+            sort_order: 'ascending',
+          });
+        },
+      },
+      {
+        label: isExpanded ? 'Collapse Smart Folder' : 'Expand Smart Folder',
+        icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
+        action: () => { if (hasChildren) toggleCollapse(node.id); },
+        disabled: !hasChildren,
+      },
+      {
+        label: anyTreeExpanded ? 'Collapse All Smart Folders' : 'Expand All Smart Folders',
+        icon: anyTreeExpanded ? <IconCollapseAll size={14} /> : <IconExpandAll size={14} />,
+        action: () => setNodesExpanded(allExpandableIds, !anyTreeExpanded),
+        disabled: allExpandableIds.length === 0,
+      },
       { separator: true },
       { submenu: true, label: 'Change Icon', icon: <IconChangeIcon size={14} />, children: [
         { custom: true, key: 'sf-icon', render: () => (
@@ -570,7 +773,51 @@ export function Sidebar() {
       } },
     ];
     contextMenu.open(e, entries);
-  }, [contextMenu, folderRename, openSmartFolderModal]);
+  }, [collapsed, contextMenu, expandableNodeIds, folderRename, openSmartFolderModal, setNodesExpanded, smartFolderNodes, smartList, toggleCollapse, quickAccessIds]);
+
+  const openSystemMenu = useCallback((event: React.MouseEvent, node: SidebarNodeDto) => {
+    if (node.id === 'system:recent_viewed') {
+      contextMenu.open(event, [{
+        label: 'Clear Recently Viewed',
+        icon: <IconTrash size={14} />,
+        disabled: (node.count ?? 0) === 0,
+        action: () => {
+          void clearRecentViews()
+            .then(() => announceUndoableMutation('items.clear_recent_views'));
+        },
+      }], { showSearch: false });
+      return;
+    }
+    if (node.id !== 'system:trash') return;
+    const target = queryTarget({ kind: 'trash' });
+    const disabled = (node.count ?? 0) === 0;
+    contextMenu.open(event, [
+      {
+        label: 'Empty Trash',
+        icon: <IconTrash size={14} />,
+        disabled,
+        danger: true,
+        keywords: 'delete remove trash permanently',
+        action: () => {
+          store.set(confirmModalAtom, {
+            open: true,
+            title: 'Empty Trash',
+            message: 'Permanently delete every item in Trash? This cannot be undone.',
+            confirmLabel: 'Delete All',
+            danger: true,
+            onConfirm: () => entityMutations.permanentlyDeleteTarget(target),
+          });
+        },
+      },
+      {
+        label: 'Restore All',
+        icon: <IconDownload size={14} />,
+        disabled,
+        keywords: 'restore recover trash',
+        action: () => { void entityMutations.setTargetLifecycle(target, 'active'); },
+      },
+    ], { showSearch: false });
+  }, [contextMenu]);
 
   // ── Bulk context menu ──────────────────────────────────────────
 
@@ -582,6 +829,134 @@ export function Sidebar() {
     const allSmart = folderIds.length === 0;
 
     const entries: MenuEntry[] = [];
+    const selectedIds = [...sel].filter((id) => id.startsWith('folder:') || id.startsWith('smart:'));
+    const selectedQuickIds = selectedIds.filter((id) => quickAccessIds.includes(id));
+    const selectedNonQuickIds = selectedIds.filter((id) => !quickAccessIds.includes(id));
+    if (selectedNonQuickIds.length > 0) {
+      entries.push({
+        label: 'Add to Quick Access', icon: <IconStar size={14} />,
+        action: () => { void reorderQuickAccess([...quickAccessIds, ...selectedNonQuickIds]); },
+      });
+    }
+    if (selectedQuickIds.length > 0) {
+      entries.push({
+        label: 'Remove from Quick Access', icon: <IconStarOff size={14} />,
+        action: () => { void reorderQuickAccess(quickAccessIds.filter((id) => !selectedQuickIds.includes(id))); },
+      });
+    }
+    entries.push({
+      label: `Duplicate ${selectedIds.length} item${selectedIds.length === 1 ? '' : 's'}`,
+      icon: <IconCopy size={14} />,
+      action: () => {
+        void Promise.all([
+          ...folderIds.map((id) => {
+            const folderId = parseFolderId(id);
+            return folderId == null ? Promise.resolve() : foldersController.duplicate(folderId);
+          }),
+          ...smartIds.map((id) => {
+            const node = smartFolderNodes.find((candidate) => candidate.id === id);
+            if (!node) return Promise.resolve();
+            return smartFoldersController.create({
+              ...buildSmartFolderPayloadFromNode(node),
+              smart_folder_id: 0,
+              name: `${node.name} copy`,
+            });
+          }),
+        ]);
+      },
+    });
+    if (allFolders) {
+      const autoTagFolderIds = folderIds.map(parseFolderId).filter((id): id is number => id != null);
+      entries.push({
+        label: 'Set Auto Tags...', icon: <IconTags size={14} />, shortcut: kbd('folder.autoTags'),
+        action: () => { void openFolderAutoTags(autoTagFolderIds, { x: e.clientX, y: e.clientY }); },
+      });
+    }
+    entries.push({ separator: true });
+
+    if (allFolders) {
+      const movingIds = deduplicateParentChild(folderIds, folderNodes);
+      const availableIds = new Set(availableTreeMoveTargetIds(folderNodes, movingIds));
+      const movingFolderIds = movingIds.map(parseFolderId).filter((id): id is number => id != null);
+      const parentIds = movingIds.map((id) => folderNodes.find((node) => node.id === id)?.parent_id ?? null);
+      const sharedParent = parentIds.every((parentId) => parentId === parentIds[0])
+        ? parseFolderId(parentIds[0] ?? '')
+        : null;
+      entries.push({
+        label: 'Move to...', icon: <IconFolderOpen size={14} />, action: () => {
+          setFolderPortal({
+            open: true,
+            anchor: { x: e.clientX, y: e.clientY },
+            selectedFolderIds: sharedParent == null ? [] : [sharedParent],
+            availableFolderIds: folderNodes
+              .map((candidate) => parseFolderId(candidate.id))
+              .filter((id): id is number => id != null && availableIds.has(`folder:${id}`)),
+            onApplyFolderParent: (parentId) => {
+              void Promise.all(movingFolderIds.map((folderId) => foldersController.move(folderId, parentId, [])));
+            },
+          });
+        },
+      });
+      entries.push({
+        label: 'Sort Contents by Name', icon: <IconSort size={14} />,
+        action: () => { void Promise.all(movingFolderIds.map((folderId) => foldersController.sortByName(folderId))); },
+      });
+    } else if (allSmart) {
+      const movingIds = deduplicateParentChild(smartIds, smartFolderNodes);
+      const availableIds = availableTreeMoveTargetIds(smartFolderNodes, movingIds);
+      const movingSmartIds = movingIds.map(parseSmartFolderIdNum).filter((id): id is number => id != null);
+      entries.push({ submenu: true, label: 'Move to...', icon: <IconFolderOpen size={14} />, children: [
+        {
+          label: 'Top Level',
+          action: () => { void Promise.all(movingSmartIds.map((id) => smartFoldersController.move(id, null, []))); },
+        },
+        ...availableIds.map((targetNodeId) => {
+          const target = smartFolderNodes.find((candidate) => candidate.id === targetNodeId)!;
+          return {
+            label: target.name,
+            action: () => {
+              const parentId = parseSmartFolderIdNum(targetNodeId);
+              if (parentId != null) void Promise.all(movingSmartIds.map((id) => smartFoldersController.move(id, parentId, [])));
+            },
+          } as MenuEntry;
+        }),
+      ] });
+      entries.push({
+        label: 'Sort Results by Name', icon: <IconSort size={14} />,
+        action: () => {
+          void Promise.all(movingIds.map((id) => {
+            const node = smartFolderNodes.find((candidate) => candidate.id === id);
+            const smartFolderId = parseSmartFolderIdNum(id);
+            if (!node || smartFolderId == null) return Promise.resolve();
+            return smartFoldersController.update(smartFolderId, {
+              ...buildSmartFolderPayloadFromNode(node),
+              sort_field: 'name',
+              sort_order: 'ascending',
+            });
+          }));
+        },
+      });
+    }
+
+    if (allFolders || allSmart) {
+      const treeNodes = allFolders ? folderNodes : smartFolderNodes;
+      const selectedIds = allFolders ? folderIds : smartIds;
+      const expandable = new Set(expandableNodeIds(treeNodes));
+      const expandableSelected = selectedIds.filter((id) => expandable.has(id));
+      const hasCollapsed = expandableSelected.some((id) => collapsed.has(id));
+      const hasExpanded = expandableSelected.some((id) => !collapsed.has(id));
+      entries.push({
+        label: 'Expand Selected', icon: <IconExpand size={14} />,
+        action: () => setNodesExpanded(expandableSelected, true),
+        disabled: !hasCollapsed,
+      });
+      entries.push({
+        label: 'Collapse Selected', icon: <IconCollapse size={14} />,
+        action: () => setNodesExpanded(expandableSelected, false),
+        disabled: !hasExpanded,
+      });
+      entries.push({ separator: true });
+    }
 
     // Change Color — only when all same type
     if (allFolders || allSmart) {
@@ -603,31 +978,6 @@ export function Sidebar() {
           }} />
         ),
       });
-      entries.push({ separator: true });
-    }
-
-    // Export — first selected folder or smart folder
-    if (folderIds.length > 0 || smartIds.length > 0) {
-      entries.push({ label: 'Export All...', icon: <IconUpload size={14} />, action: () => {
-        // Export the first selected item (bulk export of multiple scopes isn't supported)
-        if (folderIds.length > 0) {
-          const fid = parseFolderId(folderIds[0]);
-          if (fid != null) {
-            store.set(exportModalAtom, {
-              open: true, fileCount: 0,
-              target: queryTarget({ kind: 'folder', folder_id: fid }),
-            });
-          }
-        } else {
-          const sfid = parseSmartFolderIdNum(smartIds[0]);
-          if (sfid != null) {
-            store.set(exportModalAtom, {
-              open: true, fileCount: 0,
-              target: queryTarget({ kind: 'smart_folder', smart_folder_id: sfid }),
-            });
-          }
-        }
-      } });
       entries.push({ separator: true });
     }
 
@@ -657,7 +1007,7 @@ export function Sidebar() {
 
     setContextMenuNodeId(null);
     contextMenu.open(e, entries);
-  }, [contextMenu, sidebarSelection, smartFolderNodes]);
+  }, [collapsed, contextMenu, expandableNodeIds, folderNodes, setFolderPortal, setNodesExpanded, sidebarSelection, smartFolderNodes, quickAccessIds, openFolderAutoTags]);
 
   /** Unified context menu handler — dispatches to bulk or single. */
   const handleFolderContextMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
@@ -704,10 +1054,39 @@ export function Sidebar() {
               count={node.count}
               active={activeNodeId === node.id}
               onClick={() => { if (node.selectable) { setSidebarSelection(new Set()); navigate(node.id); } }}
+              onContextMenu={(event) => openSystemMenu(event, node)}
               dropDataAttr={statusDrop ? { key: 'status-drop', value: statusDrop } : undefined}
             />
           );
         })}
+
+        {quickAccessNodes.length > 0 && (
+          <>
+            <SidebarRow
+              variant="section"
+              label="Quick Access"
+              count={quickAccessNodes.length}
+              expanded={!collapsed.has('quick_access')}
+              onToggle={() => toggleCollapse('quick_access')}
+            />
+            {!collapsed.has('quick_access') && quickAccessNodes.map((node) => (
+              <SidebarRow
+                key={`quick-${node.id}`}
+                variant={node.kind === 'folder' ? 'folder' : 'smart_folder'}
+                icon={<NodeIcon node={node} expanded={false} />}
+                label={node.name}
+                count={node.count}
+                active={activeNodeId === node.id}
+                contextHighlight={contextMenuNodeId === node.id}
+                onClick={(event) => handleRowClick(node.id, event)}
+                onContextMenu={(event) => {
+                  if (node.kind === 'folder') handleFolderContextMenu(event, node);
+                  else handleSmartFolderContextMenu(event, node);
+                }}
+              />
+            ))}
+          </>
+        )}
 
         {/* Folders */}
         <SidebarRow

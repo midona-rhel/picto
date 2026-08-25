@@ -81,19 +81,16 @@ export function resolveDuplicatePair(
   pair: DuplicatePair,
 ): Promise<DuplicateResolutionResult> {
   if (action === 'smart_merge') {
-    if (pair.decision === 'NeedsChoice') {
-      return Promise.resolve({
-        status: 'quality_ambiguous',
-        choice: 'KeepBoth',
-        affected_item_ids: [],
-        freed_file_hash: null,
-        receipt: { revision: 0, resources: [], item_ids: [] },
-      });
-    }
-    const { similarity_pct: _similarity, status: _status, ...candidate } = pair;
-    return invoke<ResolutionResult>('duplicates.resolve_automatically', {
-      candidate,
-    }).then((result) => ({ ...result, status: 'resolved' }));
+    return invoke<ResolutionResult | null>('duplicates.resolve_automatically', {
+      file_id_a: pair.file_id_a,
+      file_id_b: pair.file_id_b,
+    }).then((result) => result == null ? {
+      status: 'quality_ambiguous',
+      choice: 'KeepBoth',
+      affected_item_ids: [],
+      freed_file_hash: null,
+      receipt: { revision: 0, resources: [], item_ids: [] },
+    } : { ...result, status: 'resolved' });
   }
 
   return invoke<ResolutionResult>('duplicates.resolve', {

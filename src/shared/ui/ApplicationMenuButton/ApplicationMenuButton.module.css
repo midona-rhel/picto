@@ -1,13 +1,16 @@
 .button {
   composes: iconBtn from '../../styles/iconButton.module.css';
-  position: absolute;
-  top: 10px;
-  right: 10px;
-  z-index: var(--layer-menu);
   width: 28px;
   height: var(--control-height-md);
   color: var(--color-text-secondary);
-  background: var(--color-surface-1);
-  border: 1px solid var(--color-border-secondary);
-  box-shadow: 0 2px 8px rgb(0 0 0 / 16%);
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+
+.icon {
+  width: 16px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
 }

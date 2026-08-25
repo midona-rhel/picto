@@ -39,11 +39,11 @@
 }
 
 .btn.closeBtn:hover {
-  color: rgba(255, 255, 255, 0.99);
+  color: var(--color-on-primary);
   background: #e81123;
 }
 
 .btn.closeBtn:active {
-  color: rgba(255, 255, 255, 0.99);
+  color: var(--color-on-primary);
   background: #c50f1f;
 }

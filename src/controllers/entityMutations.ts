@@ -5,6 +5,7 @@
  * No optimistic updates — wait for backend confirmation + re-fetch.
  */
 
+import { getDefaultStore } from 'jotai';
 import {
   applyEntityTags,
   deleteItems,
@@ -19,6 +20,10 @@ import { recordRecentItems } from '../shared/hooks/useRecentItems';
 import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
 import type { SelectionSummary } from '../shared/types/generated/application/SelectionSummary';
+import { clearSelectionAtom } from '../state/selection';
+import { announceUndoableMutation } from '../runtime/historyRuntime';
+
+const store = getDefaultStore();
 
 function singleTarget(itemId: number): ItemTarget {
   return { kind: 'explicit', item_ids: [itemId] };
@@ -31,29 +36,39 @@ function maybeReloadSingleItem(target: ItemTarget): void {
   }
 }
 
+/** A successful mutation removed or relocated the grid selection as a unit. */
+export function settleSelectionAfterMutation(): void {
+  store.set(clearSelectionAtom);
+}
+
 export async function setTargetRating(target: ItemTarget, rating: number): Promise<void> {
   await patchMediaEntities(target, { rating });
+  await announceUndoableMutation('items.patch_metadata');
   maybeReloadSingleItem(target);
 }
 
 export async function setItemName(itemId: number, name: string): Promise<void> {
   await renameItem(itemId, name);
+  await announceUndoableMutation('items.rename');
   void loadInspectorData(itemId);
 }
 
 export async function setTargetNotes(target: ItemTarget, notes: string): Promise<void> {
   await patchMediaEntities(target, { notes: notes.trim() || null });
+  await announceUndoableMutation('items.patch_metadata');
   maybeReloadSingleItem(target);
 }
 
 export async function setTargetSourceUrls(target: ItemTarget, urls: string[]): Promise<void> {
   await patchMediaEntities(target, { source_urls: urls });
+  await announceUndoableMutation('items.patch_metadata');
   maybeReloadSingleItem(target);
 }
 
 export async function addTargetTags(target: ItemTarget, tags: string[]): Promise<void> {
   if (tags.length === 0) return;
   await applyEntityTags(target, 'add', tags);
+  await announceUndoableMutation('items.apply_tags');
   recordRecentItems('picto-recent-tags', tags);
   maybeReloadSingleItem(target);
 }
@@ -61,16 +76,19 @@ export async function addTargetTags(target: ItemTarget, tags: string[]): Promise
 export async function removeTargetTags(target: ItemTarget, tags: string[]): Promise<void> {
   if (tags.length === 0) return;
   await applyEntityTags(target, 'remove', tags);
+  await announceUndoableMutation('items.apply_tags');
   maybeReloadSingleItem(target);
 }
 
 export async function setTargetLifecycle(target: ItemTarget, lifecycle: Lifecycle): Promise<void> {
   await setItemLifecycle(target, lifecycle);
-  maybeReloadSingleItem(target);
+  await announceUndoableMutation('items.set_lifecycle');
+  settleSelectionAfterMutation();
 }
 
 export async function permanentlyDeleteTarget(target: ItemTarget): Promise<void> {
   await deleteItems(target);
+  settleSelectionAfterMutation();
 }
 
 export async function updateTargetFolderMembership(
@@ -79,6 +97,7 @@ export async function updateTargetFolderMembership(
   operation: 'add' | 'remove',
 ): Promise<void> {
   await updateFolderMembership(target, folderId, operation);
+  await announceUndoableMutation('items.set_folder');
   if (operation === 'add') recordRecentItems('picto-recent-folders', [String(folderId)]);
   maybeReloadSingleItem(target);
 }

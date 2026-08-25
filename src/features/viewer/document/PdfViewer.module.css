@@ -1,0 +1,32 @@
+.page {
+  position: relative;
+  display: block;
+  background: #fff;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.34);
+}
+
+.page canvas { display: block; }
+
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  opacity: 1;
+  line-height: 1;
+  text-size-adjust: none;
+  transform-origin: 0 0;
+  forced-color-adjust: none;
+}
+
+.textLayer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+
+.textLayer ::selection {
+  color: transparent;
+  background: color-mix(in srgb, var(--color-accent) 42%, transparent);
+}

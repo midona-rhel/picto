@@ -5,7 +5,7 @@
  * buttons are right-aligned in the titlebar-left section.
  */
 
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState, type CSSProperties } from 'react';
 import { isNativeDragPending as isNativeDragPendingFn } from '../features/grid/dragState';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { IconSettings, IconPin, IconPinFilled } from '@tabler/icons-react';
@@ -17,34 +17,73 @@ import { TagsToolbar } from '../features/tags/TagManagerScreen';
 import { DuplicatesToolbar } from '../features/duplicates/DuplicatesScreen';
 import { Inspector } from '../features/inspector/Inspector';
 import { ModalLayer } from '../features/modals/ModalLayer';
+import { TagSelectPanel } from '../features/tags/TagSelectPanel';
+import { FolderPickerPanel } from '../features/folders/FolderPickerPanel';
+import { AiTaggerPanel } from '../features/ai-tagger/AiTaggerPanel';
+import { DiagnosticsPanel } from '../features/diagnostics/DiagnosticsPanel';
+import { listen } from '../platform/ipc';
 import {
   sidebarCollapsedAtom, toggleSidebarAtom,
-  inspectorCollapsedAtom, toggleInspectorAtom,
+  inspectorCollapsedAtom, toggleInspectorAtom, toggleBothPanelsAtom,
   inspectorWidthAtom, setInspectorWidthAtom,
   INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH,
-  activeNodeIdAtom,
   displayedSurfaceNodeIdAtom,
   showTreeGuidesAtom,
 } from '../state/navigation';
 import { sidebarNodesAtom } from '../state/sidebar';
 import { gridActiveAtom, gridScopeLabelAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
-import { viewerSessionAtom } from '../state/viewer';
+import { viewerExitTransitionAtom, viewerSessionAtom } from '../state/viewer';
 import { startAppRuntime } from '../runtime/appRuntime';
 import { registerAppSettingsReload } from '../runtime/appSettingsSettle';
+import { useShortcutScope } from '../shared/hooks/useShortcutScope';
 import { zoomController } from '../controllers/zoomController';
-import { canGoBackAtom, canGoForwardAtom, goBack, goForward, pushHistory, pushSubscriptionsHistory } from '../state/navigationHistory';
+import { canGoBackAtom, canGoForwardAtom, goBack, goForward, navigateToNode, pushSubscriptionsHistory } from '../state/navigationHistory';
 import { subscriptionsSelectionAtom, subscriptionsWorkspaceSnapshotAtom } from '../state/subscriptionsWorkspace';
-import { getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
+import { formatKeysDisplay, getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
 import { KbdTooltip } from '../shared/ui/KbdTooltip';
+import { ContextMenu, useContextMenu } from '../shared/ui/ContextMenu/ContextMenu';
+import type { MenuEntry } from '../shared/ui/ContextMenu/ContextMenu';
 import { TitlebarControlButton } from '../shared/ui/TitlebarControls';
 import { WindowControls } from '../shared/ui/WindowControls';
+import { ApplicationMenuButton } from '../shared/ui/ApplicationMenuButton/ApplicationMenuButton';
 import { appController } from '../controllers/appController';
 import { settingsController } from '../controllers/settingsController';
-import { isEditableTarget } from './editableTarget';
+import { aiTaggerPortalAtom, folderPickerPortalAtom, tagSelectPortalAtom } from '../state/portals';
 import styles from './AppShell.module.css';
 
 const isMacPlatform = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+
+export function buildPanelVisibilityContextEntries({
+  toggleAll,
+  toggleSidebar,
+  toggleInspector,
+}: {
+  toggleAll: () => void;
+  toggleSidebar: () => void;
+  toggleInspector: () => void;
+}): MenuEntry[] {
+  return [
+    {
+      label: 'Toggle All Panels',
+      shortcut: formatKeysDisplay(getShortcut('view.toggleBothPanels')!.keys),
+      action: toggleAll,
+      keepOpen: true,
+    },
+    {
+      label: 'Toggle Sidebar',
+      shortcut: formatKeysDisplay(getShortcut('view.toggleSidebar')!.keys),
+      action: toggleSidebar,
+      keepOpen: true,
+    },
+    {
+      label: 'Toggle Inspector',
+      shortcut: formatKeysDisplay(getShortcut('view.toggleInspector')!.keys),
+      action: toggleInspector,
+      keepOpen: true,
+    },
+  ];
+}
 
 function InspectorTitlebarActions() {
   const isPinned = useAtomValue(inspectorPinnedAtom);
@@ -86,20 +125,19 @@ function buildBreadcrumbPath(
 /** Scope title — shows the full breadcrumb path for folders and smart folders. */
 function ScopeTitle() {
   const gridActive = useAtomValue(gridActiveAtom);
+  const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
   const frozenLabel = useAtomValue(displayedScopeLabelAtom);
   const liveLabel = useAtomValue(gridScopeLabelAtom);
   const label = gridActive ? (frozenLabel || liveLabel) : liveLabel;
   const snapshot = useAtomValue(displayedGridSnapshotAtom);
   const nodes = useAtomValue(sidebarNodesAtom);
   const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
-  const setActiveNodeId = useSetAtom(activeNodeIdAtom);
   const [subsSelection, setSubsSelection] = useAtom(subscriptionsSelectionAtom);
   const subsSnapshot = useAtomValue(subscriptionsWorkspaceSnapshotAtom);
-
-  const navigateToNode = (nodeId: string) => {
-    setActiveNodeId(nodeId);
-    pushHistory(nodeId);
-  };
+  const titleProps = {
+    className: styles.scopeTitle,
+    'data-transition-phase': transitionPhase,
+  } as const;
 
   // Subscription breadcrumb: Subscriptions [/ Subscription].
   if (displayedSurfaceNodeId === 'system:subscriptions') {
@@ -108,11 +146,11 @@ function ScopeTitle() {
         ? subsSnapshot?.subscriptions.find((sub) => sub.id === subsSelection.id) ?? null
         : null;
     const leafName = selectedSub?.name ?? null;
-    if (!leafName) return <span className={styles.scopeTitle}>Subscriptions</span>;
+    if (!leafName) return <span {...titleProps}>Subscriptions</span>;
 
     const crumbSeparator = <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>;
     return (
-      <span className={styles.scopeTitle}>
+      <span {...titleProps}>
         <button
           type="button"
           className={styles.scopeCrumbLink}
@@ -130,11 +168,11 @@ function ScopeTitle() {
   }
 
   if (displayedSurfaceNodeId === 'system:duplicates') {
-    return <span className={styles.scopeTitle}>Duplicates</span>;
+    return <span {...titleProps}>Duplicates</span>;
   }
 
   if (displayedSurfaceNodeId === 'system:tag_manager') {
-    return <span className={styles.scopeTitle}>Tags</span>;
+    return <span {...titleProps}>Tags</span>;
   }
 
   if (!label) return null;
@@ -146,7 +184,7 @@ function ScopeTitle() {
     const path = buildBreadcrumbPath(displayedNodeId, nodes);
     if (path.length > 1) {
       return (
-        <span className={styles.scopeTitle}>
+        <span {...titleProps}>
           {path.map((seg, i) => (
             <span key={seg.id}>
               {i > 0 && <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>}
@@ -164,32 +202,59 @@ function ScopeTitle() {
     }
   }
 
-  return <span className={styles.scopeTitle}>{label}</span>;
+  return <span {...titleProps}>{label}</span>;
 }
 
 export function AppShell() {
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const inspectorCollapsed = useAtomValue(inspectorCollapsedAtom);
   const gridActive = useAtomValue(gridActiveAtom);
   const displayedSurfaceNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
   const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
   const viewerSession = useAtomValue(viewerSessionAtom);
+  const viewerExitTransition = useAtomValue(viewerExitTransitionAtom);
   const canBack = useAtomValue(canGoBackAtom);
   const canForward = useAtomValue(canGoForwardAtom);
   const inspectorWidth = useAtomValue(inspectorWidthAtom);
   const setInspectorWidth = useSetAtom(setInspectorWidthAtom);
   const toggleSidebar = useSetAtom(toggleSidebarAtom);
   const toggleInspector = useSetAtom(toggleInspectorAtom);
-  const setActiveNodeId = useSetAtom(activeNodeIdAtom);
-  const toggleBothPanels = () => { toggleSidebar(); toggleInspector(); };
+  const toggleBothPanels = useSetAtom(toggleBothPanelsAtom);
+  const panelMenu = useContextMenu();
+  const setTagSelectPortal = useSetAtom(tagSelectPortalAtom);
+  const setFolderPickerPortal = useSetAtom(folderPickerPortalAtom);
+  const setAiTaggerPortal = useSetAtom(aiTaggerPortalAtom);
   const isSubscriptionsWorkspace = displayedSurfaceNodeId === 'system:subscriptions';
+  const reserveInspectorTitlebar = gridActive && !isSubscriptionsWorkspace;
   const titlebarLeftClass = sidebarCollapsed
     ? (isMacPlatform ? styles.titlebarLeftPanelHiddenMac : styles.titlebarLeftPanelHidden)
-    : styles.titlebarLeft;
+    : (isMacPlatform ? styles.titlebarLeftMac : styles.titlebarLeft);
+
+  useEffect(() => {
+    setTagSelectPortal({ open: false, anchor: null });
+    setFolderPickerPortal({ open: false, anchor: null });
+    setAiTaggerPortal({ open: false, anchor: null });
+  }, [displayedSurfaceNodeId, setTagSelectPortal, setFolderPickerPortal, setAiTaggerPortal]);
+
+  useEffect(() => {
+    let stopped = false;
+    let dispose: (() => void) | undefined;
+    void listen('menu:toggle-diagnostics', () => setDiagnosticsOpen((open) => !open))
+      .then((unlisten) => {
+        if (stopped) unlisten();
+        else dispose = unlisten;
+      });
+    return () => {
+      stopped = true;
+      dispose?.();
+    };
+  }, []);
 
 
   // ── Inspector resize drag ──
   const inspectorDragRef = useRef({ dragging: false, startX: 0, startWidth: 0 });
+  const shellRef = useRef<HTMLDivElement>(null);
   const inspectorElRef = useRef<HTMLDivElement>(null);
   const onInspectorResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -207,7 +272,7 @@ export function AppShell() {
       rafId = 0;
       if (pendingWidth < 0) return;
       if (el) el.style.width = `${pendingWidth}px`;
-      document.documentElement.style.setProperty('--inspector-width', `${pendingWidth}px`);
+      shellRef.current?.style.setProperty('--inspector-width', `${pendingWidth}px`);
       pendingWidth = -1;
     };
     const onMove = (ev: MouseEvent) => {
@@ -230,47 +295,23 @@ export function AppShell() {
     document.addEventListener('mouseup', onUp);
   }, [inspectorWidth, setInspectorWidth]);
 
-  // Keep --inspector-width CSS variable in sync
   const setShowTreeGuides = useSetAtom(showTreeGuidesAtom);
 
   useEffect(() => {
     const stopRuntime = startAppRuntime();
 
-    const applyTheme = (theme: string) => {
-      const lightThemes = new Set(['light', 'lightgray']);
-      const resolved = theme === 'auto'
-        ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-        : theme;
-      document.documentElement.dataset.theme = theme === 'auto' ? '' : theme;
-      document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-      document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-      localStorage.setItem('picto-theme', theme);
-    };
-
     const loadAppSettings = () => {
       settingsController.getSettings().then((s) => {
         setShowTreeGuides(s.showTreeGuides ?? true);
-        if (s.colorScheme) applyTheme(s.colorScheme);
       }).catch(() => {});
     };
 
     loadAppSettings();
 
     const unregisterSettingsReload = registerAppSettingsReload(loadAppSettings);
-    let unlistenOsTheme: (() => void) | undefined;
-    void appController.subscribeOsThemeChanged(({ isDark }) => {
-      const currentTheme = localStorage.getItem('picto-theme');
-      if (currentTheme !== 'auto') return;
-      const resolved = isDark ? 'dark' : 'light';
-      const lightThemes = new Set(['light', 'lightgray']);
-      document.documentElement.dataset.theme = '';
-      document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-      document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-    }).then((fn) => { unlistenOsTheme = fn; });
     return () => {
       stopRuntime();
       unregisterSettingsReload();
-      unlistenOsTheme?.();
     };
   }, []);
 
@@ -290,8 +331,7 @@ export function AppShell() {
       if (cancelled) return;
       const nextNodeId = scopeMap[destination];
       if (!nextNodeId) return;
-      setActiveNodeId(nextNodeId);
-      pushHistory(nextNodeId);
+      navigateToNode(nextNodeId);
     }).then((dispose) => {
       if (cancelled) {
         dispose();
@@ -306,7 +346,7 @@ export function AppShell() {
       cancelled = true;
       if (unlisten) unlisten();
     };
-  }, [setActiveNodeId]);
+  }, []);
 
   // ── Re-import guard — prevent dropping files back into the app during a native drag ──
   useEffect(() => {
@@ -328,7 +368,7 @@ export function AppShell() {
   }, []);
 
   // App-wide keyboard shortcuts — uses registry defs so keys2 (EU alternatives) work
-  useEffect(() => {
+  useShortcutScope((e) => {
     const defs = {
       sidebar:    getShortcut('view.toggleSidebar')!,
       inspector:  getShortcut('view.toggleInspector')!,
@@ -338,41 +378,36 @@ export function AppShell() {
       forward:    getShortcut('nav.forward')!,
     };
 
-    function handleKeyDown(e: KeyboardEvent) {
-      if (isEditableTarget(e.target)) return;
+    // Suppress browser Tab focus navigation (but let it fall through to shortcut matching).
+    if (e.key === 'Tab') e.preventDefault();
 
-      // Suppress browser Tab focus navigation (but let it fall through to shortcut matching)
-      if (e.key === 'Tab') e.preventDefault();
+    if (matchesShortcutDef(e, defs.sidebar))   { e.preventDefault(); toggleSidebar(); return; }
+    if (matchesShortcutDef(e, defs.settings))  { e.preventDefault(); openSettings(); return; }
+    if (matchesShortcutDef(e, defs.inspector)) { e.preventDefault(); toggleInspector(); return; }
+    if (matchesShortcutDef(e, defs.back))      { e.preventDefault(); goBack(); return; }
+    if (matchesShortcutDef(e, defs.forward))   { e.preventDefault(); goForward(); return; }
+    if (matchesShortcutDef(e, defs.panels))    { e.preventDefault(); toggleBothPanels(); return; }
 
-      if (matchesShortcutDef(e, defs.sidebar))   { e.preventDefault(); toggleSidebar(); return; }
-      if (matchesShortcutDef(e, defs.settings))   { e.preventDefault(); openSettings(); return; }
-      if (matchesShortcutDef(e, defs.inspector))  { e.preventDefault(); toggleInspector(); return; }
-      if (matchesShortcutDef(e, defs.back))       { e.preventDefault(); goBack(); return; }
-      if (matchesShortcutDef(e, defs.forward))    { e.preventDefault(); goForward(); return; }
-      if (matchesShortcutDef(e, defs.panels))     { e.preventDefault(); toggleBothPanels(); return; }
-
-      // Zoom: Mod+= / Mod++ / Mod+- / Mod+0
-      if ((e.metaKey || e.ctrlKey) && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomController.zoomIn(); return; }
-      if ((e.metaKey || e.ctrlKey) && e.key === '-') { e.preventDefault(); zoomController.zoomOut(); return; }
-      if ((e.metaKey || e.ctrlKey) && e.key === '0') { e.preventDefault(); zoomController.resetZoom(); return; }
-    }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [toggleSidebar, toggleInspector, toggleBothPanels]);
+    // Zoom: Mod+= / Mod++ / Mod+- / Mod+0
+    if ((e.metaKey || e.ctrlKey) && (e.key === '=' || e.key === '+')) { e.preventDefault(); zoomController.zoomIn(); return; }
+    if ((e.metaKey || e.ctrlKey) && e.key === '-') { e.preventDefault(); zoomController.zoomOut(); return; }
+    if ((e.metaKey || e.ctrlKey) && e.key === '0') { e.preventDefault(); zoomController.resetZoom(); }
+  });
 
   const showInspector = gridActive && !inspectorCollapsed && !isSubscriptionsWorkspace;
 
-  useEffect(() => {
-    document.documentElement.style.setProperty(
-      '--inspector-width',
-      showInspector ? `${inspectorWidth}px` : '0px',
-    );
-  }, [showInspector, inspectorWidth]);
-
   return (
-    <div className={styles.shell}>
+    <div
+      ref={shellRef}
+      className={styles.shell}
+      style={{
+        '--inspector-width': showInspector ? `${inspectorWidth}px` : '0px',
+        '--titlebar-inspector-width': reserveInspectorTitlebar ? `${inspectorWidth}px` : '0px',
+      } as CSSProperties}
+    >
       <div className={styles.titlebar}>
         <div className={titlebarLeftClass}>
+          <ApplicationMenuButton />
           <div className={styles.titlebarActions}>
             <KbdTooltip label="Settings" shortcut="Mod+,">
               <button className={styles.toggleBtn} onClick={openSettings}>
@@ -380,38 +415,60 @@ export function AppShell() {
               </button>
             </KbdTooltip>
             <KbdTooltip label="Toggle Panels" shortcut="Tab">
-              <button className={styles.toggleBtn} onClick={toggleBothPanels}>
+              <button
+                className={styles.toggleBtn}
+                onClick={toggleBothPanels}
+                onContextMenu={(event) => panelMenu.open(event, buildPanelVisibilityContextEntries({
+                  toggleAll: toggleBothPanels,
+                  toggleSidebar,
+                  toggleInspector,
+                }), { showSearch: false })}
+              >
                 <ToolbarPanelIcon size={14} />
               </button>
             </KbdTooltip>
           </div>
         </div>
         <div className={styles.titlebarCenter}>
-          {viewerSession ? (
-            <ViewerToolbar />
-          ) : (
-            <>
-              <KbdTooltip label="Back" shortcut="Alt+ArrowLeft">
-                <TitlebarControlButton disabled={!canBack} onClick={canBack ? goBack : undefined}>
-                  <ToolbarHistoryIcon direction="back" />
-                </TitlebarControlButton>
-              </KbdTooltip>
-              <KbdTooltip label="Forward" shortcut="Alt+ArrowRight">
-                <TitlebarControlButton disabled={!canForward} onClick={canForward ? goForward : undefined}>
-                  <ToolbarHistoryIcon direction="forward" />
-                </TitlebarControlButton>
-              </KbdTooltip>
-              <ScopeTitle />
-              {gridActive && !isSubscriptionsWorkspace ? (
-                <GridToolbar />
-              ) : null}
-              {displayedSurfaceNodeId === 'system:duplicates' ? <DuplicatesToolbar /> : null}
-              {displayedSurfaceNodeId === 'system:tag_manager' ? <TagsToolbar /> : null}
-              {!showInspector && <WindowControls />}
-            </>
-          )}
+          <div
+            className={styles.titlebarContent}
+            data-viewer-exit-transition={viewerExitTransition || undefined}
+            data-transition-phase={transitionPhase}
+          >
+            {viewerSession ? (
+              <ViewerToolbar />
+            ) : (
+              <>
+                <KbdTooltip label="Back" shortcut="Alt+ArrowLeft">
+                  <TitlebarControlButton disabled={!canBack} onClick={canBack ? goBack : undefined}>
+                    <ToolbarHistoryIcon direction="back" />
+                  </TitlebarControlButton>
+                </KbdTooltip>
+                <KbdTooltip label="Forward" shortcut="Alt+ArrowRight">
+                  <TitlebarControlButton disabled={!canForward} onClick={canForward ? goForward : undefined}>
+                    <ToolbarHistoryIcon direction="forward" />
+                  </TitlebarControlButton>
+                </KbdTooltip>
+                <ScopeTitle />
+                {gridActive && !isSubscriptionsWorkspace ? (
+                  <GridToolbar />
+                ) : null}
+                {displayedSurfaceNodeId === 'system:duplicates' ? <DuplicatesToolbar /> : null}
+                {displayedSurfaceNodeId === 'system:tag_manager' && !gridActive ? <TagsToolbar /> : null}
+                {!reserveInspectorTitlebar && <WindowControls />}
+              </>
+            )}
+          </div>
         </div>
       </div>
+      {panelMenu.state && (
+        <ContextMenu
+          entries={panelMenu.state.entries}
+          position={panelMenu.state.position}
+          onClose={panelMenu.close}
+          showSearch={panelMenu.state.showSearch}
+        />
+      )}
 
       <div className={styles.body}>
         {!sidebarCollapsed && (
@@ -423,6 +480,11 @@ export function AppShell() {
           <WorkspaceSurface />
         </div>
       </div>
+      {reserveInspectorTitlebar && !showInspector && (
+        <div className={styles.titlebarInspectorHidden} style={{ width: inspectorWidth }}>
+          <WindowControls />
+        </div>
+      )}
       {showInspector && (
         <div
           ref={inspectorElRef}
@@ -439,6 +501,10 @@ export function AppShell() {
         </div>
       )}
       <ModalLayer />
+      <TagSelectPanel />
+      <FolderPickerPanel />
+      <AiTaggerPanel />
+      {diagnosticsOpen ? <DiagnosticsPanel onClose={() => setDiagnosticsOpen(false)} /> : null}
     </div>
   );
 }

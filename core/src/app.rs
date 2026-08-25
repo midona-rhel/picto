@@ -12,6 +12,9 @@ use ts_rs::TS;
 
 use crate::blob_store::BlobStore;
 use crate::projection_v2::ProjectionStore;
+use crate::store::history::{
+    HistoryDescriptor, HistoryDirection, HistoryEntrySummary, HistoryState,
+};
 use crate::store::Store;
 
 pub const LIBRARY_CHANGED_EVENT: &str = "library/changed";
@@ -80,15 +83,56 @@ pub enum ItemScope {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
+#[serde(rename_all = "snake_case")]
+pub enum FilterMatchMode {
+    #[default]
+    Any,
+    All,
+    Exact,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ItemFilters {
     #[serde(default)]
     pub include_tags: Vec<String>,
     #[serde(default)]
     pub exclude_tags: Vec<String>,
-    #[ts(type = "number | null")]
-    pub minimum_rating: Option<i64>,
-    pub mime_prefix: Option<String>,
+    #[serde(default)]
+    pub tag_match_mode: FilterMatchMode,
+    #[serde(default)]
+    #[ts(type = "Array<number>")]
+    pub include_folder_ids: Vec<i64>,
+    #[serde(default)]
+    #[ts(type = "Array<number>")]
+    pub exclude_folder_ids: Vec<i64>,
+    #[serde(default)]
+    pub folder_match_mode: FilterMatchMode,
+    #[serde(default)]
+    #[ts(type = "Array<number>")]
+    pub ratings: Vec<i64>,
+    #[serde(default)]
+    pub include_mime_types: Vec<String>,
+    #[serde(default)]
+    pub exclude_mime_types: Vec<String>,
     pub text: Option<String>,
+    pub color_hex: Option<String>,
+    pub imported_after: Option<String>,
+    pub imported_before: Option<String>,
+    pub modified_after: Option<String>,
+    pub modified_before: Option<String>,
+    pub min_duration_ms: Option<i64>,
+    pub max_duration_ms: Option<i64>,
+    pub min_size_bytes: Option<i64>,
+    pub max_size_bytes: Option<i64>,
+    pub min_width: Option<i64>,
+    pub max_width: Option<i64>,
+    pub min_height: Option<i64>,
+    pub max_height: Option<i64>,
+    pub notes_present: Option<bool>,
+    pub notes_contains: Option<String>,
+    pub source_url_present: Option<bool>,
+    pub source_url_contains: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -161,6 +205,13 @@ pub struct MutationReceipt {
     pub revision: u64,
     pub resources: Vec<String>,
     pub item_ids: Vec<ItemId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryOperationResult {
+    pub entry: HistoryEntrySummary,
+    pub state: HistoryState,
+    pub receipt: MutationReceipt,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -257,6 +308,104 @@ impl Application {
                 }
                 Ok(())
             })
+    }
+
+    pub fn undoable_transaction<T, D>(
+        &self,
+        descriptor: HistoryDescriptor,
+        operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<(T, D)>,
+        settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
+    ) -> Result<(T, u64, Option<HistoryEntrySummary>), String> {
+        let projections = Arc::clone(&self.projections);
+        self.store
+            .undoable_transaction_settled(descriptor, operation, move |connection, delta| {
+                if settle(&projections, delta).is_err() {
+                    projections.reload(connection)?;
+                }
+                Ok(())
+            })
+    }
+
+    pub fn undoable_transaction_if_changed<T, D>(
+        &self,
+        descriptor: HistoryDescriptor,
+        operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
+        settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
+    ) -> Result<(T, u64, Option<HistoryEntrySummary>, bool), String> {
+        let projections = Arc::clone(&self.projections);
+        self.store.undoable_transaction_if_changed_settled(
+            descriptor,
+            operation,
+            move |connection, delta| {
+                if settle(&projections, delta).is_err() {
+                    projections.reload(connection)?;
+                }
+                Ok(())
+            },
+        )
+    }
+
+    pub fn undoable_transaction_if_changed_rebuilding<T>(
+        &self,
+        descriptor: HistoryDescriptor,
+        operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<(T, bool)>,
+    ) -> Result<(T, u64, Option<HistoryEntrySummary>, bool), String> {
+        let projections = Arc::clone(&self.projections);
+        self.store.undoable_transaction_if_changed_settled(
+            descriptor.rebuilding_projections(),
+            |transaction| {
+                let (value, changed) = operation(transaction)?;
+                Ok((value, (), changed))
+            },
+            move |connection, ()| projections.reload(connection),
+        )
+    }
+
+    pub fn undoable_transaction_rebuilding<T>(
+        &self,
+        descriptor: HistoryDescriptor,
+        operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<T>,
+    ) -> Result<(T, u64, Option<HistoryEntrySummary>), String> {
+        let projections = Arc::clone(&self.projections);
+        self.store.undoable_transaction_settled(
+            descriptor.rebuilding_projections(),
+            |transaction| operation(transaction).map(|value| (value, ())),
+            move |connection, ()| projections.reload(connection),
+        )
+    }
+
+    pub fn history_state(&self) -> Result<HistoryState, String> {
+        self.store.history_state()
+    }
+
+    pub fn undo(&self) -> Result<HistoryOperationResult, String> {
+        self.apply_history(HistoryDirection::Undo)
+    }
+
+    pub fn redo(&self) -> Result<HistoryOperationResult, String> {
+        self.apply_history(HistoryDirection::Redo)
+    }
+
+    fn apply_history(&self, direction: HistoryDirection) -> Result<HistoryOperationResult, String> {
+        let projections = Arc::clone(&self.projections);
+        let mutation = self
+            .store
+            .apply_history(direction, move |connection, reload| {
+                if reload {
+                    projections.reload(connection)
+                } else {
+                    Ok(())
+                }
+            })?;
+        Ok(HistoryOperationResult {
+            entry: mutation.entry,
+            state: mutation.state,
+            receipt: MutationReceipt {
+                revision: mutation.revision,
+                resources: mutation.resources,
+                item_ids: mutation.item_ids.into_iter().map(ItemId).collect(),
+            },
+        })
     }
 
     pub fn transaction_rebuilding<T>(

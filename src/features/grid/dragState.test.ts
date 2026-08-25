@@ -78,4 +78,11 @@ describe('grid drag target resolution', () => {
     expect(isDragOwnedBy(owner)).toBe(true);
     expect(isDragOwnedBy(other)).toBe(false);
   });
+
+  it('owns the global hover-suppression flag only while dragging', () => {
+    startDrag([2], 0, 0, null);
+    expect(document.documentElement.dataset.gridDragActive).toBe('true');
+    cancelDrag();
+    expect(document.documentElement.dataset.gridDragActive).toBeUndefined();
+  });
 });

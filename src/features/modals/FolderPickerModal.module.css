@@ -25,6 +25,7 @@
   flex: 1;
   min-width: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 4px 0;
 }
 
@@ -71,7 +72,7 @@
 .checkRemove {
   background: var(--color-negative) !important;
   outline: 1px solid transparent !important;
-  color: rgba(255, 255, 255, 0.99) !important;
+  color: var(--color-on-primary) !important;
 }
 
 .emptyState { composes: emptyState from './SelectionModalShell.module.css'; }

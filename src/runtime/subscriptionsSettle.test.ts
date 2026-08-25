@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { getDefaultStore } from 'jotai';
 
 const { callbacks, register } = vi.hoisted(() => {
   const callbacks = new Map<string, () => void>();
@@ -35,6 +36,12 @@ vi.mock('../controllers/subscriptionsController', () => ({
 vi.mock('../shared/lib/notifications', () => ({ showErrorNotification }));
 
 import { refreshSubscriptionsWorkspace, startSubscriptionsSettle } from './subscriptionsSettle';
+import {
+  subscriptionsCoversAtom,
+  subscriptionsWorkspaceSnapshotAtom,
+} from '../state/subscriptionsWorkspace';
+
+const store = getDefaultStore();
 
 describe('subscription settlement', () => {
   afterEach(() => {
@@ -44,6 +51,8 @@ describe('subscription settlement', () => {
     refreshRuntimeState.mockClear();
     getCovers.mockClear();
     showErrorNotification.mockClear();
+    store.set(subscriptionsCoversAtom, new Map());
+    store.set(subscriptionsWorkspaceSnapshotAtom, null);
   });
 
   it('uses replacement resources and does not subscribe to legacy runtime events', () => {
@@ -84,5 +93,38 @@ describe('subscription settlement', () => {
       title: 'Subscriptions unavailable',
       message: 'backend unavailable',
     });
+  });
+
+  it('holds the cover stable while a run is active and updates it when the run finishes', async () => {
+    const oldCover = { file_hash: 'old', focus_x: 500, focus_y: 500, zoom_percent: 100 };
+    const newCover = { file_hash: 'new', focus_x: 500, focus_y: 500, zoom_percent: 100 };
+    store.set(subscriptionsCoversAtom, new Map([['1', oldCover]]));
+    loadWorkspaceSnapshot.mockResolvedValueOnce({
+      subscriptions: [],
+      sites: [],
+      credentials: [],
+      credentialHealth: [],
+      runningSubscriptionIds: ['1'],
+      runningProgress: [],
+      listMetrics: {},
+    });
+    getCovers.mockResolvedValueOnce(new Map([['1', newCover]]));
+
+    await refreshSubscriptionsWorkspace();
+    expect(store.get(subscriptionsCoversAtom).get('1')).toEqual(oldCover);
+
+    loadWorkspaceSnapshot.mockResolvedValueOnce({
+      subscriptions: [],
+      sites: [],
+      credentials: [],
+      credentialHealth: [],
+      runningSubscriptionIds: [],
+      runningProgress: [],
+      listMetrics: {},
+    });
+    getCovers.mockResolvedValueOnce(new Map([['1', newCover]]));
+
+    await refreshSubscriptionsWorkspace();
+    expect(store.get(subscriptionsCoversAtom).get('1')).toEqual(newCover);
   });
 });

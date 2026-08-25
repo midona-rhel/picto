@@ -8,6 +8,7 @@ import {
   IconBookmarks,
   IconPlus,
   IconSearch,
+  IconStar,
   IconTrash,
   IconX,
 } from '@tabler/icons-react';
@@ -26,6 +27,18 @@ import { EmptyState } from '../subscriptions/components/EmptyState';
 import { ActionButton } from '../subscriptions/components/ActionButton';
 import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { tagGroupColor, tagGroupOrder, tagGroupPresentation } from './tagGroupPresentation';
+import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { showTagManagerItems } from '../../controllers/gridNavigationController';
+import {
+  buildCommonTagContextEntries,
+  tagName,
+  tagNameInGroup,
+} from './tagContextMenu';
+import {
+  replaceStarredTag,
+  setTagStarred,
+  useTagPreferences,
+} from './tagPreferences';
 import styles from './TagManagerScreen.module.css';
 
 const PAGE_SIZE = 100;
@@ -40,11 +53,11 @@ type EditorAction =
   | null;
 
 function tagKey(tag: Pick<CanonicalTagRecord, 'namespace' | 'subtag'>): string {
-  return tag.namespace ? `${tag.namespace}:${tag.subtag}` : tag.subtag;
+  return tagName(tag);
 }
 
 function relationKey(relation: CanonicalTagRelation): string {
-  return relation.namespace ? `${relation.namespace}:${relation.subtag}` : relation.subtag;
+  return tagName(relation);
 }
 
 function errorMessage(reason: unknown): string {
@@ -287,6 +300,7 @@ export function TagManagerScreen() {
   const [tags, setTags] = useState<CanonicalTagRecord[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
   const [namespaces, setNamespaces] = useState<CanonicalNamespaceSummary[]>([]);
+  const [unusedCount, setUnusedCount] = useState(0);
   const query = useAtomValue(tagManagerQueryAtom);
   const [namespace, setNamespace] = useState<string | null>(null);
   const [selected, setSelected] = useState<CanonicalTagRecord | null>(null);
@@ -298,7 +312,9 @@ export function TagManagerScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editorAction, setEditorAction] = useState<EditorAction>(null);
+  const [cleanupOpen, setCleanupOpen] = useState(false);
   const [reloadToken, setReloadToken] = useState(0);
+  const [viewEpoch, setViewEpoch] = useState(0);
   const listGeneration = useRef(0);
   const summaryGeneration = useRef(0);
   const relationGeneration = useRef(0);
@@ -306,13 +322,20 @@ export function TagManagerScreen() {
   const tagCanvasRef = useRef<HTMLDivElement>(null);
   const [columnCount, setColumnCount] = useState(3);
   const contextMenu = useContextMenu();
+  const tagPreferences = useTagPreferences();
   selectedRef.current = selected;
 
   const reloadNamespaceSummary = useCallback(async () => {
     const generation = ++summaryGeneration.current;
     try {
-      const items = await tagsController.getNamespaceSummary();
-      if (generation === summaryGeneration.current) setNamespaces(items);
+      const [items, unused] = await Promise.all([
+        tagsController.getNamespaceSummary(),
+        tagsController.getUnusedCount(),
+      ]);
+      if (generation === summaryGeneration.current) {
+        setNamespaces(items);
+        setUnusedCount(unused);
+      }
     } catch (reason: unknown) {
       if (generation === summaryGeneration.current) setError(errorMessage(reason));
     }
@@ -356,6 +379,7 @@ export function TagManagerScreen() {
       if (cancelled || generation !== listGeneration.current) return;
       setTags(page.items);
       setCursor(page.next_cursor);
+      setViewEpoch((value) => value + 1);
     }).catch((reason: unknown) => {
       if (!cancelled && generation === listGeneration.current) setError(errorMessage(reason));
     }).finally(() => {
@@ -539,11 +563,29 @@ export function TagManagerScreen() {
 
   const namespaceLabel = (value: string) => value || 'general';
   const sortedNamespaces = useMemo(
-    () => [...namespaces].sort((left, right) => tagGroupOrder(left.namespace) - tagGroupOrder(right.namespace)),
+    () => namespaces
+      .filter((group) => group.namespace !== '' && group.namespace !== 'general')
+      .sort((left, right) => tagGroupOrder(left.namespace) - tagGroupOrder(right.namespace)),
     [namespaces],
   );
   const openTagContextMenu = useCallback((event: React.MouseEvent, tag: CanonicalTagRecord) => {
     const entries: MenuEntry[] = [
+      ...buildCommonTagContextEntries({
+        tag,
+        namespaces,
+        starred: tagPreferences.starredTags.includes(tagKey(tag)),
+        onFilter: showTagManagerItems,
+        onStarChange: (name, starred) => { void setTagStarred(name, starred); },
+        onMoveToGroup: (targetNamespace) => {
+          const previousName = tagKey(tag);
+          const nextName = tagNameInGroup(tag, targetNamespace);
+          void runMutation(async () => {
+            await tagsController.rename(tag.tag_id, nextName);
+            await replaceStarredTag(previousName, nextName);
+          });
+        },
+      }),
+      { separator: true },
       {
         label: 'Edit Tag',
         icon: <IconEdit size={16} />,
@@ -563,7 +605,7 @@ export function TagManagerScreen() {
       },
     ];
     contextMenu.open(event, entries);
-  }, [contextMenu]);
+  }, [contextMenu, namespaces, runMutation, tagPreferences.starredTags]);
 
   return (
     <div className={styles.root}>
@@ -571,7 +613,9 @@ export function TagManagerScreen() {
 
       <div className={styles.content}>
         <nav className={styles.namespaceRail} aria-label="Tag groups">
-          <div className={styles.railHeading}>Groups ({namespaces.length})</div>
+          <div className={styles.railHeading}>
+            <span>Groups ({sortedNamespaces.length})</span>
+          </div>
           <button
             className={`${styles.namespaceItem} ${namespace === null ? styles.namespaceItemActive : ''}`}
             onClick={() => handleNamespaceChange(null)}
@@ -597,6 +641,16 @@ export function TagManagerScreen() {
               </button>
             );
           })}
+          <button
+            className={styles.cleanupTagsButton}
+            disabled={unusedCount === 0 || busy}
+            onClick={() => setCleanupOpen(true)}
+            type="button"
+          >
+            <IconTrash size={14} />
+            <span>Delete unused tags</span>
+            <span className={styles.namespaceCount}>{unusedCount}</span>
+          </button>
         </nav>
 
         <section className={styles.browseSurface} aria-label="Tags">
@@ -615,7 +669,11 @@ export function TagManagerScreen() {
             {!loading && tags.length === 0 && (
               <EmptyState title="No tags found" description="Try a different search or group." />
             )}
-            <div className={styles.tagListInner} style={{ height: tagVirtualizer.getTotalSize() }}>
+            <div
+              className={styles.tagListInner}
+              key={viewEpoch}
+              style={{ height: tagVirtualizer.getTotalSize() }}
+            >
               {virtualRows.map((virtualRow) => (
                 <div
                   className={styles.tagVirtualRow}
@@ -640,6 +698,9 @@ export function TagManagerScreen() {
                       >
                         <span className={styles.tagDot} style={{ background: tagGroupColor(tag.namespace) }} />
                         <span className={styles.tagName}>{tagKey(tag)}</span>
+                        {tagPreferences.starredTags.includes(tagKey(tag)) && (
+                          <IconStar aria-label="Starred" className={styles.starredIcon} size={12} fill="currentColor" />
+                        )}
                         <span className={styles.tagCardCount}>({tag.file_count})</span>
                       </button>
                     );
@@ -707,6 +768,19 @@ export function TagManagerScreen() {
           loading={busy}
         />
       )}
+      <ConfirmModal
+        open={cleanupOpen}
+        onClose={() => setCleanupOpen(false)}
+        onConfirm={() => {
+          setCleanupOpen(false);
+          void runMutation(() => tagsController.deleteUnused());
+        }}
+        title="Delete unused tags"
+        message={`Delete ${unusedCount.toLocaleString()} ${unusedCount === 1 ? 'tag' : 'tags'} with no media assignments or relationships?`}
+        confirmLabel="Delete unused tags"
+        danger
+        loading={busy}
+      />
     </div>
   );
 }
@@ -715,16 +789,11 @@ export function TagsToolbar() {
   const [query, setQuery] = useAtom(tagManagerQueryAtom);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    const focusSearch = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key === 'f') {
-        event.preventDefault();
-        inputRef.current?.focus();
-      }
-    };
-    window.addEventListener('keydown', focusSearch);
-    return () => window.removeEventListener('keydown', focusSearch);
-  }, []);
+  useShortcutScope((event) => {
+    if (!(event.metaKey || event.ctrlKey) || event.key !== 'f') return;
+    inputRef.current?.focus();
+    return true;
+  }, { priority: 30 });
 
   return (
     <div className={styles.titlebarToolbar}>

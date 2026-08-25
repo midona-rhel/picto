@@ -1,8 +1,18 @@
 .root {
+  display: flex;
+  flex-direction: column;
   width: 100%;
   height: 100%;
   overflow: hidden;
   position: relative;
+}
+
+.surfaceViewport {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .surface {
@@ -29,7 +39,6 @@
 
 .surfaceIncomingVisible {
   opacity: 1;
-  will-change: opacity;
 }
 
 .error {
@@ -80,7 +89,7 @@
   gap: 2px;
   padding: 10px 24px;
   background: var(--color-primary);
-  color: white;
+  color: var(--color-on-primary);
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-medium);
   border-radius: var(--radius-md);

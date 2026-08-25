@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { authController } from '../../controllers/authController';
 import { registerAuthWorkspaceRefresh } from '../../runtime/subscriptionsSettle';
-import type { AuthSessionState } from '../../shared/types/subscriptions';
+import type { AuthSessionState, OnlyFansManualAuthInput } from '../../shared/types/subscriptions';
 import type { AuthSiteSnapshot, AuthWorkspaceSnapshot } from '../../shared/types/subscriptionsWorkspace';
 import { AuthSiteDetail } from './components/AuthSiteDetail';
 import { AuthSitesSidebar } from './components/AuthSitesSidebar';
@@ -118,6 +118,20 @@ export function AuthWorkspace({
     setSession(IDLE_SESSION);
   }
 
+  async function saveManualOnlyFans(input: OnlyFansManualAuthInput) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const next = await authController.saveManualOnlyFans(input);
+      setSession(next);
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+      throw err;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function removeCredential() {
     if (!selectedEntry) return;
     setBusy(true);
@@ -157,6 +171,7 @@ export function AuthWorkspace({
         busy={busy}
         message={message}
         onStartLogin={startLogin}
+        onSaveManualOnlyFans={saveManualOnlyFans}
         onCancelLogin={cancelLogin}
         onRemoveCredential={removeCredential}
       />

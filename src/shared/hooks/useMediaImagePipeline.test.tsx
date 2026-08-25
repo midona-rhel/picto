@@ -7,6 +7,7 @@ interface FakeImage {
   src: string;
   onload: (() => void) | null;
   onerror: (() => void) | null;
+  decode?: () => Promise<void>;
 }
 
 function PipelineHarness(props: Omit<MediaPipelineInput, 'imgRef'>) {
@@ -88,6 +89,20 @@ describe('useMediaImagePipeline', () => {
 
     act(() => vi.advanceTimersByTime(100));
     expect(screen.getByTestId('pipeline')).toHaveAttribute('data-full-url', 'media://localhost/file/second-thumb.png');
+  });
+
+  it('does not swap to a loaded thumbnail until it has decoded', async () => {
+    const { rerender } = render(<PipelineHarness {...input('first')} />);
+    rerender(<PipelineHarness {...input('second')} />);
+    const secondPreload = images[1];
+    let finishDecode: (() => void) | undefined;
+    secondPreload.decode = vi.fn(() => new Promise<void>((resolve) => { finishDecode = resolve; }));
+
+    act(() => { secondPreload.onload?.(); });
+    expect(screen.getByTestId('pipeline')).toHaveAttribute('data-displayed-hash', 'first');
+
+    await act(async () => { finishDecode?.(); });
+    expect(screen.getByTestId('pipeline')).toHaveAttribute('data-displayed-hash', 'second');
   });
 
   it('reloads a changed thumbnail for the same entity hash', () => {

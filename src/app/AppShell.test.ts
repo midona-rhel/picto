@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { isEditableTarget } from './editableTarget';
+import { buildPanelVisibilityContextEntries } from './AppShell';
 
 describe('isEditableTarget', () => {
   it('recognizes editable controls and contenteditable elements', () => {
@@ -19,5 +20,25 @@ describe('isEditableTarget', () => {
   it('leaves non-editable targets eligible for app shortcuts', () => {
     expect(isEditableTarget(document.createElement('button'))).toBe(false);
     expect(isEditableTarget(null)).toBe(false);
+  });
+});
+
+describe('panel visibility context menu', () => {
+  it('uses reference application panel actions and keeps the menu open for successive toggles', () => {
+    const toggleAll = vi.fn();
+    const toggleSidebar = vi.fn();
+    const toggleInspector = vi.fn();
+    const entries = buildPanelVisibilityContextEntries({ toggleAll, toggleSidebar, toggleInspector });
+
+    expect(entries.map((entry) => 'label' in entry ? entry.label : null)).toEqual([
+      'Toggle All Panels',
+      'Toggle Sidebar',
+      'Toggle Inspector',
+    ]);
+    for (const entry of entries) {
+      expect('keepOpen' in entry && entry.keepOpen).toBe(true);
+    }
+    if ('action' in entries[1]) entries[1].action();
+    expect(toggleSidebar).toHaveBeenCalledOnce();
   });
 });

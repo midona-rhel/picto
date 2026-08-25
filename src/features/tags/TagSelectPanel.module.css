@@ -44,12 +44,12 @@
 }
 
 .sidebarItem:hover {
-  background-color: rgba(255, 255, 255, 0.10);
+  background-color: var(--color-surface-active);
 }
 
 .sidebarItemActive {
-  color: var(--color-primary) !important;
-  background-color: var(--color-primary-10) !important;
+  color: var(--color-text-primary) !important;
+  background-color: var(--color-surface-active) !important;
 }
 
 .sidebarDot {
@@ -97,7 +97,7 @@
 .sidebarSep {
   height: 1px;
   margin: 4px 10px;
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--color-border-primary);
 }
 
 /* ── Content (absolute right, always 340px) ── */
@@ -117,6 +117,7 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   position: relative;
 }
 
@@ -145,23 +146,33 @@
 }
 
 .tagRow:hover {
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--color-surface-active);
 }
 
 .tagRowFocused {
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--color-surface-active);
 }
 
-.tagDot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
+.tagRowExcluded {
+  color: var(--color-text-primary);
+}
+
+.tagRowExcluded .tagName,
+.tagRowExcluded .tagBookmark,
+.tagRowExcluded .tagBadge {
+  opacity: 0.45;
+}
+
+.tagBookmark {
+  width: 13px;
+  height: 13px;
   flex-shrink: 0;
-  opacity: 0.6;
+  opacity: 0.62;
+  filter: saturate(0.9);
   transition: opacity 120ms ease;
 }
 
-.tagRow:hover .tagDot {
+.tagRow:hover .tagBookmark {
   opacity: 1;
 }
 

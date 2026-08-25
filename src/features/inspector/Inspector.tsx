@@ -9,7 +9,7 @@
 import { forwardRef, useEffect, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useAtomValue, getDefaultStore } from 'jotai';
-import { IconAlertCircle, IconFolder, IconSparkles } from '@tabler/icons-react';
+import { IconAlertCircle, IconFolder } from '@tabler/icons-react';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ColorPalette } from '../../shared/ui/ColorPalette';
@@ -40,12 +40,24 @@ import {
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { tagSelectPortalAtom, folderPickerPortalAtom, aiTaggerPortalAtom } from '../../state/portals';
 import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
+import { confirmModalAtom, exportModalAtom } from '../../state/modals';
+import { navigateToNode, navigateWithGridFilters } from '../../state/navigationHistory';
 import { activeNodeIdAtom } from '../../state/navigation';
-import { confirmModalAtom } from '../../state/modals';
-import { pushHistory } from '../../state/navigationHistory';
-import { InspectorAddIcon } from '../../shared/ui/icons/toolbar-icons';
+import { InspectorAddIcon, InspectorExportIcon } from '../../shared/ui/icons/toolbar-icons';
+import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
+import { showTagItems } from '../../controllers/gridNavigationController';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
+import { filesController } from '../../controllers/filesController';
+import { windowController } from '../../controllers/windowController';
+import { buildEntityOpenContextEntries } from '../grid/gridContextMenu';
+import { gridFiltersAtom, gridFilterToolbarOpenAtom } from '../../state/grid';
 import styles from './Inspector.module.css';
+import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
+import { buildCommonTagContextEntries } from '../tags/tagContextMenu';
+import { setTagStarred, useTagPreferences } from '../tags/tagPreferences';
+import { tagsController } from '../../controllers/tagsController';
+import type { CanonicalNamespaceSummary } from '../../shared/types/canonical';
+import { IconAutoTag } from '../../shared/ui/icons/sidebar-menu-icons';
 
 const store = getDefaultStore();
 
@@ -139,14 +151,41 @@ function confirmSelectionOverwrite(
 
 // ── Preview components ──────────────────────────────────────────
 
-function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage' | 'stacked' }) {
+function Preview({
+  hashes,
+  backgrounds = [],
+  type,
+  fontHashes = new Set<string>(),
+}: {
+  hashes: string[];
+  backgrounds?: readonly (string | null)[];
+  type: 'single' | 'collage' | 'stacked';
+  fontHashes?: ReadonlySet<string>;
+}) {
+  const contextMenu = useContextMenu();
   if (type === 'single' && hashes[0]) {
+    const hash = hashes[0];
     return (
-      <div className={styles.preview}>
-        <div className={styles.previewFrame}>
-          <img src={`media://localhost/thumb/${hashes[0]}.jpg`} alt="" className={styles.previewImage} draggable={false} />
+      <div
+        className={styles.preview}
+        onContextMenu={(event) => contextMenu.open(event, buildEntityOpenContextEntries({
+          hash,
+          onOpenDefault: (value) => { void filesController.openDefaultAppForHash(value); },
+          onRevealInFolder: (value) => { void filesController.revealHashInFolder(value); },
+          onOpenNewWindow: (value) => { void windowController.openDetailWindow({ hash: value }); },
+        }))}
+      >
+        <div className={styles.previewFrame} style={{ background: backgrounds[0] ?? undefined }}>
+          <ThumbnailImage
+            src={`media://localhost/thumb/${hash}.jpg`}
+            alt=""
+            className={styles.previewImage}
+            draggable={false}
+            fallback={fontHashes.has(hash) ? 'font' : 'broken'}
+          />
           <div className={styles.previewGlass} />
         </div>
+        {contextMenu.state && <ContextMenu entries={contextMenu.state.entries} position={contextMenu.state.position} onClose={contextMenu.close} />}
       </div>
     );
   }
@@ -161,8 +200,13 @@ function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage
           {hashes.length > 0 ? (
             <div className={styles.collage}>
               {[0, 1, 2, 3].map((i) => (
-                <div key={i} className={styles.collageCell}>
-                  {hashes[i] && <img src={`media://localhost/thumb/${hashes[i]}.jpg`} alt="" draggable={false} />}
+                <div key={i} className={styles.collageCell} style={{ background: backgrounds[i] ?? undefined }}>
+                  {hashes[i] && <ThumbnailImage
+                    src={`media://localhost/thumb/${hashes[i]}.jpg`}
+                    alt=""
+                    draggable={false}
+                    fallback={fontHashes.has(hashes[i]) ? 'font' : 'broken'}
+                  />}
                 </div>
               ))}
             </div>
@@ -189,8 +233,14 @@ function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage
             transform: `rotate(${rots[start + i]}deg) translate(${offs[start + i].x}px, ${offs[start + i].y}px)`,
             zIndex: i, filter: i === previews.length - 1 ? undefined : 'brightness(0.7)',
           }}>
-            <div className={styles.previewFrame}>
-              <img src={`media://localhost/thumb/${hash}.jpg`} alt="" className={styles.previewImage} draggable={false} />
+            <div className={styles.previewFrame} style={{ background: backgrounds[i] ?? undefined }}>
+              <ThumbnailImage
+                src={`media://localhost/thumb/${hash}.jpg`}
+                alt=""
+                className={styles.previewImage}
+                draggable={false}
+                fallback={fontHashes.has(hash) ? 'font' : 'broken'}
+              />
               <div className={styles.previewGlass} />
             </div>
           </div>
@@ -357,7 +407,7 @@ type InspectorSkeletonProps = {
   source?: SourceFieldModel;
   selectionCount?: number;
   showSource?: boolean;
-  rating: { value: number; onChange?: (rating: number) => void };
+  rating?: { value: number; onChange?: (rating: number) => void };
   coreProperties: CoreProperty[];
   tags: Array<{ ns: string; sub: string; raw: string }>;
   showTags?: boolean;
@@ -367,6 +417,7 @@ type InspectorSkeletonProps = {
   onRemoveFolder?: (folderId: number) => void;
   onNavigateFolder?: (folderId: number) => void;
   extras?: Array<{ label: string; value: string }>;
+  propertyAction?: React.ReactNode;
   action?: React.ReactNode;
   status?: { kind: 'loading' | 'error'; message: string };
   summaryPending?: boolean;
@@ -392,6 +443,7 @@ export function InspectorSkeleton({
   onRemoveFolder,
   onNavigateFolder,
   extras = [],
+  propertyAction,
   action,
   status,
   summaryPending = false,
@@ -400,7 +452,16 @@ export function InspectorSkeleton({
   return (
     <Shell>
       {preview}
-      <ColorPalette colors={palette} />
+      <ColorPalette
+        colors={palette}
+        onFilter={(hex) => {
+          store.set(gridFilterToolbarOpenAtom, true);
+          navigateWithGridFilters(store.get(activeNodeIdAtom), {
+            ...store.get(gridFiltersAtom),
+            color_hex: hex,
+          });
+        }}
+      />
 
       {selectionCount != null && (
         <div className={styles.selectionCount} data-inspector-selection-count="">
@@ -436,15 +497,16 @@ export function InspectorSkeleton({
       <div data-inspector-section="properties">
         <InspectorSection title="Properties">
           <div className={styles.propsStack} data-inspector-core-properties="">
-            {summaryPending
+            {rating && (summaryPending
               ? <div className={styles.pendingRating}>{showSummaryLoading && <SummarySpinner label="Loading shared rating" />}</div>
-              : <StarRating value={rating.value} onChange={rating.onChange} />}
+              : <StarRating value={rating.value} onChange={rating.onChange} />)}
             {coreProperties.filter((property) => property.loading || (property.value !== '' && property.value !== '—')).map((property) => (
               <div key={property.label} data-inspector-core-property={property.label}>
                 <PropertyRow {...property} />
               </div>
             ))}
           </div>
+          {propertyAction}
         </InspectorSection>
       </div>
 
@@ -479,7 +541,6 @@ function UnavailableInspectorSkeleton({ status, showSource = true }: { status?: 
       notes={{ value: '—', readOnly: true }}
       source={{ urls: [], unavailable: true }}
       showSource={showSource}
-      rating={{ value: 0 }}
       coreProperties={normalizedCoreProperties({})}
       tags={[]}
       showTags={false}
@@ -491,9 +552,22 @@ function UnavailableInspectorSkeleton({ status, showSource = true }: { status?: 
 }
 
 function navigateToFolder(folderId: number) {
-  const nodeId = `folder:${folderId}`;
-  store.set(activeNodeIdAtom, nodeId);
-  pushHistory(nodeId);
+  navigateToNode(`folder:${folderId}`);
+}
+
+function InspectorExportAction({ target, count }: { target: ItemTarget; count: number }) {
+  return (
+    <div className={styles.flowAction} data-inspector-property-action="export">
+      <InspectorActionButton
+        variant="flow"
+        action="export"
+        onClick={() => store.set(exportModalAtom, { open: true, fileCount: count, target })}
+      >
+        <InspectorExportIcon />
+        <span>Export</span>
+      </InspectorActionButton>
+    </div>
+  );
 }
 
 // ── Main component ──────────────────────────────────────────────
@@ -530,7 +604,12 @@ export function Inspector() {
     });
     const palette = primary?.dominant_colors ?? [];
     return <InspectorSkeleton
-      preview={<Preview hashes={primary ? [primary.file_hash] : []} type="single" />}
+      preview={<Preview
+        hashes={primary ? [primary.file_hash] : []}
+        backgrounds={primary ? [primary.dominant_color_hex] : []}
+        type="single"
+        fontHashes={primary?.mime_type.startsWith('font/') ? new Set([primary.file_hash]) : undefined}
+      />}
       palette={palette}
       name={{ value: d.label ?? primary?.name ?? '', onCommit: (value) => { void entityMutations.setItemName(d.item_id, value); } }}
       notes={{ value: primary?.notes ?? '', onCommit: (value) => { void entityMutations.setItemNotes(d.item_id, value); } }}
@@ -551,6 +630,7 @@ export function Inspector() {
       folders={folders}
       onRemoveFolder={(folderId) => { void entityMutations.removeItemFromFolder(d.item_id, folderId); }}
       onNavigateFolder={navigateToFolder}
+      propertyAction={d.media.length > 0 ? <InspectorExportAction target={{ kind: 'explicit', item_ids: [d.item_id] }} count={d.media.length} /> : undefined}
       action={<InspectorAutoTagAction count={d.media.length} enabled={d.media.length > 0 && d.media.every((media) => media.mime_type.startsWith('image/'))} />}
     />;
   }
@@ -565,6 +645,10 @@ export function Inspector() {
       return { id: f.folder_id, name: n?.name ?? f.name, color: n?.color ?? null };
     });
     const previewHashes = summary?.sample_hashes ?? [];
+    const previewMimeTypes = Object.keys(summary?.stats?.mime_counts ?? {});
+    const fontPreviewHashes = previewMimeTypes.length > 0 && previewMimeTypes.every((mime) => mime.startsWith('font/'))
+      ? new Set(previewHashes)
+      : undefined;
     const commitNotes = selTarget ? (notes: string) => {
       const apply = () => { void entityMutations.setTargetNotes(selTarget, notes); };
       if ((summary?.notes_present_count ?? 0) > 0 && notes !== (summary?.shared_notes ?? '')) {
@@ -584,7 +668,7 @@ export function Inspector() {
     } : undefined;
 
     return <InspectorSkeleton
-      preview={<Preview hashes={previewHashes} type="stacked" />}
+      preview={<Preview hashes={previewHashes} type="stacked" fontHashes={fontPreviewHashes} />}
       palette={[]}
       selectionCount={count}
       notes={{ value: summary?.shared_notes ?? '', onCommit: commitNotes, readOnly: summaryPending }}
@@ -600,6 +684,7 @@ export function Inspector() {
       folders={folders}
       onRemoveFolder={selTarget ? (folderId) => { void entityMutations.updateTargetFolderMembership(selTarget, folderId, 'remove'); } : undefined}
       onNavigateFolder={navigateToFolder}
+      propertyAction={selTarget && count > 0 ? <InspectorExportAction target={selTarget} count={count} /> : undefined}
       action={<InspectorAutoTagAction count={count} enabled={selectionSupportsAiTagging(selTarget, summary)} />}
       summaryPending={summaryPending}
       showSummaryLoading={showSummaryLoading}
@@ -627,6 +712,11 @@ export function Inspector() {
   };
 
   const scopeSize = scopeVM.totalSizeBytes != null ? fmtSize(scopeVM.totalSizeBytes) : null;
+  const exportScope = node.kind === 'folder' && scopeVM.folder?.folderId != null
+    ? { kind: 'folder' as const, folder_id: scopeVM.folder.folderId }
+    : node.kind === 'smart_folder' && scopeVM.smartFolder?.smartFolderId != null
+      ? { kind: 'smart_folder' as const, smart_folder_id: scopeVM.smartFolder.smartFolderId }
+      : null;
 
   const extras = [
     scopeVM.searchText ? { label: 'Search', value: scopeVM.searchText } : null,
@@ -635,13 +725,19 @@ export function Inspector() {
   ].filter((property): property is { label: string; value: string } => property !== null);
 
   return <InspectorSkeleton
-    preview={<Preview hashes={scopeVM.previewItems.map((item) => item.display_file_hash)} type="collage" />}
+    preview={<Preview
+      hashes={scopeVM.previewItems.map((item) => item.display_file_hash)}
+      backgrounds={scopeVM.previewItems.map((item) => item.dominant_color_hex)}
+      type="collage"
+      fontHashes={new Set(scopeVM.previewItems
+        .filter((item) => item.display_mime_type?.startsWith('font/'))
+        .map((item) => item.display_file_hash))}
+    />}
     palette={[]}
     name={{ value: node.name, readOnly: isSystem, onCommit: canEdit ? (value) => { void saveName(value); } : undefined }}
-    notes={{ value: (isSystem ? scopeVM.description : scopeVM.folder?.notes ?? scopeVM.smartFolder?.notes) ?? '', readOnly: isSystem, onCommit: canEdit ? (value) => { void saveNotes(value); } : undefined }}
+    notes={isSystem ? undefined : { value: scopeVM.folder?.notes ?? scopeVM.smartFolder?.notes ?? '', onCommit: canEdit ? (value) => { void saveNotes(value); } : undefined }}
     source={{ urls: [], unavailable: true }}
     showSource={false}
-    rating={{ value: 0 }}
     coreProperties={normalizedCoreProperties({
       Items: { value: scopeVM.totalCount.toLocaleString() },
       Size: { value: scopeSize ?? '—' },
@@ -651,6 +747,18 @@ export function Inspector() {
     folders={[]}
     showFolders={false}
     extras={extras}
+    propertyAction={exportScope && scopeVM.totalCount > 0 ? <InspectorExportAction
+      count={scopeVM.totalCount}
+      target={{
+        kind: 'query',
+        query: {
+          scope: exportScope,
+          filters: createEmptyItemFilters(),
+          sort: { field: 'imported_at', direction: 'descending', random_seed: null },
+        },
+        excluded_item_ids: [],
+      }}
+    /> : undefined}
   />;
 }
 
@@ -680,7 +788,7 @@ function InspectorAutoTagAction({ count, enabled }: { count: number; enabled: bo
         onClick={(e) => openPortal(e, aiTaggerPortalAtom)}
         disabled={!enabled}
       >
-        <IconSparkles size={14} stroke={1.5} />
+        <IconAutoTag size={14} />
         <span>{count > 1 ? `Auto Tag ${count.toLocaleString()} Images` : 'Auto Tag'}</span>
       </InspectorActionButton>
     </KbdTooltip>
@@ -719,18 +827,30 @@ function SummarySpinner({ label }: { label: string }) {
   return <span className={styles.summarySpinner} data-inspector-summary-loading="" aria-label={label} />;
 }
 
-function TagsSection({ tags, onRemove, onNavigate, editable = true, pending = false, showLoading = false }: {
+function TagsSection({ tags, onRemove, editable = true, pending = false, showLoading = false }: {
   tags: Array<{ ns: string; sub: string; raw: string }>;
   onRemove?: (raw: string) => void;
-  onNavigate?: (tag: string) => void;
   editable?: boolean;
   pending?: boolean;
   showLoading?: boolean;
 }) {
   const chipMenu = useContextMenu();
+  const tagPreferences = useTagPreferences();
+  const [namespaces, setNamespaces] = useState<CanonicalNamespaceSummary[]>([]);
   const hasTags = tags.length > 0;
+  useEffect(() => {
+    void tagsController.getNamespaceSummary().then(setNamespaces).catch(() => {});
+  }, []);
   return (
-    <InspectorSection title="Tags" count={pending ? undefined : tags.length}>
+    <InspectorSection
+      title="Tags"
+      count={pending ? undefined : tags.length}
+      onContextMenu={editable ? (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openPortal(event, tagSelectPortalAtom);
+      } : undefined}
+    >
       {pending ? <div className={styles.pendingSection}>{showLoading && <SummarySpinner label="Loading shared tags" />}</div> : hasTags || editable ? <div className={styles.tagsWrap}>
         {hasTags && tags.map((t) => (
           <TagChip
@@ -738,11 +858,18 @@ function TagsSection({ tags, onRemove, onNavigate, editable = true, pending = fa
             onRemove={onRemove ? () => onRemove(t.raw) : undefined}
             onContextMenu={(e) => {
               e.preventDefault();
-              chipMenu.openAt({ x: e.clientX, y: e.clientY }, [
-                ...(onNavigate ? [{ label: 'Show Items', action: () => onNavigate(t.raw) }] : []),
-                { label: 'Copy', action: () => { (window as any).picto?.clipboard?.writeText(t.raw) ?? navigator.clipboard.writeText(t.raw); } },
-                ...(onRemove ? [{ label: 'Remove', action: () => onRemove(t.raw), danger: true }] : []),
-              ]);
+              e.stopPropagation();
+              chipMenu.openAt(
+                { x: e.clientX, y: e.clientY },
+                buildCommonTagContextEntries({
+                  tag: { namespace: t.ns, subtag: t.sub },
+                  namespaces,
+                  starred: tagPreferences.starredTags.includes(t.raw),
+                  onFilter: showTagItems,
+                  onStarChange: (name, starred) => { void setTagStarred(name, starred); },
+                  onRemove: onRemove ? () => onRemove(t.raw) : undefined,
+                }),
+              );
             }}
           />
         ))}
@@ -780,7 +907,15 @@ function FoldersSection({ folders, onRemove, onNavigate, editable = true, pendin
   const chipMenu = useContextMenu();
   const hasFolders = folders.length > 0;
   return (
-    <InspectorSection title="Folders" count={pending ? undefined : folders.length}>
+    <InspectorSection
+      title="Folders"
+      count={pending ? undefined : folders.length}
+      onContextMenu={editable ? (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        openPortal(event, folderPickerPortalAtom);
+      } : undefined}
+    >
       {pending ? <div className={styles.pendingSection}>{showLoading && <SummarySpinner label="Loading shared folders" />}</div> : hasFolders || editable ? <div className={styles.foldersWrap}>
         {hasFolders && folders.map((f) => (
           <TagChip
@@ -790,7 +925,7 @@ function FoldersSection({ folders, onRemove, onNavigate, editable = true, pendin
               e.preventDefault();
               chipMenu.openAt({ x: e.clientX, y: e.clientY }, [
                 ...(onNavigate ? [{ label: 'Open Folder', action: () => onNavigate(f.id) }] : []),
-                ...(onRemove ? [{ label: 'Remove', action: () => onRemove(f.id), danger: true }] : []),
+                ...(onRemove ? [{ label: 'Remove', action: () => onRemove(f.id) }] : []),
               ]);
             }}
           />

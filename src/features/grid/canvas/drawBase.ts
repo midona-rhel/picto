@@ -8,8 +8,8 @@
 import type { LayoutItem, GridViewMode } from '../layout/types';
 import type { CanvasRenderItem } from './renderItemAdapter';
 import type { ThumbnailPipelineEntry } from './thumbnailPipeline';
-import { THUMBNAIL_PIPELINE_REVEAL_MS } from './thumbnailPipeline';
 import {
+  BADGE_H,
   BADGE_FONT,
   INFO_FONT,
   NAME_FONT,
@@ -17,15 +17,18 @@ import {
   drawImageContain,
   drawImageCover,
   getContainRect,
-  isHiddenBadgeType,
+  formatLabelForMime,
   mimeToExt,
   truncateText,
   formatDuration,
 } from './primitives';
+import { drawBrokenThumbnail } from '../../../shared/ui/ThumbnailImage/drawBrokenThumbnail';
+import { drawFontThumbnail } from '../../../shared/ui/ThumbnailImage/drawFontThumbnail';
 
 
 interface ThemeLike {
   placeholderBg: string;
+  isLight: boolean;
   borderRadius: number;
   textPrimary: string;
   textTertiary: string;
@@ -45,17 +48,19 @@ export interface BaseLayerArgs {
   positions: LayoutItem[];
   items: CanvasRenderItem[];
   atlasGet: (fileHash: string) => ThumbnailPipelineEntry | null;
-  now: number;
+  revealProgress: (entityHash: string) => number;
   /** Indices of tiles in the activation zone — the ONLY tiles to draw. */
   activeTiles: number[];
   draw: DrawContext;
   theme: ThemeLike;
   viewMode: GridViewMode;
   fitThumbnails: boolean;
+  grayscale: boolean;
   showTileName: boolean;
   showResolution: boolean;
   showExtension: boolean;
   showExtensionLabel: boolean;
+  showItemCount: boolean;
 }
 
 function fillPlaceholder(
@@ -95,16 +100,18 @@ export function drawCanvasBaseLayer({
   positions,
   items,
   atlasGet,
-  now,
+  revealProgress,
   activeTiles,
   draw,
   theme,
   viewMode,
   fitThumbnails,
+  grayscale,
   showTileName,
   showResolution,
   showExtension,
   showExtensionLabel,
+  showItemCount,
 }: BaseLayerArgs): boolean {
   const { scrollTop, viewportHeight: cssH, textHeight: th, borderRadius: br } = draw;
   // Grid default = contain. fitThumbnails flips grid to cover (fill/crop).
@@ -112,6 +119,9 @@ export function drawCanvasBaseLayer({
   const effectiveFit = viewMode === 'grid'
     ? (fitThumbnails ? 'cover' as const : 'contain' as const)
     : 'cover' as const;
+  const shouldContain = (item: CanvasRenderItem) => effectiveFit === 'contain'
+    || item.mime.startsWith('video/')
+    || item.mime.startsWith('audio/');
   let hasActiveReveal = false;
 
   // ── Pass 1: Images with reveal animation ──
@@ -125,9 +135,36 @@ export function drawCanvasBaseLayer({
     if (drawY + pos.h < 0 || drawY > cssH) continue;
 
     const entry = atlasGet(item.displayFileHash);
-    const isVideo = item.mime.startsWith('video/');
-    const useContain = effectiveFit === 'contain' || isVideo;
+    const isAudio = item.mime.startsWith('audio/');
+    const useContain = shouldContain(item);
     const drawThumb = useContain ? drawImageContain : drawImageCover;
+    const drawLoadedThumb = (alpha = 1) => {
+      const previousAlpha = ctx.globalAlpha;
+      const previousFilter = ctx.filter;
+      if (isAudio && item.aspectRatio) {
+        const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imageHeight);
+        ctx.globalAlpha = previousAlpha * alpha;
+        ctx.fillStyle = theme.isLight ? 'rgba(44, 47, 50, 0.05)' : 'rgba(247, 248, 248, 0.05)';
+        ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+        const gradient = theme.isLight
+          ? ctx.createLinearGradient(rect.x, rect.y, rect.x, rect.y + rect.h)
+          : ctx.createRadialGradient(rect.x + rect.w / 2, rect.y, 0, rect.x + rect.w / 2, rect.y, Math.max(rect.w, rect.h));
+        gradient.addColorStop(0, theme.isLight ? 'rgba(44, 47, 50, 0.02)' : 'rgba(247, 248, 248, 0.05)');
+        gradient.addColorStop(1, theme.isLight ? 'rgba(44, 47, 50, 0.05)' : 'rgba(247, 248, 248, 0.03)');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+        ctx.globalAlpha = previousAlpha * alpha * 0.5;
+        ctx.filter = theme.isLight ? 'grayscale(1)' : 'grayscale(1) brightness(1.5)';
+        drawThumb(ctx, entry!.thumb!, pos.x, drawY, pos.w, imageHeight);
+        ctx.filter = previousFilter;
+      } else {
+        ctx.globalAlpha = previousAlpha * alpha;
+        if (grayscale) ctx.filter = 'grayscale(1)';
+        drawThumb(ctx, entry!.thumb!, pos.x, drawY, pos.w, imageHeight);
+        ctx.filter = previousFilter;
+      }
+      ctx.globalAlpha = previousAlpha;
+    };
 
     ctx.save();
 
@@ -143,17 +180,18 @@ export function drawCanvasBaseLayer({
       ctx.clip();
     }
 
-    // Legacy two-phase reveal: image fades 0→1 over REVEAL_MS,
-    // then placeholder fades 1→0 over the next REVEAL_MS.
-    if (entry?.thumb) {
-      const revealElapsedMs = entry.animateIn
-        ? Math.max(0, now - entry.revealStartedAt)
-        : THUMBNAIL_PIPELINE_REVEAL_MS * 2;
-      const imageProgress = Math.min(1, revealElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS);
-      const placeholderFadeElapsedMs = Math.max(0, revealElapsedMs - THUMBNAIL_PIPELINE_REVEAL_MS);
-      const placeholderAlpha = imageProgress < 1
-        ? 1
-        : Math.max(0, 1 - (placeholderFadeElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS));
+    if (grayscale) ctx.filter = 'grayscale(1)';
+
+    if (item.mime.startsWith('font/')) {
+      fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
+      drawFontThumbnail(ctx, pos.x, drawY, pos.w, imageHeight, theme.placeholderBg);
+    // Two-phase reveal: image fades during the first half, then the
+    // placeholder fades during the second half. Entity visibility, not
+    // bitmap residency, owns the animation timeline.
+    } else if (entry?.thumb) {
+      const progress = revealProgress(item.hash);
+      const imageProgress = Math.min(1, progress * 2);
+      const placeholderAlpha = progress < 0.5 ? 1 : Math.max(0, 2 - progress * 2);
 
       if (imageProgress < 1 || placeholderAlpha > 0) {
         hasActiveReveal = true;
@@ -164,14 +202,17 @@ export function drawCanvasBaseLayer({
       }
 
       if (imageProgress < 1) {
-        ctx.globalAlpha = imageProgress;
-        drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
-        ctx.globalAlpha = 1;
+        drawLoadedThumb(imageProgress);
       } else {
-        drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
+        drawLoadedThumb();
       }
     } else {
-      fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
+      if (entry?.state === 'error') {
+        fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
+        drawBrokenThumbnail(ctx, pos.x, drawY, pos.w, imageHeight, theme.placeholderBg);
+      } else {
+        fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
+      }
     }
 
     ctx.restore();
@@ -188,7 +229,7 @@ export function drawCanvasBaseLayer({
     const drawY = pos.y - scrollTop;
     const imageHeight = pos.h - th;
     if (drawY + pos.h < 0 || drawY > cssH) continue;
-    if (effectiveFit === 'contain' && item.aspectRatio) {
+    if (shouldContain(item) && item.aspectRatio) {
       const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imageHeight);
       ctx.roundRect(rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1, br);
     } else {
@@ -221,7 +262,6 @@ export function drawCanvasBaseLayer({
   }
 
   // ── Pass 3: Badges (extension, duration) ──
-  const isContain = effectiveFit === 'contain';
   for (const i of activeTiles) {
     const pos = positions[i];
     const item = items[i];
@@ -233,29 +273,38 @@ export function drawCanvasBaseLayer({
     let bx = pos.x;
     let by = drawY;
     let bw = pos.w;
-    if (isContain && item.aspectRatio) {
+    let bh = imgH;
+    if (shouldContain(item) && item.aspectRatio) {
       const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imgH);
       bx = rect.x;
       by = rect.y;
       bw = rect.w;
+      bh = rect.h;
     }
 
-    const ext = mimeToExt(item.mime);
+    const formatLabel = formatLabelForMime(item.mime);
     const isVideo = item.mime.startsWith('video/');
+    const isAudio = item.mime.startsWith('audio/');
     const isAnimated = item.mime === 'image/gif' && (item.numFrames ?? 0) > 1;
-    const showBadge = showExtensionLabel && ext && !isHiddenBadgeType(ext);
+    const showBadge = showExtensionLabel && formatLabel && item.kind !== 'collection';
 
-    // Extension badge — top-left
-    if (showBadge) {
-      drawBadge(ctx, ext.toUpperCase(), bx + 5, by + 5);
+    // Item-kind / extension badge — top-left
+    if (item.kind === 'collection') {
+      drawBadge(ctx, 'GROUP', bx + 5, by + 5);
+    } else if (showBadge) {
+      drawBadge(ctx, formatLabel, bx + 5, by + 5);
     }
 
     // Duration badge — top-right (video/animated only)
-    if ((isVideo || isAnimated) && typeof item.durationMs === 'number' && item.durationMs > 0) {
+    if ((isVideo || isAudio || isAnimated) && typeof item.durationMs === 'number' && item.durationMs > 0) {
       const durText = formatDuration(item.durationMs);
       ctx.font = BADGE_FONT;
       const durW = ctx.measureText(durText).width + 8;
       drawBadge(ctx, durText, bx + bw - durW - 5, by + 5);
+    }
+
+    if (showItemCount && item.kind === 'collection') {
+      drawBadge(ctx, String(item.mediaCount), bx + 5, by + bh - BADGE_H - 5);
     }
 
   }
@@ -279,7 +328,7 @@ export function drawCanvasBaseLayer({
         const nameY = drawY + imageHeight + 14;
         const textMaxW = pos.w - 8;
         const ext = mimeToExt(item.mime);
-        const nameStr = (item.name || 'Untitled') + (showExtension && ext ? `.${ext}` : '');
+        const nameStr = (item.name || 'Untitled') + (showExtension && ext ? `.${ext.toUpperCase()}` : '');
         ctx.fillText(truncateText(ctx, nameStr, textMaxW), textX, nameY);
       }
     }

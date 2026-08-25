@@ -496,18 +496,20 @@ export function createWindowManager({
       return;
     }
     const mainWin = windowsByLabel.get('main');
+    const hasParent = Boolean(mainWin && !mainWin.isDestroyed());
+    const useTransparentManager = isMac || isWin;
     const win = new BrowserWindow({
       width: 700,
       height: 550,
       minWidth: 600,
       minHeight: 400,
-      resizable: true,
+      resizable: false,
       maximizable: false,
       fullscreenable: false,
       frame: false,
-      transparent: false,
-      backgroundColor: getThemeBgColor(getCachedConfig),
-      ...(mainWin && !mainWin.isDestroyed() ? { parent: mainWin } : {}),
+      transparent: useTransparentManager,
+      backgroundColor: useTransparentManager ? '#00000000' : getThemeBgColor(getCachedConfig),
+      ...(hasParent ? { parent: mainWin, modal: true } : {}),
       show: true,
       webPreferences: {
         preload: path.join(__dirname, 'preload.cjs'),
@@ -542,6 +544,7 @@ export function createWindowManager({
     openLibraryManager,
     openSettingsWindow,
     openSubscriptionsWindow,
+    saveManualOnlyFansCredential: authSessions.saveManualOnlyFansCredential,
     startAuthSession: authSessions.startAuthSession,
     getMainWindow,
     sendToAllWindows,

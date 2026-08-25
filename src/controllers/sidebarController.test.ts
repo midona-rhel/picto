@@ -6,7 +6,9 @@ import { setSidebarTreeAtom, sidebarNodesAtom } from '../state/sidebar';
 
 const getNavigation = vi.hoisted(() => vi.fn());
 const getSidebarCounts = vi.hoisted(() => vi.fn());
+const getNamespaceSummary = vi.hoisted(() => vi.fn());
 vi.mock('../platform/navigationApi', () => ({ getNavigation, getSidebarCounts }));
+vi.mock('../platform/tagApi', () => ({ getNamespaceSummary }));
 
 import { buildSidebarNodes, sidebarController } from './sidebarController';
 
@@ -57,14 +59,20 @@ describe('replacement sidebar reads', () => {
   beforeEach(() => {
     getNavigation.mockReset();
     getSidebarCounts.mockReset();
+    getNamespaceSummary.mockReset().mockResolvedValue([
+      { namespace: 'general', count: 5 },
+      { namespace: 'creator', count: 2 },
+    ]);
     store.set(setSidebarTreeAtom, { nodes: [], epoch: 0 });
   });
 
   it('maps replacement counts so All remains the active library only', () => {
-    const nodes = buildSidebarNodes(navigation, counts);
+    const nodes = buildSidebarNodes(navigation, counts, 7);
 
     expect(nodes.find((node) => node.id === 'system:active')?.count).toBe(9);
     expect(nodes.find((node) => node.id === 'system:inbox')?.count).toBe(2);
+    expect(nodes.find((node) => node.id === 'system:tag_manager')?.count).toBe(7);
+    expect(nodes.find((node) => node.id === 'system:random')?.count).toBeNull();
     expect(nodes.find((node) => node.id === 'folder:4')?.count).toBe(8);
     expect(nodes.find((node) => node.id === 'smart:7')?.count).toBe(7);
   });
@@ -77,12 +85,15 @@ describe('replacement sidebar reads', () => {
 
     expect(getNavigation).toHaveBeenCalledWith();
     expect(getSidebarCounts).toHaveBeenCalledWith();
+    expect(getNamespaceSummary).toHaveBeenCalledWith();
     expect(store.get(sidebarNodesAtom).map((node) => node.id)).toEqual([
       'system:active',
       'system:inbox',
       'system:recent_viewed',
       'system:uncategorized',
       'system:untagged',
+      'system:tag_manager',
+      'system:random',
       'system:duplicates',
       'system:trash',
       'folder:4',
@@ -90,12 +101,15 @@ describe('replacement sidebar reads', () => {
     ]);
   });
 
-  it('retries a revision race and rejects if the reads never converge', async () => {
+  it('keeps current counts when imports advance the revision during the read', async () => {
     getNavigation.mockResolvedValue({ ...navigation, revision: 12 });
     getSidebarCounts.mockResolvedValue(counts);
 
-    await expect(sidebarController.fetchTree()).rejects.toThrow('changed while it was being read');
-    expect(getNavigation).toHaveBeenCalledTimes(2);
-    expect(getSidebarCounts).toHaveBeenCalledTimes(2);
+    await sidebarController.fetchTree();
+
+    expect(store.get(sidebarNodesAtom).find((node) => node.id === 'system:inbox')?.count).toBe(2);
+    expect(getNavigation).toHaveBeenCalledTimes(1);
+    expect(getSidebarCounts).toHaveBeenCalledTimes(1);
+    expect(getNamespaceSummary).toHaveBeenCalledTimes(1);
   });
 });

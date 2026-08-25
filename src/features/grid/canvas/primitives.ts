@@ -8,21 +8,22 @@ export const NAME_FONT = GRID_NAME_FONT;
 export const INFO_FONT = GRID_INFO_FONT;
 export const RATING_FONT = GRID_RATING_FONT;
 
-const BADGE_HIDDEN_TYPES = new Set(['jpg', 'jpeg', 'png', 'webp']);
 const truncateCache = new Map<string, string>();
-
-export function isHiddenBadgeType(ext: string): boolean {
-  return BADGE_HIDDEN_TYPES.has(ext.toLowerCase());
-}
 
 const MIME_TO_EXT: Record<string, string> = {
   jpeg: 'jpg', png: 'png', gif: 'gif', webp: 'webp', 'svg+xml': 'svg',
   bmp: 'bmp', tiff: 'tiff', avif: 'avif', heic: 'heic', heif: 'heif',
-  jxl: 'jxl', 'x-icon': 'ico', 'vnd.adobe.photoshop': 'psd',
+  jxl: 'jpgxl', 'x-icon': 'ico', 'vnd.adobe.photoshop': 'psd',
   mp4: 'mp4', webm: 'webm', quicktime: 'mov', 'x-matroska': 'mkv',
   'x-flv': 'flv', 'x-msvideo': 'avi',
-  flac: 'flac', 'x-wav': 'wav', wav: 'wav',
-  pdf: 'pdf', 'epub+zip': 'epub',
+  mpeg: 'mp3', flac: 'flac', 'x-wav': 'wav', wav: 'wav', ogg: 'ogg',
+  mp4a: 'm4a', aac: 'aac', opus: 'opus',
+  pdf: 'pdf', 'epub+zip': 'epub', 'x-shockwave-flash': 'swf',
+  'vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+  'vnd.comicbook+zip': 'cbz', 'vnd.djvu': 'djvu',
+  plain: 'txt', markdown: 'md', json: 'json', rtf: 'rtf',
+  ttf: 'ttf', otf: 'otf', woff: 'woff', woff2: 'wof2',
 };
 
 export function mimeToExt(mime: string): string {
@@ -30,6 +31,12 @@ export function mimeToExt(mime: string): string {
   if (slash < 0) return '';
   const sub = mime.slice(slash + 1).toLowerCase();
   return MIME_TO_EXT[sub] ?? sub;
+}
+
+/** Compact grid label: four characters, except explicitly named five-letter formats. */
+export function formatLabelForMime(mime: string): string {
+  const extension = mimeToExt(mime);
+  return (extension === 'jpgxl' ? extension : extension.slice(0, 4)).toUpperCase();
 }
 
 export function drawImageCover(

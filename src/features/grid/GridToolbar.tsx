@@ -5,18 +5,16 @@
  *   [title(abs)] [- slider +] [view btn][filter btn][search input] [perf] [loading]
  */
 
-import { useAtomValue } from 'jotai';
-import { useRef, useState, useEffect, useCallback } from 'react';
+import { useAtomValue, useSetAtom } from 'jotai';
+import { useRef, useEffect, useCallback } from 'react';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
-import {
-  IconSearch,
-  IconEdit,
-} from '@tabler/icons-react';
+import { IconSearch } from '@tabler/icons-react';
 import {
   gridTransitionPhaseAtom,
   gridTargetSizeAtom,
   gridSearchTextAtom,
   gridFiltersAtom,
+  gridFilterToolbarOpenAtom,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import { viewerDisplayStateAtom, viewerDisplayControlsAtom } from '../../state/viewer';
@@ -30,7 +28,7 @@ import {
   TitlebarZoomSlider,
 } from '../../shared/ui/TitlebarControls';
 import { buildViewMenuEntries } from './GridViewMenu';
-import { buildFilterMenuEntries, countActiveGridFilters } from './GridFilterMenu';
+import { countActiveGridFilters } from './GridFilterMenu';
 import {
   ToolbarActualSizeIcon,
   ToolbarChevronIcon,
@@ -39,7 +37,9 @@ import {
   ToolbarLayoutIcon,
   ToolbarHistoryIcon,
 } from '../../shared/ui/icons/toolbar-icons';
+import { GroupEditIcon } from '../../shared/ui/icons/group-icons';
 import styles from './GridToolbar.module.css';
+import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 
 const ZOOM_MIN = 150;
 const ZOOM_MAX = 900;
@@ -84,25 +84,21 @@ function SearchInput() {
   const searchText = useAtomValue(gridSearchTextAtom);
   const ref = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'f') {
-        e.preventDefault();
-        ref.current?.focus();
-      }
+  useShortcutScope((e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+      e.preventDefault();
+      ref.current?.focus();
     }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, { priority: 30 });
 
   return (
     <div className={styles.searchWrap}>
-      <IconSearch size={13} className={styles.searchIcon} />
+      <IconSearch size={13} aria-hidden="true" />
       <input
         ref={ref}
         type="text"
         className={styles.searchInput}
-        placeholder="Search files, notes, sources..."
+        placeholder="Search"
         value={searchText}
         onChange={(e) => gridController.setSearchText(e.target.value)}
       />
@@ -128,6 +124,7 @@ export function ViewerToolbar() {
   const sliderDraggingRef = useRef(false);
   const sliderRef = useRef<HTMLInputElement>(null);
   const zoomLabelRef = useRef<HTMLSpanElement>(null);
+  const zoomMenu = useContextMenu();
 
   useEffect(() => {
     if (!controls?.zoom) return;
@@ -145,8 +142,24 @@ export function ViewerToolbar() {
   const canPrev = !!controls.navigate && state.currentIndex > 0;
   const canNext = !!controls.navigate && state.currentIndex < state.total - 1;
   const zoom = controls.zoom;
+  const openZoomMenu = (event: React.MouseEvent) => {
+    if (!zoom) return;
+    const current = Number.parseInt(zoomLabelRef.current?.textContent ?? '100', 10);
+    const levels = [5, 10, 25, 50, 100, 125, 150, 200, 300, 400, 800];
+    zoomMenu.open(event, [
+      ...levels.map((percent) => ({
+        label: `${percent}%`,
+        checked: current === percent,
+        action: () => zoom.setZoomScale(percent / 100),
+      })),
+      { separator: true },
+      { label: 'Actual size', shortcut: 'Mod+0', action: zoom.fitActual },
+      { label: 'Fit to window', shortcut: '`', action: zoom.fitToWindow },
+    ], { showSearch: false });
+  };
 
   return (
+    <>
     <TitlebarControls
       left={(
         <>
@@ -160,7 +173,20 @@ export function ViewerToolbar() {
       )}
       center={zoom ? (
         <div className={styles.sliderSection}>
-          <span ref={zoomLabelRef} className={styles.zoomLabel}>{state.zoomPercent ?? 100}%</span>
+          <span
+            ref={zoomLabelRef}
+            className={styles.zoomLabel}
+            role="button"
+            tabIndex={0}
+            onClick={openZoomMenu}
+            onContextMenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              const current = Number.parseInt(zoomLabelRef.current?.textContent ?? '100', 10);
+              if (current === 100) zoom.fitToWindow();
+              else zoom.fitActual();
+            }}
+          >{state.zoomPercent ?? 100}%</span>
           <TitlebarRangeSlider
             ref={sliderRef}
             aria-label="Zoom"
@@ -197,9 +223,9 @@ export function ViewerToolbar() {
           </>
         ) : null}
         {controls.edit ? (
-          <KbdTooltip label="Edit collection">
-            <TitlebarControlButton onClick={controls.edit} aria-label="Edit collection">
-              <IconEdit size={16} stroke={1.5} />
+          <KbdTooltip label="Edit group">
+            <TitlebarControlButton onClick={controls.edit} aria-label="Edit group">
+              <GroupEditIcon size={16} />
             </TitlebarControlButton>
           </KbdTooltip>
         ) : null}
@@ -226,17 +252,26 @@ export function ViewerToolbar() {
         </>
       )}
     />
+    {zoomMenu.state && (
+      <ContextMenu
+        entries={zoomMenu.state.entries}
+        position={zoomMenu.state.position}
+        showSearch={zoomMenu.state.showSearch}
+        onClose={zoomMenu.close}
+      />
+    )}
+    </>
   );
 }
 
 export function GridToolbar() {
   const transitionPhase = useAtomValue(gridTransitionPhaseAtom);
   const viewMenu = useContextMenu();
-  const filterMenu = useContextMenu();
   const filters = useAtomValue(gridFiltersAtom);
+  const filterToolbarOpen = useAtomValue(gridFilterToolbarOpenAtom);
+  const setFilterToolbarOpen = useSetAtom(gridFilterToolbarOpenAtom);
   const activeFilterCount = countActiveGridFilters(filters);
   const viewBtnRef = useRef<HTMLButtonElement>(null);
-  const filterBtnRef = useRef<HTMLButtonElement>(null);
 
   const openViewMenu = useCallback(() => {
     const rect = viewBtnRef.current?.getBoundingClientRect();
@@ -244,33 +279,12 @@ export function GridToolbar() {
     viewMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, buildViewMenuEntries());
   }, [viewMenu]);
 
-  const openFilterMenu = useCallback(() => {
-    const rect = filterBtnRef.current?.getBoundingClientRect();
-    if (!rect) return;
-    filterMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, buildFilterMenuEntries(filterMenu.close));
-  }, [filterMenu]);
-
-  const toolbarRef = useRef<HTMLDivElement>(null);
-  const [toolbarWidth, setToolbarWidth] = useState(9999);
-  useEffect(() => {
-    const el = toolbarRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) setToolbarWidth(entry.contentRect.width);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-
-  const showZoom = toolbarWidth > 300;
-
   return (
     <div
-      ref={toolbarRef}
       className={styles.toolbar}
       data-transition-phase={transitionPhase}
     >
-      <div className={styles.centerGroup} style={showZoom ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}>
+      <div className={styles.centerGroup}>
         <ZoomControls />
       </div>
 
@@ -282,7 +296,7 @@ export function GridToolbar() {
         </KbdTooltip>
 
         <KbdTooltip label="Filter library">
-          <TitlebarControlButton ref={filterBtnRef} active={filterMenu.state != null || activeFilterCount > 0} onClick={openFilterMenu} aria-label="Filter library">
+          <TitlebarControlButton active={filterToolbarOpen || activeFilterCount > 0} onClick={() => setFilterToolbarOpen((value) => !value)} aria-label="Filter library">
             <ToolbarFilterIcon />
             {activeFilterCount > 0 ? <span className={styles.filterBadge}>{activeFilterCount}</span> : null}
           </TitlebarControlButton>
@@ -295,11 +309,9 @@ export function GridToolbar() {
         <ContextMenu
           entries={viewMenu.state.entries}
           position={viewMenu.state.position}
+          showSearch={viewMenu.state.showSearch}
           onClose={viewMenu.close}
         />
-      )}
-      {filterMenu.state && (
-        <ContextMenu entries={filterMenu.state.entries} position={filterMenu.state.position} onClose={filterMenu.close} />
       )}
     </div>
   );

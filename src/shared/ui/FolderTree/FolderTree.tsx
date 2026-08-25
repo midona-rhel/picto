@@ -6,7 +6,7 @@
  */
 
 import { useState, useEffect, useMemo, useCallback, type ReactNode } from 'react';
-import { IconChevronRight, IconFolder, IconCheck } from '@tabler/icons-react';
+import { IconChevronRight, IconFolder, IconCheck, IconX } from '@tabler/icons-react';
 import type { SidebarNodeDto } from '../../types/canonical';
 import checkStyles from '../OverlayShell/OverlayShell.module.css';
 import styles from './FolderTree.module.css';
@@ -93,6 +93,11 @@ export interface FolderTreeProps {
   checkable?: boolean;
   /** Folder IDs the entity is already a member of — shown as non-toggleable context. */
   memberOf?: Set<number>;
+  excluded?: Set<number>;
+  /** Use filter-specific green/red selection semantics instead of ordinary add-selection color. */
+  filterSelection?: boolean;
+  onExclude?: (folderId: number, event: React.MouseEvent) => void;
+  onContextMenu?: (folderId: number, event: React.MouseEvent) => void;
 }
 
 /** Flatten visible tree into ordered folder IDs (respects expand/collapse + search). */
@@ -113,7 +118,7 @@ export function flattenVisibleIds(
   return ids;
 }
 
-export function FolderTree({ nodes, selected, onToggle, search = '', checkable = true, memberOf }: FolderTreeProps) {
+export function FolderTree({ nodes, selected, onToggle, search = '', checkable = true, memberOf, excluded, filterSelection = false, onExclude, onContextMenu }: FolderTreeProps) {
   const tree = useMemo(() => buildTree(nodes), [nodes]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
@@ -139,15 +144,22 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
     const isExpanded = effectiveExpanded.has(node.id);
     const isSelected = selected.has(folderId);
     const isMember = memberOf?.has(folderId) ?? false;
+    const isExcluded = excluded?.has(folderId) ?? false;
 
     if (searchLower && !matchesSearch(treeNode, searchLower)) return [];
 
     const result: ReactNode[] = [
       <div
         key={node.id}
-        className={`${styles.row} ${isMember ? styles.rowMember : ''}`}
+        className={`${styles.row} ${isMember ? styles.rowMember : ''} ${isExcluded ? styles.rowExcluded : ''}`}
         style={{ paddingLeft: 6 + depth * 20 }}
         onClick={isMember ? undefined : (e) => onToggle(folderId, e)}
+        onContextMenu={onExclude || onContextMenu ? (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (onExclude) onExclude(folderId, event);
+          else onContextMenu?.(folderId, event);
+        } : undefined}
       >
         {hasChildren ? (
           <div
@@ -165,8 +177,8 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
               <IconCheck size={10} />
             </div>
           ) : (
-            <div className={`${checkStyles.checkBox} ${isSelected ? checkStyles.checkBoxChecked : ''}`}>
-              {isSelected && <IconCheck size={10} />}
+            <div className={`${checkStyles.checkBox} ${isExcluded ? checkStyles.checkBoxExcluded : isSelected ? (filterSelection ? checkStyles.checkBoxFilterChecked : checkStyles.checkBoxChecked) : ''}`}>
+              {isExcluded ? <IconX size={10} /> : isSelected ? <IconCheck size={10} /> : null}
             </div>
           )
         )}

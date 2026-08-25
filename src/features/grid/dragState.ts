@@ -76,6 +76,7 @@ export function startDrag(
   sourceScope: GridDragState['sourceScope'],
   ownerId: number | null = null,
 ) {
+  document.documentElement.setAttribute('data-grid-drag-active', 'true');
   state = {
     active: true,
     ownerId,
@@ -175,6 +176,7 @@ export function endDrag() {
   if (!state.active) return;
   const { itemIds, dropTarget, sourceScope } = state;
   state = { ...state, active: false, ownerId: null, dropTarget: null };
+  document.documentElement.removeAttribute('data-grid-drag-active');
   clearDropHighlights();
   if (dropTarget) {
     void dragController.executeDrop(itemIds, dropTarget, sourceScope).catch((err) => console.error('[drag] drop failed:', err));
@@ -183,6 +185,7 @@ export function endDrag() {
 
 export function cancelDrag() {
   state = { ...state, active: false, ownerId: null, dropTarget: null };
+  document.documentElement.removeAttribute('data-grid-drag-active');
   clearDropHighlights();
 }
 

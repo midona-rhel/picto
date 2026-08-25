@@ -18,7 +18,6 @@ mod filesystem;
 mod metadata;
 mod sites;
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
@@ -30,13 +29,18 @@ use crate::subscriptions::source_adapter::{DownloadedItem, FailedDownloadedItem,
 
 use self::config::build_config;
 
-pub use failure::{classify_failure, error_tail, final_error_line, FailureKind, RecoveryAction};
+const BRIDGE_INACTIVITY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(90);
+
+pub use failure::{
+    classify_failure, error_tail, final_error_line, has_error_lines, FailureKind, RecoveryAction,
+};
 pub use filesystem::cleanup_temp_dir;
 pub use metadata::{extract_creator_identifier, parse_metadata, parse_tags};
 pub use sites::{
     build_url, extract_domain, normalize_baraag_username, normalize_fanbox_creator,
-    normalize_furaffinity_username, normalize_patreon_creator, normalize_subscribestar_creator,
-    normalize_tumblr_blog, normalize_webtoons_url, site_by_id, SiteEntry, SITES,
+    normalize_furaffinity_username, normalize_onlyfans_creator, normalize_patreon_creator,
+    normalize_subscribestar_creator, normalize_tumblr_blog, normalize_twitter_username,
+    normalize_webtoons_url, site_by_id, SiteEntry, SITES,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -82,7 +86,6 @@ pub struct RunSummary {
     pub had_download_errors: bool,
     pub failed_items: Vec<FailedDownloadedItem>,
     pub discovered_items: usize,
-    pub discovered_post_ids: Vec<String>,
     pub skipped_archive_items: usize,
     pub source_cursor: Option<String>,
     pub source_page_items: usize,
@@ -100,14 +103,13 @@ struct BridgeEvent {
     #[serde(default)]
     cursor: Option<String>,
     #[serde(default)]
-    item_count: Option<usize>,
+    error_message: Option<String>,
 }
 
 #[derive(Default)]
 struct BridgeOutputStats {
     failed_items: Vec<FailedDownloadedItem>,
     discovered_items: usize,
-    discovered_post_ids: BTreeSet<String>,
     skipped_archive_items: usize,
     source_cursor: Option<String>,
     source_page_items: usize,
@@ -173,7 +175,12 @@ fn bridge_ranges_for_site(
     if matches!(site_id, "idolcomplex" | "sankaku") {
         return bridge_ranges(1, limit);
     }
-    if matches!(site_id, "deviantart" | "webtoons") {
+    if site_id == "deviantart" {
+        // The bridge pages whole deviations before expanding each one into
+        // child media and emits the authoritative source cursor.
+        return (None, None);
+    }
+    if site_id == "webtoons" {
         let child_range = limit.map(|limit| {
             let start = start.max(1);
             let end = start.saturating_add(limit).saturating_sub(1);
@@ -243,6 +250,7 @@ impl GalleryDlRunner {
         &self,
         opts: &RunOptions,
         item_tx: tokio::sync::mpsc::Sender<DownloadedItem>,
+        post_tx: Option<tokio::sync::mpsc::Sender<ParsedMetadata>>,
     ) -> Result<RunSummary, String> {
         let run_start = std::time::Instant::now();
         let launch = self.launch_spec()?;
@@ -289,6 +297,8 @@ impl GalleryDlRunner {
             "gallery_dl_module_dir": launch.module_dir().map(|path| path.display().to_string()),
             "post_range": post_range,
             "child_range": child_range,
+            "post_limit": opts.post_limit,
+            "range_start": opts.range_start,
             "source_cursor": opts.source_cursor,
             "abort_threshold": opts.abort_threshold,
             "archive_path": (!opts.archive_path.as_os_str().is_empty()).then(|| opts.archive_path.display().to_string()),
@@ -366,6 +376,8 @@ impl GalleryDlRunner {
 
         // 5. Stream stdout: bridge emits NDJSON events.
         use tokio::io::{AsyncBufReadExt, BufReader};
+        let (progress_tx, mut progress_rx) = tokio::sync::watch::channel(std::time::Instant::now());
+        let stdout_progress = progress_tx.clone();
         let stdout_handle = tokio::spawn(async move {
             let mut stats = BridgeOutputStats::default();
             if let Some(out) = child_stdout {
@@ -379,15 +391,29 @@ impl GalleryDlRunner {
                         tracing::warn!(line = trimmed, "gallery-dl bridge: invalid NDJSON event");
                         continue;
                     };
+                    if matches!(
+                        event.event.as_str(),
+                        "item_discovered"
+                            | "post_traversed"
+                            | "item_downloaded"
+                            | "item_skipped_archive"
+                            | "item_failed_final"
+                            | "source_cursor"
+                    ) {
+                        stdout_progress.send_replace(std::time::Instant::now());
+                    }
                     let metadata = event.metadata.as_ref().map(|raw| {
                         metadata::parse_metadata_with_url(raw, event.item_url.as_deref())
                     });
                     match event.event.as_str() {
                         "item_discovered" => {
                             stats.discovered_items += 1;
-                            if let Some(metadata) = metadata {
-                                if let Some(post_id) = metadata.post_id {
-                                    stats.discovered_post_ids.insert(post_id);
+                        }
+                        "post_traversed" => {
+                            stats.source_page_items += 1;
+                            if let (Some(post_tx), Some(metadata)) = (&post_tx, metadata) {
+                                if post_tx.send(metadata).await.is_err() {
+                                    tracing::warn!("gallery-dl bridge: post receiver dropped");
                                 }
                             }
                         }
@@ -413,26 +439,23 @@ impl GalleryDlRunner {
                         }
                         "item_skipped_archive" => {
                             stats.skipped_archive_items += 1;
-                            if let Some(metadata) = metadata {
-                                if let Some(post_id) = metadata.post_id {
-                                    stats.discovered_post_ids.insert(post_id);
-                                }
-                            }
                         }
                         "item_failed_final" => {
                             if let Some(metadata) = metadata {
-                                if let Some(post_id) = metadata.post_id.clone() {
-                                    stats.discovered_post_ids.insert(post_id);
-                                }
+                                let item_url =
+                                    event.item_url.as_deref().unwrap_or("unknown media URL");
+                                let error_message = event
+                                    .error_message
+                                    .filter(|message| !message.trim().is_empty())
+                                    .unwrap_or_else(|| format!("Could not download {item_url}"));
                                 stats.failed_items.push(FailedDownloadedItem {
                                     metadata,
-                                    error_message: "gallery-dl exhausted item retries".to_string(),
+                                    error_message,
                                 });
                             }
                         }
                         "source_cursor" => {
                             stats.source_cursor = event.cursor;
-                            stats.source_page_items = event.item_count.unwrap_or_default();
                         }
                         _ => {}
                     }
@@ -468,7 +491,26 @@ impl GalleryDlRunner {
         let child_pid = child.id();
         info!(pid = ?child_pid, "gallery-dl subprocess spawned");
 
-        let status = tokio::select! {
+        let inactivity = async move {
+            loop {
+                let deadline = *progress_rx.borrow() + BRIDGE_INACTIVITY_TIMEOUT;
+                tokio::select! {
+                    _ = tokio::time::sleep_until(deadline.into()) => {
+                        if progress_rx.borrow().elapsed() >= BRIDGE_INACTIVITY_TIMEOUT {
+                            break;
+                        }
+                    }
+                    changed = progress_rx.changed() => {
+                        if changed.is_err() {
+                            std::future::pending::<()>().await;
+                        }
+                    }
+                }
+            }
+        };
+        tokio::pin!(inactivity);
+
+        let (status, stalled) = tokio::select! {
             _ = opts.cancel.cancelled() => {
                 info!(pid = ?child_pid, "Gallery-dl cancelled by user, killing subprocess");
                 // On Windows, child.kill() only terminates the direct process, not
@@ -514,7 +556,7 @@ impl GalleryDlRunner {
                     let _ = child.kill().await;
                 }
                 // Short timeout on wait — if the process doesn't die in 2s, move on
-                match tokio::time::timeout(
+                let status = match tokio::time::timeout(
                     std::time::Duration::from_secs(2),
                     child.wait(),
                 ).await {
@@ -527,16 +569,38 @@ impl GalleryDlRunner {
                         warn!("gallery-dl didn't exit within 2s after kill — abandoning");
                         std::process::ExitStatus::default()
                     }
-                }
+                };
+                (status, false)
             }
             result = child.wait() => {
-                result.map_err(|e| format!("Gallery-dl process error: {e}"))?
+                (result.map_err(|e| format!("Gallery-dl process error: {e}"))?, false)
+            }
+            _ = &mut inactivity => {
+                warn!(pid = ?child_pid, "gallery-dl bridge made no progress; killing subprocess");
+                let _ = child.kill().await;
+                let status = match tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    child.wait(),
+                ).await {
+                    Ok(Ok(status)) => status,
+                    _ => std::process::ExitStatus::default(),
+                };
+                (status, true)
             }
         };
 
         let exit_code = status.code().unwrap_or(-1);
         let bridge_stats = stdout_handle.await.unwrap_or_default();
         let stderr = stderr_handle.await.unwrap_or_default();
+        if stalled {
+            return Err(format!(
+                "gallery-dl made no progress for {} seconds{}",
+                BRIDGE_INACTIVITY_TIMEOUT.as_secs(),
+                final_error_line(&stderr)
+                    .map(|line| format!(": {line}"))
+                    .unwrap_or_default()
+            ));
+        }
         let had_download_errors = !bridge_stats.failed_items.is_empty();
 
         info!(
@@ -544,7 +608,7 @@ impl GalleryDlRunner {
             had_download_errors,
             discovered_items = bridge_stats.discovered_items,
             skipped_archive_items = bridge_stats.skipped_archive_items,
-            discovered_posts = bridge_stats.discovered_post_ids.len(),
+            traversed_posts = bridge_stats.source_page_items,
             elapsed_ms = run_start.elapsed().as_millis(),
             "gallery-dl finished"
         );
@@ -558,7 +622,6 @@ impl GalleryDlRunner {
             temp_dir,
             failed_items: bridge_stats.failed_items,
             discovered_items: bridge_stats.discovered_items,
-            discovered_post_ids: bridge_stats.discovered_post_ids.into_iter().collect(),
             skipped_archive_items: bridge_stats.skipped_archive_items,
             source_cursor: bridge_stats.source_cursor,
             source_page_items: bridge_stats.source_page_items,
@@ -749,10 +812,10 @@ mod tests {
     }
 
     #[test]
-    fn deviantart_uses_child_range_without_splitting_deviation_images() {
+    fn deviantart_pages_whole_source_posts_in_the_bridge() {
         assert_eq!(
             bridge_ranges_for_site("deviantart", 5, Some(2)),
-            (None, Some("5-6".to_string()))
+            (None, None)
         );
         assert_eq!(bridge_ranges_for_site("deviantart", 1, None), (None, None));
     }
@@ -765,6 +828,9 @@ mod tests {
 
     #[test]
     fn patreon_uses_native_cursor_batches() {
-        assert_eq!(bridge_ranges_for_site("patreon", 101, Some(100)), (None, None));
+        assert_eq!(
+            bridge_ranges_for_site("patreon", 101, Some(100)),
+            (None, None)
+        );
     }
 }

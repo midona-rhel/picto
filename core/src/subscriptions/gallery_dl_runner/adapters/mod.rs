@@ -6,11 +6,12 @@ mod e621;
 mod fanbox;
 mod furaffinity;
 mod hentaifoundry;
-mod pixiv;
 mod patreon;
+mod pixiv;
 mod sankaku;
 mod subscribestar;
 mod tumblr;
+mod twitter;
 mod webtoons;
 
 use serde_json::Value;
@@ -71,6 +72,7 @@ pub(super) fn adapter_for_json(json: &Value) -> Option<&'static dyn SiteAdapter>
         "pixiv" => Some(&pixiv::ADAPTER),
         "subscribestar" => Some(&subscribestar::ADAPTER),
         "tumblr" => Some(&tumblr::ADAPTER),
+        "twitter" => Some(&twitter::ADAPTER),
         "webtoons" => Some(&webtoons::ADAPTER),
         _ => None,
     }

@@ -5,12 +5,21 @@ export interface ViewportSnapshot {
   dpr: number;
 }
 
-export function snapshotViewport(container: HTMLDivElement): ViewportSnapshot {
+export interface CommittedViewportDimensions {
+  width: number;
+  height: number;
+  dpr: number;
+}
+
+export function snapshotViewport(
+  container: HTMLDivElement,
+  committed?: CommittedViewportDimensions,
+): ViewportSnapshot {
   return {
     scrollTop: container.scrollTop,
-    viewportHeight: container.clientHeight,
-    containerWidth: container.clientWidth,
-    dpr: window.devicePixelRatio || 1,
+    viewportHeight: committed?.height ?? container.clientHeight,
+    containerWidth: committed?.width ?? container.clientWidth,
+    dpr: committed?.dpr ?? (window.devicePixelRatio || 1),
   };
 }
 

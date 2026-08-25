@@ -7,9 +7,6 @@
  */
 
 import { useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from 'react';
-import { createPortal } from 'react-dom';
-import { KbdTooltip } from '../../shared/ui/KbdTooltip';
-import { ToolbarChevronIcon, ToolbarCloseIcon } from '../../shared/ui/icons/toolbar-icons';
 import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
 import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
@@ -18,6 +15,11 @@ import { useImageZoom, type ImageSize } from './hooks/useImageZoom';
 import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { useRecordMediaView } from './hooks/useRecordMediaView';
 import { VideoPlayer } from './video/VideoPlayer';
+import { DetailMediaRenderer } from './document/DetailMediaRenderer';
+import { detailRendererKind } from './document/detailRendererKind';
+import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
+import { QuickLookHost } from './QuickLookHost';
 import styles from './QuickLook.module.css';
 
 export interface QuickLookProps {
@@ -29,29 +31,28 @@ export interface QuickLookProps {
   onLoadMore?: () => void;
 }
 
-export function QuickLook({
-  items, currentIndex, totalCount, onNavigate, onClose, onLoadMore,
-}: QuickLookProps) {
+interface QuickLookContentProps extends QuickLookProps {
+  thumbnailReady?: boolean;
+  onReady: () => void;
+}
+
+export function QuickLookContent({
+  items, currentIndex, onNavigate, onClose, onLoadMore, onReady, thumbnailReady = false,
+}: QuickLookContentProps) {
   const currentItem = items[currentIndex] ?? null;
   const currentItemId = currentItem?.item_id ?? 0;
   const currentHash = currentItem?.display_file_hash ?? '';
   useRecordMediaView(currentItemId);
   const currentMime = currentItem?.display_mime_type ?? '';
-  const isVideo = currentMime.startsWith('video/');
-  const total = totalCount ?? items.length;
+  const rendererKind = detailRendererKind(currentMime);
+  const isImage = rendererKind === 'image';
+  const isVideo = rendererKind === 'video';
+  const isAudio = rendererKind === 'audio';
   const thumbHash = currentHash;
-
-  // Fade-in
-  const [isOpen, setIsOpen] = useState(false);
-  useEffect(() => {
-    const raf = requestAnimationFrame(() => setIsOpen(true));
-    return () => cancelAnimationFrame(raf);
-  }, []);
 
   // Refs
   const containerRef = useRef<HTMLDivElement>(null);
-  const thumbFrameRef = useRef<HTMLDivElement>(null);
-  const fullFrameRef = useRef<HTMLDivElement>(null);
+  const imageFrameRef = useRef<HTMLDivElement>(null);
   const fullImgRef = useRef<HTMLImageElement>(null);
 
   // Media pipeline (before imageSize — derives from displayedHash)
@@ -68,10 +69,14 @@ export function QuickLook({
     hash: currentHash || null,
     thumbnailHash: currentItem?.display_file_hash ?? null,
     mime: currentMime,
-    isVideo,
+    isVideo: !isImage,
     imgRef: fullImgRef,
     neighborHashes,
   });
+
+  useEffect(() => {
+    if (!isImage || thumbnailReady || pipeline.thumbLoaded || pipeline.fullVisible) onReady();
+  }, [isImage, onReady, pipeline.fullVisible, pipeline.thumbLoaded, thumbnailReady]);
 
   // Image size from displayed item
   const displayedItem = pipeline.displayedHash
@@ -83,7 +88,7 @@ export function QuickLook({
   }, [pipeline.displayedHash]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Zoom/pan
-  const zoom = useImageZoom(containerRef, imageSize, [thumbFrameRef, fullFrameRef]);
+  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef]);
 
   // Fit when displayed image changes
   useLayoutEffect(() => {
@@ -107,7 +112,7 @@ export function QuickLook({
   }, [currentIndex, items.length, onNavigate, onLoadMore]);
 
   // Keyboard — registry defs for EU alternative keys
-  useEffect(() => {
+  useShortcutScope((e) => {
     const closeDef = getShortcut('view.closeDetail')!;
     const detailDef = getShortcut('view.detailView')!;
     const quicklookDef = getShortcut('view.quicklook')!;
@@ -118,88 +123,80 @@ export function QuickLook({
     const zoomOutDef = getShortcut('view.zoomOut')!;
     const actualDef = getShortcut('view.actualSize')!;
 
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-
       // Escape, Space (quicklook toggle), or Enter (detail toggle) all close
       if (matchesShortcutDef(e, closeDef) || matchesShortcutDef(e, quicklookDef) || matchesShortcutDef(e, detailDef)) { e.preventDefault(); onClose(currentItemId); return; }
       if (matchesShortcutDef(e, prevDef)) { e.preventDefault(); navigate(-1); return; }
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
-      if (matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }
-      if (matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale * 1.25); return; }
-      if (matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale / 1.25); return; }
-      if (matchesShortcutDef(e, actualDef)) { e.preventDefault(); zoom.fitActual(); return; }
+      if (isImage && matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }
+      if (isImage && matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale * 1.25); return; }
+      if (isImage && matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale / 1.25); return; }
+      if (isImage && matchesShortcutDef(e, actualDef)) { e.preventDefault(); zoom.fitActual(); return; }
 
       // Rating: 0-5
       if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key >= '0' && e.key <= '5') {
         e.preventDefault();
         void entityMutations.setItemRating(currentItemId, parseInt(e.key, 10));
       }
-    };
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
-  }, [currentItemId, navigate, onClose, zoom]);
+  }, { priority: 60 });
 
   if (!currentItem) return null;
 
   const thumbUrl = mediaThumbnailUrl(thumbHash);
-  const canPrev = currentIndex > 0;
-  const canNext = currentIndex < items.length - 1;
-
-  return createPortal(
-    <div className={styles.overlay} data-quick-look-overlay>
-      <KbdTooltip label="Close" shortcut="Space" position="bottom">
-        <button className={styles.exitBtn} onClick={() => onClose(currentItemId)}>
-          <ToolbarCloseIcon />
-        </button>
-      </KbdTooltip>
-
-      <div
-        ref={containerRef}
-        className={`${styles.imageArea} ${isOpen ? styles.open : ''} ${zoom.isDragging ? styles.dragging : ''}`}
-        onMouseDown={zoom.handlers.onMouseDown}
-      >
-        {isVideo ? (
+  return (
+    <div
+      ref={containerRef}
+      className={`${styles.imageArea} ${zoom.isDragging ? styles.dragging : ''}`}
+      onMouseDown={isImage ? zoom.handlers.onMouseDown : undefined}
+    >
+        {isAudio ? (
+          <VideoPlayer
+            key={currentHash}
+            kind="audio"
+            src={mediaFileUrl(thumbHash, currentMime)}
+            waveformSrc={thumbUrl}
+            muted={false}
+          />
+        ) : isVideo ? (
           <VideoPlayer key={currentHash} src={mediaFileUrl(thumbHash, currentMime)} />
+        ) : !isImage ? (
+          <DetailMediaRenderer
+            hash={currentHash}
+            mimeType={currentMime}
+            displayName={currentItem.name}
+          />
         ) : (
-          <>
-            <div ref={thumbFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
-              <img
-                src={pipeline.thumbUrl || thumbUrl}
-                alt="" draggable={false}
-                onLoad={pipeline.handleThumbLoad}
-                style={{ display: 'block', width: imageSize?.width, height: imageSize?.height, opacity: pipeline.thumbLoaded ? 1 : 0 }}
-              />
-            </div>
-            <div ref={fullFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
-              {pipeline.fullUrl && (
-                <img
-                  ref={fullImgRef}
-                  src={pipeline.fullUrl}
-                  alt="" decoding="async" draggable={false}
-                  onLoad={pipeline.handleFullLoad}
-                  style={{ display: 'block', width: imageSize?.width, height: imageSize?.height, opacity: pipeline.fullVisible ? 1 : 0, transition: 'opacity 130ms ease' }}
-                />
-              )}
-            </div>
-          </>
+          <ImageCrossfadeFrame
+            frameRef={imageFrameRef}
+            fullImageRef={fullImgRef}
+            imageSize={imageSize}
+            thumbnailUrl={pipeline.thumbUrl || thumbUrl}
+            fullUrl={pipeline.fullUrl}
+            thumbnailVisible={thumbnailReady || pipeline.thumbLoaded}
+            fullVisible={pipeline.fullVisible}
+            onThumbnailLoad={pipeline.handleThumbLoad}
+            onFullLoad={pipeline.handleFullLoad}
+          />
         )}
-      </div>
+    </div>
+  );
+}
 
-      <div className={styles.inlineToolbar}>
-        <KbdTooltip label="Previous" shortcut="ArrowLeft">
-          <button className={styles.navBtn} onClick={() => navigate(-1)} disabled={!canPrev}>
-            <ToolbarChevronIcon direction="left" />
-          </button>
-        </KbdTooltip>
-        <span className={styles.pageCounter}>{currentIndex + 1} / {total}</span>
-        <KbdTooltip label="Next" shortcut="ArrowRight">
-          <button className={styles.navBtn} onClick={() => navigate(1)} disabled={!canNext}>
-            <ToolbarChevronIcon direction="right" />
-          </button>
-        </KbdTooltip>
-      </div>
-    </div>,
-    document.body,
+export function QuickLook(props: QuickLookProps) {
+  const [contentReady, setContentReady] = useState(false);
+  const currentItemId = props.items[props.currentIndex]?.item_id ?? 0;
+  const markReady = useCallback(() => setContentReady(true), []);
+
+  return (
+    <QuickLookHost
+      contentReady={contentReady}
+      currentIndex={props.currentIndex}
+      totalCount={props.totalCount ?? props.items.length}
+      canPrevious={props.currentIndex > 0}
+      canNext={props.currentIndex < props.items.length - 1}
+      onNavigate={props.onNavigate}
+      onClose={() => props.onClose(currentItemId)}
+    >
+      <QuickLookContent {...props} onReady={markReady} />
+    </QuickLookHost>
   );
 }

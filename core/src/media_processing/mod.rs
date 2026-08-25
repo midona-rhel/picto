@@ -4,6 +4,7 @@
 mod adapters;
 mod analysis;
 mod detection;
+pub mod formats;
 mod hashing;
 mod phash;
 mod source;
@@ -14,7 +15,9 @@ pub mod colors;
 pub mod ffmpeg;
 pub mod ffmpeg_path;
 pub mod gallery_dl_path;
+pub mod jxl;
 pub mod office;
+pub mod onlyfans_path;
 pub mod pdf;
 pub mod specialty;
 pub mod svg;
@@ -22,8 +25,9 @@ pub mod svg;
 use std::path::Path;
 
 pub use analysis::get_file_info;
-pub use detection::{get_mime, has_supported_extension, is_allowed_mime, is_image};
-pub use hashing::get_hash_from_bytes;
+pub use detection::{get_mime, is_allowed_mime, is_image};
+pub use formats::has_supported_extension;
+pub use hashing::{get_hash_from_bytes, get_hash_from_path};
 pub use phash::{
     compute_phash, compute_phash_base64, compute_phash_base64_from_image, compute_phash_from_image,
 };

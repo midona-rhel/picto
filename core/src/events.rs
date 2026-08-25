@@ -93,7 +93,7 @@ impl<S: tracing::Subscriber> Layer<S> for EventEmitLayer {
         let payload = serde_json::json!({
             "level": level,
             "target": target,
-            "message": visitor.message,
+            "message": visitor.render(),
             "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         });
 
@@ -106,6 +106,19 @@ impl<S: tracing::Subscriber> Layer<S> for EventEmitLayer {
 #[derive(Default)]
 struct MessageVisitor {
     message: String,
+    fields: Vec<String>,
+}
+
+impl MessageVisitor {
+    fn render(self) -> String {
+        if self.fields.is_empty() {
+            self.message
+        } else if self.message.is_empty() {
+            self.fields.join(" ")
+        } else {
+            format!("{} {}", self.message, self.fields.join(" "))
+        }
+    }
 }
 
 impl tracing::field::Visit for MessageVisitor {
@@ -117,11 +130,7 @@ impl tracing::field::Visit for MessageVisitor {
                 self.message = self.message[1..self.message.len() - 1].to_string();
             }
         } else {
-            if !self.message.is_empty() {
-                self.message.push(' ');
-            }
-            self.message
-                .push_str(&format!("{}={:?}", field.name(), value));
+            self.fields.push(format!("{}={:?}", field.name(), value));
         }
     }
 
@@ -129,35 +138,19 @@ impl tracing::field::Visit for MessageVisitor {
         if field.name() == "message" {
             self.message = value.to_string();
         } else {
-            if !self.message.is_empty() {
-                self.message.push(' ');
-            }
-            self.message
-                .push_str(&format!("{}={}", field.name(), value));
+            self.fields.push(format!("{}={}", field.name(), value));
         }
     }
 
     fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
-        if !self.message.is_empty() {
-            self.message.push(' ');
-        }
-        self.message
-            .push_str(&format!("{}={}", field.name(), value));
+        self.fields.push(format!("{}={}", field.name(), value));
     }
 
     fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
-        if !self.message.is_empty() {
-            self.message.push(' ');
-        }
-        self.message
-            .push_str(&format!("{}={}", field.name(), value));
+        self.fields.push(format!("{}={}", field.name(), value));
     }
 
     fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
-        if !self.message.is_empty() {
-            self.message.push(' ');
-        }
-        self.message
-            .push_str(&format!("{}={}", field.name(), value));
+        self.fields.push(format!("{}={}", field.name(), value));
     }
 }

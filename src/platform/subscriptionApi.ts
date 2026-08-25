@@ -17,11 +17,16 @@ import type { CreatedSubscription } from '../shared/types/generated/application/
 import type { CreatedSubscriptionQuery } from '../shared/types/generated/application/CreatedSubscriptionQuery';
 import type { CreatedSubscriptionRun } from '../shared/types/generated/application/CreatedSubscriptionRun';
 import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
+import type { SubscriptionCoverCandidateCursor } from '../shared/types/generated/application/SubscriptionCoverCandidateCursor';
+import type { SubscriptionCoverCandidatePage } from '../shared/types/generated/application/SubscriptionCoverCandidatePage';
+import type { SubscriptionCoverSelection } from '../shared/types/generated/application/SubscriptionCoverSelection';
 import type {
   AuthSessionState,
   CredentialDomain,
   CredentialHealth,
+  OnlyFansManualAuthInput,
   SubscriptionInfo,
+  SubscriptionCover,
   SubscriptionIssuePage,
   SubscriptionProgressEvent,
   SubscriptionRunRecord,
@@ -56,11 +61,14 @@ function mapQuery(query: SubscriptionView['queries'][number]) {
     query_text: query.query_text,
     display_name: query.display_name,
     notes: query.notes,
+    group_posts: query.group_posts,
     paused: query.paused,
     last_check_time: latest(query.last_success_at, query.last_failure_at),
     files_found: query.media_count,
     posts_found: query.post_count,
     completed_initial_run: query.initial_run_complete,
+    source_history_complete: query.source_history_complete,
+    successful_run_count: query.successful_run_count,
     resume_cursor: null,
     resume_strategy: null,
     last_success_at: query.last_success_at,
@@ -78,6 +86,9 @@ function mapSubscription(subscription: SubscriptionView): SubscriptionInfo {
     paused: subscription.paused,
     created_at: '',
     total_files: subscription.media_count,
+    posts_per_run: subscription.periodic_post_limit ?? subscription.initial_post_limit ?? 100,
+    target_folder_ids: subscription.destination.target_folder_ids,
+    automatic_tags: subscription.destination.automatic_tags,
     queries: subscription.queries.map(mapQuery),
   };
 }
@@ -97,11 +108,13 @@ function mapProgress(
     mode: 'replacement',
     query_id: null,
     query_name: null,
+    posts_traversed: counts.posts_traversed,
+    posts_added: counts.posts_added,
     files_downloaded: counts.downloaded,
     files_skipped: 0,
     queued_for_ingest: current?.counts.queued ?? Math.max(0, discovered - counts.ingested),
     ingesting: 0,
-    ingested: counts.ingested,
+    media_added: counts.ingested,
     reused: 0,
     failed_ingest: counts.failed,
     pages_fetched: 0,
@@ -112,7 +125,6 @@ function mapProgress(
     phase: status,
     current_post_id: null,
     current_post_items: 0,
-    posts_processed: 0,
     resume_cursor: null,
     last_error: null,
     finished_status: null,
@@ -130,6 +142,9 @@ function mapRun(run: SubscriptionRunSummary): SubscriptionRunRecord {
     status: run.status,
     failure_kind: run.failure_kind,
     error_message: run.error_message,
+    posts_traversed: run.counts.posts_traversed,
+    posts_added: run.counts.posts_added,
+    media_added: run.counts.ingested,
     files_downloaded: run.counts.downloaded,
     files_skipped: 0,
     metadata_validated: 0,
@@ -171,12 +186,36 @@ export function getSubscriptionSites(): Promise<SubscriptionSiteInfo[]> {
   return invoke<SourceCatalogEntry[]>('sources.list', {}).then((sites) => sites.map(mapSite));
 }
 
-export function getSubscriptionCovers(): Promise<Map<string, string>> {
+export function getSubscriptionCovers(): Promise<Map<string, SubscriptionCover>> {
   return listReplacementSubscriptions().then((list) => new Map(
     list.subscriptions.flatMap((subscription) => subscription.cover_file_hash
-      ? [[String(subscription.subscription_id), subscription.cover_file_hash] as const]
+      ? [[String(subscription.subscription_id), {
+        file_hash: subscription.cover_file_hash,
+        focus_x: subscription.cover_focus_x,
+        focus_y: subscription.cover_focus_y,
+        zoom_percent: subscription.cover_zoom_percent,
+      }] as const]
       : []),
   ));
+}
+
+export function getSubscriptionCoverCandidates(
+  id: string,
+  cursor: SubscriptionCoverCandidateCursor | null = null,
+  limit = 200,
+): Promise<SubscriptionCoverCandidatePage> {
+  return invoke<SubscriptionCoverCandidatePage>('subscriptions.cover.candidates', {
+    subscription_id: Number(id),
+    cursor,
+    limit,
+  });
+}
+
+export function setSubscriptionCover(id: string, cover: SubscriptionCoverSelection): Promise<void> {
+  return invoke<MutationReceipt>('subscriptions.cover.set', {
+    subscription_id: Number(id),
+    cover,
+  }).then(() => undefined);
 }
 
 export function getSubscriptions(): Promise<SubscriptionInfo[]> {
@@ -190,23 +229,32 @@ export function setSubscriptionSchedule(id: string, schedule: string): Promise<v
   }).then(() => undefined);
 }
 
+export function setSubscriptionPostsPerRun(id: string, postsPerRun: number): Promise<void> {
+  return invoke<MutationReceipt>('subscriptions.posts_per_run', {
+    subscription_id: Number(id),
+    posts_per_run: postsPerRun,
+  }).then(() => undefined);
+}
+
+export function setSubscriptionDestination(
+  id: string,
+  destination: { target_folder_ids: number[]; automatic_tags: string[] },
+): Promise<void> {
+  return invoke<MutationReceipt>('subscriptions.destination', {
+    subscription_id: Number(id),
+    destination,
+  }).then(() => undefined);
+}
+
 export async function createSubscription(params: {
   name: string;
-  site_id: string;
-  query_text: string;
 }): Promise<SubscriptionInfo> {
   const input: NewSubscription = {
     name: params.name,
     schedule: 'manual',
-    initial_post_limit: null,
-    periodic_post_limit: null,
-    queries: [{
-      site_id: params.site_id,
-      query_kind: 'tag',
-      query_text: params.query_text,
-      display_name: null,
-      notes: null,
-    }],
+    initial_post_limit: 100,
+    periodic_post_limit: 100,
+    queries: [],
   };
   const created = await invoke<CreatedSubscription>('subscriptions.create', input);
   const list = await listReplacementSubscriptions();
@@ -247,10 +295,10 @@ export function addSubscriptionQuery(
 ): Promise<SubscriptionInfo['queries'][number]> {
   const query: NewSubscriptionQuery = {
     site_id: siteId,
-    query_kind: 'tag',
     query_text: queryText,
     display_name: null,
     notes: notes ?? null,
+    group_posts: true,
   };
   return invoke<CreatedSubscriptionQuery>('subscriptions.queries.add', {
     subscription_id: Number(subscriptionId),
@@ -273,10 +321,10 @@ export function editSubscriptionQuery(
 ): Promise<void> {
   const query: NewSubscriptionQuery = {
     site_id: siteId,
-    query_kind: 'tag',
     query_text: queryText,
     display_name: displayName ?? null,
     notes: notes ?? null,
+    group_posts: true,
   };
   return invoke<MutationReceipt>('subscriptions.queries.update', { query_id: id, query }).then(() => undefined);
 }
@@ -287,6 +335,13 @@ export function deleteSubscriptionQuery(id: string): Promise<void> {
 
 export function pauseSubscriptionQuery(id: string, paused: boolean): Promise<void> {
   return invoke<MutationReceipt>('subscriptions.queries.pause', { query_id: Number(id), paused }).then(() => undefined);
+}
+
+export function setSubscriptionQueryGrouping(id: string, groupPosts: boolean): Promise<void> {
+  return invoke<MutationReceipt>('subscriptions.queries.grouping', {
+    query_id: Number(id),
+    group_posts: groupPosts,
+  }).then(() => undefined);
 }
 
 export function getRunningSubscriptions(): Promise<string[]> {
@@ -377,4 +432,8 @@ export function cancelAuthSession(): Promise<void> {
 
 export function getAuthSessionState(): Promise<AuthSessionState> {
   return invoke<AuthSessionState>('auth_session_state');
+}
+
+export function saveManualOnlyFansCredential(input: OnlyFansManualAuthInput): Promise<AuthSessionState> {
+  return invoke<AuthSessionState>('auth_onlyfans_manual', { ...input });
 }

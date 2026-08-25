@@ -6,7 +6,10 @@ import type {
 } from '../../shared/types/subscriptions';
 import {
   getQueryAuthState,
+  getSubscriptionRunTarget,
+  isQueryCompleted,
   isQueryUpToDate,
+  isSubscriptionCompleted,
   isSubscriptionUpToDate,
 } from './subscriptionUtils';
 import { getCredentialOwnerSiteId } from '../../shared/lib/subscriptionHelpers';
@@ -19,11 +22,14 @@ function query(overrides: Partial<SubscriptionQueryInfo> = {}): SubscriptionQuer
     query_text: 'huffslove',
     display_name: null,
     notes: null,
+    group_posts: true,
     paused: false,
     last_check_time: '2026-08-05T19:23:40Z',
     files_found: 198,
     posts_found: 198,
     completed_initial_run: true,
+    source_history_complete: true,
+    successful_run_count: 2,
     resume_cursor: null,
     resume_strategy: null,
     last_success_at: '2026-08-05T19:23:40Z',
@@ -42,13 +48,23 @@ function subscription(queries: SubscriptionQueryInfo[]): SubscriptionInfo {
     paused: false,
     created_at: '2026-08-05T19:08:25Z',
     total_files: 198,
+    posts_per_run: 100,
+    target_folder_ids: [],
+    automatic_tags: [],
     queries,
   };
 }
 
 describe('subscription freshness', () => {
-  it('marks a successfully exhausted query up to date', () => {
+  it('marks the first successful run completed but not up to date', () => {
+    const firstRun = query({ successful_run_count: 1 });
+    expect(isQueryCompleted(firstRun)).toBe(true);
+    expect(isQueryUpToDate(firstRun)).toBe(false);
+  });
+
+  it('marks a later successful check up to date', () => {
     expect(isQueryUpToDate(query())).toBe(true);
+    expect(isQueryUpToDate(query({ source_history_complete: false }))).toBe(false);
   });
 
   it('rejects incomplete, failed, paused, and unhealthy queries', () => {
@@ -61,10 +77,43 @@ describe('subscription freshness', () => {
   it('requires every query and the subscription health to be current', () => {
     const current = subscription([query(), query({ id: '2' })]);
     expect(isSubscriptionUpToDate(current)).toBe(true);
+    expect(isSubscriptionCompleted(current)).toBe(true);
+    expect(isSubscriptionCompleted(subscription([
+      query({ successful_run_count: 1 }),
+    ]))).toBe(true);
+    expect(isSubscriptionUpToDate(subscription([
+      query({ successful_run_count: 1 }),
+    ]))).toBe(false);
     expect(isSubscriptionUpToDate(current, 1, 0)).toBe(false);
     expect(isSubscriptionUpToDate(current, 0, 1)).toBe(false);
     expect(isSubscriptionUpToDate(subscription([]))).toBe(false);
     expect(isSubscriptionUpToDate(subscription([query({ completed_initial_run: false })]))).toBe(false);
+  });
+});
+
+describe('subscription run target', () => {
+  it('matches the backend limit rule for initial and subsequent query runs', () => {
+    const value = subscription([
+      query({ id: 'initial', completed_initial_run: false }),
+      query({ id: 'periodic', completed_initial_run: true }),
+      query({ id: 'paused', paused: true }),
+    ]);
+    value.posts_per_run = 40;
+
+    expect(getSubscriptionRunTarget(value)).toBe(80);
+  });
+
+  it('uses one hundred source posts per active query by default', () => {
+    expect(getSubscriptionRunTarget(subscription([
+      query({ id: 'one' }),
+      query({ id: 'two' }),
+      query({ id: 'paused', paused: true }),
+    ]))).toBe(200);
+  });
+
+  it('does not invent a source-specific limit for account feeds', () => {
+    const value = subscription([query({ site_id: 'twitter' })]);
+    expect(getSubscriptionRunTarget(value)).toBe(100);
   });
 });
 
@@ -107,7 +156,7 @@ describe('subscription auth state', () => {
       sites: [authSite({ auth_required_for_full_access: true })],
       credentials: [],
       credentialHealth: [],
-    })).toEqual({ tone: 'attention', label: 'Auth recommended', blocking: false });
+    })).toEqual({ tone: 'idle', label: '', blocking: false });
   });
 
   it('blocks only strictly gated sources or known-bad saved credentials', () => {
@@ -117,5 +166,14 @@ describe('subscription auth state', () => {
       credentials: [],
       credentialHealth: [],
     }).blocking).toBe(true);
+  });
+
+  it('returns the concrete credential failure instead of a generic auth status', () => {
+    expect(getQueryAuthState({
+      query: query({ site_id: 'source' }),
+      sites: [authSite()],
+      credentials: [{ site_category: 'source', credential_type: 'cookies', display_name: null, created_at: '' }],
+      credentialHealth: [{ site_category: 'source', health_status: 'error', last_checked_at: '', last_error: 'Session cookie was rejected' }],
+    })).toEqual({ tone: 'attention', label: 'Session cookie was rejected', blocking: true });
   });
 });

@@ -2,13 +2,13 @@ import { getDefaultStore } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { activeNodeIdAtom } from '../state/navigation';
 
-const { deleteFolderMock } = vi.hoisted(() => ({ deleteFolderMock: vi.fn() }));
+const { deleteFoldersMock } = vi.hoisted(() => ({ deleteFoldersMock: vi.fn() }));
 
 vi.mock('../platform/folderApi', () => ({
   addMedia: vi.fn(),
   clearFolderWatchConfig: vi.fn(),
   createFolder: vi.fn(),
-  deleteFolder: deleteFolderMock,
+  deleteFolders: deleteFoldersMock,
   getFolderCoverHashes: vi.fn(),
   moveFolder: vi.fn(),
   renameFolder: vi.fn(),
@@ -37,7 +37,7 @@ function deletionReceipt(deleted: number[], fallback: number | null) {
 
 describe('foldersController deletion settlement', () => {
   beforeEach(() => {
-    deleteFolderMock.mockReset();
+    deleteFoldersMock.mockReset();
     store.set(activeNodeIdAtom, 'system:active');
   });
 
@@ -50,7 +50,7 @@ describe('foldersController deletion settlement', () => {
 
   it('waits for backend success and uses its complete descendant receipt', async () => {
     let resolveDelete: ((value: unknown) => void) | undefined;
-    deleteFolderMock.mockImplementation(() => new Promise((resolve) => { resolveDelete = resolve; }));
+    deleteFoldersMock.mockImplementation(() => new Promise((resolve) => { resolveDelete = resolve; }));
     store.set(activeNodeIdAtom, 'folder:12');
 
     const deletion = foldersController.delete(10);
@@ -59,12 +59,12 @@ describe('foldersController deletion settlement', () => {
     resolveDelete?.(deletionReceipt([10, 11, 12], null));
     await deletion;
 
-    expect(deleteFolderMock).toHaveBeenCalledWith(10);
+    expect(deleteFoldersMock).toHaveBeenCalledWith([10]);
     expect(store.get(activeNodeIdAtom)).toBe('system:active');
   });
 
   it('uses the backend-provided nearest surviving parent', async () => {
-    deleteFolderMock.mockResolvedValue(deletionReceipt([21, 22], 20));
+    deleteFoldersMock.mockResolvedValue(deletionReceipt([21, 22], 20));
     store.set(activeNodeIdAtom, 'folder:22');
 
     await foldersController.delete(21);
@@ -73,11 +73,22 @@ describe('foldersController deletion settlement', () => {
   });
 
   it('leaves navigation unchanged when the command fails', async () => {
-    deleteFolderMock.mockRejectedValue(new Error('delete failed'));
+    deleteFoldersMock.mockRejectedValue(new Error('delete failed'));
     store.set(activeNodeIdAtom, 'folder:31');
 
     await expect(foldersController.delete(30)).rejects.toThrow('delete failed');
 
     expect(store.get(activeNodeIdAtom)).toBe('folder:31');
+  });
+
+  it('sends a multi-folder deletion as one backend mutation', async () => {
+    deleteFoldersMock.mockResolvedValue(deletionReceipt([10, 11, 20], null));
+    store.set(activeNodeIdAtom, 'folder:11');
+
+    await foldersController.deleteMany([10, 11, 20, 10]);
+
+    expect(deleteFoldersMock).toHaveBeenCalledOnce();
+    expect(deleteFoldersMock).toHaveBeenCalledWith([10, 11, 20]);
+    expect(store.get(activeNodeIdAtom)).toBe('system:active');
   });
 });

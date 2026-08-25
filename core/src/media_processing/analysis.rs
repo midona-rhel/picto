@@ -22,6 +22,35 @@ pub async fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<Fi
         return Err(FileError::ZeroSizeFile(path.display().to_string()));
     }
 
+    if mime.is_none()
+        && super::formats::format_for_path(path).is_some_and(|format| {
+            format.mime_type.starts_with("audio/") || format.mime_type.starts_with("video/")
+        })
+    {
+        if let Ok(probed) = super::ffmpeg::probe_media_info(path).await {
+            if is_allowed_mime(probed.mime) {
+                if let Some(video) = probed.video {
+                    return Ok(FileInfo {
+                        mime: probed.mime,
+                        width: Some(video.width),
+                        height: Some(video.height),
+                        duration_ms: Some(video.duration_ms),
+                        num_frames: Some(video.num_frames as u32),
+                        has_audio: video.has_audio,
+                    });
+                }
+                return Ok(FileInfo {
+                    mime: probed.mime,
+                    width: None,
+                    height: None,
+                    duration_ms: probed.audio_duration_ms,
+                    num_frames: None,
+                    has_audio: probed.has_audio,
+                });
+            }
+        }
+    }
+
     let mime = match mime {
         Some(m) => m,
         None => get_mime(path).await?,

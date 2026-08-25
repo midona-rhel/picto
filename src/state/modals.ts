@@ -82,22 +82,22 @@ export const tagSelectModalAtom = atom({ open: false });
 // ── Folder picker modal (wider modal version, opened from context menu / keyboard) ──
 export const folderPickerModalAtom = atom({ open: false });
 
-// ── Collection organizer modal ──
-export interface CollectionCandidate {
+// ── Group organizer modal ──
+export interface GroupCandidate {
   collection_id: number;
   label: string | null;
   member_count: number;
 }
 
-export interface CollectionOrganizerModalState {
+export interface GroupOrganizerModalState {
   open: boolean;
   target: ItemTarget | null;
-  collections: CollectionCandidate[];
-  onComplete?: (collectionId: number) => void;
+  groups: GroupCandidate[];
+  onComplete?: (groupId: number) => void;
 }
 
-export const collectionOrganizerModalAtom = atom<CollectionOrganizerModalState>({
+export const groupOrganizerModalAtom = atom<GroupOrganizerModalState>({
   open: false,
   target: null,
-  collections: [],
+  groups: [],
 });

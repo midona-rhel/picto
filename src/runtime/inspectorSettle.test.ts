@@ -6,7 +6,7 @@ import {
   inspectorPinnedAtom,
 } from '../state/inspector';
 import { gridSessionAtom } from '../state/grid';
-import { activeNodeIdAtom } from '../state/navigation';
+import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from '../state/navigation';
 import { emptyGridSelection, gridSelectionAtom } from '../state/selection';
 import { viewerSessionAtom } from '../state/viewer';
 
@@ -84,7 +84,34 @@ describe('inspector invalidation', () => {
     stop();
   });
 
-  it('inspects the open detail root instead of a selected collection member', () => {
+  it('immediately returns a selected-item inspector to the active scope when a mutation clears selection', () => {
+    store.set(activeNodeIdAtom, 'system:trash');
+    store.set(displayedSurfaceNodeIdAtom, 'system:trash');
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      totalCount: 1,
+      active: true,
+    });
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(),
+      itemIds: new Set([17]),
+      anchor: { kind: 'item', id: 17 },
+    });
+    store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: 17 });
+    store.set(displayedInspectorItemDetailsAtom, { item_id: 17 } as never);
+    const stop = startInspectorSettle();
+
+    store.set(gridSelectionAtom, emptyGridSelection());
+
+    expect(store.get(displayedInspectorTargetAtom)).toEqual({
+      kind: 'scope',
+      nodeId: 'system:trash',
+    });
+    expect(store.get(displayedInspectorItemDetailsAtom)).toBeNull();
+    stop();
+  });
+
+  it('inspects the open detail root instead of a selected group member', () => {
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
       active: true,

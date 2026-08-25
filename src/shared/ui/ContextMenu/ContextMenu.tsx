@@ -4,19 +4,28 @@
 
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { IconSearch, IconChevronRight } from '@tabler/icons-react';
+import { IconCheck, IconChevronRight, IconSearch, IconX } from '@tabler/icons-react';
 import { getZoomFactor, getViewportCSS } from '../../lib/zoomCompensation';
+import { useShortcutScope } from '../../hooks/useShortcutScope';
 import styles from './ContextMenu.module.css';
 
 // ── Types ──
 
 export interface MenuItem {
   label: string;
+  /** Alternate terms used by reference application-style command search. */
+  keywords?: string | string[];
   icon?: ReactNode;
   shortcut?: string;
   action: () => void;
+  /** Alternate action invoked by right-clicking an reference application-style facet value. */
+  contextAction?: () => void;
   danger?: boolean;
   disabled?: boolean;
+  checked?: boolean;
+  excluded?: boolean;
+  /** Toggle items stay open so several options can be changed together. */
+  keepOpen?: boolean;
 }
 
 export interface MenuSeparator {
@@ -32,6 +41,7 @@ export interface MenuCustom {
 export interface MenuSubmenu {
   submenu: true;
   label: string;
+  keywords?: string | string[];
   icon?: ReactNode;
   children: MenuEntry[];
 }
@@ -55,19 +65,24 @@ function isSubmenu(entry: MenuEntry): entry is MenuSubmenu {
 interface ContextMenuState {
   entries: MenuEntry[];
   position: { x: number; y: number };
+  showSearch: boolean;
+}
+
+interface ContextMenuOpenOptions {
+  showSearch?: boolean;
 }
 
 export function useContextMenu() {
   const [state, setState] = useState<ContextMenuState | null>(null);
 
-  const open = useCallback((e: React.MouseEvent, entries: MenuEntry[]) => {
+  const open = useCallback((e: React.MouseEvent, entries: MenuEntry[], options?: ContextMenuOpenOptions) => {
     e.preventDefault();
     e.stopPropagation();
-    setState({ entries, position: { x: e.clientX, y: e.clientY } });
+    setState({ entries, position: { x: e.clientX, y: e.clientY }, showSearch: options?.showSearch ?? true });
   }, []);
 
-  const openAt = useCallback((position: { x: number; y: number }, entries: MenuEntry[]) => {
-    setState({ entries, position });
+  const openAt = useCallback((position: { x: number; y: number }, entries: MenuEntry[], options?: ContextMenuOpenOptions) => {
+    setState({ entries, position, showSearch: options?.showSearch ?? true });
   }, []);
 
   const close = useCallback(() => setState(null), []);
@@ -81,9 +96,12 @@ interface ContextMenuProps {
   entries: MenuEntry[];
   position: { x: number; y: number };
   onClose: () => void;
+  showSearch?: boolean;
+  /** Content-specific width while preserving the one shared menu renderer/chrome. */
+  width?: number;
 }
 
-export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
+export function ContextMenu({ entries, position, onClose, showSearch = true, width }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
@@ -93,7 +111,8 @@ export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
   const [openSubmenuLabel, setOpenSubmenuLabel] = useState<string | null>(null);
   const submenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [closing, setClosing] = useState(false);
-  const hasSearchableEntries = entries.some((entry) => !isSeparator(entry) && !isCustom(entry));
+  const hasSearchableEntries = showSearch
+    && entries.some((entry) => !isSeparator(entry) && !isCustom(entry));
 
   const startClose = useCallback(() => {
     if (closing) return;
@@ -119,15 +138,9 @@ export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
 
   // Filter
   const query = search.toLowerCase().trim();
-  const filtered = query
-    ? entries.filter((e) => {
-        if (isSeparator(e)) return false;
-        if (isCustom(e)) return true;
-        if (isSubmenu(e)) return e.label.toLowerCase().includes(query);
-        return e.label.toLowerCase().includes(query);
-      })
-    : entries;
+  const filtered = query ? searchMenuEntries(entries, query) : entries;
   const cleaned = cleanSeparators(filtered);
+  const hasIcons = cleaned.some((entry) => !isSeparator(entry) && !isCustom(entry) && Boolean(entry.icon));
 
   const actionableIndices = cleaned
     .map((e, i) => (!isSeparator(e) && !isCustom(e) ? i : -1))
@@ -165,14 +178,12 @@ export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
     placeMenu();
     window.addEventListener('resize', placeMenu);
     return () => window.removeEventListener('resize', placeMenu);
-  }, [position, cleaned.length]);
+  }, [position, cleaned.length, width]);
 
   useEffect(() => { if (hasSearchableEntries) searchRef.current?.focus(); }, [hasSearchableEntries]);
 
-  // Keyboard
-  useEffect(() => {
-    function handleKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') { startClose(); return; }
+  useShortcutScope((e) => {
+      if (e.key === 'Escape') { startClose(); return true; }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setFocusIdx((prev) => {
@@ -192,7 +203,10 @@ export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
         const item = cleaned[focusIdx];
         if (!item || isSeparator(item) || isCustom(item)) return;
         if (isSubmenu(item)) { setOpenSubmenuLabel(openSubmenuLabel === item.label ? null : item.label); return; }
-        if (!item.disabled) { item.action(); startClose(); }
+        if (!item.disabled) {
+          item.action();
+          if (!item.keepOpen) startClose();
+        }
       }
       if (e.key === 'ArrowRight' && focusIdx >= 0) {
         const item = cleaned[focusIdx];
@@ -202,10 +216,7 @@ export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
         e.preventDefault();
         setOpenSubmenuLabel(null);
       }
-    }
-    window.addEventListener('keydown', handleKey, true);
-    return () => window.removeEventListener('keydown', handleKey, true);
-  }, [startClose, focusIdx, cleaned, actionableIndices, openSubmenuLabel]);
+  }, { priority: 110, allowInEditable: true });
 
   return createPortal(
     <div className="no-drag-region">
@@ -216,12 +227,12 @@ export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
       />
       <div
         ref={menuRef}
-        className={`${styles.menu} ${closing ? styles.menuClosing : ''}`}
+        className={`${styles.menu} floatingGlassSurface ${closing ? styles.menuClosing : ''}`}
         role="menu"
         aria-label="Context menu"
         style={pos
-          ? { left: pos.x, top: pos.y, transformOrigin: origin }
-          : { left: -9999, top: -9999, visibility: 'hidden' as const }
+          ? { left: pos.x, top: pos.y, transformOrigin: origin, width }
+          : { left: -9999, top: -9999, visibility: 'hidden' as const, width }
         }
         onPointerDown={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.preventDefault()}
@@ -269,7 +280,7 @@ export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
                     onClick={() => setOpenSubmenuLabel(isOpen ? null : entry.label)}
                     onMouseEnter={() => { setFocusIdx(i); handleSubmenuIntent(entry.label); }}
                   >
-                    <span className={styles.iconSlot}>{entry.icon ?? null}</span>
+                    {hasIcons && <span className={styles.iconSlot} data-menu-icon-slot="">{entry.icon ?? null}</span>}
                     <span className={styles.label}>{entry.label}</span>
                     <IconChevronRight size={12} className={styles.chevron} />
                   </div>
@@ -291,6 +302,7 @@ export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
               focusIdx === i ? styles.focused : '',
               entry.disabled ? styles.disabled : '',
               entry.danger ? styles.danger : '',
+              entry.excluded ? styles.excluded : '',
             ].filter(Boolean).join(' ');
 
             return (
@@ -299,12 +311,25 @@ export function ContextMenu({ entries, position, onClose }: ContextMenuProps) {
                 className={cls}
                 role="menuitem"
                 aria-disabled={entry.disabled || undefined}
-                onClick={() => { if (entry.disabled) return; entry.action(); startClose(); }}
+                onClick={() => {
+                  if (entry.disabled) return;
+                  entry.action();
+                  if (!entry.keepOpen) startClose();
+                }}
+                onContextMenu={(event) => {
+                  if (!entry.contextAction || entry.disabled) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  entry.contextAction();
+                }}
                 onMouseEnter={() => { setFocusIdx(i); handleSubmenuIntent(null); }}
                 onMouseLeave={() => setFocusIdx(-1)}
               >
-                <span className={styles.iconSlot}>{entry.icon ?? null}</span>
+                {hasIcons && <span className={styles.iconSlot} data-menu-icon-slot="">{entry.icon ?? null}</span>}
                 <span className={styles.label}>{entry.label}</span>
+                {(entry.checked !== undefined || entry.excluded) && (
+                  <span className={styles.checkSlot}>{entry.excluded ? <IconX size={13} /> : entry.checked ? <IconCheck size={13} /> : null}</span>
+                )}
                 {entry.shortcut && <span className={styles.shortcut}>{entry.shortcut}</span>}
               </div>
             );
@@ -362,11 +387,12 @@ function SubmenuPanel({
   }, [parentRef, itemIdx]);
 
   const cleaned = cleanSeparators(items);
+  const hasIcons = cleaned.some((entry) => !isSeparator(entry) && !isCustom(entry) && !isSubmenu(entry) && Boolean(entry.icon));
 
   return createPortal(
     <div
       ref={ref}
-      className={styles.menu}
+      className={`${styles.menu} floatingGlassSurface`}
       role="menu"
       aria-label="Context submenu"
       style={{ left: pos.left, top: pos.top, width: 'auto', transformOrigin: subOrigin }}
@@ -379,14 +405,27 @@ function SubmenuPanel({
           if (isSeparator(entry)) return <div key={i} className={styles.separator} role="separator" />;
           if (isCustom(entry)) return <div key={entry.key} className={styles.customItem}>{entry.render()}</div>;
           if (isSubmenu(entry)) return null; // No nested submenus
-          const cls = [styles.item, entry.disabled ? styles.disabled : '', entry.danger ? styles.danger : ''].filter(Boolean).join(' ');
+          const cls = [styles.item, entry.disabled ? styles.disabled : '', entry.danger ? styles.danger : '', entry.excluded ? styles.excluded : ''].filter(Boolean).join(' ');
           return (
             <div key={i} className={cls}
               role="menuitem"
               aria-disabled={entry.disabled || undefined}
-              onClick={() => { if (entry.disabled) return; entry.action(); onClose(); }}>
-              <span className={styles.iconSlot}>{entry.icon ?? null}</span>
+              onClick={() => {
+                if (entry.disabled) return;
+                entry.action();
+                if (!entry.keepOpen) onClose();
+              }}
+              onContextMenu={(event) => {
+                if (!entry.contextAction || entry.disabled) return;
+                event.preventDefault();
+                event.stopPropagation();
+                entry.contextAction();
+              }}>
+              {hasIcons && <span className={styles.iconSlot} data-menu-icon-slot="">{entry.icon ?? null}</span>}
               <span className={styles.label}>{entry.label}</span>
+              {(entry.checked !== undefined || entry.excluded) && (
+                <span className={styles.checkSlot}>{entry.excluded ? <IconX size={13} /> : entry.checked ? <IconCheck size={13} /> : null}</span>
+              )}
               {entry.shortcut && <span className={styles.shortcut}>{entry.shortcut}</span>}
             </div>
           );
@@ -410,4 +449,54 @@ function cleanSeparators(entries: MenuEntry[]): MenuEntry[] {
   }
   if (result.length > 0 && isSeparator(result[result.length - 1])) result.pop();
   return result;
+}
+
+function keywordText(entry: MenuItem | MenuSubmenu): string {
+  const keywords = Array.isArray(entry.keywords) ? entry.keywords.join(' ') : entry.keywords ?? '';
+  return `${entry.label} ${keywords}`.toLocaleLowerCase();
+}
+
+/**
+ * reference application searches command keywords and submenu actions, not only visible
+ * top-level labels. Matching submenu actions are flattened into executable
+ * results so search never leads to a dead parent row.
+ */
+export function searchMenuEntries(entries: MenuEntry[], rawQuery: string): MenuEntry[] {
+  const query = rawQuery.trim().toLocaleLowerCase();
+  if (!query) return entries;
+
+  const matches: Array<{ entry: MenuItem | MenuSubmenu; score: number; order: number }> = [];
+  let order = 0;
+  const visit = (items: MenuEntry[]) => {
+    for (const entry of items) {
+      if (isSeparator(entry) || isCustom(entry)) continue;
+      const currentOrder = order++;
+      if (!('disabled' in entry) || !entry.disabled) {
+        const score = menuSearchScore(keywordText(entry), entry.label.toLocaleLowerCase(), query);
+        if (score != null) matches.push({ entry, score, order: currentOrder });
+      }
+      if (isSubmenu(entry)) visit(entry.children);
+    }
+  };
+  visit(entries);
+
+  return matches
+    .sort((left, right) => left.score - right.score || left.order - right.order)
+    .map(({ entry }) => entry);
+}
+
+function menuSearchScore(text: string, label: string, query: string): number | null {
+  if (label.startsWith(query)) return 0;
+  const labelIndex = label.indexOf(query);
+  if (labelIndex >= 0) return 10 + labelIndex;
+  const keywordIndex = text.indexOf(query);
+  if (keywordIndex >= 0) return 100 + keywordIndex;
+
+  let queryIndex = 0;
+  let gap = 0;
+  for (let index = 0; index < text.length && queryIndex < query.length; index += 1) {
+    if (text[index] === query[queryIndex]) queryIndex += 1;
+    else if (queryIndex > 0) gap += 1;
+  }
+  return queryIndex === query.length ? 200 + gap : null;
 }

@@ -19,6 +19,7 @@ function resetEntry(running: boolean, onReset = vi.fn()): [MenuItem, typeof onRe
     onStop: vi.fn(),
     onPause: vi.fn(),
     onRename: vi.fn(),
+    onSetCover: vi.fn(),
     onSetSchedule: vi.fn(),
     onReset,
     onDelete: vi.fn(),

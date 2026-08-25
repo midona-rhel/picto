@@ -21,11 +21,14 @@ export interface SubscriptionQueryInfo {
   query_text: string;
   display_name: string | null;
   notes: string | null;
+  group_posts: boolean;
   paused: boolean;
   last_check_time: string | null;
   files_found: number;
   posts_found: number;
   completed_initial_run: boolean;
+  source_history_complete: boolean;
+  successful_run_count: number;
   resume_cursor: string | null;
   resume_strategy: string | null;
   last_success_at: string | null;
@@ -41,7 +44,17 @@ export interface SubscriptionInfo {
   paused: boolean;
   created_at: string;
   total_files: number;
+  posts_per_run: number;
+  target_folder_ids: number[];
+  automatic_tags: string[];
   queries: SubscriptionQueryInfo[];
+}
+
+export interface SubscriptionCover {
+  file_hash: string;
+  focus_x: number;
+  focus_y: number;
+  zoom_percent: number;
 }
 
 export type SubscriptionSchedule = 'manual' | 'daily' | 'weekly' | 'monthly';
@@ -52,11 +65,13 @@ export interface SubscriptionProgressEvent {
   mode: string;
   query_id?: string | null;
   query_name?: string | null;
+  posts_traversed: number;
+  posts_added: number;
   files_downloaded: number;
   files_skipped: number;
   queued_for_ingest: number;
   ingesting: number;
-  ingested: number;
+  media_added: number;
   reused: number;
   failed_ingest: number;
   pages_fetched: number;
@@ -67,7 +82,6 @@ export interface SubscriptionProgressEvent {
   phase?: string | null;
   current_post_id?: string | null;
   current_post_items: number;
-  posts_processed: number;
   resume_cursor?: string | null;
   last_error?: string | null;
   finished_status?: string | null;
@@ -83,6 +97,9 @@ export interface SubscriptionRunRecord {
   status: string;
   failure_kind: string | null;
   error_message: string | null;
+  posts_traversed: number;
+  posts_added: number;
+  media_added: number;
   files_downloaded: number;
   files_skipped: number;
   metadata_validated: number;
@@ -182,4 +199,10 @@ export interface AuthSessionState {
   title: string | null;
   current_url: string | null;
   message: string | null;
+}
+
+export interface OnlyFansManualAuthInput {
+  cookie: string;
+  user_agent: string;
+  x_bc: string;
 }

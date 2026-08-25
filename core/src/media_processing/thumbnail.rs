@@ -1,3 +1,4 @@
+use std::io::BufReader;
 use std::path::Path;
 
 use image::GenericImageView;
@@ -99,8 +100,97 @@ pub fn generate_thumbnail_from_decoded_image(
         ThumbnailScaleType::ScaleDownOnly,
         100,
     );
-    let resized = decoded.resize_exact(tw, th, image::imageops::FilterType::Lanczos3);
+    let resized = fast_resize(decoded, tw, th)?;
     encode_thumbnail(&resized)
+}
+
+/// Decode a JPEG at the smallest native IDCT scale that still covers the
+/// thumbnail target. This avoids materializing the full-resolution raster.
+pub(crate) fn generate_jpeg_thumbnail(
+    path: &Path,
+    target_resolution: (u32, u32),
+) -> FileResult<(Vec<u8>, &'static str)> {
+    let file = std::fs::File::open(path)?;
+    let mut decoder = jpeg_decoder::Decoder::new(BufReader::new(file));
+    decoder
+        .scale(
+            target_resolution.0.min(u16::MAX as u32) as u16,
+            target_resolution.1.min(u16::MAX as u32) as u16,
+        )
+        .map_err(|error| FileError::Thumbnail(format!("JPEG scale failed: {error}")))?;
+    let pixels = decoder
+        .decode()
+        .map_err(|error| FileError::Thumbnail(format!("JPEG decode failed: {error}")))?;
+    let info = decoder
+        .info()
+        .ok_or_else(|| FileError::Thumbnail("JPEG dimensions are unavailable".to_string()))?;
+    let rgb = jpeg_pixels_to_rgb(pixels, info.pixel_format);
+    let image = image::RgbImage::from_raw(info.width as u32, info.height as u32, rgb)
+        .ok_or_else(|| FileError::Thumbnail("JPEG pixel buffer has invalid dimensions".into()))?;
+    let (tw, th) = get_thumbnail_resolution(
+        image.dimensions(),
+        target_resolution,
+        ThumbnailScaleType::ScaleDownOnly,
+        100,
+    );
+    let resized = fast_resize_rgb(image, tw, th)?;
+    encode_rgb_as_jpeg(&resized).map(|bytes| (bytes, "jpg"))
+}
+
+fn jpeg_pixels_to_rgb(pixels: Vec<u8>, format: jpeg_decoder::PixelFormat) -> Vec<u8> {
+    match format {
+        jpeg_decoder::PixelFormat::RGB24 => pixels,
+        jpeg_decoder::PixelFormat::L8 => pixels
+            .into_iter()
+            .flat_map(|value| [value, value, value])
+            .collect(),
+        jpeg_decoder::PixelFormat::L16 => pixels
+            .chunks_exact(2)
+            .flat_map(|value| [value[0], value[0], value[0]])
+            .collect(),
+        jpeg_decoder::PixelFormat::CMYK32 => pixels
+            .chunks_exact(4)
+            .flat_map(|pixel| {
+                let black = 1.0 - pixel[3] as f32 / 255.0;
+                [
+                    ((255 - pixel[0]) as f32 * black) as u8,
+                    ((255 - pixel[1]) as f32 * black) as u8,
+                    ((255 - pixel[2]) as f32 * black) as u8,
+                ]
+            })
+            .collect(),
+    }
+}
+
+fn fast_resize_rgb(image: image::RgbImage, width: u32, height: u32) -> FileResult<image::RgbImage> {
+    use fast_image_resize as fr;
+
+    let source = fr::images::Image::from_vec_u8(
+        image.width(),
+        image.height(),
+        image.into_raw(),
+        fr::PixelType::U8x3,
+    )
+    .map_err(|error| FileError::Thumbnail(format!("JPEG resize source failed: {error}")))?;
+    let mut destination = fr::images::Image::new(width, height, fr::PixelType::U8x3);
+    fr::Resizer::new()
+        .resize(&source, &mut destination, None)
+        .map_err(|error| FileError::Thumbnail(format!("JPEG resize failed: {error}")))?;
+    image::RgbImage::from_raw(width, height, destination.into_vec())
+        .ok_or_else(|| FileError::Thumbnail("JPEG resize buffer has invalid dimensions".into()))
+}
+
+fn encode_rgb_as_jpeg(rgb: &image::RgbImage) -> FileResult<Vec<u8>> {
+    use image::ImageEncoder;
+
+    let mut output = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut output, 82).write_image(
+        rgb.as_raw(),
+        rgb.width(),
+        rgb.height(),
+        image::ExtendedColorType::Rgb8,
+    )?;
+    Ok(output)
 }
 
 fn fast_resize(img: &image::DynamicImage, tw: u32, th: u32) -> FileResult<image::DynamicImage> {
@@ -354,4 +444,54 @@ fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
     let mut buf = Vec::new();
     decoder.read_to_end(&mut buf)?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{fast_resize, generate_jpeg_thumbnail};
+    use image::{DynamicImage, GenericImageView, Rgb, RgbImage, Rgba, RgbaImage};
+
+    #[test]
+    fn simd_lanczos_thumbnail_matches_the_reference_resizer() {
+        let source = DynamicImage::ImageRgba8(RgbaImage::from_fn(600, 400, |x, y| {
+            Rgba([
+                (x * 255 / 600) as u8,
+                (y * 255 / 400) as u8,
+                ((x * 13 + y * 29) & 0xff) as u8,
+                255,
+            ])
+        }));
+        let reference = source
+            .resize_exact(180, 120, image::imageops::FilterType::Lanczos3)
+            .to_rgba8();
+        let resized = fast_resize(&source, 180, 120).unwrap().to_rgba8();
+        let (sum, maximum) = reference.as_raw().iter().zip(resized.as_raw()).fold(
+            (0_u64, 0_u8),
+            |(sum, maximum), (left, right)| {
+                let difference = left.abs_diff(*right);
+                (sum + u64::from(difference), maximum.max(difference))
+            },
+        );
+        let mean = sum as f64 / reference.as_raw().len() as f64;
+
+        assert!(mean < 1.0, "mean channel difference was {mean}");
+        assert!(maximum <= 20, "maximum channel difference was {maximum}");
+    }
+
+    #[test]
+    fn jpeg_thumbnail_decodes_at_reduced_resolution() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("large.jpg");
+        DynamicImage::ImageRgb8(RgbImage::from_fn(1600, 1200, |x, y| {
+            Rgb([(x % 256) as u8, (y % 256) as u8, ((x + y) % 256) as u8])
+        }))
+        .save(&path)
+        .unwrap();
+
+        let (bytes, extension) = generate_jpeg_thumbnail(&path, (512, 512)).unwrap();
+        let thumbnail = image::load_from_memory(&bytes).unwrap();
+
+        assert_eq!(extension, "jpg");
+        assert_eq!(thumbnail.dimensions(), (512, 384));
+    }
 }

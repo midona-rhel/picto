@@ -16,4 +16,8 @@ export const windowController = {
   setCurrentWindowAlwaysOnTop(value: boolean): Promise<void> {
     return (window as any).picto.api.window.call('setAlwaysOnTop', { value });
   },
+
+  captureCurrentWindowRect(rect: { x: number; y: number; width: number; height: number }): Promise<string> {
+    return (window as any).picto.api.window.call('captureRect', rect);
+  },
 };

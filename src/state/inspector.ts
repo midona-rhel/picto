@@ -13,7 +13,7 @@ import type {
 } from '../shared/types/canonical';
 import type { ItemDetails } from '../shared/types/generated/application/ItemDetails';
 import { gridActiveAtom } from './grid';
-import { activeNodeIdAtom } from './navigation';
+import { displayedSurfaceNodeIdAtom } from './navigation';
 import {
   gridSelectionAtom,
   selectedItemIdAtom,
@@ -64,8 +64,8 @@ export const liveInspectorTargetAtom = atom<InspectorTarget>((get) => {
   if (selectedItemId != null) {
     return { kind: 'item', itemId: selectedItemId };
   }
-  const activeNodeId = get(activeNodeIdAtom);
-  return activeNodeId ? { kind: 'scope', nodeId: activeNodeId } : { kind: 'none' };
+  const displayedNodeId = get(displayedSurfaceNodeIdAtom);
+  return displayedNodeId ? { kind: 'scope', nodeId: displayedNodeId } : { kind: 'none' };
 });
 
 export const displayedGridSnapshotAtom = atom<DisplayedGridSnapshot | null>(null);
@@ -81,6 +81,7 @@ export const displayedScopeLabelAtom = atom((get) => {
     'system:trash': 'Trash',
     'system:uncategorized': 'Uncategorized',
     'system:untagged': 'Untagged',
+    'system:random': 'Random',
   };
   return fallbacks[snapshot.nodeId] ?? '';
 });
@@ -129,14 +130,6 @@ function asStringArray(value: unknown): string[] {
     : [];
 }
 
-const SYSTEM_SCOPE_DESCRIPTIONS: Record<string, string> = {
-  'system:active': 'All images not in Inbox or Trash.',
-  'system:inbox': 'New or unreviewed media waiting to be processed.',
-  'system:trash': 'Media currently marked for removal.',
-  'system:uncategorized': 'Active media that is not assigned to any folder.',
-  'system:untagged': 'Active media that has no tags yet.',
-};
-
 export const displayedSidebarNodeAtom = atom<SidebarNodeDto | null>((get) => {
   const snapshot = get(displayedGridSnapshotAtom);
   if (!snapshot) return null;
@@ -182,7 +175,7 @@ export const scopeInspectorViewModelAtom = atom((get) => {
     previewItems: isSubfolderSelection
       ? (get(subfolderPreviewAtom)?.nodeId === node.id ? get(subfolderPreviewAtom)?.items ?? [] : [])
       : snapshot.previewItems,
-    description: node.kind === 'system' ? SYSTEM_SCOPE_DESCRIPTIONS[node.id] ?? null : null,
+    description: null,
     folder:
       node.kind === 'folder'
         ? {

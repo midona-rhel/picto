@@ -12,7 +12,6 @@ import { RenameDialog, type RenameTarget } from './components/RenameDialog';
 import {
   markSubscriptionRunTriggered,
   refreshSubscriptionsWorkspace,
-  startSubscriptionsSettle,
 } from '../../runtime/subscriptionsSettle';
 import type { SubscriptionInfo } from '../../shared/types/subscriptions';
 import { getCredentialOwnerSiteId } from '../../shared/lib/subscriptionHelpers';
@@ -20,6 +19,7 @@ import { showErrorNotification } from '../../shared/lib/notifications';
 import { AccountsModal } from './components/AccountsModal';
 import { SubscriptionsGrid } from './components/SubscriptionsGrid';
 import { SubscriptionDetail } from './components/SubscriptionDetail';
+import { SubscriptionCoverDialog } from './components/SubscriptionCoverDialog';
 import { EmptyState } from './components/EmptyState';
 import { NewSubscriptionDialog, type CreateSubscriptionInput } from './components/NewSubscriptionDialog';
 import {
@@ -28,22 +28,18 @@ import {
   subscriptionsBusyKeyAtom,
   subscriptionsCoversAtom,
   subscriptionsDetailAtom,
-  subscriptionsDetailTabAtom,
   subscriptionsProgressBySubscriptionIdAtom,
   subscriptionsSelectedProgressAtom,
   subscriptionsSelectedSubscriptionAtom,
   subscriptionsSelectionAtom,
   subscriptionsWizardAtom,
-  subscriptionsWorkspaceLoadingAtom,
   subscriptionsWorkspaceSnapshotAtom,
 } from '../../state/subscriptionsWorkspace';
 import styles from './SubscriptionsScreen.module.css';
 
 export function SubscriptionsScreen() {
   const snapshot = useAtomValue(subscriptionsWorkspaceSnapshotAtom);
-  const loading = useAtomValue(subscriptionsWorkspaceLoadingAtom);
   const [selection, setSelection] = useAtom(subscriptionsSelectionAtom);
-  const [activeTab, setActiveTab] = useAtom(subscriptionsDetailTabAtom);
   const [detail, setDetail] = useAtom(subscriptionsDetailAtom);
   const [wizard, setWizard] = useAtom(subscriptionsWizardAtom);
   const [accountsModal, setAccountsModal] = useAtom(subscriptionsAccountsModalAtom);
@@ -55,6 +51,7 @@ export function SubscriptionsScreen() {
   const contextMenu = useContextMenu();
   const setConfirmModal = useSetAtom(confirmModalAtom);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
+  const [coverTarget, setCoverTarget] = useState<{ id: string; name: string } | null>(null);
 
   const confirm = useCallback(
     (opts: { title: string; message: string; confirmLabel?: string; danger?: boolean }, action: () => void) => {
@@ -95,11 +92,9 @@ export function SubscriptionsScreen() {
     }
   }, [setDetail]);
 
-  // This screen is shared by the main and standalone subscription windows.
+  // Startup owns the retained workspace; entering the route only revalidates it.
   useEffect(() => {
-    const stopSettle = startSubscriptionsSettle();
     void refreshSubscriptionsWorkspace();
-    return stopSettle;
   }, []);
 
   // Detail follows the selected subscription
@@ -117,11 +112,13 @@ export function SubscriptionsScreen() {
     try {
       await action();
       if (options?.refresh !== false) await refreshSubscriptionsWorkspace();
+      return true;
     } catch (err) {
       showErrorNotification({
         title: 'Subscription action failed',
         message: err instanceof Error ? err.message : String(err),
       });
+      return false;
     } finally {
       setBusyKey(null);
     }
@@ -154,8 +151,6 @@ export function SubscriptionsScreen() {
     await act('wizard', async () => {
       const subscription = await subscriptionsController.create({
         name: result.name,
-        site_id: result.siteId,
-        query_text: result.queryText,
       });
       navigateTo({ kind: 'subscription', id: subscription.id });
       setWizard({ open: false });
@@ -196,8 +191,14 @@ export function SubscriptionsScreen() {
     },
     setSchedule: (id: string, schedule: string) =>
       void act(`schedule:${id}`, () => subscriptionsController.setSchedule(id, schedule)),
+    setPostsPerRun: (id: string, postsPerRun: number) =>
+      void act(`posts-per-run:${id}`, () => subscriptionsController.setPostsPerRun(id, postsPerRun)),
+    setDestination: (id: string, destination: { target_folder_ids: number[]; automatic_tags: string[] }) =>
+      act(`destination:${id}`, () => subscriptionsController.setDestination(id, destination)).then(() => undefined),
     pauseQuery: (queryId: string, paused: boolean) =>
       void act(`pauseq:${queryId}`, () => subscriptionsController.pauseQuery(queryId, paused)),
+    setQueryGrouping: (queryId: string, groupPosts: boolean) =>
+      void act(`groupq:${queryId}`, () => subscriptionsController.setQueryGrouping(queryId, groupPosts)),
     deleteQuery: (queryId: string) => {
       confirm(
         { title: 'Delete Query', message: 'This query stops syncing. Downloaded files stay in your library.', confirmLabel: 'Delete', danger: true },
@@ -228,6 +229,7 @@ export function SubscriptionsScreen() {
         onStop: () => detailController.stop(subscription.id),
         onPause: (paused) => detailController.pause(subscription.id, paused),
         onRename: () => setRenameTarget({ kind: 'subscription', id: subscription.id, currentName: subscription.name }),
+        onSetCover: () => setCoverTarget({ id: subscription.id, name: subscription.name }),
         onSetSchedule: (schedule) => detailController.setSchedule(subscription.id, schedule),
         onReset: () => detailController.reset(subscription.id),
         onDelete: () => detailController.delete(subscription.id),
@@ -286,9 +288,7 @@ export function SubscriptionsScreen() {
   return (
     <div className={styles.root}>
       <main className={styles.detailPane}>
-        {loading && !snapshot ? (
-          <EmptyState title="Loading…" description="Fetching subscriptions." />
-        ) : selection == null && snapshot ? (
+        {selection == null && snapshot ? (
           <SubscriptionsGrid
             subscriptions={snapshot.subscriptions}
             listMetrics={snapshot.listMetrics}
@@ -310,13 +310,11 @@ export function SubscriptionsScreen() {
             snapshot={snapshot}
             progress={selectedProgress}
             detail={detail}
-            coverHash={covers.get(selectedSubscription.id) ?? null}
-            activeTab={activeTab}
+            cover={covers.get(selectedSubscription.id) ?? null}
             busy={busy}
             controller={{
               ...detailController,
             }}
-            onTabChange={setActiveTab}
             onOpenAccounts={(siteId) => setAccountsModal({
               open: true,
               focusSiteId: siteId ? getCredentialOwnerSiteId(siteId, snapshot.sites) : null,
@@ -324,18 +322,17 @@ export function SubscriptionsScreen() {
             onLoadMoreHealth={() => void loadMoreHealth()}
             onOpenMenu={(position) => openSubscriptionMenu(position, selectedSubscription)}
           />
-        ) : (
+        ) : snapshot ? (
           <EmptyState
             title="Subscribe to artists and tags"
             description="Create a subscription and new posts will land in your library automatically."
           />
-        )}
+        ) : null}
       </main>
 
       <NewSubscriptionDialog
         open={wizard.open}
         busy={busy}
-        sites={snapshot?.sites ?? []}
         onCreate={(result) => void createFromWizard(result)}
         onClose={() => setWizard({ open: false })}
       />
@@ -354,6 +351,19 @@ export function SubscriptionsScreen() {
         busy={busy}
         onRename={commitRename}
         onClose={() => setRenameTarget(null)}
+      />
+
+      <SubscriptionCoverDialog
+        target={coverTarget}
+        busy={busy}
+        onLoad={(id, cursor) => subscriptionsController.getCoverCandidates(id, cursor)}
+        onSave={(id, mediaItemId, crop) => act(`cover:${id}`, () => subscriptionsController.setCover(id, {
+          media_item_id: mediaItemId,
+          focus_x: crop.focusX,
+          focus_y: crop.focusY,
+          zoom_percent: crop.zoomPercent,
+        }))}
+        onClose={() => setCoverTarget(null)}
       />
 
       {contextMenu.state && (

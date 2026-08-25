@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { IconBooks, IconCheck, IconPlus, IconFolderOpen, IconAdjustments } from '@tabler/icons-react';
+import { createPortal } from 'react-dom';
+import { IconCheck, IconPlus, IconFolderOpen, IconAdjustments, IconSearch, IconX } from '@tabler/icons-react';
 import { invoke } from '../../platform/ipc';
-import { DynamicIcon } from '../../shared/ui/DynamicIcon';
+import { LibraryAvatar } from './LibraryAvatar';
 import { rectToCSS, getViewportCSS } from '../../shared/lib/zoomCompensation';
+import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import styles from './LibrarySwitcherPopover.module.css';
 
 interface Entry {
@@ -12,6 +14,7 @@ interface Entry {
   current: boolean;
   icon: string | null;
   color: string | null;
+  imageHash: string | null;
 }
 
 /// reference application-style library switcher panel, anchored under the sidebar button:
@@ -48,6 +51,7 @@ export function LibrarySwitcherPopover({
                 current: config.currentPath === path,
                 icon: config.libraryMeta?.[path]?.icon ?? null,
                 color: config.libraryMeta?.[path]?.color ?? null,
+                imageHash: config.libraryMeta?.[path]?.imageHash ?? null,
               };
             }),
         );
@@ -59,16 +63,17 @@ export function LibrarySwitcherPopover({
     const onDown = (e: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(e.target as Node)) onClose();
     };
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
     window.addEventListener('mousedown', onDown);
-    window.addEventListener('keydown', onKey);
     return () => {
       window.removeEventListener('mousedown', onDown);
-      window.removeEventListener('keydown', onKey);
     };
   }, [onClose]);
+
+  useShortcutScope((event) => {
+    if (event.key !== 'Escape') return;
+    onClose();
+    return true;
+  }, { priority: 100, allowInEditable: true });
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -78,88 +83,86 @@ export function LibrarySwitcherPopover({
 
   const rect = rectToCSS(anchor);
   const viewport = getViewportCSS();
-  const top = Math.min(rect.bottom + 4, viewport.height - 430);
-  const left = Math.max(8, Math.min(rect.left, viewport.width - rect.width - 8));
+  const panelWidth = Math.min(300, viewport.width - 16);
+  const top = Math.max(8, Math.min(rect.bottom + 4, viewport.height - 430));
+  const left = Math.max(8, Math.min(rect.left, viewport.width - panelWidth - 8));
 
-  return (
+  return createPortal(
     <div
       ref={rootRef}
-      className={styles.popover}
-      style={{ top, left, width: rect.width }}
+      className={`${styles.popover} floatingGlassSurface no-drag-region`}
+      style={{ top, left, width: panelWidth }}
     >
-      <div className={styles.header}>
-        <div className={styles.headerTitle}>Libraries</div>
-        <input
-          className={styles.search}
-          placeholder="Search libraries…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          autoFocus
-        />
-      </div>
-      <div className={styles.list}>
-        {filtered.length === 0 ? (
-          <div className={styles.empty}>No Result</div>
-        ) : (
-          filtered.map((entry) => (
-            <button
-              key={entry.path}
-              className={styles.item}
-              onClick={() => {
-                if (!entry.current) void (window as any).picto.library.switch(entry.path);
-                onClose();
-              }}
-            >
-              <span
-                className={styles.itemIcon}
-                style={entry.color ? { color: entry.color } : undefined}
+      <div className={styles.content}>
+        <div className={styles.header}>
+          <IconSearch className={styles.searchIcon} size={16} />
+          <input
+            className={styles.search}
+            placeholder="Search libraries…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            autoFocus
+          />
+          <button className={styles.closeButton} type="button" onClick={onClose} aria-label="Close library switcher">
+            <IconX size={14} />
+          </button>
+        </div>
+        <div className={styles.list}>
+          {filtered.length === 0 ? (
+            <div className={styles.empty}>No Result</div>
+          ) : (
+            filtered.map((entry) => (
+              <button
+                key={entry.path}
+                className={styles.item}
+                onClick={() => {
+                  if (!entry.current) void (window as any).picto.library.switch(entry.path);
+                  onClose();
+                }}
               >
-                {entry.icon ? (
-                  <DynamicIcon name={entry.icon} size={15} color={entry.color} />
-                ) : (
-                  <IconBooks size={15} />
-                )}
-              </span>
-              <span className={styles.itemInfo}>
-                <span className={styles.itemName}>{entry.name}</span>
-                <span className={styles.itemPath} title={entry.dir}>{entry.dir}</span>
-              </span>
-              {entry.current ? (
-                <span className={styles.itemCheck}><IconCheck size={14} /></span>
-              ) : null}
-            </button>
-          ))
-        )}
+                <LibraryAvatar appearance={entry} size={24} className={styles.itemIcon} />
+                <span className={styles.itemInfo}>
+                  <span className={styles.itemName}>{entry.name}</span>
+                  <span className={styles.itemPath} title={entry.dir}>{entry.dir}</span>
+                </span>
+                {entry.current ? (
+                  <span className={styles.itemCheck}><IconCheck size={14} /></span>
+                ) : null}
+              </button>
+            ))
+          )}
+        </div>
+        <div className={styles.functions}>
+          <button
+            className={styles.functionItem}
+            onClick={() => {
+              void invoke('open_library_manager', {});
+              onClose();
+            }}
+          >
+            <IconPlus size={14} /> Create Library…
+          </button>
+          <button
+            className={styles.functionItem}
+            onClick={() => {
+              void (window as any).picto.library.open();
+              onClose();
+            }}
+          >
+            <IconFolderOpen size={14} /> Open Library…
+          </button>
+          <button
+            className={styles.functionItem}
+            onClick={() => {
+              void invoke('open_library_manager', {});
+              onClose();
+            }}
+          >
+            <IconAdjustments size={14} /> Library Manager…
+          </button>
+        </div>
       </div>
-      <div className={styles.functions}>
-        <button
-          className={styles.functionItem}
-          onClick={() => {
-            void invoke('open_library_manager', {});
-            onClose();
-          }}
-        >
-          <IconPlus size={14} /> Create Library…
-        </button>
-        <button
-          className={styles.functionItem}
-          onClick={() => {
-            void (window as any).picto.library.open();
-            onClose();
-          }}
-        >
-          <IconFolderOpen size={14} /> Open Library…
-        </button>
-        <button
-          className={styles.functionItem}
-          onClick={() => {
-            void invoke('open_library_manager', {});
-            onClose();
-          }}
-        >
-          <IconAdjustments size={14} /> Library Manager…
-        </button>
-      </div>
-    </div>
+    </div>,
+    document.body,
   );
 }

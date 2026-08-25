@@ -7,6 +7,7 @@ import type { FolderMutationReceipt } from '../shared/types/generated/applicatio
 import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
 import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
+import { createEmptyItemFilters } from '../shared/lib/itemFilters';
 
 export function createFolder(params: {
   name: string;
@@ -19,8 +20,12 @@ export function createFolder(params: {
   });
 }
 
-export function deleteFolder(folderId: number): Promise<FolderMutationReceipt> {
-  return invoke<FolderMutationReceipt>('folders.delete', { folder_id: folderId });
+export function duplicateFolder(folderId: number): Promise<CreatedFolder> {
+  return invoke<CreatedFolder>('folders.duplicate', { folder_id: folderId });
+}
+
+export function deleteFolders(folderIds: number[]): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.delete', { folder_ids: folderIds });
 }
 
 export function removeEntitiesFromFolder(folderId: number, target: ItemTarget): Promise<unknown> {
@@ -40,6 +45,14 @@ export function setFolderMetadata(input: {
   return invoke<FolderMutationReceipt>('folders.metadata.set', input);
 }
 
+export function getFolderAutoTags(folderId: number): Promise<string[]> {
+  return invoke<string[]>('folders.auto_tags.get', { folder_id: folderId });
+}
+
+export function setFolderAutoTags(folderId: number, tags: string[]): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.auto_tags.set', { folder_id: folderId, tags });
+}
+
 export function moveFolder(folderId: number, parentId: number | null): Promise<FolderMutationReceipt> {
   return invoke<FolderMutationReceipt>('folders.move', {
     folder_id: folderId,
@@ -54,6 +67,18 @@ export function reorderFolderChildren(
   return invoke<FolderMutationReceipt>('folders.reorder', {
     parent_id: parentId,
     folder_ids: folderIds,
+  });
+}
+
+export function sortFolderTree(
+  folderId: number,
+  descending: boolean,
+  recursive: boolean,
+): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.sort_tree', {
+    folder_id: folderId,
+    descending,
+    recursive,
   });
 }
 
@@ -85,19 +110,14 @@ export function clearFolderWatchConfig(folderId: number): Promise<FolderMutation
   return invoke<FolderMutationReceipt>('folders.watch.clear', { folder_id: folderId });
 }
 
-export async function getFolderCoverHash(folderId: number): Promise<string | null> {
+export async function getFolderCover(folderId: number): Promise<{ entity_hash: string; mime_type: string } | null> {
   const page = await queryItems({
     scope: { kind: 'folder', folder_id: folderId },
-    filters: {
-      include_tags: [],
-      exclude_tags: [],
-      minimum_rating: null,
-      mime_prefix: null,
-      text: null,
-    },
+    filters: createEmptyItemFilters(),
     sort: { field: 'folder_order', direction: 'ascending', random_seed: null },
   }, { offset: 0, limit: 1 });
-  return page.items[0]?.display_file_hash ?? null;
+  const item = page.items[0];
+  return item ? { entity_hash: item.display_file_hash, mime_type: item.display_mime_type } : null;
 }
 
 export function addMedia(paths: string[], params: {

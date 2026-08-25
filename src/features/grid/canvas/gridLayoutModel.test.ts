@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { estimateGridScrollHeight, GridLayoutRuntime } from './gridLayoutModel';
+import {
+  captureGridScrollPosition,
+  collectThumbnailActivation,
+  estimateGridScrollHeight,
+  GridLayoutRuntime,
+  restoreGridScrollTop,
+  type ThumbnailActivationBuffers,
+} from './gridLayoutModel';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 
 function item(itemId: number, fileHash = `file-${itemId}`, width = 100, height = 100): CanonicalEntityGridItem {
@@ -7,21 +14,15 @@ function item(itemId: number, fileHash = `file-${itemId}`, width = 100, height =
     item_id: itemId,
     kind: 'media',
     lifecycle: 'active',
-    label: null,
     name: `item-${itemId}`,
-    display_media_item_id: itemId,
     display_file_hash: fileHash,
     display_mime_type: 'image/jpeg',
     pixel_width: width,
     pixel_height: height,
     duration_ms: null,
     frame_count: null,
-    has_audio: false,
     dominant_color_hex: null,
-    size_bytes: 1,
     rating: null,
-    captured_at: null,
-    imported_at: null,
     media_count: 1,
   };
 }
@@ -61,5 +62,43 @@ describe('estimateGridScrollHeight', () => {
   it('never shrinks below real loaded content', () => {
     expect(estimateGridScrollHeight(2_000, 500, 400)).toBe(2_000);
     expect(estimateGridScrollHeight(2_000, 500, null)).toBe(2_000);
+  });
+});
+
+describe('grid scroll restoration', () => {
+  it('restores the same relative location when the result height changes', () => {
+    const saved = captureGridScrollPosition(4_500, 10_000, 1_000);
+    expect(saved).toEqual({ scrollTop: 4_500, progress: 0.5 });
+    expect(restoreGridScrollTop(saved, 20_000, 1_000)).toBe(9_500);
+  });
+
+  it('preserves the bottom edge across result mutations', () => {
+    const saved = captureGridScrollPosition(9_000, 10_000, 1_000);
+    expect(saved.progress).toBe(1);
+    expect(restoreGridScrollTop(saved, 7_000, 1_000)).toBe(6_000);
+  });
+
+  it('falls back to the exact offset before a scroll range can be estimated', () => {
+    expect(restoreGridScrollTop({ scrollTop: 320, progress: 0.4 }, 0, 0)).toBe(320);
+  });
+});
+
+describe('collectThumbnailActivation', () => {
+  it('keeps fonts visible without scheduling a raster thumbnail decode', () => {
+    const source = [item(10), { ...item(11), display_mime_type: 'font/ttf' }];
+    const model = new GridLayoutRuntime().update(source, {
+      width: 500, targetSize: 180, gap: 16, viewMode: 'grid', textHeight: 20, scrollbarWidth: 8,
+    });
+    const buffers: ThumbnailActivationBuffers = {
+      activeTiles: [],
+      activeHashes: new Set(),
+      viewportHashes: new Set(),
+      planTiles: [],
+    };
+
+    collectThumbnailActivation([0, 1], model.positions, model.items, 0, model.totalHeight, 0, model.totalHeight, buffers);
+
+    expect(buffers.activeTiles).toEqual([0, 1]);
+    expect(buffers.planTiles.map((tile) => tile.fileHash)).toEqual(['file-10']);
   });
 });

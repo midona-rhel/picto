@@ -19,6 +19,10 @@
   cursor: pointer;
 }
 
+.audioRoot {
+  background: var(--color-bg-app);
+}
+
 /* Controls overlay */
 .controls {
   position: absolute;
@@ -40,6 +44,59 @@
   width: 100%; height: 16px;
   display: flex; align-items: center;
   cursor: pointer; position: relative;
+}
+
+.waveformProgressBar {
+  z-index: 1;
+  width: 100%;
+  min-width: 64px;
+  height: 40px;
+  margin: 0;
+  overflow: visible;
+  pointer-events: auto;
+}
+
+.waveformBase,
+.waveformImage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 40px;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 40px;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-position: center;
+  -webkit-mask-size: 100% 40px;
+  mask-repeat: no-repeat;
+  mask-position: center;
+  mask-size: 100% 40px;
+  pointer-events: none;
+}
+
+.waveformBase {
+  background-color: rgba(255, 255, 255, 0.2);
+}
+
+.waveformPlayed {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.waveformImage {
+  width: 100%;
+  background-color: rgba(255, 255, 255, 0.95);
+}
+
+.waveformCursor {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.95);
+  pointer-events: none;
 }
 
 .progressTrack {

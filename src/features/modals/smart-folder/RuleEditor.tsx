@@ -97,7 +97,7 @@ function TagAutoInput({ values, onChange }: { values: string[]; onChange: (v: st
         padding: '3px 6px', minHeight: 32,
         border: '1px solid var(--color-border-primary)',
         borderRadius: 'var(--radius-sm)',
-        background: 'var(--color-black-20)',
+        background: 'var(--color-control-surface)',
       }}>
         {values.map((tag) => {
           const { namespace, subtag } = parseTag(tag);
@@ -122,7 +122,7 @@ function TagAutoInput({ values, onChange }: { values: string[]; onChange: (v: st
       {showDrop && rect && createPortal(
         <div style={{
           position: 'fixed', top: rect.bottom + 2, left: rect.left, width: rect.width,
-          maxHeight: 200, overflowY: 'auto', zIndex: 10001,
+          maxHeight: 200, overflowY: 'auto', scrollbarGutter: 'stable', zIndex: 10001,
           background: 'var(--glass-bg)', backdropFilter: 'var(--glass-blur)',
           border: '1px solid var(--color-border-secondary)',
           borderRadius: 'var(--radius-sm)', boxShadow: 'var(--shadow-panel)',

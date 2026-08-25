@@ -48,7 +48,7 @@ import {
   selectionTargetAtom,
 } from '../../state/selection';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
-import { confirmModalAtom } from '../../state/modals';
+import { confirmModalAtom, exportModalAtom } from '../../state/modals';
 
 const entity = {
   item_id: 1, kind: 'media', lifecycle: 'active', label: 'Example', cover_media_item_id: null,
@@ -59,7 +59,7 @@ const entity = {
     captured_at: '2026-01-01', imported_at: '2026-01-02', position: 0, tags: [] }],
 };
 
-const collection = {
+const group = {
   item_id: 10, kind: 'collection', lifecycle: 'active', label: 'Album', cover_media_item_id: 11,
   folder_ids: [7], aggregate_tags: ['general:member-tag'], revision: 1,
   media: [entity.media[0], { ...entity.media[0], media_item_id: 12, file_hash: 'file-2', mime_type: 'video/mp4', position: 1 }],
@@ -123,6 +123,7 @@ describe('Inspector presentation branches', () => {
     store.set(tagSelectPortalAtom, { open: false, anchor: null });
     store.set(folderPickerPortalAtom, { open: false, anchor: null });
     store.set(confirmModalAtom, { open: false, title: '', message: '', onConfirm: () => {} });
+    store.set(exportModalAtom, { open: false, fileCount: 0 });
   });
 
   it('uses item identity fields only when the target has item identity', () => {
@@ -169,9 +170,55 @@ describe('Inspector presentation branches', () => {
   it('renders the complete persisted dominant-color palette', () => {
     const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
 
-    expect(document.querySelector('[title="#123456 · Click to copy"]')).toBeInTheDocument();
-    expect(document.querySelector('[title="#abcdef · Click to copy"]')).toBeInTheDocument();
+    expect(document.querySelector('[class*="previewFrame"]')).toHaveStyle({ background: '#123456' });
+    expect(document.querySelector('[title="#123456 · Click to filter · Right-click for actions"]')).toBeInTheDocument();
+    expect(document.querySelector('[title="#abcdef · Click to filter · Right-click for actions"]')).toBeInTheDocument();
     view.unmount();
+  });
+
+  it('reuses the shared entity actions for a single-media preview', () => {
+    const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
+
+    fireEvent.contextMenu(document.querySelector('[class*="previewFrame"]')!);
+
+    expect(screen.getByText('Open with Default App')).toBeInTheDocument();
+    expect(screen.getByText(/Reveal in Finder|Show in Explorer/)).toBeInTheDocument();
+    expect(screen.getByText('Open in New Window')).toBeInTheDocument();
+    view.unmount();
+  });
+
+  it('shows the shared broken-thumbnail artwork in item and scope previews', () => {
+    const entityView = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
+    fireEvent.error(document.querySelector('img[src*="file-1"]')!);
+    expect(document.querySelector('[data-broken-thumbnail]')).toBeInTheDocument();
+    entityView.unmount();
+
+    const scope = {
+      node: { id: 'system:active', kind: 'system', name: 'All', count: 1, meta: {}, icon: null, color: null },
+      totalCount: 1,
+      totalSizeBytes: null,
+      searchText: '',
+      previewItems: [{ display_file_hash: 'file-1' }],
+      description: 'All items.',
+      folder: null,
+      smartFolder: null,
+    };
+    const scopeView = renderInspector({ target: { kind: 'scope', nodeId: scope.node.id }, scope });
+    fireEvent.error(document.querySelector('img[src*="file-1"]')!);
+    expect(document.querySelector('[data-broken-thumbnail]')).toBeInTheDocument();
+    scopeView.unmount();
+  });
+
+  it('shows a font specimen directly instead of treating a font as broken', () => {
+    const fontEntity = {
+      ...entity,
+      media: [{ ...entity.media[0], file_hash: 'font-1', mime_type: 'font/ttf' }],
+    };
+    renderInspector({ target: { kind: 'item', itemId: 1 }, data: fontEntity });
+
+    expect(document.querySelector('img[src*="font-1"]')).not.toBeInTheDocument();
+    expect(document.querySelector('[data-font-thumbnail]')).toBeInTheDocument();
+    expect(document.querySelector('[data-broken-thumbnail]')).not.toBeInTheDocument();
   });
 
   it('waits 250ms before showing aggregate loaders and swaps the summary atomically', async () => {
@@ -288,8 +335,8 @@ describe('Inspector presentation branches', () => {
     view.unmount();
   });
 
-  it('renders a collection from ordered replacement media details', () => {
-    renderInspector({ target: { kind: 'item', itemId: 10 }, data: collection });
+  it('renders a group from ordered replacement media details', () => {
+    renderInspector({ target: { kind: 'item', itemId: 10 }, data: group });
     expect(screen.getByText('Album')).toBeInTheDocument();
     expect(document.querySelector('[data-inspector-core-property="Items"]')).toHaveTextContent('2');
     expect(document.querySelector('[data-inspector-core-property="Type"]')).toHaveTextContent('Mixed');
@@ -310,6 +357,10 @@ describe('Inspector presentation branches', () => {
     fireEvent.click(addTags!);
     expect(store.get(tagSelectPortalAtom)).toMatchObject({ open: true });
     fireEvent.click(addFolder!);
+    expect(store.get(folderPickerPortalAtom)).toMatchObject({ open: true });
+
+    store.set(folderPickerPortalAtom, { open: false, anchor: null });
+    fireEvent.contextMenu(screen.getByText('Folders'));
     expect(store.get(folderPickerPortalAtom)).toMatchObject({ open: true });
 
     fireEvent.click(screen.getByText('Tags'));
@@ -351,6 +402,47 @@ describe('Inspector presentation branches', () => {
     multiView.unmount();
   });
 
+  it('places Export inside Properties and opens the shared export workflow', () => {
+    const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
+    const exportButton = screen.getByRole('button', { name: 'Export' });
+
+    expect(exportButton).toHaveAttribute('data-inspector-button-variant', 'flow');
+    expect(exportButton.closest('[data-inspector-section="properties"]')).toBeInTheDocument();
+    fireEvent.click(exportButton);
+    expect(getDefaultStore().get(exportModalAtom)).toEqual({
+      open: true,
+      fileCount: 1,
+      target: { kind: 'explicit', item_ids: [1] },
+    });
+    view.unmount();
+  });
+
+  it('exports non-empty folder scopes but not system or empty scopes', () => {
+    const folderScope = {
+      node: { id: 'folder:7', kind: 'folder', name: 'Folder', count: 3, meta: {}, icon: null, color: null },
+      totalCount: 3, totalSizeBytes: null, searchText: '', previewItems: [], description: null,
+      folder: { folderId: 7, notes: null, autoTags: [], watchEnabled: false },
+      smartFolder: null,
+    };
+    const folderView = renderInspector({ target: { kind: 'scope', nodeId: 'folder:7' }, scope: folderScope });
+    expect(screen.getByRole('button', { name: 'Export' })).toBeInTheDocument();
+    folderView.unmount();
+
+    const systemView = renderInspector({
+      target: { kind: 'scope', nodeId: 'system:active' },
+      scope: { ...folderScope, node: { ...folderScope.node, id: 'system:active', kind: 'system' }, folder: null },
+    });
+    expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
+    systemView.unmount();
+
+    const emptyView = renderInspector({
+      target: { kind: 'scope', nodeId: 'folder:7' },
+      scope: { ...folderScope, totalCount: 0 },
+    });
+    expect(screen.queryByRole('button', { name: 'Export' })).not.toBeInTheDocument();
+    emptyView.unmount();
+  });
+
   it('keeps identity and core anchors for folder, smart-folder, and system scopes', () => {
     for (const kind of ['folder', 'smart_folder', 'system'] as const) {
       const scope = {
@@ -361,9 +453,10 @@ describe('Inspector presentation branches', () => {
       };
       const view = renderInspector({ target: { kind: 'scope', nodeId: scope.node.id }, scope });
       expect([...document.querySelectorAll('[data-inspector-anchor]')].map((node) => node.getAttribute('data-inspector-anchor')))
-        .toEqual(['name', 'notes']);
+        .toEqual(kind === 'system' ? ['name'] : ['name', 'notes']);
       expect([...document.querySelectorAll('[data-inspector-core-property]')].map((node) => node.getAttribute('data-inspector-core-property')))
         .toEqual(['Items']);
+      expect(screen.queryByText('Rating')).not.toBeInTheDocument();
       assertNoClassificationSections();
       view.unmount();
     }

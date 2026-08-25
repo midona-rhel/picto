@@ -4,18 +4,46 @@
  * Every setting is a row with { id, label, keywords, panel, render }.
  * Normal mode: sidebar nav selects a panel, content shows that panel's rows.
  * Search mode (>2 chars): filters ALL rows, groups results by panel name.
- * Footer always visible: Reset (revert to defaults) + Save (commit changes).
+ * Footer always visible: Save closes after committing; Apply commits in place.
  */
 
 import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react';
-import { IconSettings2, IconCommand, IconPalette, IconX, IconSearch, IconBorderAll, IconLayoutBoard, IconSortAscending, IconSortDescending, IconSparkles } from '@tabler/icons-react';
-import { getKeyboardPreset, setKeyboardPreset, type KeyboardPreset } from '../../shared/lib/shortcuts';
+import {
+  IconAdjustmentsHorizontal,
+  IconBorderAll,
+  IconBox,
+  IconCheck,
+  IconCommand,
+  IconEye,
+  IconLayoutBoard,
+  IconLayoutSidebar,
+  IconSearch,
+  IconSettings2,
+  IconSortAscending,
+  IconSortDescending,
+  IconX,
+} from '@tabler/icons-react';
+import {
+  getKeyboardPreset,
+  getShortcutOverrides,
+  persistShortcutState,
+  replaceShortcutOverrides,
+  setKeyboardPreset,
+  type KeyboardPreset,
+  type ShortcutBindingOverride,
+} from '../../shared/lib/shortcuts';
 import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
-import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { ShortcutsPanel } from './ShortcutsPanel';
 import { AiTaggingPanel } from './AiTaggingPanel';
 import { appController } from '../../controllers/appController';
 import { settingsController, type AppSettings, type ViewPrefsDto, type ViewPrefsPatch } from '../../controllers/settingsController';
+import { previewTheme, themeNeedsNativeWindowRestart } from '../../runtime/themeRuntime';
+import {
+  AUDIO_VISUALIZATION_OPTIONS,
+  getAudioVisualizationMode,
+  setAudioVisualizationMode,
+  type AudioVisualizationMode,
+} from '../../shared/lib/audioVisualization';
 import styles from './Settings.module.css';
 
 // ── Settings row definition ──
@@ -25,7 +53,6 @@ interface SettingRow {
   label: string;
   keywords: string;
   panel: string;
-  render: (onDirty: () => void) => ReactNode;
 }
 
 // ── Panel definitions ──
@@ -37,43 +64,51 @@ interface PanelDef {
   /** Terms covered by this category, used by the single settings search path. */
   keywords: string;
   description: string;
-  /** If set, renders a custom component instead of rows */
-  custom?: (onDirty: () => void) => ReactNode;
+  separatorBefore?: boolean;
 }
 
 const PANELS: PanelDef[] = [
   {
     id: 'general', label: 'General', icon: IconSettings2,
-    keywords: 'general keyboard layout qwerty qwertz azerty eu us european preset',
-    description: 'Keyboard layout and regional shortcut alternatives.',
+    keywords: 'general appearance theme color light dark gray blue purple zoom keyboard layout qwerty qwertz azerty eu us european preset',
+    description: 'Appearance, zoom, and keyboard layout.',
   },
   {
-    id: 'appearance', label: 'Appearance', icon: IconPalette,
-    keywords: 'appearance theme color light dark gray blue purple vibrancy liquid glass mica acrylic language zoom grid thumbnails sort',
-    description: 'Theme, language, zoom, and default grid presentation.',
+    id: 'sidebar', label: 'Sidebar', icon: IconLayoutSidebar,
+    keywords: 'sidebar navigation folder tree guides hierarchy lines',
+    description: 'Sidebar and folder-tree presentation.',
+  },
+  {
+    id: 'controls', label: 'Controls', icon: IconAdjustmentsHorizontal,
+    keywords: 'controls grid layout thumbnails sort order name resolution extension label count fit',
+    description: 'Default grid controls and item presentation.',
+    separatorBefore: true,
+  },
+  {
+    id: 'preview', label: 'Preview', icon: IconEye,
+    keywords: 'preview audio visualization visualizer spectrum oscilloscope orbit',
+    description: 'Media preview behavior.',
   },
   {
     id: 'shortcuts', label: 'Shortcuts', icon: IconCommand,
     keywords: 'shortcuts keyboard shortcut keybind hotkey binding command key',
     description: 'Find and edit keyboard shortcut bindings.',
-    custom: () => <ShortcutsPanel />,
   },
   {
-    id: 'aitagging', label: 'AI Tagging', icon: IconSparkles,
+    id: 'aitagging', label: 'AI Models', icon: IconBox,
     keywords: 'ai tagging tagger models model download threshold confidence auto tag rating',
     description: 'Local models, confidence thresholds, and auto-tag behavior.',
-    custom: () => <AiTaggingPanel />,
+    separatorBefore: true,
   },
 ];
 
 // ── Individual setting rows (for General + future panels) ──
 
-function KeyboardPresetRow({ onDirty }: { onDirty: () => void }) {
-  const [preset, setPreset] = useState<KeyboardPreset>(getKeyboardPreset());
+function KeyboardPresetRow({ preset, onChange }: { preset: KeyboardPreset; onChange: (preset: KeyboardPreset) => void }) {
   return (
     <div className={styles.settingsBlock}>
-      <div className={styles.blockTitle}>Keyboard</div>
       <div className={styles.blockContent}>
+        <div className={styles.blockTitle}>Keyboard</div>
         <Row label="Keyboard layout">
           <select
             className={styles.select}
@@ -81,9 +116,7 @@ function KeyboardPresetRow({ onDirty }: { onDirty: () => void }) {
             value={preset}
             onChange={(e) => {
               const v = e.target.value as KeyboardPreset;
-              setPreset(v);
-              setKeyboardPreset(v);
-              onDirty();
+              onChange(v);
             }}
           >
             <option value="us">US (QWERTY)</option>
@@ -99,10 +132,22 @@ function KeyboardPresetRow({ onDirty }: { onDirty: () => void }) {
 }
 
 
-// ── Reusable row ──
+// ── Reusable rows ──
 
-function TreeGuidesToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
-  return <ToggleSwitch on={on} onChange={onToggle} />;
+function CheckSetting({ checked, label, onChange }: {
+  checked: boolean;
+  label: string;
+  onChange: () => void;
+}) {
+  return (
+    <label className={styles.checkboxItem}>
+      <input type="checkbox" checked={checked} onChange={onChange} />
+      <span className={styles.checkboxIndicator} aria-hidden="true">
+        {checked ? <IconCheck size={11} stroke={3} /> : null}
+      </span>
+      <span>{label}</span>
+    </label>
+  );
 }
 
 function Row({ label, sep, children }: { label: string; sep?: boolean; children: ReactNode }) {
@@ -119,10 +164,7 @@ function Row({ label, sep, children }: { label: string; sep?: boolean; children:
 
 // ── Appearance panel ──
 
-const isMacPlatform = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
-const isWinPlatform = typeof navigator !== 'undefined' && /Win/.test(navigator.platform);
-
-const THEMES: Array<{ name: string; css: string; color: string | undefined; platform?: 'mac' | 'win' }> = [
+const THEMES: Array<{ name: string; css: string; color: string | undefined }> = [
   { name: 'Auto', css: 'auto', color: undefined },
   { name: 'Light', css: 'light', color: '#ffffff' },
   { name: 'Light Gray', css: 'lightgray', color: '#c8cacd' },
@@ -130,13 +172,7 @@ const THEMES: Array<{ name: string; css: string; color: string | undefined; plat
   { name: 'Dark', css: 'dark', color: '#010101' },
   { name: 'Blue', css: 'blue', color: '#28356e' },
   { name: 'Purple', css: 'purple', color: '#463275' },
-  // macOS native
-  { name: 'Vibrancy', css: 'vibrancy', color: undefined, platform: 'mac' as const },
-  { name: 'Liquid Glass', css: 'liquidglass', color: undefined, platform: 'mac' as const },
-  // Windows native
-  { name: 'Mica', css: 'mica', color: undefined, platform: 'win' as const },
-  { name: 'Acrylic', css: 'acrylic', color: undefined, platform: 'win' as const },
-].filter((t) => !t.platform || (t.platform === 'mac' && isMacPlatform) || (t.platform === 'win' && isWinPlatform));
+];
 
 const ZOOM_OPTIONS = [
   { value: '75', label: '75%' },
@@ -172,27 +208,18 @@ const SORT_DIR_OPTIONS = [
   { value: 'descending', label: 'Descending', icon: <IconSortDescending size={14} /> },
 ];
 
-function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs }: {
+function PreferencePanel({ panel, onDirty, appSettings, setAppSettings, prefs, setPrefs, audioVisualization, setAudioVisualization }: {
+  panel: 'general' | 'sidebar' | 'controls' | 'preview';
   onDirty: () => void;
   appSettings: AppSettings | null;
   setAppSettings: React.Dispatch<React.SetStateAction<AppSettings | null>>;
   prefs: ViewPrefsDto | null;
   setPrefs: React.Dispatch<React.SetStateAction<ViewPrefsDto | null>>;
+  audioVisualization: AudioVisualizationMode;
+  setAudioVisualization: (mode: AudioVisualizationMode) => void;
 }) {
-  const [activeTheme, setActiveTheme] = useState(() => {
-    const saved = localStorage.getItem('picto-theme') ?? 'dark';
-    // Apply theme to this window on mount (settings is a separate Electron window)
-    const lightThemes = new Set(['light', 'lightgray']);
-    const resolved = saved === 'auto'
-      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-      : saved;
-    document.documentElement.dataset.theme = saved === 'auto' ? '' : saved;
-    document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-    document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-    return saved;
-  });
   const [zoom, setZoom] = useState('100');
-  const previousThemeRef = useRef(activeTheme);
+  const activeTheme = appSettings?.colorScheme ?? 'dark';
 
   useEffect(() => {
     if (appSettings?.zoomFactor == null) {
@@ -207,32 +234,13 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
 
   const updateAppSetting = (patch: Partial<AppSettings>) => {
     setAppSettings((cur) => cur ? { ...cur, ...patch } : null);
-    // Apply immediately for live preview in the main window
-    void settingsController.saveSettings(patch).catch(() => {});
     onDirty();
   };
 
   const handleThemeChange = (css: string) => {
-    // Native transparency themes need window recreation — warn user first
-    const nativeThemes = new Set(['vibrancy', 'liquidglass', 'mica', 'acrylic']);
-    const willRestart = nativeThemes.has(css) || nativeThemes.has(previousThemeRef.current);
-    if (willRestart && !window.confirm('This theme requires restarting the main window. Continue?')) return;
-
-    // Theme preview is applied immediately (visual feedback), but only persisted on Save
-    const lightThemes = new Set(['light', 'lightgray']);
-    const resolved = css === 'auto'
-      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-      : css;
-    document.documentElement.dataset.theme = css === 'auto' ? '' : css;
-    document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-    document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-    localStorage.setItem('picto-theme', css);
-    setActiveTheme(css);
-    updateAppSetting({ colorScheme: css });
-    if (willRestart) {
-      void appController.restartMainWindow().catch(() => {});
-    }
-    previousThemeRef.current = css;
+    setAppSettings((current) => current ? { ...current, colorScheme: css } : null);
+    previewTheme(css);
+    onDirty();
   };
 
   const handleZoomChange = (value: string) => {
@@ -240,63 +248,91 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
     updateAppSetting({ zoomFactor: Number(value) / 100 });
   };
 
+  const handleAudioVisualizationChange = (value: string) => {
+    const mode = value as AudioVisualizationMode;
+    setAudioVisualization(mode);
+    setAudioVisualizationMode(mode, false);
+    onDirty();
+  };
+
   const updateViewPref = (patch: ViewPrefsPatch) => {
     setPrefs((cur) => cur ? { ...cur, ...patch } as ViewPrefsDto : null);
-    // Apply immediately for live preview
-    void settingsController.setViewPrefs('', patch).catch(() => {});
     onDirty();
   };
 
   return (
     <div className={styles.panelContent}>
-      {/* ── Appearance ── */}
-      <div className={styles.settingsBlock}>
-        <div className={styles.blockTitle}>Appearance</div>
-        <div className={styles.blockContent}>
-          <Row label="Theme">
-            <div className={styles.themesPicker}>
-              {THEMES.map((t) => (
-                <button
-                  key={t.css}
-                  className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeSwatchAuto : ''} ${!t.color && t.css !== 'auto' ? styles.themeSwatchGlass : ''} ${activeTheme === t.css ? styles.themeSwatchActive : ''}`}
-                  style={t.color ? { backgroundColor: t.color } : undefined}
-                  data-tooltip={t.name}
-                  type="button"
-                  onClick={() => handleThemeChange(t.css)}
-                />
-              ))}
-            </div>
-          </Row>
-          <div className={styles.rowSep} />
-          <div className={styles.labelItems}>
-            <div className={styles.labelItem}>
-              <label className={styles.settingLabel}>Language</label>
-              <div className={styles.settingControl}>
-                <CmSelect value="en" options={[{ value: 'en', label: 'English' }]} onChange={() => {}} />
-              </div>
-            </div>
-            <div className={styles.labelItemsSep} />
-            <div className={styles.labelItem}>
-              <label className={styles.settingLabel}>Zoom</label>
-              <div className={styles.settingControl}>
-                <CmSelect value={zoom} options={ZOOM_OPTIONS} onChange={handleZoomChange} />
+      {panel === 'general' ? (
+        <>
+          <div className={styles.settingsBlock}>
+            <div className={styles.blockContent}>
+              <div className={styles.blockTitle}>Appearance</div>
+              <Row label="Theme">
+                <div className={styles.themesPicker}>
+                  {THEMES.map((t) => (
+                    <button
+                      key={t.css}
+                      className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeSwatchAuto : ''} ${!t.color && t.css !== 'auto' ? styles.themeSwatchGlass : ''} ${activeTheme === t.css ? styles.themeSwatchActive : ''}`}
+                      style={t.color ? { backgroundColor: t.color } : undefined}
+                      data-tooltip={t.name}
+                      type="button"
+                      aria-label={`${t.name} theme`}
+                      onClick={() => handleThemeChange(t.css)}
+                    />
+                  ))}
+                </div>
+              </Row>
+              <div className={styles.rowSep} />
+              <div className={styles.labelItems}>
+                <div className={styles.labelItem}>
+                  <label className={styles.settingLabel}>Language</label>
+                  <div className={styles.staticValue}>English</div>
+                </div>
+                <div className={styles.labelItemsSep} />
+                <div className={styles.labelItem}>
+                  <label className={styles.settingLabel}>Zoom Level</label>
+                  <div className={styles.settingControl}>
+                    <CmSelect value={zoom} options={ZOOM_OPTIONS} onChange={handleZoomChange} />
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-          <Row label="Folder tree guides" sep>
-            <TreeGuidesToggle
-              on={appSettings?.showTreeGuides ?? true}
-              onToggle={() => updateAppSetting({ showTreeGuides: !(appSettings?.showTreeGuides ?? true) })}
-            />
-          </Row>
-        </div>
-      </div>
+        </>
+      ) : null}
 
-      {/* ── Grid Defaults ── */}
-      {prefs && (
+      {panel === 'sidebar' ? (
         <div className={styles.settingsBlock}>
-          <div className={styles.blockTitle}>Grid Defaults</div>
           <div className={styles.blockContent}>
+            <div className={styles.blockTitle}>Folder Tree</div>
+            <CheckSetting
+              checked={appSettings?.showTreeGuides ?? true}
+              label="Show hierarchy guides"
+              onChange={() => updateAppSetting({ showTreeGuides: !(appSettings?.showTreeGuides ?? true) })}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {panel === 'preview' ? (
+        <div className={styles.settingsBlock}>
+          <div className={styles.blockContent}>
+            <div className={styles.blockTitle}>Audio</div>
+            <Row label="Visualization">
+              <CmSelect
+                value={audioVisualization}
+                options={AUDIO_VISUALIZATION_OPTIONS}
+                onChange={handleAudioVisualizationChange}
+              />
+            </Row>
+          </div>
+        </div>
+      ) : null}
+
+      {panel === 'controls' && prefs ? (
+        <div className={styles.settingsBlock}>
+          <div className={styles.blockContent}>
+            <div className={styles.blockTitle}>Grid Defaults</div>
             <Row label="Default layout">
               <CmSelect value={prefs.view_mode ?? 'waterfall'} options={LAYOUT_OPTIONS} onChange={(v) => updateViewPref({ view_mode: v })} />
             </Row>
@@ -321,82 +357,83 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
                 </div>
               </div>
             </div>
-            <Row label="Fit thumbnails" sep>
-              <ToggleSwitch on={prefs.thumbnail_fit === 'cover'} onChange={() => {
+            <div className={styles.rowSep} />
+            <div className={styles.checkboxGrid}>
+              <CheckSetting checked={prefs.thumbnail_fit === 'cover'} label="Fit thumbnails" onChange={() => {
                 updateViewPref({ thumbnail_fit: prefs.thumbnail_fit === 'cover' ? 'contain' : 'cover' });
               }} />
-            </Row>
-            <Row label="Show name" sep>
-              <ToggleSwitch on={prefs.show_name ?? true} onChange={() => updateViewPref({ show_name: !(prefs.show_name ?? true) })} />
-            </Row>
-            <Row label="Show resolution" sep>
-              <ToggleSwitch on={prefs.show_resolution ?? false} onChange={() => updateViewPref({ show_resolution: !(prefs.show_resolution ?? false) })} />
-            </Row>
-            <Row label="Show extension" sep>
-              <ToggleSwitch on={prefs.show_extension ?? false} onChange={() => updateViewPref({ show_extension: !(prefs.show_extension ?? false) })} />
-            </Row>
-            <Row label="Show label" sep>
-              <ToggleSwitch on={prefs.show_label ?? false} onChange={() => updateViewPref({ show_label: !(prefs.show_label ?? false) })} />
-            </Row>
+              <CheckSetting checked={prefs.show_name ?? true} label="Show name" onChange={() => updateViewPref({ show_name: !(prefs.show_name ?? true) })} />
+              <CheckSetting checked={prefs.show_resolution ?? false} label="Show resolution" onChange={() => updateViewPref({ show_resolution: !(prefs.show_resolution ?? false) })} />
+              <CheckSetting checked={prefs.show_extension ?? false} label="Show extension" onChange={() => updateViewPref({ show_extension: !(prefs.show_extension ?? false) })} />
+              <CheckSetting checked={prefs.show_label ?? false} label="Show label" onChange={() => updateViewPref({ show_label: !(prefs.show_label ?? false) })} />
+              <CheckSetting checked={prefs.show_item_count ?? true} label="Show item count" onChange={() => updateViewPref({ show_item_count: !(prefs.show_item_count ?? true) })} />
+            </div>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
 
 const ALL_SETTINGS: SettingRow[] = [
   {
+    id: 'general.appearance',
+    label: 'Appearance',
+    keywords: 'theme color light dark gray blue purple zoom language',
+    panel: 'general',
+  },
+  {
     id: 'general.keyboard',
     label: 'Keyboard Layout',
     keywords: 'keyboard layout qwerty qwertz azerty eu us european preset shortcut',
     panel: 'general',
-    render: (onDirty) => <KeyboardPresetRow onDirty={onDirty} />,
+  },
+  {
+    id: 'sidebar.folder-tree',
+    label: 'Folder Tree',
+    keywords: 'sidebar folder hierarchy tree guides lines',
+    panel: 'sidebar',
+  },
+  {
+    id: 'controls.grid',
+    label: 'Grid Defaults',
+    keywords: 'grid layout thumbnail size sort name resolution extension label count fit',
+    panel: 'controls',
+  },
+  {
+    id: 'preview.audio',
+    label: 'Audio Preview',
+    keywords: 'audio preview visualization spectrum oscilloscope orbit',
+    panel: 'preview',
   },
 ];
 
 // ── Component ──
 
-// Default app settings (used by Reset)
-const DEFAULT_APP_SETTINGS: Partial<AppSettings> = {
-  showTreeGuides: true,
-  colorScheme: 'dark',
-};
-const DEFAULT_VIEW_PREFS: ViewPrefsPatch = {
-  view_mode: 'waterfall',
-  target_size: 220,
-  sort_field: 'imported_at',
-  sort_order: 'descending',
-  show_name: true,
-  show_resolution: false,
-  show_extension: false,
-  show_label: false,
-  thumbnail_fit: 'contain',
-};
-
-// Apply theme to this window immediately on module load (settings is a separate Electron window)
-(function applyThemeOnLoad() {
-  const saved = localStorage.getItem('picto-theme') ?? 'dark';
-  const lightThemes = new Set(['light', 'lightgray']);
-  const resolved = saved === 'auto'
-    ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
-    : saved;
-  document.documentElement.dataset.theme = saved === 'auto' ? '' : saved;
-  document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-  document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-})();
-
 export function Settings() {
   const [selected, setSelected] = useState('general');
   const [search, setSearch] = useState('');
   const [isDirty, setIsDirty] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [pendingKeyboardPreset, setPendingKeyboardPreset] = useState<KeyboardPreset>(getKeyboardPreset);
+  const [pendingAudioVisualization, setPendingAudioVisualization] = useState<AudioVisualizationMode>(getAudioVisualizationMode);
 
-  // Working state — applied to backend immediately for live preview.
-  // On Save: becomes the new saved baseline.
-  // On close without save: reverted to savedSnapshot.
   const [pendingAppSettings, setPendingAppSettings] = useState<AppSettings | null>(null);
   const [pendingViewPrefs, setPendingViewPrefs] = useState<ViewPrefsDto | null>(null);
-  const savedSnapshotRef = useRef<{ app: AppSettings | null; prefs: ViewPrefsDto | null }>({ app: null, prefs: null });
+  const savedSnapshotRef = useRef<{
+    app: AppSettings | null;
+    prefs: ViewPrefsDto | null;
+    keyboardPreset: KeyboardPreset;
+    audioVisualization: AudioVisualizationMode;
+    shortcutOverrides: Readonly<Record<string, ShortcutBindingOverride>>;
+  }>({
+    app: null,
+    prefs: null,
+    keyboardPreset: getKeyboardPreset(),
+    audioVisualization: getAudioVisualizationMode(),
+    shortcutOverrides: getShortcutOverrides(),
+  });
 
   // Load from backend on mount + snapshot the saved state
   useEffect(() => {
@@ -441,63 +478,71 @@ export function Settings() {
     return matchedPanels;
   }, [isSearching, matchedPanels]);
 
-  // Revert unsaved changes when window closes (native close button, Cmd+W, etc.)
+  const restoreRuntimePreview = useCallback(() => {
+    const snapshot = savedSnapshotRef.current;
+    setKeyboardPreset(snapshot.keyboardPreset, false);
+    setAudioVisualizationMode(snapshot.audioVisualization, false);
+    replaceShortcutOverrides(snapshot.shortcutOverrides, false);
+    if (snapshot.app) previewTheme(snapshot.app.colorScheme);
+  }, []);
+
   useEffect(() => {
     if (!isDirty) return;
-    const handler = () => {
-      const snap = savedSnapshotRef.current;
-      if (snap.app) void settingsController.replaceSettings(snap.app).catch(() => {});
-      if (snap.prefs) void settingsController.setViewPrefs('', settingsController.viewPrefsToPatch(snap.prefs)).catch(() => {});
-    };
+    const handler = () => restoreRuntimePreview();
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [isDirty]);
+  }, [isDirty, restoreRuntimePreview]);
 
   const handleClose = () => {
     if (isDirty) {
-      // Revert to saved snapshot
-      const snap = savedSnapshotRef.current;
-      if (snap.app) void settingsController.replaceSettings(snap.app).catch(() => {});
-      if (snap.prefs) void settingsController.setViewPrefs('', settingsController.viewPrefsToPatch(snap.prefs)).catch(() => {});
+      restoreRuntimePreview();
     }
     window.close();
   };
 
-  const handleSave = () => {
-    // Persist pending state to backend — this is now the saved baseline
-    if (pendingAppSettings) {
-      void settingsController.replaceSettings(pendingAppSettings).catch(() => {});
-      savedSnapshotRef.current.app = structuredClone(pendingAppSettings);
+  const handleSave = async (closeAfterSave: boolean) => {
+    if (isSaving) return;
+    const needsRestart = pendingAppSettings
+      ? themeNeedsNativeWindowRestart(savedSnapshotRef.current.app?.colorScheme, pendingAppSettings.colorScheme)
+      : false;
+    setIsSaving(true);
+    setSaveError(null);
+    try {
+      if (pendingAppSettings) await settingsController.replaceSettings(pendingAppSettings);
+      if (pendingViewPrefs) {
+        await settingsController.setViewPrefs('', settingsController.viewPrefsToPatch(pendingViewPrefs));
+      }
+      setKeyboardPreset(pendingKeyboardPreset);
+      setAudioVisualizationMode(pendingAudioVisualization);
+      persistShortcutState();
+      savedSnapshotRef.current = {
+        app: pendingAppSettings ? structuredClone(pendingAppSettings) : null,
+        prefs: pendingViewPrefs ? structuredClone(pendingViewPrefs) : null,
+        keyboardPreset: pendingKeyboardPreset,
+        audioVisualization: pendingAudioVisualization,
+        shortcutOverrides: getShortcutOverrides(),
+      };
+      setIsDirty(false);
+      if (needsRestart) await appController.restartMainWindow();
+      if (closeAfterSave) window.close();
+    } catch (reason) {
+      setSaveError(reason instanceof Error ? reason.message : 'Unable to save settings.');
+    } finally {
+      setIsSaving(false);
     }
-    if (pendingViewPrefs) {
-      void settingsController.setViewPrefs('', settingsController.viewPrefsToPatch(pendingViewPrefs)).catch(() => {});
-      savedSnapshotRef.current.prefs = structuredClone(pendingViewPrefs);
-    }
-    setIsDirty(false);
   };
-
-  const handleReset = () => {
-    if (!window.confirm('Reset all settings to defaults?')) return;
-    setKeyboardPreset('us');
-    setPendingAppSettings((cur) => cur ? { ...cur, ...DEFAULT_APP_SETTINGS } : null);
-    setPendingViewPrefs((cur) => cur ? { ...cur, ...DEFAULT_VIEW_PREFS } as ViewPrefsDto : null);
-    setIsDirty(true);
-  };
-
-  // Rows for the currently selected panel
-  const panelRows = ALL_SETTINGS.filter((s) => s.panel === selected);
 
   return (
     <div className={styles.root}>
       {/* ── Sidebar ── */}
       <div className={styles.sidebar}>
-        <div className={styles.sidebarTitle}>Settings</div>
+        <div className={styles.sidebarTitle}>Preferences</div>
         <div className={styles.searchWrap}>
           <IconSearch size={14} className={styles.searchIcon} />
           <input
             className={styles.sidebarSearch}
             type="search"
-            placeholder="Search settings..."
+            placeholder="Search..."
             aria-label="Search settings"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -508,14 +553,16 @@ export function Settings() {
             const Icon = panel.icon;
             const isActive = panel.id === selected && !isSearching;
             return (
-              <button
-                key={panel.id}
-                className={isActive ? styles.navItemActive : styles.navItem}
-                onClick={() => { setSelected(panel.id); setSearch(''); }}
-              >
-                <Icon size={18} />
-                {panel.label}
-              </button>
+              <div key={panel.id} className={styles.navEntry}>
+                {panel.separatorBefore ? <div className={styles.navSeparator} /> : null}
+                <button
+                  className={isActive ? styles.navItemActive : styles.navItem}
+                  onClick={() => { setSelected(panel.id); setSearch(''); }}
+                >
+                  <Icon size={18} stroke={1.8} />
+                  {panel.label}
+                </button>
+              </div>
             );
           })}
         </div>
@@ -556,29 +603,52 @@ export function Settings() {
                 })}
               </div>
             )
-          ) : activePanel.id === 'appearance' ? (
-            <AppearancePanel
-              onDirty={markDirty}
-              appSettings={pendingAppSettings}
-              setAppSettings={setPendingAppSettings}
-              prefs={pendingViewPrefs}
-              setPrefs={setPendingViewPrefs}
+          ) : ['general', 'sidebar', 'controls', 'preview'].includes(activePanel.id) ? (
+            <>
+              <PreferencePanel
+                panel={activePanel.id as 'general' | 'sidebar' | 'controls' | 'preview'}
+                onDirty={markDirty}
+                appSettings={pendingAppSettings}
+                setAppSettings={setPendingAppSettings}
+                prefs={pendingViewPrefs}
+                setPrefs={setPendingViewPrefs}
+                audioVisualization={pendingAudioVisualization}
+                setAudioVisualization={setPendingAudioVisualization}
+              />
+              {activePanel.id === 'general' ? (
+                <div className={styles.panelContent}>
+                  <KeyboardPresetRow
+                    preset={pendingKeyboardPreset}
+                    onChange={(preset) => {
+                      setPendingKeyboardPreset(preset);
+                      setKeyboardPreset(preset, false);
+                      markDirty();
+                    }}
+                  />
+                </div>
+              ) : null}
+            </>
+          ) : activePanel.id === 'shortcuts' ? (
+            <ShortcutsPanel onDirty={markDirty} />
+          ) : activePanel.id === 'aitagging' ? (
+            <AiTaggingPanel
+              settings={pendingAppSettings}
+              onSettingsChange={(patch) => {
+                setPendingAppSettings((current) => current ? { ...current, ...patch } : current);
+                markDirty();
+              }}
             />
-          ) : activePanel.custom ? (
-            activePanel.custom(markDirty)
-          ) : (
-            // Normal panel view — render all rows for the selected panel
-            <div className={styles.panelContent}>
-              {panelRows.map((row) => <div key={row.id}>{row.render(markDirty)}</div>)}
-            </div>
-          )}
+          ) : null}
         </div>
 
         {/* ── Footer — always visible ── */}
         <div className={styles.footer}>
-          <button className={styles.footerBtn} onClick={handleReset} disabled={!isDirty}>Reset to Defaults</button>
-          <button className={styles.footerBtn} onClick={handleSave} disabled={!isDirty}>
-            Save Changes
+          <span className={styles.saveStatus} role="status">{saveError}</span>
+          <button className={styles.footerBtnPrimary} onClick={() => void handleSave(true)} disabled={isSaving}>
+            {isSaving ? 'Saving…' : 'Save Changes'}
+          </button>
+          <button className={styles.footerBtn} onClick={() => void handleSave(false)} disabled={isSaving}>
+            Apply
           </button>
         </div>
       </div>

@@ -1,0 +1,461 @@
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { getDefaultStore } from 'jotai';
+import { useState } from 'react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { GroupSurface } from './GroupSurface';
+import { viewerDisplayControlsAtom, viewerDisplayStateAtom } from '../../state/viewer';
+import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
+
+const mocks = vi.hoisted(() => ({
+  getItemDetails: vi.fn(),
+  detachItems: vi.fn(),
+  reorderGroup: vi.fn(),
+  ungroup: vi.fn(),
+  openDefaultAppForHash: vi.fn(),
+  revealHashInFolder: vi.fn(),
+  openDetailWindow: vi.fn(),
+  copyFileForHash: vi.fn(),
+  copyFilePath: vi.fn(),
+  copyText: vi.fn(),
+  regenerateThumbnailsBatch: vi.fn(),
+  detailMediaRenderer: vi.fn(),
+}));
+
+vi.mock('../../controllers/viewerController', () => ({
+  viewerController: { getItemDetails: mocks.getItemDetails },
+}));
+vi.mock('../../platform/entityApi', () => ({
+  detachItems: mocks.detachItems,
+  reorderGroup: mocks.reorderGroup,
+  ungroup: mocks.ungroup,
+}));
+vi.mock('../../runtime/libraryInvalidation', () => ({
+  libraryInvalidation: { register: vi.fn(() => () => {}) },
+}));
+vi.mock('../../controllers/filesController', () => ({
+  filesController: {
+    openDefaultAppForHash: mocks.openDefaultAppForHash,
+    revealHashInFolder: mocks.revealHashInFolder,
+    copyFileForHash: mocks.copyFileForHash,
+    copyFilePath: mocks.copyFilePath,
+    copyText: mocks.copyText,
+    regenerateThumbnailsBatch: mocks.regenerateThumbnailsBatch,
+  },
+}));
+vi.mock('../../controllers/windowController', () => ({
+  windowController: { openDetailWindow: mocks.openDetailWindow },
+}));
+vi.mock('../viewer/MediaView', () => ({
+  MediaView: ({ currentIndex, backLabel, onClose }: { currentIndex: number; backLabel?: string; onClose: () => void }) => (
+    <div data-testid="media-view" data-back-label={backLabel}>
+      Viewing {currentIndex}
+      <button type="button" onClick={onClose}>Back from member</button>
+    </div>
+  ),
+}));
+vi.mock('../viewer/QuickLook', () => ({
+  QuickLook: ({ currentIndex, onClose }: { currentIndex: number; onClose: () => void }) => (
+    <div data-testid="quick-look">
+      Quick looking {currentIndex}
+      <button type="button" onClick={onClose}>Close quick look</button>
+    </div>
+  ),
+}));
+vi.mock('../viewer/document/DetailMediaRenderer', () => ({
+  DetailMediaRenderer: (props: { hash: string; mimeType: string; mediaKeyboardShortcutsEnabled?: boolean }) => {
+    mocks.detailMediaRenderer(props);
+    return <div data-testid={`detail-renderer-${props.hash}`} />;
+  },
+}));
+vi.mock('../grid/canvas/CanvasGrid', () => ({
+  CanvasGrid: (props: {
+    items: Array<{ item_id: number; display_file_hash: string }>;
+    onReorder?: (ids: number[]) => void;
+    onTileClick?: (index: number, item: { item_id: number }, event?: React.MouseEvent) => void;
+    onTileContextMenu?: (
+      index: number,
+      item: { item_id: number },
+      position: { x: number; y: number },
+    ) => void;
+    onMarqueeSelectionChange?: (selection: { itemIds: Set<number>; folderNodeIds: Set<string> }) => void;
+  }) => (
+    <div data-testid="canvas-grid">
+      {props.items.map((item, index) => (
+        <button
+          key={item.item_id}
+          type="button"
+          data-testid={`grid-item-${item.item_id}`}
+          onClick={(event) => props.onTileClick?.(index, item, event)}
+          onContextMenu={() => props.onTileContextMenu?.(index, item, { x: 10, y: 10 })}
+        >
+          {item.display_file_hash}
+        </button>
+      ))}
+      <button
+        type="button"
+        onClick={() => props.onReorder?.([...props.items].reverse().map((item) => item.item_id))}
+      >
+        Reorder
+      </button>
+      <button type="button" onClick={() => props.onMarqueeSelectionChange?.({ itemIds: new Set([1, 2]), folderNodeIds: new Set() })}>
+        Marquee first two
+      </button>
+    </div>
+  ),
+}));
+vi.mock('../../shared/ui/ContextMenu', () => ({
+  ContextMenu: ({ entries }: { entries: Array<{ label?: string; action?: () => void; separator?: true }> }) => (
+    <div data-testid="context-menu">
+      {entries.map((entry, index) => entry.separator
+        ? <hr key={`separator-${index}`} />
+        : <button key={entry.label} type="button" onClick={entry.action}>{entry.label}</button>)}
+    </div>
+  ),
+  useContextMenu: () => {
+    const [state, setState] = useState<{
+      entries: Array<{ label?: string; action?: () => void; separator?: true }>;
+      position: { x: number; y: number };
+    } | null>(null);
+    return {
+      state,
+      openAt: (
+        position: { x: number; y: number },
+        entries: Array<{ label?: string; action?: () => void; separator?: true }>,
+      ) => setState({ position, entries }),
+      close: () => setState(null),
+    };
+  },
+}));
+
+function details(): ItemDetails {
+  return {
+    item_id: 7,
+    kind: 'collection',
+    lifecycle: 'active',
+    label: 'Ordered set',
+    cover_media_item_id: 1,
+    folder_ids: [],
+    aggregate_tags: [],
+    revision: 1,
+    media: [
+      media(1, 'one', 'image/png', 0),
+      media(2, 'two', 'image/png', 1),
+      media(3, 'three', 'video/mp4', 2),
+    ],
+  };
+}
+
+function media(itemId: number, hash: string, mimeType: string, position: number) {
+  return {
+    media_item_id: itemId,
+    file_hash: hash,
+    mime_type: mimeType,
+    dominant_color_hex: null,
+    dominant_colors: [],
+    size_bytes: 10,
+    pixel_width: 100,
+    pixel_height: 200,
+    duration_ms: null,
+    frame_count: null,
+    has_audio: false,
+    name: `Item ${itemId}`,
+    notes: null,
+    rating: null,
+    source_urls: [],
+    captured_at: null,
+    imported_at: '2026-08-23T00:00:00Z',
+    position,
+    tags: [],
+  };
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  getDefaultStore().set(viewerDisplayControlsAtom, null);
+  getDefaultStore().set(viewerDisplayStateAtom, null);
+  mocks.getItemDetails.mockResolvedValue(details());
+  mocks.detachItems.mockResolvedValue({});
+  mocks.reorderGroup.mockResolvedValue({});
+  mocks.ungroup.mockResolvedValue({});
+});
+
+async function enterEditor() {
+  await waitFor(() => expect(getDefaultStore().get(viewerDisplayControlsAtom)?.edit).toBeTypeOf('function'));
+  act(() => getDefaultStore().get(viewerDisplayControlsAtom)?.edit?.());
+}
+
+describe('GroupSurface', () => {
+  it('renders members in persisted order as a document reader', async () => {
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+    expect([...document.querySelectorAll('[data-group-member]')].map(
+      (element) => element.getAttribute('data-group-member'),
+    )).toEqual(['1', '2', '3']);
+  });
+
+  it('does not replace the application toolbar while presented inside Quick Look', async () => {
+    render(<GroupSurface groupId={7} presentation="quicklook" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+    expect(getDefaultStore().get(viewerDisplayControlsAtom)).toBeNull();
+    expect(getDefaultStore().get(viewerDisplayStateAtom)).toBeNull();
+  });
+
+  it('opens inline media detail on member double-click', async () => {
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+    fireEvent.doubleClick(document.querySelector('[data-group-member="2"]')!);
+    const mediaView = await screen.findByTestId('media-view');
+    expect(mediaView).toHaveTextContent('Viewing 1');
+    expect(mediaView).toHaveAttribute('data-back-label', 'Back to group');
+  });
+
+  it('uses the same inline detail viewer for video members', async () => {
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+    fireEvent.doubleClick(document.querySelector('[data-group-member="3"]')!);
+    expect(await screen.findByTestId('media-view')).toHaveTextContent('Viewing 2');
+  });
+
+  it('uses the canonical media renderer for video members in the group reader', async () => {
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    expect(await screen.findByTestId('detail-renderer-three')).toBeInTheDocument();
+    expect(mocks.detailMediaRenderer).toHaveBeenCalledWith(expect.objectContaining({
+      hash: 'three',
+      mimeType: 'video/mp4',
+      mediaKeyboardShortcutsEnabled: false,
+      mediaAutoPlay: false,
+      mediaLoop: false,
+      mediaMuted: false,
+    }));
+    expect(document.querySelector('[data-group-member="3"] > video')).toBeNull();
+  });
+
+  it('shows member thumbnails before revealing decoded full images', async () => {
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+
+    const memberImages = [...document.querySelectorAll('[data-group-member] img')];
+    const thumbnails = memberImages.filter((image) => image.getAttribute('src')?.includes('/thumb/'));
+    const fullImages = memberImages.filter((image) => image.getAttribute('src')?.includes('/file/'));
+    expect(thumbnails).toHaveLength(2);
+    expect(fullImages).toHaveLength(2);
+    expect(fullImages[0].className).not.toContain('fullImageVisible');
+    fireEvent.load(fullImages[0]);
+    expect(fullImages[0].className).toContain('fullImageVisible');
+    expect(getComputedStyle(fullImages[0]).position).toBe('absolute');
+    expect(getComputedStyle(thumbnails[0]).position).toBe('absolute');
+    expect(getComputedStyle(fullImages[0]).objectFit).toBe('fill');
+    expect(getComputedStyle(thumbnails[0]).objectFit).toBe('fill');
+    expect(fullImages[0].parentElement).toBe(thumbnails[0].parentElement);
+  });
+
+  it.each([' ', 'Enter'])('closes the group reader with the shared viewer toggle %p', async (key) => {
+    const onClose = vi.fn();
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
+    await screen.findByLabelText('Ordered set');
+    fireEvent.keyDown(window, { key, code: key === ' ' ? 'Space' : 'Enter' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('opens Quick Look for the selected group member from the editor', async () => {
+    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.click(await screen.findByTestId('grid-item-2'));
+    fireEvent.keyDown(window, { key: ' ', code: 'Space' });
+    expect(await screen.findByTestId('quick-look')).toHaveTextContent('Quick looking 1');
+  });
+
+  it('sends the complete reordered member list', async () => {
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await enterEditor();
+    expect(screen.queryByText(/Drag to reorder/i)).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Reorder' }));
+    await waitFor(() => expect(mocks.reorderGroup).toHaveBeenCalledWith({
+      collection_id: 7,
+      media_item_ids: [3, 2, 1],
+    }));
+  });
+
+  it('removes multiple selected members from the group', async () => {
+    const onClose = vi.fn();
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
+    await enterEditor();
+    fireEvent.click(await screen.findByTestId('grid-item-1'));
+    fireEvent.click(await screen.findByTestId('grid-item-2'), { metaKey: true });
+    fireEvent.contextMenu(screen.getByTestId('grid-item-2'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove 2 from Group' }));
+    await waitFor(() => expect(mocks.detachItems).toHaveBeenCalledWith({
+      collection_id: 7,
+      media_item_ids: [1, 2],
+      target_lifecycle: null,
+    }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('moves selected members directly to trash from the group menu', async () => {
+    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    const member = await screen.findByTestId('grid-item-2');
+    fireEvent.contextMenu(member);
+
+    const remove = await screen.findByRole('button', { name: 'Remove from Group' });
+    const trash = screen.getByRole('button', { name: 'Move to Trash' });
+    expect(remove.compareDocumentPosition(trash) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.click(trash);
+    await waitFor(() => expect(mocks.detachItems).toHaveBeenCalledWith({
+      collection_id: 7,
+      media_item_ids: [2],
+      target_lifecycle: 'trash',
+    }));
+  });
+
+  it('marquee-selects members for group-native bulk actions', async () => {
+    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByTestId('grid-item-1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Marquee first two' }));
+    fireEvent.contextMenu(screen.getByTestId('grid-item-2'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Regenerate 2 Thumbnails' }));
+    expect(mocks.regenerateThumbnailsBatch).toHaveBeenCalledWith(['one', 'two']);
+  });
+
+  it('removes the selected editor members with Delete', async () => {
+    const onClose = vi.fn();
+    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
+    await screen.findByTestId('grid-item-1');
+    fireEvent.click(screen.getByRole('button', { name: 'Marquee first two' }));
+    fireEvent.keyDown(window, { key: 'Delete' });
+    await waitFor(() => expect(mocks.detachItems).toHaveBeenCalledWith({
+      collection_id: 7,
+      media_item_ids: [1, 2],
+      target_lifecycle: null,
+    }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('does not expose a separate cover choice', async () => {
+    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.contextMenu(await screen.findByTestId('grid-item-2'));
+    expect(screen.queryByRole('button', { name: 'Set as Cover' })).not.toBeInTheDocument();
+  });
+
+  it('reuses shared open actions for a single group member', async () => {
+    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.contextMenu(await screen.findByTestId('grid-item-2'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open with Default App' }));
+    expect(mocks.openDefaultAppForHash).toHaveBeenCalledWith('two');
+  });
+
+  it('does not select in the reader and applies its menu to one member', async () => {
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+    const first = document.querySelector('[data-group-member="1"]')!;
+    const second = document.querySelector('[data-group-member="2"]')!;
+
+    fireEvent.click(first);
+    fireEvent.click(second, { metaKey: true });
+    expect(document.querySelectorAll('[data-selected="true"]')).toHaveLength(0);
+
+    fireEvent.contextMenu(second);
+    expect(screen.queryByRole('button', { name: 'Select All' })).not.toBeInTheDocument();
+    fireEvent.click(await screen.findByRole('button', { name: 'Remove from Group' }));
+    await waitFor(() => expect(mocks.detachItems).toHaveBeenCalledWith({
+      collection_id: 7,
+      media_item_ids: [2],
+      target_lifecycle: null,
+    }));
+  });
+
+  it('keeps contiguous shift selection inside the editor', async () => {
+    const onClose = vi.fn();
+    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
+    const first = await screen.findByTestId('grid-item-1');
+    const third = screen.getByTestId('grid-item-3');
+
+    fireEvent.click(first);
+    fireEvent.click(third, { shiftKey: true });
+    fireEvent.contextMenu(third);
+    expect(await screen.findByRole('button', { name: 'Remove 3 from Group' })).toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('returns directly to the grid when editing was opened from the grid', async () => {
+    const onClose = vi.fn();
+    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
+    await screen.findByTestId('grid-item-1');
+    const controls = getDefaultStore().get(viewerDisplayControlsAtom);
+    expect(controls?.backLabel).toBe('Back to grid');
+    act(() => controls?.close());
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(screen.getByTestId('canvas-grid')).toBeInTheDocument();
+  });
+
+  it('returns to the grid when editing was entered from the group reader', async () => {
+    const onClose = vi.fn();
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
+    await enterEditor();
+    const controls = getDefaultStore().get(viewerDisplayControlsAtom);
+    expect(controls?.backLabel).toBe('Back to grid');
+    act(() => controls?.close());
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('returns from an opened member to the group reader, not the grid', async () => {
+    const onClose = vi.fn();
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
+    await screen.findByLabelText('Ordered set');
+    fireEvent.doubleClick(document.querySelector('[data-group-member="2"]')!);
+    await screen.findByTestId('media-view');
+    fireEvent.click(screen.getByRole('button', { name: 'Back from member' }));
+    expect(onClose).not.toHaveBeenCalled();
+    expect(await screen.findByRole('main')).toBeInTheDocument();
+  });
+
+  it('adds truthful file and thumbnail actions to the member menu', async () => {
+    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.contextMenu(await screen.findByTestId('grid-item-2'));
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy File Path' }));
+    expect(mocks.copyFilePath).toHaveBeenCalledWith('two');
+
+    fireEvent.contextMenu(await screen.findByTestId('grid-item-2'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Regenerate Thumbnail' }));
+    expect(mocks.regenerateThumbnailsBatch).toHaveBeenCalledWith(['two']);
+  });
+
+  it('copies tags from the selected group member', async () => {
+    const next = details();
+    next.media[1].tags = ['creator:alice', 'favorite'];
+    mocks.getItemDetails.mockResolvedValue(next);
+    render(<GroupSurface groupId={7} initialMode="editor" rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    fireEvent.contextMenu(await screen.findByTestId('grid-item-2'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Copy Tags' }));
+    expect(mocks.copyText).toHaveBeenCalledWith('["creator:alice","favorite"]');
+  });
+
+  it('confirms before dissolving the whole group', async () => {
+    const onClose = vi.fn();
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={onClose} />);
+    await screen.findByLabelText('Ordered set');
+    fireEvent.contextMenu(screen.getByRole('main'));
+    fireEvent.click(await screen.findByRole('button', { name: 'Ungroup...' }));
+
+    const confirm = getDefaultStore().get((await import('../../state/modals')).confirmModalAtom);
+    expect(confirm).toMatchObject({ open: true, confirmLabel: 'Ungroup' });
+    await act(async () => { confirm.onConfirm(); });
+    await waitFor(() => expect(mocks.ungroup).toHaveBeenCalledWith(7));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it('uses arrow keys to navigate the root detail sequence', async () => {
+    const navigate = vi.fn();
+    render(<GroupSurface groupId={7} rootCurrentIndex={1} rootTotal={3} onNavigateRoot={navigate} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(navigate.mock.calls).toEqual([[-1], [1]]);
+  });
+});

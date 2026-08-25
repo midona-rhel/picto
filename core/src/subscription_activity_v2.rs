@@ -23,6 +23,10 @@ const MAX_PAGE_SIZE: usize = 100;
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct ActivityCounts {
     #[ts(type = "number")]
+    pub posts_traversed: i64,
+    #[ts(type = "number")]
+    pub posts_added: i64,
+    #[ts(type = "number")]
     pub fetched: i64,
     #[ts(type = "number")]
     pub downloaded: i64,
@@ -461,7 +465,15 @@ fn activity_counts_for_query(
     run_query_id: i64,
 ) -> rusqlite::Result<ActivityCounts> {
     connection.query_row(
-        "SELECT COUNT(DISTINCT rsi.source_item_id),
+        "SELECT (SELECT COUNT(DISTINCT ssp.source_post_id)
+                 FROM subscription_run_query current
+                 JOIN subscription_source_post ssp
+                   ON ssp.query_id = current.query_id
+                  AND ssp.last_seen_run_id = current.run_id
+                 WHERE current.run_query_id = ?1),
+                COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                    THEN si.source_post_id END),
+                COUNT(DISTINCT rsi.source_item_id),
                 COUNT(DISTINCT CASE WHEN si.state IN ('downloaded', 'ingested')
                                     THEN rsi.source_item_id END),
                 COUNT(DISTINCT CASE WHEN ij.status IN ('pending', 'running')
@@ -479,12 +491,14 @@ fn activity_counts_for_query(
         [run_query_id],
         |row| {
             Ok(ActivityCounts {
-                fetched: row.get(0)?,
-                downloaded: row.get(1)?,
-                queued: row.get(2)?,
-                ingested: row.get(3)?,
-                failed: row.get(4)?,
-                deleted: row.get(5)?,
+                posts_traversed: row.get(0)?,
+                posts_added: row.get(1)?,
+                fetched: row.get(2)?,
+                downloaded: row.get(3)?,
+                queued: row.get(4)?,
+                ingested: row.get(5)?,
+                failed: row.get(6)?,
+                deleted: row.get(7)?,
             })
         },
     )
@@ -503,12 +517,14 @@ fn run_summary_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Subscriptio
         created_at: row.get(8)?,
         query_count: row.get(9)?,
         counts: ActivityCounts {
-            fetched: row.get(10)?,
-            downloaded: row.get(11)?,
-            queued: row.get(12)?,
-            ingested: row.get(13)?,
-            failed: row.get(14)?,
-            deleted: row.get(15)?,
+            posts_traversed: row.get(10)?,
+            posts_added: row.get(11)?,
+            fetched: row.get(12)?,
+            downloaded: row.get(13)?,
+            queued: row.get(14)?,
+            ingested: row.get(15)?,
+            failed: row.get(16)?,
+            deleted: row.get(17)?,
         },
     })
 }
@@ -521,8 +537,19 @@ WITH target_runs AS (
     ORDER BY created_at DESC, run_id DESC
     LIMIT ?2
 ),
+post_counts AS (
+    SELECT srq.run_id,
+           COUNT(DISTINCT ssp.source_post_id) AS posts_traversed
+    FROM target_runs tr
+    JOIN subscription_run_query srq ON srq.run_id = tr.run_id
+    LEFT JOIN subscription_source_post ssp
+      ON ssp.query_id = srq.query_id AND ssp.last_seen_run_id = srq.run_id
+    GROUP BY srq.run_id
+),
 run_counts AS (
     SELECT srq.run_id,
+           COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                               THEN si.source_post_id END) AS posts_added,
            COUNT(DISTINCT rsi.source_item_id) AS fetched,
            COUNT(DISTINCT CASE WHEN si.state IN ('downloaded', 'ingested')
                                THEN rsi.source_item_id END) AS downloaded,
@@ -545,17 +572,30 @@ SELECT sr.run_id, sr.subscription_id, sr.requested_by, sr.status,
        sr.started_at, sr.finished_at, sr.failure_kind, sr.error_message,
        sr.created_at,
        (SELECT COUNT(*) FROM subscription_run_query WHERE run_id = sr.run_id),
+       COALESCE(pc.posts_traversed, 0), COALESCE(rc.posts_added, 0),
        COALESCE(rc.fetched, 0), COALESCE(rc.downloaded, 0),
        COALESCE(rc.queued, 0), COALESCE(rc.ingested, 0),
        COALESCE(rc.failed, 0), COALESCE(rc.deleted, 0)
 FROM target_runs sr
+LEFT JOIN post_counts pc ON pc.run_id = sr.run_id
 LEFT JOIN run_counts rc ON rc.run_id = sr.run_id
 ORDER BY sr.created_at DESC, sr.run_id DESC
 "#;
 
 const RUN_SUMMARY_BY_ID_SQL: &str = r#"
-WITH run_counts AS (
+WITH post_counts AS (
     SELECT srq.run_id,
+           COUNT(DISTINCT ssp.source_post_id) AS posts_traversed
+    FROM subscription_run_query srq
+    LEFT JOIN subscription_source_post ssp
+      ON ssp.query_id = srq.query_id AND ssp.last_seen_run_id = srq.run_id
+    WHERE srq.run_id = ?1
+    GROUP BY srq.run_id
+),
+run_counts AS (
+    SELECT srq.run_id,
+           COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                               THEN si.source_post_id END) AS posts_added,
            COUNT(DISTINCT rsi.source_item_id) AS fetched,
            COUNT(DISTINCT CASE WHEN si.state IN ('downloaded', 'ingested')
                                THEN rsi.source_item_id END) AS downloaded,
@@ -578,10 +618,12 @@ SELECT sr.run_id, sr.subscription_id, sr.requested_by, sr.status,
        sr.started_at, sr.finished_at, sr.failure_kind, sr.error_message,
        sr.created_at,
        (SELECT COUNT(*) FROM subscription_run_query WHERE run_id = sr.run_id),
+       COALESCE(pc.posts_traversed, 0), COALESCE(rc.posts_added, 0),
        COALESCE(rc.fetched, 0), COALESCE(rc.downloaded, 0),
        COALESCE(rc.queued, 0), COALESCE(rc.ingested, 0),
        COALESCE(rc.failed, 0), COALESCE(rc.deleted, 0)
 FROM subscription_run sr
+LEFT JOIN post_counts pc ON pc.run_id = sr.run_id
 LEFT JOIN run_counts rc ON rc.run_id = sr.run_id
 WHERE sr.run_id = ?1
 "#;
@@ -679,6 +721,28 @@ mod tests {
                     [],
                 )?;
                 let post_id = tx.last_insert_rowid();
+                tx.execute(
+                    "INSERT INTO subscription_source_post (
+                         subscription_id, query_id, source_post_id, last_seen_run_id
+                     ) VALUES (?1, (
+                         SELECT query_id FROM subscription_run_query WHERE run_query_id = ?2
+                     ), ?3, ?4)",
+                    params![subscription_id, run_query_id, post_id, run_id],
+                )?;
+                tx.execute(
+                    "INSERT INTO source_post (site_id, post_key, created_at, updated_at)
+                     VALUES ('example', 'post-without-media', 'now', 'now')",
+                    [],
+                )?;
+                let empty_post_id = tx.last_insert_rowid();
+                tx.execute(
+                    "INSERT INTO subscription_source_post (
+                         subscription_id, query_id, source_post_id, last_seen_run_id
+                     ) VALUES (?1, (
+                         SELECT query_id FROM subscription_run_query WHERE run_query_id = ?2
+                     ), ?3, ?4)",
+                    params![subscription_id, run_query_id, empty_post_id, run_id],
+                )?;
                 for (item_key, state) in [
                     ("downloaded", "downloaded"),
                     ("ingested", "ingested"),
@@ -716,6 +780,8 @@ mod tests {
             .unwrap();
 
         let progress = current_progress(&store, subscription_id).unwrap().unwrap();
+        assert_eq!(progress.counts.posts_traversed, 2);
+        assert_eq!(progress.counts.posts_added, 1);
         assert_eq!(progress.counts.fetched, 5);
         assert_eq!(progress.counts.downloaded, 2);
         assert_eq!(progress.counts.queued, 1);

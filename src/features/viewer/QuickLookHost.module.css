@@ -1,0 +1,39 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-overlay);
+  display: flex;
+  flex-direction: column;
+  background: var(--color-bg-app);
+  color: #f8f9fb;
+  font-family: var(--font-family-ui);
+  opacity: 0;
+  transition: opacity 100ms ease;
+  will-change: opacity;
+}
+
+.overlay.open {
+  opacity: 1;
+}
+
+.closeButton {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: #f8f9fb;
+  cursor: pointer;
+  transition: background 200ms ease;
+}
+
+.closeButton:hover {
+  background: var(--color-surface-hover);
+}

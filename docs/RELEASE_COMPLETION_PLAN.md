@@ -9,7 +9,8 @@ Collections are first-class library items. Cloud sync is deferred from this rele
 ## Release Rules
 
 1. Visible library items are standalone media or collections.
-2. Media assets are images or videos. Collection roots own lifecycle and folders; members inherit.
+2. Media assets use the accepted-format registry. Collection roots own lifecycle and folders;
+   members inherit. ZIP imports are safely expanded into one collection.
 3. `All` means active accepted roots only. Inbox and Trash stay outside All and library scopes.
 4. The durable ingest queue is the only entrypoint for manual, watch, subscription, and retry work.
 5. Before 1.0, there are no migrations. A library must match the current schema or fail untouched.
@@ -54,6 +55,32 @@ Collections are first-class library items. Cloud sync is deferred from this rele
 - Finish duplicates with deterministic quality comparison, metadata/provenance preservation, and
   safe collection-aware merge behavior.
 - Finish tag management and durable automatic AI tagging.
+- Keep Picto's accepted-format registry aligned with reference application's documented format matrix. Accepted
+  files are preserved even when Picto has no detail renderer yet. The current matrix is:
+  - Image/texture: `bmp`, `gif`, `heic`, `heif`, `hif`, `icns`, `ico`, `jpeg`, `jpg`, `jpe`,
+    `jfif`, `png`, `svg`, `tif`, `tiff`, `webp`, `avif`, `base64`, `insp`, `jxl`, `dds`, `exr`,
+    `hdr`, `tga`, `svga`, `pag`, `lottie`, `iff`, `lbm`, plus existing Picto image formats.
+  - 3D: `fbx`, `obj`, `3ds`, `3mf`, `dae`, `ifc`, `ply`, `stl`, `glb`, `gltf`, `vrm`.
+  - Design source: `af`, `afdesign`, `afphoto`, `afpub`, `ai`, `c4d`, `cdr`, `clip`, `dwg`,
+    `graffle`, `idml`, `indd`, `indt`, `mindnode`, `psb`, `psd`, `psdt`, `pxd`, `principle`,
+    `sketch`, `skt`, `skp`, `xd`, `xmind`.
+  - Video: `m4v`, `mp4`, `webm`, `mov`, `mkv`, `flv`, `f4v`, `ts`, `mts`, `m2ts`, `3gp`,
+    plus existing Picto video formats.
+  - Audio: `aac`, `flac`, `m4a`, `mp3`, `ogg`, `wav`, plus existing Picto audio formats.
+  - Font/RAW: `ttf`, `ttc`, `otf`, `woff`, `3fr`, `arw`, `cr2`, `cr3`, `crw`, `dng`, `erf`,
+    `mrw`, `nef`, `nrw`, `orf`, `pef`, `raf`, `raw`, `rw2`, `sr2`, `srw`, `x3f`.
+  - Office/web: `txt`, `md`, `markdown`, `json`, `key`, `numbers`, `pages`, `pdf`, `potx`,
+    `ppt`, `pptx`, `xls`, `xlsx`, `doc`, `docx`, `eddx`, `emmx`, `html`, `mhtml`, `url`.
+  - Explicit extension additions: `zip` (expand to collection), `epub`, `swf`, `eps`, `livp`,
+    LUT (`cube`, `3dl`), and lighting photometry (`ies`).
+  Source: https://en.reference application.cool/support/article/what-file-formats-does-reference application-support
+  reference application extension inventory: https://community-en.reference application.cool/plugins/format
+- Treat the reference application plugin screenshots as a behavior backlog, not packages to copy. Candidate
+  Picto-native actions: custom export; Live Photo, SWF, JXL, EPS, EPUB, and video-format support;
+  FFmpeg/media-info dependencies; UTF-8 repair; video-frame export; combine images; OCR/copy text;
+  crop; video-to-GIF; image comparison; EXIF; histogram; format conversion; reverse/high-resolution/
+  Pinterest image search; AI models/actions/search/enlarge/background removal/erase; and MCP server.
+  Each accepted item needs a separate behavior decision before implementation.
 - Finish deletion, recently viewed, folder/smart-folder behavior, and measured 100k-1M performance.
 - Keep OnlyFans as a separate source runner using the same normalized subscription contract.
 - Defer cloud sync, oplog, replay, conflict handling, and sync UI until after this release.

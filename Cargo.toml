@@ -20,3 +20,11 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.webp]
 opt-level = 3
+
+# The desktop debugger uses the native core directly. Leaving the application
+# crates at opt-level 0 makes ordinary query row mapping and JSON serialization
+# dominate IPC latency even though SQLite itself is fast.
+[profile.dev.package.picto_core]
+opt-level = 2
+[profile.dev.package.picto_node]
+opt-level = 2

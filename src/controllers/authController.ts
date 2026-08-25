@@ -7,11 +7,13 @@ import {
   listCredentialHealth,
   listCredentials,
   listSubscriptionIssues,
+  saveManualOnlyFansCredential,
   startAuthSession,
 } from '../platform/subscriptionApi';
 import { listen } from '../platform/ipc';
 import type {
   AuthSessionState,
+  OnlyFansManualAuthInput,
   SubscriptionIssueRecord,
   SubscriptionSiteInfo,
 } from '../shared/types/subscriptions';
@@ -129,6 +131,10 @@ export const authController = {
 
   getSessionState(): Promise<AuthSessionState> {
     return getAuthSessionState();
+  },
+
+  saveManualOnlyFans(input: OnlyFansManualAuthInput): Promise<AuthSessionState> {
+    return saveManualOnlyFansCredential(input);
   },
 
   subscribeSessionState(onState: (session: AuthSessionState) => void): Promise<() => void> {

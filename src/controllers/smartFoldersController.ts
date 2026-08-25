@@ -15,7 +15,8 @@ import type {
 import type { CreateSmartFolderInput } from '../shared/types/generated/application/CreateSmartFolderInput';
 import type { SmartFolderPredicate } from '../shared/types/generated/application/SmartFolderPredicate';
 import { activeNodeIdAtom } from '../state/navigation';
-import { pushHistory, removeHistoryEntries } from '../state/navigationHistory';
+import { navigateToNode, removeHistoryEntries } from '../state/navigationHistory';
+import { announceUndoableMutation } from '../runtime/historyRuntime';
 
 const store = getDefaultStore();
 
@@ -77,18 +78,20 @@ export const smartFoldersController = {
       const fallback = result.fallback_smart_folder_id == null
         ? 'system:active'
         : `smart:${result.fallback_smart_folder_id}`;
-      store.set(activeNodeIdAtom, fallback);
-      pushHistory(fallback);
+      navigateToNode(fallback);
     }
+    await announceUndoableMutation('smart_folders.delete');
   },
 
   async create(folder: SmartFolderCommandPayload): Promise<string> {
     const result = await createSmartFolder(toInput(folder));
+    await announceUndoableMutation('smart_folders.create');
     return `smart:${result.smart_folder_id}`;
   },
 
   async update(id: number, folder: SmartFolderCommandPayload): Promise<void> {
     await updateSmartFolder(id, toInput(folder));
+    await announceUndoableMutation('smart_folders.update');
   },
 
   async move(smartFolderId: number, parentId: number | null, siblingOrder: [number, number][]) {
@@ -99,5 +102,8 @@ export const smartFoldersController = {
         .map(([siblingId]) => siblingId);
       await reorderSmartFolders(parentId, orderedIds);
     }
+    await announceUndoableMutation(
+      siblingOrder.length > 0 ? 'smart_folders.reorder' : 'smart_folders.move',
+    );
   },
 };

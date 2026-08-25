@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Provider, createStore } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   status: vi.fn(),
   predict: vi.fn(),
   apply: vi.fn(),
+  announce: vi.fn(),
+  details: vi.fn(),
   portalAtom: undefined as any,
   targetAtom: undefined as any,
 }));
@@ -16,6 +18,14 @@ vi.mock('../../platform/aiTaggerApi', () => ({
   aiTaggerStatus: mocks.status,
   aiTagPredict: mocks.predict,
   aiTagApply: mocks.apply,
+}));
+
+vi.mock('../../runtime/historyRuntime', () => ({
+  announceUndoableMutation: mocks.announce,
+}));
+
+vi.mock('../../controllers/viewerController', () => ({
+  viewerController: { getItemDetails: mocks.details },
 }));
 
 vi.mock('../../state/portals', async () => {
@@ -52,6 +62,38 @@ const prediction = (mediaItemId: number, tag = 'cat', confidence = 0.8) => ({
   predictions: [{ tag, namespace: 'character', confidence, model: model.slug }],
 });
 
+const details = (itemId: number) => ({
+  item_id: itemId,
+  kind: 'media',
+  lifecycle: 'active',
+  label: null,
+  cover_media_item_id: null,
+  folder_ids: [],
+  aggregate_tags: [],
+  revision: 1,
+  media: [{
+    media_item_id: itemId,
+    file_hash: `hash-${itemId}`,
+    mime_type: 'image/jpeg',
+    dominant_color_hex: '#202020',
+    dominant_colors: ['#202020'],
+    size_bytes: 100,
+    pixel_width: 100,
+    pixel_height: 100,
+    duration_ms: null,
+    frame_count: null,
+    has_audio: false,
+    name: `Image ${itemId}`,
+    notes: null,
+    rating: null,
+    source_urls: [],
+    captured_at: null,
+    imported_at: '2026-01-01T00:00:00Z',
+    position: 0,
+    tags: [],
+  }],
+});
+
 async function renderPanel(itemIds = [1]) {
   const store = createStore();
   store.set(mocks.portalAtom, { open: true, anchor: null });
@@ -69,21 +111,26 @@ beforeEach(() => {
     cachedBackend: null,
   });
   mocks.predict.mockResolvedValue({ predictions: [prediction(1)], thresholds: { general: 0.35, character: 0.35 } });
+  mocks.details.mockImplementation(async (itemId: number) => details(itemId));
   mocks.apply.mockResolvedValue({ revision: 1, resources: ['tags'], item_ids: [1] });
+  mocks.announce.mockResolvedValue(undefined);
 });
 
 describe('AiTaggerPanel', () => {
   it('uses replacement numeric item IDs for prediction and apply', async () => {
-    mocks.predict.mockResolvedValue({ predictions: [prediction(1), prediction(2)], thresholds: { general: 0.35, character: 0.35 } });
+    mocks.predict.mockImplementation(async ([itemId]: number[]) => ({ predictions: [prediction(itemId)], thresholds: { general: 0.35, character: 0.35 } }));
     const user = userEvent.setup();
     await renderPanel([1, 2]);
     await screen.findByText('cat');
-    expect(mocks.predict).toHaveBeenCalledWith([1, 2], [model.slug]);
-    await user.click(screen.getByRole('button', { name: 'Apply 1 tag' }));
+    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
+    expect(mocks.predict).toHaveBeenNthCalledWith(1, [1], [model.slug]);
+    expect(mocks.predict).toHaveBeenNthCalledWith(2, [2], [model.slug]);
+    await user.click(screen.getByRole('button', { name: 'Apply 2 tags' }));
     await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
       { media_item_id: 1, tags: ['character:cat'] },
       { media_item_id: 2, tags: ['character:cat'] },
     ]));
+    expect(mocks.announce).toHaveBeenCalledWith('items.apply_ai_tags');
   });
 
   it('uses namespace thresholds returned by the backend', async () => {
@@ -94,6 +141,43 @@ describe('AiTaggerPanel', () => {
     expect(screen.queryByText('miku')).not.toBeInTheDocument();
     await user.click(screen.getByText('Below cutoff'));
     expect(await screen.findByText('miku')).toBeInTheDocument();
+    expect(screen.queryByText(/\d+% cutoff/)).not.toBeInTheDocument();
+  });
+
+  it('selects rating predictions above their threshold by default', async () => {
+    mocks.predict.mockResolvedValue({
+      predictions: [{
+        mediaItemId: 1,
+        error: null,
+        predictions: [{ tag: 'explicit', namespace: 'rating', confidence: 0.9, model: model.slug }],
+      }],
+      thresholds: { general: 0.35, rating: 0.5 },
+    });
+    const user = userEvent.setup();
+    await renderPanel();
+    expect(await screen.findByText('explicit')).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: 'Apply 1 tag' }));
+    await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
+      { media_item_id: 1, tags: ['rating:explicit'] },
+    ]));
+  });
+
+  it('uses the inspector preview frame for the reviewed image', async () => {
+    const { container } = await renderPanel();
+    await screen.findByText('cat');
+    const image = container.querySelector('img');
+    if (!image) throw new Error('AI review preview image was not rendered');
+    expect(image.className).toContain('previewImage');
+    expect(image.parentElement?.className).toContain('previewFrame');
+  });
+
+  it('reports the execution provider selected when the model loads', async () => {
+    const initialStatus = await mocks.status();
+    mocks.status
+      .mockResolvedValueOnce(initialStatus)
+      .mockResolvedValue({ ...initialStatus, cachedBackend: 'CoreML GPU' });
+    await renderPanel();
+    expect(await screen.findByText(/CoreML GPU inference/)).toBeInTheDocument();
   });
 
   it('does not apply until the receipt promise resolves and stays open on failure', async () => {
@@ -126,9 +210,59 @@ describe('AiTaggerPanel', () => {
   });
 
   it('reports partial prediction failures without hiding successful tags', async () => {
-    mocks.predict.mockResolvedValue({ predictions: [prediction(1, 'fresh'), { mediaItemId: 2, predictions: [], error: 'unsupported media' }], thresholds: { character: 0.35 } });
+    mocks.predict.mockImplementation(async ([itemId]: number[]) => ({
+      predictions: itemId === 1
+        ? [prediction(1, 'fresh')]
+        : [{ mediaItemId: 2, predictions: [], error: 'unsupported media' }],
+      thresholds: { character: 0.35 },
+    }));
     await renderPanel([1, 2]);
     expect(await screen.findByText('fresh')).toBeInTheDocument();
-    expect(screen.getByText(/1 of 2 media items could not be tagged.*unsupported media/i)).toBeInTheDocument();
+    expect(await screen.findByText(/1 of 2 media items could not be tagged.*unsupported media/i)).toBeInTheDocument();
+  });
+
+  it('reports determinate progress while selected media are analyzed', async () => {
+    let resolveFirst!: (value: any) => void;
+    mocks.predict
+      .mockReturnValueOnce(new Promise((resolve) => { resolveFirst = resolve; }))
+      .mockResolvedValueOnce({ predictions: [prediction(2)], thresholds: { character: 0.35 } });
+    await renderPanel([1, 2]);
+    expect(await screen.findByRole('progressbar')).toHaveAttribute('aria-valuenow', '0');
+    expect(screen.getByText('Analyzing 1 of 2')).toBeInTheDocument();
+    await act(async () => resolveFirst({ predictions: [prediction(1)], thresholds: { character: 0.35 } }));
+    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument());
+  });
+
+  it('reviews per-image predictions with buttons and arrow keys', async () => {
+    mocks.predict.mockImplementation(async ([itemId]: number[]) => ({
+      predictions: [prediction(itemId, itemId === 1 ? 'cat' : 'dog')],
+      thresholds: { character: 0.35 },
+    }));
+    await renderPanel([1, 2]);
+    expect(await screen.findByText('cat')).toBeInTheDocument();
+    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
+    fireEvent.keyDown(window, { key: 'ArrowRight' });
+    expect(await screen.findByText('dog')).toBeInTheDocument();
+    expect(screen.queryByText('cat')).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'ArrowLeft' });
+    expect(await screen.findByText('cat')).toBeInTheDocument();
+  });
+
+  it('keeps review choices scoped to the image being reviewed', async () => {
+    mocks.predict.mockImplementation(async ([itemId]: number[]) => ({
+      predictions: [prediction(itemId)],
+      thresholds: { character: 0.35 },
+    }));
+    const user = userEvent.setup();
+    await renderPanel([1, 2]);
+    await screen.findByText('cat');
+    await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
+    await user.click(screen.getByText('cat'));
+    await user.click(screen.getByRole('button', { name: 'Next image' }));
+    await user.click(screen.getByRole('button', { name: 'Apply 1 tag' }));
+    await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
+      { media_item_id: 2, tags: ['character:cat'] },
+    ]));
   });
 });

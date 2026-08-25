@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { ContextMenu } from './ContextMenu';
+import { ContextMenu, searchMenuEntries } from './ContextMenu';
 
 describe('ContextMenu', () => {
   it('owns one canonical presentation regardless of the supplied entries', () => {
@@ -72,6 +72,24 @@ describe('ContextMenu', () => {
     expect(screen.getByRole('menuitem', { name: 'Folder A' })).toBeInTheDocument();
   });
 
+  it('does not reserve an icon column when a menu level has no icons', () => {
+    render(
+      <ContextMenu
+        entries={[{
+          submenu: true,
+          label: 'Set Rating',
+          children: [{ label: 'No Rating', action: vi.fn() }],
+        }]}
+        position={{ x: 20, y: 20 }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(document.querySelector('[data-menu-icon-slot]')).not.toBeInTheDocument();
+    fireEvent.mouseEnter(screen.getByRole('menuitem', { name: 'Set Rating' }));
+    expect(screen.getByRole('menuitem', { name: 'No Rating' }).querySelector('[data-menu-icon-slot]')).toBeNull();
+  });
+
   it('does not add a second search field to a custom control panel', () => {
     render(
       <ContextMenu
@@ -83,5 +101,66 @@ describe('ContextMenu', () => {
 
     expect(screen.queryByPlaceholderText('Search...')).not.toBeInTheDocument();
     expect(screen.getByText('Filter controls')).toBeInTheDocument();
+  });
+
+  it('supports content-specific width without changing the shared chrome', () => {
+    render(
+      <ContextMenu
+        entries={[{ custom: true, key: 'filters', render: () => <div>Filter controls</div> }]}
+        position={{ x: 20, y: 20 }}
+        onClose={vi.fn()}
+        width={220}
+      />,
+    );
+
+    const menu = screen.getByRole('menu', { name: 'Context menu' });
+    expect(menu).toHaveStyle({ width: '220px' });
+    expect(menu.className).toContain('menu');
+  });
+
+  it('supports reference application facet include on click and exclude on right-click', () => {
+    const include = vi.fn();
+    const exclude = vi.fn();
+    render(
+      <ContextMenu
+        entries={[{ label: 'JPG', action: include, contextAction: exclude, keepOpen: true }]}
+        position={{ x: 20, y: 20 }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const item = screen.getByRole('menuitem', { name: 'JPG' });
+    fireEvent.click(item);
+    expect(include).toHaveBeenCalledOnce();
+    fireEvent.contextMenu(item);
+    expect(exclude).toHaveBeenCalledOnce();
+    expect(screen.getByRole('menu', { name: 'Context menu' })).toBeInTheDocument();
+  });
+});
+
+describe('searchMenuEntries', () => {
+  it('finds alternate keywords and executable submenu actions', () => {
+    const exportAction = vi.fn();
+    const entries = [
+      {
+        submenu: true as const,
+        label: 'Organize',
+        children: [
+          { label: 'Export Originals', keywords: 'save files', action: exportAction },
+        ],
+      },
+    ];
+
+    expect(searchMenuEntries(entries, 'save')).toEqual([entries[0].children[0]]);
+    expect(searchMenuEntries(entries, 'original')).toEqual([entries[0].children[0]]);
+  });
+
+  it('ranks a visible label match before a keyword match', () => {
+    const entries = [
+      { label: 'Reveal in Finder', keywords: 'open folder', action: vi.fn() },
+      { label: 'Open With', keywords: 'reveal', action: vi.fn() },
+    ];
+
+    expect(searchMenuEntries(entries, 'reveal')).toEqual([entries[0], entries[1]]);
   });
 });

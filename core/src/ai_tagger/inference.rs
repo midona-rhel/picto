@@ -12,6 +12,8 @@ use ts_rs::TS;
 use super::labels::LabelEntry;
 use super::models::{ChannelOrder, OutputActivation};
 
+const BELOW_THRESHOLD_REVIEW_LIMIT: usize = 100;
+
 /// A single tag prediction from inference.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
@@ -54,6 +56,7 @@ impl Thresholds {
 /// An active tagger session wrapping an ONNX Runtime session + parsed labels.
 pub struct TaggerSession {
     session: ort::session::Session,
+    backend: String,
     labels: Vec<LabelEntry>,
     input_size: u32,
     channel_order: ChannelOrder,
@@ -83,13 +86,14 @@ impl TaggerSession {
         }
 
         let labels = super::labels::parse_labels_csv(&labels_path)?;
-        let session = create_session(&model_path)?;
+        let (session, backend) = create_session(&model_path)?;
         validate_session_contract(&session, input_size, labels.len())?;
 
         tracing::info!(slug, labels = labels.len(), "AI tagger session loaded");
 
         Ok(Self {
             session,
+            backend,
             labels,
             input_size,
             channel_order,
@@ -103,10 +107,10 @@ impl TaggerSession {
     }
 
     pub fn gpu_backend(&self) -> String {
-        "CPU".into()
+        self.backend.clone()
     }
 
-    /// Run inference on raw image bytes and return predictions above thresholds.
+    /// Run inference and return suggestions plus the strongest near misses for review.
     pub fn predict(
         &mut self,
         image_bytes: &[u8],
@@ -156,16 +160,12 @@ impl TaggerSession {
         for (i, &logit) in logits.iter().enumerate() {
             let confidence = interpret_output(logit, self.output_activation)?;
             let label = &self.labels[i];
-            let threshold = thresholds.for_namespace(&label.namespace);
-
-            if confidence >= threshold {
-                predictions.push(TagPrediction {
-                    tag: label.name.clone(),
-                    namespace: label.namespace.clone(),
-                    confidence,
-                    model: self.slug.clone(),
-                });
-            }
+            predictions.push(TagPrediction {
+                tag: label.name.clone(),
+                namespace: label.namespace.clone(),
+                confidence,
+                model: self.slug.clone(),
+            });
         }
 
         predictions.sort_by(|a, b| {
@@ -173,20 +173,86 @@ impl TaggerSession {
                 .partial_cmp(&a.confidence)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
+        retain_review_predictions(&mut predictions, thresholds);
 
         Ok(predictions)
     }
 }
 
-/// Create an ONNX Runtime session (CPU execution provider).
-///
-/// GPU acceleration (CoreML, CUDA, DirectML) requires models that are
-/// compatible with those providers. WD14/E621 models currently use
-/// operators that fail on CoreML, so we use CPU for now.
-fn create_session(model_path: &Path) -> Result<ort::session::Session, String> {
+fn retain_review_predictions(predictions: &mut Vec<TagPrediction>, thresholds: &Thresholds) {
+    let mut below_threshold = 0;
+    predictions.retain(|prediction| {
+        if prediction.confidence >= thresholds.for_namespace(&prediction.namespace) {
+            return true;
+        }
+        if below_threshold >= BELOW_THRESHOLD_REVIEW_LIMIT {
+            return false;
+        }
+        below_threshold += 1;
+        true
+    });
+}
+
+fn create_session(model_path: &Path) -> Result<(ort::session::Session, String), String> {
     tracing::info!(path = %model_path.display(), "Loading ONNX model");
+
+    #[cfg(target_os = "macos")]
+    {
+        use ort::ep::{coreml, CoreML};
+
+        let provider = CoreML::default()
+            .with_compute_units(coreml::ComputeUnits::CPUAndGPU)
+            .with_model_format(coreml::ModelFormat::MLProgram)
+            .build()
+            .error_on_failure();
+        let accelerated = (|| -> ort::Result<ort::session::Session> {
+            let mut builder =
+                ort::session::Session::builder()?.with_execution_providers([provider])?;
+            builder.commit_from_file(model_path)
+        })();
+        match accelerated {
+            Ok(session) => return Ok((session, "CoreML GPU".into())),
+            Err(error) => tracing::warn!(%error, "CoreML session failed; falling back to CPU"),
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use ort::ep::DirectML;
+
+        let provider = DirectML::default().build().error_on_failure();
+        let accelerated = (|| -> ort::Result<ort::session::Session> {
+            let mut builder = ort::session::Session::builder()?
+                .with_parallel_execution(false)?
+                .with_memory_pattern(false)?
+                .with_execution_providers([provider])?;
+            builder.commit_from_file(model_path)
+        })();
+        match accelerated {
+            Ok(session) => return Ok((session, "DirectML GPU".into())),
+            Err(error) => tracing::warn!(%error, "DirectML session failed; falling back to CPU"),
+        }
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        use ort::ep::WebGPU;
+
+        let provider = WebGPU::default().build().error_on_failure();
+        let accelerated = (|| -> ort::Result<ort::session::Session> {
+            let mut builder =
+                ort::session::Session::builder()?.with_execution_providers([provider])?;
+            builder.commit_from_file(model_path)
+        })();
+        match accelerated {
+            Ok(session) => return Ok((session, "WebGPU GPU".into())),
+            Err(error) => tracing::warn!(%error, "WebGPU session failed; falling back to CPU"),
+        }
+    }
+
     ort::session::Session::builder()
         .and_then(|mut b| b.commit_from_file(model_path))
+        .map(|session| (session, "CPU".into()))
         .map_err(|e| format!("Failed to load ONNX model: {e}"))
 }
 
@@ -349,5 +415,36 @@ mod tests {
         assert_eq!(interpret_output(0.0, OutputActivation::Logit).unwrap(), 0.5);
         assert!(interpret_output(1.1, OutputActivation::Probability).is_err());
         assert!(interpret_output(f32::NAN, OutputActivation::Probability).is_err());
+    }
+
+    #[test]
+    fn review_predictions_include_strongest_results_below_threshold() {
+        let thresholds = Thresholds {
+            general: 0.8,
+            character: 0.8,
+            copyright: 0.8,
+            artist: 0.8,
+            species: 0.8,
+            rating: 0.8,
+        };
+        let mut predictions = (0..180)
+            .map(|index| TagPrediction {
+                tag: format!("tag-{index}"),
+                namespace: "general".into(),
+                confidence: 1.0 - index as f32 / 200.0,
+                model: "test".into(),
+            })
+            .collect::<Vec<_>>();
+
+        retain_review_predictions(&mut predictions, &thresholds);
+
+        assert_eq!(predictions.len(), 100 + 41);
+        assert!(predictions
+            .iter()
+            .any(|prediction| prediction.confidence < 0.8));
+        assert_eq!(
+            predictions.last().map(|prediction| prediction.tag.as_str()),
+            Some("tag-140")
+        );
     }
 }

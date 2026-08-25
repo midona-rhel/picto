@@ -1,4 +1,5 @@
 import { shell } from 'electron';
+import { spawn } from 'node:child_process';
 
 function createReverseSearchConfigs() {
   const waitForHelper = `
@@ -165,13 +166,20 @@ export function registerIpcHandlers({
   nativeTheme,
   screen,
   invoke,
+  invokeSerialized,
   isValidHash,
   buildBlobPath,
+  setThumbnail,
+  regenerateThumbnail,
   windowManager,
   libraryService,
   updaterService,
   startNativeDrag,
+  getAssociatedApplications,
+  openWithApplication,
+  isDev,
 }) {
+
   ipcMain.handle('picto:invoke', async (_event, payload) => {
     const { command, args } = payload || {};
     if (!command || typeof command !== 'string') {
@@ -190,6 +198,9 @@ export function registerIpcHandlers({
     }
     if (command === 'auth_session_state') {
       return windowManager.getAuthSessionState();
+    }
+    if (command === 'auth_onlyfans_manual') {
+      return windowManager.saveManualOnlyFansCredential(args);
     }
     if (command === 'open_subscriptions_window') {
       windowManager.openSubscriptionsWindow();
@@ -212,8 +223,37 @@ export function registerIpcHandlers({
       windowManager.createWindow(label, hash, width, height);
       return null;
     }
-
-    return invoke(command, args || {});
+    if (command === 'media.set_thumbnail') {
+      await setThumbnail(args?.file_hash, args?.png_base64);
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('picto:thumbnail-changed', { fileHash: args?.file_hash });
+      }
+      return null;
+    }
+    if (command === 'media.regenerate_thumbnails') {
+      const hashes = [...new Set(args?.file_hashes ?? [])];
+      if (hashes.length === 0 || hashes.some((hash) => !isValidHash(hash))) {
+        throw new Error('Invalid thumbnail targets');
+      }
+      for (const hash of hashes) {
+        await regenerateThumbnail(hash);
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (!win.isDestroyed()) win.webContents.send('picto:thumbnail-changed', { fileHash: hash });
+        }
+      }
+      return {
+        requested: hashes.length,
+        enqueued: hashes.length,
+        already_queued: 0,
+        receipt: { revision: 0, resources: ['thumbnails'], item_ids: [] },
+      };
+    }
+    const nativeStarted = performance.now();
+    const serialized = await invokeSerialized(command, args || {});
+    return {
+      __pictoCoreJson: serialized,
+      __pictoNativeMs: performance.now() - nativeStarted,
+    };
   });
 
   // Restart the main window (e.g. after changing to a native transparency theme)
@@ -241,7 +281,7 @@ export function registerIpcHandlers({
     return null;
   });
 
-  ipcMain.handle('picto:window', (event, { method, payload }) => {
+  ipcMain.handle('picto:window', async (event, { method, payload }) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) throw new Error('No window context');
     switch (method) {
@@ -271,6 +311,15 @@ export function registerIpcHandlers({
       case 'setFocus':
         win.focus();
         return null;
+      case 'captureRect': {
+        const bounds = win.getContentBounds();
+        const x = Math.max(0, Math.round(Number(payload?.x)));
+        const y = Math.max(0, Math.round(Number(payload?.y)));
+        const width = Math.min(bounds.width - x, Math.round(Number(payload?.width)));
+        const height = Math.min(bounds.height - y, Math.round(Number(payload?.height)));
+        if (!(width > 0) || !(height > 0)) throw new Error('Invalid capture bounds');
+        return (await win.webContents.capturePage({ x, y, width, height })).toDataURL();
+      }
       default:
         throw new Error(`Unknown window method: ${method}`);
     }
@@ -411,9 +460,67 @@ export function registerIpcHandlers({
 
   });
 
-  ipcMain.handle('picto:popup-menu', (event) => {
+  const serializeMenu = (menu, pathPrefix = '') => (menu?.items ?? [])
+    .filter((item) => item.visible !== false)
+    .map((item, index) => {
+      const id = pathPrefix ? `${pathPrefix}.${index}` : String(index);
+      return {
+        id,
+        label: item.label,
+        type: item.type,
+        enabled: item.enabled,
+        checked: item.checked,
+        accelerator: item.accelerator ?? null,
+        submenu: item.submenu ? serializeMenu(item.submenu, id) : null,
+      };
+    });
+
+  const resolveMenuItem = (id) => {
+    const indexes = String(id).split('.').map(Number);
+    let menu = Menu.getApplicationMenu();
+    let item = null;
+    for (const index of indexes) {
+      if (!menu || !Number.isInteger(index)) return null;
+      item = menu.items[index] ?? null;
+      menu = item?.submenu ?? null;
+    }
+    return item;
+  };
+
+  ipcMain.handle('picto:application-menu:get', () => {
+    const menu = Menu.getApplicationMenu();
+    const items = serializeMenu(menu);
+    // The macOS app-name menu contains OS-owned Services/Hide commands.
+    // Their Picto equivalents already live in File/Help; the in-window menu
+    // exposes the complete cross-platform application command surface.
+    return process.platform === 'darwin' && items[0]?.label === app.name ? items.slice(1) : items;
+  });
+
+  ipcMain.handle('picto:application-menu:execute', (event, { id }) => {
+    const item = resolveMenuItem(id);
     const win = BrowserWindow.fromWebContents(event.sender);
-    if (win) Menu.getApplicationMenu()?.popup({ window: win });
+    if (!item || !win || item.enabled === false || item.type === 'separator' || item.submenu) return null;
+    if (typeof item.click === 'function') {
+      item.click(item, win, {});
+      return null;
+    }
+    const role = String(item.role ?? '').toLowerCase();
+    switch (role) {
+      case 'cut': win.webContents.cut(); break;
+      case 'copy': win.webContents.copy(); break;
+      case 'paste': win.webContents.paste(); break;
+      case 'selectall': win.webContents.selectAll(); break;
+      case 'reload': win.webContents.reload(); break;
+      case 'forcereload': win.webContents.reloadIgnoringCache(); break;
+      case 'toggledevtools': win.webContents.toggleDevTools(); break;
+      case 'togglefullscreen': win.setFullScreen(!win.isFullScreen()); break;
+      case 'minimize': win.minimize(); break;
+      case 'zoom': win.isMaximized() ? win.unmaximize() : win.maximize(); break;
+      case 'close': win.close(); break;
+      case 'quit': app.quit(); break;
+      default: break;
+    }
+    return null;
   });
 
   ipcMain.handle('picto:monitor:current', () => {
@@ -475,5 +582,33 @@ export function registerIpcHandlers({
 
   ipcMain.handle('picto:shell:openPath', async (_event, { path }) => {
     if (path) await shell.openPath(path);
+  });
+
+  ipcMain.handle('picto:shell:getOpenWithOptions', async (_event, { path }) => {
+    if (!path) throw new Error('A file path is required');
+    if (process.platform === 'darwin') {
+      return { mode: 'submenu', applications: getAssociatedApplications(path) };
+    }
+    if (process.platform === 'win32') {
+      return { mode: 'chooser', applications: [] };
+    }
+    return { mode: 'unsupported', applications: [] };
+  });
+
+  ipcMain.handle('picto:shell:openWithApplication', async (_event, { path, applicationPath }) => {
+    if (!path || !applicationPath) throw new Error('A file and application path are required');
+    if (process.platform !== 'darwin') throw new Error('Application selection is only available on macOS');
+    openWithApplication(applicationPath, path);
+  });
+
+  ipcMain.handle('picto:shell:openWithChooser', async (_event, { path }) => {
+    if (!path) throw new Error('A file path is required');
+    if (process.platform !== 'win32') throw new Error('The system application chooser is unavailable');
+    const child = spawn('rundll32.exe', ['shell32.dll,OpenAs_RunDLL', path], {
+      detached: true,
+      stdio: 'ignore',
+      windowsHide: false,
+    });
+    child.unref();
   });
 }

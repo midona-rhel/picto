@@ -1,18 +1,17 @@
 import {
-  IconAlertTriangle,
+  IconCircleCheckFilled,
+  IconCopy,
   IconPencil,
   IconPlayerPause,
   IconPlayerPlay,
-  IconShieldLock,
   IconTrash,
 } from '@tabler/icons-react';
 import type {
-  SubscriptionProgressEvent,
   SubscriptionQueryInfo,
   SubscriptionSiteInfo,
 } from '../../../shared/types/subscriptions';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip/KbdTooltip';
-import { describeFailure, formatRelativeTime, getSiteLabel, isQueryUpToDate } from '../subscriptionUtils';
+import { formatRelativeTime, getSiteLabel } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
 
 /** One dense table row in the queries table. */
@@ -21,84 +20,41 @@ export function QueryRow({
   sites,
   running,
   paused,
-  failedCount,
   authWarning,
-  progress,
   busy,
   onPause,
+  onGrouping,
   onEdit,
   onDelete,
   onOpenAuth,
+  onShowStats,
 }: {
   query: SubscriptionQueryInfo;
   sites: SubscriptionSiteInfo[];
   running: boolean;
   paused: boolean;
-  failedCount: number;
   /** Non-null when the site needs auth attention; text shown on the chip. */
   authWarning: string | null;
-  progress: SubscriptionProgressEvent | null;
   busy: boolean;
   onPause: (paused: boolean) => void;
+  onGrouping: (groupPosts: boolean) => void;
   onEdit: () => void;
   onDelete: () => void;
   onOpenAuth: () => void;
+  onShowStats: () => void;
 }) {
   const label = query.display_name?.trim() || query.query_text;
-  const failureText = !running && !paused
-    ? describeFailure(query.last_failure_kind, query.last_failure_message)
-    : null;
-  const hasFailure = failedCount > 0 || (query.last_failure_kind != null && !running);
-  const upToDate = !running && !paused && isQueryUpToDate(query, failedCount);
-  const tone = running
-    ? 'running'
-    : paused
-      ? 'paused'
-      : hasFailure
-        ? 'attention'
-        : upToDate
-          ? 'success'
-          : 'idle';
-  const toneLabel = running
-    ? progress
-      ? `${progress.files_downloaded} down · ${progress.ingested} in`
-      : 'Running'
-    : paused
-      ? 'Paused'
-      : failedCount > 0
-        ? `${failedCount} failed`
-        : query.last_failure_kind
-          ? failureText ?? 'Failed'
-          : upToDate
-            ? 'Up to date'
-            : 'Idle';
-  const dotClass =
-    tone === 'running'
-      ? styles.qDotRunning
-      : tone === 'paused'
-        ? styles.qDotPaused
-        : tone === 'attention'
-          ? styles.qDotAttention
-          : tone === 'success'
-            ? styles.qDotSuccess
-            : styles.qDotIdle;
 
   return (
-    <div className={styles.qRow}>
+    <div className={`${styles.subscriptionTableRow} ${styles.qRow}`.trim()} onDoubleClick={onShowStats} title="Double-click for source details">
       <span className={styles.qCellName}>
         <span className={styles.qName} title={query.query_text}>{label}</span>
-        {upToDate && <span className={styles.upToDateChip}>Up to date</span>}
-        {authWarning && (
-          <KbdTooltip label={`${authWarning} — click to manage account`}>
-            <button type="button" className={styles.qAuthChip} onClick={onOpenAuth}>
-              <IconShieldLock size={12} />
-            </button>
-          </KbdTooltip>
+        {query.source_history_complete && query.completed_initial_run && (
+          <IconCircleCheckFilled className={styles.qCompleteIcon} size={13} title="Checked all available posts" />
         )}
+        {authWarning && <button type="button" className={styles.qAuthChip} onClick={onOpenAuth}>{authWarning}</button>}
         {query.last_failure_message && !running && (
-          <KbdTooltip label={query.last_failure_message}>
-            <span className={styles.qFailIcon}><IconAlertTriangle size={12} /></span>
-          </KbdTooltip>
+          <span className={styles.qFailureText} title={query.last_failure_message}>{query.last_failure_message}</span>
         )}
       </span>
       <span className={styles.qCellSite}>{getSiteLabel(query.site_id, sites)}</span>
@@ -108,14 +64,19 @@ export function QueryRow({
         {query.last_check_time ? formatRelativeTime(query.last_check_time) : 'never'}
         {!query.completed_initial_run && ' · syncing'}
       </span>
-      <span
-        className={styles.qCellStatus}
-        title={query.last_failure_message ?? undefined}
-      >
-        <span className={`${styles.qDot} ${dotClass}`.trim()} />
-        {toneLabel}
-      </span>
       <span className={styles.qCellActions}>
+        <KbdTooltip label={query.group_posts ? 'Group multi-media posts' : 'Keep post media separate'}>
+          <button
+            type="button"
+            className={`${styles.querySmallBtn} ${query.group_posts ? styles.querySmallBtnActive : ''}`.trim()}
+            aria-label="Group multi-media posts"
+            aria-pressed={query.group_posts}
+            onClick={() => onGrouping(!query.group_posts)}
+            disabled={busy || running}
+          >
+            <IconCopy size={14} />
+          </button>
+        </KbdTooltip>
         <KbdTooltip label={paused ? 'Resume query' : 'Pause query'}>
           <button
             type="button"

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, MutationReceipt};
+use crate::store::history::HistoryDescriptor;
 
 const MAX_LIMIT: i64 = 500;
 const MAX_RECEIPT_ITEM_IDS: usize = 256;
@@ -142,6 +143,19 @@ pub fn namespace_counts(application: &Application) -> Result<Vec<(String, i64)>,
     })
 }
 
+pub fn unused_count(application: &Application) -> Result<i64, String> {
+    application.store().read(|connection| {
+        connection.query_row(
+            "SELECT COUNT(*) FROM tag t
+             WHERE NOT EXISTS (SELECT 1 FROM media_tag mt WHERE mt.tag_id = t.tag_id)
+               AND NOT EXISTS (SELECT 1 FROM tag_alias a WHERE a.from_tag_id = t.tag_id OR a.to_tag_id = t.tag_id)
+               AND NOT EXISTS (SELECT 1 FROM tag_implication i WHERE i.child_tag_id = t.tag_id OR i.parent_tag_id = t.tag_id)",
+            [],
+            |row| row.get(0),
+        )
+    })
+}
+
 pub fn relations(application: &Application, tag_id: i64) -> Result<TagRelations, String> {
     application.store().read(|connection| {
         require_tag(connection, tag_id)?;
@@ -181,7 +195,8 @@ impl Application {
         from_tag_id: i64,
         to_tag_id: Option<i64>,
     ) -> Result<MutationReceipt, String> {
-        let (_, revision, _) = self.transaction_if_changed(
+        let (_, revision, _, _) = self.undoable_transaction_if_changed(
+            tag_history("tags.set_alias", "Change tag alias").rebuilding_projections(),
             |transaction| {
                 require_tag(transaction, from_tag_id)?;
                 if let Some(to_tag_id) = to_tag_id {
@@ -252,7 +267,8 @@ impl Application {
         if child_tag_id == parent_tag_id {
             return Err("A tag cannot imply itself".to_string());
         }
-        let (_, revision, _) = self.transaction_if_changed(
+        let (_, revision, _, _) = self.undoable_transaction_if_changed(
+            tag_history("tags.set_implication", "Change tag implication").rebuilding_projections(),
             |transaction| {
                 require_tag(transaction, child_tag_id)?;
                 require_tag(transaction, parent_tag_id)?;
@@ -284,57 +300,95 @@ impl Application {
         new_name: &str,
     ) -> Result<MutationReceipt, String> {
         let (namespace, subtag) = parse_tag(new_name)?;
-        let (item_ids, revision, _) = self.transaction_if_changed_rebuilding(|transaction| {
-            require_tag(transaction, tag_id)?;
-            let target = transaction
-                .query_row(
-                    "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
-                    params![namespace, subtag],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()?;
-            match target {
-                Some(target_id) if target_id != tag_id => {
-                    let roots = roots_for_tag(transaction, tag_id)?;
-                    transaction.execute(
-                        "INSERT INTO media_tag (media_item_id, tag_id, source, provenance_mask)
-                         SELECT media_item_id, ?1, source, provenance_mask FROM media_tag
-                         WHERE tag_id = ?2
-                         ON CONFLICT(media_item_id, tag_id, source) DO UPDATE SET
-                             provenance_mask = media_tag.provenance_mask | excluded.provenance_mask",
-                        params![target_id, tag_id],
-                    )?;
-                    transaction.execute("DELETE FROM media_tag WHERE tag_id = ?1", [tag_id])?;
-                    transaction.execute(
-                        "INSERT INTO tag_alias (from_tag_id, to_tag_id, source)
-                         VALUES (?1, ?2, 'local')
-                         ON CONFLICT(from_tag_id, source) DO UPDATE SET to_tag_id = excluded.to_tag_id",
-                        params![tag_id, target_id],
-                    )?;
-                    Ok((roots, true))
+        let (item_ids, revision, _, _) = self.undoable_transaction_if_changed_rebuilding(
+            tag_history("tags.rename_or_merge", "Rename tag"),
+            |transaction| {
+                require_tag(transaction, tag_id)?;
+                let target = transaction
+                    .query_row(
+                        "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
+                        params![namespace, subtag],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()?;
+                match target {
+                    Some(target_id) if target_id != tag_id => {
+                        let roots = roots_for_tag(transaction, tag_id)?;
+                        transaction.execute(
+                            "INSERT INTO media_tag (media_item_id, tag_id, source, provenance_mask)
+                             SELECT media_item_id, ?1, source, provenance_mask FROM media_tag
+                             WHERE tag_id = ?2
+                             ON CONFLICT(media_item_id, tag_id, source) DO UPDATE SET
+                                 provenance_mask = media_tag.provenance_mask | excluded.provenance_mask",
+                            params![target_id, tag_id],
+                        )?;
+                        transaction.execute("DELETE FROM media_tag WHERE tag_id = ?1", [tag_id])?;
+                        transaction.execute(
+                            "INSERT INTO tag_alias (from_tag_id, to_tag_id, source)
+                             VALUES (?1, ?2, 'local')
+                             ON CONFLICT(from_tag_id, source) DO UPDATE SET to_tag_id = excluded.to_tag_id",
+                            params![tag_id, target_id],
+                        )?;
+                        Ok((roots, true))
+                    }
+                    Some(_) => Ok((Vec::new(), false)),
+                    None => {
+                        transaction.execute(
+                            "UPDATE tag SET namespace = ?1, subtag = ?2 WHERE tag_id = ?3",
+                            params![namespace, subtag, tag_id],
+                        )?;
+                        Ok((Vec::new(), true))
+                    }
                 }
-                Some(_) => Ok((Vec::new(), false)),
-                None => {
-                    transaction.execute(
-                        "UPDATE tag SET namespace = ?1, subtag = ?2 WHERE tag_id = ?3",
-                        params![namespace, subtag, tag_id],
-                    )?;
-                    Ok((Vec::new(), true))
-                }
-            }
-        })?;
+            },
+        )?;
         Ok(tag_receipt_with_items(revision, &item_ids))
     }
 
     pub fn delete_tag(&self, tag_id: i64) -> Result<MutationReceipt, String> {
-        let (item_ids, revision) = self.transaction_rebuilding(|transaction| {
-            require_tag(transaction, tag_id)?;
-            let roots = roots_for_tag(transaction, tag_id)?;
-            transaction.execute("DELETE FROM tag WHERE tag_id = ?1", [tag_id])?;
-            Ok(roots)
-        })?;
+        let (item_ids, revision, _) = self.undoable_transaction_rebuilding(
+            tag_history("tags.delete", "Delete tag"),
+            |transaction| {
+                require_tag(transaction, tag_id)?;
+                let roots = roots_for_tag(transaction, tag_id)?;
+                transaction.execute("DELETE FROM tag WHERE tag_id = ?1", [tag_id])?;
+                Ok(roots)
+            },
+        )?;
         Ok(tag_receipt_with_items(revision, &item_ids))
     }
+
+    pub fn delete_unused_tags(&self) -> Result<MutationReceipt, String> {
+        let (_, revision, _, _) = self.undoable_transaction_if_changed(
+            tag_history("tags.delete_unused", "Delete unused tags"),
+            |transaction| {
+                let deleted = transaction.execute(
+                    "DELETE FROM tag
+                     WHERE NOT EXISTS (SELECT 1 FROM media_tag mt WHERE mt.tag_id = tag.tag_id)
+                       AND NOT EXISTS (SELECT 1 FROM tag_alias a WHERE a.from_tag_id = tag.tag_id OR a.to_tag_id = tag.tag_id)
+                       AND NOT EXISTS (SELECT 1 FROM tag_implication i WHERE i.child_tag_id = tag.tag_id OR i.parent_tag_id = tag.tag_id)",
+                    [],
+                )?;
+                Ok(((), (), deleted != 0))
+            },
+            |_, ()| Ok(()),
+        )?;
+        Ok(tag_receipt(revision))
+    }
+}
+
+fn tag_history(command: &str, label: &str) -> HistoryDescriptor {
+    HistoryDescriptor::new(
+        command,
+        label,
+        vec![
+            resources::LIBRARY.to_string(),
+            resources::SIDEBAR.to_string(),
+            resources::SMART_FOLDERS.to_string(),
+            resources::TAGS.to_string(),
+        ],
+        Vec::new(),
+    )
 }
 
 fn relation_rows(
@@ -488,6 +542,7 @@ mod tests {
                 captured_at: None,
                 source: None,
                 target_folder_id: None,
+                target_folder_ids: Vec::new(),
             })
             .unwrap()
             .root_item_id;
@@ -582,6 +637,64 @@ mod tests {
                 )?;
                 assert_eq!(direct, 1);
                 assert_eq!(alias, to);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn unused_cleanup_deletes_only_unreferenced_tags() {
+        let (_directory, application, _) = fixture();
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO tag (namespace, subtag) VALUES ('general', 'orphan')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO tag (namespace, subtag) VALUES ('general', 'relation_only')",
+                    [],
+                )?;
+                let relation_only: i64 = transaction.query_row(
+                    "SELECT tag_id FROM tag WHERE subtag = 'relation_only'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let assigned: i64 = transaction.query_row(
+                    "SELECT tag_id FROM tag WHERE subtag = 'one_girl'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                transaction.execute(
+                    "INSERT INTO tag_alias (from_tag_id, to_tag_id, source) VALUES (?1, ?2, 'local')",
+                    params![relation_only, assigned],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(unused_count(&application).unwrap(), 1);
+        application.delete_unused_tags().unwrap();
+        application
+            .store()
+            .read(|connection| {
+                let orphan: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM tag WHERE subtag = 'orphan'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let relation_only: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM tag WHERE subtag = 'relation_only'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let assigned: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM tag WHERE subtag = 'one_girl'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!((orphan, relation_only, assigned), (0, 1, 1));
                 Ok(())
             })
             .unwrap();

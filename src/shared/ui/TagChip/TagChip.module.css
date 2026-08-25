@@ -11,13 +11,17 @@
   font-size: var(--font-size-sm);
   font-family: var(--inspector-font-family, var(--font-family-ui));
   font-weight: var(--font-weight-regular);
-  color: var(--inspector-text-primary, var(--color-text-primary));
+  color: var(--chip-text-dark);
   white-space: nowrap;
   user-select: none;
   background-color: var(--chip-bg);
   border: 1px solid var(--chip-border);
   transition: background-color 200ms var(--ease-default),
               border-color 200ms var(--ease-default);
+}
+
+:global([data-mantine-color-scheme="light"]) .chip {
+  color: var(--chip-text-light);
 }
 
 .chipWithRemove {

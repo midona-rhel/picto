@@ -3,6 +3,8 @@
   "rust_only": [
   ],
   "ts_only": [
+    "auth_onlyfans_manual",
+    "media.set_thumbnail",
     "open_settings_window",
     "auth_session_start",
     "auth_session_state",

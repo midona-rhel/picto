@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { IconBooks, IconSelector } from '@tabler/icons-react';
+import { IconSelector } from '@tabler/icons-react';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { listen } from '../../platform/ipc';
 import { LibrarySwitcherPopover } from './LibrarySwitcherPopover';
-import { DynamicIcon } from '../../shared/ui/DynamicIcon';
+import { LibraryAvatar, type LibraryAppearance } from './LibraryAvatar';
 import styles from './LibrarySwitcherButton.module.css';
 
 function libraryDisplayName(path: string | null): string {
@@ -16,7 +16,7 @@ function libraryDisplayName(path: string | null): string {
 /// Shows the open library's name; clicking opens the Library Manager.
 export function LibrarySwitcherButton() {
   const [name, setName] = useState<string>('');
-  const [meta, setMeta] = useState<{ icon: string | null; color: string | null }>({ icon: null, color: null });
+  const [meta, setMeta] = useState<LibraryAppearance>({ icon: null, color: null, imageHash: null });
   const [anchor, setAnchor] = useState<DOMRect | null>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -26,7 +26,7 @@ export function LibrarySwitcherButton() {
       .then((config: any) => {
         setName(libraryDisplayName(config.currentPath));
         const m = config.currentPath ? config.libraryMeta?.[config.currentPath] : null;
-        setMeta({ icon: m?.icon ?? null, color: m?.color ?? null });
+        setMeta({ icon: m?.icon ?? null, color: m?.color ?? null, imageHash: m?.imageHash ?? null });
       })
       .catch(() => {});
   }, []);
@@ -35,6 +35,7 @@ export function LibrarySwitcherButton() {
     refresh();
     const unlistens: Array<() => void> = [];
     void listen('library-switched', refresh).then((un) => unlistens.push(un));
+    void listen('library-meta-changed', refresh).then((un) => unlistens.push(un));
     return () => unlistens.forEach((un) => un());
   }, [refresh]);
 
@@ -52,15 +53,9 @@ export function LibrarySwitcherButton() {
             )
           }
         >
-          <span className={styles.icon} style={meta.color ? { color: meta.color } : undefined}>
-            {meta.icon ? (
-              <DynamicIcon name={meta.icon} size={16} color={meta.color} />
-            ) : (
-              <IconBooks size={16} />
-            )}
-          </span>
+          <LibraryAvatar appearance={meta} size={26} className={styles.icon} />
           <span className={styles.name}>{name}</span>
-          <span className={styles.chevron}><IconSelector size={14} /></span>
+          <span className={styles.chevron}><IconSelector size={14} stroke={1.25} /></span>
         </button>
       </KbdTooltip>
       {anchor ? <LibrarySwitcherPopover anchor={anchor} onClose={() => setAnchor(null)} /> : null}

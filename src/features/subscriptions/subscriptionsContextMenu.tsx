@@ -12,6 +12,7 @@ import {
   IconPlayerPlay,
   IconPlayerPause,
   IconPlayerStop,
+  IconPhotoEdit,
   IconRefresh,
   IconTrash,
 } from '@tabler/icons-react';
@@ -30,6 +31,7 @@ export interface SubscriptionMenuContext {
   onStop: () => void;
   onPause: (paused: boolean) => void;
   onRename: () => void;
+  onSetCover: () => void;
   onSetSchedule: (schedule: string) => void;
   onReset: () => void;
   onDelete: () => void;
@@ -54,6 +56,7 @@ export function buildSubscriptionMenu(ctx: SubscriptionMenuContext): MenuEntry[]
       : { label: 'Pause', icon: <IconPlayerPause size={14} />, action: () => ctx.onPause(true) },
     sep(),
     { label: 'Rename', icon: <IconRename />, action: ctx.onRename },
+    { label: 'Set Cover Photo…', icon: <IconPhotoEdit size={14} />, action: ctx.onSetCover },
     {
       submenu: true,
       label: 'Schedule',

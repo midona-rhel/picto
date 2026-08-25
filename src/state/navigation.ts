@@ -42,6 +42,16 @@ export const toggleInspectorAtom = atom(null, (get, set) => {
   localStorage.setItem(INSPECTOR_STORAGE_KEY, String(next));
 });
 
+/** Toggle both rails as one store transaction so layout observes one width. */
+export const toggleBothPanelsAtom = atom(null, (get, set) => {
+  const nextSidebar = !get(sidebarCollapsedAtom);
+  const nextInspector = !get(inspectorCollapsedAtom);
+  set(sidebarCollapsedAtom, nextSidebar);
+  set(inspectorCollapsedAtom, nextInspector);
+  localStorage.setItem(STORAGE_KEY, String(nextSidebar));
+  localStorage.setItem(INSPECTOR_STORAGE_KEY, String(nextInspector));
+});
+
 export const showTreeGuidesAtom = atom(true);
 
 const INSPECTOR_WIDTH_STORAGE_KEY = 'picto-inspector-width';

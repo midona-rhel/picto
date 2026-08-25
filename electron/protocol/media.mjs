@@ -3,6 +3,13 @@ import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { forwardWarn } from '../services/logForwarder.mjs';
 
+const DOCUMENT_THUMBNAIL_MIMES = new Set([
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'text/plain', 'text/markdown', 'application/json', 'application/rtf',
+  'application/epub+zip', 'application/vnd.comicbook+zip', 'image/vnd.djvu',
+]);
+
 export function isValidHash(value) {
   return typeof value === 'string' && value.length === 64 && /^[a-fA-F0-9]+$/.test(value);
 }
@@ -31,7 +38,15 @@ export function extToMime(ext) {
     bmp: 'image/bmp', tiff: 'image/tiff', tif: 'image/tiff', svg: 'image/svg+xml', avif: 'image/avif',
     heif: 'image/heif', heic: 'image/heif', jxl: 'image/jxl', ico: 'image/x-icon', psd: 'image/vnd.adobe.photoshop',
     mp4: 'video/mp4', webm: 'video/webm', mkv: 'video/x-matroska', mov: 'video/quicktime', flv: 'video/x-flv',
-    avi: 'video/x-msvideo', flac: 'audio/flac', wav: 'audio/x-wav', pdf: 'application/pdf', epub: 'application/epub+zip',
+    avi: 'video/x-msvideo',
+    aac: 'audio/aac', flac: 'audio/flac', m4a: 'audio/mp4', mka: 'audio/x-matroska', mp3: 'audio/mpeg',
+    oga: 'audio/ogg', ogg: 'audio/ogg', opus: 'audio/opus', tta: 'audio/x-tta', wav: 'audio/x-wav',
+    wma: 'audio/x-ms-wma', wv: 'audio/wavpack',
+    pdf: 'application/pdf', epub: 'application/epub+zip', cbz: 'application/vnd.comicbook+zip',
+    djvu: 'image/vnd.djvu', djv: 'image/vnd.djvu', docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation', swf: 'application/x-shockwave-flash',
+    txt: 'text/plain', md: 'text/markdown', markdown: 'text/markdown', json: 'application/json', rtf: 'application/rtf',
+    ttf: 'font/ttf', ttc: 'font/collection', otf: 'font/otf', woff: 'font/woff',
   };
   return mimeByExt[ext] || 'application/octet-stream';
 }
@@ -60,8 +75,12 @@ export function createMediaProtocolService({
   invoke,
   isDev,
   getCurrentLibraryRoot,
+  flashThumbnail,
+  pdfThumbnail,
+  documentThumbnail,
+  onThumbnailReady = () => {},
 }) {
-  const thumbEnsureInFlight = new Map();
+  const thumbRequestInFlight = new Map();
   const thumbMetaCache = new Map();
   const fileMetaCache = new Map();
   let cachedRoot = null;
@@ -72,7 +91,7 @@ export function createMediaProtocolService({
     cachedRoot = root;
     thumbMetaCache.clear();
     fileMetaCache.clear();
-    thumbEnsureInFlight.clear();
+    thumbRequestInFlight.clear();
     return root;
   }
 
@@ -97,7 +116,7 @@ export function createMediaProtocolService({
     if (!root) return '';
     const ab = hash.slice(0, 2);
     const cd = hash.slice(2, 4);
-    if (kind === 'thumb') return path.join(root, 'blobs', 't', ab, cd, `${hash}.jpg`);
+    if (kind === 'thumb') return path.join(root, 'blobs', 't', ab, cd, `${hash}.${ext}`);
     return path.join(root, 'blobs', 'f', ab, cd, `${hash}.${ext}`);
   }
 
@@ -158,21 +177,117 @@ export function createMediaProtocolService({
     return null;
   }
 
-  async function ensureThumbBefore404(hash) {
-    const existing = thumbEnsureInFlight.get(hash);
+  function invalidateThumbnail(hash) {
+    thumbMetaCache.delete(hash);
+    thumbRequestInFlight.delete(hash);
+  }
+
+  async function setThumbnail(hash, pngBase64) {
+    if (!isValidHash(hash)) throw new Error('Invalid thumbnail hash');
+    const png = Buffer.from(String(pngBase64 ?? ''), 'base64');
+    if (png.length === 0 || png.length > 32 * 1024 * 1024) throw new Error('Invalid thumbnail size');
+    if (!png.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+      throw new Error('Thumbnail data is not a PNG');
+    }
+    const outputPath = buildBlobPath('thumb', hash, 'png');
+    const oldJpgPath = buildBlobPath('thumb', hash, 'jpg');
+    const temporaryPath = `${outputPath}.${process.pid}.${Date.now()}.tmp`;
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    try {
+      await fs.writeFile(temporaryPath, png);
+      await fs.rename(temporaryPath, outputPath);
+      await fs.rm(oldJpgPath, { force: true });
+    } finally {
+      await fs.rm(temporaryPath, { force: true });
+    }
+    invalidateThumbnail(hash);
+  }
+
+  async function renderThumbnailNow(hash) {
+    const existing = thumbRequestInFlight.get(hash);
     if (existing) {
       await existing;
       return;
     }
     const task = (async () => {
       try {
-        await invoke('media.ensure_thumbnail', { file_hash: hash });
+        await invoke('media.render_thumbnail_now', { file_hash: hash });
       } catch {}
+      if (!await resolveThumbMeta(hash)) await renderExternalThumbnail(hash);
     })().finally(() => {
-      thumbEnsureInFlight.delete(hash);
+      thumbRequestInFlight.delete(hash);
     });
-    thumbEnsureInFlight.set(hash, task);
+    thumbRequestInFlight.set(hash, task);
     await task;
+  }
+
+  function scheduleThumbnailAfterMiss(hash) {
+    if (thumbRequestInFlight.has(hash)) return;
+    const task = (async () => {
+      try {
+        const requested = await invoke('media.request_thumbnail', { file_hash: hash });
+        if (requested?.ready) {
+          onThumbnailReady(hash);
+          return;
+        }
+        if (requested?.supported) return;
+      } catch {}
+
+      // Browser-backed formats are also generated off the request path. The
+      // failed image response remains a placeholder until this event retries it.
+      if (await renderExternalThumbnail(hash)) onThumbnailReady(hash);
+    })().catch((error) => {
+      forwardWarn('media', `Deferred thumbnail failed: ${error?.message ?? String(error)}`);
+    }).finally(() => {
+      thumbRequestInFlight.delete(hash);
+    });
+    thumbRequestInFlight.set(hash, task);
+  }
+
+  async function renderExternalThumbnail(hash) {
+    const original = await resolveOriginalMeta(hash, 'bin');
+    if (!original) return false;
+    const outputPath = buildBlobPath('thumb', hash, 'png');
+    if (original.actualExt === 'swf' && flashThumbnail) {
+      await flashThumbnail.render({
+        sourceUrl: `media://localhost/file/${hash}.swf`,
+        outputPath,
+      });
+    } else if (original.actualExt === 'pdf' && pdfThumbnail) {
+      await pdfThumbnail.render({
+        sourceUrl: `media://localhost/file/${hash}.pdf`,
+        outputPath,
+      });
+    } else {
+      const mimeType = extToMime(original.actualExt);
+      if (!documentThumbnail || !DOCUMENT_THUMBNAIL_MIMES.has(mimeType)) return false;
+      await documentThumbnail.render({ hash, mimeType, outputPath });
+    }
+    return Boolean(await resolveThumbMeta(hash));
+  }
+
+  async function regenerateThumbnail(hash) {
+    if (!isValidHash(hash)) throw new Error('Invalid thumbnail hash');
+    const previous = await resolveThumbMeta(hash);
+    const backupPath = previous
+      ? `${previous.filePath}.${process.pid}.${Date.now()}.regenerate-backup`
+      : null;
+
+    if (previous && backupPath) await fs.rename(previous.filePath, backupPath);
+    invalidateThumbnail(hash);
+    try {
+      await renderThumbnailNow(hash);
+      const regenerated = await resolveThumbMeta(hash);
+      if (!regenerated) throw new Error('No thumbnail renderer supports this file.');
+      if (backupPath) await fs.rm(backupPath, { force: true });
+      return regenerated;
+    } catch (error) {
+      const partial = await resolveThumbMeta(hash);
+      if (partial) await fs.rm(partial.filePath, { force: true });
+      if (previous && backupPath) await fs.rename(backupPath, previous.filePath);
+      invalidateThumbnail(hash);
+      throw error;
+    }
   }
 
   async function registerMediaProtocol() {
@@ -192,8 +307,7 @@ export function createMediaProtocolService({
         : await resolveOriginalMeta(parsed.hash, parsed.ext);
 
       if (!meta && parsed.kind === 'thumb') {
-        await ensureThumbBefore404(parsed.hash);
-        meta = await resolveThumbMeta(parsed.hash);
+        scheduleThumbnailAfterMiss(parsed.hash);
       }
 
       if (!meta) {
@@ -210,6 +324,9 @@ export function createMediaProtocolService({
       const mime = parsed.kind === 'thumb'
         ? extToMime(meta.actualExt || 'jpg')
         : extToMime(meta.actualExt || parsed.ext);
+      const cacheControl = parsed.kind === 'thumb'
+        ? 'no-store'
+        : 'public, max-age=31536000, immutable';
       const range = parseRange(request.headers.get('range'), meta.size);
 
       if (!range) {
@@ -220,7 +337,7 @@ export function createMediaProtocolService({
             'Content-Type': mime,
             'Content-Length': String(meta.size),
             'Accept-Ranges': 'bytes',
-            'Cache-Control': 'public, max-age=31536000, immutable',
+            'Cache-Control': cacheControl,
           },
         });
       }
@@ -234,7 +351,7 @@ export function createMediaProtocolService({
           'Content-Length': String(length),
           'Content-Range': `bytes ${range.start}-${range.end}/${meta.size}`,
           'Accept-Ranges': 'bytes',
-          'Cache-Control': 'public, max-age=31536000, immutable',
+          'Cache-Control': cacheControl,
         },
       });
     });
@@ -242,6 +359,8 @@ export function createMediaProtocolService({
 
   return {
     buildBlobPath,
+    setThumbnail,
+    regenerateThumbnail,
     registerMediaProtocol,
   };
 }

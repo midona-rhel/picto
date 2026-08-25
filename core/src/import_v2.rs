@@ -11,7 +11,7 @@ use ts_rs::TS;
 use crate::app::{Application, Lifecycle};
 use crate::folders_v2::{CreateFolderInput, FolderId};
 use crate::ingest_queue_v2::{self, IngestJobSpec};
-use crate::ingest_v2::PreparedMediaInput;
+use crate::ingest_v2::{PreparedMediaInput, SourcePostInput};
 
 const LOCAL_PROVENANCE: i64 = 1;
 const WATCH_STABLE_DELAY: Duration = Duration::from_millis(500);
@@ -193,26 +193,60 @@ async fn prepare_and_enqueue(
     tags: &[String],
     source_urls: &[String],
 ) -> Result<bool, String> {
+    if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+    {
+        return prepare_archive_and_enqueue(
+            application,
+            path,
+            job_key,
+            source_kind,
+            lifecycle,
+            target_folder_id,
+            tags,
+            source_urls,
+        )
+        .await;
+    }
+
+    let input = prepare_input(path, lifecycle, target_folder_id, tags, source_urls, None).await?;
+    let result = ingest_queue_v2::enqueue(
+        application,
+        &IngestJobSpec {
+            job_key: job_key.to_string(),
+            source_kind: source_kind.to_string(),
+            source_path: path.display().to_string(),
+            delete_after_ingest: false,
+            input,
+        },
+    )?;
+    Ok(result.inserted)
+}
+
+async fn prepare_input(
+    path: &Path,
+    lifecycle: Lifecycle,
+    target_folder_id: Option<FolderId>,
+    tags: &[String],
+    source_urls: &[String],
+    source: Option<SourcePostInput>,
+) -> Result<PreparedMediaInput, String> {
     let prepared = crate::media_processing::PreparedMediaSource::prepare_ingest(path)
         .await
         .map_err(|error| format!("Failed to inspect {}: {error}", path.display()))?;
-    if !prepared.caps.ingest_supported
-        || !(prepared.mime_type.starts_with("image/") || prepared.mime_type.starts_with("video/"))
-    {
+    if !prepared.caps.ingest_supported || prepared.mime_type == "application/zip" {
         return Err(format!("Unsupported media: {}", path.display()));
     }
-    let bytes = prepared
-        .file_bytes
-        .as_deref()
-        .ok_or_else(|| format!("Prepared media has no bytes: {}", path.display()))?;
     let captured_at = fs::metadata(path)
         .ok()
         .and_then(|metadata| metadata.created().or_else(|_| metadata.modified()).ok())
         .map(|time| chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339());
-    let input = PreparedMediaInput {
-        file_hash: hex::encode(crate::media_processing::get_hash_from_bytes(bytes)),
+    Ok(PreparedMediaInput {
+        file_hash: String::new(),
         mime_type: prepared.mime_type,
-        size_bytes: prepared.size_bytes.unwrap_or(bytes.len() as u64) as i64,
+        size_bytes: prepared.size_bytes.unwrap_or_default() as i64,
         pixel_width: prepared.pixel_width.map(i64::from),
         pixel_height: prepared.pixel_height.map(i64::from),
         duration_ms: prepared.duration_ms.map(|value| value as i64),
@@ -229,20 +263,87 @@ async fn prepare_and_enqueue(
         provenance_mask: LOCAL_PROVENANCE,
         lifecycle,
         captured_at,
-        source: None,
+        source,
         target_folder_id: target_folder_id.map(|id| id.0),
-    };
-    let result = ingest_queue_v2::enqueue(
-        application,
-        &IngestJobSpec {
-            job_key: job_key.to_string(),
-            source_kind: source_kind.to_string(),
-            source_path: path.display().to_string(),
-            delete_after_ingest: false,
-            input,
-        },
-    )?;
-    Ok(result.inserted)
+        target_folder_ids: Vec::new(),
+    })
+}
+
+async fn prepare_archive_and_enqueue(
+    application: &Application,
+    archive_path: &Path,
+    job_key: &str,
+    source_kind: &str,
+    lifecycle: Lifecycle,
+    target_folder_id: Option<FolderId>,
+    tags: &[String],
+    source_urls: &[String],
+) -> Result<bool, String> {
+    let post_key = format!(
+        "zip:{}",
+        hex::encode(
+            crate::media_processing::get_hash_from_path(archive_path)
+                .map_err(|error| format!("Failed to hash {}: {error}", archive_path.display()))?
+        )
+    );
+    let title = archive_path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::to_string);
+    let entries = crate::media_processing::archive::extract_library_files(archive_path)
+        .map_err(|error| format!("Failed to extract {}: {error}", archive_path.display()))?;
+    if entries.is_empty() {
+        return Err(format!(
+            "Unsupported media: {} contains no accepted files",
+            archive_path.display()
+        ));
+    }
+
+    let count = entries.len();
+    let mut inserted = false;
+    for (index, entry) in entries.into_iter().enumerate() {
+        let source = SourcePostInput {
+            site_id: "archive".to_string(),
+            post_key: post_key.clone(),
+            item_key: format!("{post_key}:{index}:{}", entry.archive_name),
+            position: index as i64,
+            post_complete: index + 1 == count,
+            force_collection: true,
+            group_post: true,
+            canonical_post_url: None,
+            canonical_media_url: None,
+            creator_name: None,
+            title: title.clone(),
+            description: None,
+            captured_at: None,
+            metadata_json: None,
+        };
+        let mut input = prepare_input(
+            &entry.path,
+            lifecycle,
+            target_folder_id,
+            tags,
+            source_urls,
+            Some(source),
+        )
+        .await?;
+        input.name = Path::new(&entry.archive_name)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(str::to_string);
+        let result = ingest_queue_v2::enqueue(
+            application,
+            &IngestJobSpec {
+                job_key: format!("{job_key}:zip:{index}"),
+                source_kind: source_kind.to_string(),
+                source_path: entry.path.display().to_string(),
+                delete_after_ingest: true,
+                input,
+            },
+        )?;
+        inserted |= result.inserted;
+    }
+    Ok(inserted)
 }
 
 fn collect_manual_candidates(
@@ -429,55 +530,7 @@ fn should_ignore(path: &Path) -> bool {
 }
 
 fn is_media_path(path: &Path) -> bool {
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    matches!(
-        extension.as_str(),
-        "jpg"
-            | "jpeg"
-            | "jpe"
-            | "jfif"
-            | "png"
-            | "apng"
-            | "gif"
-            | "webp"
-            | "bmp"
-            | "dib"
-            | "tiff"
-            | "tif"
-            | "svg"
-            | "svgz"
-            | "ico"
-            | "cur"
-            | "heif"
-            | "heifs"
-            | "heic"
-            | "heics"
-            | "avif"
-            | "avifs"
-            | "qoi"
-            | "jxl"
-            | "mp4"
-            | "m4v"
-            | "webm"
-            | "mkv"
-            | "mov"
-            | "qt"
-            | "avi"
-            | "flv"
-            | "wmv"
-            | "ogv"
-            | "mpeg"
-            | "mpg"
-            | "mpe"
-            | "rm"
-            | "rmvb"
-            | "3gp"
-            | "3g2"
-    )
+    crate::media_processing::has_supported_extension(path)
 }
 
 use rusqlite::OptionalExtension;
@@ -485,6 +538,7 @@ use rusqlite::OptionalExtension;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
     use std::sync::Arc;
 
     use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb};
@@ -497,6 +551,18 @@ mod tests {
             .unwrap();
     }
 
+    fn zip_files(path: &Path, files: &[(&str, &[u8])]) {
+        let file = fs::File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        for (name, bytes) in files {
+            archive
+                .start_file(*name, zip::write::SimpleFileOptions::default())
+                .unwrap();
+            archive.write_all(bytes).unwrap();
+        }
+        archive.finish().unwrap();
+    }
+
     #[tokio::test]
     async fn manual_directory_filters_files_and_preserves_folder_structure() {
         let library = tempfile::tempdir().unwrap();
@@ -504,7 +570,7 @@ mod tests {
         fs::create_dir(source.path().join("child")).unwrap();
         png(&source.path().join("one.png"));
         png(&source.path().join("child/two.png"));
-        fs::write(source.path().join("child/ignored.txt"), b"ignored").unwrap();
+        fs::write(source.path().join("child/ignored.exe"), b"ignored").unwrap();
         let application = Application::new(Arc::new(Store::open(library.path()).unwrap()));
 
         let report = application
@@ -605,5 +671,70 @@ mod tests {
             .projections()
             .folder_bitmap(folder.0)
             .contains(root as u32));
+    }
+
+    #[tokio::test]
+    async fn manual_zip_expands_to_one_hidden_until_complete_collection() {
+        let library = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        let archive_path = source.path().join("album.zip");
+        zip_files(
+            &archive_path,
+            &[("track.mp3", b"audio"), ("notes.txt", b"credits")],
+        );
+        let application = Application::new(Arc::new(Store::open(library.path()).unwrap()));
+
+        let report = application
+            .enqueue_manual_import(&ManualImportInput {
+                paths: vec![archive_path.display().to_string()],
+                tags: Vec::new(),
+                source_urls: Vec::new(),
+                lifecycle: Lifecycle::Inbox,
+                parent_folder_id: None,
+                preserve_structure: false,
+            })
+            .await
+            .unwrap();
+        assert_eq!(report.discovered, 1);
+        assert_eq!(report.queued, 1);
+
+        assert_eq!(
+            ingest_queue_v2::run_batch(&application, 1)
+                .unwrap()
+                .ingested,
+            1
+        );
+        let roots_after_first: i64 = application
+            .store()
+            .read(|connection| {
+                connection.query_row("SELECT COUNT(*) FROM library_root", [], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(roots_after_first, 0);
+
+        assert_eq!(
+            ingest_queue_v2::run_batch(&application, 8)
+                .unwrap()
+                .ingested,
+            1
+        );
+        application
+            .store()
+            .read(|connection| {
+                let (kind, label, members): (String, Option<String>, i64) = connection.query_row(
+                    "SELECT li.kind, li.label,
+                            (SELECT COUNT(*) FROM collection_member cm
+                             WHERE cm.collection_id = li.item_id)
+                     FROM library_item li
+                     JOIN library_root lr ON lr.item_id = li.item_id",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                assert_eq!(kind, "collection");
+                assert_eq!(label.as_deref(), Some("album"));
+                assert_eq!(members, 2);
+                Ok(())
+            })
+            .unwrap();
     }
 }

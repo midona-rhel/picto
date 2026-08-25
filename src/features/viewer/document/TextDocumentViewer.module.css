@@ -1,0 +1,46 @@
+.page {
+  box-sizing: border-box;
+  width: min(816px, 100%);
+  min-height: min(1056px, 100cqh);
+  padding: 72px 76px;
+  overflow-wrap: anywhere;
+  background: #fff;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.34);
+  color: #1f2023;
+  font: 14px/1.65 var(--font-family-ui);
+  user-select: text;
+}
+
+.page :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.4em 0 0.55em;
+  line-height: 1.25;
+}
+
+.page h1:first-child,
+.page h2:first-child { margin-top: 0; }
+
+.page :is(img, svg) { max-width: 100%; }
+.page a { color: #2773c9; }
+.page blockquote {
+  margin-inline: 0;
+  padding-left: 16px;
+  border-left: 3px solid #c7c9cd;
+  color: #5b5e65;
+}
+
+.page :is(code, pre) { font-family: var(--font-family-mono); }
+.page code {
+  padding: 0.12em 0.3em;
+  border-radius: 4px;
+  background: #eef0f2;
+}
+
+.plainText {
+  margin: 0;
+  white-space: pre-wrap;
+  tab-size: 4;
+  background: transparent;
+  color: inherit;
+  font-size: 13px;
+  line-height: 1.6;
+}

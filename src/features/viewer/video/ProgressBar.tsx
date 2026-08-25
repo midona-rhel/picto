@@ -11,9 +11,10 @@ interface Props {
   onSeek: (time: number) => void;
   onSeekStart?: () => void;
   onSeekEnd?: () => void;
+  waveformSrc?: string;
 }
 
-export function ProgressBar({ currentTime, duration, buffered, onSeek, onSeekStart, onSeekEnd }: Props) {
+export function ProgressBar({ currentTime, duration, buffered, onSeek, onSeekStart, onSeekEnd, waveformSrc }: Props) {
   const trackRef = useRef<HTMLDivElement>(null);
   const [hovered, setHovered] = useState(false);
   const [dragging, setDragging] = useState(false);
@@ -46,13 +47,31 @@ export function ProgressBar({ currentTime, duration, buffered, onSeek, onSeekSta
   const expanded = hovered || dragging;
 
   return (
-    <div ref={trackRef} className={styles.progressBar}
+    <div ref={trackRef} className={`${styles.progressBar} ${waveformSrc ? styles.waveformProgressBar : ''}`}
       onMouseEnter={() => setHovered(true)} onMouseLeave={() => setHovered(false)}
       onMouseMove={(e) => setHoverFrac(getFrac(e))} onMouseDown={handleDown}>
-      <div className={`${styles.progressTrack} ${expanded ? styles.progressTrackExpanded : ''}`}>
-        <div className={styles.progressBuffered} style={{ width: `${bufferedFrac * 100}%` }} />
-        <div className={styles.progressFill} style={{ width: `${progress * 100}%` }} />
-      </div>
+      {waveformSrc ? (
+        <>
+          <div
+            className={styles.waveformBase}
+            data-waveform-layer="unplayed"
+            style={{ WebkitMaskImage: `url("${waveformSrc}")`, maskImage: `url("${waveformSrc}")` }}
+          />
+          <div className={styles.waveformPlayed} style={{ clipPath: `inset(0 ${(1 - progress) * 100}% 0 0)` }}>
+            <div
+              className={styles.waveformImage}
+              data-waveform-layer="played"
+              style={{ WebkitMaskImage: `url("${waveformSrc}")`, maskImage: `url("${waveformSrc}")` }}
+            />
+          </div>
+          <div className={styles.waveformCursor} style={{ left: `${progress * 100}%` }} />
+        </>
+      ) : (
+        <div className={`${styles.progressTrack} ${expanded ? styles.progressTrackExpanded : ''}`}>
+          <div className={styles.progressBuffered} style={{ width: `${bufferedFrac * 100}%` }} />
+          <div className={styles.progressFill} style={{ width: `${progress * 100}%` }} />
+        </div>
+      )}
       {(hovered || dragging) && duration > 0 && (
         <div className={styles.progressHoverTime} style={{ left: `${hoverFrac * 100}%` }}>
           {formatTime(hoverFrac * duration)}

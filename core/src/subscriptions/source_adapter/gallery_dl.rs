@@ -61,6 +61,6 @@ impl SubscriptionSourceAdapter for GalleryDlSourceAdapter {
         opts: &'a RunOptions,
         item_tx: Sender<DownloadedItem>,
     ) -> Pin<Box<dyn Future<Output = Result<RunSummary, String>> + Send + 'a>> {
-        Box::pin(async move { self.runner.run(opts, item_tx).await })
+        Box::pin(async move { self.runner.run(opts, item_tx, None).await })
     }
 }

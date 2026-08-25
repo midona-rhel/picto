@@ -149,8 +149,8 @@ pub static SITES: &[SiteEntry] = &[
         supports_account: true,
         auth_required_for_full_access: false,
         auth_strictly_required: false,
-        credential_types: COOKIE_CREDENTIAL_TYPES,
-        oauth_provider: None,
+        credential_types: OAUTH_CREDENTIAL_TYPES,
+        oauth_provider: Some("deviantart"),
     },
     SiteEntry {
         id: "tumblr",
@@ -164,6 +164,19 @@ pub static SITES: &[SiteEntry] = &[
         auth_strictly_required: false,
         credential_types: OAUTH_CREDENTIAL_TYPES,
         oauth_provider: Some("tumblr"),
+    },
+    SiteEntry {
+        id: "twitter",
+        domain: "x.com",
+        credential_owner_site_id: "twitter",
+        name: "Twitter / X",
+        example_query: "username",
+        supports_query: false,
+        supports_account: true,
+        auth_required_for_full_access: false,
+        auth_strictly_required: false,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
+        oauth_provider: None,
     },
     SiteEntry {
         id: "furaffinity",
@@ -206,7 +219,7 @@ pub static SITES: &[SiteEntry] = &[
     },
     SiteEntry {
         id: "subscribestar",
-        domain: "subscribestar.com",
+        domain: "subscribestar.art",
         credential_owner_site_id: "subscribestar",
         name: "SubscribeStar",
         example_query: "creator-slug",
@@ -214,6 +227,19 @@ pub static SITES: &[SiteEntry] = &[
         supports_account: true,
         auth_required_for_full_access: true,
         auth_strictly_required: false,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
+        oauth_provider: None,
+    },
+    SiteEntry {
+        id: "onlyfans",
+        domain: "onlyfans.com",
+        credential_owner_site_id: "onlyfans",
+        name: "OnlyFans",
+        example_query: "creator-name",
+        supports_query: false,
+        supports_account: true,
+        auth_required_for_full_access: true,
+        auth_strictly_required: true,
         credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
@@ -323,6 +349,9 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "tumblr" => normalize_tumblr_blog(query)
             .ok()
             .and_then(|blog| build_tumblr_blog_url(&blog)),
+        "twitter" => normalize_twitter_username(query)
+            .ok()
+            .and_then(|username| build_twitter_media_url(&username)),
         "furaffinity" => normalize_furaffinity_username(query)
             .ok()
             .and_then(|username| build_furaffinity_gallery_url(&username)),
@@ -335,6 +364,9 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "subscribestar" => normalize_subscribestar_creator(query)
             .ok()
             .and_then(|creator| build_subscribestar_creator_url(&creator)),
+        "onlyfans" => normalize_onlyfans_creator(query)
+            .ok()
+            .and_then(|creator| build_onlyfans_creator_url(&creator)),
         "idolcomplex" => build_booru_url("https://www.idolcomplex.com/en/posts", query),
         "sankaku" => build_booru_url("https://sankaku.app/", query),
         "yandere" => build_booru_url("https://yande.re/post", query),
@@ -343,6 +375,55 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "e621" => build_booru_url("https://e621.net/posts", query),
         _ => None,
     }
+}
+
+pub fn normalize_twitter_username(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Twitter / X subscriptions require a username".to_string());
+    }
+
+    let username = if let Ok(url) = Url::parse(trimmed) {
+        if !matches!(url.scheme(), "http" | "https")
+            || !matches!(
+                url.host_str(),
+                Some("x.com" | "www.x.com" | "twitter.com" | "www.twitter.com")
+            )
+            || url.username() != ""
+            || url.password().is_some()
+            || url.port().is_some()
+        {
+            return Err("Twitter / X subscriptions require a canonical profile URL".to_string());
+        }
+        let segments: Vec<_> = url
+            .path_segments()
+            .into_iter()
+            .flatten()
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        match segments.as_slice() {
+            [username] | [username, "media"] => username.trim_start_matches('@').to_string(),
+            _ => return Err("Twitter / X subscriptions require a profile or media URL".to_string()),
+        }
+    } else {
+        trimmed.trim_start_matches('@').to_string()
+    };
+
+    if username.is_empty()
+        || username.len() > 15
+        || !username
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+    {
+        return Err("Twitter / X subscriptions require a valid username".to_string());
+    }
+    Ok(username)
+}
+
+fn build_twitter_media_url(username: &str) -> Option<String> {
+    let mut url = Url::parse("https://x.com").ok()?;
+    url.path_segments_mut().ok()?.push(username).push("media");
+    Some(url.to_string())
 }
 
 pub fn normalize_baraag_username(raw: &str) -> Result<String, String> {
@@ -748,7 +829,7 @@ pub fn normalize_subscribestar_creator(raw: &str) -> Result<String, String> {
         if !matches!(url.scheme(), "http" | "https")
             || !matches!(
                 url.host_str(),
-                Some("subscribestar.com" | "www.subscribestar.com")
+                Some("subscribestar.art" | "subscribestar.com" | "www.subscribestar.com")
             )
             || url.username() != ""
             || url.password().is_some()
@@ -782,7 +863,52 @@ pub fn normalize_subscribestar_creator(raw: &str) -> Result<String, String> {
     )
 }
 
+pub fn normalize_onlyfans_creator(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("OnlyFans subscriptions require a creator name".to_string());
+    }
+    let creator = if let Ok(url) = Url::parse(trimmed) {
+        if !matches!(url.scheme(), "http" | "https")
+            || !matches!(url.host_str(), Some("onlyfans.com" | "www.onlyfans.com"))
+            || url.username() != ""
+            || url.password().is_some()
+            || url.port().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+        {
+            return Err("OnlyFans subscriptions require a canonical creator URL".to_string());
+        }
+        let segments: Vec<_> = url
+            .path_segments()
+            .into_iter()
+            .flatten()
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        match segments.as_slice() {
+            [creator] => (*creator).to_string(),
+            _ => return Err("OnlyFans subscriptions require a creator profile URL".to_string()),
+        }
+    } else {
+        trimmed.strip_prefix('@').unwrap_or(trimmed).to_string()
+    };
+    validate_simple_creator_slug(
+        &creator,
+        128,
+        "OnlyFans subscriptions require a safe creator name",
+    )
+}
+
+fn build_onlyfans_creator_url(creator: &str) -> Option<String> {
+    let mut url = Url::parse("https://onlyfans.com").ok()?;
+    url.path_segments_mut().ok()?.push(creator);
+    Some(url.to_string())
+}
+
 fn build_subscribestar_creator_url(creator: &str) -> Option<String> {
+    // gallery-dl selects its extractor before following SubscribeStar's
+    // redirect from .com to .art. Starting on .art therefore produces
+    // NoExtractorError even though the resulting page is valid.
     let mut url = Url::parse("https://www.subscribestar.com").ok()?;
     url.path_segments_mut().ok()?.push(creator);
     Some(url.to_string())
@@ -922,10 +1048,12 @@ mod tests {
                 "baraag",
                 "deviantart",
                 "tumblr",
+                "twitter",
                 "furaffinity",
                 "patreon",
                 "fanbox",
                 "subscribestar",
+                "onlyfans",
                 "idolcomplex",
                 "sankaku",
                 "yandere",
@@ -934,7 +1062,7 @@ mod tests {
                 "e621",
             ])
         );
-        assert_eq!(SITES.len(), 20);
+        assert_eq!(SITES.len(), 22);
     }
 
     #[test]
@@ -972,6 +1100,14 @@ mod tests {
         let tumblr = site_by_id("tumblr").unwrap();
         assert_eq!(tumblr.credential_types, OAUTH_CREDENTIAL_TYPES);
         assert_eq!(tumblr.oauth_provider, Some("tumblr"));
+    }
+
+    #[test]
+    fn twitter_runs_anonymously_but_still_offers_cookie_login() {
+        let twitter = site_by_id("twitter").unwrap();
+        assert!(!twitter.auth_required_for_full_access);
+        assert!(!twitter.auth_strictly_required);
+        assert_eq!(twitter.credential_types, COOKIE_CREDENTIAL_TYPES);
     }
 
     #[test]
@@ -1021,6 +1157,10 @@ mod tests {
             Some("https://www.tumblr.com/nasa")
         );
         assert_eq!(
+            build_url("twitter", "https://twitter.com/OpenAI/media").as_deref(),
+            Some("https://x.com/OpenAI/media")
+        );
+        assert_eq!(
             build_url(
                 "furaffinity",
                 "https://www.furaffinity.net/user/Artist_Name/"
@@ -1037,11 +1177,7 @@ mod tests {
             Some("https://creator-name.fanbox.cc/")
         );
         assert_eq!(
-            build_url(
-                "subscribestar",
-                "https://www.subscribestar.com/creator-name"
-            )
-            .as_deref(),
+            build_url("subscribestar", "https://subscribestar.art/creator-name").as_deref(),
             Some("https://www.subscribestar.com/creator-name")
         );
         assert_eq!(
@@ -1068,6 +1204,30 @@ mod tests {
             build_url("e621", "canine").as_deref(),
             Some("https://e621.net/posts?tags=canine")
         );
+    }
+
+    #[test]
+    fn twitter_subscriptions_accept_handles_and_canonical_profiles() {
+        for input in [
+            "OpenAI",
+            "@OpenAI",
+            "https://x.com/OpenAI",
+            "https://twitter.com/OpenAI/media",
+        ] {
+            assert_eq!(normalize_twitter_username(input).as_deref(), Ok("OpenAI"));
+            assert_eq!(
+                build_url("twitter", input).as_deref(),
+                Some("https://x.com/OpenAI/media")
+            );
+        }
+        for input in [
+            "",
+            "not-a-handle",
+            "https://x.com/i/flow/login",
+            "https://example.com/OpenAI",
+        ] {
+            assert!(normalize_twitter_username(input).is_err(), "{input}");
+        }
     }
 
     #[test]
@@ -1151,8 +1311,8 @@ mod tests {
 
         for value in [
             "creator-name",
+            "https://subscribestar.art/creator-name",
             "https://www.subscribestar.com/creator-name",
-            "https://subscribestar.com/creator-name",
         ] {
             assert_eq!(
                 normalize_subscribestar_creator(value).as_deref(),
@@ -1163,8 +1323,8 @@ mod tests {
         for value in [
             "creator/name",
             "https://example.com/creator-name",
-            "https://www.subscribestar.com/creator-name?tag=foo",
-            "https://www.subscribestar.com/posts/12345",
+            "https://subscribestar.art/creator-name?tag=foo",
+            "https://subscribestar.art/posts/12345",
         ] {
             assert!(
                 normalize_subscribestar_creator(value).is_err(),

@@ -1,0 +1,100 @@
+import { useEffect, useState } from 'react';
+import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
+import { ThumbnailImage } from '../../../shared/ui/ThumbnailImage/ThumbnailImage';
+
+export type SubscriptionCoverCrop = {
+  focusX: number;
+  focusY: number;
+  zoomPercent: number;
+};
+
+export type SubscriptionCoverDimensions = { width: number; height: number };
+
+export function subscriptionCoverGeometry(
+  dimensions: SubscriptionCoverDimensions,
+  crop: SubscriptionCoverCrop,
+) {
+  const width = Math.max(1, dimensions.width);
+  const height = Math.max(1, dimensions.height);
+  const aspect = width / height;
+  const zoom = crop.zoomPercent / 100;
+  const widthRatio = Math.max(1, aspect) * zoom;
+  const heightRatio = Math.max(1, 1 / aspect) * zoom;
+  const focusX = crop.focusX / 1000;
+  const focusY = crop.focusY / 1000;
+  return {
+    widthRatio,
+    heightRatio,
+    leftPercent: 50 + (0.5 - focusX) * (widthRatio - 1) * 100,
+    topPercent: 50 + (0.5 - focusY) * (heightRatio - 1) * 100,
+  };
+}
+
+export function SubscriptionCoverImage({
+  fileHash,
+  crop,
+  fallbackDimensions,
+  className,
+  alt = '',
+  loading,
+  draggable = false,
+  onDimensionsChange,
+  onError,
+}: {
+  fileHash: string;
+  crop: SubscriptionCoverCrop;
+  fallbackDimensions?: SubscriptionCoverDimensions;
+  className?: string;
+  alt?: string;
+  loading?: 'eager' | 'lazy';
+  draggable?: boolean;
+  onDimensionsChange?: (dimensions: SubscriptionCoverDimensions) => void;
+  onError?: () => void;
+}) {
+  const [dimensions, setDimensions] = useState(fallbackDimensions ?? { width: 1, height: 1 });
+  const [useThumbnail, setUseThumbnail] = useState(false);
+
+  useEffect(() => {
+    setUseThumbnail(false);
+    setDimensions(fallbackDimensions ?? { width: 1, height: 1 });
+  }, [fallbackDimensions?.height, fallbackDimensions?.width, fileHash]);
+
+  const geometry = subscriptionCoverGeometry(dimensions, crop);
+  return (
+    <ThumbnailImage
+      src={useThumbnail
+        ? mediaThumbnailUrl(fileHash)
+        : mediaFileUrl(fileHash, 'application/octet-stream')}
+      fallback="empty"
+      alt={alt}
+      loading={loading}
+      draggable={draggable}
+      className={className}
+      onLoad={(event) => {
+        const next = {
+          width: event.currentTarget.naturalWidth,
+          height: event.currentTarget.naturalHeight,
+        };
+        setDimensions(next);
+        onDimensionsChange?.(next);
+      }}
+      onThumbnailError={() => {
+        if (!useThumbnail) setUseThumbnail(true);
+        else onError?.();
+      }}
+      style={{
+        position: 'absolute',
+        display: 'block',
+        maxWidth: 'none',
+        width: `${geometry.widthRatio * 100}%`,
+        height: `${geometry.heightRatio * 100}%`,
+        left: `${geometry.leftPercent}%`,
+        top: `${geometry.topPercent}%`,
+        objectFit: 'fill',
+        transform: 'translate(-50%, -50%)',
+        userSelect: 'none',
+        pointerEvents: 'none',
+      }}
+    />
+  );
+}

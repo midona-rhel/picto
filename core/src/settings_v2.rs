@@ -1,10 +1,11 @@
 //! Persisted application and per-view preferences.
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::app::{resources, Application, MutationReceipt};
+use crate::store::history::HistoryDescriptor;
 
 const APPLICATION_SETTINGS_KEY: &str = "application";
 
@@ -35,14 +36,30 @@ impl Application {
         value: &serde_json::Value,
     ) -> Result<MutationReceipt, String> {
         require_object("Application settings", value)?;
-        replace_value(self, "setting", "key", APPLICATION_SETTINGS_KEY, value)
+        replace_value(
+            self,
+            "settings.replace",
+            "Replace settings",
+            "setting",
+            "key",
+            APPLICATION_SETTINGS_KEY,
+            value,
+        )
     }
 
     pub fn patch_application_settings(
         &self,
         patch: &serde_json::Value,
     ) -> Result<MutationReceipt, String> {
-        patch_value(self, "setting", "key", APPLICATION_SETTINGS_KEY, patch)
+        patch_value(
+            self,
+            "settings.patch",
+            "Change settings",
+            "setting",
+            "key",
+            APPLICATION_SETTINGS_KEY,
+            patch,
+        )
     }
 
     pub fn patch_view_preferences(
@@ -51,7 +68,7 @@ impl Application {
         patch: &serde_json::Value,
     ) -> Result<MutationReceipt, String> {
         let scope = required("View preference scope", scope)?;
-        patch_value(self, "view_pref", "scope", &scope, patch)
+        patch_untracked_value(self, "view_pref", "scope", &scope, patch)
     }
 }
 
@@ -87,31 +104,61 @@ fn read_value(
 
 fn replace_value(
     application: &Application,
+    command: &str,
+    label: &str,
     table: &str,
     key_column: &str,
     key: &str,
     value: &serde_json::Value,
 ) -> Result<MutationReceipt, String> {
     let encoded = serde_json::to_string(value).map_err(|error| error.to_string())?;
-    let (_, revision, _) = application.store().transaction_if_changed(|transaction| {
-        let sql = format!("SELECT value_json FROM {table} WHERE {key_column} = ?1");
-        let previous = transaction
-            .query_row(&sql, [key], |row| row.get::<_, String>(0))
-            .optional()?;
-        if previous.as_deref() == Some(encoded.as_str()) {
-            return Ok(((), false));
-        }
-        let sql = format!(
-            "INSERT INTO {table} ({key_column}, value_json) VALUES (?1, ?2)
-                 ON CONFLICT({key_column}) DO UPDATE SET value_json = excluded.value_json"
-        );
-        transaction.execute(&sql, params![key, encoded])?;
-        Ok(((), true))
-    })?;
+    let (_, revision, _, _) = application.undoable_transaction_if_changed(
+        settings_history(command, label),
+        |transaction| {
+            let sql = format!("SELECT value_json FROM {table} WHERE {key_column} = ?1");
+            let previous = transaction
+                .query_row(&sql, [key], |row| row.get::<_, String>(0))
+                .optional()?;
+            if previous.as_deref() == Some(encoded.as_str()) {
+                return Ok(((), (), false));
+            }
+            let sql = format!(
+                "INSERT INTO {table} ({key_column}, value_json) VALUES (?1, ?2)
+                     ON CONFLICT({key_column}) DO UPDATE SET value_json = excluded.value_json"
+            );
+            transaction.execute(&sql, params![key, encoded])?;
+            Ok(((), (), true))
+        },
+        |_, ()| Ok(()),
+    )?;
     Ok(settings_receipt(revision))
 }
 
 fn patch_value(
+    application: &Application,
+    command: &str,
+    label: &str,
+    table: &str,
+    key_column: &str,
+    key: &str,
+    patch: &serde_json::Value,
+) -> Result<MutationReceipt, String> {
+    require_object("Settings patch", patch)?;
+    let (_, revision, _, _) = application.undoable_transaction_if_changed(
+        settings_history(command, label),
+        |transaction| {
+            Ok((
+                (),
+                (),
+                patch_stored_value(transaction, table, key_column, key, patch)?,
+            ))
+        },
+        |_, ()| Ok(()),
+    )?;
+    Ok(settings_receipt(revision))
+}
+
+fn patch_untracked_value(
     application: &Application,
     table: &str,
     key_column: &str,
@@ -120,39 +167,61 @@ fn patch_value(
 ) -> Result<MutationReceipt, String> {
     require_object("Settings patch", patch)?;
     let (_, revision, _) = application.store().transaction_if_changed(|transaction| {
-        let select = format!("SELECT value_json FROM {table} WHERE {key_column} = ?1");
-        let previous = transaction
-            .query_row(&select, [key], |row| row.get::<_, String>(0))
-            .optional()?
-            .map(|value| {
-                serde_json::from_str::<serde_json::Value>(&value).map_err(|error| {
-                    rusqlite::Error::FromSqlConversionFailure(
-                        0,
-                        rusqlite::types::Type::Text,
-                        Box::new(error),
-                    )
-                })
-            })
-            .transpose()?
-            .unwrap_or_else(|| serde_json::json!({}));
-        if !previous.is_object() {
-            return Err(invalid("Stored settings must be a JSON object"));
-        }
-        let mut value = previous.clone();
-        merge_object(&mut value, patch);
-        if value == previous {
-            return Ok(((), false));
-        }
-        let encoded = serde_json::to_string(&value)
-            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-        let upsert = format!(
-            "INSERT INTO {table} ({key_column}, value_json) VALUES (?1, ?2)
-                 ON CONFLICT({key_column}) DO UPDATE SET value_json = excluded.value_json"
-        );
-        transaction.execute(&upsert, params![key, encoded])?;
-        Ok(((), true))
+        Ok((
+            (),
+            patch_stored_value(transaction, table, key_column, key, patch)?,
+        ))
     })?;
     Ok(settings_receipt(revision))
+}
+
+fn patch_stored_value(
+    transaction: &Transaction<'_>,
+    table: &str,
+    key_column: &str,
+    key: &str,
+    patch: &serde_json::Value,
+) -> rusqlite::Result<bool> {
+    let select = format!("SELECT value_json FROM {table} WHERE {key_column} = ?1");
+    let previous = transaction
+        .query_row(&select, [key], |row| row.get::<_, String>(0))
+        .optional()?
+        .map(|value| {
+            serde_json::from_str::<serde_json::Value>(&value).map_err(|error| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    0,
+                    rusqlite::types::Type::Text,
+                    Box::new(error),
+                )
+            })
+        })
+        .transpose()?
+        .unwrap_or_else(|| serde_json::json!({}));
+    if !previous.is_object() {
+        return Err(invalid("Stored settings must be a JSON object"));
+    }
+    let mut value = previous.clone();
+    merge_object(&mut value, patch);
+    if value == previous {
+        return Ok(false);
+    }
+    let encoded = serde_json::to_string(&value)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    let upsert = format!(
+        "INSERT INTO {table} ({key_column}, value_json) VALUES (?1, ?2)
+             ON CONFLICT({key_column}) DO UPDATE SET value_json = excluded.value_json"
+    );
+    transaction.execute(&upsert, params![key, encoded])?;
+    Ok(true)
+}
+
+fn settings_history(command: &str, label: &str) -> HistoryDescriptor {
+    HistoryDescriptor::new(
+        command,
+        label,
+        vec![resources::SETTINGS.to_string()],
+        Vec::new(),
+    )
 }
 
 fn merge_object(target: &mut serde_json::Value, patch: &serde_json::Value) {
@@ -224,6 +293,12 @@ mod tests {
             application_settings(&application).unwrap().value,
             serde_json::json!({"zoom": 1.25, "theme": "dark"})
         );
+
+        application.undo().unwrap();
+        assert_eq!(
+            application_settings(&application).unwrap().value,
+            serde_json::json!({})
+        );
     }
 
     #[test]
@@ -248,6 +323,29 @@ mod tests {
                 .unwrap()
                 .value,
             serde_json::json!({})
+        );
+
+        assert!(application.history_state().unwrap().undo.is_none());
+    }
+
+    #[test]
+    fn view_preferences_do_not_replace_real_undo_history() {
+        let (_directory, application) = fixture();
+        application
+            .patch_application_settings(&serde_json::json!({"theme": "dark"}))
+            .unwrap();
+        application
+            .patch_view_preferences("system:all", &serde_json::json!({"size": 180}))
+            .unwrap();
+
+        application.undo().unwrap();
+        assert_eq!(
+            application_settings(&application).unwrap().value,
+            serde_json::json!({})
+        );
+        assert_eq!(
+            view_preferences(&application, "system:all").unwrap().value,
+            serde_json::json!({"size": 180})
         );
     }
 }

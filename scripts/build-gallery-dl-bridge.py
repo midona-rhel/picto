@@ -54,6 +54,8 @@ def command_for(venv_dir: Path, output_dir: Path, platform_name: str | None = No
         "--collect-all",
         "gallery_dl",
         "--collect-all",
+        "curl_cffi",
+        "--collect-all",
         "requests",
         "--collect-all",
         "yt_dlp",

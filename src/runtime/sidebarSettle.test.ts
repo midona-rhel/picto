@@ -25,10 +25,10 @@ describe('sidebar runtime settling', () => {
     start.mockReset();
   });
 
-  it('subscribes to the three replacement sidebar resources', () => {
+  it('subscribes to every resource that changes sidebar counts', () => {
     const stop = startSidebarSettle();
 
-    expect([...callbacks.keys()]).toEqual(['sidebar', 'folders', 'smart_folders']);
+    expect([...callbacks.keys()]).toEqual(['sidebar', 'folders', 'smart_folders', 'tags']);
     expect(start).not.toHaveBeenCalled();
 
     stop();
@@ -41,9 +41,10 @@ describe('sidebar runtime settling', () => {
     callbacks.get('sidebar')?.();
     callbacks.get('folders')?.();
     callbacks.get('smart_folders')?.();
+    callbacks.get('tags')?.();
     await Promise.resolve();
 
-    expect(fetchTree).toHaveBeenCalledTimes(3);
+    expect(fetchTree).toHaveBeenCalledTimes(4);
     stop();
   });
 });

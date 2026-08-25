@@ -71,6 +71,16 @@ export function InspectorAddIcon({ className }: Pick<ToolbarIconProps, 'classNam
   );
 }
 
+/** Inspector export uses filled one-pixel geometry so it stays sharp at 1×. */
+export function InspectorExportIcon({ className }: Pick<ToolbarIconProps, 'className'>) {
+  return (
+    <svg aria-hidden="true" className={className} width="16" height="16" viewBox="0 0 16 16" fill="none">
+      <path fill="currentColor" d="M7 2.7 3.85 5.85l-.7-.7 4-4a.5.5 0 0 1 .7 0l4 4-.7.7L8 2.7V11H7V2.7Z" />
+      <path fill="currentColor" d="M1 10h1v3a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-3h1v3a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2v-3Z" />
+    </svg>
+  );
+}
+
 /** Inspector chip remove control uses an 18px box and a crisp one-pixel X. */
 export function InspectorRemoveIcon({ className }: Pick<ToolbarIconProps, 'className'>) {
   return (

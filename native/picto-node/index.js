@@ -310,8 +310,10 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { startNativeDrag, initRuntime, healthcheck, openLibrary, closeLibrary, invoke, registerEventCallback, emitTestEvent } = nativeBinding
+const { getAssociatedApplications, openWithApplication, startNativeDrag, initRuntime, healthcheck, openLibrary, closeLibrary, invoke, registerEventCallback, emitTestEvent } = nativeBinding
 
+module.exports.getAssociatedApplications = getAssociatedApplications
+module.exports.openWithApplication = openWithApplication
 module.exports.startNativeDrag = startNativeDrag
 module.exports.initRuntime = initRuntime
 module.exports.healthcheck = healthcheck

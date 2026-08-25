@@ -31,6 +31,13 @@ pub struct SourcePostInput {
     pub position: i64,
     #[serde(default)]
     pub post_complete: bool,
+    /// Force a source container such as a ZIP to remain a collection even
+    /// when it contains only one accepted item.
+    #[serde(default)]
+    pub force_collection: bool,
+    /// Group accepted siblings from this source post into one collection.
+    #[serde(default)]
+    pub group_post: bool,
     pub canonical_post_url: Option<String>,
     pub canonical_media_url: Option<String>,
     pub creator_name: Option<String>,
@@ -62,6 +69,8 @@ pub struct PreparedMediaInput {
     pub source: Option<SourcePostInput>,
     #[serde(default)]
     pub target_folder_id: Option<i64>,
+    #[serde(default)]
+    pub target_folder_ids: Vec<i64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -85,167 +94,175 @@ impl Application {
         let ((media_item_id, root_item_id, reused, promoted), revision, changed) = self
             .transaction_if_changed(
                 |transaction| {
-                if let Some(source) = &input.source {
-                    if let Some(existing) = existing_source_item(transaction, source)? {
-                        match existing {
-                            ExistingSourceItem::Present {
-                                media_item_id,
-                                root_item_id,
-                            } => {
-                                return Ok((
-                                    (media_item_id, root_item_id, true, false),
-                                    StructureProjectionDelta::default(),
-                                    false,
-                                ));
+                    if let Some(source) = &input.source {
+                        if let Some(existing) = existing_source_item(transaction, source)? {
+                            match existing {
+                                ExistingSourceItem::Present {
+                                    media_item_id,
+                                    root_item_id,
+                                } => {
+                                    return Ok((
+                                        (media_item_id, root_item_id, true, false),
+                                        StructureProjectionDelta::default(),
+                                        false,
+                                    ));
+                                }
+                                ExistingSourceItem::Deleted => {
+                                    return Err(invalid(DELETED_SOURCE_ITEM_ERROR));
+                                }
+                                ExistingSourceItem::Pending => {}
                             }
-                            ExistingSourceItem::Deleted => {
-                                return Err(invalid(DELETED_SOURCE_ITEM_ERROR));
-                            }
-                            ExistingSourceItem::Pending => {}
                         }
+                    } else if let Some((media_item_id, root_item_id)) =
+                        existing_manual_item(transaction, &input.file_hash)?
+                    {
+                        let mut delta = StructureProjectionDelta::default();
+                        let tag_ids = insert_tags(
+                            transaction,
+                            media_item_id,
+                            &input.tags,
+                            input.provenance_mask,
+                            false,
+                        )?;
+                        delta
+                            .tags
+                            .extend(tag_ids.into_iter().map(|tag_id| TagProjectionChange {
+                                media_id: media_item_id,
+                                tag_id,
+                                present: true,
+                            }));
+                        let folder_changed = attach_target_folders(
+                            transaction,
+                            input.target_folder_id,
+                            &input.target_folder_ids,
+                            root_item_id,
+                            &mut delta,
+                        )?;
+                        let changed = folder_changed || !delta.tags.is_empty();
+                        return Ok(((media_item_id, root_item_id, true, false), delta, changed));
                     }
-                } else if let Some((media_item_id, root_item_id)) =
-                    existing_manual_item(transaction, &input.file_hash)?
-                {
-                    let mut delta = StructureProjectionDelta::default();
+
+                    let file_id = upsert_file(transaction, input, &now)?;
+                    let media_item_id = insert_media_asset(transaction, file_id, input, &now)?;
                     let tag_ids = insert_tags(
                         transaction,
                         media_item_id,
                         &input.tags,
                         input.provenance_mask,
-                        false,
+                        input.source.is_some(),
                     )?;
-                    delta.tags.extend(tag_ids.into_iter().map(|tag_id| TagProjectionChange {
-                        media_id: media_item_id,
-                        tag_id,
-                        present: true,
-                    }));
-                    let folder_changed = attach_target_folder(
+                    let (root_item_id, promoted, root_visible) = if let Some(source) = &input.source
+                    {
+                        attach_source_item(transaction, source, media_item_id, &now)?;
+                        settle_source_post_root(
+                            transaction,
+                            source,
+                            media_item_id,
+                            input.lifecycle,
+                            &now,
+                        )?
+                    } else {
+                        insert_root(transaction, media_item_id, input.lifecycle)?;
+                        (media_item_id, false, true)
+                    };
+                    if root_visible {
+                        enqueue_root_thumbnail(transaction, root_item_id, &now)?;
+                    }
+                    enqueue_derivatives(
                         transaction,
-                        input.target_folder_id,
-                        root_item_id,
-                        &mut delta,
-                    )?;
-                    let changed = folder_changed || !delta.tags.is_empty();
-                    return Ok(((media_item_id, root_item_id, true, false), delta, changed));
-                }
-
-                let file_id = upsert_file(transaction, input, &now)?;
-                let media_item_id = insert_media_asset(transaction, file_id, input, &now)?;
-                let tag_ids = insert_tags(
-                    transaction,
-                    media_item_id,
-                    &input.tags,
-                    input.provenance_mask,
-                    input.source.is_some(),
-                )?;
-                enqueue_derivatives(
-                    transaction,
-                    media_item_id,
-                    file_id,
-                    input,
-                    enqueue_ai,
-                    &now,
-                )?;
-
-                let (root_item_id, promoted, root_visible) = if let Some(source) = &input.source {
-                    attach_source_item(transaction, source, media_item_id, &now)?;
-                    settle_source_post_root(
-                        transaction,
-                        source,
                         media_item_id,
-                        input.lifecycle,
+                        file_id,
+                        input,
+                        enqueue_ai,
                         &now,
-                    )?
-                } else {
-                    insert_root(transaction, media_item_id, input.lifecycle)?;
-                    (media_item_id, false, true)
-                };
-                let mut delta = StructureProjectionDelta::default();
-                delta.items.push(ItemProjectionChange {
-                    item_id: media_item_id,
-                    kind: crate::app::ItemKind::Media,
-                    present: true,
-                });
-                if media_item_id == root_item_id {
-                    delta.roots.push(RootProjectionChange {
-                        item_id: media_item_id,
-                        lifecycle: Some(input.lifecycle),
-                    });
-                } else if promoted {
+                    )?;
+                    let mut delta = StructureProjectionDelta::default();
                     delta.items.push(ItemProjectionChange {
-                        item_id: root_item_id,
-                        kind: crate::app::ItemKind::Collection,
+                        item_id: media_item_id,
+                        kind: crate::app::ItemKind::Media,
                         present: true,
                     });
-                    delta.roots.push(RootProjectionChange {
-                        item_id: root_item_id,
-                        lifecycle: Some(input.lifecycle),
-                    });
-                    let mut statement = transaction.prepare(
-                        "SELECT media_item_id FROM collection_member
-                         WHERE collection_id = ?1",
-                    )?;
-                    let members = statement
-                        .query_map([root_item_id], |row| row.get::<_, i64>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    drop(statement);
-                    let mut folder_statement = transaction.prepare(
-                        "SELECT folder_id FROM folder_item WHERE item_id = ?1",
-                    )?;
-                    let folder_ids = folder_statement
-                        .query_map([root_item_id], |row| row.get::<_, i64>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    drop(folder_statement);
-                    for folder_id in folder_ids {
-                        delta.folders.push(FolderProjectionChange {
-                            folder_id,
+                    if media_item_id == root_item_id {
+                        delta.roots.push(RootProjectionChange {
+                            item_id: media_item_id,
+                            lifecycle: Some(input.lifecycle),
+                        });
+                    } else if promoted {
+                        delta.items.push(ItemProjectionChange {
                             item_id: root_item_id,
+                            kind: crate::app::ItemKind::Collection,
                             present: true,
                         });
-                        for member_id in &members {
+                        delta.roots.push(RootProjectionChange {
+                            item_id: root_item_id,
+                            lifecycle: Some(input.lifecycle),
+                        });
+                        let mut statement = transaction.prepare(
+                            "SELECT media_item_id FROM collection_member
+                         WHERE collection_id = ?1",
+                        )?;
+                        let members = statement
+                            .query_map([root_item_id], |row| row.get::<_, i64>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?;
+                        drop(statement);
+                        let mut folder_statement = transaction
+                            .prepare("SELECT folder_id FROM folder_item WHERE item_id = ?1")?;
+                        let folder_ids = folder_statement
+                            .query_map([root_item_id], |row| row.get::<_, i64>(0))?
+                            .collect::<rusqlite::Result<Vec<_>>>()?;
+                        drop(folder_statement);
+                        for folder_id in folder_ids {
                             delta.folders.push(FolderProjectionChange {
                                 folder_id,
-                                item_id: *member_id,
-                                present: false,
+                                item_id: root_item_id,
+                                present: true,
+                            });
+                            for member_id in &members {
+                                delta.folders.push(FolderProjectionChange {
+                                    folder_id,
+                                    item_id: *member_id,
+                                    present: false,
+                                });
+                            }
+                        }
+                        for member_id in members {
+                            delta.roots.push(RootProjectionChange {
+                                item_id: member_id,
+                                lifecycle: None,
+                            });
+                            delta.memberships.push(MembershipProjectionChange {
+                                collection_id: root_item_id,
+                                media_id: member_id,
+                                present: true,
                             });
                         }
-                    }
-                    for member_id in members {
-                        delta.roots.push(RootProjectionChange {
-                            item_id: member_id,
-                            lifecycle: None,
-                        });
+                    } else {
                         delta.memberships.push(MembershipProjectionChange {
                             collection_id: root_item_id,
-                            media_id: member_id,
+                            media_id: media_item_id,
                             present: true,
                         });
                     }
-                } else {
-                    delta.memberships.push(MembershipProjectionChange {
-                        collection_id: root_item_id,
-                        media_id: media_item_id,
-                        present: true,
-                    });
-                }
-                if root_visible {
-                    attach_target_folder(
-                        transaction,
-                        input.target_folder_id,
-                        root_item_id,
-                        &mut delta,
-                    )?;
-                }
-                delta.tags.extend(tag_ids.into_iter().map(|tag_id| TagProjectionChange {
-                    media_id: media_item_id,
-                    tag_id,
-                    present: true,
-                }));
-                Ok(((media_item_id, root_item_id, false, promoted), delta, true))
-            },
-            |projections, delta| projections.apply_structure_delta(delta),
-        )?;
+                    if root_visible {
+                        attach_target_folders(
+                            transaction,
+                            input.target_folder_id,
+                            &input.target_folder_ids,
+                            root_item_id,
+                            &mut delta,
+                        )?;
+                    }
+                    delta
+                        .tags
+                        .extend(tag_ids.into_iter().map(|tag_id| TagProjectionChange {
+                            media_id: media_item_id,
+                            tag_id,
+                            present: true,
+                        }));
+                    Ok(((media_item_id, root_item_id, false, promoted), delta, true))
+                },
+                |projections, delta| projections.apply_structure_delta(delta),
+            )?;
 
         let receipt = changed.then(|| MutationReceipt {
             revision,
@@ -256,7 +273,7 @@ impl Application {
                     resources::DUPLICATES.to_string(),
                     resources::TASKS.to_string(),
                 ];
-                if input.target_folder_id.is_some() {
+                if input.target_folder_id.is_some() || !input.target_folder_ids.is_empty() {
                     changed_resources.push(resources::FOLDERS.to_string());
                 }
                 changed_resources
@@ -340,6 +357,25 @@ fn attach_target_folder(
     Ok(changed)
 }
 
+fn attach_target_folders(
+    transaction: &Transaction<'_>,
+    legacy_folder_id: Option<i64>,
+    folder_ids: &[i64],
+    root_item_id: i64,
+    delta: &mut StructureProjectionDelta,
+) -> rusqlite::Result<bool> {
+    let mut changed = false;
+    if let Some(folder_id) = legacy_folder_id {
+        changed |= attach_target_folder(transaction, Some(folder_id), root_item_id, delta)?;
+    }
+    for &folder_id in folder_ids {
+        if Some(folder_id) != legacy_folder_id {
+            changed |= attach_target_folder(transaction, Some(folder_id), root_item_id, delta)?;
+        }
+    }
+    Ok(changed)
+}
+
 fn validate_input(input: &PreparedMediaInput) -> Result<(), String> {
     if input.file_hash.trim().is_empty() {
         return Err("A physical file hash is required".to_string());
@@ -347,7 +383,9 @@ fn validate_input(input: &PreparedMediaInput) -> Result<(), String> {
     if input.size_bytes < 0 {
         return Err("Media size cannot be negative".to_string());
     }
-    if !input.mime_type.starts_with("image/") && !input.mime_type.starts_with("video/") {
+    if !crate::media_processing::formats::is_supported_mime(&input.mime_type)
+        || input.mime_type == "application/zip"
+    {
         return Err(format!("Unsupported media type: {}", input.mime_type));
     }
     if let Some(source) = &input.source {
@@ -571,22 +609,24 @@ fn settle_source_post_root(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     drop(stmt);
 
+    if !source.group_post && !source.force_collection {
+        insert_root(transaction, new_media_item_id, lifecycle)?;
+        return Ok((new_media_item_id, false, true));
+    }
+
     let provisional_collection = provisional_source_collection(transaction, source_post_id)?;
-    if current_root.is_none() && (provisional_collection.is_some() || !source.post_complete) {
+    if current_root.is_none()
+        && (source.force_collection || provisional_collection.is_some() || !source.post_complete)
+    {
         let collection_id = if let Some(collection_id) = provisional_collection {
             collection_id
         } else {
             transaction.execute(
-                "INSERT INTO library_item (item_key, kind, created_at, updated_at)
-                 VALUES (?1, 'collection', ?2, ?2)",
-                params![new_key("collection"), now],
+                "INSERT INTO library_item (item_key, kind, label, created_at, updated_at)
+                 VALUES (?1, 'collection', ?2, ?3, ?3)",
+                params![new_key("collection"), source.title, now],
             )?;
-            let collection_id = transaction.last_insert_rowid();
-            transaction.execute(
-                "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
-                params![media_ids[0], collection_id],
-            )?;
-            collection_id
+            transaction.last_insert_rowid()
         };
         for media_id in &media_ids {
             transaction.execute(
@@ -598,6 +638,7 @@ fn settle_source_post_root(
                 params![collection_id, RANK_GAP, source_post_id, media_id],
             )?;
         }
+        crate::operations_v2::sync_collection_cover(transaction, collection_id)?;
         if source.post_complete {
             insert_root(transaction, collection_id, lifecycle)?;
             transaction.execute(
@@ -630,9 +671,9 @@ fn settle_source_post_root(
                 return Err(invalid("Source post items cannot cross lifecycle scopes"));
             }
             transaction.execute(
-                "INSERT INTO library_item (item_key, kind, created_at, updated_at)
-                 VALUES (?1, 'collection', ?2, ?2)",
-                params![new_key("collection"), now],
+                "INSERT INTO library_item (item_key, kind, label, created_at, updated_at)
+                 VALUES (?1, 'collection', ?2, ?3, ?3)",
+                params![new_key("collection"), source.title, now],
             )?;
             let collection_id = transaction.last_insert_rowid();
             insert_root(transaction, collection_id, lifecycle)?;
@@ -650,10 +691,7 @@ fn settle_source_post_root(
                     params![collection_id, media_id, (index as i64 + 1) * RANK_GAP],
                 )?;
             }
-            transaction.execute(
-                "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
-                params![media_ids[0], collection_id],
-            )?;
+            crate::operations_v2::sync_collection_cover(transaction, collection_id)?;
             transaction.execute(
                 "UPDATE source_post SET root_item_id = ?1, updated_at = ?2
                  WHERE source_post_id = ?3",
@@ -663,11 +701,18 @@ fn settle_source_post_root(
         }
         (Some(root_id), _) if root_kind(transaction, root_id)? == "collection" => {
             transaction.execute(
+                "UPDATE library_item
+                 SET label = ?1, updated_at = ?2
+                 WHERE item_id = ?3 AND (label IS NULL OR TRIM(label) = '')",
+                params![source.title, now, root_id],
+            )?;
+            transaction.execute(
                 "INSERT INTO collection_member
                      (collection_id, media_item_id, position_rank)
                  VALUES (?1, ?2, ?3)",
                 params![root_id, new_media_item_id, (source.position + 1) * RANK_GAP],
             )?;
+            crate::operations_v2::sync_collection_cover(transaction, root_id)?;
             Ok((root_id, false, true))
         }
         (Some(root_id), _) => Ok((root_id, false, true)),
@@ -711,44 +756,61 @@ fn insert_tags(
     provenance_mask: i64,
     external: bool,
 ) -> rusqlite::Result<Vec<i64>> {
-    let mut tag_ids = BTreeSet::new();
-    for tag in tags {
-        let parsed = if external {
-            crate::tag_name_v2::parse_external(tag)
-        } else {
-            crate::tag_name_v2::parse_local(tag)
-        };
-        let Ok((namespace, subtag)) = parsed else {
-            continue;
-        };
-        transaction.execute(
-            "INSERT INTO tag (namespace, subtag) VALUES (?1, ?2)
-             ON CONFLICT(namespace, subtag) DO NOTHING",
-            params![namespace, subtag],
-        )?;
-        let tag_id: i64 = transaction.query_row(
-            "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
-            params![namespace, subtag],
-            |row| row.get(0),
-        )?;
-        let changed = transaction.execute(
-            "INSERT INTO media_tag (media_item_id, tag_id, source, provenance_mask)
-             VALUES (?1, ?2, ?4, ?3)
-             ON CONFLICT(media_item_id, tag_id, source) DO UPDATE SET
-                 provenance_mask = media_tag.provenance_mask | excluded.provenance_mask
-             WHERE media_tag.provenance_mask <> (media_tag.provenance_mask | excluded.provenance_mask)",
-            params![
-                media_item_id,
-                tag_id,
-                provenance_mask,
-                if external { "remote" } else { "local" }
-            ],
-        )?;
-        if changed != 0 {
-            tag_ids.insert(tag_id);
-        }
+    let parsed = tags
+        .iter()
+        .filter_map(|tag| {
+            if external {
+                crate::tag_name_v2::parse_external(tag)
+            } else {
+                crate::tag_name_v2::parse_local(tag)
+            }
+            .ok()
+        })
+        .collect::<BTreeSet<_>>();
+    if parsed.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(tag_ids.into_iter().collect())
+    let encoded = serde_json::to_string(&parsed)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+
+    transaction.execute(
+        "WITH input(namespace, subtag) AS (
+             SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')
+             FROM json_each(?1)
+         )
+         INSERT INTO tag (namespace, subtag)
+         SELECT namespace, subtag FROM input WHERE 1
+         ON CONFLICT(namespace, subtag) DO NOTHING",
+        [&encoded],
+    )?;
+
+    let mut statement = transaction.prepare(
+        "WITH input(namespace, subtag) AS (
+             SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')
+             FROM json_each(?1)
+         )
+         INSERT INTO media_tag (media_item_id, tag_id, source, provenance_mask)
+         SELECT ?2, t.tag_id, ?3, ?4
+         FROM input JOIN tag t USING (namespace, subtag)
+         WHERE 1
+         ON CONFLICT(media_item_id, tag_id, source) DO UPDATE SET
+             provenance_mask = media_tag.provenance_mask | excluded.provenance_mask
+         WHERE media_tag.provenance_mask <>
+             (media_tag.provenance_mask | excluded.provenance_mask)
+         RETURNING tag_id",
+    )?;
+    let tag_ids = statement
+        .query_map(
+            params![
+                encoded,
+                media_item_id,
+                if external { "remote" } else { "local" },
+                provenance_mask,
+            ],
+            |row| row.get(0),
+        )?
+        .collect();
+    tag_ids
 }
 
 fn enqueue_derivatives(
@@ -759,11 +821,26 @@ fn enqueue_derivatives(
     enqueue_ai: bool,
     now: &str,
 ) -> rusqlite::Result<()> {
-    let mut work = BTreeSet::from(["thumbnail", "dominant_colors"]);
-    if input.mime_type.starts_with("image/") {
-        work.insert("perceptual_hash");
+    let capabilities = crate::media_capabilities::capabilities_for_stored_media(
+        &input.mime_type,
+        input.frame_count,
+    );
+    // Queue the user-visible derivative first. The worker claims in work_id
+    // order, so this order is the ingestion priority contract rather than an
+    // incidental alphabetical sort.
+    let mut work = Vec::with_capacity(3);
+    if capabilities.can_dominant_colors {
+        work.push("dominant_colors");
+    }
+    if capabilities.can_perceptual_hash {
+        // Color analysis and pHash both consume the same reduced thumbnail.
+        // The dominant-colors worker writes both when available, avoiding a
+        // second queue claim and thumbnail decode for normal image ingest.
+        if !capabilities.can_dominant_colors {
+            work.push("perceptual_hash");
+        }
         if enqueue_ai {
-            work.insert("ai_tag");
+            work.push("ai_tag");
         }
     }
     for work_type in work {
@@ -776,6 +853,54 @@ fn enqueue_derivatives(
             params![media_item_id, file_id, work_type, now],
         )?;
     }
+    Ok(())
+}
+
+fn enqueue_root_thumbnail(
+    transaction: &Transaction<'_>,
+    root_item_id: i64,
+    now: &str,
+) -> rusqlite::Result<()> {
+    let target = transaction
+        .query_row(
+            "SELECT
+                 CASE WHEN li.kind = 'collection' THEN li.cover_media_item_id ELSE lr.item_id END,
+                 ma.file_id,
+                 mf.mime_type,
+                 mf.frame_count
+             FROM library_root lr
+             JOIN library_item li ON li.item_id = lr.item_id
+             JOIN media_asset ma ON ma.item_id = CASE
+                 WHEN li.kind = 'collection' THEN li.cover_media_item_id ELSE lr.item_id END
+             JOIN media_file mf ON mf.file_id = ma.file_id
+             WHERE lr.item_id = ?1",
+            [root_item_id],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, Option<i64>>(3)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((media_item_id, file_id, mime_type, frame_count)) = target else {
+        return Ok(());
+    };
+    if !crate::media_capabilities::capabilities_for_stored_media(&mime_type, frame_count)
+        .can_thumbnail()
+    {
+        return Ok(());
+    }
+    transaction.execute(
+        "INSERT INTO work_item (
+             media_item_id, file_id, work_type, status, attempt_count,
+             available_at, created_at, updated_at
+         ) VALUES (?1, ?2, 'thumbnail', 'pending', 0, ?3, ?3, ?3)
+         ON CONFLICT DO NOTHING",
+        params![media_item_id, file_id, now],
+    )?;
     Ok(())
 }
 
@@ -820,7 +945,7 @@ fn new_key(prefix: &str) -> String {
 mod tests {
     use std::sync::Arc;
 
-    use super::{PreparedMediaInput, SourcePostInput};
+    use super::{insert_tags, PreparedMediaInput, SourcePostInput};
     use crate::app::{Application, ItemTarget, Lifecycle};
     use crate::store::Store;
 
@@ -848,6 +973,8 @@ mod tests {
                 item_key: item.to_string(),
                 position,
                 post_complete: true,
+                force_collection: false,
+                group_post: true,
                 canonical_post_url: None,
                 canonical_media_url: None,
                 creator_name: None,
@@ -857,6 +984,7 @@ mod tests {
                 metadata_json: None,
             }),
             target_folder_id: None,
+            target_folder_ids: Vec::new(),
         }
     }
 
@@ -890,6 +1018,18 @@ mod tests {
             .projections()
             .inbox_bitmap()
             .contains(first.media_item_id.0 as u32));
+        let second_thumbnail_jobs = app
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT COUNT(*) FROM work_item
+                     WHERE media_item_id = ?1 AND work_type = 'thumbnail'",
+                    [second.media_item_id.0],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(second_thumbnail_jobs, 0);
         let other_post = app
             .ingest_prepared(&input("same", "post-b", "a", 0))
             .unwrap();
@@ -909,6 +1049,46 @@ mod tests {
                 assert_eq!(files, 2);
                 assert_eq!(media, 3);
                 assert_eq!(roots, 2);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn ungrouped_source_post_creates_one_root_per_media_item() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        let mut first_input = input("first", "post", "a", 0);
+        first_input.source.as_mut().unwrap().group_post = false;
+        first_input.source.as_mut().unwrap().post_complete = false;
+        let first = app.ingest_prepared(&first_input).unwrap();
+
+        let mut second_input = input("second", "post", "b", 1);
+        second_input.source.as_mut().unwrap().group_post = false;
+        let second = app.ingest_prepared(&second_input).unwrap();
+
+        assert_eq!(first.media_item_id, first.root_item_id);
+        assert_eq!(second.media_item_id, second.root_item_id);
+        assert!(!first.promoted_to_collection);
+        assert!(!second.promoted_to_collection);
+        app.store()
+            .read(|connection| {
+                let roots: i64 =
+                    connection
+                        .query_row("SELECT COUNT(*) FROM library_root", [], |row| row.get(0))?;
+                let collection_members: i64 =
+                    connection.query_row("SELECT COUNT(*) FROM collection_member", [], |row| {
+                        row.get(0)
+                    })?;
+                let post_root: Option<i64> = connection.query_row(
+                    "SELECT root_item_id FROM source_post
+                     WHERE site_id = 'example' AND post_key = 'post'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(roots, 2);
+                assert_eq!(collection_members, 0);
+                assert_eq!(post_root, None);
                 Ok(())
             })
             .unwrap();
@@ -963,6 +1143,70 @@ mod tests {
         .unwrap();
         let error = app.ingest_prepared(&input).unwrap_err();
         assert!(error.contains("cannot be resurrected"));
+    }
+
+    #[test]
+    fn tag_ingest_deduplicates_inputs_and_reports_only_changed_assignments() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        let mut media = input("tag-hash", "tag-post", "tag-item", 0);
+        media.tags = vec![
+            "general:first".to_string(),
+            "general:first".to_string(),
+            "general:second".to_string(),
+        ];
+        let result = app.ingest_prepared(&media).unwrap();
+
+        app.store()
+            .read(|connection| {
+                let assignments: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM media_tag WHERE media_item_id = ?1",
+                    [result.media_item_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(assignments, 2);
+                Ok(())
+            })
+            .unwrap();
+
+        app.store()
+            .transaction(|transaction| {
+                let unchanged = insert_tags(
+                    transaction,
+                    result.media_item_id.0,
+                    &["general:first".to_string(), "general:first".to_string()],
+                    1,
+                    true,
+                )?;
+                assert!(unchanged.is_empty());
+
+                let changed = insert_tags(
+                    transaction,
+                    result.media_item_id.0,
+                    &["general:first".to_string(), "general:first".to_string()],
+                    2,
+                    true,
+                )?;
+                assert_eq!(changed.len(), 1);
+                Ok(())
+            })
+            .unwrap();
+
+        app.store()
+            .read(|connection| {
+                let mask: i64 = connection.query_row(
+                    "SELECT mt.provenance_mask
+                     FROM media_tag mt JOIN tag t ON t.tag_id = mt.tag_id
+                     WHERE mt.media_item_id = ?1
+                       AND t.namespace = 'general' AND t.subtag = 'first'
+                       AND mt.source = 'remote'",
+                    [result.media_item_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(mask, 3);
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
@@ -1115,16 +1359,68 @@ mod tests {
             .store()
             .read(|connection| {
                 let mut statement =
-                    connection.prepare("SELECT work_type FROM work_item ORDER BY work_type")?;
+                    connection.prepare("SELECT work_type FROM work_item ORDER BY work_id")?;
                 let rows = statement
                     .query_map([], |row| row.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
                 Ok(rows)
             })
             .unwrap();
-        assert_eq!(
-            work_types,
-            ["ai_tag", "dominant_colors", "perceptual_hash", "thumbnail"]
-        );
+        assert_eq!(work_types, ["thumbnail", "dominant_colors", "ai_tag"]);
+    }
+
+    #[test]
+    fn audio_ingest_enqueues_thumbnail_without_palette() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        let mut audio = input("audio-hash", "audio-post", "track", 0);
+        audio.mime_type = "audio/mpeg".to_string();
+        audio.pixel_width = None;
+        audio.pixel_height = None;
+        audio.frame_count = None;
+        audio.duration_ms = Some(12_000);
+        audio.has_audio = true;
+
+        app.ingest_prepared(&audio).unwrap();
+
+        let work_types: Vec<String> = app
+            .store()
+            .read(|connection| {
+                let mut statement =
+                    connection.prepare("SELECT work_type FROM work_item ORDER BY work_id")?;
+                let rows = statement
+                    .query_map([], |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap();
+        assert_eq!(work_types, ["thumbnail"]);
+    }
+
+    #[test]
+    fn forced_source_container_with_one_item_is_still_a_collection() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        let mut archived = input("archive-hash", "zip:one", "only", 0);
+        archived.source.as_mut().unwrap().force_collection = true;
+
+        let result = app.ingest_prepared(&archived).unwrap();
+
+        assert_ne!(result.media_item_id, result.root_item_id);
+        let (kind, members): (String, i64) = app
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT li.kind,
+                            (SELECT COUNT(*) FROM collection_member cm
+                             WHERE cm.collection_id = li.item_id)
+                     FROM library_item li WHERE li.item_id = ?1",
+                    [result.root_item_id.0],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+            })
+            .unwrap();
+        assert_eq!(kind, "collection");
+        assert_eq!(members, 1);
     }
 }

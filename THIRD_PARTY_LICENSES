@@ -54,11 +54,11 @@ FFmpeg is invoked as a subprocess. Its source code is available at:
 gallery-dl
 ----------
 Version: 1.31.7
-Source:  https://github.com/mikf/gallery-dl
+Source:  https://codeberg.org/mikf/gallery-dl
 License: GPL-2.0-only
 
 gallery-dl is free software licensed under the GNU General Public License
-version 2. Source code is available at https://github.com/mikf/gallery-dl.
+version 2. Source code is available at https://codeberg.org/mikf/gallery-dl.
 
 On macOS, gallery-dl is distributed as a Python wheel and invoked via a
 wrapper script that calls `python3 -m gallery_dl`. On Windows and Linux,
@@ -220,6 +220,7 @@ All direct NPM application dependencies are MIT-licensed unless noted otherwise.
 
 Application
 -----------
+  @ruffle-rs/ruffle       — MIT OR Apache-2.0
   electron-updater        — MIT
   jotai                   — MIT
   @mantine/core           — MIT
@@ -228,6 +229,15 @@ Application
   @tanstack/react-virtual — MIT
   react                   — MIT
   react-dom               — MIT
+  pdfjs-dist              — Apache-2.0
+  @jsquash/jxl            — Apache-2.0
+  docx-preview            — Apache-2.0
+  @office-kit/pptx        — MIT
+  @office-kit/pptx-preview — MIT
+  djvu-rs                 — MIT
+  jszip                   — MIT
+  marked                  — MIT
+  rtf.js                  — MIT
 
 Dev
 ---

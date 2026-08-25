@@ -26,20 +26,15 @@
 }
 
 .icon {
-  display: flex;
-  align-items: center;
-  justify-content: center;
   width: var(--sidebar-glyph-column);
   min-width: var(--sidebar-glyph-column);
-  height: var(--sidebar-row-height);
+  height: 26px;
   margin-right: 0;
-  border-radius: 4px;
-  color: var(--sidebar-icon-color, var(--color-text-primary));
-  flex-shrink: 0;
+  border-radius: 6px;
 }
 
 .name {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   font-size: 13px;
   font-weight: 700;
@@ -52,7 +47,7 @@
 .chevron {
   display: flex;
   align-items: center;
-  margin-left: 2px;
+  margin-left: 4px;
   color: var(--sidebar-count-color, var(--color-text-tertiary));
   flex-shrink: 0;
   opacity: 0.7;

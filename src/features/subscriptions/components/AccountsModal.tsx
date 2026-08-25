@@ -16,7 +16,7 @@ export function AccountsModal({
   onClose: () => void;
 }) {
   return (
-    <GlassModal open={open} onClose={onClose} title="Site accounts" size="lg" flush>
+    <GlassModal open={open} onClose={onClose} title="Site accounts" size="xl" flush>
       <AuthWorkspace externalSelectedSiteId={focusSiteId} />
     </GlassModal>
   );

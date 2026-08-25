@@ -4,6 +4,7 @@ import { buildTileSpatialIndex, type TileSpatialIndex } from '../layout/spatialI
 import { adaptGridItem, type CanvasRenderItem } from './renderItemAdapter';
 import type { PlanTile } from './thumbnailPlan';
 import type { GridViewMode, LayoutItem } from '../layout/types';
+import type { GridScrollPosition } from '../../../shared/types/gridScroll';
 
 export interface GridLayoutModel {
   items: CanvasRenderItem[];
@@ -43,14 +44,16 @@ export function collectThumbnailActivation(
     if (position.y + position.h >= viewportTop && position.y <= viewportBottom) {
       buffers.viewportHashes.add(item.hash);
     }
-    const planTile = buffers.planTiles[planCount] ?? { fileHash: '', mime: '', w: 0, h: 0, cy: 0 };
-    planTile.fileHash = item.thumbnailHash;
-    planTile.mime = item.mime;
-    planTile.w = position.w;
-    planTile.h = position.h;
-    planTile.cy = position.y + position.h / 2;
-    buffers.planTiles[planCount] = planTile;
-    planCount++;
+    if (!item.mime.startsWith('font/')) {
+      const planTile = buffers.planTiles[planCount] ?? { fileHash: '', mime: '', w: 0, h: 0, cy: 0 };
+      planTile.fileHash = item.thumbnailHash;
+      planTile.mime = item.mime;
+      planTile.w = position.w;
+      planTile.h = position.h;
+      planTile.cy = position.y + position.h / 2;
+      buffers.planTiles[planCount] = planTile;
+      planCount++;
+    }
   }
   buffers.planTiles.length = planCount;
 }
@@ -63,6 +66,28 @@ export function estimateGridScrollHeight(
 ): number {
   if (loadedCount === 0 || totalCount == null || totalCount <= loadedCount) return loadedHeight;
   return Math.max(loadedHeight, Math.round((loadedHeight / loadedCount) * totalCount));
+}
+
+export function captureGridScrollPosition(
+  scrollTop: number,
+  contentHeight: number,
+  viewportHeight: number,
+): GridScrollPosition {
+  const maxScrollTop = Math.max(0, contentHeight - viewportHeight);
+  return {
+    scrollTop: Math.max(0, scrollTop),
+    progress: maxScrollTop > 0 ? Math.min(1, Math.max(0, scrollTop / maxScrollTop)) : 0,
+  };
+}
+
+export function restoreGridScrollTop(
+  position: GridScrollPosition,
+  contentHeight: number,
+  viewportHeight: number,
+): number {
+  const maxScrollTop = Math.max(0, contentHeight - viewportHeight);
+  if (maxScrollTop === 0) return Math.max(0, position.scrollTop);
+  return Math.round(Math.min(1, Math.max(0, position.progress)) * maxScrollTop);
 }
 
 interface LayoutConfig {

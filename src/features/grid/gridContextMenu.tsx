@@ -8,20 +8,26 @@
  */
 
 import {
-  IconArrowsMaximize, IconExternalLink, IconFolderSearch, IconBrandFinder, IconAppWindow,
+  IconApps, IconArrowsMaximize, IconExternalLink, IconFolderSearch, IconBrandFinder, IconAppWindow,
   IconFolderMinus, IconFolderPlus,
   IconCopy, IconClipboardCopy, IconLink, IconBookmark, IconBookmarks,
   IconRefresh, IconTrash, IconArrowBackUp,
-  IconSelectAll, IconDeselect,
   IconSearch,
-  IconFileExport, IconFolder, IconStar,
-  IconEdit, IconStack2,
+  IconFileExport, IconFolder, IconPhoto, IconStar,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconAutoTag, IconPasteTags, IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
 import { IconFolderNewSelection } from '../../shared/ui/IconPicker/customIcons';
 import { buildContextMenuViewEntries } from './GridViewMenu';
 import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
+import {
+  DeselectAllIcon,
+  GroupCreateIcon,
+  GroupEditIcon,
+  GroupRemoveIcon,
+  SelectAllIcon,
+} from '../../shared/ui/icons/group-icons';
+import type { OpenWithOptions } from '../../platform/shellApi';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -30,7 +36,8 @@ function kbd(id: string): string | undefined {
   return def ? formatKeysDisplay(def.keys) : undefined;
 }
 
-interface GridMenuContext {
+export interface GridMenuContext {
+  surface?: 'grid' | 'viewer';
   selectionCount: number;
   querySelectionActive: boolean;
   aiTagEnabled?: boolean;
@@ -46,6 +53,9 @@ interface GridMenuContext {
   onDeselectAll: () => void;
   onOpen?: () => void;
   onOpenDefault?: (hash: string) => void;
+  openWithOptions?: OpenWithOptions | null;
+  onOpenWithApplication?: (hash: string, applicationPath: string) => void;
+  onOpenWithChooser?: (hash: string) => void;
   onRevealInFolder?: (hash: string) => void;
   onCopyFilePath?: (hash: string) => void;
   onCopyFile?: (hash: string) => void;
@@ -55,6 +65,7 @@ interface GridMenuContext {
   onPermanentDelete?: () => void;
   onOpenNewWindow?: (hash: string) => void;
   onAddToFolder?: () => void;
+  onAddToLastUsedFolder?: () => void;
   onRemoveFromFolder?: () => void;
   onOpenTagSelect?: () => void;
   onOpenAiTagger?: () => void;
@@ -62,20 +73,22 @@ interface GridMenuContext {
   onReject?: () => void;
   onRename?: () => void;
   onRegenerateThumbnails?: () => void;
+  onSetLibraryIcon?: (hash: string) => void;
   onCopyTags?: () => void;
   onPasteTags?: () => void;
   hasClipboardTags?: boolean;
   singleName?: string | null;
   singleMime?: string | null;
   singleKind?: 'media' | 'collection' | null;
-  containsCollection?: boolean;
-  onCopyLink?: (hash: string, mime: string) => void;
+  containsGroup?: boolean;
+  onCopyLink?: (link: string) => void;
   onNewFolderWithSelection?: () => void;
   onSearchByImage?: (engine: string, hash: string) => void;
   onSetRating?: (rating: number) => void;
   onExport?: () => void;
-  onOrganizeCollection?: () => void;
-  onEditCollection?: () => void;
+  onOrganizeGroup?: () => void;
+  onEditGroup?: () => void;
+  onUngroup?: () => void;
 }
 
 function sep(): MenuSeparator {
@@ -102,17 +115,144 @@ function item(
   };
 }
 
+export function buildEntityOpenContextEntries({
+  hash,
+  onOpenDefault,
+  openWithOptions,
+  onOpenWithApplication,
+  onOpenWithChooser,
+  onRevealInFolder,
+  onOpenNewWindow,
+}: {
+  hash: string;
+  onOpenDefault?: (hash: string) => void;
+  openWithOptions?: OpenWithOptions | null;
+  onOpenWithApplication?: (hash: string, applicationPath: string) => void;
+  onOpenWithChooser?: (hash: string) => void;
+  onRevealInFolder?: (hash: string) => void;
+  onOpenNewWindow?: (hash: string) => void;
+}): MenuEntry[] {
+  const entries: MenuEntry[] = [];
+  if (onOpenDefault) {
+    entries.push(item('Open with Default App', {
+      icon: <IconExternalLink size={15} />,
+      shortcut: kbd('file.openDefaultApp'),
+      action: () => onOpenDefault(hash),
+    }));
+  }
+  if (openWithOptions?.mode === 'submenu' && openWithOptions.applications.length > 0 && onOpenWithApplication) {
+    entries.push({
+      submenu: true,
+      label: 'Open With Other',
+      icon: <IconApps size={15} />,
+      children: openWithOptions.applications.map((application) => ({
+        label: application.isDefault ? `${application.name} (Default)` : application.name,
+        icon: application.iconDataUrl
+          ? <img alt="" height={16} src={application.iconDataUrl} width={16} />
+          : <IconApps size={15} />,
+        action: () => onOpenWithApplication(hash, application.path),
+      })),
+    });
+  } else if (openWithOptions?.mode === 'chooser' && onOpenWithChooser) {
+    entries.push(item('Open With Other...', {
+      icon: <IconApps size={15} />,
+      shortcut: kbd('file.openOtherApp'),
+      action: () => onOpenWithChooser(hash),
+    }));
+  }
+  if (onRevealInFolder) {
+    entries.push(item(isMac ? 'Reveal in Finder' : 'Show in Explorer', {
+      icon: isMac ? <IconBrandFinder size={15} /> : <IconFolderSearch size={15} />,
+      shortcut: kbd('file.revealInFolder'),
+      action: () => onRevealInFolder(hash),
+    }));
+  }
+  if (onOpenNewWindow) {
+    entries.push(item('Open in New Window', {
+      icon: <IconAppWindow size={15} />,
+      shortcut: kbd('file.openNewWindow'),
+      action: () => onOpenNewWindow(hash),
+    }));
+  }
+  return entries;
+}
+
+export function mediaLinkFor(hash: string, mime: string): string {
+  const extensions: Record<string, string> = {
+    'image/jpeg': 'jpg',
+    'image/png': 'png',
+    'image/gif': 'gif',
+    'image/webp': 'webp',
+    'video/mp4': 'mp4',
+    'video/webm': 'webm',
+  };
+  return `media://localhost/file/${hash}.${extensions[mime] ?? 'bin'}`;
+}
+
+export function buildEntityCopyContextEntries({
+  hash,
+  name,
+  mime,
+  onCopyFile,
+  onCopyFilePath,
+  onCopyName,
+  onCopyLink,
+}: {
+  hash: string;
+  name?: string | null;
+  mime?: string | null;
+  onCopyFile?: (hash: string) => void;
+  onCopyFilePath?: (hash: string) => void;
+  onCopyName?: (name: string) => void;
+  onCopyLink?: (link: string) => void;
+}): MenuEntry[] {
+  const entries: MenuEntry[] = [];
+  if (onCopyFile) {
+    entries.push(item('Copy', {
+      icon: <IconCopy size={15} />,
+      shortcut: kbd('edit.copy'),
+      action: () => onCopyFile(hash),
+    }));
+  }
+  if (onCopyFilePath) {
+    entries.push(item('Copy File Path', {
+      icon: <IconClipboardCopy size={15} />,
+      shortcut: kbd('edit.copyFilePath'),
+      action: () => onCopyFilePath(hash),
+    }));
+  }
+  if (name && onCopyName) {
+    entries.push(item('Copy Name', {
+      icon: <IconClipboardCopy size={15} />,
+      action: () => onCopyName(name),
+    }));
+  }
+  if (mime && onCopyLink) {
+    entries.push(item('Copy as Link', {
+      icon: <IconLink size={15} />,
+      action: () => onCopyLink(mediaLinkFor(hash, mime)),
+    }));
+  }
+  return entries;
+}
+
 /** Build context menu entries for right-clicking a tile. */
 export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const { selectionCount, singleSelected, singleHash, statusFilter, scopeKind } = ctx;
+  const viewerSurface = ctx.surface === 'viewer';
   const hasSelection = selectionCount > 0;
   const aiTagEnabled = ctx.aiTagEnabled ?? !!ctx.onOpenAiTagger;
+  const canSetLibraryIcon = singleSelected
+    && Boolean(singleHash)
+    && ctx.singleKind === 'media'
+    && Boolean(ctx.singleMime?.startsWith('image/'))
+    && Boolean(ctx.onSetLibraryIcon);
   const entries: MenuEntry[] = [];
 
   // ── Mixed selection (folders + entities) or folders-only: limited menu ──
   if (ctx.isMixed) {
-    entries.push(item('Select All', { shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
-    entries.push(item('Deselect All', { action: ctx.onDeselectAll }));
+    entries.push(item('Select All', { icon: <SelectAllIcon size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
+    entries.push(item('Deselect All', { icon: <DeselectAllIcon size={15} />, action: ctx.onDeselectAll }));
     if (ctx.onMoveToTrash) {
       entries.push(sep());
       entries.push(item('Move to Trash', { icon: <IconTrash size={15} />, action: ctx.onMoveToTrash }));
@@ -124,8 +264,8 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       entries.push(item('Open Folder', { icon: <IconFolder size={15} />, action: ctx.onOpen }));
       entries.push(sep());
     }
-    entries.push(item('Select All', { shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
-    entries.push(item('Deselect All', { action: ctx.onDeselectAll }));
+    entries.push(item('Select All', { icon: <SelectAllIcon size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
+    entries.push(item('Deselect All', { icon: <DeselectAllIcon size={15} />, action: ctx.onDeselectAll }));
     return entries;
   }
 
@@ -140,34 +280,47 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 
   // ── Open actions ──
   if (singleSelected) {
-    entries.push(item('Open', { icon: <IconArrowsMaximize size={15} />, shortcut: kbd('view.detailView'), action: ctx.onOpen }));
-    if (ctx.singleKind !== 'collection') {
-      entries.push(item('Open with Default App', {
-        icon: <IconExternalLink size={15} />,
-        shortcut: kbd('file.openDefaultApp'),
-        action: singleHash && ctx.onOpenDefault ? () => ctx.onOpenDefault!(singleHash!) : undefined,
-      }));
-      entries.push(item(isMac ? 'Reveal in Finder' : 'Show in Explorer', {
-        icon: isMac ? <IconBrandFinder size={15} /> : <IconFolderSearch size={15} />,
-        shortcut: kbd('file.revealInFolder'),
-        action: singleHash && ctx.onRevealInFolder ? () => ctx.onRevealInFolder!(singleHash!) : undefined,
-      }));
-      entries.push(item('Open in New Window', {
-        icon: <IconAppWindow size={15} />,
-        shortcut: kbd('file.openNewWindow'),
-        action: singleHash && ctx.onOpenNewWindow ? () => ctx.onOpenNewWindow!(singleHash!) : undefined,
+    if (!viewerSurface) {
+      entries.push(item('Open', { icon: <IconArrowsMaximize size={15} />, shortcut: kbd('view.detailView'), action: ctx.onOpen }));
+    }
+    if (ctx.singleKind !== 'collection' && singleHash) {
+      entries.push(...buildEntityOpenContextEntries({
+        hash: singleHash,
+        onOpenDefault: ctx.onOpenDefault,
+        openWithOptions: ctx.openWithOptions,
+        onOpenWithApplication: ctx.onOpenWithApplication,
+        onOpenWithChooser: ctx.onOpenWithChooser,
+        onRevealInFolder: ctx.onRevealInFolder,
+        onOpenNewWindow: ctx.onOpenNewWindow,
       }));
     }
+    if (entries.length > 0) entries.push(sep());
+  }
+
+  if (canSetLibraryIcon) {
+    entries.push(item('Set as Library Icon', {
+      icon: <IconPhoto size={15} />,
+      action: () => ctx.onSetLibraryIcon!(singleHash!),
+    }));
     entries.push(sep());
   }
 
   // ── View options ──
-  const viewEntries = buildContextMenuViewEntries();
-  for (const entry of viewEntries) entries.push(entry);
-  entries.push(sep());
+  if (!viewerSurface) {
+    const viewEntries = buildContextMenuViewEntries();
+    for (const entry of viewEntries) entries.push(entry);
+    entries.push(sep());
+  }
 
   // ── Organization ──
   if (hasSelection) {
+    if (ctx.onAddToLastUsedFolder) {
+      entries.push(item('Add to Last Used Folder', {
+        icon: <IconFolderPlus size={15} />,
+        shortcut: kbd('file.addToLastFolder'),
+        action: ctx.onAddToLastUsedFolder,
+      }));
+    }
     entries.push(item('Add to Folder', {
       icon: <IconFolderPlus size={15} />,
       shortcut: kbd('file.addToFolder'),
@@ -179,53 +332,42 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
         action: ctx.onNewFolderWithSelection,
       }));
     }
-    if (selectionCount > 1 && ctx.onOrganizeCollection) {
-      entries.push(item('Group into Collection...', {
-        icon: <IconStack2 size={15} />,
-        action: ctx.onOrganizeCollection,
+    if (selectionCount > 1 && ctx.onOrganizeGroup) {
+      entries.push(item('Group...', {
+        icon: <GroupCreateIcon size={15} />,
+        action: ctx.onOrganizeGroup,
       }));
     }
     if (singleSelected && ctx.singleKind === 'collection') {
-      entries.push(item('Edit Collection', {
-        icon: <IconEdit size={15} />,
-        action: ctx.onEditCollection,
+      entries.push(item('Edit Group', {
+        icon: <GroupEditIcon size={15} />,
+        action: ctx.onEditGroup,
+      }));
+      entries.push(item('Ungroup...', {
+        icon: <GroupRemoveIcon size={15} />,
+        action: ctx.onUngroup,
       }));
     }
     entries.push(sep());
   }
 
   // ── Rename ──
-  if (singleSelected) {
+  if (singleSelected && ctx.onRename) {
     entries.push(item('Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.rename'), action: ctx.onRename }));
-  }
-  if (singleSelected) {
     entries.push(sep());
   }
 
   // ── Copy ──
   if (singleSelected && singleHash && ctx.singleKind !== 'collection') {
-    entries.push(item('Copy', {
-      icon: <IconCopy size={15} />,
-      shortcut: kbd('edit.copy'),
-      action: ctx.onCopyFile ? () => ctx.onCopyFile!(singleHash!) : undefined,
+    entries.push(...buildEntityCopyContextEntries({
+      hash: singleHash,
+      name: ctx.singleName,
+      mime: ctx.singleMime,
+      onCopyFile: ctx.onCopyFile,
+      onCopyFilePath: ctx.onCopyFilePath,
+      onCopyName: ctx.onCopyName,
+      onCopyLink: ctx.onCopyLink,
     }));
-    entries.push(item('Copy File Path', {
-      icon: <IconClipboardCopy size={15} />,
-      shortcut: kbd('edit.copyFilePath'),
-      action: ctx.onCopyFilePath ? () => ctx.onCopyFilePath!(singleHash!) : undefined,
-    }));
-    if (ctx.singleName) {
-      entries.push(item('Copy Name', {
-        icon: <IconClipboardCopy size={15} />,
-        action: ctx.onCopyName ? () => ctx.onCopyName!(ctx.singleName!) : undefined,
-      }));
-    }
-    if (ctx.singleMime && ctx.onCopyLink) {
-      entries.push(item('Copy as Link', {
-        icon: <IconLink size={15} />,
-        action: () => ctx.onCopyLink!(singleHash!, ctx.singleMime!),
-      }));
-    }
     entries.push(sep());
   }
 
@@ -238,7 +380,9 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       action: ctx.onOpenAiTagger,
       disabled: !aiTagEnabled,
     }));
-    entries.push(item('Copy Tags', { icon: <IconBookmarks size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags }));
+    if (singleSelected) {
+      entries.push(item('Copy Tags', { icon: <IconBookmarks size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags }));
+    }
     entries.push(item('Paste Tags', { icon: <IconPasteTags size={15} />, shortcut: kbd('edit.pasteTags'), action: ctx.onPasteTags, disabled: !ctx.hasClipboardTags }));
     entries.push(sep());
   }
@@ -283,18 +427,20 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   }
 
   // ── Thumbnails ──
-  if (hasSelection && !ctx.containsCollection) {
+  if (hasSelection && !ctx.containsGroup) {
     const thumbLabel = selectionCount > 1 ? `Regenerate ${selectionCount} Thumbnails` : 'Regenerate Thumbnail';
     entries.push(item(thumbLabel, { icon: <IconRefresh size={15} />, shortcut: kbd('file.regenerateThumbnail'), action: ctx.onRegenerateThumbnails }));
     entries.push(sep());
   }
 
   // ── Selection ──
-  entries.push(item('Select All', { icon: <IconSelectAll size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
-  if (hasSelection) {
-    entries.push(item('Deselect All', { icon: <IconDeselect size={15} />, shortcut: kbd('edit.deselectAll'), action: ctx.onDeselectAll }));
+  if (!viewerSurface) {
+    entries.push(item('Select All', { icon: <SelectAllIcon size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
+    if (hasSelection) {
+      entries.push(item('Deselect All', { icon: <DeselectAllIcon size={15} />, shortcut: kbd('edit.deselectAll'), action: ctx.onDeselectAll }));
+    }
+    entries.push(sep());
   }
-  entries.push(sep());
 
   // ── Folder removal ──
   if (scopeKind === 'folder' && hasSelection) {
@@ -336,7 +482,7 @@ export function buildEmptyContextMenu(ctx: GridMenuContext): MenuEntry[] {
   for (const entry of viewEntries) entries.push(entry);
   entries.push(sep());
 
-  entries.push(item('Select All', { icon: <IconSelectAll size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
+  entries.push(item('Select All', { icon: <SelectAllIcon size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
 
   return entries;
 }

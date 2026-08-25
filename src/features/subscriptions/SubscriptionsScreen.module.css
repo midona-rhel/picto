@@ -11,27 +11,17 @@
   gap: 2px;
 }
 
-.emptyState,
-.issueCard {
+.emptyState {
   border: 1px solid var(--color-border-secondary);
   background: var(--color-surface-1);
   border-radius: 8px;
 }
 
-.heroTop,
 .heroActions,
-.issueHeader,
-.inlineActions,
-.sectionHeader {
+.inlineActions {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-}
-
-
-.heroTop,
-.sectionHeader {
-  justify-content: space-between;
 }
 
 
@@ -84,26 +74,7 @@
 .statusIdle {
   color: var(--color-text-secondary);
   border-color: var(--color-border-secondary);
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.content {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding: 10px 24px 24px;
-  box-sizing: border-box;
-}
-
-.hero {
-  padding: 8px 0 4px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  border: none;
-  background: none;
-  flex-shrink: 0;
+  background: var(--color-contrast-05);
 }
 
 .heroTitle {
@@ -119,16 +90,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
-.heroMeta {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  margin-top: 4px;
-}
-
-/* Tab buttons — same visual as titlebar icon buttons */
 
 .section {
   display: flex;
@@ -165,7 +126,7 @@
   font-family: inherit;
   color: var(--color-text-primary);
   border: 1px solid var(--color-border-primary);
-  background: rgba(247, 248, 248, 0.05);
+  background: var(--color-surface-hover);
   border-radius: 6px;
   cursor: pointer;
   transition: background 150ms ease;
@@ -176,7 +137,7 @@
 .button:hover,
 .buttonSecondary:hover,
 .buttonGhost:hover {
-  background: rgba(247, 248, 248, 0.1);
+  background: var(--color-surface-active);
 }
 
 .button:focus-visible,
@@ -213,24 +174,6 @@
 }
 
 
-.issueCard {
-  padding: var(--space-3);
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.linkButton {
-  appearance: none;
-  border: 0;
-  background: transparent;
-  color: var(--color-primary);
-  cursor: pointer;
-  padding: 0;
-  font: inherit;
-  text-align: left;
-}
-
 .emptyState {
   display: flex;
   flex-direction: column;
@@ -263,7 +206,7 @@
 
 .querySmallBtn:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--color-hover-overlay);
 }
 
 .querySmallBtn:disabled {
@@ -271,76 +214,9 @@
   pointer-events: none;
 }
 
-/* ── Live progress card ─────────────────────────────────────────── */
-
-.progressCard {
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 10px;
-  padding: 14px 16px;
-  background: var(--color-surface-1);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.progressPhases {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.progressPhase {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 11.5px;
-  color: var(--color-text-tertiary);
-}
-
-.progressPhaseActive {
-  color: var(--color-text-primary);
-  font-weight: 600;
-}
-
-.progressPhaseDivider {
-  flex: 0 0 16px;
-  height: 1px;
-  background: var(--color-border-secondary);
-}
-
-.progressCounters {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-}
-
-.progressCounter {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-.progressCounterValue {
-  font-size: 16px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-  font-variant-numeric: tabular-nums;
-}
-
-.progressCounterLabel {
-  font-size: 10.5px;
-  color: var(--color-text-tertiary);
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.progressTicker {
-  font-size: 11.5px;
-  color: var(--color-text-secondary);
-  font-variant-numeric: tabular-nums;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.querySmallBtnActive {
+  color: var(--color-accent);
+  opacity: 1;
 }
 
 /* ── Autocomplete dropdown ──────────────────────────────────────── */
@@ -359,6 +235,7 @@
   box-shadow: var(--box-border-shadow, 0 8px 24px rgba(0, 0, 0, 0.4)); /* guard:allow — shadow fallback */
   max-height: 260px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 4px;
 }
 
@@ -400,48 +277,10 @@
   font-weight: 600;
   padding: 1px 5px;
   border-radius: 4px;
-  background: var(--color-surface-3);
+  background: var(--color-surface-2);
   color: var(--color-text-secondary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-}
-
-/* ── Health tab ─────────────────────────────────────────────────── */
-
-.healthGroup {
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 8px;
-  overflow: hidden;
-  margin-bottom: 10px;
-}
-
-.healthGroupHeader {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  background: var(--color-surface-2);
-  font-size: 12px;
-  color: var(--color-text-primary);
-}
-
-.healthGroupReason {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-family: ui-monospace, monospace;
-  font-size: 11px;
-}
-
-.healthRow {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 7px 12px;
-  border-top: 1px solid var(--color-border-secondary);
-  font-size: 12px;
-  color: var(--color-text-secondary);
 }
 
 /* ── Detail pane layout (full width, wide-mode columns) ─────────── */
@@ -451,8 +290,450 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
+}
+
+/* ── Fixed subscription detail workspace ───────────────────────── */
+
+.subscriptionWorkspace {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+  padding-right: 8px;
+  box-sizing: border-box;
+  overflow: hidden;
+  font-family: var(--font-family-ui);
+}
+
+.subscriptionRail {
+  flex: 0 0 280px;
+  min-width: 280px;
+  min-height: 0;
+  padding: 8px 0 8px 8px;
+  box-sizing: border-box;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+.subscriptionIdentity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  padding: 36px 16px 20px;
+}
+
+.subscriptionCover {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  margin-bottom: 16px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-surface-1);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.1);
+}
+
+.subscriptionCover img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.subscriptionCoverFallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-tertiary);
+  font-size: 28px;
+  font-weight: 600;
+}
+
+.subscriptionName {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
+  margin-bottom: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  user-select: text;
+}
+
+.subscriptionStatus {
+  min-height: 22px;
+  max-width: calc(100% - 24px);
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  justify-content: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subscriptionActions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 24px;
+  align-items: center;
+  gap: 6px;
+  margin: 0 16px 20px;
+}
+
+.subscriptionActions > button {
+  min-width: 0;
+  height: 30px;
+  padding-inline: 10px;
+}
+
+.subscriptionActions > button:last-child {
+  padding: 0;
+}
+
+.subscriptionRunProgress {
+  min-height: 38px;
+  margin: -8px 16px 12px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 120ms ease;
+}
+
+.subscriptionRunProgressActive {
+  opacity: 1;
+  visibility: visible;
+}
+
+.subscriptionRunProgressLabel {
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--color-text-tertiary);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+
+.subscriptionRunProgressTrack {
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-surface-active);
+}
+
+.subscriptionRunProgressTrack > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+  transition: width 160ms ease;
+}
+
+.subscriptionProperties,
+.subscriptionDestination {
+  margin: 0 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-primary);
+}
+
+.subscriptionProperties {
+  display: flex;
+  flex-direction: column;
+}
+
+.subscriptionProperty {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  line-height: 26px;
+  margin-bottom: 2px;
+}
+
+.subscriptionProperty > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font: 400 12px/26px var(--font-family-ui);
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subscriptionPostsPerRunInput {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 100px;
+}
+
+.subscriptionPostsPerRunInput input {
+  height: 26px;
+  padding: 0 26px 0 8px;
+  font-size: 12px;
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+.subscriptionPostsPerRunInput input::-webkit-inner-spin-button,
+.subscriptionPostsPerRunInput input::-webkit-outer-spin-button {
+  appearance: none;
+  margin: 0;
+}
+
+.subscriptionPostsPerRunStepper {
+  position: absolute;
+  top: 3px;
+  right: 4px;
+  bottom: 3px;
+  width: 16px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+
+.subscriptionPostsPerRunStepper button {
+  flex: 1;
+  min-height: 0;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--color-text-primary);
+  opacity: 0.5;
+  cursor: pointer;
+  transition: opacity 120ms ease;
+}
+
+.subscriptionPostsPerRunStepper button:hover,
+.subscriptionPostsPerRunStepper button:focus-visible {
+  opacity: 1;
+}
+
+.subscriptionPostsPerRunStepper button:focus-visible {
+  outline: 1px solid var(--color-border-primary);
+  outline-offset: 0;
+}
+
+.subscriptionPostsPerRunStepper button:disabled {
+  opacity: 0.2;
+  cursor: default;
+}
+
+.subscriptionDestination {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.subscriptionRailHeading {
+  color: var(--color-text-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.subscriptionRailField {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--color-text-tertiary);
+  font-size: 11.5px;
+}
+
+.subscriptionDestinationValues {
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  align-content: flex-start;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.subscriptionDestinationAdd,
+.subscriptionDestinationEmpty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.subscriptionDestinationAdd {
+  width: 26px;
+  padding: 0;
+}
+
+.subscriptionDestinationEmpty {
+  width: 100%;
+  gap: 8px;
+  padding: 0 24px 0 16px;
+  font: 400 12px/26px var(--font-family-ui);
+}
+
+.subscriptionDestinationAdd:hover,
+.subscriptionDestinationEmpty:hover {
+  background: var(--color-surface-active);
+  color: var(--color-text-primary);
+}
+
+.subscriptionOverflowButton {
+  width: 30px;
+  height: 30px;
+  aspect-ratio: 1;
+  border-radius: 6px;
+}
+
+.subscriptionDataPlane {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  margin: 8px 0;
+  overflow: hidden;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 8px;
+  background: var(--color-rail-surface);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.25), 0 0 12px rgba(0, 0, 0, 0.15);
+  container-type: inline-size;
+}
+
+.subscriptionDataHeader {
+  flex: 0 0 48px;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border-bottom: 0;
+  opacity: 0.8;
+}
+
+.subscriptionTabs {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 6px;
+  background: var(--color-footer-surface);
+}
+
+.subscriptionTab {
+  position: relative;
+  z-index: 1;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font: 400 13px/28px var(--font-family-ui);
+  cursor: pointer;
+}
+
+.subscriptionTab:hover {
+  color: var(--color-text-secondary);
+}
+
+.subscriptionTabActive {
+  color: var(--color-text-primary);
+}
+
+.subscriptionTabActive::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  border-radius: 4px;
+  background: var(--color-surface-active);
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.2);
+}
+
+.subscriptionDataBody {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.subscriptionTableViewport {
+  position: absolute;
+  inset: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: 8px 16px 16px;
+  box-sizing: border-box;
+}
+
+.subscriptionTable,
+.subscriptionTableViewport > .historyTable {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.subscriptionTable .subscriptionTableHeader,
+.subscriptionTableViewport > .historyTable > .subscriptionTableHeader {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.subscriptionDataFooter {
+  flex: 0 0 52px;
+  min-height: 52px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  box-sizing: border-box;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.subscriptionDataFooter .addQueryRow {
+  width: 100%;
+  padding: 0;
+}
+
+.subscriptionWorkspaceEmpty {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-tertiary);
+  font-size: 13px;
 }
 
 /* ── Overflow menu ──────────────────────────────────────────────── */
@@ -462,14 +743,6 @@
 /* Query row actions appear on hover, card lifts slightly */
 
 /* Wizard site cards grow on hover */
-
-.fieldInline {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--color-text-tertiary);
-}
 
 /* ── Form groups (wizard, edit modal) ───────────────────────────── */
 
@@ -498,52 +771,10 @@
   color: var(--color-text-tertiary);
 }
 
-/* ── Dense detail sections ──────────────────────────────────────── */
-
-.detailSections {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  min-height: 0;
-  overflow-y: auto;
-  padding-bottom: 24px;
-}
-
-.detailSection {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.healthStack {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.subsectionTitle {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--color-text-secondary);
-}
-
 .sectionEmptyLine {
   font-size: 12.5px;
   color: var(--color-text-tertiary);
   padding: 4px 0;
-}
-
-.healthyLine {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12.5px;
-  color: var(--color-text-secondary);
-  padding: 4px 0;
-}
-
-.healthyLine svg {
-  color: var(--color-success, #5fb56b); /* guard:allow — success fallback */
 }
 
 /* ── Queries table ──────────────────────────────────────────────── */
@@ -551,40 +782,53 @@
 .qTable {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 8px;
-  background: var(--color-surface-1);
   overflow: hidden;
 }
 
-.qRow {
-  display: grid;
-  grid-template-columns: minmax(160px, 1fr) 110px 64px 64px 110px 130px 84px;
+.subscriptionTableRow {
   align-items: center;
-  gap: 10px;
   min-height: 32px;
   padding: 0 12px;
   font-size: 12.5px;
   color: var(--color-text-primary);
 }
 
-.qRow + .qRow {
+.subscriptionTableRow + .subscriptionTableRow {
   border-top: 1px solid var(--color-border-secondary);
 }
 
-.qRow:not(.qHeader):hover {
-  background: var(--color-surface-2);
+.subscriptionTableRow:not(.subscriptionTableHeader):hover {
+  background: var(--color-surface-hover);
 }
 
-.qHeader {
+.subscriptionTableHeader {
   min-height: 28px;
+  color: var(--color-text-tertiary);
+  background: var(--color-footer-surface);
   font-size: 10.5px;
   font-weight: 600;
-  text-transform: uppercase;
   letter-spacing: 0.05em;
-  color: var(--color-text-tertiary);
-  background: var(--color-black-10);
+  text-transform: uppercase;
   user-select: none;
+}
+
+.subscriptionTableHeader > * {
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  line-height: 1;
+  text-transform: inherit;
+}
+
+.qRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(72px, 0.28fr) 76px 76px minmax(82px, 110px) 76px;
+  gap: 10px;
+  min-width: 0;
+}
+
+.qRow > * {
+  min-width: 0;
 }
 
 .qCellName {
@@ -606,15 +850,24 @@
   border: none;
   background: none;
   padding: 0;
-  color: var(--color-warning, #e8a33d); /* guard:allow — warning fallback */
+  min-width: 0;
+  max-width: 140px;
+  overflow: hidden;
+  color: #f0ad91;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   cursor: pointer;
   flex-shrink: 0;
 }
 
-.qFailIcon {
-  display: inline-flex;
-  color: var(--color-warning, #e8a33d); /* guard:allow — warning fallback */
-  flex-shrink: 0;
+.qFailureText {
+  min-width: 0;
+  overflow: hidden;
+  color: #f0ad91;
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .qCellSite {
@@ -622,6 +875,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.qCompleteIcon {
+  flex: 0 0 auto;
+  color: var(--color-success, #5fb56b); /* guard:allow — success fallback */
 }
 
 .qCellNum {
@@ -689,6 +947,44 @@
   transition: opacity 100ms ease;
 }
 
+.queryStats {
+  display: flex;
+  flex-direction: column;
+}
+
+.queryStats > div {
+  min-height: 28px;
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--color-border-secondary);
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}
+
+.queryStats > div:last-child {
+  border-bottom: 0;
+}
+
+.queryStats strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--color-text-primary);
+  font-weight: 400;
+  text-align: right;
+}
+
+@container (max-width: 440px) {
+  .qRow {
+    grid-template-columns: minmax(0, 1fr) 44px 44px minmax(82px, 105px) 76px;
+  }
+
+  .qCellSite {
+    display: none;
+  }
+}
+
 .qRow:hover .qCellActions,
 .qRow:focus-within .qCellActions {
   opacity: 1;
@@ -707,40 +1003,13 @@
 .historyTable {
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 8px;
-  background: var(--color-surface-1);
   overflow: hidden;
 }
 
 .historyRow {
   display: grid;
   grid-template-columns: 150px 150px 90px 70px minmax(120px, 1fr);
-  align-items: center;
   gap: 10px;
-  min-height: 30px;
-  padding: 0 12px;
-  font-size: 12.5px;
-  color: var(--color-text-primary);
-}
-
-.historyRow + .historyRow {
-  border-top: 1px solid var(--color-border-secondary);
-}
-
-.historyRow:not(.historyHeader):hover {
-  background: var(--color-surface-2);
-}
-
-.historyHeader {
-  min-height: 28px;
-  font-size: 10.5px;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--color-text-tertiary);
-  background: var(--color-black-10);
-  user-select: none;
 }
 
 .historyNote {
@@ -762,6 +1031,55 @@
   text-align: left;
 }
 
+.problemTable {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.problemRow {
+  display: grid;
+  grid-template-columns: minmax(92px, 0.28fr) minmax(0, 1fr) minmax(82px, 110px) 52px;
+  gap: 10px;
+  min-width: 0;
+}
+
+.problemRow > * {
+  min-width: 0;
+}
+
+.problemMessage {
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.problemRow .qCellStatus {
+  text-overflow: ellipsis;
+}
+
+.problemTableActions {
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 12px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+@container (max-width: 440px) {
+  .problemRow {
+    grid-template-columns: minmax(80px, 0.35fr) minmax(0, 1fr) 52px;
+  }
+
+  .problemRow > :nth-child(3) {
+    display: none;
+  }
+}
+
 .historyMore:hover {
   background: var(--color-surface-2);
 }
@@ -773,28 +1091,29 @@
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 16px;
-  padding: 18px 28px 28px;
+  gap: 12px;
+  padding: 12px 16px 24px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 .followingHeader {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
 }
 
 .followingGrid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(164px, 1fr));
-  gap: 18px 14px;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 180px));
+  gap: 16px;
 }
 
 .followCard {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
   padding: 0;
   border: none;
   background: none;
@@ -809,16 +1128,15 @@
   position: relative;
   display: block;
   aspect-ratio: 1 / 1;
-  border-radius: 8px;
+  border-radius: 4px;
   overflow: hidden;
   border: 1px solid var(--color-border-secondary);
   background: var(--color-surface-2);
-  transition: border-color 120ms ease, transform 120ms ease;
+  transition: border-color 120ms ease;
 }
 
 .followCard:hover .followCover {
   border-color: var(--color-border-primary);
-  transform: scale(1.02);
 }
 
 .followCard:focus-visible {
@@ -857,7 +1175,7 @@
   font-weight: 700;
   color: var(--color-text-tertiary);
   background:
-    linear-gradient(160deg, rgba(255, 255, 255, 0.05), transparent),
+    linear-gradient(160deg, var(--color-contrast-05), transparent),
     var(--color-surface-2);
 }
 
@@ -870,7 +1188,7 @@
 
 .followNameText {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -889,185 +1207,6 @@
 }
 
 .followMeta {
-  font-size: 11.5px;
+  font-size: 11px;
   color: var(--color-text-tertiary);
-}
-
-.heroIdentity {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-
-.heroCover {
-  position: relative;
-  width: 64px;
-  height: 64px;
-  border-radius: 8px;
-  overflow: hidden;
-  flex-shrink: 0;
-  border: 1px solid var(--color-border-secondary);
-  background: var(--color-surface-2);
-}
-
-.heroCover img {
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-}
-
-.heroCoverFallback {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 24px;
-  font-weight: 700;
-  color: var(--color-text-tertiary);
-}
-
-
-/* ── Overview / Technical mode toggle ───────────────────────────── */
-
-.modeToggleRow {
-  display: flex;
-  justify-content: flex-end;
-}
-
-.modeToggle {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 7px;
-  background: var(--color-black-10);
-}
-
-.modeToggleBtn {
-  height: 22px;
-  padding: 0 10px;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--color-text-secondary);
-  font: inherit;
-  font-size: 11.5px;
-  cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
-}
-
-.modeToggleBtn:hover {
-  color: var(--color-text-primary);
-}
-
-.modeToggleBtnActive {
-  background: var(--color-surface-3);
-  color: var(--color-text-primary);
-}
-
-/* ── Overview (plain-language) view ─────────────────────────────── */
-
-.overview {
-  display: flex;
-  flex-direction: column;
-  gap: 22px;
-  max-width: 560px;
-}
-
-.ovStatus {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 14px 16px;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 10px;
-  background: var(--color-surface-1);
-}
-
-.ovIcon {
-  display: inline-flex;
-  color: var(--color-text-tertiary);
-  padding-top: 1px;
-}
-
-.ovIconOk {
-  color: var(--color-success, #5fb56b); /* guard:allow — success fallback */
-}
-
-.ovIconWarn {
-  color: var(--color-warning, #e8a33d); /* guard:allow — warning fallback */
-}
-
-.ovIconRunning {
-  color: var(--color-accent, #3297ff); /* guard:allow — accent fallback */
-  animation: ovSpin 1.6s linear infinite;
-}
-
-@keyframes ovSpin {
-  from { transform: rotate(0deg); }
-  to { transform: rotate(360deg); }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .ovIconRunning { animation: none; }
-}
-
-.ovStatusText {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-  min-width: 0;
-}
-
-.ovHeadline {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--color-text-primary);
-}
-
-.ovSub {
-  font-size: 12.5px;
-  color: var(--color-text-secondary);
-  line-height: 1.5;
-}
-
-.ovActions {
-  display: flex;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.ovQueries {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.ovFollowRow {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-height: 26px;
-  font-size: 13px;
-}
-
-.ovFollowName {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ovFollowMeta {
-  font-size: 12px;
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }

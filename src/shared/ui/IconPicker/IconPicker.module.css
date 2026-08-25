@@ -64,6 +64,7 @@
   max-height: 200px;
   overflow-y: auto;
   overflow-x: hidden;
+  scrollbar-gutter: stable;
 }
 
 .iconBtn {

@@ -196,6 +196,7 @@
   min-height: var(--control-height-lg);
   max-height: 240px;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: 4px 0;
   animation: popoverFadeIn 120ms ease-out;
 }
@@ -285,7 +286,7 @@
   display: block;
   padding: 2px 0;
   color: var(--inspector-text-primary, var(--color-text-primary));
-  text-shadow: 0 0 12px rgba(255, 255, 255, 0.15);
+  text-shadow: 0 0 12px var(--color-contrast-15);
   cursor: pointer;
   text-decoration: none;
   overflow: hidden;
@@ -295,5 +296,5 @@
 
 .popoverLink:hover {
   text-decoration: underline;
-  text-shadow: 0 0 16px rgba(255, 255, 255, 0.25);
+  text-shadow: 0 0 16px var(--color-contrast-25);
 }

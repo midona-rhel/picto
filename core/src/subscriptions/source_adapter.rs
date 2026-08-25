@@ -6,8 +6,9 @@ use url::Url;
 
 use crate::subscriptions::gallery_dl_runner::{
     build_url, normalize_baraag_username, normalize_fanbox_creator, normalize_furaffinity_username,
-    normalize_patreon_creator, normalize_subscribestar_creator, normalize_tumblr_blog,
-    normalize_webtoons_url, site_by_id, SiteEntry,
+    normalize_onlyfans_creator, normalize_patreon_creator, normalize_subscribestar_creator,
+    normalize_tumblr_blog, normalize_twitter_username, normalize_webtoons_url, site_by_id,
+    SiteEntry,
 };
 
 pub use gallery_dl::{GalleryDlSourceAdapter, SubscriptionSourceAdapter};
@@ -71,6 +72,9 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
     if site_id == "tumblr" && query_kind == "user" {
         return normalize_tumblr_blog(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
+    if site_id == "twitter" && query_kind == "user" {
+        return normalize_twitter_username(trimmed).unwrap_or_else(|_| trimmed.to_string());
+    }
     if site_id == "furaffinity" && query_kind == "user" {
         return normalize_furaffinity_username(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
@@ -82,6 +86,9 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
     }
     if site_id == "subscribestar" && query_kind == "user" {
         return normalize_subscribestar_creator(trimmed).unwrap_or_else(|_| trimmed.to_string());
+    }
+    if site_id == "onlyfans" && query_kind == "user" {
+        return normalize_onlyfans_creator(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
     if site_id == "pixivuser" && query_kind == "user" {
         if let Ok(url) = Url::parse(trimmed) {
@@ -144,6 +151,9 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
     if site_id == "tumblr" {
         normalize_tumblr_blog(query_text)?;
     }
+    if site_id == "twitter" {
+        normalize_twitter_username(query_text)?;
+    }
     if site_id == "furaffinity" {
         normalize_furaffinity_username(query_text)?;
     }
@@ -155,6 +165,9 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
     }
     if site_id == "subscribestar" {
         normalize_subscribestar_creator(query_text)?;
+    }
+    if site_id == "onlyfans" {
+        normalize_onlyfans_creator(query_text)?;
     }
     if matches!(
         site_id,
@@ -319,7 +332,7 @@ mod tests {
             normalize_query_text(
                 "subscribestar",
                 "user",
-                "https://www.subscribestar.com/creator-name"
+                "https://subscribestar.art/creator-name"
             ),
             "creator-name"
         );
@@ -386,14 +399,11 @@ mod tests {
         assert!(validate_query_text("fanbox", "https://creator-name.fanbox.cc/").is_ok());
         assert!(validate_query_text("fanbox", "https://www.fanbox.cc/").is_err());
         assert!(validate_query_text("subscribestar", "creator-name").is_ok());
-        assert!(validate_query_text(
-            "subscribestar",
-            "https://www.subscribestar.com/creator-name"
-        )
-        .is_ok());
         assert!(
-            validate_query_text("subscribestar", "https://www.subscribestar.com/posts/123")
-                .is_err()
+            validate_query_text("subscribestar", "https://subscribestar.art/creator-name").is_ok()
+        );
+        assert!(
+            validate_query_text("subscribestar", "https://subscribestar.art/posts/123").is_err()
         );
         assert!(validate_query_text(
             "hentaifoundry",

@@ -2,6 +2,7 @@ import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 
 export interface CanvasRenderItem {
   itemId: number;
+  kind: CanonicalEntityGridItem['kind'];
   displayFileHash: string;
   // Compatibility keys for the activation/reveal helpers. `hash` is the
   // logical item identity; `thumbnailHash` is the physical file identity.
@@ -16,15 +17,17 @@ export interface CanvasRenderItem {
   dominantColor: string | null;
   aspectRatio: number | null;
   numFrames: number | null;
+  mediaCount: number;
 }
 
 export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
   const aspectRatio = item.pixel_width && item.pixel_height
     ? item.pixel_width / item.pixel_height
-    : null;
+    : item.display_mime_type.startsWith('audio/') ? 2 : null;
 
   return {
     itemId: item.item_id,
+    kind: item.kind,
     displayFileHash: item.display_file_hash,
     hash: String(item.item_id),
     thumbnailHash: item.display_file_hash,
@@ -37,6 +40,7 @@ export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
     dominantColor: item.dominant_color_hex,
     aspectRatio,
     numFrames: item.frame_count,
+    mediaCount: item.media_count,
   };
 }
 

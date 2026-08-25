@@ -1,0 +1,47 @@
+.root {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) var(--titlebar-height);
+  overflow: hidden;
+  background: var(--color-bg-app);
+  color: var(--color-text-primary);
+}
+
+.viewport {
+  box-sizing: border-box;
+  container-type: size;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  padding: 24px;
+  background: rgb(42, 42, 46);
+}
+
+.footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  border-top: 1px solid var(--color-border-secondary);
+  background: var(--color-bg-app);
+  font-family: var(--font-family-ui);
+}
+
+.pageStatus {
+  min-width: 92px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-align: center;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.message {
+  color: var(--color-text-secondary);
+  font: var(--font-size-sm)/1.5 var(--font-family-ui);
+}

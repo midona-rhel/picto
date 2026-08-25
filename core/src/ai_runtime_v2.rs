@@ -167,7 +167,7 @@ pub async fn manual_predict(
     let media_item_ids = resolve_prediction_items(application, &request.item_ids)?;
     if media_item_ids.len() > MAX_MANUAL_PREDICTION_ITEMS {
         return Err(format!(
-            "Manual prediction accepts at most {} media items after expanding collections",
+            "Manual prediction accepts at most {} media items after expanding groups",
             MAX_MANUAL_PREDICTION_ITEMS
         ));
     }
@@ -376,7 +376,7 @@ fn load_prediction_original(
             .map_err(|error| format!("Media item {} was not found: {error}", media_item_id.0))?;
         if row.0 == "collection" {
             return Err(format!(
-                "Media item {} is a collection; AI prediction requires an image item",
+                "Media item {} is a group; AI prediction requires an image item",
                 media_item_id.0
             ));
         }

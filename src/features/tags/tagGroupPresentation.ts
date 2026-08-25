@@ -1,10 +1,8 @@
 import {
   IconBook,
   IconBookmark,
-  IconBuilding,
-  IconMoodSmile,
   IconPaw,
-  IconPhoto,
+  IconPencil,
   IconSettings,
   IconStar,
   IconUser,
@@ -24,16 +22,12 @@ const DEFAULT_GROUP: GroupPresentation = {
 };
 
 const GROUPS: Record<string, GroupPresentation> = {
-  creator: { color: [170, 0, 0], icon: IconUser, order: 0 },
-  studio: { color: [128, 0, 0], icon: IconBuilding, order: 1 },
-  series: { color: [170, 0, 170], icon: IconBook, order: 2 },
-  character: { color: [0, 170, 0], icon: IconMoodSmile, order: 3 },
-  person: { color: [0, 128, 0], icon: IconUser, order: 4 },
-  species: { color: [0, 130, 170], icon: IconPaw, order: 5 },
-  photoset: { color: [114, 160, 193], icon: IconPhoto, order: 6 },
-  rating: { color: [218, 165, 32], icon: IconStar, order: 7 },
-  meta: { color: [160, 160, 160], icon: IconSettings, order: 8 },
-  system: { color: [153, 101, 21], icon: IconSettings, order: 9 },
+  creator: { color: [170, 0, 0], icon: IconPencil, order: 0 },
+  series: { color: [170, 0, 170], icon: IconBook, order: 1 },
+  character: { color: [0, 170, 0], icon: IconUser, order: 2 },
+  species: { color: [0, 130, 170], icon: IconPaw, order: 3 },
+  rating: { color: [218, 165, 32], icon: IconStar, order: 4 },
+  meta: { color: [160, 160, 160], icon: IconSettings, order: 5 },
   general: DEFAULT_GROUP,
   '': DEFAULT_GROUP,
 };

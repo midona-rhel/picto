@@ -4,7 +4,6 @@ import { libraryInvalidation } from './libraryInvalidation';
 import {
   subscriptionsCoversAtom,
   subscriptionsSelectionAtom,
-  subscriptionsWorkspaceLoadingAtom,
   subscriptionsWorkspaceSnapshotAtom,
 } from '../state/subscriptionsWorkspace';
 import { showErrorNotification } from '../shared/lib/notifications';
@@ -46,6 +45,12 @@ export function refreshSubscriptionsWorkspace(): Promise<void> {
         subscriptionsController.loadWorkspaceSnapshot(),
         subscriptionsController.getCovers(),
       ]);
+      const previousCovers = store.get(subscriptionsCoversAtom);
+      for (const subscriptionId of snapshot.runningSubscriptionIds) {
+        const previousCover = previousCovers.get(subscriptionId);
+        if (previousCover) covers.set(subscriptionId, previousCover);
+        else covers.delete(subscriptionId);
+      }
       store.set(subscriptionsWorkspaceSnapshotAtom, snapshot);
       store.set(subscriptionsCoversAtom, covers);
       store.set(subscriptionsSelectionAtom, (current) => {
@@ -60,7 +65,6 @@ export function refreshSubscriptionsWorkspace(): Promise<void> {
         message: error instanceof Error ? error.message : String(error),
       });
     } finally {
-      store.set(subscriptionsWorkspaceLoadingAtom, false);
       workspaceRefreshPromise = null;
       syncPolling?.();
     }

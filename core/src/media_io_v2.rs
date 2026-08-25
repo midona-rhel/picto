@@ -76,23 +76,115 @@ pub fn resolve_file_paths(
         .collect()
 }
 
-/// Ensure one thumbnail through the shared derivative executor.
-///
-/// Existing thumbnails are treated as success, so retries and repeated
-/// protocol requests are safe and do not create duplicate generation paths.
+/// Request one missing thumbnail without decoding media on the caller's thread.
+/// Visible requests replace a deferred per-item row with one immediately
+/// eligible file-level row; retries retain their backoff.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
-pub struct EnsureThumbnailResult {
-    pub created: bool,
+pub struct RequestThumbnailResult {
+    pub ready: bool,
+    pub supported: bool,
+    pub queued: bool,
 }
 
-pub async fn ensure_thumbnail(
+pub fn request_thumbnail(
     store: &Store,
     blobs: &BlobStore,
     file_hash: &FileHash,
-) -> Result<EnsureThumbnailResult, String> {
+) -> Result<RequestThumbnailResult, String> {
+    if blobs
+        .find_thumbnail_path(&file_hash.0)
+        .map_err(|error| format!("Thumbnail lookup failed: {error}"))?
+        .is_some()
+    {
+        return Ok(RequestThumbnailResult {
+            ready: true,
+            supported: true,
+            queued: false,
+        });
+    }
+
+    let (file_id, mime_type, frame_count) = store.read(|connection| {
+        connection.query_row(
+            "SELECT file_id, mime_type, frame_count FROM media_file WHERE file_hash = ?1",
+            [&file_hash.0],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )
+    })?;
+    if !crate::media_capabilities::capabilities_for_stored_media(&mime_type, frame_count)
+        .can_thumbnail()
+    {
+        return Ok(RequestThumbnailResult {
+            ready: false,
+            supported: false,
+            queued: false,
+        });
+    }
+
+    const VISIBLE_PRIORITY: &str = "0001-01-01T00:00:00Z";
+    let now = Utc::now().to_rfc3339();
+    let (queued, _, _) = store.transaction_if_changed(|transaction| {
+        let rows = {
+            let mut statement = transaction.prepare(
+                "SELECT media_item_id, status, attempt_count, available_at
+                 FROM work_item WHERE file_id = ?1 AND work_type = 'thumbnail'",
+            )?;
+            let rows = statement
+                .query_map([file_id], |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+        if rows.iter().any(|(_, status, _, _)| status == "running")
+            || rows.iter().any(|(_, _, attempts, _)| *attempts > 0)
+        {
+            return Ok((false, false));
+        }
+        if rows.len() == 1 && rows[0].0.is_none() && rows[0].3 == VISIBLE_PRIORITY {
+            return Ok((false, false));
+        }
+
+        transaction.execute(
+            "DELETE FROM work_item
+             WHERE file_id = ?1 AND work_type = 'thumbnail' AND status = 'pending'",
+            [file_id],
+        )?;
+        transaction.execute(
+            "INSERT INTO work_item (
+                 file_id, work_type, status, attempt_count,
+                 available_at, created_at, updated_at
+             ) VALUES (?1, 'thumbnail', 'pending', 0, ?2, ?3, ?3)",
+            params![file_id, VISIBLE_PRIORITY, now],
+        )?;
+        Ok((true, true))
+    })?;
+    Ok(RequestThumbnailResult {
+        ready: false,
+        supported: true,
+        queued,
+    })
+}
+
+/// Explicit regeneration is allowed to wait; viewport thumbnail requests are not.
+pub async fn render_thumbnail_now(
+    store: &Store,
+    blobs: &BlobStore,
+    file_hash: &FileHash,
+) -> Result<bool, String> {
     let file_id = file_id_for_hash(store, file_hash)?;
-    let outcome = media_processing_v2::execute(
+    Ok(media_processing_v2::execute(
         store,
         blobs,
         media_processing_v2::DerivativeRequest {
@@ -101,10 +193,8 @@ pub async fn ensure_thumbnail(
             kind: WorkKind::Thumbnail,
         },
     )
-    .await?;
-    Ok(EnsureThumbnailResult {
-        created: outcome.thumbnail_written,
-    })
+    .await?
+    .thumbnail_written)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -603,31 +693,77 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn ensure_thumbnail_is_idempotent() {
+    #[test]
+    fn visible_thumbnail_request_promotes_deferred_work_without_decoding() {
         let fixture = fixture();
-        let first = ensure_thumbnail(
+        fixture
+            .application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO work_item (
+                     media_item_id, file_id, work_type, status, attempt_count,
+                     available_at, created_at, updated_at
+                 ) VALUES (1, 1, 'thumbnail', 'pending', 0, ?1, ?1, ?1)",
+                    [NOW],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let first = request_thumbnail(
             fixture.application.store(),
             fixture.application.blobs(),
             &fixture.hashes[0],
         )
-        .await
         .unwrap();
-        let second = ensure_thumbnail(
+        let second = request_thumbnail(
             fixture.application.store(),
             fixture.application.blobs(),
             &fixture.hashes[0],
         )
-        .await
         .unwrap();
-        assert!(first.created);
-        assert!(!second.created);
+        assert_eq!(
+            first,
+            RequestThumbnailResult {
+                ready: false,
+                supported: true,
+                queued: true
+            }
+        );
+        assert_eq!(
+            second,
+            RequestThumbnailResult {
+                ready: false,
+                supported: true,
+                queued: false
+            }
+        );
         assert!(fixture
             .application
             .blobs()
             .find_thumbnail_path(&fixture.hashes[0].0)
             .unwrap()
-            .is_some());
+            .is_none());
+        let target = fixture
+            .application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT media_item_id, available_at, COUNT(*) OVER ()
+                 FROM work_item WHERE file_id = 1 AND work_type = 'thumbnail'",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<i64>>(0)?,
+                            row.get::<_, String>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(target, (None, "0001-01-01T00:00:00Z".to_string(), 1));
     }
 
     #[test]

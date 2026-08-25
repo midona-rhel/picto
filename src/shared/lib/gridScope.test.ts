@@ -4,6 +4,7 @@ import { nodeIdToGridScope, scopeToGridNodeId, isNonGridNodeId } from './gridSco
 describe('gridScope helpers', () => {
   it('maps grid node ids to canonical scopes', () => {
     expect(nodeIdToGridScope('system:active')).toEqual({ kind: 'all' });
+    expect(nodeIdToGridScope('system:random')).toEqual({ kind: 'all' });
     expect(nodeIdToGridScope('system:recent_viewed')).toEqual({ kind: 'recently_viewed' });
     expect(nodeIdToGridScope('folder:12')).toEqual({ kind: 'folder', folder_id: 12 });
     expect(nodeIdToGridScope('smart:7')).toEqual({ kind: 'smart_folder', smart_folder_id: 7 });

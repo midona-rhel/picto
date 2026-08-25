@@ -6,8 +6,12 @@ import {
   clipboardCopyFile,
   clipboardWriteText,
   regenerateThumbnailsBatch,
+  setThumbnail,
   resolveFilePath,
+  getOpenWithOptions,
   shellOpenPath,
+  shellOpenWithApplication,
+  shellOpenWithChooser,
   shellShowInFolder,
 } from '../platform/shellApi';
 import type { BaseScope, EntityTarget } from '../shared/types/canonical';
@@ -32,6 +36,43 @@ export function manualImportParamsForScope(
     ...params,
     lifecycle: scope.kind === 'inbox' ? 'inbox' : 'active',
   };
+}
+
+const MEDIA_IMPORT_FILTERS = [{
+  name: 'Media',
+  extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'mp4', 'webm', 'mkv', 'mov', 'avi'],
+}];
+
+/** Use the canonical desktop picker and import destination for a grid scope. */
+export async function chooseAndImportFiles(scope: BaseScope): Promise<void> {
+  const result = await (window as any).picto.dialog.open({
+    properties: ['openFile'],
+    multiple: true,
+    title: 'Import files',
+    filters: MEDIA_IMPORT_FILTERS,
+  });
+  if (!result) return;
+  const paths = Array.isArray(result) ? result : [result];
+  await addMedia(paths, manualImportParamsForScope(
+    scope,
+    scope.kind === 'folder' ? { parent_folder_id: scope.folder_id } : {},
+  ));
+}
+
+/** Use the canonical desktop picker and structure-preserving folder import. */
+export async function chooseAndImportFolder(scope: BaseScope): Promise<void> {
+  const result = await (window as any).picto.dialog.open({
+    properties: ['openDirectory'],
+    multiple: false,
+    title: 'Import folder',
+  });
+  if (!result) return;
+  const folderPath = typeof result === 'string' ? result : result[0];
+  if (!folderPath) return;
+  await addMedia([folderPath], manualImportParamsForScope(scope, {
+    preserve_structure: true,
+    parent_folder_id: scope.kind === 'folder' ? scope.folder_id : null,
+  }));
 }
 
 export const filesController = {
@@ -81,6 +122,21 @@ export const filesController = {
     if (path) shellOpenPath(path);
   },
 
+  async getOpenWithOptionsForHash(hash: string) {
+    const path = await resolveFilePath(hash);
+    return getOpenWithOptions(path);
+  },
+
+  async openWithApplicationForHash(hash: string, applicationPath: string): Promise<void> {
+    const path = await resolveFilePath(hash);
+    await shellOpenWithApplication(path, applicationPath);
+  },
+
+  async openWithChooserForHash(hash: string): Promise<void> {
+    const path = await resolveFilePath(hash);
+    await shellOpenWithChooser(path);
+  },
+
   async revealHashInFolder(hash: string): Promise<void> {
     const path = await resolveFilePath(hash);
     if (path) shellShowInFolder(path);
@@ -98,5 +154,13 @@ export const filesController = {
 
   regenerateThumbnailsBatch(hashes: string[]) {
     return regenerateThumbnailsBatch(hashes);
+  },
+
+  setThumbnail(hash: string, pngDataUrl: string) {
+    const comma = pngDataUrl.indexOf(',');
+    if (!pngDataUrl.startsWith('data:image/png;base64,') || comma < 0) {
+      return Promise.reject(new Error('Thumbnail capture did not produce a PNG.'));
+    }
+    return setThumbnail(hash, pngDataUrl.slice(comma + 1));
   },
 };

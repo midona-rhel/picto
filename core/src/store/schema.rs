@@ -2,7 +2,9 @@
 
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 124;
+pub const CURRENT_SCHEMA_VERSION: i64 = 126;
+pub const CURRENT_PHASH_ANALYSIS_VERSION: i64 = 3;
+pub const PHASH_VERSION_SETTING: &str = "media.perceptual_hash_version";
 
 pub const LIBRARY_DDL: &str = r#"
 CREATE TABLE library_meta (
@@ -166,6 +168,7 @@ CREATE TABLE subscription_query (
     query_text TEXT NOT NULL,
     display_name TEXT,
     notes TEXT,
+    group_posts INTEGER NOT NULL DEFAULT 1,
     paused INTEGER NOT NULL DEFAULT 0,
     resume_cursor TEXT,
     initial_run_complete INTEGER NOT NULL DEFAULT 0,
@@ -359,6 +362,20 @@ CREATE TABLE setting (
     value_json TEXT NOT NULL
 );
 
+CREATE TABLE history_entry (
+    entry_id INTEGER PRIMARY KEY,
+    command TEXT NOT NULL,
+    label TEXT NOT NULL,
+    forward_changeset BLOB NOT NULL,
+    resources_json TEXT NOT NULL,
+    item_ids_json TEXT NOT NULL,
+    reload_projections INTEGER NOT NULL DEFAULT 0 CHECK (reload_projections IN (0, 1)),
+    applied INTEGER NOT NULL DEFAULT 1 CHECK (applied IN (0, 1)),
+    byte_size INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX idx_history_entry_applied ON history_entry(applied, entry_id);
+
 CREATE VIRTUAL TABLE media_fts USING fts5(
     name,
     notes,
@@ -381,6 +398,15 @@ pub fn create(connection: &mut Connection) -> Result<(), String> {
             [CURRENT_SCHEMA_VERSION],
         )
         .map_err(|error| format!("Failed to record schema version: {error}"))?;
+    transaction
+        .execute(
+            "INSERT INTO setting (key, value_json) VALUES (?1, ?2)",
+            rusqlite::params![
+                PHASH_VERSION_SETTING,
+                CURRENT_PHASH_ANALYSIS_VERSION.to_string()
+            ],
+        )
+        .map_err(|error| format!("Failed to record pHash version: {error}"))?;
     transaction.commit().map_err(|error| error.to_string())
 }
 
@@ -471,7 +497,7 @@ mod tests {
                 "retained {removed}"
             );
         }
-        assert_eq!(CURRENT_SCHEMA_VERSION, 124);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 126);
     }
 
     #[test]

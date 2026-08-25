@@ -9,6 +9,7 @@ import {
   getRunningSubscriptionProgress,
   getRunningSubscriptions,
   getSubscriptionCovers,
+  getSubscriptionCoverCandidates,
   getSubscriptionSites,
   getSubscriptions,
   listCredentialHealth,
@@ -17,10 +18,14 @@ import {
   listSubscriptionRuns,
   pauseSubscription,
   pauseSubscriptionQuery,
+  setSubscriptionQueryGrouping,
   renameSubscription,
   resetSubscription,
   runSubscription,
   setSubscriptionSchedule,
+  setSubscriptionPostsPerRun,
+  setSubscriptionDestination,
+  setSubscriptionCover,
   stopSubscription,
 } from '../platform/subscriptionApi';
 import type { IssueCursor } from '../shared/types/generated/application/IssueCursor';
@@ -28,10 +33,12 @@ import type {
   CredentialDomain,
   CredentialHealth,
   SubscriptionInfo,
+  SubscriptionCover,
   SubscriptionProgressEvent,
   SubscriptionRunRecord,
   SubscriptionSiteInfo,
 } from '../shared/types/subscriptions';
+import type { SubscriptionCoverCandidateCursor } from '../shared/types/generated/application/SubscriptionCoverCandidateCursor';
 import type { SubscriptionWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
 
 function deriveLastActivityAt(subscription: SubscriptionInfo): string | null {
@@ -108,8 +115,6 @@ export const subscriptionsController = {
 
   create(input: {
     name: string;
-    site_id: string;
-    query_text: string;
   }): Promise<SubscriptionInfo> {
     return createSubscription(input);
   },
@@ -118,9 +123,32 @@ export const subscriptionsController = {
     return setSubscriptionSchedule(id, schedule);
   },
 
+  setPostsPerRun(id: string, postsPerRun: number): Promise<void> {
+    return setSubscriptionPostsPerRun(id, postsPerRun);
+  },
+
+  setDestination(
+    id: string,
+    destination: { target_folder_ids: number[]; automatic_tags: string[] },
+  ): Promise<void> {
+    return setSubscriptionDestination(id, destination);
+  },
+
   /** Newest downloaded file hash per subscription id, for grid covers. */
-  async getCovers(): Promise<Map<string, string>> {
+  async getCovers(): Promise<Map<string, SubscriptionCover>> {
     return getSubscriptionCovers();
+  },
+
+  getCoverCandidates(
+    id: string,
+    cursor: SubscriptionCoverCandidateCursor | null = null,
+    limit = 200,
+  ) {
+    return getSubscriptionCoverCandidates(id, cursor, limit);
+  },
+
+  setCover(id: string, cover: { media_item_id: number; focus_x: number; focus_y: number; zoom_percent: number }): Promise<void> {
+    return setSubscriptionCover(id, cover);
   },
 
   rename(id: string, name: string): Promise<void> {
@@ -172,6 +200,10 @@ export const subscriptionsController = {
 
   pauseQuery(id: string, paused: boolean): Promise<void> {
     return pauseSubscriptionQuery(id, paused);
+  },
+
+  setQueryGrouping(id: string, groupPosts: boolean): Promise<void> {
+    return setSubscriptionQueryGrouping(id, groupPosts);
   },
 
   listCredentials(): Promise<CredentialDomain[]> {

@@ -5,6 +5,7 @@ fn main() {
     {
         cc::Build::new()
             .file("src/drag_mac.m")
+            .file("src/open_with_mac.m")
             .flag("-fobjc-arc")
             .compile("drag_mac");
 

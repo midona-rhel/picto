@@ -29,6 +29,11 @@
 }
 
 :root {
+  /* reference application's theme model: one base surface and one contrast family. */
+  --theme-background: #18191c;
+  --theme-contrast: #f8f9fb;
+  --theme-text: #f8f9fb;
+
   /* ── Colors ─────────────────────────────────────────────── */
   --color-primary: #3297FF;
   --color-primary-10: rgba(50, 151, 255, 0.10);
@@ -38,28 +43,43 @@
   --color-primary-60: rgba(50, 151, 255, 0.60);
 
   /* ── Surfaces ───────────────────────────────────────────── */
-  --color-bg-app: rgb(24, 25, 27);
-  --color-surface-1: rgb(36, 37, 40);
-  --color-surface-2: #2a2a2e;
-  --color-surface-hover: rgba(248, 249, 251, 0.05);
-  --color-surface-active: rgba(248, 249, 251, 0.10);
+  --color-bg-app: var(--theme-background);
+  --color-rail-surface: color-mix(in srgb, var(--theme-contrast) 3%, var(--theme-background));
+  --color-surface-1: var(--color-rail-surface);
+  --color-surface-2: color-mix(in srgb, var(--theme-contrast) 5%, var(--theme-background));
+  --color-surface-hover: color-mix(in srgb, var(--theme-contrast) 5%, transparent);
+  --color-surface-active: color-mix(in srgb, var(--theme-contrast) 10%, transparent);
   --color-surface-drop: var(--color-primary-30);
+  --color-control-surface: rgba(0, 0, 0, 0.20);
+  --color-control-surface-hover: rgba(0, 0, 0, 0.20);
+  --color-footer-surface: color-mix(in srgb, var(--theme-contrast) 3%, transparent);
 
   /* ── Text ────────────────────────────────────────────────── */
-  --color-text-primary: rgba(255, 255, 255, 1.0);
-  --color-text-secondary: rgba(255, 255, 255, 0.72);
-  --color-text-tertiary: rgba(255, 255, 255, 0.50);
-  --color-text-disabled: rgba(255, 255, 255, 0.22);
+  --color-text-primary: var(--theme-text);
+  --color-text-secondary: color-mix(in srgb, var(--theme-text) 70%, transparent);
+  --color-text-tertiary: color-mix(in srgb, var(--theme-text) 60%, transparent);
+  --color-text-disabled: color-mix(in srgb, var(--theme-text) 22%, transparent);
+  --color-on-primary: #ffffff;
 
   /* ── Borders ─────────────────────────────────────────────── */
-  --color-border-primary: rgba(255, 255, 255, 0.14);
-  --color-border-secondary: rgba(255, 255, 255, 0.08);
+  --color-border-primary: color-mix(in srgb, var(--theme-contrast) 10%, transparent);
+  --color-border-secondary: color-mix(in srgb, var(--theme-contrast) 8%, transparent);
   --color-border-focus: var(--color-primary-60);
 
   /* ── Black overlays ──────────────────────────────────────── */
   --color-black-10: rgba(0, 0, 0, 0.10);
   --color-black-20: rgba(0, 0, 0, 0.20);
   --color-black-30: rgba(0, 0, 0, 0.30);
+  --color-contrast-03: color-mix(in srgb, var(--theme-contrast) 3%, transparent);
+  --color-contrast-05: color-mix(in srgb, var(--theme-contrast) 5%, transparent);
+  --color-contrast-06: color-mix(in srgb, var(--theme-contrast) 6%, transparent);
+  --color-contrast-08: color-mix(in srgb, var(--theme-contrast) 8%, transparent);
+  --color-contrast-10: color-mix(in srgb, var(--theme-contrast) 10%, transparent);
+  --color-contrast-12: color-mix(in srgb, var(--theme-contrast) 12%, transparent);
+  --color-contrast-15: color-mix(in srgb, var(--theme-contrast) 15%, transparent);
+  --color-contrast-20: color-mix(in srgb, var(--theme-contrast) 20%, transparent);
+  --color-contrast-25: color-mix(in srgb, var(--theme-contrast) 25%, transparent);
+  --color-contrast-50: color-mix(in srgb, var(--theme-contrast) 50%, transparent);
 
   /* ── Typography ──────────────────────────────────────────── */
   --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -101,18 +121,18 @@
   --shadow-panel: 0 12px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.5);
 
   /* ── Glass panel surface ────────────────────────────────── */
-  --glass-bg: color-mix(in srgb, var(--color-bg-app) 92%, transparent);
+  --glass-bg: color-mix(in srgb, var(--theme-background) 92%, transparent);
   --glass-blur: blur(13px) brightness(0.7);
   --glass-border-top: 1px solid rgba(255, 255, 255, 0.25);
   --glass-border-side: 1px solid rgba(255, 255, 255, 0.15);
   --glass-border-bottom: 1px solid rgba(255, 255, 255, 0.10);
 
   /* ── Interaction overlays (theme-aware hover/active tints) ─ */
-  --color-hover-overlay: rgba(255, 255, 255, 0.08);
-  --color-active-overlay: rgba(255, 255, 255, 0.14);
-  --color-pressed-overlay: rgba(255, 255, 255, 0.20);
-  --color-subtle-overlay: rgba(255, 255, 255, 0.10);
-  --color-strong-overlay: rgba(255, 255, 255, 0.25);
+  --color-hover-overlay: var(--color-contrast-08);
+  --color-active-overlay: color-mix(in srgb, var(--theme-contrast) 14%, transparent);
+  --color-pressed-overlay: var(--color-contrast-20);
+  --color-subtle-overlay: var(--color-contrast-10);
+  --color-strong-overlay: var(--color-contrast-25);
 
   /* ── Menu/overlay specific ──────────────────────────────── */
   --color-negative: #ff4757;
@@ -137,6 +157,7 @@
   --layer-menu: 301;
   --layer-tooltip: 400;
   --layer-drag-overlay: 500;
+  --layer-notification: 600;
 
   /* ── Titlebar ────────────────────────────────────────────── */
   --titlebar-height: 48px;
@@ -164,17 +185,17 @@
   /* Header controls extend around text aligned with the rendered folder glyph. */
   --sidebar-section-control-inset: 5px;
   /* reference application's --color-dark-3 over the dark base captures as rgb(31 32 35). */
-  --sidebar-surface: rgb(31, 32, 35);
+  --sidebar-surface: var(--color-rail-surface);
   --sidebar-surface-top: var(--sidebar-surface);
   --sidebar-surface-elevated: color-mix(in srgb, var(--color-surface-2) 88%, transparent);
   --sidebar-border-color: var(--color-border-secondary);
-  --sidebar-text-primary: rgb(248, 249, 251);
+  --sidebar-text-primary: var(--color-text-primary);
   --sidebar-section-text: var(--color-text-tertiary);
   --sidebar-count-color: var(--color-text-tertiary);
-  --sidebar-icon-color: rgb(248, 249, 251);
-  --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
-  --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
-  --sidebar-item-selected-bg: rgba(248, 249, 251, 0.05);
+  --sidebar-icon-color: var(--color-text-primary);
+  --sidebar-item-hover-bg: var(--color-surface-hover);
+  --sidebar-item-active-bg: var(--color-surface-active);
+  --sidebar-item-selected-bg: var(--color-surface-hover);
   /* Shared by section, system, and folder list-item highlights. */
   --sidebar-list-highlight-top: 0px;
   --sidebar-list-highlight-right-inset: 2px;
@@ -185,47 +206,32 @@
   --sidebar-list-highlight-active-bg: var(--sidebar-item-active-bg);
   --sidebar-list-highlight-selected-bg: var(--sidebar-item-selected-bg);
   /* reference application's normal tree connectors: rgba(189, 190, 192, 25%). */
-  --sidebar-tree-guide-color: rgba(189, 190, 192, 0.25);
+  --sidebar-tree-guide-color: color-mix(in srgb, var(--color-text-secondary) 25%, transparent);
+
+  --scrollbar-thumb-background: var(--color-contrast-25);
+  --scrollbar-thumb-hover-background: var(--color-contrast-50);
 }
 
 /* ── Blue theme ──────────────────────────────────────────────── */
 :root[data-theme="blue"] {
-  --color-bg-app: #0f1732;
-  --color-surface-1: #171f3a;
-  --color-surface-2: #1c2441;
-  --color-surface-hover: rgba(248, 249, 251, 0.05);
-  --color-surface-active: rgba(248, 249, 251, 0.10);
-  --color-menu-hover: var(--color-hover-overlay);
-  --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
-  --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
+  --theme-background: #0d1630;
 }
 
 /* ── Purple theme ────────────────────────────────────────────── */
 :root[data-theme="purple"] {
-  --color-bg-app: #1e1526;
-  --color-surface-1: #261d2e;
-  --color-surface-2: #2b2235;
-  --color-surface-hover: rgba(248, 249, 251, 0.05);
-  --color-surface-active: rgba(248, 249, 251, 0.10);
-  --color-menu-hover: var(--color-hover-overlay);
-  --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
-  --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
+  --theme-background: #1c1424;
 }
 
 /* ── Gray theme ──────────────────────────────────────────────── */
 :root[data-theme="gray"] {
-  --color-bg-app: #323236;
-  --color-surface-1: #3a3a3e;
-  --color-surface-2: #3f3f45;
-  --color-surface-hover: rgba(248, 249, 251, 0.05);
-  --color-surface-active: rgba(248, 249, 251, 0.10);
-  --color-menu-hover: var(--color-hover-overlay);
-  --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
-  --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
+  --theme-background: #37383c;
 }
 
 /* ── Light theme ─────────────────────────────────────────────── */
 :root[data-mantine-color-scheme="light"] {
+  --theme-background: #ffffff;
+  --theme-contrast: #2c2f32;
+  --theme-text: #2c2f32;
   --color-primary: #2563eb;
   --color-primary-10: rgba(37, 99, 235, 0.10);
   --color-primary-20: rgba(37, 99, 235, 0.20);
@@ -234,33 +240,10 @@
   --color-primary-60: rgba(37, 99, 235, 0.60);
   --color-primary-70: rgba(37, 99, 235, 0.70);
 
-  --color-bg-app: #f5f5f5;
-  --color-surface-1: #f0f0f0;
-  --color-surface-2: #ebedef;
-  --color-surface-hover: rgba(44, 47, 50, 0.05);
-  --color-surface-active: rgba(44, 47, 50, 0.10);
-
-  --color-text-primary: rgba(0, 0, 0, 1.0);
-  --color-text-secondary: rgba(0, 0, 0, 0.72);
-  --color-text-tertiary: rgba(0, 0, 0, 0.50);
-
-  --color-border-primary: rgba(0, 0, 0, 0.12);
-  --color-border-secondary: rgba(0, 0, 0, 0.06);
-
-  --sidebar-surface: rgba(44, 47, 50, 0.03);
-  --sidebar-surface-top: var(--sidebar-surface);
-  --sidebar-border-color: var(--color-border-secondary);
-  --sidebar-item-hover-bg: rgba(44, 47, 50, 0.05);
-  --sidebar-item-active-bg: rgba(44, 47, 50, 0.10);
-  --sidebar-item-selected-bg: rgba(44, 47, 50, 0.05);
-  --sidebar-item-hover-bg: rgba(44, 47, 50, 0.05);
-  --sidebar-item-active-bg: rgba(44, 47, 50, 0.10);
-
-  --color-hover-overlay: rgba(0, 0, 0, 0.06);
-  --color-active-overlay: rgba(0, 0, 0, 0.10);
-  --color-pressed-overlay: rgba(0, 0, 0, 0.16);
-  --color-subtle-overlay: rgba(0, 0, 0, 0.08);
-  --color-strong-overlay: rgba(0, 0, 0, 0.20);
+  --color-border-primary: color-mix(in srgb, var(--theme-contrast) 15%, transparent);
+  --color-border-secondary: color-mix(in srgb, var(--theme-contrast) 10%, transparent);
+  --color-control-surface: rgba(255, 255, 255, 0.50);
+  --color-control-surface-hover: rgba(255, 255, 255, 0.80);
 
   --glass-bg: color-mix(in srgb, var(--color-bg-app) 90%, transparent);
   --glass-blur: blur(25px) brightness(3);
@@ -276,16 +259,15 @@
 :root[data-theme="vibrancy"],
 :root[data-theme="mica"],
 :root[data-theme="acrylic"] {
-  --color-bg-app: transparent;
-  --color-surface-1: rgba(36, 37, 40, 0.6);
-  --color-surface-2: rgba(42, 42, 46, 0.4);
-  --color-surface-hover: rgba(248, 249, 251, 0.08);
-  --color-surface-active: rgba(248, 249, 251, 0.14);
+  --theme-background: transparent;
+  --color-rail-surface: color-mix(in srgb, var(--theme-contrast) 3%, transparent);
+  --color-surface-1: color-mix(in srgb, var(--theme-contrast) 6%, transparent);
+  --color-surface-2: color-mix(in srgb, var(--theme-contrast) 4%, transparent);
 }
 
 /* ── Liquid Glass — near-transparent for the glass effect to dominate ── */
 :root[data-theme="liquidglass"] {
-  --color-bg-app: transparent;
+  --theme-background: transparent;
   --color-surface-1: rgba(0, 0, 0, 0.05);
   --color-surface-2: rgba(0, 0, 0, 0.03);
   --color-surface-hover: rgba(255, 255, 255, 0.05);
@@ -298,9 +280,5 @@
 
 /* ── Light Gray theme ────────────────────────────────────────── */
 :root[data-mantine-color-scheme="light"][data-theme="lightgray"] {
-  --color-bg-app: #c8cacd;
-  --color-surface-1: #d0d2d5;
-  --color-surface-2: #c2c4c7;
-  --color-border-primary: #abadaf;
-  --color-border-secondary: rgba(0, 0, 0, 0.08);
+  --theme-background: #e3e4e6;
 }

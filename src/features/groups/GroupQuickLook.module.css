@@ -1,0 +1,10 @@
+.frame {
+  position: absolute;
+  top: 48px;
+  right: clamp(32px, 16vw, 280px);
+  bottom: 48px;
+  left: clamp(32px, 16vw, 280px);
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}

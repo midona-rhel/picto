@@ -14,6 +14,8 @@ tokio-util = "0.7"
 
 # Image processing
 image = "0.25"
+jpeg-decoder = "0.3"
+jxl-oxide = { version = "0.12.6", features = ["image"] }
 fast_image_resize = { version = "5", features = ["image"] }
 webp = "0.3"
 kmeans_colors = { version = "0.7", default-features = false, features = ["palette_color"] }
@@ -45,9 +47,6 @@ ndarray = "0.17"
 # OS keychain credential storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-security-framework = "3.7"
-
 # Hashing & checksums
 sha2 = "0.10"
 img_hash = "3.2"
@@ -67,7 +66,7 @@ open = "5"
 notify = "6.1"
 
 # SQLite database engine (WAL mode, FTS5)
-rusqlite = { version = "0.31", features = ["bundled", "functions"] }
+rusqlite = { version = "0.31", features = ["bundled", "functions", "session"] }
 
 # Roaring bitmaps for fast set operations
 roaring = "0.10"
@@ -84,8 +83,16 @@ num_cpus = "1.16"
 # TypeScript type generation from Rust structs (PBI-234)
 ts-rs = { version = "10", features = ["serde-compat", "no-serde-warnings"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "2.0.0-rc.12", features = ["coreml"] }
+security-framework = "3.7"
+
 [target.'cfg(windows)'.dependencies]
+ort = { version = "2.0.0-rc.12", features = ["directml"] }
 windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "2.0.0-rc.12", features = ["webgpu"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -84,6 +84,10 @@ export function getNamespaceSummary(): Promise<CanonicalNamespaceSummary[]> {
   );
 }
 
+export function getUnusedTagCount(): Promise<number> {
+  return invoke<number>('tags.unused_count');
+}
+
 export function getTagRelations(tagId: number): Promise<TagRelationGroups> {
   const input: TagInput = { tag_id: tagId };
   return invoke<ReplacementTagRelations>('tags.relations', input)
@@ -103,6 +107,10 @@ export function mergeTags(fromTagId: number, toTagName: string): Promise<Mutatio
 export function deleteTag(tagId: number): Promise<MutationReceipt> {
   const input: TagInput = { tag_id: tagId };
   return invoke<MutationReceipt>('tags.delete', input);
+}
+
+export function deleteUnusedTags(): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('tags.delete_unused', {});
 }
 
 export function manageTagAlias(fromTagId: number, toTagId?: number | null): Promise<MutationReceipt> {

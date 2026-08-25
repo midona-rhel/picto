@@ -3,24 +3,41 @@
 //! Durable queue tables own state. These loops only wake, execute bounded
 //! work, publish compact invalidations, and honor application shutdown.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
 use chrono::Utc;
+use serde::Serialize;
 use tokio_util::sync::CancellationToken;
 
 use crate::app::{resources, Application, MutationReceipt};
 use crate::background_runtime_v2::{self, DrainBatchResult};
-use crate::gallery_dl_source_v2::GalleryDlSourceRunner;
 use crate::ingest_queue_v2::{self, IngestRunReport};
+use crate::onlyfans_source_v2::SubscriptionSourceRouter;
 use crate::subscription_runtime_v2::{SourceRunner, SubscriptionWorker};
 use crate::subscriptions_v2::{self, RecoveryCounts};
 
 const SUBSCRIPTION_TICK: StdDuration = StdDuration::from_secs(1);
+const SUBSCRIPTION_WORKER_COUNT: usize = 4;
 const MAINTENANCE_TICK: StdDuration = StdDuration::from_millis(250);
 const WATCH_TICK: StdDuration = StdDuration::from_secs(30);
 const INGEST_BATCH_SIZE: usize = 8;
 const WORK_BATCH_SIZE: usize = 8;
+const THUMBNAIL_CHANGED_EVENT: &str = "picto:thumbnail-changed";
+const DOMINANT_COLOR_CHANGED_EVENT: &str = "picto:dominant-color-changed";
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ThumbnailChanged<'a> {
+    file_hash: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DominantColorChanged<'a> {
+    file_hash: &'a str,
+    dominant_color_hex: Option<&'a str>,
+}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct StartupRecovery {
@@ -28,6 +45,7 @@ pub struct StartupRecovery {
     pub subscription_query_runs: usize,
     pub ingest_jobs: usize,
     pub work_items: usize,
+    pub pruned_thumbnail_work: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -47,17 +65,22 @@ pub fn recover(application: &Application, now: &str) -> Result<StartupRecovery, 
         subscriptions_v2::recover_startup(application.store(), now)?;
     let ingest_jobs = ingest_queue_v2::reset_running(application)?;
     let work_items = crate::workers_v2::reset_running(application.store())?;
+    let pruned_thumbnail_work =
+        crate::workers_v2::prune_deferred_thumbnail_work(application.store())?;
+    crate::media_processing_v2::enqueue_missing_dominant_color_work(application.store(), now)?;
+    crate::media_processing_v2::reconcile_perceptual_hash_work(application.store(), now)?;
     Ok(StartupRecovery {
         subscription_runs: runs,
         subscription_query_runs: query_runs,
         ingest_jobs,
         work_items,
+        pruned_thumbnail_work,
     })
 }
 
 pub async fn subscription_tick<R: SourceRunner>(
     application: &Application,
-    worker: &mut SubscriptionWorker<'_, R>,
+    worker: &SubscriptionWorker<'_, R>,
     now: &str,
 ) -> Result<SubscriptionTickResult, String> {
     let scheduled = subscriptions_v2::schedule_due_runs(application.store(), now)?;
@@ -85,6 +108,18 @@ pub async fn maintenance_tick(application: &Application) -> Result<MaintenanceTi
     if let Some(receipt) = &work.receipt {
         application.publish(receipt);
     }
+    for file_hash in &work.thumbnail_file_hashes {
+        crate::events::emit(THUMBNAIL_CHANGED_EVENT, &ThumbnailChanged { file_hash });
+    }
+    for change in &work.dominant_color_changes {
+        crate::events::emit(
+            DOMINANT_COLOR_CHANGED_EVENT,
+            &DominantColorChanged {
+                file_hash: &change.file_hash,
+                dominant_color_hex: change.dominant_color_hex.as_deref(),
+            },
+        );
+    }
     Ok(MaintenanceTickResult { ingest, work })
 }
 
@@ -95,34 +130,73 @@ pub fn start(
     cancel: CancellationToken,
 ) -> Result<Vec<(&'static str, tokio::task::JoinHandle<()>)>, String> {
     recover(&application, &Utc::now().to_rfc3339())?;
-    let runner = GalleryDlSourceRunner::open(application.store().library_root());
-
-    let subscription_application = Arc::clone(&application);
-    let subscription_cancel = cancel.clone();
-    let subscription_handle = tokio::spawn(async move {
-        let mut worker = SubscriptionWorker::with_cancellation(
-            &subscription_application,
-            runner,
-            subscription_cancel.clone(),
-        );
+    let scheduler_application = Arc::clone(&application);
+    let scheduler_cancel = cancel.clone();
+    let scheduler_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(SUBSCRIPTION_TICK);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
-                _ = subscription_cancel.cancelled() => return,
+                _ = scheduler_cancel.cancelled() => return,
                 _ = interval.tick() => {
                     let now = Utc::now().to_rfc3339();
-                    if let Err(error) = subscription_tick(
-                        &subscription_application,
-                        &mut worker,
-                        &now,
-                    ).await {
-                        tracing::warn!(error = %error, "Replacement subscription tick failed");
+                    match subscriptions_v2::schedule_due_runs(scheduler_application.store(), &now) {
+                        Ok(scheduled) if !scheduled.is_empty() => {
+                            match scheduler_application.store().revision() {
+                                Ok(revision) => {
+                                    let receipt = MutationReceipt {
+                                        revision,
+                                        resources: vec![
+                                            resources::SUBSCRIPTIONS.to_string(),
+                                            resources::TASKS.to_string(),
+                                        ],
+                                        item_ids: Vec::new(),
+                                    };
+                                    scheduler_application.publish(&receipt);
+                                }
+                                Err(error) => tracing::warn!(
+                                    error = %error,
+                                    "Reading revision after subscription scheduling failed"
+                                ),
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(error) => tracing::warn!(error = %error, "Subscription scheduling failed"),
                     }
                 }
             }
         }
     });
+
+    let shared_schedule = Arc::new(Mutex::new(subscriptions_v2::DomainSchedule::new()));
+    let mut subscription_handles = Vec::with_capacity(SUBSCRIPTION_WORKER_COUNT);
+    for _ in 0..SUBSCRIPTION_WORKER_COUNT {
+        let subscription_application = Arc::clone(&application);
+        let subscription_cancel = cancel.clone();
+        let schedule = Arc::clone(&shared_schedule);
+        let runner = SubscriptionSourceRouter::open(application.store().library_root());
+        subscription_handles.push(tokio::spawn(async move {
+            let worker = SubscriptionWorker::with_shared_schedule(
+                &subscription_application,
+                runner,
+                schedule,
+                subscription_cancel.clone(),
+            );
+            let mut interval = tokio::time::interval(SUBSCRIPTION_TICK);
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = subscription_cancel.cancelled() => return,
+                    _ = interval.tick() => {
+                        let now = Utc::now().to_rfc3339();
+                        if let Err(error) = worker.tick(&now).await {
+                            tracing::warn!(error = %error, "Replacement subscription worker failed");
+                        }
+                    }
+                }
+            }
+        }));
+    }
 
     let maintenance_application = Arc::clone(&application);
     let maintenance_cancel = cancel.clone();
@@ -158,11 +232,17 @@ pub fn start(
         }
     });
 
-    Ok(vec![
-        ("replacement_subscriptions", subscription_handle),
+    let mut handles = vec![
+        ("replacement_subscription_scheduler", scheduler_handle),
         ("replacement_maintenance", maintenance_handle),
         ("replacement_folder_watches", watch_handle),
-    ])
+    ];
+    handles.extend(
+        subscription_handles
+            .into_iter()
+            .map(|handle| ("replacement_subscription_worker", handle)),
+    );
+    Ok(handles)
 }
 
 #[cfg(test)]
@@ -175,7 +255,7 @@ mod tests {
 
     use super::*;
     use crate::store::Store;
-    use crate::subscription_runtime_v2::{DownloadedItem, RunnerFailure, RunnerSuccess};
+    use crate::subscription_runtime_v2::{RunnerFailure, RunnerSuccess, SourceEvent};
     use crate::subscriptions_v2::{QueryInput, SubscriptionInput};
 
     struct EmptyRunner;
@@ -184,7 +264,7 @@ mod tests {
         fn run<'a>(
             &'a self,
             _query: &'a crate::subscriptions_v2::ClaimedQueryRun,
-            _output: mpsc::Sender<DownloadedItem>,
+            _output: mpsc::Sender<SourceEvent>,
             _cancel: CancellationToken,
         ) -> Pin<Box<dyn Future<Output = Result<RunnerSuccess, RunnerFailure>> + Send + 'a>>
         {
@@ -223,9 +303,9 @@ mod tests {
             },
         )
         .unwrap();
-        let mut worker = SubscriptionWorker::new(&application, EmptyRunner);
+        let worker = SubscriptionWorker::new(&application, EmptyRunner);
 
-        let result = subscription_tick(&application, &mut worker, "2026-01-02T00:00:00Z")
+        let result = subscription_tick(&application, &worker, "2026-01-02T00:00:00Z")
             .await
             .unwrap();
 
