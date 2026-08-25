@@ -39,11 +39,14 @@ export function AuthWorkspace({
 
   const refresh = useCallback(async (preserveSelection = true) => {
     const next = await authController.loadWorkspaceSnapshot();
-    setSnapshot(next);
-    onSitesLoaded?.(next.sites);
+    const sites = [...next.sites].sort((left, right) => (
+      left.site.name.localeCompare(right.site.name, undefined, { sensitivity: 'base' })
+    ));
+    setSnapshot({ ...next, sites });
+    onSitesLoaded?.(sites);
     setSelectedSiteId((current) => {
-      if (preserveSelection && current && next.sites.some((site) => site.site.id === current)) return current;
-      return next.sites[0]?.site.id ?? null;
+      if (preserveSelection && current && sites.some((site) => site.site.id === current)) return current;
+      return sites[0]?.site.id ?? null;
     });
   }, [onSitesLoaded]);
 

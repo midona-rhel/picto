@@ -248,7 +248,7 @@ pub fn current_progress(
     store: &Store,
     subscription_id: i64,
 ) -> Result<Option<CurrentSubscriptionProgress>, String> {
-    store.read(|connection| {
+    store.read_snapshot(|connection| {
         let active_run = connection
             .query_row(
                 "SELECT run_id, status

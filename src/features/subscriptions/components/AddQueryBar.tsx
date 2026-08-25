@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
 import { ActionButton } from './ActionButton';
 import { TagAutocompleteInput } from './TagAutocompleteInput';
@@ -14,9 +14,21 @@ export function AddQueryBar({
   busy: boolean;
   onAdd: (siteId: string, queryText: string) => Promise<void>;
 }) {
-  const [siteId, setSiteId] = useState(sites[0]?.id ?? '');
+  const sortedSites = useMemo(
+    () => [...sites].sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })),
+    [sites],
+  );
+  const [siteId, setSiteId] = useState(sortedSites[0]?.id ?? '');
   const [queryText, setQueryText] = useState('');
-  const site = sites.find((entry) => entry.id === siteId) ?? null;
+  const site = sortedSites.find((entry) => entry.id === siteId) ?? null;
+
+  useEffect(() => {
+    setSiteId((current) => (
+      sortedSites.some((entry) => entry.id === current)
+        ? current
+        : (sortedSites[0]?.id ?? '')
+    ));
+  }, [sortedSites]);
 
   const submit = async () => {
     const text = queryText.trim();
@@ -29,9 +41,10 @@ export function AddQueryBar({
     <div className={styles.addQueryRow}>
       <CmSelect
         value={siteId}
-        options={sites.map((entry) => ({ value: entry.id, label: entry.name }))}
+        options={sortedSites.map((entry) => ({ value: entry.id, label: entry.name }))}
         onChange={setSiteId}
         width={140}
+        ariaLabel="Source"
       />
       <TagAutocompleteInput
         siteId={siteId}

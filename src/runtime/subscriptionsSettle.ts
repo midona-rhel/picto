@@ -41,10 +41,8 @@ export function refreshSubscriptionsWorkspace(): Promise<void> {
 
   workspaceRefreshPromise = (async () => {
     try {
-      const [snapshot, covers] = await Promise.all([
-        subscriptionsController.loadWorkspaceSnapshot(),
-        subscriptionsController.getCovers(),
-      ]);
+      const snapshot = await subscriptionsController.loadWorkspaceSnapshot();
+      const covers = snapshot.covers;
       const previousCovers = store.get(subscriptionsCoversAtom);
       for (const subscriptionId of snapshot.runningSubscriptionIds) {
         const previousCover = previousCovers.get(subscriptionId);
@@ -75,7 +73,10 @@ export function refreshSubscriptionsWorkspace(): Promise<void> {
 export function refreshSubscriptionsRuntimeState(): Promise<void> {
   if (runtimeRefreshPromise) return runtimeRefreshPromise;
 
-  runtimeRefreshPromise = subscriptionsController.refreshRuntimeState()
+  const snapshot = store.get(subscriptionsWorkspaceSnapshotAtom);
+  const runningIds = new Set(snapshot?.runningSubscriptionIds ?? []);
+  const runningSubscriptions = snapshot?.subscriptions.filter((subscription) => runningIds.has(subscription.id)) ?? [];
+  runtimeRefreshPromise = subscriptionsController.refreshRuntimeState(runningSubscriptions)
     .then((runtime) => {
       store.set(subscriptionsWorkspaceSnapshotAtom, (current) => (current ? { ...current, ...runtime } : current));
     })

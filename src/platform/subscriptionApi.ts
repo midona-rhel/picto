@@ -1,4 +1,5 @@
 import { invoke } from './ipc';
+import { getSettings } from './settingsApi';
 import type { SourceCatalogEntry } from '../shared/types/generated/application/SourceCatalogEntry';
 import type { SubscriptionList } from '../shared/types/generated/application/SubscriptionList';
 import type { SubscriptionView } from '../shared/types/generated/application/SubscriptionView';
@@ -182,21 +183,39 @@ async function listReplacementSubscriptions(): Promise<SubscriptionList> {
   return invoke<SubscriptionList>('subscriptions.list', {});
 }
 
-export function getSubscriptionSites(): Promise<SubscriptionSiteInfo[]> {
-  return invoke<SourceCatalogEntry[]>('sources.list', {}).then((sites) => sites.map(mapSite));
-}
-
-export function getSubscriptionCovers(): Promise<Map<string, SubscriptionCover>> {
-  return listReplacementSubscriptions().then((list) => new Map(
-    list.subscriptions.flatMap((subscription) => subscription.cover_file_hash
+export async function getSubscriptionOverview() {
+  const list = await listReplacementSubscriptions();
+  const subscriptions = list.subscriptions.map(mapSubscription);
+  const running = list.subscriptions.filter((subscription) =>
+    subscription.active_run_id != null && ['pending', 'running'].includes(subscription.status ?? ''),
+  );
+  return {
+    subscriptions,
+    covers: new Map(list.subscriptions.flatMap((subscription) => subscription.cover_file_hash
       ? [[String(subscription.subscription_id), {
         file_hash: subscription.cover_file_hash,
         focus_x: subscription.cover_focus_x,
         focus_y: subscription.cover_focus_y,
         zoom_percent: subscription.cover_zoom_percent,
-      }] as const]
-      : []),
-  ));
+      }]] as const
+      : [])),
+    runningSubscriptionIds: running.map((subscription) => String(subscription.subscription_id)),
+    runningProgress: running
+      .map((subscription) => mapProgress(subscription))
+      .filter((entry): entry is SubscriptionProgressEvent => entry !== null),
+    openIssueCounts: Object.fromEntries(list.subscriptions.map((subscription) => [
+      String(subscription.subscription_id),
+      subscription.open_issue_count,
+    ])),
+  };
+}
+
+export function getSubscriptionSites(): Promise<SubscriptionSiteInfo[]> {
+  return invoke<SourceCatalogEntry[]>('sources.list', {}).then((sites) => sites.map(mapSite));
+}
+
+export function getSubscriptionCovers(): Promise<Map<string, SubscriptionCover>> {
+  return getSubscriptionOverview().then((overview) => overview.covers);
 }
 
 export function getSubscriptionCoverCandidates(
@@ -249,11 +268,12 @@ export function setSubscriptionDestination(
 export async function createSubscription(params: {
   name: string;
 }): Promise<SubscriptionInfo> {
+  const settings = await getSettings();
   const input: NewSubscription = {
     name: params.name,
-    schedule: 'manual',
-    initial_post_limit: 100,
-    periodic_post_limit: 100,
+    schedule: settings.subscriptionDefaultSchedule,
+    initial_post_limit: settings.subscriptionDefaultPostsPerRun,
+    periodic_post_limit: settings.subscriptionDefaultPostsPerRun,
     queries: [],
   };
   const created = await invoke<CreatedSubscription>('subscriptions.create', input);
@@ -287,29 +307,29 @@ export function stopSubscription(id: string): Promise<void> {
   return invoke<MutationReceipt>('subscriptions.cancel', { subscription_id: Number(id) }).then(() => undefined);
 }
 
-export function addSubscriptionQuery(
+export async function addSubscriptionQuery(
   subscriptionId: string,
   siteId: string,
   queryText: string,
   notes?: string | null,
 ): Promise<SubscriptionInfo['queries'][number]> {
+  const settings = await getSettings();
   const query: NewSubscriptionQuery = {
     site_id: siteId,
     query_text: queryText,
     display_name: null,
     notes: notes ?? null,
-    group_posts: true,
+    group_posts: settings.subscriptionDefaultGroupPosts,
   };
-  return invoke<CreatedSubscriptionQuery>('subscriptions.queries.add', {
+  const created = await invoke<CreatedSubscriptionQuery>('subscriptions.queries.add', {
     subscription_id: Number(subscriptionId),
     query,
-  }).then(async (created) => {
-    const list = await listReplacementSubscriptions();
-    const subscription = list.subscriptions.find((entry) => entry.subscription_id === Number(subscriptionId));
-    const result = subscription?.queries.find((entry) => entry.query_id === created.query_id);
-    if (!result) throw new Error('Query was added but could not be read back.');
-    return mapQuery(result);
   });
+  const list = await listReplacementSubscriptions();
+  const subscription = list.subscriptions.find((entry) => entry.subscription_id === Number(subscriptionId));
+  const result = subscription?.queries.find((entry) => entry.query_id === created.query_id);
+  if (!result) throw new Error('Query was added but could not be read back.');
+  return mapQuery(result);
 }
 
 export function editSubscriptionQuery(
@@ -345,9 +365,7 @@ export function setSubscriptionQueryGrouping(id: string, groupPosts: boolean): P
 }
 
 export function getRunningSubscriptions(): Promise<string[]> {
-  return listReplacementSubscriptions().then((list) => list.subscriptions
-    .filter((subscription) => subscription.active_run_id != null && ['pending', 'running'].includes(subscription.status ?? ''))
-    .map((subscription) => String(subscription.subscription_id)));
+  return getSubscriptionOverview().then((overview) => overview.runningSubscriptionIds);
 }
 
 export function getRunningSubscriptionProgress(): Promise<SubscriptionProgressEvent[]> {
@@ -362,6 +380,42 @@ export function getRunningSubscriptionProgress(): Promise<SubscriptionProgressEv
       return mapProgress(subscription, current);
     }));
     return progress.filter((entry): entry is SubscriptionProgressEvent => entry !== null);
+  });
+}
+
+export function getSubscriptionProgress(
+  subscription: Pick<SubscriptionInfo, 'id' | 'name'>,
+): Promise<SubscriptionProgressEvent | null> {
+  return invoke<CurrentSubscriptionProgress | null>('subscriptions.progress.get', {
+    subscription_id: Number(subscription.id),
+  }).then((current) => current == null ? null : {
+    subscription_id: subscription.id,
+    subscription_name: subscription.name,
+    mode: 'replacement',
+    query_id: null,
+    query_name: null,
+    posts_traversed: current.counts.posts_traversed,
+    posts_added: current.counts.posts_added,
+    files_downloaded: current.counts.downloaded,
+    files_skipped: 0,
+    queued_for_ingest: current.counts.queued,
+    ingesting: 0,
+    media_added: current.counts.ingested,
+    reused: 0,
+    failed_ingest: current.counts.failed,
+    pages_fetched: 0,
+    metadata_validated: 0,
+    metadata_invalid: 0,
+    last_metadata_error: null,
+    status_text: current.status,
+    phase: current.status,
+    current_post_id: null,
+    current_post_items: 0,
+    resume_cursor: null,
+    last_error: null,
+    finished_status: null,
+    failure_kind: null,
+    error: null,
   });
 }
 

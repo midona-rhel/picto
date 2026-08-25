@@ -109,6 +109,8 @@ pub struct SubscriptionView {
     pub active_run_id: Option<i64>,
     #[ts(type = "number")]
     pub media_count: i64,
+    #[ts(type = "number")]
+    pub open_issue_count: i64,
     pub cover_file_hash: Option<String>,
     #[ts(type = "number")]
     pub cover_focus_x: i64,
@@ -171,13 +173,16 @@ pub struct SubscriptionList {
 }
 
 pub fn list(application: &Application) -> Result<SubscriptionList, String> {
-    application.store().read(|connection| {
+    application.store().read_snapshot(|connection| {
         let rows = connection
             .prepare(
                 "SELECT s.subscription_id, s.name, s.schedule, s.paused,
                         s.initial_post_limit, s.periodic_post_limit, s.next_run_at,
                         active.run_id, COALESCE(active.status, latest.status),
                         COUNT(DISTINCT CASE WHEN si.state = 'ingested' THEN si.media_item_id END),
+                        (SELECT COUNT(*) FROM subscription_issue issue
+                         WHERE issue.subscription_id = s.subscription_id
+                           AND issue.status = 'open'),
                         (
                             SELECT mf.file_hash
                             FROM subscription_source_post cover_ssp
@@ -224,7 +229,8 @@ pub fn list(application: &Application) -> Result<SubscriptionList, String> {
                     active_run_id: row.get(7)?,
                     status: row.get(8)?,
                     media_count: row.get(9)?,
-                    cover_file_hash: row.get(10)?,
+                    open_issue_count: row.get(10)?,
+                    cover_file_hash: row.get(11)?,
                     cover_focus_x: 500,
                     cover_focus_y: 500,
                     cover_zoom_percent: 100,

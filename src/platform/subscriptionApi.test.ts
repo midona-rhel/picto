@@ -34,6 +34,7 @@ const replacementSubscription = {
   status: 'running',
   active_run_id: 11,
   media_count: 3,
+  open_issue_count: 2,
   cover_file_hash: 'cover-hash',
   cover_focus_x: 250,
   cover_focus_y: 750,
@@ -199,28 +200,53 @@ describe('replacement subscription API', () => {
 
   it('creates a subscription and reads its canonical persisted view back', async () => {
     invoke
+      .mockResolvedValueOnce({
+        value: {
+          subscriptionDefaultSchedule: 'weekly',
+          subscriptionDefaultPostsPerRun: 250,
+          subscriptionDefaultGroupPosts: false,
+        },
+        revision: 1,
+      })
       .mockResolvedValueOnce({ subscription_id: 7, receipt: { revision: 1, resources: [], item_ids: [] } })
       .mockResolvedValueOnce(listPayload());
 
     await expect(createSubscription({ name: 'Artists' })).resolves.toEqual(expect.objectContaining({ id: '7' }));
-    expect(invoke.mock.calls[0]).toEqual(['subscriptions.create', {
+    expect(invoke.mock.calls[1]).toEqual(['subscriptions.create', {
       name: 'Artists',
-      schedule: 'manual',
-      initial_post_limit: 100,
-      periodic_post_limit: 100,
+      schedule: 'weekly',
+      initial_post_limit: 250,
+      periodic_post_limit: 250,
       queries: [],
     }]);
   });
 
   it('adds a query through the replacement query command and reads it back', async () => {
     invoke
+      .mockResolvedValueOnce({
+        value: {
+          subscriptionDefaultSchedule: 'daily',
+          subscriptionDefaultPostsPerRun: 100,
+          subscriptionDefaultGroupPosts: false,
+        },
+        revision: 1,
+      })
       .mockResolvedValueOnce({ query_id: 9, receipt: { revision: 1, resources: [], item_ids: [] } })
       .mockResolvedValueOnce(listPayload());
 
     await expect(addSubscriptionQuery('7', 'gelbooru', 'artist')).resolves.toEqual(
       expect.objectContaining({ id: '9', query_text: 'artist' }),
     );
-    expect(invoke.mock.calls[0][0]).toBe('subscriptions.queries.add');
+    expect(invoke.mock.calls[1]).toEqual(['subscriptions.queries.add', {
+      subscription_id: 7,
+      query: {
+        site_id: 'gelbooru',
+        query_text: 'artist',
+        display_name: null,
+        notes: null,
+        group_posts: false,
+      },
+    }]);
   });
 
   it('maps persisted run and issue pages without legacy attempt reads', async () => {

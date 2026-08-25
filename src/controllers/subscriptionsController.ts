@@ -6,9 +6,8 @@ import {
   deleteSubscription,
   deleteSubscriptionQuery,
   editSubscriptionQuery,
-  getRunningSubscriptionProgress,
-  getRunningSubscriptions,
-  getSubscriptionCovers,
+  getSubscriptionOverview,
+  getSubscriptionProgress,
   getSubscriptionCoverCandidates,
   getSubscriptionSites,
   getSubscriptions,
@@ -51,49 +50,40 @@ function deriveLastActivityAt(subscription: SubscriptionInfo): string | null {
 }
 
 export const subscriptionsController = {
-  async loadWorkspaceSnapshot(): Promise<SubscriptionWorkspaceSnapshot> {
-    const [subscriptions, sites, credentials, credentialHealth, runningSubscriptionIds, runningProgress] = await Promise.all([
-      getSubscriptions(),
+  async loadWorkspaceSnapshot(): Promise<SubscriptionWorkspaceSnapshot & { covers: Map<string, SubscriptionCover> }> {
+    const [overview, sites, credentials, credentialHealth] = await Promise.all([
+      getSubscriptionOverview(),
       getSubscriptionSites(),
       listCredentials(),
       listCredentialHealth(),
-      getRunningSubscriptions(),
-      getRunningSubscriptionProgress(),
     ]);
 
-    const metricsEntries = await Promise.all(
-      subscriptions.map(async (subscription) => {
-        const issues = await listSubscriptionIssues(subscription.id, null, 1);
-        return [
-          subscription.id,
-          {
-            failedPostCount: 0,
-            openIssueCount: issues.total_count,
-            lastActivityAt: deriveLastActivityAt(subscription),
-          },
-        ] as const;
-      }),
-    );
-
     return {
-      subscriptions,
+      subscriptions: overview.subscriptions,
       sites,
       credentials,
       credentialHealth,
-      runningSubscriptionIds,
-      runningProgress,
-      listMetrics: Object.fromEntries(metricsEntries),
+      runningSubscriptionIds: overview.runningSubscriptionIds,
+      runningProgress: overview.runningProgress,
+      listMetrics: Object.fromEntries(overview.subscriptions.map((subscription) => [
+        subscription.id,
+        {
+          failedPostCount: 0,
+          openIssueCount: overview.openIssueCounts[subscription.id] ?? 0,
+          lastActivityAt: deriveLastActivityAt(subscription),
+        },
+      ])),
+      covers: overview.covers,
     };
   },
 
-  async refreshRuntimeState(): Promise<{
+  async refreshRuntimeState(runningSubscriptions: SubscriptionInfo[]): Promise<{
     runningSubscriptionIds: string[];
     runningProgress: SubscriptionProgressEvent[];
   }> {
-    const [runningSubscriptionIds, runningProgress] = await Promise.all([
-      getRunningSubscriptions(),
-      getRunningSubscriptionProgress(),
-    ]);
+    const progress = await Promise.all(runningSubscriptions.map(getSubscriptionProgress));
+    const runningProgress = progress.filter((entry): entry is SubscriptionProgressEvent => entry !== null);
+    const runningSubscriptionIds = runningProgress.map((entry) => entry.subscription_id);
     return { runningSubscriptionIds, runningProgress };
   },
 
@@ -132,11 +122,6 @@ export const subscriptionsController = {
     destination: { target_folder_ids: number[]; automatic_tags: string[] },
   ): Promise<void> {
     return setSubscriptionDestination(id, destination);
-  },
-
-  /** Newest downloaded file hash per subscription id, for grid covers. */
-  async getCovers(): Promise<Map<string, SubscriptionCover>> {
-    return getSubscriptionCovers();
   },
 
   getCoverCandidates(

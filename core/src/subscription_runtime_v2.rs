@@ -389,10 +389,10 @@ async fn run_stream<R: SourceRunner>(
 fn publish_source_progress(application: &Application) -> Result<(), String> {
     application.publish(&MutationReceipt {
         revision: application.store().revision()?,
-        resources: vec![
-            resources::SUBSCRIPTIONS.to_string(),
-            resources::TASKS.to_string(),
-        ],
+        // Per-item traversal/download progress does not change subscription
+        // configuration. Publishing the catalog resource here made the UI run
+        // its expensive full subscription query for every source event.
+        resources: vec![resources::TASKS.to_string()],
         item_ids: Vec::new(),
     });
     Ok(())

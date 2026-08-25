@@ -32,6 +32,19 @@ impl Store {
 
         if existed {
             schema::validate(&writer)?;
+            // Let SQLite choose join order from the actual library rather than
+            // generic estimates. This is planner metadata, not an application
+            // schema migration, and turns source-backed cover lookups from a
+            // full source-item scan into indexed post lookups.
+            writer
+                .execute_batch(
+                    "PRAGMA analysis_limit=1000;
+                     ANALYZE;
+                     PRAGMA optimize;",
+                )
+                .map_err(|error| {
+                    format!("Failed to optimize SQLite planner statistics: {error}")
+                })?;
         } else {
             schema::create(&mut writer)?;
         }
@@ -70,6 +83,20 @@ impl Store {
         self.with_reader(|connection| operation(connection).map_err(|error| error.to_string()))
     }
 
+    /// Read a SQLite snapshot without waiting for projection settlement.
+    ///
+    /// Use this only for views derived entirely from SQLite. WAL keeps the
+    /// snapshot consistent while background writers continue, whereas
+    /// `read` also waits for in-memory projections to settle.
+    pub fn read_snapshot<T>(
+        &self,
+        operation: impl FnOnce(&Connection) -> rusqlite::Result<T>,
+    ) -> Result<T, String> {
+        self.with_reader_unlocked(|connection| {
+            operation(connection).map_err(|error| error.to_string())
+        })
+    }
+
     pub fn read_result<T>(
         &self,
         operation: impl FnOnce(&Connection) -> Result<T, String>,
@@ -85,6 +112,13 @@ impl Store {
             .consistency
             .read()
             .map_err(|_| "Store consistency lock poisoned".to_string())?;
+        self.with_reader_unlocked(operation)
+    }
+
+    fn with_reader_unlocked<T>(
+        &self,
+        operation: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
         let connection = self
             .readers
             .lock()
@@ -240,6 +274,7 @@ fn open_connection(path: &Path, read_only: bool) -> Result<Connection, String> {
 #[cfg(test)]
 mod tests {
     use super::Store;
+    use std::sync::{mpsc, Arc};
 
     #[test]
     fn transaction_commits_one_revision() {
@@ -270,5 +305,52 @@ mod tests {
         assert_eq!(store.revision().unwrap(), 0);
         assert_eq!(store.revision().unwrap(), 0);
         assert_eq!(store.readers.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn sqlite_snapshot_reads_do_not_wait_for_an_uncommitted_writer() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(Store::open(directory.path()).unwrap());
+        let writer = Arc::clone(&store);
+        let (started_tx, transaction_started) = mpsc::channel();
+        let (release_tx, release) = mpsc::channel();
+
+        let handle = std::thread::spawn(move || {
+            writer
+                .transaction(|transaction| {
+                    transaction.execute(
+                        "INSERT INTO library_item (item_key, kind, created_at, updated_at)
+                         VALUES ('pending-item', 'media', 'now', 'now')",
+                        [],
+                    )?;
+                    started_tx.send(()).unwrap();
+                    release.recv().unwrap();
+                    Ok(())
+                })
+                .unwrap();
+        });
+
+        transaction_started.recv().unwrap();
+        let visible_count = store
+            .read_snapshot(|connection| {
+                connection.query_row("SELECT COUNT(*) FROM library_item", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+            })
+            .unwrap();
+        assert_eq!(visible_count, 0);
+
+        release_tx.send(()).unwrap();
+        handle.join().unwrap();
+        assert_eq!(
+            store
+                .read_snapshot(|connection| {
+                    connection.query_row("SELECT COUNT(*) FROM library_item", [], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                })
+                .unwrap(),
+            1,
+        );
     }
 }

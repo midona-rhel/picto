@@ -22,16 +22,16 @@ const loadWorkspaceSnapshot = vi.hoisted(() => vi.fn().mockResolvedValue({
   runningSubscriptionIds: [],
   runningProgress: [],
   listMetrics: {},
+  covers: new Map(),
 }));
 const refreshRuntimeState = vi.hoisted(() => vi.fn().mockResolvedValue({
   runningSubscriptionIds: [],
   runningProgress: [],
 }));
-const getCovers = vi.hoisted(() => vi.fn().mockResolvedValue(new Map()));
 const showErrorNotification = vi.hoisted(() => vi.fn());
 
 vi.mock('../controllers/subscriptionsController', () => ({
-  subscriptionsController: { loadWorkspaceSnapshot, refreshRuntimeState, getCovers },
+  subscriptionsController: { loadWorkspaceSnapshot, refreshRuntimeState },
 }));
 vi.mock('../shared/lib/notifications', () => ({ showErrorNotification }));
 
@@ -49,7 +49,6 @@ describe('subscription settlement', () => {
     register.mockClear();
     loadWorkspaceSnapshot.mockClear();
     refreshRuntimeState.mockClear();
-    getCovers.mockClear();
     showErrorNotification.mockClear();
     store.set(subscriptionsCoversAtom, new Map());
     store.set(subscriptionsWorkspaceSnapshotAtom, null);
@@ -71,16 +70,25 @@ describe('subscription settlement', () => {
     await Promise.resolve();
 
     expect(loadWorkspaceSnapshot).toHaveBeenCalledOnce();
-    expect(getCovers).toHaveBeenCalledOnce();
     stop();
   });
 
   it('refreshes persisted task progress for task invalidation', async () => {
+    const runningSubscription = { id: '7', name: 'Active feed' };
+    store.set(subscriptionsWorkspaceSnapshotAtom, {
+      subscriptions: [runningSubscription],
+      sites: [],
+      credentials: [],
+      credentialHealth: [],
+      runningSubscriptionIds: ['7'],
+      runningProgress: [],
+      listMetrics: {},
+    } as never);
     const stop = startSubscriptionsSettle();
     callbacks.get('tasks')?.();
     await Promise.resolve();
 
-    expect(refreshRuntimeState).toHaveBeenCalledOnce();
+    expect(refreshRuntimeState).toHaveBeenCalledWith([runningSubscription]);
     stop();
   });
 
@@ -107,8 +115,8 @@ describe('subscription settlement', () => {
       runningSubscriptionIds: ['1'],
       runningProgress: [],
       listMetrics: {},
+      covers: new Map([['1', newCover]]),
     });
-    getCovers.mockResolvedValueOnce(new Map([['1', newCover]]));
 
     await refreshSubscriptionsWorkspace();
     expect(store.get(subscriptionsCoversAtom).get('1')).toEqual(oldCover);
@@ -121,8 +129,8 @@ describe('subscription settlement', () => {
       runningSubscriptionIds: [],
       runningProgress: [],
       listMetrics: {},
+      covers: new Map([['1', newCover]]),
     });
-    getCovers.mockResolvedValueOnce(new Map([['1', newCover]]));
 
     await refreshSubscriptionsWorkspace();
     expect(store.get(subscriptionsCoversAtom).get('1')).toEqual(newCover);

@@ -27,8 +27,10 @@ export function ActionButton({
   return (
     <button
       className={`${variantClass} ${compact ? styles.buttonCompact : ''}`.trim()}
+      data-modal-primary={variant === 'primary' ? 'true' : undefined}
       disabled={disabled}
       onClick={onClick}
+      type="button"
     >
       {children}
     </button>
