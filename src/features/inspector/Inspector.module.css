@@ -211,18 +211,29 @@
   align-items: center;
   justify-content: center;
   transform-origin: center;
+  transition:
+    transform 200ms var(--ease-default),
+    filter 200ms var(--ease-default);
+}
+
+.stackItemBase {
+  transform: rotate(0deg);
 }
 
 .stackItemLeft {
-  animation: stackPreviewLeft 200ms var(--ease-default) both;
+  transform: rotate(-5deg) scale(0.93);
 }
 
 .stackItemRight {
-  animation: stackPreviewRight 250ms var(--ease-default) both;
+  transform: rotate(5deg) scale(0.93);
 }
 
-.stackItemTop {
-  transform: rotate(0deg);
+.stackItemEnterLeft {
+  animation: stackPreviewLeft 200ms var(--ease-default) both;
+}
+
+.stackItemEnterRight {
+  animation: stackPreviewRight 250ms var(--ease-default) both;
 }
 
 @keyframes stackPreviewLeft {

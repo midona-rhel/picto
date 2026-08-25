@@ -6,7 +6,7 @@
  * - Multiple items selected → shared tags/folders from backend
  */
 
-import { forwardRef, useEffect, useState } from 'react';
+import { forwardRef, useEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useAtomValue, getDefaultStore } from 'jotai';
 import { IconAlertCircle, IconFolder } from '@tabler/icons-react';
@@ -244,21 +244,48 @@ function Preview({
     );
   }
 
-  // Stacked
-  const previews = hashes.slice(0, 3);
+  return <StackedPreview hashes={hashes} backgrounds={backgrounds} fontHashes={fontHashes} />;
+}
+
+function StackedPreview({
+  hashes,
+  backgrounds,
+  fontHashes,
+}: {
+  hashes: string[];
+  backgrounds: readonly (string | null)[];
+  fontHashes: ReadonlySet<string>;
+}) {
+  const previousHashes = useRef<ReadonlySet<string>>(new Set());
+  const previews = hashes.slice(-5);
+  const enteringHashes = new Set(previews.filter((hash) => !previousHashes.current.has(hash)));
+
+  useEffect(() => {
+    previousHashes.current = new Set(previews);
+  }, [previews]);
+
   if (previews.length === 0) return null;
   return (
     <div className={styles.preview}>
       <div className={styles.stackContainer}>
         {previews.map((hash, i) => {
           const top = i === previews.length - 1;
-          const motionClass = top
-            ? styles.stackItemTop
+          const motionClass = i === 0
+            ? styles.stackItemBase
             : i % 2 === 0 ? styles.stackItemLeft : styles.stackItemRight;
+          const enterClass = enteringHashes.has(hash) && i > 0
+            ? i % 2 === 0 ? styles.stackItemEnterLeft : styles.stackItemEnterRight
+            : '';
           return (
-            <div key={hash} className={`${styles.stackItem} ${motionClass}`} style={{
+            <div
+              key={hash}
+              className={`${styles.stackItem} ${motionClass} ${enterClass}`}
+              data-inspector-preview-hash={hash}
+              data-inspector-stack-position={top ? 'top' : 'behind'}
+              style={{
               zIndex: i, filter: top ? undefined : 'brightness(0.7)',
-            }}>
+              }}
+            >
               <div className={styles.previewFrame} style={{ background: backgrounds[i] ?? undefined }}>
                 <ThumbnailImage
                   src={`media://localhost/thumb/${hash}.jpg`}

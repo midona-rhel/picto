@@ -439,25 +439,36 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
             selected_collection_candidates.push(row?);
         }
 
-        let samples_sql = format!(
-            "{}
-             SELECT recent.item_id
-             FROM (
-                 SELECT sr.item_id, MAX(ma.imported_at) AS imported_at
-                 FROM selected_roots sr
-                 LEFT JOIN selected_media sm ON sm.root_item_id = sr.item_id
-                 LEFT JOIN media_asset ma ON ma.item_id = sm.media_item_id
-                 GROUP BY sr.item_id
-                 ORDER BY imported_at DESC, sr.item_id DESC
-                 LIMIT 3
-             ) recent
-             ORDER BY recent.imported_at ASC, recent.item_id ASC",
-            selection.with_clause
-        );
-        let sample_item_ids = connection
-            .prepare(&samples_sql)?
-            .query_map(parameters.as_slice(), |row| row.get::<_, i64>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
+        let sample_item_ids = match target {
+            ItemTarget::Explicit { item_ids } => item_ids
+                .iter()
+                .rev()
+                .take(5)
+                .rev()
+                .map(|item_id| item_id.0)
+                .collect(),
+            ItemTarget::Query { .. } => {
+                let samples_sql = format!(
+                    "{}
+                     SELECT recent.item_id
+                     FROM (
+                         SELECT sr.item_id, MAX(ma.imported_at) AS imported_at
+                         FROM selected_roots sr
+                         LEFT JOIN selected_media sm ON sm.root_item_id = sr.item_id
+                         LEFT JOIN media_asset ma ON ma.item_id = sm.media_item_id
+                         GROUP BY sr.item_id
+                         ORDER BY imported_at DESC, sr.item_id DESC
+                         LIMIT 5
+                     ) recent
+                     ORDER BY recent.imported_at ASC, recent.item_id ASC",
+                    selection.with_clause
+                );
+                connection
+                    .prepare(&samples_sql)?
+                    .query_map(parameters.as_slice(), |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?
+            }
+        };
         let mut sample_hashes = Vec::new();
         for item_id in sample_item_ids {
             if let Some(hash) = selection_display_hash(connection, item_id)? {
@@ -2754,7 +2765,7 @@ mod tests {
     }
 
     #[test]
-    fn selection_summary_orders_preview_samples_oldest_to_newest_for_stacking() {
+    fn selection_summary_preserves_recent_explicit_selection_order_for_stacking() {
         let (_directory, store) = seed_store();
         store
             .transaction(|transaction| {
@@ -2783,9 +2794,10 @@ mod tests {
         assert_eq!(
             summary.sample_hashes,
             vec![
-                crate::app::FileHash("hash-2".to_string()),
-                crate::app::FileHash("hash-11".to_string()),
                 crate::app::FileHash("hash-1".to_string()),
+                crate::app::FileHash("hash-2".to_string()),
+                crate::app::FileHash("hash-3".to_string()),
+                crate::app::FileHash("hash-11".to_string()),
             ]
         );
     }

@@ -297,6 +297,41 @@ describe('Inspector presentation branches', () => {
     vi.useRealTimers();
   });
 
+  it('stacks at most the five most recently selected previews with the newest on top', async () => {
+    vi.mocked(entityMutations.getTargetSelectionSummary).mockResolvedValue({
+      total_count: 6,
+      selected_count: 6,
+      sample_hashes: ['file-1', 'file-2', 'file-3', 'file-4', 'file-5', 'file-6'],
+      shared_tags: [],
+      top_tags: [],
+      shared_folders: [],
+      shared_notes: null,
+      notes_present_count: 0,
+      shared_source_urls: [],
+      source_urls_present_count: 0,
+      stats: {
+        total_size_bytes: 600,
+        mime_counts: { 'image/jpeg': 6 },
+        rating_stats: { min: null, max: null, shared: null },
+      },
+      revision: 4,
+    } as never);
+
+    const view = renderInspector({
+      target: { kind: 'multi', count: 6, selectionMode: 'explicit' },
+      selectionTarget: { kind: 'explicit', item_ids: [1, 2, 3, 4, 5, 6] },
+      selectionCount: 6,
+    });
+
+    await screen.findByText('6 items selected');
+    const previews = [...document.querySelectorAll('[data-inspector-preview-hash]')];
+    expect(previews.map((node) => node.getAttribute('data-inspector-preview-hash')))
+      .toEqual(['file-2', 'file-3', 'file-4', 'file-5', 'file-6']);
+    expect(previews.map((node) => node.getAttribute('data-inspector-stack-position')))
+      .toEqual(['behind', 'behind', 'behind', 'behind', 'top']);
+    view.unmount();
+  });
+
   it('confirms before replacing existing notes or sources across a selection', async () => {
     const summary = {
       total_count: 2,
