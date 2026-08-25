@@ -56,7 +56,7 @@ describe('PdfViewer', () => {
     await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeInTheDocument());
     await waitFor(() => expect(getPage).toHaveBeenCalled());
     const next = screen.getByRole('button', { name: 'Next PDF page' });
-    fireEvent.click(next);
+    await act(async () => { fireEvent.click(next); });
     expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Previous PDF page' })).toBeEnabled();
     expect(screen.getByRole('contentinfo', { name: 'PDF page navigation' })).toBeInTheDocument();

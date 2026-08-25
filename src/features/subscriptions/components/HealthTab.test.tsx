@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { MantineProvider } from '@mantine/core';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -44,6 +44,7 @@ const failedPost: FailedPostGroup = {
 describe('HealthTab', () => {
   it('binds persisted recovery actions without retrying the displayed subset', async () => {
     const user = userEvent.setup();
+    const click = (...args: Parameters<typeof user.click>) => act(() => user.click(...args));
     const onRetryAll = vi.fn();
     const onFixCredentials = vi.fn();
     const onReviewQuery = vi.fn();
@@ -80,9 +81,9 @@ describe('HealthTab', () => {
     expect(screen.getByText('retry automatically')).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: 'Retry all' })).toHaveLength(1);
 
-    await user.click(screen.getByRole('button', { name: 'Retry all' }));
-    await user.click(screen.getByRole('button', { name: 'Fix login' }));
-    await user.click(screen.getByRole('button', { name: 'Review source' }));
+    await click(screen.getByRole('button', { name: 'Retry all' }));
+    await click(screen.getByRole('button', { name: 'Fix login' }));
+    await click(screen.getByRole('button', { name: 'Review source' }));
 
     expect(onRetryAll).toHaveBeenCalledOnce();
     expect(onFixCredentials).toHaveBeenCalledWith(expect.objectContaining({ issue_id: 2 }));

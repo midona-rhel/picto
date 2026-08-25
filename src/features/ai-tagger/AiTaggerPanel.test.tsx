@@ -98,9 +98,19 @@ async function renderPanel(itemIds = [1]) {
   const store = createStore();
   store.set(mocks.portalAtom, { open: true, anchor: null });
   store.set(mocks.targetAtom, { kind: 'explicit', item_ids: itemIds });
-  const result = render(<Provider store={store}><AiTaggerPanel /></Provider>);
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 10)); });
+  let result!: ReturnType<typeof render>;
+  await act(async () => {
+    result = render(<Provider store={store}><AiTaggerPanel /></Provider>);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  });
   return { ...result, store };
+}
+
+function setupUser() {
+  const user = userEvent.setup();
+  return {
+    click: (...args: Parameters<typeof user.click>) => act(() => user.click(...args)),
+  };
 }
 
 beforeEach(() => {
@@ -119,7 +129,7 @@ beforeEach(() => {
 describe('AiTaggerPanel', () => {
   it('uses replacement numeric item IDs for prediction and apply', async () => {
     mocks.predict.mockImplementation(async ([itemId]: number[]) => ({ predictions: [prediction(itemId)], thresholds: { general: 0.35, character: 0.35 } }));
-    const user = userEvent.setup();
+    const user = setupUser();
     await renderPanel([1, 2]);
     await screen.findByText('cat');
     await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
@@ -135,7 +145,7 @@ describe('AiTaggerPanel', () => {
 
   it('uses namespace thresholds returned by the backend', async () => {
     mocks.predict.mockResolvedValue({ predictions: [prediction(1, 'miku', 0.5)], thresholds: { general: 0.35, character: 0.9 } });
-    const user = userEvent.setup();
+    const user = setupUser();
     await renderPanel();
     await screen.findByText('Below cutoff');
     expect(screen.queryByText('miku')).not.toBeInTheDocument();
@@ -153,7 +163,7 @@ describe('AiTaggerPanel', () => {
       }],
       thresholds: { general: 0.35, rating: 0.5 },
     });
-    const user = userEvent.setup();
+    const user = setupUser();
     await renderPanel();
     expect(await screen.findByText('explicit')).toBeInTheDocument();
     await user.click(screen.getByRole('button', { name: 'Apply 1 tag' }));
@@ -183,7 +193,7 @@ describe('AiTaggerPanel', () => {
   it('does not apply until the receipt promise resolves and stays open on failure', async () => {
     let resolveApply!: (value: unknown) => void;
     mocks.apply.mockReturnValue(new Promise((resolve) => { resolveApply = resolve; }));
-    const user = userEvent.setup();
+    const user = setupUser();
     await renderPanel();
     await screen.findByText('cat');
     await user.click(screen.getByRole('button', { name: 'Apply 1 tag' }));
@@ -202,10 +212,13 @@ describe('AiTaggerPanel', () => {
     await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(1));
     act(() => store.set(mocks.targetAtom, { kind: 'explicit', item_ids: [2] }));
     await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));
-    resolveFirst({ predictions: [prediction(1, 'stale')], thresholds: { character: 0.35 } });
-    await act(async () => {});
+    await act(async () => {
+      resolveFirst({ predictions: [prediction(1, 'stale')], thresholds: { character: 0.35 } });
+    });
     expect(screen.queryByText('stale')).not.toBeInTheDocument();
-    resolveSecond({ predictions: [prediction(2, 'fresh')], thresholds: { character: 0.35 } });
+    await act(async () => {
+      resolveSecond({ predictions: [prediction(2, 'fresh')], thresholds: { character: 0.35 } });
+    });
     expect(await screen.findByText('fresh')).toBeInTheDocument();
   });
 
@@ -254,7 +267,7 @@ describe('AiTaggerPanel', () => {
       predictions: [prediction(itemId)],
       thresholds: { character: 0.35 },
     }));
-    const user = userEvent.setup();
+    const user = setupUser();
     await renderPanel([1, 2]);
     await screen.findByText('cat');
     await waitFor(() => expect(mocks.predict).toHaveBeenCalledTimes(2));

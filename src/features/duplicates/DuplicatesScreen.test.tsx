@@ -99,14 +99,28 @@ function details(itemId: number, hash: string, name: string): ItemDetails {
   };
 }
 
-function renderScreen(withNotifications = false) {
-  return render(
-    <MantineProvider forceColorScheme="dark">
-      {withNotifications && <NotificationHost />}
-      <DuplicatesToolbar />
-      <DuplicatesScreen />
-    </MantineProvider>,
-  );
+async function renderScreen(withNotifications = false) {
+  let result!: ReturnType<typeof render>;
+  await act(async () => {
+    result = render(
+      <MantineProvider forceColorScheme="dark">
+        {withNotifications && <NotificationHost />}
+        <DuplicatesToolbar />
+        <DuplicatesScreen />
+      </MantineProvider>,
+    );
+    await Promise.resolve();
+  });
+  return result;
+}
+
+function setupUser() {
+  const user = userEvent.setup();
+  return {
+    click: (...args: Parameters<typeof user.click>) => act(() => user.click(...args)),
+    hover: (...args: Parameters<typeof user.hover>) => act(() => user.hover(...args)),
+    unhover: (...args: Parameters<typeof user.unhover>) => act(() => user.unhover(...args)),
+  };
 }
 
 describe('DuplicatesScreen', () => {
@@ -137,7 +151,7 @@ describe('DuplicatesScreen', () => {
   });
 
   it('loads logical details by item ID while rendering physical file hashes', async () => {
-    await act(async () => { renderScreen(); });
+    await renderScreen();
 
     expect(await screen.findByText('Left image')).toBeInTheDocument();
     expect(screen.getByText('Right image')).toBeInTheDocument();
@@ -177,7 +191,7 @@ describe('DuplicatesScreen', () => {
       };
     });
 
-    await act(async () => { renderScreen(); });
+    await renderScreen();
 
     expect(await screen.findByText('Member image')).toBeInTheDocument();
     expect(screen.getByText('Source post')).toBeInTheDocument();
@@ -186,7 +200,7 @@ describe('DuplicatesScreen', () => {
   });
 
   it('reuses shared entity open actions for duplicate candidates', async () => {
-    await act(async () => { renderScreen(); });
+    await renderScreen();
     await screen.findByText('Left image');
 
     fireEvent.contextMenu(screen.getByText('Left candidate').closest('article')!);
@@ -198,8 +212,8 @@ describe('DuplicatesScreen', () => {
   });
 
   it('resolves a pair through the replacement candidate contract', async () => {
-    const user = userEvent.setup();
-    await act(async () => { renderScreen(); });
+    const user = setupUser();
+    await renderScreen();
     await screen.findByText('Left image');
 
     await user.click(screen.getByRole('button', { name: 'Keep left' }));
@@ -211,8 +225,8 @@ describe('DuplicatesScreen', () => {
   });
 
   it('keeps an ambiguous smart merge in review for an explicit choice', async () => {
-    const user = userEvent.setup();
-    await act(async () => { renderScreen(true); });
+    const user = setupUser();
+    await renderScreen(true);
     await screen.findByText('Left image');
 
     vi.mocked(resolveDuplicatePair).mockResolvedValueOnce({
@@ -230,8 +244,8 @@ describe('DuplicatesScreen', () => {
   });
 
   it('uses one linked zoom level for both comparison panes', async () => {
-    const user = userEvent.setup();
-    await act(async () => { renderScreen(); });
+    const user = setupUser();
+    await renderScreen();
     await screen.findByText('Left image');
 
     await user.click(screen.getByRole('button', { name: 'Zoom out' }));
@@ -242,8 +256,8 @@ describe('DuplicatesScreen', () => {
   });
 
   it('shows the aligned difference composite only while the control is held', async () => {
-    const user = userEvent.setup();
-    await act(async () => { renderScreen(); });
+    const user = setupUser();
+    await renderScreen();
     await screen.findByText('Left image');
     await user.click(screen.getByRole('button', { name: 'Zoom out' }));
     const leftTransform = screen.getByTestId('left-preview-layers').style.transform;
@@ -266,8 +280,8 @@ describe('DuplicatesScreen', () => {
       has_more: false,
       total: 1,
     });
-    const user = userEvent.setup();
-    await act(async () => { renderScreen(); });
+    const user = setupUser();
+    await renderScreen();
     await screen.findByText('Left image');
 
     await user.hover(screen.getByRole('button', { name: 'Smart merge' }));
@@ -291,8 +305,8 @@ describe('DuplicatesScreen', () => {
     });
     let finishMerge!: (result: Awaited<ReturnType<typeof resolveDuplicatePair>>) => void;
     vi.mocked(resolveDuplicatePair).mockImplementationOnce(() => new Promise((resolve) => { finishMerge = resolve; }));
-    const user = userEvent.setup();
-    await act(async () => { renderScreen(); });
+    const user = setupUser();
+    await renderScreen();
     await screen.findByText('Right image');
     const button = screen.getByRole('button', { name: 'Smart merge' });
     const rightCard = screen.getByText('Right candidate').closest('article');
@@ -315,7 +329,7 @@ describe('DuplicatesScreen', () => {
   });
 
   it('restores a full-resolution candidate even if its image element was hidden', async () => {
-    await act(async () => { renderScreen(); });
+    await renderScreen();
     await screen.findByText('Left image');
     const fullImage = await waitFor(() => {
       const image = document.querySelector<HTMLImageElement>('img[src="media://localhost/file/left.png"]');
@@ -327,12 +341,12 @@ describe('DuplicatesScreen', () => {
     fireEvent.load(fullImage);
 
     expect(fullImage.style.display).toBe('');
-    expect(fullImage.style.opacity).toBe('1');
+    await waitFor(() => expect(fullImage.className).toContain('fullImageVisible'));
   });
 
   it('keeps decisions disabled while logical details are loading', async () => {
     vi.mocked(getDuplicateItemDetails).mockImplementation(() => new Promise(() => {}));
-    await act(async () => { renderScreen(); });
+    await renderScreen();
 
     expect(await screen.findByRole('button', { name: 'Keep left' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Keep right' })).toBeDisabled();
@@ -343,18 +357,20 @@ describe('DuplicatesScreen', () => {
     vi.mocked(getDuplicatePairs).mockResolvedValue({ items: [], next_cursor: null, has_more: false, total: 0 });
     let finishScan!: (result: Awaited<ReturnType<typeof scanDuplicates>>) => void;
     vi.mocked(scanDuplicates).mockImplementationOnce(() => new Promise((resolve) => { finishScan = resolve; }));
-    const user = userEvent.setup();
-    await act(async () => { renderScreen(true); });
+    const user = setupUser();
+    await renderScreen(true);
     await screen.findByRole('region', { name: 'No duplicate pairs' });
 
     await user.click(screen.getByRole('button', { name: 'Scan library' }));
     expect(screen.getByRole('region', { name: 'No duplicate pairs' })).toBeInTheDocument();
     expect(await screen.findByRole('progressbar')).toBeInTheDocument();
 
-    finishScan({
-      candidate_count: 0,
-      affected_item_ids: [],
-      receipt: { revision: 2, resources: ['duplicates'], item_ids: [] },
+    await act(async () => {
+      finishScan({
+        candidate_count: 0,
+        affected_item_ids: [],
+        receipt: { revision: 2, resources: ['duplicates'], item_ids: [] },
+      });
     });
     await waitFor(() => expect(screen.queryByRole('progressbar')).not.toBeInTheDocument());
     expect(await screen.findByRole('status')).toHaveTextContent('Scan complete - no new review pairs');
