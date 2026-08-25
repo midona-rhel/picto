@@ -1,4 +1,13 @@
-import { GRID_BADGE_FONT, GRID_INFO_FONT, GRID_NAME_FONT, GRID_RATING_FONT, GRID_TILE_RADIUS } from '../gridAppearance';
+import {
+  GRID_BADGE_BACKGROUND,
+  GRID_BADGE_BORDER,
+  GRID_BADGE_FONT,
+  GRID_BADGE_TEXT,
+  GRID_INFO_FONT,
+  GRID_NAME_FONT,
+  GRID_RATING_FONT,
+  GRID_TILE_RADIUS,
+} from '../gridAppearance';
 
 export const BADGE_H = 18;
 export const BADGE_FONT = GRID_BADGE_FONT;
@@ -88,12 +97,16 @@ export function drawBadge(
   const w = metrics.width + BADGE_PAD_X * 2;
   const bx = align === 'right' ? x - w : x;
 
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.65)';
+  ctx.fillStyle = GRID_BADGE_BACKGROUND;
   ctx.beginPath();
   ctx.roundRect(bx, y, w, BADGE_H, BADGE_RADIUS);
   ctx.fill();
 
-  ctx.fillStyle = 'rgba(255, 255, 255, 0.80)';
+  ctx.strokeStyle = GRID_BADGE_BORDER;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.fillStyle = GRID_BADGE_TEXT;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, bx + BADGE_PAD_X, y + BADGE_H / 2);

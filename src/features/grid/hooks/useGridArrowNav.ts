@@ -13,8 +13,9 @@ import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { LayoutResult } from '../layout/types';
 import type { GridSelection, GridSelectionAction } from '../../../state/selection';
 import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
-
-const GAP = 16;
+import { useAtomValue } from 'jotai';
+import { gridSpacingAtom } from '../../../state/grid';
+import { gridGapForSpacing } from '../gridAppearance';
 
 /** Map WASD to arrow equivalents so both sets work. */
 const WASD_MAP: Record<string, string> = {
@@ -40,6 +41,7 @@ export function useGridArrowNav(opts: {
   containerWidth: number;
   targetSize: number;
 }) {
+  const gap = gridGapForSpacing(useAtomValue(gridSpacingAtom));
   const optsRef = useRef(opts);
   optsRef.current = opts;
 
@@ -66,8 +68,8 @@ export function useGridArrowNav(opts: {
       // Compute column count (must match computeLayout's formula)
       const snappedSize = Math.max(50, Math.round(targetSize / 50) * 50);
       const fullWidth = containerWidth;
-      const minInnerWidth = fullWidth - 2 * GAP;
-      const columnCount = Math.max(1, Math.round((minInnerWidth + GAP) / (snappedSize + GAP)));
+      const minInnerWidth = fullWidth - 2 * gap;
+      const columnCount = Math.max(1, Math.round((minInnerWidth + gap) / (snappedSize + gap)));
 
       // Find current position
       let current = selection.anchor?.kind === 'item'
@@ -82,7 +84,7 @@ export function useGridArrowNav(opts: {
 
       // Compute visible rows for page up/down
       const container = containerRef.current;
-      const visibleRows = container ? Math.max(1, Math.floor(container.clientHeight / (snappedSize + GAP))) : 5;
+      const visibleRows = container ? Math.max(1, Math.floor(container.clientHeight / (snappedSize + gap))) : 5;
 
       let target: number;
       switch (action) {
@@ -121,10 +123,10 @@ export function useGridArrowNav(opts: {
       if (pos && container) {
         const scrollTop = container.scrollTop;
         const viewportH = container.clientHeight;
-        if (pos.y < scrollTop + GAP) {
-          container.scrollTop = pos.y - GAP;
-        } else if (pos.y + pos.h > scrollTop + viewportH - GAP) {
-          container.scrollTop = pos.y + pos.h - viewportH + GAP;
+        if (pos.y < scrollTop + gap) {
+          container.scrollTop = pos.y - gap;
+        } else if (pos.y + pos.h > scrollTop + viewportH - gap) {
+          container.scrollTop = pos.y + pos.h - viewportH + gap;
         }
       }
   }, { priority: 10 });

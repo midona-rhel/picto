@@ -1,6 +1,7 @@
 import { invoke } from './ipc';
 import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
 import type { SettingsSnapshot } from '../shared/types/generated/application/SettingsSnapshot';
+import type { GridSpacing } from '../shared/types/grid';
 
 export interface ViewPrefsDto {
   scope_key: string;
@@ -34,6 +35,7 @@ export interface ViewPrefsPatch {
 export interface AppSettings {
   gridTargetSize: number;
   gridViewMode: string;
+  gridSpacing: GridSpacing;
   inspectorWidth: number;
   colorScheme: string;
   gridSortField: string;
@@ -60,6 +62,7 @@ export interface AppSettings {
 const APP_SETTINGS_DEFAULTS: AppSettings = {
   gridTargetSize: 250,
   gridViewMode: 'waterfall',
+  gridSpacing: 'wide',
   inspectorWidth: 280,
   colorScheme: 'dark',
   gridSortField: 'imported_at',
@@ -110,6 +113,13 @@ function stringValue(value: unknown, key: string): string {
   return value;
 }
 
+function gridSpacingValue(value: unknown): GridSpacing {
+  if (value !== 'wide' && value !== 'tight') {
+    throw new Error('Settings field "gridSpacing" must be "wide" or "tight".');
+  }
+  return value;
+}
+
 function booleanValue(value: unknown, key: string): boolean {
   if (typeof value !== 'boolean') throw new Error(`Settings field "${key}" must be a boolean.`);
   return value;
@@ -137,6 +147,7 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     ...source,
     gridTargetSize: numberValue(storedOrDefault(source, 'gridTargetSize', APP_SETTINGS_DEFAULTS.gridTargetSize), 'gridTargetSize'),
     gridViewMode: stringValue(storedOrDefault(source, 'gridViewMode', APP_SETTINGS_DEFAULTS.gridViewMode), 'gridViewMode'),
+    gridSpacing: gridSpacingValue(storedOrDefault(source, 'gridSpacing', APP_SETTINGS_DEFAULTS.gridSpacing)),
     inspectorWidth: numberValue(storedOrDefault(source, 'inspectorWidth', APP_SETTINGS_DEFAULTS.inspectorWidth), 'inspectorWidth'),
     colorScheme: stringValue(storedOrDefault(source, 'colorScheme', APP_SETTINGS_DEFAULTS.colorScheme), 'colorScheme'),
     gridSortField: stringValue(storedOrDefault(source, 'gridSortField', APP_SETTINGS_DEFAULTS.gridSortField), 'gridSortField'),

@@ -11,6 +11,9 @@
   font-family: var(--font-family-ui);
 }
 
+.container.tight { padding-inline: 8px; }
+.container.tight .list { gap: 8px; }
+
 :global([data-mantine-color-scheme="light"]) .container {
   --folder-card: linear-gradient(rgb(0 0 0 / 10%), rgb(0 0 0 / 10%));
   --folder-card-top: rgb(0 0 0 / 20%);

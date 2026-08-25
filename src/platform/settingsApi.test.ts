@@ -27,6 +27,7 @@ describe('settings API', () => {
     expect(snapshot.revision).toBe(12);
     expect(snapshot.value.colorScheme).toBe('light');
     expect(snapshot.value.showTreeGuides).toBe(false);
+    expect(snapshot.value.gridSpacing).toBe('wide');
     expect(snapshot.value.showTagGroups).toBe(true);
     expect(snapshot.value.starredTags).toEqual([]);
     expect(snapshot.value.aiTaggerAutoOnImport).toBe(false);
@@ -42,6 +43,12 @@ describe('settings API', () => {
     invoke.mockResolvedValue({ value: { starredTags: ['creator:alice', 2] }, revision: 1 });
 
     await expect(getSettingsSnapshot()).rejects.toThrow('starredTags');
+  });
+
+  it('rejects unknown grid spacing values', async () => {
+    invoke.mockResolvedValue({ value: { gridSpacing: 'compact' }, revision: 1 });
+
+    await expect(getSettingsSnapshot()).rejects.toThrow('gridSpacing');
   });
 
   it('uses replacement settings and view commands with their value payloads', async () => {

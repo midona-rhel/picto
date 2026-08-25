@@ -6,6 +6,8 @@ import type { SidebarNodeDto } from '../../shared/types/canonical';
 import styles from './SubfolderGrid.module.css';
 import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
 import { GlassInput } from '../../shared/ui/GlassInput/GlassInput';
+import { useAtomValue } from 'jotai';
+import { gridSpacingAtom } from '../../state/grid';
 
 interface SubfolderGridProps {
   childFolders: SidebarNodeDto[];
@@ -29,6 +31,7 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
   onOpenFolder, onSelectFolder, onFolderContextMenu,
   selectedNodeIds, renamingNodeId, onRenameFolder, onCancelRename,
 }, ref) {
+  const spacing = useAtomValue(gridSpacingAtom);
   const [expanded, setExpanded] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const [covers, setCovers] = useState<Map<number, { hash: string; mime: string }>>(new Map());
@@ -99,7 +102,7 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
   const gridColumns = `repeat(auto-fill, minmax(${clampedSize}px, 1fr))`;
 
   return (
-    <div ref={rootRef} className={styles.container}>
+    <div ref={rootRef} className={`${styles.container} ${spacing === 'tight' ? styles.tight : ''}`}>
       <div className={styles.sectionLabel} data-grid-header-interactive onClick={() => setExpanded(!expanded)}>
         <span className={`${styles.chevron} ${!expanded ? styles.chevronCollapsed : ''}`}>
           <IconChevronRight size={11} />

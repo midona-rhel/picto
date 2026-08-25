@@ -20,7 +20,7 @@ const model = {
 };
 
 const settings = {
-  gridTargetSize: 200, gridViewMode: 'grid', inspectorWidth: 320, colorScheme: 'dark',
+  gridTargetSize: 200, gridViewMode: 'grid', gridSpacing: 'wide' as const, inspectorWidth: 320, colorScheme: 'dark',
   gridSortField: 'added_at', gridSortOrder: 'desc', zoomFactor: null, showTreeGuides: true,
   showTagGroups: true, starredTags: [], sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false, aiTaggerE621Enabled: false, aiTaggerEva02Enabled: false,

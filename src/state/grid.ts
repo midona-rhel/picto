@@ -8,7 +8,7 @@ import type { ItemScope } from '../shared/types/generated/application/ItemScope'
 import type { ItemSortField } from '../shared/types/generated/application/ItemSortField';
 import type { ItemSummary } from '../shared/types/generated/application/ItemSummary';
 import type { SortDirection } from '../shared/types/generated/application/SortDirection';
-import type { GridViewMode } from '../shared/types/grid';
+import type { GridSpacing, GridViewMode } from '../shared/types/grid';
 import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from './navigation';
 import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
 import { nodeIdToGridScope } from '../shared/lib/gridScope';
@@ -114,6 +114,8 @@ export const gridShowResolutionAtom = pick((s) => s.view.showResolution);
 export const gridFitThumbnailsAtom = pick((s) => s.view.fitThumbnails);
 /** Transient grid display mode. It is deliberately not a per-scope library preference. */
 export const gridGrayscaleAtom = atom(false);
+/** Application-wide spacing density. Wide preserves Picto's original layout. */
+export const gridSpacingAtom = atom<GridSpacing>('wide');
 export const gridShowSubfoldersAtom = pick((s) => s.view.showSubfolders);
 export const gridItemsAtom = pick((s) => s.items);
 export const gridCursorAtom = pick((s) => s.cursor);

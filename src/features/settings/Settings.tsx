@@ -80,7 +80,7 @@ const PANELS: PanelDef[] = [
   },
   {
     id: 'controls', label: 'Controls', icon: IconAdjustmentsHorizontal,
-    keywords: 'controls grid layout thumbnails sort order name resolution extension label count fit',
+    keywords: 'controls grid layout thumbnails spacing density wide tight sort order name resolution extension label count fit',
     description: 'Default grid controls and item presentation.',
     separatorBefore: true,
   },
@@ -206,6 +206,10 @@ const SORT_FIELD_OPTIONS = [
 const SORT_DIR_OPTIONS = [
   { value: 'ascending', label: 'Ascending', icon: <IconSortAscending size={14} /> },
   { value: 'descending', label: 'Descending', icon: <IconSortDescending size={14} /> },
+];
+const GRID_SPACING_OPTIONS = [
+  { value: 'wide', label: 'Wide' },
+  { value: 'tight', label: 'Tight' },
 ];
 
 function PreferencePanel({ panel, onDirty, appSettings, setAppSettings, prefs, setPrefs, audioVisualization, setAudioVisualization }: {
@@ -341,6 +345,13 @@ function PreferencePanel({ panel, onDirty, appSettings, setAppSettings, prefs, s
                 onChange={(e) => updateViewPref({ target_size: Number(e.target.value) })} className={styles.rangeInput} />
               <span className={styles.valueLabel}>{prefs.target_size ?? 220}px</span>
             </Row>
+            <Row label="Grid spacing" sep>
+              <CmSelect
+                value={appSettings?.gridSpacing ?? 'wide'}
+                options={GRID_SPACING_OPTIONS}
+                onChange={(value) => updateAppSetting({ gridSpacing: value as 'wide' | 'tight' })}
+              />
+            </Row>
             <div className={styles.rowSep} />
             <div className={styles.labelItems}>
               <div className={styles.labelItem}>
@@ -397,7 +408,7 @@ const ALL_SETTINGS: SettingRow[] = [
   {
     id: 'controls.grid',
     label: 'Grid Defaults',
-    keywords: 'grid layout thumbnail size sort name resolution extension label count fit',
+    keywords: 'grid layout thumbnail size spacing density wide tight sort name resolution extension label count fit',
     panel: 'controls',
   },
   {

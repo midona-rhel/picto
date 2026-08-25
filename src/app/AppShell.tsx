@@ -31,7 +31,7 @@ import {
   showTreeGuidesAtom,
 } from '../state/navigation';
 import { sidebarNodesAtom } from '../state/sidebar';
-import { gridActiveAtom, gridScopeLabelAtom, gridTransitionPhaseAtom } from '../state/grid';
+import { gridActiveAtom, gridScopeLabelAtom, gridSpacingAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
 import { viewerExitTransitionAtom, viewerSessionAtom } from '../state/viewer';
 import { startAppRuntime } from '../runtime/appRuntime';
@@ -296,6 +296,7 @@ export function AppShell() {
   }, [inspectorWidth, setInspectorWidth]);
 
   const setShowTreeGuides = useSetAtom(showTreeGuidesAtom);
+  const setGridSpacing = useSetAtom(gridSpacingAtom);
 
   useEffect(() => {
     const stopRuntime = startAppRuntime();
@@ -303,6 +304,7 @@ export function AppShell() {
     const loadAppSettings = () => {
       settingsController.getSettings().then((s) => {
         setShowTreeGuides(s.showTreeGuides ?? true);
+        setGridSpacing(s.gridSpacing);
       }).catch(() => {});
     };
 

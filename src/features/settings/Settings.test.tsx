@@ -25,6 +25,7 @@ vi.mock('../../controllers/settingsController', () => ({
 const appSettings = {
   gridTargetSize: 220,
   gridViewMode: 'waterfall',
+  gridSpacing: 'wide' as const,
   inspectorWidth: 320,
   colorScheme: 'dark',
   gridSortField: 'date_added',
@@ -114,6 +115,20 @@ describe('Settings', () => {
 
     await user.click(screen.getByRole('button', { name: 'Save Changes' }));
     expect(localStorage.getItem('picto-keyboard-preset')).toBe('eu');
+  });
+
+  it('persists reference application-style tight grid spacing through the existing settings transaction', async () => {
+    const user = userEvent.setup();
+    await renderSettings();
+
+    await user.click(screen.getByRole('button', { name: 'Controls' }));
+    await user.click(screen.getByRole('button', { name: 'Wide' }));
+    await user.click(screen.getByRole('button', { name: 'Tight' }));
+    await user.click(screen.getByRole('button', { name: 'Save Changes' }));
+
+    await waitFor(() => expect(mocks.replaceSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ gridSpacing: 'tight' }),
+    ));
   });
 
   it('keeps a failed save dirty and exposes the failure for retry', async () => {

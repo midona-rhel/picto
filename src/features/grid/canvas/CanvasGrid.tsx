@@ -7,10 +7,12 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useAtomValue } from 'jotai';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { GridViewMode, LayoutResult } from '../layout/types';
 import { HoverPreviewPortal } from './HoverPreviewPortal';
 import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
+import { getContainRect, mimeToExt, NAME_FONT, truncateText } from './primitives';
 
 import { ThumbnailPipeline, type PlanTile } from './thumbnailPipeline';
 import { ThumbnailRevealTracker } from './thumbnailRevealTracker';
@@ -42,8 +44,15 @@ import { useCanvasViewport } from './useCanvasViewport';
 import styles from './CanvasGrid.module.css';
 import type { ItemScope } from '../../../shared/types/generated/application/ItemScope';
 import { resolveRenderedGridItem } from './renderItemAdapter';
+import { gridSpacingAtom } from '../../../state/grid';
+import {
+  GRID_SELECTION_COLOR,
+  GRID_SELECTION_INNER_WIDTH,
+  GRID_SELECTION_OUTER_WIDTH,
+  GRID_TILE_RADIUS,
+  gridGapForSpacing,
+} from '../gridAppearance';
 
-const GAP = 16;
 const TEXT_NAME_ROW_H = 20;
 const EMPTY_ITEM_ID_SET = new Set<number>();
 const EMPTY_FOLDER_NODE_SET = new Set<string>();
@@ -198,6 +207,7 @@ export function CanvasGrid({
   onMarqueeSelectionChange,
   collectHeaderMarqueeHits,
 }: CanvasGridProps) {
+  const gap = gridGapForSpacing(useAtomValue(gridSpacingAtom));
   const containerRef = useRef<HTMLDivElement>(null);
   const dragOwnerIdRef = useRef(0);
   if (dragOwnerIdRef.current === 0) dragOwnerIdRef.current = createDragOwnerId();
@@ -234,7 +244,6 @@ export function CanvasGrid({
     textPrimary: 'rgba(255,255,255,0.92)',
     textTertiary: 'rgba(255,255,255,0.36)',
     glassBorder: 'rgba(255,255,255,0.14)',
-    tileBoundary: 'rgba(255,255,255,0.12)',
   });
   // Refresh theme cache when container mounts or theme changes
   const refreshTheme = useCallback(() => {
@@ -249,7 +258,6 @@ export function CanvasGrid({
       textPrimary: s.getPropertyValue('--color-text-primary').trim() || 'rgba(255,255,255,0.92)',
       textTertiary: s.getPropertyValue('--color-text-tertiary').trim() || 'rgba(255,255,255,0.36)',
       glassBorder: s.getPropertyValue('--color-border-primary').trim() || 'rgba(255,255,255,0.14)',
-      tileBoundary: s.getPropertyValue('--color-border-secondary').trim() || 'rgba(255,255,255,0.12)',
     };
   }, []);
   const scrollStateRef = useRef<CanvasScrollState>(createIdleCanvasScrollState());
@@ -310,11 +318,11 @@ export function CanvasGrid({
   const layoutModel = useMemo(() => layoutRuntimeRef.current.update(items, {
     width: layoutWidth.width,
     targetSize,
-    gap: GAP,
+    gap,
     viewMode,
     textHeight,
     scrollbarWidth: layoutWidth.scrollbarWidth,
-  }), [items, layoutWidth, targetSize, viewMode, textHeight]);
+  }), [items, layoutWidth, targetSize, viewMode, textHeight, gap]);
   const renderItemsRef = useRef(layoutModel.items);
   renderItemsRef.current = layoutModel.items;
   const estimatedScrollHeight = useMemo(
@@ -554,23 +562,68 @@ export function CanvasGrid({
     ctx.scale(vp.dpr, vp.dpr);
     const scrollTop = Math.max(0, vp.scrollTop - headerHeight);
 
-    // Draw selection borders on all selected tiles
+    // reference application-style selection follows the rendered thumbnail, not the empty tile cell.
     if (selectedItemIds.size > 0) {
-      ctx.strokeStyle = '#3297FF';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
       const visible = activeTilesRef.current;
       for (let k = 0; k < visible.length; k++) {
         const i = visible[k];
         if (!selectedItemIds.has(layoutModel.items[i]?.itemId)) continue;
         const pos = layoutModel.positions[i];
-        if (!pos) continue;
+        const item = layoutModel.items[i];
+        if (!pos || !item) continue;
         const drawY = pos.y - scrollTop;
         if (drawY + pos.h < -100 || drawY > vp.viewportHeight + 100) continue;
         const imgH = pos.h - textHeight;
-        ctx.roundRect(pos.x - 1, drawY - 1, pos.w + 2, imgH + 2, 4);
+        const useContain = (viewMode === 'grid' && !fitThumbnails)
+          || item.mime.startsWith('video/')
+          || item.mime.startsWith('audio/');
+        const frame = useContain && item.aspectRatio
+          ? getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imgH)
+          : { x: pos.x, y: drawY, w: pos.w, h: imgH };
+
+        ctx.strokeStyle = GRID_SELECTION_COLOR;
+        ctx.lineWidth = GRID_SELECTION_OUTER_WIDTH;
+        ctx.beginPath();
+        ctx.roundRect(
+          frame.x - 2,
+          frame.y - 2,
+          frame.w + 4,
+          frame.h + 4,
+          GRID_TILE_RADIUS + 2,
+        );
+        ctx.stroke();
+
+        ctx.strokeStyle = cachedThemeRef.current.opaqueBg;
+        ctx.lineWidth = GRID_SELECTION_INNER_WIDTH;
+        ctx.beginPath();
+        ctx.roundRect(
+          frame.x - 0.5,
+          frame.y - 0.5,
+          frame.w + 1,
+          frame.h + 1,
+          GRID_TILE_RADIUS + 0.5,
+        );
+        ctx.stroke();
+
+        if (showName && textHeight > 0) {
+          ctx.font = NAME_FONT;
+          const ext = mimeToExt(item.mime);
+          const label = (item.name || 'Untitled') + (showExtension && ext ? `.${ext.toUpperCase()}` : '');
+          const text = truncateText(ctx, label, pos.w - 8);
+          const textWidth = ctx.measureText(text).width;
+          const textX = pos.x + pos.w / 2;
+          const textY = drawY + imgH + 14;
+          const labelHeight = 17;
+          ctx.fillStyle = GRID_SELECTION_COLOR;
+          ctx.beginPath();
+          ctx.roundRect(textX - textWidth / 2 - 3, textY - labelHeight / 2, textWidth + 6, labelHeight, 2);
+          ctx.fill();
+          ctx.fillStyle = '#fff';
+          ctx.textAlign = 'center';
+          ctx.textBaseline = 'middle';
+          ctx.fillText(text, textX, textY);
+        }
       }
-      ctx.stroke();
     }
 
     // Draw hover zoom button (bottom-right of hovered tile)
@@ -630,7 +683,6 @@ export function CanvasGrid({
       if (rdPos) {
         const rdDrawY = rdPos.y - scrollTop;
         const rdImgH = rdPos.h - textHeight;
-        const gap = 16;
         const indicatorX = rd.dropSide === 'left'
           ? rdPos.x - gap / 2
           : rdPos.x + rdPos.w + gap / 2;
@@ -660,7 +712,7 @@ export function CanvasGrid({
       reorderDropRef.current == null;
 
     ctx.restore();
-  }, [layoutModel, items, selectedItemIds, textHeight, headerHeight]);
+  }, [layoutModel, items, selectedItemIds, textHeight, headerHeight, viewMode, fitThumbnails, showName, showExtension, gap]);
 
   // ── Shared RAF scheduler ──
   const drawBaseRef = useRef(drawBase);
