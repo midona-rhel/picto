@@ -179,6 +179,7 @@ export function registerIpcHandlers({
   openWithApplication,
   isDev,
 }) {
+  const openWithOptionsByExtension = new Map();
 
   ipcMain.handle('picto:invoke', async (_event, payload) => {
     const { command, args } = payload || {};
@@ -587,7 +588,15 @@ export function registerIpcHandlers({
   ipcMain.handle('picto:shell:getOpenWithOptions', async (_event, { path }) => {
     if (!path) throw new Error('A file path is required');
     if (process.platform === 'darwin') {
-      return { mode: 'submenu', applications: getAssociatedApplications(path) };
+      const dot = path.lastIndexOf('.');
+      const extension = dot >= 0 ? path.slice(dot).toLowerCase() : path.toLowerCase();
+      if (!openWithOptionsByExtension.has(extension)) {
+        openWithOptionsByExtension.set(extension, {
+          mode: 'submenu',
+          applications: getAssociatedApplications(path),
+        });
+      }
+      return openWithOptionsByExtension.get(extension);
     }
     if (process.platform === 'win32') {
       return { mode: 'chooser', applications: [] };
