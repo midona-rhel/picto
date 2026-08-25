@@ -54,10 +54,10 @@ function status(downloaded = false) {
   };
 }
 
-async function renderPanel() {
+async function renderPanel(onSettingsChange = vi.fn()) {
   let result!: ReturnType<typeof render>;
   await act(async () => {
-    result = render(<AiTaggingPanel settings={settings} onSettingsChange={vi.fn()} />);
+    result = render(<AiTaggingPanel settings={settings} onSettingsChange={onSettingsChange} />);
     await Promise.resolve();
   });
   return result;
@@ -98,6 +98,24 @@ describe('AiTaggingPanel', () => {
     await waitFor(() => expect(mocks.status.mock.calls.length).toBeGreaterThan(1));
   });
 
+  it('allows multiple downloaded models to be selected independently', async () => {
+    const onSettingsChange = vi.fn();
+    mocks.status.mockResolvedValue({
+      ...status(true),
+      models: [
+        { ...model, downloaded: true },
+        { ...model, slug: 'z3d-e621-convnext', label: 'Z3D', downloaded: true },
+      ],
+    });
+    await renderPanel(onSettingsChange);
+    await screen.findByText('Z3D');
+    const switches = screen.getAllByRole('switch');
+    await setupUser().click(switches[0]);
+    await setupUser().click(switches[1]);
+    expect(onSettingsChange).toHaveBeenNthCalledWith(1, { aiTaggerWd14Enabled: true });
+    expect(onSettingsChange).toHaveBeenNthCalledWith(2, { aiTaggerE621Enabled: true });
+  });
+
   it('cancels an active model operation through the replacement command', async () => {
     let resolveDownload!: (value: unknown) => void;
     mocks.download.mockReturnValue(new Promise((resolve) => { resolveDownload = resolve; }));
@@ -116,9 +134,9 @@ describe('AiTaggingPanel', () => {
     expect(screen.queryByText('Accuracy over speed')).not.toBeInTheDocument();
   });
 
-  it('places the local-processing note below the model list', async () => {
+  it('places the serialized local-processing note below the model list', async () => {
     await renderPanel();
-    const note = await screen.findByText('Models run locally. Picto never uploads media for AI tagging.');
+    const note = await screen.findByText('Selected models run locally one after another. Picto never uploads media for AI tagging.');
     const modelList = screen.getByText('WD14').closest('[class*="blockContent"]');
 
     expect(modelList).not.toContainElement(note);

@@ -3,8 +3,10 @@
 //! Manages the ONNX Runtime session lifecycle and runs image classification
 //! to produce tag predictions with confidence scores.
 
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
+use std::time::Instant;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -55,13 +57,36 @@ impl Thresholds {
 
 /// An active tagger session wrapping an ONNX Runtime session + parsed labels.
 pub struct TaggerSession {
-    session: ort::session::Session,
+    runtime: SessionRuntime,
     backend: String,
     labels: Vec<LabelEntry>,
     input_size: u32,
     channel_order: ChannelOrder,
     output_activation: OutputActivation,
     slug: String,
+}
+
+enum SessionRuntime {
+    Ort(ort::session::Session),
+    #[cfg(target_os = "macos")]
+    CoreMl {
+        model: coreml_native::Model,
+        input_name: String,
+        output_name: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct InputSpec {
+    pub input_size: u32,
+    pub channel_order: ChannelOrder,
+}
+
+#[derive(Clone)]
+pub struct PreparedInput {
+    spec: InputSpec,
+    batch_size: usize,
+    values: Arc<[f32]>,
 }
 
 impl TaggerSession {
@@ -86,13 +111,15 @@ impl TaggerSession {
         }
 
         let labels = super::labels::parse_labels_csv(&labels_path)?;
-        let (session, backend) = create_session(&model_path)?;
-        validate_session_contract(&session, input_size, labels.len())?;
+        let (runtime, backend) = create_runtime(model_dir, &model_path, input_size, labels.len())?;
+        if let SessionRuntime::Ort(session) = &runtime {
+            validate_session_contract(session, input_size, labels.len())?;
+        }
 
         tracing::info!(slug, labels = labels.len(), "AI tagger session loaded");
 
         Ok(Self {
-            session,
+            runtime,
             backend,
             labels,
             input_size,
@@ -110,75 +137,172 @@ impl TaggerSession {
         self.backend.clone()
     }
 
+    pub fn input_spec(&self) -> InputSpec {
+        InputSpec {
+            input_size: self.input_size,
+            channel_order: self.channel_order,
+        }
+    }
+
     /// Run inference and return suggestions plus the strongest near misses for review.
     pub fn predict(
         &mut self,
         image_bytes: &[u8],
         thresholds: &Thresholds,
     ) -> Result<Vec<TagPrediction>, String> {
-        let tensor = preprocess_image(image_bytes, self.input_size, self.channel_order)?;
+        let started = Instant::now();
+        let input = prepare_input(image_bytes, self.input_spec())?;
+        let preprocess_ms = started.elapsed().as_secs_f64() * 1000.0;
+        self.predict_prepared(&input, thresholds, preprocess_ms)
+    }
 
-        let input_value = ort::value::Tensor::from_array(tensor)
-            .map_err(|e| format!("Failed to create input tensor: {e}"))?;
+    pub fn predict_prepared(
+        &mut self,
+        input: &PreparedInput,
+        thresholds: &Thresholds,
+        preprocess_ms: f64,
+    ) -> Result<Vec<TagPrediction>, String> {
+        let mut batches = self.predict_prepared_batch(input, thresholds, preprocess_ms)?;
+        batches
+            .pop()
+            .ok_or_else(|| "Model produced no prediction batch".to_string())
+    }
 
-        // Log model input/output names for debugging
-        tracing::debug!(
-            inputs = ?self.session.inputs().iter().map(|i| i.name()).collect::<Vec<_>>(),
-            outputs = ?self.session.outputs().iter().map(|o| o.name()).collect::<Vec<_>>(),
-            "Model I/O names"
-        );
-
-        let outputs = self
-            .session
-            .run(ort::inputs![input_value])
-            .map_err(|e| format!("Inference failed: {e}"))?;
-        if outputs.len() == 0 {
-            return Err("Model produced no output tensors".into());
-        }
-
-        // Model outputs a single tensor of shape [1, num_labels]
-        let (_, logits) = outputs[0]
-            .try_extract_tensor::<f32>()
-            .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
-
-        tracing::info!(
-            slug = self.slug,
-            output_len = logits.len(),
-            labels_len = self.labels.len(),
-            "Inference complete, processing output"
-        );
-
-        if logits.len() != self.labels.len() {
+    pub fn predict_prepared_batch(
+        &mut self,
+        input: &PreparedInput,
+        thresholds: &Thresholds,
+        preprocess_ms: f64,
+    ) -> Result<Vec<Vec<TagPrediction>>, String> {
+        if input.spec != self.input_spec() {
             return Err(format!(
-                "Model output count {} does not match label count {}",
+                "Prepared input {:?} does not match model input {:?}",
+                input.spec,
+                self.input_spec()
+            ));
+        }
+        let inference_started = Instant::now();
+        let logits = match &mut self.runtime {
+            SessionRuntime::Ort(session) => {
+                let input_value = ort::value::TensorRef::from_array_view((
+                    [
+                        input.batch_size as i64,
+                        i64::from(input.spec.input_size),
+                        i64::from(input.spec.input_size),
+                        3,
+                    ],
+                    Arc::clone(&input.values),
+                ))
+                .map_err(|e| format!("Failed to create input tensor: {e}"))?;
+                let outputs = session
+                    .run(ort::inputs![input_value])
+                    .map_err(|e| format!("Inference failed: {e}"))?;
+                if outputs.len() == 0 {
+                    return Err("Model produced no output tensors".into());
+                }
+                let (_, logits) = outputs[0]
+                    .try_extract_tensor::<f32>()
+                    .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
+                logits.to_vec()
+            }
+            #[cfg(target_os = "macos")]
+            SessionRuntime::CoreMl {
+                model,
+                input_name,
+                output_name,
+            } => {
+                let values_per_image = input.values.len() / input.batch_size;
+                let mut logits = Vec::with_capacity(self.labels.len() * input.batch_size);
+                for values in input.values.chunks_exact(values_per_image) {
+                    let tensor = coreml_native::BorrowedTensor::from_f32(
+                        values,
+                        &[
+                            1,
+                            input.spec.input_size as usize,
+                            input.spec.input_size as usize,
+                            3,
+                        ],
+                    )
+                    .map_err(|error| format!("Failed to create Core ML input: {error}"))?;
+                    let prediction = model
+                        .predict(&[(input_name, &tensor)])
+                        .map_err(|error| format!("Core ML inference failed: {error}"))?;
+                    let (output, _) = prediction
+                        .get_f32(output_name)
+                        .map_err(|error| format!("Failed to read Core ML output: {error}"))?;
+                    logits.extend(output);
+                }
+                logits
+            }
+        };
+        let inference_ms = inference_started.elapsed().as_secs_f64() * 1000.0;
+
+        let expected_outputs = self.labels.len() * input.batch_size;
+        if logits.len() != expected_outputs {
+            return Err(format!(
+                "Model output count {} does not match {} labels across {} images",
                 logits.len(),
-                self.labels.len()
+                self.labels.len(),
+                input.batch_size
             ));
         }
 
-        let mut predictions = Vec::new();
-        for (i, &logit) in logits.iter().enumerate() {
-            let confidence = interpret_output(logit, self.output_activation)?;
-            let label = &self.labels[i];
-            predictions.push(TagPrediction {
-                tag: label.name.clone(),
-                namespace: label.namespace.clone(),
-                confidence,
-                model: self.slug.clone(),
-            });
-        }
+        let postprocess_started = Instant::now();
+        let predictions = logits
+            .chunks_exact(self.labels.len())
+            .map(|batch| self.rank_predictions(batch, thresholds))
+            .collect::<Result<Vec<_>, _>>()?;
+        let postprocess_ms = postprocess_started.elapsed().as_secs_f64() * 1000.0;
 
-        predictions.sort_by(|a, b| {
-            b.confidence
-                .partial_cmp(&a.confidence)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
-        retain_review_predictions(&mut predictions, thresholds);
+        tracing::debug!(
+            target: "ai_inference",
+            model = self.slug,
+            backend = self.backend,
+            preprocess_ms,
+            inference_ms,
+            postprocess_ms,
+            batch_size = input.batch_size,
+            predictions = predictions.iter().map(Vec::len).sum::<usize>(),
+            "AI inference completed"
+        );
 
         Ok(predictions)
     }
+
+    fn rank_predictions(
+        &self,
+        logits: &[f32],
+        thresholds: &Thresholds,
+    ) -> Result<Vec<TagPrediction>, String> {
+        let mut ranked = Vec::with_capacity(logits.len());
+        for (index, &logit) in logits.iter().enumerate() {
+            ranked.push((index, interpret_output(logit, self.output_activation)?));
+        }
+        ranked.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut below_threshold = 0;
+        Ok(ranked
+            .into_iter()
+            .filter_map(|(index, confidence)| {
+                let label = &self.labels[index];
+                if confidence < thresholds.for_namespace(&label.namespace) {
+                    if below_threshold >= BELOW_THRESHOLD_REVIEW_LIMIT {
+                        return None;
+                    }
+                    below_threshold += 1;
+                }
+                Some(TagPrediction {
+                    tag: label.name.clone(),
+                    namespace: label.namespace.clone(),
+                    confidence,
+                    model: self.slug.clone(),
+                })
+            })
+            .collect())
+    }
 }
 
+#[cfg(test)]
 fn retain_review_predictions(predictions: &mut Vec<TagPrediction>, thresholds: &Thresholds) {
     let mut below_threshold = 0;
     predictions.retain(|prediction| {
@@ -193,27 +317,17 @@ fn retain_review_predictions(predictions: &mut Vec<TagPrediction>, thresholds: &
     });
 }
 
-fn create_session(model_path: &Path) -> Result<(ort::session::Session, String), String> {
-    tracing::info!(path = %model_path.display(), "Loading ONNX model");
+fn create_runtime(
+    model_dir: &Path,
+    model_path: &Path,
+    input_size: u32,
+    label_count: usize,
+) -> Result<(SessionRuntime, String), String> {
+    tracing::info!(model = %model_dir.display(), "Loading AI model runtime");
 
     #[cfg(target_os = "macos")]
-    {
-        use ort::ep::{coreml, CoreML};
-
-        let provider = CoreML::default()
-            .with_compute_units(coreml::ComputeUnits::CPUAndGPU)
-            .with_model_format(coreml::ModelFormat::MLProgram)
-            .build()
-            .error_on_failure();
-        let accelerated = (|| -> ort::Result<ort::session::Session> {
-            let mut builder =
-                ort::session::Session::builder()?.with_execution_providers([provider])?;
-            builder.commit_from_file(model_path)
-        })();
-        match accelerated {
-            Ok(session) => return Ok((session, "CoreML GPU".into())),
-            Err(error) => tracing::warn!(%error, "CoreML session failed; falling back to CPU"),
-        }
+    if let Some(runtime) = load_native_coreml(model_dir, input_size, label_count)? {
+        return Ok((runtime, "Core ML GPU/ANE".into()));
     }
 
     #[cfg(target_os = "windows")]
@@ -229,7 +343,7 @@ fn create_session(model_path: &Path) -> Result<(ort::session::Session, String), 
             builder.commit_from_file(model_path)
         })();
         match accelerated {
-            Ok(session) => return Ok((session, "DirectML GPU".into())),
+            Ok(session) => return Ok((SessionRuntime::Ort(session), "DirectML GPU".into())),
             Err(error) => tracing::warn!(%error, "DirectML session failed; falling back to CPU"),
         }
     }
@@ -238,22 +352,68 @@ fn create_session(model_path: &Path) -> Result<(ort::session::Session, String), 
     {
         use ort::ep::WebGPU;
 
-        let provider = WebGPU::default().build().error_on_failure();
+        let provider = WebGPU::default()
+            .with_enable_graph_capture(true)
+            .build()
+            .error_on_failure();
         let accelerated = (|| -> ort::Result<ort::session::Session> {
             let mut builder =
                 ort::session::Session::builder()?.with_execution_providers([provider])?;
             builder.commit_from_file(model_path)
         })();
         match accelerated {
-            Ok(session) => return Ok((session, "WebGPU GPU".into())),
+            Ok(session) => return Ok((SessionRuntime::Ort(session), "WebGPU GPU".into())),
             Err(error) => tracing::warn!(%error, "WebGPU session failed; falling back to CPU"),
         }
     }
 
     ort::session::Session::builder()
         .and_then(|mut b| b.commit_from_file(model_path))
-        .map(|session| (session, "CPU".into()))
+        .map(|session| (SessionRuntime::Ort(session), "CPU".into()))
         .map_err(|e| format!("Failed to load ONNX model: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+fn load_native_coreml(
+    model_dir: &Path,
+    input_size: u32,
+    label_count: usize,
+) -> Result<Option<SessionRuntime>, String> {
+    let package = model_dir.join("model.mlpackage");
+    let compiled = model_dir.join("model.mlmodelc");
+    if !compiled.exists() {
+        if !package.exists() {
+            return Ok(None);
+        }
+        let temporary = coreml_native::compile_model(&package)
+            .map_err(|error| format!("Failed to compile Core ML model: {error}"))?;
+        std::fs::rename(&temporary, &compiled).map_err(|error| {
+            format!(
+                "Failed to preserve compiled Core ML model {}: {error}",
+                compiled.display()
+            )
+        })?;
+    }
+    let model = coreml_native::Model::load(&compiled, coreml_native::ComputeUnits::All)
+        .map_err(|error| format!("Failed to load native Core ML model: {error}"))?;
+    let inputs = model.inputs();
+    let expected_input = [1, input_size as usize, input_size as usize, 3];
+    if inputs.len() != 1 || inputs[0].shape() != Some(&expected_input[..]) {
+        return Err(format!(
+            "Core ML model must have one float input with shape {expected_input:?}; found {inputs:?}"
+        ));
+    }
+    let outputs = model.outputs();
+    if outputs.len() != 1 || outputs[0].shape() != Some(&[1, label_count][..]) {
+        return Err(format!(
+            "Core ML model must have one [1,{label_count}] output; found {outputs:?}"
+        ));
+    }
+    Ok(Some(SessionRuntime::CoreMl {
+        input_name: inputs[0].name().to_string(),
+        output_name: outputs[0].name().to_string(),
+        model,
+    }))
 }
 
 fn validate_session_contract(
@@ -308,51 +468,69 @@ fn validate_session_contract(
 /// 3. Resize to model input size
 /// 4. Convert byte channels directly to float values in `[0, 255]`
 /// 5. Reorder channels if model expects BGR
-fn preprocess_image(
+pub fn prepare_input(image_bytes: &[u8], spec: InputSpec) -> Result<PreparedInput, String> {
+    prepare_inputs(&[image_bytes], spec)
+}
+
+pub fn prepare_inputs(image_bytes: &[&[u8]], spec: InputSpec) -> Result<PreparedInput, String> {
+    if image_bytes.is_empty() {
+        return Err("At least one image is required for AI preprocessing".into());
+    }
+    let image_values = (spec.input_size * spec.input_size * 3) as usize;
+    let mut values = Vec::with_capacity(image_values * image_bytes.len());
+    for bytes in image_bytes {
+        append_preprocessed_image(bytes, spec, &mut values)?;
+    }
+    Ok(PreparedInput {
+        spec,
+        batch_size: image_bytes.len(),
+        values: Arc::from(values),
+    })
+}
+
+fn append_preprocessed_image(
     image_bytes: &[u8],
-    input_size: u32,
-    channel_order: ChannelOrder,
-) -> Result<ndarray::Array4<f32>, String> {
+    spec: InputSpec,
+    values: &mut Vec<f32>,
+) -> Result<(), String> {
     let img =
         image::load_from_memory(image_bytes).map_err(|e| format!("Failed to decode image: {e}"))?;
 
     let rgb = img.to_rgb8();
     let (w, h) = (rgb.width(), rgb.height());
-
-    // Pad to square with white background
-    let max_dim = w.max(h);
-    let mut padded = image::RgbImage::from_pixel(max_dim, max_dim, image::Rgb([255, 255, 255]));
-    let x_offset = (max_dim - w) / 2;
-    let y_offset = (max_dim - h) / 2;
-    image::imageops::overlay(&mut padded, &rgb, x_offset as i64, y_offset as i64);
-
-    // Resize to model input size
+    let max_dim = w.max(h).max(1);
+    let resized_width = ((u64::from(w) * u64::from(spec.input_size) + u64::from(max_dim) / 2)
+        / u64::from(max_dim))
+    .max(1) as u32;
+    let resized_height = ((u64::from(h) * u64::from(spec.input_size) + u64::from(max_dim) / 2)
+        / u64::from(max_dim))
+    .max(1) as u32;
     let resized = image::imageops::resize(
-        &padded,
-        input_size,
-        input_size,
+        &rgb,
+        resized_width,
+        resized_height,
         image::imageops::FilterType::Lanczos3,
     );
+    let mut padded = image::RgbImage::from_pixel(
+        spec.input_size,
+        spec.input_size,
+        image::Rgb([255, 255, 255]),
+    );
+    image::imageops::overlay(
+        &mut padded,
+        &resized,
+        i64::from((spec.input_size - resized_width) / 2),
+        i64::from((spec.input_size - resized_height) / 2),
+    );
 
-    let size = input_size as usize;
-
-    // NHWC: [batch, height, width, channels], raw float values in [0, 255].
-    let mut tensor = ndarray::Array4::<f32>::zeros((1, size, size, 3));
-    for y in 0..size {
-        for x in 0..size {
-            let pixel = resized.get_pixel(x as u32, y as u32);
-            let (c0, c1, c2) = match channel_order {
-                ChannelOrder::Rgb => (pixel[0], pixel[1], pixel[2]),
-                ChannelOrder::Bgr => (pixel[2], pixel[1], pixel[0]),
-            };
-            // Raw float32 [0, 255] — no normalization (matches ComfyUI reference)
-            tensor[[0, y, x, 0]] = c0 as f32;
-            tensor[[0, y, x, 1]] = c1 as f32;
-            tensor[[0, y, x, 2]] = c2 as f32;
-        }
+    for pixel in padded.pixels() {
+        let channels = match spec.channel_order {
+            ChannelOrder::Rgb => [pixel[0], pixel[1], pixel[2]],
+            ChannelOrder::Bgr => [pixel[2], pixel[1], pixel[0]],
+        };
+        values.extend(channels.into_iter().map(f32::from));
     }
-
-    Ok(tensor)
+    Ok(())
 }
 
 fn sigmoid(x: f32) -> f32 {
@@ -377,9 +555,18 @@ pub type SharedTaggerSessions = Arc<
     tokio::sync::Mutex<std::collections::HashMap<String, Arc<std::sync::Mutex<TaggerSession>>>>,
 >;
 
+pub type SharedPredictionCache =
+    Arc<std::sync::Mutex<lru::LruCache<String, Arc<Vec<TagPrediction>>>>>;
+
 /// Create a new empty sessions map.
 pub fn new_shared_sessions() -> SharedTaggerSessions {
     Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+pub fn new_prediction_cache() -> SharedPredictionCache {
+    Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+        NonZeroUsize::new(512).expect("prediction cache capacity is non-zero"),
+    )))
 }
 
 #[cfg(test)]
@@ -399,11 +586,32 @@ mod tests {
 
     #[test]
     fn preprocessing_is_nhwc_raw_bgr() {
-        let tensor = preprocess_image(&png(Rgb([10, 20, 30])), 1, ChannelOrder::Bgr).unwrap();
-        assert_eq!(tensor.shape(), &[1, 1, 1, 3]);
-        assert_eq!(tensor[[0, 0, 0, 0]], 30.0);
-        assert_eq!(tensor[[0, 0, 0, 1]], 20.0);
-        assert_eq!(tensor[[0, 0, 0, 2]], 10.0);
+        let input = prepare_input(
+            &png(Rgb([10, 20, 30])),
+            InputSpec {
+                input_size: 1,
+                channel_order: ChannelOrder::Bgr,
+            },
+        )
+        .unwrap();
+        assert_eq!(&*input.values, &[30.0, 20.0, 10.0]);
+    }
+
+    #[test]
+    fn batch_preprocessing_reuses_one_contiguous_model_input() {
+        let first = png(Rgb([10, 20, 30]));
+        let second = png(Rgb([40, 50, 60]));
+        let input = prepare_inputs(
+            &[&first, &second],
+            InputSpec {
+                input_size: 1,
+                channel_order: ChannelOrder::Bgr,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(input.batch_size, 2);
+        assert_eq!(&*input.values, &[30.0, 20.0, 10.0, 60.0, 50.0, 40.0]);
     }
 
     #[test]

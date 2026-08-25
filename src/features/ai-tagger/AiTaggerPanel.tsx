@@ -155,30 +155,18 @@ export function AiTaggerPanel() {
     setError(null);
     setProgress({ done: 0, total: ids.length, currentItemId: ids[0] ?? null });
     if (reset) setPredictions([]);
-    const failures: string[] = [];
 
     try {
-      for (let index = 0; index < ids.length; index += 1) {
-        const itemId = ids[index];
-        if (generation !== runGenerationRef.current) return;
-        setProgress({ done: index, total: ids.length, currentItemId: itemId });
-        try {
-          const output = await aiTagPredict([itemId], [...slugs]);
-          if (generation !== runGenerationRef.current) return;
-          setThresholds(output.thresholds);
-          setPredictions((previous) => mergePredictionResults(previous, output.predictions, slugs));
-          setActiveItemId((current) => current ?? output.predictions[0]?.mediaItemId ?? null);
-          for (const failed of output.predictions.filter((entry) => entry.error)) {
-            failures.push(`Item ${failed.mediaItemId}: ${failed.error}`);
-          }
-        } catch (reason) {
-          failures.push(`Item ${itemId}: ${String(reason)}`);
-        }
-        setProgress({ done: index + 1, total: ids.length, currentItemId: itemId });
-      }
+      const output = await aiTagPredict(ids, [...slugs]);
+      if (generation !== runGenerationRef.current) return;
+      setThresholds(output.thresholds);
+      setPredictions((previous) => mergePredictionResults(previous, output.predictions, slugs));
+      setActiveItemId((current) => current ?? output.predictions[0]?.mediaItemId ?? null);
+      const failures = output.predictions.filter((entry) => entry.error);
+      setProgress({ done: ids.length, total: ids.length, currentItemId: ids[ids.length - 1] ?? null });
       ranModelsRef.current = new Set([...ranModelsRef.current, ...slugs]);
       if (failures.length > 0) {
-        setError(`${failures.length} of ${ids.length} media items could not be tagged. ${failures[0]}`);
+        setError(`${failures.length} of ${ids.length} media items could not be tagged. ${failures[0].error}`);
       }
       try {
         const status = await aiTaggerStatus();
@@ -186,6 +174,8 @@ export function AiTaggerPanel() {
       } catch {
         if (generation === runGenerationRef.current) setBackend((current) => current ?? 'CPU');
       }
+    } catch (reason) {
+      if (generation === runGenerationRef.current) setError(String(reason));
     } finally {
       if (generation === runGenerationRef.current) {
         runningRef.current = false;

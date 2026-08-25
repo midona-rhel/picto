@@ -55,6 +55,18 @@ async fn download_model_inner(
         .map_err(|e| format!("Failed to download labels CSV: {e}"))?;
         cancelled(cancel)?;
 
+        #[cfg(target_os = "macos")]
+        if let Some(artifact) = &model_info.coreml {
+            let archive = temp_dir.join("coreml.zip");
+            download_file(&artifact.url, &artifact.sha256, &archive, cancel)
+                .await
+                .map_err(|error| format!("Failed to download Core ML model: {error}"))?;
+            cancelled(cancel)?;
+            extract_coreml_archive(&archive, &temp_dir, artifact.size)?;
+            std::fs::remove_file(&archive)
+                .map_err(|error| format!("Failed to remove Core ML archive: {error}"))?;
+        }
+
         // Validate the complete pair before it can become visible to the app.
         let labels = super::labels::parse_labels_csv(&labels_path)?;
         if labels.is_empty() {
@@ -94,6 +106,55 @@ async fn download_model_inner(
             Err(error)
         }
     }
+}
+
+#[cfg(target_os = "macos")]
+fn extract_coreml_archive(
+    archive: &Path,
+    destination: &Path,
+    archive_size: u64,
+) -> Result<(), String> {
+    let file = std::fs::File::open(archive)
+        .map_err(|error| format!("Failed to open Core ML archive: {error}"))?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|error| format!("Failed to read Core ML archive: {error}"))?;
+    let mut extracted_size = 0_u64;
+    for index in 0..archive.len() {
+        let mut entry = archive
+            .by_index(index)
+            .map_err(|error| format!("Failed to read Core ML archive entry: {error}"))?;
+        let relative = entry
+            .enclosed_name()
+            .ok_or_else(|| "Core ML archive contains an unsafe path".to_string())?;
+        if !relative.starts_with("model.mlpackage") {
+            return Err(format!(
+                "Core ML archive contains an unexpected entry: {}",
+                relative.display()
+            ));
+        }
+        extracted_size = extracted_size.saturating_add(entry.size());
+        if extracted_size > archive_size.saturating_mul(2) {
+            return Err("Core ML archive expands beyond its registered size limit".into());
+        }
+        let output = destination.join(relative);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&output)
+                .map_err(|error| format!("Failed to create Core ML directory: {error}"))?;
+            continue;
+        }
+        if let Some(parent) = output.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|error| format!("Failed to create Core ML directory: {error}"))?;
+        }
+        let mut output_file = std::fs::File::create(&output)
+            .map_err(|error| format!("Failed to create Core ML file: {error}"))?;
+        std::io::copy(&mut entry, &mut output_file)
+            .map_err(|error| format!("Failed to extract Core ML file: {error}"))?;
+    }
+    if !destination.join("model.mlpackage/Manifest.json").is_file() {
+        return Err("Core ML archive did not contain a model package".into());
+    }
+    Ok(())
 }
 
 fn recover_interrupted_download(
@@ -284,6 +345,29 @@ mod tests {
     use crate::ai_tagger::models;
     use tempfile::TempDir;
 
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn coreml_archive_extracts_only_the_registered_package() {
+        use std::io::Write;
+
+        let root = TempDir::new().unwrap();
+        let archive_path = root.path().join("model.zip");
+        let mut archive = zip::ZipWriter::new(std::fs::File::create(&archive_path).unwrap());
+        archive
+            .start_file(
+                "model.mlpackage/Manifest.json",
+                zip::write::SimpleFileOptions::default(),
+            )
+            .unwrap();
+        archive.write_all(b"{}").unwrap();
+        archive.finish().unwrap();
+
+        let destination = root.path().join("bundle");
+        std::fs::create_dir(&destination).unwrap();
+        extract_coreml_archive(&archive_path, &destination, 1_024).unwrap();
+        assert!(destination.join("model.mlpackage/Manifest.json").is_file());
+    }
+
     #[test]
     fn temporary_bundle_is_a_unique_sibling_of_active_bundle() {
         let root = TempDir::new().unwrap();
@@ -313,6 +397,8 @@ mod tests {
         let active = models::model_dir(root.path(), &model);
         std::fs::write(temp.join("model.onnx"), b"model").unwrap();
         std::fs::write(temp.join("selected_tags.csv"), b"labels").unwrap();
+        #[cfg(target_os = "macos")]
+        std::fs::create_dir_all(temp.join("model.mlpackage")).unwrap();
         models::mark_bundle_validated(&temp, &model).unwrap();
 
         activate_bundle(&temp, &active, root.path(), "wd14-swinv2-v3").unwrap();

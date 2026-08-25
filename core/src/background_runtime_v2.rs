@@ -10,6 +10,8 @@ use crate::media_processing_v2::{self, BlobSource, DerivativeOutcome};
 use crate::store::Store;
 use crate::workers_v2::{self, WorkItem, WorkKind, WorkSpec, Worker, DEFAULT_BATCH_SIZE};
 
+type WorkExecution = Result<(Option<MutationReceipt>, Option<DerivativeOutcome>), String>;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DrainBatchResult {
     pub claimed: usize,
@@ -79,6 +81,16 @@ async fn drain_claimed_batch<B: BlobSource>(
 
     let mut groups: Vec<Vec<WorkItem>> = Vec::new();
     for item in items {
+        if item.kind == WorkKind::AiTag {
+            if let Some(group) = groups.iter_mut().find(|group| {
+                group
+                    .first()
+                    .is_some_and(|candidate| candidate.kind == WorkKind::AiTag)
+            }) {
+                group.push(item);
+                continue;
+            }
+        }
         let derivative_file = is_derivative(item.kind).then_some(item.file_id).flatten();
         if let Some(file_id) = derivative_file {
             if let Some(group) = groups.iter_mut().find(|group| {
@@ -94,18 +106,43 @@ async fn drain_claimed_batch<B: BlobSource>(
     }
 
     for group in groups {
-        let executions: Vec<Result<(Option<MutationReceipt>, Option<DerivativeOutcome>), String>> =
-            if group.iter().all(|item| is_derivative(item.kind)) {
-                media_processing_v2::execute_work_group(store, blobs, &group)
+        let executions: Vec<WorkExecution> = if group.iter().all(|item| is_derivative(item.kind)) {
+            media_processing_v2::execute_work_group(store, blobs, &group)
+                .await
+                .into_iter()
+                .map(|result| result.map(|outcome| (None, Some(outcome))))
+                .collect::<Vec<_>>()
+        } else if group.iter().all(|item| item.kind == WorkKind::AiTag) {
+            let media_item_ids = group
+                .iter()
+                .map(|item| {
+                    item.media_item_id
+                        .map(ItemId)
+                        .ok_or_else(|| "AI tagging work is missing its media item ID".to_string())
+                })
+                .collect::<Result<Vec<_>, String>>();
+            match media_item_ids {
+                Ok(media_item_ids) => {
+                    match crate::ai_runtime_v2::execute_ai_tagging_batch(
+                        application,
+                        &media_item_ids,
+                    )
                     .await
-                    .into_iter()
-                    .map(|result| result.map(|outcome| (None, Some(outcome))))
-                    .collect::<Vec<_>>()
-            } else {
-                vec![execute_non_derivative(application, blobs, &group[0])
-                    .await
-                    .map(|receipt| (receipt, None))]
-            };
+                    {
+                        Ok(results) => results
+                            .into_iter()
+                            .map(|result| Ok((result.receipt, None)))
+                            .collect(),
+                        Err(error) => (0..group.len()).map(|_| Err(error.clone())).collect(),
+                    }
+                }
+                Err(error) => (0..group.len()).map(|_| Err(error.clone())).collect(),
+            }
+        } else {
+            vec![execute_non_derivative(application, blobs, &group[0])
+                .await
+                .map(|receipt| (receipt, None))]
+        };
         for (item, execution) in group.into_iter().zip(executions) {
             match execution {
                 Ok((operation_receipt, derivative_outcome)) => {

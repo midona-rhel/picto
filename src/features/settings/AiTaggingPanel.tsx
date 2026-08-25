@@ -165,7 +165,7 @@ export function AiTaggingPanel({
             );
           })}
         </div>
-        <p className={settingsStyles.settingHint}>Models run locally. Picto never uploads media for AI tagging.</p>
+        <p className={settingsStyles.settingHint}>Selected models run locally one after another. Picto never uploads media for AI tagging.</p>
       </div>
 
       <div className={settingsStyles.settingsBlock}>
@@ -209,7 +209,7 @@ export function AiTaggingPanel({
           <div className={settingsStyles.settingRow}>
             <div className={styles.settingCopy}>
               <div className={styles.settingName}>Auto-tag new imports</div>
-              <div className={styles.settingDescription}>Run enabled models after import and apply tags above the confidence levels.</div>
+              <div className={styles.settingDescription}>Run selected models after import and apply tags above the confidence levels.</div>
             </div>
             <div className={settingsStyles.settingControl}>
               <ToggleSwitch

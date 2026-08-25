@@ -84,7 +84,7 @@ parking_lot = "0.12"
 ts-rs = { version = "10", features = ["serde-compat", "no-serde-warnings"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-ort = { version = "2.0.0-rc.12", features = ["coreml"] }
+coreml-native = "0.2"
 security-framework = "3.7"
 
 [target.'cfg(windows)'.dependencies]

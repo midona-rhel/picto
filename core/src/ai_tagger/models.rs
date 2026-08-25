@@ -11,8 +11,20 @@ use ts_rs::TS;
 
 pub(crate) const BUNDLE_MARKER: &str = ".bundle-validated";
 
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct CoreMlArtifact {
+    pub url: String,
+    pub sha256: String,
+    pub size: u64,
+}
+
+#[derive(Deserialize)]
+struct CoreMlArtifactRegistry {
+    assets: std::collections::HashMap<String, CoreMlArtifact>,
+}
+
 /// Channel ordering expected by the model.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 #[serde(rename_all = "lowercase")]
 pub enum ChannelOrder {
@@ -70,6 +82,9 @@ pub struct ModelInfo {
     /// Heavy models trade speed for accuracy and are only recommended on
     /// machines with plenty of memory.
     pub heavy: bool,
+    #[serde(skip)]
+    #[ts(skip)]
+    pub(crate) coreml: Option<CoreMlArtifact>,
 }
 
 /// Static registry of known models.
@@ -78,6 +93,12 @@ pub struct ModelInfo {
 /// EVA02-Large v3 is the highest-accuracy WD variant but several times
 /// slower and ~1.3 GB on disk, so it is marked heavy.
 pub fn known_models() -> Vec<ModelInfo> {
+    let mut coreml = serde_json::from_str::<CoreMlArtifactRegistry>(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../scripts/ai/coreml-artifacts.json"
+    )))
+    .expect("Core ML artifact registry must be valid")
+    .assets;
     vec![
         ModelInfo {
             slug: "wd14-swinv2-v3".into(),
@@ -92,6 +113,7 @@ pub fn known_models() -> Vec<ModelInfo> {
             size_bytes: 467_000_000,
             dataset: "Danbooru tags".into(),
             heavy: false,
+            coreml: coreml.remove("wd14-swinv2-v3"),
         },
         ModelInfo {
             slug: "z3d-e621-convnext".into(),
@@ -107,6 +129,7 @@ pub fn known_models() -> Vec<ModelInfo> {
             size_bytes: 390_000_000,
             dataset: "e621 tags".into(),
             heavy: false,
+            coreml: coreml.remove("z3d-e621-convnext"),
         },
         ModelInfo {
             slug: "wd14-eva02-large-v3".into(),
@@ -121,6 +144,7 @@ pub fn known_models() -> Vec<ModelInfo> {
             size_bytes: 1_260_000_000,
             dataset: "Danbooru tags, highest accuracy".into(),
             heavy: true,
+            coreml: coreml.remove("wd14-eva02-large-v3"),
         },
     ]
 }
@@ -145,19 +169,32 @@ pub fn is_model_downloaded(models_root: &std::path::Path, slug: &str) -> bool {
 }
 
 fn bundle_marker_content(model: &ModelInfo) -> String {
-    format!(
-        "picto-ai-model-bundle-v2\nmodel={}\nlabels={}\n",
+    let mut marker = format!(
+        "picto-ai-model-bundle-v3\nmodel={}\nlabels={}\n",
         model.onnx_sha256, model.labels_sha256
-    )
+    );
+    #[cfg(target_os = "macos")]
+    if let Some(artifact) = &model.coreml {
+        marker.push_str(&format!("coreml={}\n", artifact.sha256));
+    }
+    marker
 }
 
 pub(crate) fn bundle_is_marked(dir: &std::path::Path, model: &ModelInfo) -> bool {
-    dir.join("model.onnx").is_file()
+    let portable = dir.join("model.onnx").is_file()
         && dir.join("selected_tags.csv").is_file()
         && std::fs::read_to_string(dir.join(BUNDLE_MARKER))
             .ok()
             .as_deref()
-            == Some(bundle_marker_content(model).as_str())
+            == Some(bundle_marker_content(model).as_str());
+    #[cfg(target_os = "macos")]
+    return portable
+        && model
+            .coreml
+            .as_ref()
+            .is_none_or(|_| dir.join("model.mlpackage").is_dir());
+    #[cfg(not(target_os = "macos"))]
+    portable
 }
 
 pub(crate) fn mark_bundle_validated(
@@ -209,6 +246,11 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
+    fn add_platform_artifact(dir: &std::path::Path) {
+        #[cfg(target_os = "macos")]
+        std::fs::create_dir_all(dir.join("model.mlpackage")).unwrap();
+    }
+
     #[test]
     fn unknown_slugs_are_not_downloaded() {
         let root = TempDir::new().unwrap();
@@ -229,6 +271,7 @@ mod tests {
             b"tag_id,name,category,count\n0,tag,0,1\n",
         )
         .unwrap();
+        add_platform_artifact(&dir);
 
         assert!(!is_model_downloaded(root.path(), "wd14-swinv2-v3"));
         mark_bundle_validated(&dir, &model).unwrap();
@@ -269,6 +312,7 @@ mod tests {
         model.labels_sha256 = hex::encode(Sha256::digest(labels));
         std::fs::write(dir.join("model.onnx"), onnx).unwrap();
         std::fs::write(dir.join("selected_tags.csv"), labels).unwrap();
+        add_platform_artifact(&dir);
         mark_bundle_validated(&dir, &model).unwrap();
 
         validate_bundle_integrity(&dir, &model).unwrap();

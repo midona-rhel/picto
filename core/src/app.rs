@@ -238,6 +238,7 @@ pub struct Application {
     blobs: Arc<BlobStore>,
     projections: Arc<ProjectionStore>,
     ai_sessions: crate::ai_tagger::inference::SharedTaggerSessions,
+    ai_prediction_cache: crate::ai_tagger::inference::SharedPredictionCache,
     ai_model_downloads: tokio::sync::Mutex<HashMap<String, CancellationToken>>,
     ai_model_lifecycle: tokio::sync::Mutex<()>,
     ingest_execution: std::sync::Mutex<()>,
@@ -259,6 +260,7 @@ impl Application {
             blobs,
             projections,
             ai_sessions: crate::ai_tagger::inference::new_shared_sessions(),
+            ai_prediction_cache: crate::ai_tagger::inference::new_prediction_cache(),
             ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
             ai_model_lifecycle: tokio::sync::Mutex::new(()),
             ingest_execution: std::sync::Mutex::new(()),
@@ -285,6 +287,12 @@ impl Application {
 
     pub(crate) fn ai_sessions(&self) -> &crate::ai_tagger::inference::SharedTaggerSessions {
         &self.ai_sessions
+    }
+
+    pub(crate) fn ai_prediction_cache(
+        &self,
+    ) -> &crate::ai_tagger::inference::SharedPredictionCache {
+        &self.ai_prediction_cache
     }
 
     pub(crate) fn ai_model_downloads(

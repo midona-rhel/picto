@@ -1,0 +1,40 @@
+name: Core ML Models
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: scripts/ai/coreml-export-requirements.txt
+
+      - name: Install converter
+        run: python -m pip install -r scripts/ai/coreml-export-requirements.txt
+
+      - name: Export fixed-shape Core ML programs
+        run: >-
+          python scripts/ai/export-coreml-models.py
+          wd14-swinv2-v3 wd14-eva02-large-v3
+          --output artifacts/coreml
+
+      - name: Verify registered checksums
+        run: python scripts/ai/verify-coreml-manifest.py artifacts/coreml
+
+      - name: Publish immutable model assets
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
+        with:
+          tag_name: ai-models-v1
+          name: Picto AI Models v1
+          body_path: scripts/ai/README.md
+          prerelease: false
+          files: artifacts/coreml/*.zip
