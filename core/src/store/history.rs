@@ -139,6 +139,8 @@ impl Store {
         let transaction = connection
             .transaction()
             .map_err(|error| error.to_string())?;
+        crate::cloud::capture::begin_explicit_capture(&transaction)
+            .map_err(|error| error.to_string())?;
 
         let mut session = Session::new(&transaction).map_err(|error| error.to_string())?;
         for table in UNDOABLE_TABLES {
@@ -164,6 +166,11 @@ impl Store {
             Some(changeset)
         };
         drop(session);
+
+        if changed {
+            crate::cloud::capture::finish_explicit_capture(&transaction, changeset.as_deref())
+                .map_err(|error| error.to_string())?;
+        }
 
         let history = if let Some(changeset) = changeset {
             transaction
@@ -260,6 +267,8 @@ impl Store {
             let transaction = connection
                 .transaction()
                 .map_err(|error| error.to_string())?;
+            let cloud_capture = crate::cloud::capture::SemanticCapture::start(&transaction)
+                .map_err(|error| error.to_string())?;
             let entry = load_entry(&transaction, direction)
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| match direction {
@@ -302,6 +311,9 @@ impl Store {
                         entry.summary.entry_id
                     ],
                 )
+                .map_err(|error| error.to_string())?;
+            cloud_capture
+                .finish(&transaction)
                 .map_err(|error| error.to_string())?;
             let revision =
                 schema::increment_revision(&transaction).map_err(|error| error.to_string())?;

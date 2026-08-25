@@ -1,6 +1,7 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderWithProviders } from '../../test/render';
 import { Settings } from './Settings';
 import { getKeyboardPreset, setKeyboardPreset } from '../../shared/lib/shortcuts';
 
@@ -79,9 +80,9 @@ const appSettings = {
 };
 
 async function renderSettings() {
-  let result!: ReturnType<typeof render>;
+  let result!: ReturnType<typeof renderWithProviders>;
   await act(async () => {
-    result = render(<Settings />);
+    result = renderWithProviders(<Settings />);
     await Promise.resolve();
   });
   return result;

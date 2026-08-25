@@ -41,3 +41,21 @@
   composes: btn btnPrimary from '../../shared/styles/actionButton.module.css';
   margin-top: 8px;
 }
+
+.spinner {
+  width: 24px;
+  height: 24px;
+  border: 2px solid var(--color-border-secondary);
+  border-top-color: var(--color-text-primary);
+  border-radius: 50%;
+  animation: library-gate-spin 700ms linear infinite;
+}
+
+.progress {
+  width: min(320px, calc(100vw - 48px));
+  margin-top: 8px;
+}
+
+@keyframes library-gate-spin {
+  to { transform: rotate(360deg); }
+}

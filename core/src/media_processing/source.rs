@@ -31,11 +31,7 @@ pub struct PreparedMediaSource {
 }
 
 impl PreparedMediaSource {
-    fn accepted_without_probe(
-        path: &Path,
-        mime_type: &str,
-        size_bytes: u64,
-    ) -> Self {
+    fn accepted_without_probe(path: &Path, mime_type: &str, size_bytes: u64) -> Self {
         Self {
             path: path.to_path_buf(),
             mime_type: mime_type.to_string(),
@@ -65,7 +61,8 @@ impl PreparedMediaSource {
             match get_file_info(path, None).await {
                 Ok(info) => (info.mime, info),
                 Err(_) => {
-                    let format = accepted_format.expect("media extension came from accepted format");
+                    let format =
+                        accepted_format.expect("media extension came from accepted format");
                     return Ok(Self::accepted_without_probe(
                         path,
                         format.mime_type,
@@ -91,7 +88,11 @@ impl PreparedMediaSource {
                             .unwrap_or_default()
                     ))
                 })?;
-                return Ok(Self::accepted_without_probe(path, format.mime_type, size_bytes));
+                return Ok(Self::accepted_without_probe(
+                    path,
+                    format.mime_type,
+                    size_bytes,
+                ));
             }
         };
         if !is_allowed_mime(detected_mime) {

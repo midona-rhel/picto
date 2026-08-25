@@ -12,6 +12,7 @@ import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
 import { ToggleSwitch } from '../../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { TagChip } from '../../../shared/ui/TagChip/TagChip';
 import { tagsController } from '../../../controllers/tagsController';
+import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
 import type { SmartFolderPredicateRule, CanonicalTagRecord } from '../../../shared/types/canonical';
 import {
   getFieldDef,
@@ -340,23 +341,23 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove }: RuleE
           {renderValueInput()}
         </div>
       )}
-      <button
+      <KbdTooltip label="Add rule"><button
         className={modalStyles.actionBtn}
         onClick={onAdd}
         type="button"
-        title="Add rule"
+        aria-label="Add rule"
       >
         <IconPlus size={14} />
-      </button>
+      </button></KbdTooltip>
       {canRemove && (
-        <button
+        <KbdTooltip label="Remove rule"><button
           className={`${modalStyles.actionBtn} ${modalStyles.actionBtnDanger}`}
           onClick={onRemove}
           type="button"
-          title="Remove rule"
+          aria-label="Remove rule"
         >
           <IconMinus size={14} />
-        </button>
+        </button></KbdTooltip>
       )}
     </div>
   );

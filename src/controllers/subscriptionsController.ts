@@ -8,6 +8,7 @@ import {
   editSubscriptionQuery,
   getSubscriptionOverview,
   getSubscriptionProgress,
+  getSubscriptionRunActivity,
   getSubscriptionCoverCandidates,
   getSubscriptionSites,
   getSubscriptions,
@@ -39,6 +40,7 @@ import type {
 } from '../shared/types/subscriptions';
 import type { SubscriptionCoverCandidateCursor } from '../shared/types/generated/application/SubscriptionCoverCandidateCursor';
 import type { SubscriptionWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
+import type { SubscriptionRunActivity } from '../shared/types/generated/application/SubscriptionRunActivity';
 
 function deriveLastActivityAt(subscription: SubscriptionInfo): string | null {
   let latest: string | null = null;
@@ -89,6 +91,10 @@ export const subscriptionsController = {
 
   async listRuns(subscriptionId: string): Promise<SubscriptionRunRecord[]> {
     return listSubscriptionRuns(subscriptionId, 20);
+  },
+
+  getRunActivity(runId: number): Promise<SubscriptionRunActivity> {
+    return getSubscriptionRunActivity(runId, 1);
   },
 
   async listIssues(subscriptionId: string, cursor?: IssueCursor | null) {

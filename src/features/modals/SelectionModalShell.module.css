@@ -3,6 +3,9 @@
 .panelBody {
   display: flex;
   flex-direction: column;
+  font-family: var(--font-family-ui);
+  font-size: 13px;
+  font-weight: 400;
 }
 
 .searchBar {
@@ -31,8 +34,7 @@
   background: none;
   color: var(--color-text-primary);
   caret-color: var(--color-text-primary);
-  font-family: var(--font-family);
-  font-size: var(--font-size-md);
+  font: inherit;
 }
 
 .searchInput::placeholder {
@@ -72,8 +74,10 @@
 }
 
 .sidebarItemActive {
-  color: var(--color-primary) !important;
-  background-color: var(--color-primary-10) !important;
+  color: var(--color-text-primary) !important;
+  background-color: var(--color-surface-active) !important;
+  outline: 1px solid var(--color-contrast-25);
+  outline-offset: -1px;
 }
 
 .sidebarName {

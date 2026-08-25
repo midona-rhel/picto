@@ -1466,6 +1466,55 @@ mod tests {
     }
 
     #[test]
+    fn candidate_queue_lists_most_similar_first() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        app.store()
+            .transaction(|transaction| {
+                for item_id in 1..=3_i64 {
+                    let file_id = item_id + 9;
+                    transaction.execute(
+                        "INSERT INTO library_item
+                             (item_id, item_key, kind, created_at, updated_at)
+                         VALUES (?1, ?2, 'media', 'now', 'now')",
+                        params![item_id, format!("item-{item_id}")],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
+                        [item_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, file_hash, mime_type, size_bytes, created_at)
+                         VALUES (?1, ?2, 'image/jpeg', 1, 'now')",
+                        params![file_id, format!("hash-{file_id}")],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
+                         VALUES (?1, ?2, 'now', 'now')",
+                        params![item_id, file_id],
+                    )?;
+                }
+                transaction.execute(
+                    "INSERT INTO duplicate (file_id_a, file_id_b, distance)
+                     VALUES (10, 11, 8), (10, 12, 2)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(
+            list_candidates(&app, 10)
+                .unwrap()
+                .into_iter()
+                .map(|candidate| candidate.distance)
+                .collect::<Vec<_>>(),
+            vec![2, 8]
+        );
+    }
+
+    #[test]
     fn scan_is_file_level_but_exposes_all_logical_occurrences() {
         let directory = tempfile::tempdir().unwrap();
         let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));

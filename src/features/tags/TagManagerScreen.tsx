@@ -8,7 +8,6 @@ import {
   IconBookmarks,
   IconPlus,
   IconSearch,
-  IconTags,
   IconStar,
   IconTrash,
   IconX,
@@ -23,12 +22,14 @@ import type {
 import { TagChip } from '../../shared/ui/TagChip/TagChip';
 import { GlassInput } from '../../shared/ui/GlassInput/GlassInput';
 import { GlassModal } from '../../shared/ui/GlassModal';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ConfirmModal } from '../modals/ConfirmModal';
 import { EmptyState } from '../subscriptions/components/EmptyState';
 import { ActionButton } from '../subscriptions/components/ActionButton';
 import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { tagGroupColor, tagGroupOrder, tagGroupPresentation } from './tagGroupPresentation';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { showTagManagerItems } from '../../controllers/gridNavigationController';
 import {
   buildCommonTagContextEntries,
@@ -196,15 +197,14 @@ function RelationList({
         <div className={styles.relationRow} key={`${relation.relation}:${relation.tag_id}`}>
           <TagChip namespace={relation.namespace} subtag={relation.subtag} />
           <span className={styles.relationKind}>{relation.relation}</span>
-          <button
+          <KbdTooltip label="Remove relation"><button
             className={styles.iconButton}
-            title="Remove relation"
             aria-label={`Remove ${relationKey(relation)}`}
             onClick={() => onRemove(relation)}
             type="button"
           >
             <IconX size={14} />
-          </button>
+          </button></KbdTooltip>
         </div>
       ))}
     </div>
@@ -657,7 +657,7 @@ export function TagManagerScreen() {
     contextMenu.open(event, [
       {
         label: 'Show Tags in Group',
-        icon: <IconTags size={16} />,
+        icon: <IconBookmark size={16} />,
         action: () => handleNamespaceChange(group.namespace),
       },
       { separator: true },
@@ -893,13 +893,14 @@ export function TagsToolbar() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useShortcutScope((event) => {
-    if (!(event.metaKey || event.ctrlKey) || event.key !== 'f') return;
+    const search = getShortcut('nav.search');
+    if (!search || !matchesShortcutDef(event, search)) return;
     inputRef.current?.focus();
     return true;
   }, { priority: 30 });
 
   return (
-    <div className={styles.titlebarToolbar}>
+    <div className={styles.titlebarToolbar} data-window-drag-region="">
       <div className={styles.titlebarSearch}>
         <IconSearch size={13} className={styles.titlebarSearchIcon} />
         <input

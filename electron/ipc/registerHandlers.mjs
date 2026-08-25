@@ -5,6 +5,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clipboardFilePaths, clipboardHasImport } from './clipboardImport.mjs';
+import { createTrustedIpcHandle } from './trustedIpc.mjs';
 
 function createReverseSearchConfigs() {
   const waitForHelper = `
@@ -90,7 +91,7 @@ async function runReverseImageSearch({ BrowserWindow, filePath, engine }) {
     show: false,
     width: 1100,
     height: 800,
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   searchWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
@@ -185,8 +186,9 @@ export function registerIpcHandlers({
   isDev,
 }) {
   const openWithOptionsByExtension = new Map();
+  const handle = createTrustedIpcHandle(ipcMain, windowManager.ownsWebContents);
 
-  ipcMain.handle('picto:invoke', async (_event, payload) => {
+  handle('picto:invoke', async (_event, payload) => {
     const { command, args } = payload || {};
     if (!command || typeof command !== 'string') {
       throw new Error('Invalid invoke payload');
@@ -263,7 +265,7 @@ export function registerIpcHandlers({
   });
 
   // Restart the main window (e.g. after changing to a native transparency theme)
-  ipcMain.handle('picto:restart-main-window', () => {
+  handle('picto:restart-main-window', () => {
     const main = windowManager.getMainWindow();
     if (main && !main.isDestroyed()) {
       main.close();
@@ -272,7 +274,7 @@ export function registerIpcHandlers({
     setTimeout(() => { windowManager.createWindow('main'); }, 200);
   });
 
-  ipcMain.handle('picto:event:emit', (event, { name, payload, target }) => {
+  handle('picto:event:emit', (event, { name, payload, target }) => {
     if (!name || typeof name !== 'string') return null;
     if (target) {
       const win = windowManager.getWindow(target);
@@ -287,7 +289,7 @@ export function registerIpcHandlers({
     return null;
   });
 
-  ipcMain.handle('picto:window', async (event, { method, payload }) => {
+  handle('picto:window', async (event, { method, payload }) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win) throw new Error('No window context');
     switch (method) {
@@ -331,7 +333,7 @@ export function registerIpcHandlers({
     }
   });
 
-  ipcMain.handle('picto:dialog:open', async (event, options = {}) => {
+  handle('picto:dialog:open', async (event, options = {}) => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
     const {
       properties: requestedProperties,
@@ -362,17 +364,17 @@ export function registerIpcHandlers({
     return result.filePaths.length === 1 ? result.filePaths[0] : result.filePaths;
   });
 
-  ipcMain.handle('picto:dialog:save', async (_event, options = {}) => {
+  handle('picto:dialog:save', async (_event, options = {}) => {
     const result = await dialog.showSaveDialog(options);
     return result.canceled ? null : result.filePath ?? null;
   });
 
-  ipcMain.handle('picto:clipboard:writeText', (_event, { text }) => {
+  handle('picto:clipboard:writeText', (_event, { text }) => {
     clipboard.writeText(String(text ?? ''));
     return null;
   });
 
-  ipcMain.handle('picto:clipboard:copyFile', async (_event, { filePath }) => {
+  handle('picto:clipboard:copyFile', async (_event, { filePath }) => {
     if (process.platform === 'darwin') {
       clipboard.writeBookmark(filePath.split('/').pop(), `file://${filePath}`);
     } else {
@@ -381,7 +383,7 @@ export function registerIpcHandlers({
     return null;
   });
 
-  ipcMain.handle('picto:clipboard:copyImage', async (_event, { filePath }) => {
+  handle('picto:clipboard:copyImage', async (_event, { filePath }) => {
     try {
       const img = nativeImage.createFromPath(filePath);
       if (img.isEmpty()) throw new Error('Failed to load image');
@@ -392,9 +394,9 @@ export function registerIpcHandlers({
     }
   });
 
-  ipcMain.handle('picto:clipboard:hasImport', () => clipboardHasImport(clipboard));
+  handle('picto:clipboard:hasImport', () => clipboardHasImport(clipboard));
 
-  ipcMain.handle('picto:clipboard:readImport', () => {
+  handle('picto:clipboard:readImport', () => {
     const paths = clipboardFilePaths(clipboard);
     if (paths.length > 0) return { paths, temporary: false };
     const image = clipboard.readImage();
@@ -406,11 +408,12 @@ export function registerIpcHandlers({
     return { paths: [path], temporary: true };
   });
 
-  ipcMain.handle('picto:reverseImageSearch', async (_event, { filePath, engine }) => {
+  handle('picto:reverseImageSearch', async (_event, { filePath, engine }) => {
     return runReverseImageSearch({ BrowserWindow, filePath, engine });
   });
 
   ipcMain.on('ondragstart', async (event, { hashes, iconDataUrl }) => {
+    if (!windowManager.ownsWebContents(event.sender)) return;
     if (!hashes?.length) return;
 
 
@@ -507,7 +510,7 @@ export function registerIpcHandlers({
     return item;
   };
 
-  ipcMain.handle('picto:application-menu:get', () => {
+  handle('picto:application-menu:get', () => {
     const menu = Menu.getApplicationMenu();
     const items = serializeMenu(menu);
     // The macOS app-name menu contains OS-owned Services/Hide commands.
@@ -516,7 +519,7 @@ export function registerIpcHandlers({
     return process.platform === 'darwin' && items[0]?.label === app.name ? items.slice(1) : items;
   });
 
-  ipcMain.handle('picto:application-menu:execute', (event, { id }) => {
+  handle('picto:application-menu:execute', (event, { id }) => {
     const item = resolveMenuItem(id);
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!item || !win || item.enabled === false || item.type === 'separator' || item.submenu) return null;
@@ -543,7 +546,7 @@ export function registerIpcHandlers({
     return null;
   });
 
-  ipcMain.handle('picto:monitor:current', () => {
+  handle('picto:monitor:current', () => {
     const point = screen.getCursorScreenPoint();
     const display = screen.getDisplayNearestPoint(point);
     return {
@@ -552,7 +555,7 @@ export function registerIpcHandlers({
     };
   });
 
-  ipcMain.handle('picto:monitor:gpu', async () => {
+  handle('picto:monitor:gpu', async () => {
     const featureStatus = app.getGPUFeatureStatus();
     let info = null;
     try {
@@ -568,19 +571,24 @@ export function registerIpcHandlers({
     };
   });
 
-  ipcMain.handle('picto:library:create', async (_event, payload) => libraryService.createLibrary(payload));
-  ipcMain.handle('picto:library:open', async () => libraryService.openLibraryDialog());
-  ipcMain.handle('picto:library:switch', async (_event, { path }) => libraryService.switchLibrary(path));
-  ipcMain.handle('picto:library:remove', async (_event, { path }) => libraryService.removeLibrary(path));
-  ipcMain.handle('picto:library:delete', async (_event, { path }) => libraryService.deleteLibrary(path));
-  ipcMain.handle('picto:library:togglePin', async (_event, { path }) => libraryService.toggleLibraryPin(path));
-  ipcMain.handle('picto:library:rename', async (_event, { path, newName }) => libraryService.renameLibrary(path, newName));
-  ipcMain.handle('picto:library:relocate', async (_event, { oldPath }) => libraryService.relocateLibrary(oldPath));
-  ipcMain.handle('picto:library:getConfig', async () => libraryService.getLibraryConfig());
-  ipcMain.handle('picto:library:setMeta', async (_event, { path, meta }) => libraryService.setLibraryMeta(path, meta));
+  handle('picto:library:create', async (_event, payload) => libraryService.createLibrary(payload));
+  handle('picto:library:joinCloud', async (_event, payload) => libraryService.joinCloudLibrary(payload));
+  handle('picto:library:open', async () => libraryService.openLibraryDialog());
+  handle('picto:library:switch', async (_event, { path }) => libraryService.switchLibrary(path));
+  handle('picto:library:remove', async (_event, { path }) => libraryService.removeLibrary(path));
+  handle('picto:library:delete', async (_event, { path }) => libraryService.deleteLibrary(path));
+  handle('picto:library:togglePin', async (_event, { path }) => libraryService.toggleLibraryPin(path));
+  handle('picto:library:rename', async (_event, { path, newName }) => libraryService.renameLibrary(path, newName));
+  handle('picto:library:relocate', async (_event, { oldPath }) => libraryService.relocateLibrary(oldPath));
+  handle('picto:library:getConfig', async () => libraryService.getLibraryConfig());
+  handle('picto:library:setMeta', async (_event, { path, meta }) => libraryService.setLibraryMeta(path, meta));
+  handle('picto:tutorial:start', async () => libraryService.startTutorialLibrary());
+  handle('picto:tutorial:reset', async () => libraryService.resetTutorialLibrary());
+  handle('picto:tutorial:finish', async () => libraryService.finishTutorialLibrary());
+  handle('picto:tutorial:status', async () => libraryService.getTutorialSession());
 
   // Auto-updater
-  ipcMain.handle('picto:updater:check', async () => {
+  handle('picto:updater:check', async () => {
     try {
       const result = await updaterService.checkForUpdates();
       return result?.updateInfo ?? null;
@@ -588,23 +596,23 @@ export function registerIpcHandlers({
       return { error: err?.message ?? String(err) };
     }
   });
-  ipcMain.handle('picto:updater:download', async () => {
+  handle('picto:updater:download', async () => {
     await updaterService.downloadUpdate();
   });
-  ipcMain.handle('picto:updater:install', () => {
+  handle('picto:updater:install', () => {
     updaterService.quitAndInstall();
   });
 
   // Shell operations — reveal in Finder/Explorer, open with default app
-  ipcMain.handle('picto:shell:showInFolder', async (_event, { path }) => {
+  handle('picto:shell:showInFolder', async (_event, { path }) => {
     if (path) shell.showItemInFolder(path);
   });
 
-  ipcMain.handle('picto:shell:openPath', async (_event, { path }) => {
+  handle('picto:shell:openPath', async (_event, { path }) => {
     if (path) await shell.openPath(path);
   });
 
-  ipcMain.handle('picto:shell:getOpenWithOptions', async (_event, { path }) => {
+  handle('picto:shell:getOpenWithOptions', async (_event, { path }) => {
     if (!path) throw new Error('A file path is required');
     if (process.platform === 'darwin') {
       const dot = path.lastIndexOf('.');
@@ -612,7 +620,7 @@ export function registerIpcHandlers({
       if (!openWithOptionsByExtension.has(extension)) {
         openWithOptionsByExtension.set(extension, {
           mode: 'submenu',
-          applications: getAssociatedApplications(path),
+          applications: await getAssociatedApplications(path),
         });
       }
       return openWithOptionsByExtension.get(extension);
@@ -623,13 +631,13 @@ export function registerIpcHandlers({
     return { mode: 'unsupported', applications: [] };
   });
 
-  ipcMain.handle('picto:shell:openWithApplication', async (_event, { path, applicationPath }) => {
+  handle('picto:shell:openWithApplication', async (_event, { path, applicationPath }) => {
     if (!path || !applicationPath) throw new Error('A file and application path are required');
     if (process.platform !== 'darwin') throw new Error('Application selection is only available on macOS');
     openWithApplication(applicationPath, path);
   });
 
-  ipcMain.handle('picto:shell:openWithChooser', async (_event, { path }) => {
+  handle('picto:shell:openWithChooser', async (_event, { path }) => {
     if (!path) throw new Error('A file path is required');
     if (process.platform !== 'win32') throw new Error('The system application chooser is unavailable');
     const child = spawn('rundll32.exe', ['shell32.dll,OpenAs_RunDLL', path], {

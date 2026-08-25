@@ -32,7 +32,7 @@
     "test:ui": "vitest --ui",
     "test:watch": "vitest --watch",
     "alpha:verify": "npm run release:audit && npx tsc -p tsconfig.json --noEmit && npm run test -- --run && cargo test --manifest-path core/Cargo.toml --quiet && npm run check:command-parity",
-    "alpha:package": "npm run generate:app-icons && npm run build:native && npm run build:electron && npm run build:gallery-dl-bridge && npm run build:onlyfans-bridge && npm run release:audit -- --artifacts && npx electron-builder --publish=never",
+    "alpha:package": "npm run generate:app-icons && npm run build:native && npm run build:electron && npm run build:gallery-dl-bridge && npm run build:onlyfans-bridge && npm run release:audit -- --artifacts && node scripts/build-alpha-package.mjs",
     "alpha:smoke": "node ./scripts/ci/alpha-smoke.mjs",
     "duplicate:smoke": "node ./scripts/ci/duplicate-review-smoke.mjs",
     "duplicate:benchmark": "node ./scripts/ci/duplicate-scan-benchmark.mjs",
@@ -108,6 +108,12 @@
           "picto-onlyfans-bridge.exe",
           "THIRD_PARTY_LICENSES.txt"
         ]
+      }
+    ],
+    "extraResources": [
+      {
+        "from": "resources/tutorial/",
+        "to": "tutorial/"
       }
     ],
     "publish": {

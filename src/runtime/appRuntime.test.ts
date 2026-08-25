@@ -17,6 +17,7 @@ vi.mock('./libraryInvalidation', () => ({
 vi.mock('./appSettingsSettle', () => ({ startAppSettingsSettle: () => vi.fn() }));
 vi.mock('./applicationMenuRuntime', () => ({ startApplicationMenuRuntime: () => vi.fn() }));
 vi.mock('./diagnosticsRuntime', () => ({ startDiagnosticsRuntime: () => vi.fn() }));
+vi.mock('./cloudSettle', () => ({ startCloudSettle: () => vi.fn() }));
 vi.mock('./gridSettle', () => ({ startGridSettle: () => vi.fn() }));
 vi.mock('./historyRuntime', () => ({ startHistoryRuntime: () => vi.fn() }));
 vi.mock('./inspectorSettle', () => ({ startInspectorSettle: () => vi.fn() }));

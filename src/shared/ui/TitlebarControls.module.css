@@ -6,7 +6,7 @@
   display: flex;
   align-items: center;
   padding-right: 8px;
-  -webkit-app-region: no-drag;
+  -webkit-app-region: drag;
   color: var(--color-text-primary);
   font-family: var(--font-family-ui);
   font-weight: var(--font-weight-regular);
@@ -51,7 +51,6 @@
   font-family: inherit;
   font-weight: var(--font-weight-medium);
   white-space: nowrap;
-  -webkit-app-region: no-drag;
 }
 
 .counter {

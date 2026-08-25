@@ -4,7 +4,8 @@
  * TypeScript API commands are kept in sync.
  *
  * Parses:
- * - core/src/ipc_v2.rs — match arm string literals ("command.name" =>)
+ * - core/src/ipc_v2.rs — normal command dispatch
+ * - core/src/state_v2.rs — process-level commands that replace the active library
  * - src/platform/*.ts — invoke('command_name', ...) calls (per-domain API files)
  *
  * Reports any drift between the two surfaces, minus an explicit allowlist.
@@ -14,17 +15,23 @@ import path from 'node:path';
 import { extractRustCommandsFromText, extractTsCommandsFromText } from './check-command-parity-lib.mjs';
 
 const ROOT = process.cwd();
-const IPC_FILE = path.join(ROOT, 'core/src/ipc_v2.rs');
+const RUST_COMMAND_FILES = [
+  path.join(ROOT, 'core/src/ipc_v2.rs'),
+  path.join(ROOT, 'core/src/state_v2.rs'),
+];
 const CALLER_DIRS = [path.join(ROOT, 'src'), path.join(ROOT, 'electron')];
 const ALLOWLIST_FILE = path.join(ROOT, 'scripts/command-parity-allowlist.json');
 
 async function extractRustCommands() {
-  const content = await fs.readFile(IPC_FILE, 'utf8');
-  const commands = extractRustCommandsFromText(content);
+  const commands = new Set();
   const MOD_CMD_RE = /command\s*==\s*"([a-z_][a-z0-9_.]*)"/g;
-  let match;
-  while ((match = MOD_CMD_RE.exec(content)) !== null) {
-    commands.add(match[1]);
+  for (const file of RUST_COMMAND_FILES) {
+    const content = await fs.readFile(file, 'utf8');
+    for (const command of extractRustCommandsFromText(content)) commands.add(command);
+    let match;
+    while ((match = MOD_CMD_RE.exec(content)) !== null) {
+      commands.add(match[1]);
+    }
   }
   return commands;
 }

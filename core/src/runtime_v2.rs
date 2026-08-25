@@ -3,6 +3,7 @@
 //! Durable queue tables own state. These loops only wake, execute bounded
 //! work, publish compact invalidations, and honor application shutdown.
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
@@ -21,6 +22,7 @@ const SUBSCRIPTION_TICK: StdDuration = StdDuration::from_secs(1);
 const SUBSCRIPTION_WORKER_COUNT: usize = 4;
 const MAINTENANCE_TICK: StdDuration = StdDuration::from_millis(250);
 const WATCH_TICK: StdDuration = StdDuration::from_secs(30);
+const CLOUD_TICK: StdDuration = StdDuration::from_secs(2);
 const INGEST_BATCH_SIZE: usize = 8;
 const WORK_BATCH_SIZE: usize = 8;
 const THUMBNAIL_CHANGED_EVENT: &str = "picto:thumbnail-changed";
@@ -64,6 +66,7 @@ pub fn recover(application: &Application, now: &str) -> Result<StartupRecovery, 
     let RecoveryCounts { runs, query_runs } =
         subscriptions_v2::recover_startup(application.store(), now)?;
     let ingest_jobs = ingest_queue_v2::reset_running(application)?;
+    ingest_queue_v2::recover_settled_provisional_collections(application)?;
     let work_items = crate::workers_v2::reset_running(application.store())?;
     let pruned_thumbnail_work =
         crate::workers_v2::prune_deferred_thumbnail_work(application.store())?;
@@ -104,7 +107,14 @@ pub async fn subscription_tick<R: SourceRunner>(
 
 pub async fn maintenance_tick(application: &Application) -> Result<MaintenanceTickResult, String> {
     let ingest = ingest_queue_v2::run_batch(application, INGEST_BATCH_SIZE)?;
-    let work = background_runtime_v2::drain_batch(application, WORK_BATCH_SIZE).await?;
+    // User-visible ingest thumbnails win over colors, pHash, and other
+    // derivatives. A subscription worker may be draining the same queue, so
+    // checking both ready and running jobs prevents derivative contention.
+    let work = if ingest_queue_v2::has_ready_or_running(application)? {
+        DrainBatchResult::default()
+    } else {
+        background_runtime_v2::drain_batch(application, WORK_BATCH_SIZE).await?
+    };
     if let Some(receipt) = &work.receipt {
         application.publish(receipt);
     }
@@ -232,10 +242,43 @@ pub fn start(
         }
     });
 
+    let cloud_application = Arc::clone(&application);
+    let cloud_cancel = cancel.clone();
+    let cloud_handle = tokio::spawn(async move {
+        let mut state = crate::cloud::worker::WorkerState::default();
+        let mut interval = tokio::time::interval(CLOUD_TICK);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = cloud_cancel.cancelled() => return,
+                _ = interval.tick() => {
+                    match crate::cloud::worker::tick(&cloud_application, &mut state).await {
+                        Ok(result) if result.state_changed => {
+                            match cloud_application.store().revision() {
+                                Ok(revision) => cloud_application.publish(&MutationReceipt {
+                                    revision,
+                                    resources: vec![
+                                        resources::CLOUD.to_string(),
+                                        resources::TASKS.to_string(),
+                                    ],
+                                    item_ids: Vec::new(),
+                                }),
+                                Err(error) => tracing::warn!(error = %error, "Reading revision after cloud sync failed"),
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(error) => tracing::warn!(error = %error, "Cloud folder sync failed"),
+                    }
+                }
+            }
+        }
+    });
+
     let mut handles = vec![
         ("replacement_subscription_scheduler", scheduler_handle),
         ("replacement_maintenance", maintenance_handle),
         ("replacement_folder_watches", watch_handle),
+        ("replacement_cloud_sync", cloud_handle),
     ];
     handles.extend(
         subscription_handles
@@ -243,6 +286,63 @@ pub fn start(
             .map(|handle| ("replacement_subscription_worker", handle)),
     );
     Ok(handles)
+}
+
+/// Start the deliberately small tutorial runtime. The real maintenance and
+/// subscription pipelines remain in use, but the only source runner can read
+/// bundled fixture files and no scheduler, watch, cloud, or network worker is
+/// created.
+pub fn start_tutorial(
+    application: Arc<Application>,
+    cancel: CancellationToken,
+    fixture_root: PathBuf,
+) -> Result<Vec<(&'static str, tokio::task::JoinHandle<()>)>, String> {
+    recover(&application, &Utc::now().to_rfc3339())?;
+
+    let maintenance_application = Arc::clone(&application);
+    let maintenance_cancel = cancel.clone();
+    let maintenance_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval(MAINTENANCE_TICK);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = maintenance_cancel.cancelled() => return,
+                _ = interval.tick() => {
+                    if let Err(error) = maintenance_tick(&maintenance_application).await {
+                        tracing::warn!(error = %error, "Tutorial maintenance tick failed");
+                    }
+                }
+            }
+        }
+    });
+
+    let source_application = Arc::clone(&application);
+    let source_cancel = cancel.clone();
+    let source_handle = tokio::spawn(async move {
+        let worker = SubscriptionWorker::with_cancellation(
+            &source_application,
+            crate::tutorial_source_v2::TutorialSourceRunner::new(fixture_root),
+            source_cancel.clone(),
+        );
+        let mut interval = tokio::time::interval(SUBSCRIPTION_TICK);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = source_cancel.cancelled() => return,
+                _ = interval.tick() => {
+                    let now = Utc::now().to_rfc3339();
+                    if let Err(error) = worker.tick(&now).await {
+                        tracing::warn!(error = %error, "Tutorial subscription worker failed");
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(vec![
+        ("tutorial_maintenance", maintenance_handle),
+        ("tutorial_subscription_worker", source_handle),
+    ])
 }
 
 #[cfg(test)]

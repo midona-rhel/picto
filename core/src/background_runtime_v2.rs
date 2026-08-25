@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::app::{resources, Application, ItemId, MutationReceipt};
-use crate::media_processing_v2::{self, BlobSource};
+use crate::media_processing_v2::{self, BlobSource, DerivativeOutcome};
 use crate::store::Store;
 use crate::workers_v2::{self, WorkItem, WorkKind, WorkSpec, Worker, DEFAULT_BATCH_SIZE};
 
@@ -75,6 +75,7 @@ async fn drain_claimed_batch<B: BlobSource>(
     let mut affected_files: BTreeMap<i64, (Vec<i64>, Option<String>)> = BTreeMap::new();
     let mut thumbnail_file_hashes = BTreeSet::new();
     let mut dominant_color_changes = BTreeMap::new();
+    let mut duplicate_analysis_touched = false;
 
     let mut groups: Vec<Vec<WorkItem>> = Vec::new();
     for item in items {
@@ -93,24 +94,33 @@ async fn drain_claimed_batch<B: BlobSource>(
     }
 
     for group in groups {
-        let executions = if group.iter().all(|item| is_derivative(item.kind)) {
-            media_processing_v2::execute_work_group(store, blobs, &group)
-                .await
-                .into_iter()
-                .map(|result| result.map(|_| None))
-                .collect::<Vec<_>>()
-        } else {
-            vec![execute_non_derivative(application, blobs, &group[0]).await]
-        };
+        let executions: Vec<Result<(Option<MutationReceipt>, Option<DerivativeOutcome>), String>> =
+            if group.iter().all(|item| is_derivative(item.kind)) {
+                media_processing_v2::execute_work_group(store, blobs, &group)
+                    .await
+                    .into_iter()
+                    .map(|result| result.map(|outcome| (None, Some(outcome))))
+                    .collect::<Vec<_>>()
+            } else {
+                vec![execute_non_derivative(application, blobs, &group[0])
+                    .await
+                    .map(|receipt| (receipt, None))]
+            };
         for (item, execution) in group.into_iter().zip(executions) {
             match execution {
-                Ok(operation_receipt) => {
+                Ok((operation_receipt, derivative_outcome)) => {
                     if item.kind == WorkKind::BlobDelete {
                         if let Some(file_hash) = &item.file_hash {
                             affected_resources.insert(format!("file:{file_hash}"));
                         }
                     }
-                    if matches!(item.kind, WorkKind::Thumbnail | WorkKind::DominantColors) {
+                    let publishes_derivative =
+                        derivative_outcome.is_some_and(|outcome| match item.kind {
+                            WorkKind::Thumbnail => outcome.thumbnail_written,
+                            WorkKind::DominantColors => outcome.dominant_colors_written,
+                            _ => false,
+                        });
+                    if publishes_derivative {
                         let (_, file_hash) = if let Some(file_id) = item.file_id {
                             if let Some(affected) = affected_files.get(&file_id) {
                                 affected.clone()
@@ -146,6 +156,9 @@ async fn drain_claimed_batch<B: BlobSource>(
                         affected_resources.extend(receipt.resources);
                         affected_item_ids.extend(receipt.item_ids.into_iter().map(|id| id.0));
                     }
+                    duplicate_analysis_touched |= item.kind == WorkKind::PerceptualHash
+                        || derivative_outcome
+                            .is_some_and(|outcome| outcome.perceptual_hash_written);
                     if !workers_v2::complete(store, item.work_id)? {
                         return Err(format!(
                             "Work item {} succeeded but could not be completed",
@@ -165,6 +178,25 @@ async fn drain_claimed_batch<B: BlobSource>(
                     }
                 }
             }
+        }
+    }
+
+    if duplicate_analysis_touched {
+        let more_hash_work: bool = store.read(|connection| {
+            connection.query_row(
+                "SELECT EXISTS(
+                    SELECT 1 FROM work_item
+                    WHERE work_type = 'perceptual_hash'
+                      AND status IN ('pending', 'running')
+                )",
+                [],
+                |row| row.get(0),
+            )
+        })?;
+        if !more_hash_work {
+            let scan = crate::duplicates_v2::scan(application, 10)?;
+            affected_resources.extend(scan.receipt.resources);
+            affected_item_ids.extend(scan.affected_item_ids.into_iter().map(|id| id.0));
         }
     }
 
@@ -260,7 +292,7 @@ fn dominant_color_for_file(store: &Store, file_id: Option<i64>) -> Result<Option
 #[cfg(test)]
 mod tests {
     use super::{drain_claimed_batch, DrainBatchResult};
-    use crate::app::{resources, Application};
+    use crate::app::{resources, Application, ItemId};
     use crate::media_processing_v2::BlobSource;
     use crate::store::Store;
     use crate::workers_v2::{self, WorkKind, WorkSpec};
@@ -377,7 +409,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn derivative_batch_is_bounded_and_receipt_is_exact() {
+    async fn completed_thumbnail_does_not_publish_a_false_change() {
         let (_directory, application, blobs) = fixture();
         enqueue(application.store(), WorkSpec::file(7, WorkKind::Thumbnail));
         enqueue(application.store(), WorkSpec::blob("orphan-hash"));
@@ -395,7 +427,7 @@ mod tests {
                     resources: vec![resources::TASKS.to_string()],
                     item_ids: vec![],
                 }),
-                thumbnail_file_hashes: vec!["hash-7".to_string()],
+                thumbnail_file_hashes: vec![],
                 dominant_color_changes: vec![],
             }
         );
@@ -418,8 +450,37 @@ mod tests {
     async fn derivative_rows_for_one_file_share_media_preparation() {
         let (directory, application, _) = fixture();
         let original = directory.path().join("source.png");
-        DynamicImage::ImageRgb8(RgbImage::from_pixel(128, 128, image::Rgb([24, 96, 180])))
-            .save(&original)
+        let image =
+            DynamicImage::ImageRgb8(RgbImage::from_pixel(128, 128, image::Rgb([24, 96, 180])));
+        image.save(&original).unwrap();
+        let existing_hash =
+            crate::media_processing::compute_phash_base64_from_image(&image).unwrap();
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO media_file
+                         (file_id, file_hash, mime_type, size_bytes, perceptual_hash, created_at)
+                     VALUES (8, 'hash-8', 'image/png', 1, ?1, ?2)",
+                    rusqlite::params![existing_hash, NOW],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_item
+                         (item_id, item_key, kind, created_at, updated_at)
+                     VALUES (11, 'item-11', 'media', ?1, ?1)",
+                    [NOW],
+                )?;
+                transaction.execute(
+                    "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
+                     VALUES (11, 8, ?1, ?1)",
+                    [NOW],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (11, 'active')",
+                    [],
+                )?;
+                Ok(())
+            })
             .unwrap();
         let original_lookups = Arc::new(AtomicUsize::new(0));
         let thumbnail_writes = Arc::new(AtomicUsize::new(0));
@@ -450,8 +511,15 @@ mod tests {
             .dominant_color_hex
             .is_some());
         let receipt = result.receipt.as_ref().unwrap();
-        assert_eq!(receipt.resources, [resources::TASKS]);
-        assert!(receipt.item_ids.is_empty());
+        assert_eq!(
+            receipt.resources,
+            [
+                resources::DUPLICATES.to_string(),
+                resources::SIDEBAR.to_string(),
+                resources::TASKS.to_string()
+            ]
+        );
+        assert_eq!(receipt.item_ids, [ItemId(9), ItemId(10), ItemId(11)]);
         assert_eq!(original_lookups.load(Ordering::Relaxed), 1);
         assert_eq!(thumbnail_writes.load(Ordering::Relaxed), 1);
         application
@@ -467,6 +535,12 @@ mod tests {
                 let queued: i64 =
                     connection.query_row("SELECT COUNT(*) FROM work_item", [], |row| row.get(0))?;
                 assert_eq!(queued, 0);
+                let duplicates: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM duplicate WHERE status = 'detected'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(duplicates, 1);
                 Ok(())
             })
             .unwrap();

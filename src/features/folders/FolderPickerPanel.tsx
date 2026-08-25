@@ -10,7 +10,15 @@ import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { OverlayShell } from '../../shared/ui/OverlayShell';
 import { FolderTree, buildTree, flattenVisibleIds } from '../../shared/ui/FolderTree';
-import { IconCheck, IconFolder, IconFolderPlus, IconSearch } from '@tabler/icons-react';
+import {
+  IconCheck,
+  IconChecks,
+  IconFolder,
+  IconFolderPlus,
+  IconFolders,
+  IconHistory,
+  IconSearch,
+} from '@tabler/icons-react';
 import { folderPickerPortalAtom } from '../../state/portals';
 import { selectionTargetAtom } from '../../state/selection';
 import { displayedInspectorItemDetailsAtom } from '../../state/inspector';
@@ -23,6 +31,10 @@ import { GlassModal, modalStyles } from '../../shared/ui/GlassModal/GlassModal';
 import { foldersController } from '../../controllers/foldersController';
 import { FilterLogicTabs } from '../../shared/ui/FilterLogicTabs';
 import type { FilterMatchMode } from '../../shared/types/generated/application/FilterMatchMode';
+import { useRecentItems } from '../../shared/hooks/useRecentItems';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+
+type FolderView = 'all' | 'recent' | 'selected';
 
 export function FolderPickerPanel() {
   const portalState = useAtomValue(folderPickerPortalAtom);
@@ -39,6 +51,7 @@ export function FolderPickerPanel() {
   const close = useCallback(() => setPortalState({ open: false }), [setPortalState]);
 
   const [query, setQuery] = useState('');
+  const [view, setView] = useState<FolderView>('all');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [excluded, setExcluded] = useState<Set<number>>(new Set());
   const [rootSelected, setRootSelected] = useState(false);
@@ -50,6 +63,7 @@ export function FolderPickerPanel() {
   const contextMenu = useContextMenu();
   const [createTarget, setCreateTarget] = useState<{ parentId: number | null; title: string } | null>(null);
   const [folderName, setFolderName] = useState('');
+  const [recentFolderIds, recordRecentFolders] = useRecentItems('picto-recent-folders', 20);
 
   // Build tree + flat visible IDs for range selection
   const availableFolders = useMemo(() => {
@@ -64,6 +78,18 @@ export function FolderPickerPanel() {
     [tree, expanded, searchLower],
   );
 
+  const displayedFolders = useMemo(() => {
+    if (view === 'all') return availableFolders;
+    const byId = new Map(availableFolders.map((node) => [Number(node.id.slice(7)), node]));
+    const ids = view === 'recent'
+      ? recentFolderIds.map(Number)
+      : [...selected];
+    return ids.flatMap((folderId, index) => {
+      const node = byId.get(folderId);
+      return node ? [{ ...node, parent_id: 'section:folders', sort_order: index }] : [];
+    });
+  }, [availableFolders, recentFolderIds, selected, view]);
+
   // Sync expanded state when tree changes (auto-expand all)
   useEffect(() => {
     const ids = new Set<string>();
@@ -74,6 +100,7 @@ export function FolderPickerPanel() {
   useEffect(() => {
     if (open) {
       setQuery('');
+      setView('all');
       setSelected(new Set(portalState.selectedFolderIds ?? (immediateSelection ? entityData?.folder_ids ?? [] : [])));
       setRootSelected(parentSelection && (portalState.selectedFolderIds?.length ?? 0) === 0);
       setExcluded(filterSelection ? new Set(portalState.excludedFolderIds ?? []) : new Set());
@@ -89,7 +116,8 @@ export function FolderPickerPanel() {
     } else if (target) {
       void entityMutations.updateTargetFolderMembership(target, folderId, adding ? 'add' : 'remove');
     }
-  }, [portalState.onApplyFolders, target]);
+    if (adding) recordRecentFolders([String(folderId)]);
+  }, [portalState.onApplyFolders, recordRecentFolders, target]);
 
   const commitFilterSelection = useCallback((nextSelected: Set<number>, nextExcluded: Set<number>, mode = matchMode) => {
     portalState.onApplyFolderFilter?.([...nextSelected], [...nextExcluded], mode);
@@ -216,7 +244,7 @@ export function FolderPickerPanel() {
     <OverlayShell
       open={open}
       onClose={close}
-      width={340}
+      width={360}
       height={480}
       pinned={pinned}
       onPinnedChange={setPinned}
@@ -233,6 +261,26 @@ export function FolderPickerPanel() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
+          </div>
+          <div className={shellStyles.viewTabs} role="group" aria-label="Folder view">
+            <KbdTooltip label="All folders"><button
+              type="button"
+              className={`${shellStyles.viewTab} ${view === 'all' ? shellStyles.viewTabActive : ''}`}
+              aria-label="All folders"
+              onClick={() => setView('all')}
+            ><IconFolders size={14} /></button></KbdTooltip>
+            <KbdTooltip label="Recent folders"><button
+              type="button"
+              className={`${shellStyles.viewTab} ${view === 'recent' ? shellStyles.viewTabActive : ''}`}
+              aria-label="Recent folders"
+              onClick={() => setView('recent')}
+            ><IconHistory size={14} /></button></KbdTooltip>
+            <KbdTooltip label="Selected folders"><button
+              type="button"
+              className={`${shellStyles.viewTab} ${view === 'selected' ? shellStyles.viewTabActive : ''}`}
+              aria-label="Selected folders"
+              onClick={() => setView('selected')}
+            ><IconChecks size={14} /></button></KbdTooltip>
           </div>
           {filterSelection ? <FilterLogicTabs value={matchMode} onChange={changeMatchMode} /> : null}
         </>
@@ -270,7 +318,7 @@ export function FolderPickerPanel() {
         </div>
       ) : null}
       <FolderTree
-        nodes={availableFolders}
+        nodes={displayedFolders}
         selected={selected}
         onToggle={handleToggle}
         excluded={filterSelection ? excluded : undefined}

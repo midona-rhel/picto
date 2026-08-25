@@ -16,6 +16,7 @@ const store = getDefaultStore();
 
 describe('FolderPickerPanel row context actions', () => {
   beforeEach(() => {
+    localStorage.removeItem('picto-recent-folders');
     vi.mocked(foldersController.create).mockClear();
     store.set(sidebarNodesAtom, [{
       id: 'folder:7',
@@ -95,5 +96,24 @@ describe('FolderPickerPanel row context actions', () => {
     expect(onApplyFolders).toHaveBeenLastCalledWith([7]);
     fireEvent.click(screen.getByText('Archive'));
     expect(onApplyFolders).toHaveBeenLastCalledWith([7, 8]);
+  });
+
+  it('offers all, recent, and selected folder views', () => {
+    localStorage.setItem('picto-recent-folders', JSON.stringify(['8']));
+    store.set(sidebarNodesAtom, [
+      { id: 'folder:7', kind: 'folder', name: 'Reference', parent_id: 'section:folders' } as SidebarNodeDto,
+      { id: 'folder:8', kind: 'folder', name: 'Archive', parent_id: 'section:folders' } as SidebarNodeDto,
+    ]);
+    store.set(folderPickerPortalAtom, { open: true, selectedFolderIds: [7], onApplyFolders: vi.fn() });
+
+    render(<MantineProvider><FolderPickerPanel /></MantineProvider>);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Recent folders' }));
+    expect(screen.getByText('Archive')).toBeInTheDocument();
+    expect(screen.queryByText('Reference')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Selected folders' }));
+    expect(screen.getByText('Reference')).toBeInTheDocument();
+    expect(screen.queryByText('Archive')).not.toBeInTheDocument();
   });
 });

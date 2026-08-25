@@ -1097,7 +1097,7 @@ def main() -> int:
 
         emit(
             "onlyfans_self_test",
-            runtime_imported=callable(_load.systemSet) and callable(_start_manager),
+            ofscraper_imported=callable(_load.systemSet) and callable(_start_manager),
         )
         return 0
     if args.request is None:

@@ -112,7 +112,7 @@ vi.mock('../../shared/ui/ContextMenu', () => ({
     <div data-testid="context-menu">
       {entries.map((entry, index) => entry.separator
         ? <hr key={`separator-${index}`} />
-        : <button key={entry.label} type="button" onClick={entry.action}>{entry.label}</button>)}
+        : <button key={`${entry.label}-${index}`} type="button" onClick={entry.action}>{entry.label}</button>)}
     </div>
   ),
   useContextMenu: () => {

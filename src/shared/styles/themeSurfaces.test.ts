@@ -45,4 +45,24 @@ describe('theme surface ownership', () => {
     expect(source).toContain('--font-page-bg: var(--color-bg-app);');
     expect(source).toContain('--font-page-fg: var(--color-text-primary);');
   });
+
+  it('keeps tag and folder selection typography and selection neutral', () => {
+    const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
+    const overlay = readFileSync(resolve(process.cwd(), 'src/shared/ui/OverlayShell/OverlayShell.module.css'), 'utf8');
+    const tags = readFileSync(resolve(process.cwd(), 'src/features/tags/TagSelectPanel.module.css'), 'utf8');
+    const tagPanel = readFileSync(resolve(process.cwd(), 'src/features/tags/TagSelectPanel.tsx'), 'utf8');
+    const folders = readFileSync(resolve(process.cwd(), 'src/shared/ui/FolderTree/FolderTree.module.css'), 'utf8');
+
+    expect(overlay).toContain('font-family: var(--font-family-ui);');
+    expect(tokens).toContain(":root[data-platform='mac']");
+    expect(tokens).toContain(":root[data-platform='windows']");
+    expect(tokens).toContain(":root[data-platform='linux']");
+    expect(overlay).toContain('.checkBoxChecked {\n  background: var(--color-text-primary);');
+    expect(tags).toContain('.tagRowSelected {\n  background: var(--color-surface-active);');
+    expect(tags).not.toContain('var(--color-selection-bg)');
+    expect(tags).not.toContain('--tag-text-dark');
+    expect(tagPanel).not.toContain('tagGroupTextColor');
+    expect(tagPanel).toContain('fillOpacity={showChecked && !onApplyTagFilter ? 0.58 : 0.28}');
+    expect(folders).toContain('.rowSelected {\n  background: var(--color-surface-active);');
+  });
 });

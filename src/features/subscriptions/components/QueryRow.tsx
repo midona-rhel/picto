@@ -46,7 +46,7 @@ export function QueryRow({
   const label = query.display_name?.trim() || query.query_text;
 
   return (
-    <div className={`${styles.subscriptionTableRow} ${styles.qRow}`.trim()} onDoubleClick={onShowStats} title="Double-click for source details">
+    <KbdTooltip label="Double-click for source details"><div className={`${styles.subscriptionTableRow} ${styles.qRow}`.trim()} onDoubleClick={onShowStats}>
       <span className={styles.qCellName}>
         <span className={styles.qName} title={query.query_text}>{label}</span>
         {query.source_history_complete && query.completed_initial_run && (
@@ -98,6 +98,6 @@ export function QueryRow({
           </button>
         </KbdTooltip>
       </span>
-    </div>
+    </div></KbdTooltip>
   );
 }

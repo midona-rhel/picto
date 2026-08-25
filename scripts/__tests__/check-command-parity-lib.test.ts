@@ -19,6 +19,15 @@ describe('check-command-parity parser helpers', () => {
     expect(commands.has('open_settings_window')).toBe(true);
   });
 
+  it('extracts process-level serialized invocations', () => {
+    const source = `
+      await invokeSerialized('cloud.library.join', { library_id: libraryId });
+    `;
+
+    const commands = extractTsCommandsFromText(source, 'libraryHostService.mjs');
+    expect(commands.has('cloud.library.join')).toBe(true);
+  });
+
   it('extracts invoke commands when generic arguments span multiple lines', () => {
     const source = `
       import { invoke } from '#desktop/api';

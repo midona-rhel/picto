@@ -316,9 +316,11 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     const zoomInDef = getShortcut('view.zoomIn');
     const zoomOutDef = getShortcut('view.zoomOut');
     const actualDef = getShortcut('view.actualSize');
+    const closeDef = getShortcut('view.closeDetail');
+    const copyPathDef = getShortcut('edit.copyFilePath');
 
       // Close window
-      if (e.key === 'Escape') {
+      if (closeDef && matchesShortcutDef(e, closeDef)) {
         e.preventDefault();
         void windowController.closeCurrentWindow();
         return;
@@ -351,7 +353,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
       }
 
       // Copy path
-      if ((e.metaKey || e.ctrlKey) && e.altKey && e.key === 'c') {
+      if (copyPathDef && matchesShortcutDef(e, copyPathDef)) {
         e.preventDefault();
         handleCopyPath();
       }
@@ -383,7 +385,10 @@ export function DetailWindow({ hash }: DetailWindowProps) {
       }}
     >
       {currentImage && (
-        <div className={`${styles.toolbar} ${toolbarHidden ? styles.toolbarHidden : ''}`}>
+        <div
+          className={`${styles.toolbar} ${toolbarHidden ? styles.toolbarHidden : ''}`}
+          data-window-drag-region=""
+        >
           <div className={styles.toolbarLeft}>
             <span className={styles.titleName}>{titleText}</span>
             {images.length > 1 && (
@@ -397,12 +402,12 @@ export function DetailWindow({ hash }: DetailWindowProps) {
             {supportsZoom && (usesRendererZoom || pipeline.thumbLoaded) && (
               <>
                 <span className={styles.zoomRatio}>{zoomPercent}%</span>
-                <KbdTooltip label="Actual size" shortcut="Mod+0">
+                <KbdTooltip label="Actual size" shortcutId="view.actualSize">
                   <button className={styles.icBtn} onClick={actualActiveViewer}>
                     <ToolbarActualSizeIcon />
                   </button>
                 </KbdTooltip>
-                <KbdTooltip label="Fit to window" shortcut="`">
+                <KbdTooltip label="Fit to window" shortcutId="view.fitWindow">
                   <button className={styles.icBtn} onClick={fitActiveViewer}>
                     <ToolbarFitIcon />
                   </button>
@@ -410,7 +415,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
               </>
             )}
 
-            <KbdTooltip label={alwaysOnTop ? 'Unpin' : 'Always on top'} shortcut="Shift+T">
+            <KbdTooltip label={alwaysOnTop ? 'Unpin' : 'Always on top'} shortcutId="view.alwaysOnTop">
               <button
                 className={`${styles.icBtn} ${alwaysOnTop ? styles.icBtnActive : ''}`}
                 onClick={toggleAlwaysOnTop}
@@ -419,7 +424,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
               </button>
             </KbdTooltip>
 
-            <KbdTooltip label="Close" shortcut="Escape">
+            <KbdTooltip label="Close" shortcutId="view.closeDetail">
               <button
                 className={styles.icBtn}
                 onClick={() => void windowController.closeCurrentWindow()}

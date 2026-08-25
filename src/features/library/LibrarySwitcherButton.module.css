@@ -1,38 +1,81 @@
 .button {
+  position: relative;
+  isolation: isolate;
   display: flex;
   align-items: center;
   gap: 6px;
-  width: calc(100% - var(--sidebar-list-anchor) - var(--sidebar-content-inset));
-  height: 26px;
-  margin: 0 var(--sidebar-content-inset) 12px var(--sidebar-list-anchor);
-  padding: 0 6px 0 0;
+  width: calc(100% - var(--sidebar-list-anchor) - var(--sidebar-content-inset) + 4px);
+  min-height: 48px;
+  margin: 4px calc(var(--sidebar-content-inset) - 4px) 8px var(--sidebar-list-anchor);
+  padding: 4px 9px 4px 0;
   border: none;
-  border-radius: 6px;
   background: transparent;
   color: var(--sidebar-text-primary, var(--color-text-primary));
   cursor: pointer;
   text-align: left;
-  transition: background var(--duration-fast) var(--ease-default);
   font-family: var(--font-family-ui, var(--font-family));
 }
 
-.button:hover {
-  background: var(--sidebar-item-hover-bg, var(--color-surface-hover));
+.highlight {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  height: 48px;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-default);
+}
+
+.highlightFill {
+  fill: var(--sidebar-list-highlight-hover-bg);
+  transition: fill var(--duration-fast) var(--ease-default);
+}
+
+.highlightBar {
+  x: 24px;
+  y: 9px;
+  width: calc(100% - 24px);
+  height: 30px;
+  rx: 6px;
+  ry: 6px;
+}
+
+.highlightBarJoin {
+  /* Fill the bar's leading radius so the circle-to-row join stays perfectly straight. */
+  x: 24px;
+  y: 9px;
+  width: 12px;
+  height: 30px;
+}
+
+.button:hover .highlight,
+.button:focus-visible .highlight {
+  opacity: 1;
+}
+
+.button[data-open='true'] .highlight {
+  opacity: 1;
+}
+
+.button[data-open='true'] .highlightFill {
+  fill: var(--sidebar-list-highlight-active-bg);
 }
 
 .button:focus-visible {
   outline: none;
-  box-shadow: inset 0 0 0 1px var(--color-border-focus);
 }
 
 .icon {
-  width: var(--sidebar-glyph-column);
-  min-width: var(--sidebar-glyph-column);
-  height: 26px;
-  border-radius: 6px;
+  position: relative;
+  z-index: 1;
+  min-width: 39px;
+  margin-left: 4.5px;
 }
 
 .name {
+  position: relative;
+  z-index: 1;
   flex: 1 1 auto;
   min-width: 0;
   font-size: 13px;
@@ -45,10 +88,21 @@
 }
 
 .chevron {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   margin-left: auto;
   color: var(--sidebar-count-color, var(--color-text-tertiary));
   flex-shrink: 0;
   opacity: 0.7;
+  transition:
+    color var(--duration-fast) var(--ease-default),
+    opacity var(--duration-fast) var(--ease-default);
+}
+
+.button:hover .chevron,
+.button[data-open='true'] .chevron {
+  color: var(--sidebar-text-primary, var(--color-text-primary));
+  opacity: 1;
 }

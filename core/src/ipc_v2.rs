@@ -140,6 +140,27 @@ pub fn dispatch(
             )?)
         }
         "tasks.get" => read(crate::tasks_v2::snapshot(application)?),
+        "cloud.providers.detect" => read(crate::cloud::provider::detect_roots()),
+        "cloud.status.get" => read(crate::cloud::status(application)?),
+        "cloud.configuration.get" => read(crate::cloud::configuration(application)?),
+        "cloud.configure" => {
+            let input: crate::cloud::ConfigureCloudInput = parse(args_json)?;
+            publish(application, crate::cloud::configure(application, &input)?)
+        }
+        "cloud.pause" => {
+            let input: CloudPauseInput = parse(args_json)?;
+            publish(
+                application,
+                crate::cloud::set_paused(application, input.paused)?,
+            )
+        }
+        "cloud.retention.update" => {
+            let input: ValueInput = parse(args_json)?;
+            publish(
+                application,
+                crate::cloud::update_retention(application, &input.value)?,
+            )
+        }
         "media.resolve_paths" => {
             let input: FileHashesInput = parse(args_json)?;
             read(crate::media_io_v2::resolve_file_paths(
@@ -269,7 +290,8 @@ pub fn dispatch(
         }
         "folders.cover.set" => publish_folder(
             application,
-            application.set_folder_cover(&parse::<crate::folders_v2::SetFolderCoverInput>(args_json)?)?,
+            application
+                .set_folder_cover(&parse::<crate::folders_v2::SetFolderCoverInput>(args_json)?)?,
         ),
         "folders.move" => {
             let input: MoveFolderInput = parse(args_json)?;
@@ -590,6 +612,30 @@ pub async fn dispatch_async(
         return read(crate::diagnostics_v2::snapshot(application)?);
     }
     match command {
+        "cloud.libraries.discover" => {
+            let input: CloudRootInput = parse(args_json)?;
+            return read(crate::cloud::discover_libraries(&input.root_path).await?);
+        }
+        "cloud.reconcile" => {
+            let provider = crate::cloud::directory_provider(application)?;
+            let result = crate::cloud::reconcile::reconcile(
+                application,
+                &provider,
+                crate::cloud::reconcile::ReconcileMode::Manual,
+            )
+            .await?;
+            return read(result);
+        }
+        "cloud.snapshot.create" => {
+            let provider = crate::cloud::directory_provider(application)?;
+            return read(crate::cloud::snapshot::publish(application.store(), &provider).await?);
+        }
+        "cloud.restore.list" => {
+            let provider = crate::cloud::directory_provider(application)?;
+            return read(
+                crate::cloud::snapshot::list_remote(application.store(), &provider).await?,
+            );
+        }
         "subscriptions.reset" => {
             let input: SubscriptionInput = parse(args_json)?;
             return publish(
@@ -696,6 +742,25 @@ struct PixivOAuthExchangeInput {
     code: String,
     code_verifier: String,
     phpsessid: Option<String>,
+}
+
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct CloudPauseInput {
+    paused: bool,
+}
+
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct CloudRootInput {
+    root_path: String,
+}
+
+#[derive(Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct CloudRestorePrepared {
+    pub snapshot_id: String,
+    pub restored: bool,
 }
 
 #[derive(Serialize)]

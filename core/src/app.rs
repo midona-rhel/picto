@@ -240,6 +240,7 @@ pub struct Application {
     ai_sessions: crate::ai_tagger::inference::SharedTaggerSessions,
     ai_model_downloads: tokio::sync::Mutex<HashMap<String, CancellationToken>>,
     ai_model_lifecycle: tokio::sync::Mutex<()>,
+    ingest_execution: std::sync::Mutex<()>,
 }
 
 impl Application {
@@ -260,6 +261,7 @@ impl Application {
             ai_sessions: crate::ai_tagger::inference::new_shared_sessions(),
             ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
             ai_model_lifecycle: tokio::sync::Mutex::new(()),
+            ingest_execution: std::sync::Mutex::new(()),
         })
     }
 
@@ -273,6 +275,12 @@ impl Application {
 
     pub fn blobs(&self) -> &BlobStore {
         &self.blobs
+    }
+
+    pub(crate) fn lock_ingest_execution(&self) -> Result<std::sync::MutexGuard<'_, ()>, String> {
+        self.ingest_execution
+            .lock()
+            .map_err(|_| "Ingest execution lock was poisoned".to_string())
     }
 
     pub(crate) fn ai_sessions(&self) -> &crate::ai_tagger::inference::SharedTaggerSessions {
@@ -463,6 +471,7 @@ pub mod resources {
     pub const SUBSCRIPTIONS: &str = "subscriptions";
     pub const SETTINGS: &str = "settings";
     pub const TASKS: &str = "tasks";
+    pub const CLOUD: &str = "cloud";
 
     pub fn item(item_id: i64) -> String {
         format!("item:{item_id}")

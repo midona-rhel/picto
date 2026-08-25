@@ -221,10 +221,13 @@ export function MediaView({
       if (activeZoom && matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); activeZoom.zoomOut(); return; }
       if (activeZoom && matchesShortcutDef(e, actualDef)) { e.preventDefault(); activeZoom.fitActual(); return; }
 
-      // Rating: 0-5 (no modifiers)
-      if (effectiveRatingItemId != null && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key >= '0' && e.key <= '5') {
-        e.preventDefault();
-        void entityMutations.setItemRating(effectiveRatingItemId, parseInt(e.key, 10));
+      if (effectiveRatingItemId != null) {
+        for (let rating = 0; rating <= 5; rating += 1) {
+          if (!matchesShortcutDef(e, getShortcut(`rate.${rating}`)!)) continue;
+          e.preventDefault();
+          void entityMutations.setItemRating(effectiveRatingItemId, rating);
+          return;
+        }
       }
   }, { priority: 50 });
 

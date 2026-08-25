@@ -1,6 +1,11 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { MantineProvider } from '@mantine/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { GlassModal } from './GlassModal';
+
+function renderModal(modal: React.ReactElement) {
+  return render(<MantineProvider>{modal}</MantineProvider>);
+}
 
 describe('GlassModal outside dismissal', () => {
   afterEach(() => { vi.useRealTimers(); });
@@ -8,7 +13,7 @@ describe('GlassModal outside dismissal', () => {
   it('does not close when a selection drag starts inside and releases outside', () => {
     vi.useFakeTimers();
     const onClose = vi.fn();
-    render(<GlassModal open title="Rename" onClose={onClose}>
+    renderModal(<GlassModal open title="Rename" onClose={onClose}>
       <input aria-label="Name" defaultValue="Selected text" />
     </GlassModal>);
     const input = screen.getByLabelText('Name');
@@ -25,7 +30,7 @@ describe('GlassModal outside dismissal', () => {
   it('closes when the press begins and ends on the backdrop', () => {
     vi.useFakeTimers();
     const onClose = vi.fn();
-    render(<GlassModal open title="Rename" onClose={onClose}><div>Body</div></GlassModal>);
+    renderModal(<GlassModal open title="Rename" onClose={onClose}><div>Body</div></GlassModal>);
     const backdrop = screen.getByRole('dialog').parentElement!;
 
     fireEvent.pointerDown(backdrop);
@@ -37,7 +42,7 @@ describe('GlassModal outside dismissal', () => {
 
   it('activates the enabled primary action when Enter is pressed in an input', () => {
     const onPrimary = vi.fn();
-    render(
+    renderModal(
       <GlassModal
         open
         title="Rename"
@@ -56,7 +61,7 @@ describe('GlassModal outside dismissal', () => {
   it('does not replace the native Enter behavior of a focused button', () => {
     const onSecondary = vi.fn();
     const onPrimary = vi.fn();
-    render(
+    renderModal(
       <GlassModal
         open
         title="Confirm"

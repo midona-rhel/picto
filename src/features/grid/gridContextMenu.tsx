@@ -54,6 +54,7 @@ export interface GridMenuContext {
   onOpen?: () => void;
   onOpenDefault?: (hash: string) => void;
   openWithOptions?: OpenWithOptions | null;
+  openWithPending?: boolean;
   onOpenWithApplication?: (hash: string, applicationPath: string) => void;
   onOpenWithChooser?: (hash: string) => void;
   onRevealInFolder?: (hash: string) => void;
@@ -161,6 +162,7 @@ export function buildEntityOpenContextEntries({
   hash,
   onOpenDefault,
   openWithOptions,
+  openWithPending,
   onOpenWithApplication,
   onOpenWithChooser,
   onRevealInFolder,
@@ -169,6 +171,7 @@ export function buildEntityOpenContextEntries({
   hash: string;
   onOpenDefault?: (hash: string) => void;
   openWithOptions?: OpenWithOptions | null;
+  openWithPending?: boolean;
   onOpenWithApplication?: (hash: string, applicationPath: string) => void;
   onOpenWithChooser?: (hash: string) => void;
   onRevealInFolder?: (hash: string) => void;
@@ -182,7 +185,14 @@ export function buildEntityOpenContextEntries({
       action: () => onOpenDefault(hash),
     }));
   }
-  if (openWithOptions?.mode === 'submenu' && openWithOptions.applications.length > 0 && onOpenWithApplication) {
+  if (openWithPending) {
+    entries.push({
+      submenu: true,
+      label: 'Open With Other',
+      icon: <IconApps size={15} />,
+      children: [item('Loading applications...', { disabled: true })],
+    });
+  } else if (openWithOptions?.mode === 'submenu' && openWithOptions.applications.length > 0 && onOpenWithApplication) {
     entries.push({
       submenu: true,
       label: 'Open With Other',
@@ -329,6 +339,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
         hash: singleHash,
         onOpenDefault: ctx.onOpenDefault,
         openWithOptions: ctx.openWithOptions,
+        openWithPending: ctx.openWithPending,
         onOpenWithApplication: ctx.onOpenWithApplication,
         onOpenWithChooser: ctx.onOpenWithChooser,
         onRevealInFolder: ctx.onRevealInFolder,

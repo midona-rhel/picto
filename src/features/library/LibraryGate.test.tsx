@@ -1,5 +1,6 @@
-import { act, render, screen, waitFor } from '@testing-library/react';
+import { act, screen, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderWithProviders } from '../../test/render';
 import { LibraryGate } from './LibraryGate';
 
 type EventHandler = (payload: unknown) => void;
@@ -33,7 +34,7 @@ afterEach(() => {
 describe('LibraryGate', () => {
   it('does not mount library-backed UI and opens the chooser when no library exists', async () => {
     const { invoke } = installDesktop(null);
-    render(<LibraryGate><div>Library content</div></LibraryGate>);
+    renderWithProviders(<LibraryGate><div>Library content</div></LibraryGate>);
 
     expect(await screen.findByText('Open a library to start')).toBeInTheDocument();
     expect(screen.queryByText('Library content')).not.toBeInTheDocument();
@@ -42,7 +43,7 @@ describe('LibraryGate', () => {
 
   it('mounts library-backed UI after the host reports a successful switch', async () => {
     const { handlers } = installDesktop(null);
-    render(<LibraryGate><div>Library content</div></LibraryGate>);
+    renderWithProviders(<LibraryGate><div>Library content</div></LibraryGate>);
     await screen.findByText('Open a library to start');
 
     act(() => handlers.get('library-switched')?.({ path: '/tmp/Main.library' }));
@@ -53,7 +54,7 @@ describe('LibraryGate', () => {
 
   it('mounts library-backed UI immediately when a library is already open', async () => {
     const { invoke } = installDesktop('/tmp/Main.library');
-    render(<LibraryGate><div>Library content</div></LibraryGate>);
+    renderWithProviders(<LibraryGate><div>Library content</div></LibraryGate>);
 
     expect(await screen.findByText('Library content')).toBeInTheDocument();
     expect(invoke).not.toHaveBeenCalledWith('open_library_manager', {});

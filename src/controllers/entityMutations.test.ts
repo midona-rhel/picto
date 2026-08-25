@@ -22,7 +22,12 @@ vi.mock('../platform/folderApi', () => ({
 vi.mock('./inspectorController', () => ({ loadInspectorData: loadInspectorDataMock }));
 vi.mock('../shared/hooks/useRecentItems', () => ({ recordRecentItems: vi.fn() }));
 
-import { permanentlyDeleteTarget, setTargetLifecycle, settleSelectionAfterMutation } from './entityMutations';
+import {
+  permanentlyDeleteTarget,
+  setItemRating,
+  setTargetLifecycle,
+  settleSelectionAfterMutation,
+} from './entityMutations';
 
 describe('setTargetLifecycle', () => {
   const store = getDefaultStore();
@@ -89,5 +94,17 @@ describe('setTargetLifecycle', () => {
     settleSelectionAfterMutation();
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
     expect(store.get(gridSelectionAtom).anchor).toBeNull();
+  });
+
+  it('sends the selected rating through the canonical metadata patch', async () => {
+    const { patchMediaEntities } = await import('../platform/entityApi');
+    vi.mocked(patchMediaEntities).mockResolvedValueOnce(undefined as never);
+
+    await setItemRating(4, 5);
+
+    expect(patchMediaEntities).toHaveBeenCalledWith(
+      { kind: 'explicit', item_ids: [4] },
+      { rating: 5 },
+    );
   });
 });

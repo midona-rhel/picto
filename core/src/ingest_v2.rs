@@ -154,13 +154,57 @@ impl Application {
                     let (root_item_id, promoted, root_visible) = if let Some(source) = &input.source
                     {
                         attach_source_item(transaction, source, media_item_id, &now)?;
-                        settle_source_post_root(
+                        let settled = settle_source_post_root(
                             transaction,
                             source,
                             media_item_id,
                             input.lifecycle,
                             &now,
-                        )?
+                        )?;
+                        let (source_post_id, source_item_id): (i64, i64) = transaction.query_row(
+                            "SELECT sp.source_post_id, si.source_item_id
+                             FROM source_post sp
+                             JOIN source_item si ON si.source_post_id = sp.source_post_id
+                             WHERE sp.site_id = ?1 AND sp.post_key = ?2 AND si.item_key = ?3",
+                            params![source.site_id, source.post_key, source.item_key],
+                            |row| Ok((row.get(0)?, row.get(1)?)),
+                        )?;
+                        let mut post_fields = vec!["exists", "root_item"];
+                        if source.canonical_post_url.is_some() {
+                            post_fields.push("canonical_url");
+                        }
+                        if source.creator_name.is_some() {
+                            post_fields.push("creator_name");
+                        }
+                        if source.title.is_some() {
+                            post_fields.push("title");
+                        }
+                        if source.description.is_some() {
+                            post_fields.push("description");
+                        }
+                        if source.captured_at.is_some() {
+                            post_fields.push("captured_at");
+                        }
+                        if source.metadata_json.is_some() {
+                            post_fields.push("metadata_json");
+                        }
+                        crate::cloud::capture::record_source_post_upsert(
+                            transaction,
+                            source_post_id,
+                            &post_fields,
+                        )?;
+                        crate::cloud::capture::record_source_item_upsert(
+                            transaction,
+                            source_item_id,
+                            &[
+                                "exists",
+                                "position",
+                                "media_url",
+                                "canonical_url",
+                                "media_item",
+                            ],
+                        )?;
+                        settled
                     } else {
                         insert_root(transaction, media_item_id, input.lifecycle)?;
                         (media_item_id, false, true)

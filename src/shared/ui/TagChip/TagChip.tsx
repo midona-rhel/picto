@@ -5,31 +5,33 @@
 
 import type { ReactNode } from 'react';
 import { InspectorRemoveIcon } from '../icons/toolbar-icons';
+import { KbdTooltip } from '../KbdTooltip';
 import styles from './TagChip.module.css';
 
 const NS_COLORS: Record<string, [number, number, number]> = {
-  creator: [170, 0, 0],
-  studio: [128, 0, 0],
-  character: [0, 170, 0],
-  person: [0, 128, 0],
-  series: [170, 0, 170],
-  species: [0, 130, 170],
-  meta: [160, 160, 160],
-  system: [153, 101, 21],
-  '': [114, 160, 193],
-  default: [114, 160, 193],
+  creator: [255, 102, 103],
+  studio: [255, 102, 103],
+  character: [48, 209, 89],
+  person: [48, 209, 89],
+  series: [196, 153, 255],
+  species: [0, 170, 255],
+  rating: [255, 214, 10],
+  meta: [189, 190, 192],
+  system: [255, 159, 10],
+  '': [189, 190, 192],
+  default: [189, 190, 192],
 };
 
 const TAG_TEXT_COLORS = {
   neutral: ['var(--inspector-text-primary, var(--color-text-primary))', 'var(--inspector-text-primary, var(--color-text-primary))'],
-  red: ['#F8E6E5', '#88403E'],
-  orange: ['#F8EFE1', '#7C5435'],
-  yellow: ['#F8F6E1', '#77623E'],
-  green: ['#E3F5E8', '#40594B'],
-  aqua: ['#E5F3F6', '#16636C'],
-  blue: ['#DEF0F8', '#345A78'],
-  purple: ['#F2EEF9', '#5C496E'],
-  pink: ['#F8EEF4', '#7D4A66'],
+  red: ['#F8E7E6', '#513636'],
+  orange: ['#F8F0E1', '#4C3E31'],
+  yellow: ['#F8F5E1', '#4A4335'],
+  green: ['#E4F5E9', '#34403C'],
+  aqua: ['#E5F4F6', '#234449'],
+  blue: ['#DFF1F9', '#3C4E5A'],
+  purple: ['#F3EFF9', '#3F3B4A'],
+  pink: ['#F8EFF4', '#584753'],
 } as const;
 
 function tagTextColors([r, g, b]: [number, number, number]): readonly [string, string] {
@@ -89,14 +91,16 @@ export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick, 
       {showNamespace && <span className={styles.namespace}>{namespace}:</span>}
       <span className={styles.subtag}>{subtag}</span>
       {onRemove && (
-        <button
-          className={styles.removeBtn}
-          onClick={(e) => { e.stopPropagation(); onRemove(); }}
-          type="button"
-          title="Remove"
-        >
-          <InspectorRemoveIcon />
-        </button>
+        <KbdTooltip label="Remove">
+          <button
+            className={styles.removeBtn}
+            onClick={(e) => { e.stopPropagation(); onRemove(); }}
+            type="button"
+            aria-label="Remove"
+          >
+            <InspectorRemoveIcon />
+          </button>
+        </KbdTooltip>
       )}
     </span>
   );

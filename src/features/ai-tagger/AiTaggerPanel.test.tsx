@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Provider, createStore } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderWithProviders } from '../../test/render';
 import { AiTaggerPanel } from './AiTaggerPanel';
 
 const mocks = vi.hoisted(() => ({
@@ -98,9 +99,9 @@ async function renderPanel(itemIds = [1]) {
   const store = createStore();
   store.set(mocks.portalAtom, { open: true, anchor: null });
   store.set(mocks.targetAtom, { kind: 'explicit', item_ids: itemIds });
-  let result!: ReturnType<typeof render>;
+  let result!: ReturnType<typeof renderWithProviders>;
   await act(async () => {
-    result = render(<Provider store={store}><AiTaggerPanel /></Provider>);
+    result = renderWithProviders(<Provider store={store}><AiTaggerPanel /></Provider>);
     await new Promise((resolve) => setTimeout(resolve, 10));
   });
   return { ...result, store };

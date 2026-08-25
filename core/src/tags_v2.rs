@@ -90,14 +90,17 @@ pub fn list(
     application.store().read(|connection| {
         let mut statement = connection.prepare(
             "SELECT t.tag_id, t.namespace, t.subtag,
-                    COUNT(DISTINCT mt.media_item_id) AS media_count,
-                    COUNT(DISTINCT COALESCE(cm.collection_id, mt.media_item_id)) AS root_count,
+                    COUNT(DISTINCT CASE WHEN visible_root.item_id IS NOT NULL
+                                        THEN mt.media_item_id END) AS media_count,
+                    COUNT(DISTINCT visible_root.item_id) AS root_count,
                     CASE WHEN alias_to.tag_id IS NULL THEN NULL
                          WHEN alias_to.namespace = 'general' THEN alias_to.subtag
                          ELSE alias_to.namespace || ':' || alias_to.subtag END AS aliases_to
              FROM tag t
              LEFT JOIN media_tag mt ON mt.tag_id = t.tag_id
              LEFT JOIN collection_member cm ON cm.media_item_id = mt.media_item_id
+             LEFT JOIN library_root visible_root
+               ON visible_root.item_id = COALESCE(cm.collection_id, mt.media_item_id)
              LEFT JOIN tag_alias ta ON ta.from_tag_id = t.tag_id AND ta.source = 'local'
              LEFT JOIN tag alias_to ON alias_to.tag_id = ta.to_tag_id
              WHERE t.tag_id > ?1
@@ -705,6 +708,23 @@ mod tests {
     }
 
     #[test]
+    fn list_does_not_count_tags_from_media_without_a_visible_root() {
+        let (_directory, application, media) = fixture();
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute("DELETE FROM library_root WHERE item_id = ?1", [media.0])?;
+                Ok(())
+            })
+            .unwrap();
+
+        let page = list(&application, None, Some("one girl"), None, 20).unwrap();
+        assert_eq!(page.tags.len(), 1);
+        assert_eq!(page.tags[0].media_count, 0);
+        assert_eq!(page.tags[0].root_count, 0);
+    }
+
+    #[test]
     fn implication_updates_effective_root_projection() {
         let (_directory, application, media) = fixture();
         let ids = application
@@ -860,7 +880,9 @@ mod tests {
             })
             .unwrap();
 
-        application.rename_tag_group("character", "creator").unwrap();
+        application
+            .rename_tag_group("character", "creator")
+            .unwrap();
 
         application
             .store()

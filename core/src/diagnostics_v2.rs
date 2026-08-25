@@ -79,7 +79,7 @@ pub fn snapshot(application: &Application) -> Result<DiagnosticsSnapshot, String
             "SELECT
                  COALESCE(SUM(status = 'running'), 0),
                  COALESCE(SUM(status = 'pending'), 0),
-                 COALESCE(SUM(status = 'failed'), 0)
+                 (SELECT COUNT(*) FROM subscription_issue WHERE status = 'open')
              FROM subscription_run_query",
             [],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -244,5 +244,41 @@ mod tests {
             diagnostics.workers[1].detail,
             "Generating thumbnails · 1 active · 0 queued"
         );
+    }
+
+    #[test]
+    fn historical_subscription_failures_do_not_leave_the_worker_in_attention() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute_batch(
+                    "INSERT INTO subscription (
+                         subscription_id, subscription_key, name, schedule, created_at
+                     ) VALUES (1, 'sub', 'Subscription', 'manual', 'now');
+                     INSERT INTO subscription_query (
+                         query_id, query_key, subscription_id, site_id, domain_key,
+                         query_kind, query_text
+                     ) VALUES (1, 'query', 1, 'site', 'site', 'tag', 'tag');
+                     INSERT INTO subscription_run (
+                         run_id, subscription_id, requested_by, status, created_at
+                     ) VALUES (1, 1, 'test', 'failed', 'now');
+                     INSERT INTO subscription_run_query (
+                         run_query_id, run_id, query_id, status, available_at
+                     ) VALUES (1, 1, 1, 'failed', 'now');",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let diagnostics = snapshot(&application).unwrap();
+        let subscriptions = diagnostics
+            .workers
+            .iter()
+            .find(|worker| worker.id == "subscriptions")
+            .unwrap();
+        assert_eq!(subscriptions.state, "waiting");
+        assert_eq!(subscriptions.attention, 0);
     }
 }

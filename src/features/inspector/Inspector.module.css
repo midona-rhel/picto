@@ -210,6 +210,41 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  transform-origin: center;
+}
+
+.stackItemLeft {
+  animation: stackPreviewLeft 200ms var(--ease-default) both;
+}
+
+.stackItemRight {
+  animation: stackPreviewRight 250ms var(--ease-default) both;
+}
+
+.stackItemTop {
+  transform: rotate(0deg);
+}
+
+@keyframes stackPreviewLeft {
+  from {
+    opacity: 0;
+    transform: translate(100px, 40px) rotate(-10deg) scale(1.2);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(-5deg) scale(0.93);
+  }
+}
+
+@keyframes stackPreviewRight {
+  from {
+    opacity: 0;
+    transform: translate(100px, 40px) rotate(10deg) scale(1.2);
+  }
+  to {
+    opacity: 1;
+    transform: rotate(5deg) scale(0.93);
+  }
 }
 
 /* Scope preview — folder stack with 4-image collage inside front card */
@@ -335,6 +370,35 @@
   border-radius: var(--radius-md);
   border: 1px solid var(--color-contrast-20);
   pointer-events: none;
+}
+
+/* The inspector preview label is deliberately roomier than its grid badge. */
+.previewTypeLabel {
+  position: absolute;
+  z-index: 2;
+  top: 5px;
+  left: 5px;
+  box-sizing: border-box;
+  padding: 2px 4px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  font-family: var(--font-family-ui);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: normal;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+  backdrop-filter: blur(5px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stackItemLeft,
+  .stackItemRight {
+    animation: none;
+  }
 }
 
 /* Read-only field pills (name, notes, source) */

@@ -102,6 +102,7 @@ pub struct IngestQueue<'a> {
 impl<'a> IngestQueue<'a> {
     pub fn start(application: &'a Application) -> Result<Self, String> {
         reset_running(application)?;
+        recover_settled_provisional_collections(application)?;
         cleanup_orphaned_staging(application)?;
         Ok(Self { application })
     }
@@ -113,6 +114,71 @@ impl<'a> IngestQueue<'a> {
     pub fn run_batch(&self, limit: usize) -> Result<IngestRunReport, String> {
         run_batch(self.application, limit)
     }
+}
+
+/// Makes successfully ingested partial source posts visible after a restart.
+///
+/// Grouped downloads stay provisional while their post is actively being
+/// ingested. If a run ends before any item carries the final `post_complete`
+/// marker, all completed media would otherwise remain permanently hidden even
+/// though their jobs committed successfully. Pending/running work blocks this
+/// recovery so an active post is never exposed midway through ingestion.
+pub(crate) fn recover_settled_provisional_collections(
+    application: &Application,
+) -> Result<usize, String> {
+    let now = Utc::now().to_rfc3339();
+    let (recovered, _, _) = application.store().transaction_if_changed(|transaction| {
+        let candidates = {
+            let mut statement = transaction.prepare(
+                "SELECT cm.collection_id, si.source_post_id,
+                        COALESCE(MAX(ij.lifecycle), 'inbox')
+                 FROM collection_member cm
+                 JOIN source_item si ON si.media_item_id = cm.media_item_id
+                 JOIN source_post sp ON sp.source_post_id = si.source_post_id
+                 LEFT JOIN library_root lr ON lr.item_id = cm.collection_id
+                 LEFT JOIN ingest_job ij ON ij.source_item_id = si.source_item_id
+                 WHERE lr.item_id IS NULL AND sp.root_item_id IS NULL
+                   AND NOT EXISTS (
+                       SELECT 1
+                       FROM source_item pending_si
+                       JOIN ingest_job pending_job
+                         ON pending_job.source_item_id = pending_si.source_item_id
+                       WHERE pending_si.source_post_id = si.source_post_id
+                         AND pending_job.status IN ('pending', 'running')
+                   )
+                 GROUP BY cm.collection_id, si.source_post_id",
+            )?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            rows
+        };
+
+        for (collection_id, source_post_id, lifecycle) in &candidates {
+            transaction.execute(
+                "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)
+                 ON CONFLICT(item_id) DO NOTHING",
+                params![collection_id, lifecycle],
+            )?;
+            transaction.execute(
+                "UPDATE source_post SET root_item_id = ?1, updated_at = ?2
+                 WHERE source_post_id = ?3 AND root_item_id IS NULL",
+                params![collection_id, now, source_post_id],
+            )?;
+        }
+        let recovered = candidates.len();
+        Ok((recovered, recovered != 0))
+    })?;
+    if recovered != 0 {
+        tracing::info!(recovered, "Recovered settled provisional collections");
+    }
+    Ok(recovered)
 }
 
 fn cleanup_orphaned_staging(application: &Application) -> Result<(), String> {
@@ -546,6 +612,10 @@ fn claim_at(application: &Application, limit: usize, now: &str) -> Result<Vec<In
 }
 
 pub fn run_batch(application: &Application, limit: usize) -> Result<IngestRunReport, String> {
+    // Subscription workers and maintenance share this queue. Only one owner
+    // may decode/persist an ingest batch at a time; otherwise thumbnail-first
+    // ingest and derivative work compete across cores and duplicate I/O.
+    let _execution = application.lock_ingest_execution()?;
     let jobs = claim(application, limit)?;
     let mut report = IngestRunReport {
         claimed: jobs.len(),
@@ -555,9 +625,6 @@ pub fn run_batch(application: &Application, limit: usize) -> Result<IngestRunRep
     let mut item_ids = BTreeSet::new();
 
     for job in jobs {
-        if job.input.source.is_some() {
-            resources_changed.insert(resources::SUBSCRIPTIONS.to_string());
-        }
         match process_job(application, &job) {
             Ok(result) => {
                 mark_succeeded(application, job.ingest_job_id)?;
@@ -588,6 +655,21 @@ pub fn run_batch(application: &Application, limit: usize) -> Result<IngestRunRep
         });
     }
     Ok(report)
+}
+
+pub fn has_ready_or_running(application: &Application) -> Result<bool, String> {
+    let now = Utc::now().to_rfc3339();
+    application.store().read(|connection| {
+        connection.query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM ingest_job
+                 WHERE status = 'running'
+                    OR (status = 'pending' AND available_at <= ?1)
+             )",
+            [now],
+            |row| row.get(0),
+        )
+    })
 }
 
 fn process_job(application: &Application, job: &IngestJob) -> Result<IngestMediaResult, String> {
@@ -763,7 +845,10 @@ mod tests {
 
     use rusqlite::params;
 
-    use super::{claim_at, enqueue_at, reset_running_at, IngestJobSpec, IngestQueue};
+    use super::{
+        claim_at, enqueue_at, recover_settled_provisional_collections, reset_running_at,
+        IngestJobSpec, IngestQueue,
+    };
     use crate::app::{Application, Lifecycle};
     use crate::ingest_v2::{PreparedMediaInput, SourcePostInput};
     use crate::store::Store;
@@ -844,6 +929,45 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(reset_running_at(&app, "2026-01-01T00:01:00Z").unwrap(), 1);
         assert_eq!(claim_at(&app, 8, "2026-01-01T00:01:00Z").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn restart_promotes_a_settled_provisional_collection() {
+        let (_directory, app) = application();
+        let mut first = input();
+        let source = first.source.as_mut().unwrap();
+        source.post_complete = false;
+        source.force_collection = true;
+        first.tags = vec!["creator:example".to_string()];
+        let result = app.ingest_prepared(&first).unwrap();
+
+        app.store()
+            .read(|connection| {
+                let roots: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM library_root WHERE item_id = ?1",
+                    [result.root_item_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(roots, 0);
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(recover_settled_provisional_collections(&app).unwrap(), 1);
+        app.store()
+            .read(|connection| {
+                let recovered: (String, i64) = connection.query_row(
+                    "SELECT lr.lifecycle, sp.root_item_id
+                     FROM library_root lr
+                     JOIN source_post sp ON sp.root_item_id = lr.item_id
+                     WHERE lr.item_id = ?1",
+                    [result.root_item_id.0],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(recovered, ("inbox".to_string(), result.root_item_id.0));
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

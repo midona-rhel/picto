@@ -10,8 +10,6 @@ import type { CanvasRenderItem } from './renderItemAdapter';
 import type { ThumbnailPipelineEntry } from './thumbnailPipeline';
 import {
   BADGE_H,
-  BADGE_FONT,
-  BADGE_PAD_X,
   INFO_BASELINE,
   INFO_FONT,
   NAME_BASELINE,
@@ -25,6 +23,7 @@ import {
   truncateText,
   formatDuration,
 } from './primitives';
+import { GRID_BADGE_INSET } from '../gridAppearance';
 import { drawBrokenThumbnail } from '../../../shared/ui/ThumbnailImage/drawBrokenThumbnail';
 import { drawFontThumbnail } from '../../../shared/ui/ThumbnailImage/drawFontThumbnail';
 
@@ -278,10 +277,13 @@ export function drawCanvasBaseLayer({
 
     // Duration badge — top-right (video/animated only)
     if ((isVideo || isAudio || isAnimated) && typeof item.durationMs === 'number' && item.durationMs > 0) {
-      const durText = formatDuration(item.durationMs);
-      ctx.font = BADGE_FONT;
-      const durW = ctx.measureText(durText).width + BADGE_PAD_X * 2;
-      drawBadge(ctx, durText, bx + bw - durW - 5, by + 5);
+      drawBadge(
+        ctx,
+        formatDuration(item.durationMs),
+        bx + bw - GRID_BADGE_INSET,
+        by + GRID_BADGE_INSET,
+        'right',
+      );
     }
 
     if (showItemCount && item.kind === 'collection') {

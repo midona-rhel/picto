@@ -62,6 +62,7 @@ export type SubscriptionSchedule = 'manual' | 'daily' | 'weekly' | 'monthly';
 export interface SubscriptionProgressEvent {
   subscription_id: string;
   subscription_name: string;
+  run_id?: number;
   mode: string;
   query_id?: string | null;
   query_name?: string | null;

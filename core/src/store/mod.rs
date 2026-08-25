@@ -152,7 +152,12 @@ impl Store {
         let transaction = connection
             .transaction()
             .map_err(|error| error.to_string())?;
+        let cloud_capture = crate::cloud::capture::SemanticCapture::start(&transaction)
+            .map_err(|error| error.to_string())?;
         let value = operation(&transaction).map_err(|error| error.to_string())?;
+        cloud_capture
+            .finish(&transaction)
+            .map_err(|error| error.to_string())?;
         let revision =
             schema::increment_revision(&transaction).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
@@ -174,10 +179,16 @@ impl Store {
         let transaction = connection
             .transaction()
             .map_err(|error| error.to_string())?;
+        let cloud_capture = crate::cloud::capture::SemanticCapture::start(&transaction)
+            .map_err(|error| error.to_string())?;
         let (value, changed) = operation(&transaction).map_err(|error| error.to_string())?;
         let revision = if changed {
+            cloud_capture
+                .finish(&transaction)
+                .map_err(|error| error.to_string())?;
             schema::increment_revision(&transaction).map_err(|error| error.to_string())?
         } else {
+            drop(cloud_capture);
             schema::revision(&transaction).map_err(|error| error.to_string())?
         };
         transaction.commit().map_err(|error| error.to_string())?;
@@ -203,7 +214,12 @@ impl Store {
         let transaction = connection
             .transaction()
             .map_err(|error| error.to_string())?;
+        let cloud_capture = crate::cloud::capture::SemanticCapture::start(&transaction)
+            .map_err(|error| error.to_string())?;
         let (value, delta) = operation(&transaction).map_err(|error| error.to_string())?;
+        cloud_capture
+            .finish(&transaction)
+            .map_err(|error| error.to_string())?;
         let revision =
             schema::increment_revision(&transaction).map_err(|error| error.to_string())?;
         transaction.commit().map_err(|error| error.to_string())?;
@@ -216,6 +232,25 @@ impl Store {
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
         settle: impl FnOnce(&Connection, D) -> Result<(), String>,
     ) -> Result<(T, u64, bool), String> {
+        self.transaction_if_changed_settled_inner(operation, settle, true)
+    }
+
+    /// Remote semantic mutations already carry their cloud identity. Applying
+    /// them must settle projections normally without creating a local echo.
+    pub(crate) fn transaction_if_changed_settled_without_cloud<T, D>(
+        &self,
+        operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
+        settle: impl FnOnce(&Connection, D) -> Result<(), String>,
+    ) -> Result<(T, u64, bool), String> {
+        self.transaction_if_changed_settled_inner(operation, settle, false)
+    }
+
+    fn transaction_if_changed_settled_inner<T, D>(
+        &self,
+        operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
+        settle: impl FnOnce(&Connection, D) -> Result<(), String>,
+        capture_cloud: bool,
+    ) -> Result<(T, u64, bool), String> {
         let _guard = self
             .consistency
             .write()
@@ -227,12 +262,22 @@ impl Store {
         let transaction = connection
             .transaction()
             .map_err(|error| error.to_string())?;
+        let mut cloud_capture = capture_cloud
+            .then(|| crate::cloud::capture::SemanticCapture::start(&transaction))
+            .transpose()
+            .map_err(|error| error.to_string())?;
         let (value, delta, changed) = operation(&transaction).map_err(|error| error.to_string())?;
         let revision = if changed {
+            if let Some(cloud_capture) = cloud_capture.take() {
+                cloud_capture
+                    .finish(&transaction)
+                    .map_err(|error| error.to_string())?;
+            }
             schema::increment_revision(&transaction).map_err(|error| error.to_string())?
         } else {
             schema::revision(&transaction).map_err(|error| error.to_string())?
         };
+        drop(cloud_capture);
         transaction.commit().map_err(|error| error.to_string())?;
         if changed {
             settle(&connection, delta)?;
@@ -295,6 +340,45 @@ mod tests {
 
         assert_eq!(revision, 1);
         assert_eq!(store.revision().unwrap(), 1);
+    }
+
+    #[test]
+    fn cloud_session_capture_is_not_created_until_sync_is_enabled() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = Store::open(directory.path()).unwrap();
+
+        let (disabled_count, _) = store
+            .transaction(|transaction| {
+                transaction.query_row(
+                    "SELECT COUNT(*) FROM sqlite_temp_master
+                     WHERE type = 'table' AND name = 'cloud_capture_operation'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(disabled_count, 0);
+
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE cloud_state SET provider = 'dropbox' WHERE singleton = 1",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let (enabled_count, _) = store
+            .transaction(|transaction| {
+                transaction.query_row(
+                    "SELECT COUNT(*) FROM sqlite_temp_master
+                     WHERE type = 'table' AND name = 'cloud_capture_operation'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(enabled_count, 1);
     }
 
     #[test]

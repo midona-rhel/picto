@@ -63,9 +63,12 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'edit.pasteTags',     label: 'Paste Tags',      group: 'Edit', keys: 'Mod+Shift+V' },
   { id: 'edit.pasteImport',   label: 'Paste Import',     group: 'Edit', keys: 'Mod+V' },
 
+  // ── Groups ──
+  { id: 'group.removeMembers', label: 'Remove from Group', group: 'Groups', keys: 'Delete', keys2: 'Backspace' },
+
   // ── Inbox ──
-  { id: 'inbox.accept', label: 'Accept', group: 'Inbox', keys: 'Enter',     description: 'Accept inbox image (set to active)' },
-  { id: 'inbox.reject', label: 'Reject', group: 'Inbox', keys: 'Backspace', description: 'Reject inbox image (move to trash)' },
+  { id: 'inbox.accept', label: 'Accept', group: 'Inbox', keys: 'Z', description: 'Accept inbox item (set to active)' },
+  { id: 'inbox.reject', label: 'Reject', group: 'Inbox', keys: 'X', description: 'Reject inbox item (move to trash)' },
 
   // ── View ──
   { id: 'view.detailView',       label: 'Media View',       group: 'View', keys: 'Enter',                         description: 'Open selected image in media view' },
@@ -110,16 +113,17 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'rate.5', label: 'Rate 5 Stars', group: 'Rating', keys: '5', description: 'Rate selected images 5 stars' },
 
   // ── Video ──
-  { id: 'video.togglePlay',   label: 'Toggle Play/Pause', group: 'Video', keys: 'P', keys2: 'K', description: 'Play or pause video' },
+  { id: 'video.togglePlay',   label: 'Toggle Play/Pause', group: 'Video', keys: 'K',            description: 'Play or pause video; Space remains the Quick Look toggle' },
   { id: 'video.seekBackward', label: 'Seek Backward',     group: 'Video', keys: 'J',         description: 'Seek backward 5 seconds' },
   { id: 'video.seekForward',  label: 'Seek Forward',      group: 'Video', keys: 'L',         description: 'Seek forward 5 seconds' },
   { id: 'video.volumeUp',     label: 'Volume Up',         group: 'Video', keys: 'ArrowUp',   description: 'Increase volume' },
   { id: 'video.volumeDown',   label: 'Volume Down',       group: 'Video', keys: 'ArrowDown', description: 'Decrease volume' },
   { id: 'video.toggleMute',   label: 'Toggle Mute',       group: 'Video', keys: 'M',         description: 'Mute or unmute video' },
-  { id: 'video.toggleLoop',   label: 'Toggle Loop',       group: 'Video', keys: 'Shift+L',   description: 'Toggle loop playback' },
+  { id: 'video.toggleLoop',   label: 'Toggle Loop',       group: 'Video', keys: 'O',         description: 'Toggle loop playback' },
   { id: 'video.rateIncrease', label: 'Speed Up',          group: 'Video', keys: ']',  keys2: 'Shift+.',  description: 'Increase playback speed' },
   { id: 'video.rateDecrease', label: 'Slow Down',         group: 'Video', keys: '[',  keys2: 'Shift+,',  description: 'Decrease playback speed' },
-  { id: 'video.rateReset',    label: 'Reset Speed',       group: 'Video', keys: 'Backspace', description: 'Reset playback speed to 1x' },
+  { id: 'video.rateReset',    label: 'Reset Speed',       group: 'Video', keys: '\\', keys2: 'Shift+R', description: 'Reset playback speed to 1x' },
+  { id: 'video.fullscreen',   label: 'Toggle Fullscreen', group: 'Video', keys: 'F',         description: 'Enter or leave fullscreen playback' },
 
   // ── Duplicates ──
   { id: 'dup.smartMerge',   label: 'Smart Merge',   group: 'Duplicates', keys: 'S',          description: 'Auto-merge keeping the better file' },
@@ -170,6 +174,7 @@ const EU_SWAP_IDS = new Set([
   'view.fitWindow',      // ` → Shift+F
   'video.rateIncrease',  // ] → Shift+.
   'video.rateDecrease',  // [ → Shift+,
+  'video.rateReset',     // \ → Shift+R
 ]);
 
 const DEFAULT_KEY_BINDINGS = new Map(
@@ -211,7 +216,7 @@ export function getShortcutGroups(): ShortcutGroup[] {
     if (!list) { list = []; map.set(def.group, list); }
     list.push(def);
   }
-  const order = ['Navigation', 'File', 'Edit', 'Rating', 'View', 'Inbox', 'Video', 'Duplicates'];
+  const order = ['Navigation', 'File', 'Edit', 'Groups', 'Rating', 'View', 'Inbox', 'Video', 'Duplicates'];
   return order.filter((g) => map.has(g)).map((g) => ({ name: g, items: map.get(g)! }));
 }
 
@@ -281,7 +286,12 @@ export function persistShortcutState(): void {
   localStorage.setItem(OVERRIDES_STORAGE_KEY, JSON.stringify(shortcutOverrides));
 }
 
-export function matchesShortcut(e: KeyboardEvent, keys: string): boolean {
+export interface ShortcutMatchOptions {
+  /** Range selection adds Shift to a configurable movement binding. */
+  allowExtraShift?: boolean;
+}
+
+export function matchesShortcut(e: KeyboardEvent, keys: string, options: ShortcutMatchOptions = {}): boolean {
   if (!keys) return false;
   let base = keys;
   let trailingPlus = false;
@@ -304,9 +314,11 @@ export function matchesShortcut(e: KeyboardEvent, keys: string): boolean {
   const hasCtrl = isMac ? e.ctrlKey : false;
   if (wantCtrl !== hasCtrl) return false;
   if (modifiers.has('Alt') !== e.altKey) return false;
-  if (modifiers.has('Shift') !== e.shiftKey) return false;
+  const wantShift = modifiers.has('Shift');
+  const hasAllowedExtraShift = options.allowExtraShift && !wantShift && e.shiftKey;
+  if (wantShift !== e.shiftKey && !hasAllowedExtraShift) return false;
   if (!wantMod && !wantCtrl && !modifiers.has('Alt') && !modifiers.has('Shift')) {
-    if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return false;
+    if (e.metaKey || e.ctrlKey || e.altKey || (e.shiftKey && !hasAllowedExtraShift)) return false;
   }
 
   let normalizedKey = e.key;
@@ -315,8 +327,8 @@ export function matchesShortcut(e: KeyboardEvent, keys: string): boolean {
   return normalizedKey === targetKey;
 }
 
-export function matchesShortcutDef(e: KeyboardEvent, def: ShortcutDef): boolean {
-  if (matchesShortcut(e, def.keys)) return true;
-  if (def.keys2 && matchesShortcut(e, def.keys2)) return true;
+export function matchesShortcutDef(e: KeyboardEvent, def: ShortcutDef, options: ShortcutMatchOptions = {}): boolean {
+  if (matchesShortcut(e, def.keys, options)) return true;
+  if (def.keys2 && matchesShortcut(e, def.keys2, options)) return true;
   return false;
 }

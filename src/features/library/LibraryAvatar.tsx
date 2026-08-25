@@ -17,10 +17,12 @@ export function LibraryAvatar({
   appearance,
   size,
   className,
+  highlighted = false,
 }: {
   appearance: LibraryAppearance;
   size: number;
   className?: string;
+  highlighted?: boolean;
 }) {
   const [imageFailed, setImageFailed] = useState(false);
   const imageHash = appearance.imageHash ?? null;
@@ -29,7 +31,7 @@ export function LibraryAvatar({
 
   return (
     <span
-      className={`${styles.avatar}${imageHash && !imageFailed ? ` ${styles.imageBacked}` : ''}${className ? ` ${className}` : ''}`}
+      className={`${styles.avatar}${highlighted ? ` ${styles.highlighted}` : ''}${className ? ` ${className}` : ''}`}
       style={{ width: size, height: size, color: appearance.color ?? undefined }}
     >
       {imageHash && !imageFailed ? (
@@ -47,9 +49,9 @@ export function LibraryAvatar({
           onError={() => setImageFailed(true)}
         />
       ) : appearance.icon ? (
-        <DynamicIcon name={appearance.icon} size={size} color={appearance.color ?? null} />
+        <DynamicIcon name={appearance.icon} size={Math.round(size * 0.72)} color={appearance.color ?? null} />
       ) : (
-        <IconBooks size={size} stroke={0.75} />
+        <IconBooks size={Math.round(size * 0.72)} stroke={0.9} />
       )}
     </span>
   );

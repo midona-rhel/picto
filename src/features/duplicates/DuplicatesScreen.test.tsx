@@ -60,7 +60,6 @@ function pair(decision: DuplicatePair['decision'] = 'NeedsChoice'): DuplicatePai
       occurrences: [{ media_item_id: 22, root_item_id: 22, collection_id: null }],
     },
     decision,
-    similarity_pct: 98.046875,
     status: 'detected',
   };
 }
@@ -157,7 +156,7 @@ describe('DuplicatesScreen', () => {
     expect(screen.getByText('Right image')).toBeInTheDocument();
     expect(getDuplicateItemDetails).toHaveBeenCalledWith(11);
     expect(getDuplicateItemDetails).toHaveBeenCalledWith(22);
-    expect(screen.getByText('98.0% similar')).toBeInTheDocument();
+    expect(screen.getByText('80% similar')).toBeInTheDocument();
     expect(screen.getAllByText('Created')).toHaveLength(2);
     expect(screen.getAllByText('Added')).toHaveLength(2);
     expect(screen.getByTestId('left-preview-layers').querySelector('img')).toHaveAttribute(
@@ -166,18 +165,30 @@ describe('DuplicatesScreen', () => {
     );
   });
 
-  it('does not describe an equal perceptual hash as a pixel-perfect match', async () => {
+  it('presents similarity as an understandable whole percent', async () => {
     const equalHashPair = pair();
     equalHashPair.distance = 0;
-    equalHashPair.similarity_pct = 100;
     vi.mocked(getDuplicatePairs).mockResolvedValueOnce({
       items: [equalHashPair], next_cursor: null, has_more: false, total: 1,
     });
 
     await renderScreen();
 
-    expect(await screen.findByText('Same perceptual hash')).toBeInTheDocument();
-    expect(screen.queryByText('100% match')).not.toBeInTheDocument();
+    expect(await screen.findByText('99% similar')).toBeInTheDocument();
+  });
+
+  it('shows a one-bit pair as 96% even if hot reload retained the old raw score', async () => {
+    vi.mocked(getDuplicatePairs).mockResolvedValueOnce({
+      items: [{ ...pair(), distance: 1, similarity_pct: 99.6 } as DuplicatePair],
+      next_cursor: null,
+      has_more: false,
+      total: 1,
+    });
+
+    await renderScreen();
+
+    expect(await screen.findByText('96% similar')).toBeInTheDocument();
+    expect(screen.queryByText('100% similar')).not.toBeInTheDocument();
   });
 
   it('loads an attached duplicate occurrence through its group root', async () => {
@@ -342,7 +353,7 @@ describe('DuplicatesScreen', () => {
     expect(rightCard).not.toHaveAttribute('data-smart-merge-survivor');
   });
 
-  it('restores a full-resolution candidate even if its image element was hidden', async () => {
+  it('holds the thumbnail until the full-resolution fade has completed', async () => {
     await renderScreen();
     await screen.findByText('Left image');
     const fullImage = await waitFor(() => {
@@ -351,11 +362,67 @@ describe('DuplicatesScreen', () => {
       return image!;
     });
 
-    fullImage.style.display = 'none';
+    expect(fullImage).toHaveAttribute('loading', 'eager');
+    expect(fullImage).toHaveAttribute('decoding', 'async');
+    expect(fullImage).toHaveAttribute('data-resolution', 'full');
     fireEvent.load(fullImage);
 
-    expect(fullImage.style.display).toBe('');
     await waitFor(() => expect(fullImage.className).toContain('fullImageVisible'));
+    expect(screen.getByTestId('left-preview-layers').querySelector('img[src*="/thumb/"]')).not.toBeNull();
+    fireEvent.transitionEnd(fullImage, { propertyName: 'opacity' });
+    await waitFor(() => {
+      expect(screen.getByTestId('left-preview-layers').querySelector('img[src*="/thumb/"]')).toBeNull();
+    });
+  });
+
+  it('keeps the previous candidate painted until the next thumbnail is decoded', async () => {
+    const secondPair = pair();
+    secondPair.file_id_a = 3;
+    secondPair.file_id_b = 4;
+    secondPair.left = {
+      file: file(3, 'next-left', 200, 100),
+      occurrences: [{ media_item_id: 33, root_item_id: 33, collection_id: null }],
+    };
+    secondPair.right = {
+      file: file(4, 'next-right', 200, 100),
+      occurrences: [{ media_item_id: 44, root_item_id: 44, collection_id: null }],
+    };
+    vi.mocked(getDuplicatePairs).mockResolvedValueOnce({
+      items: [pair(), secondPair], next_cursor: null, has_more: false, total: 2,
+    });
+    vi.mocked(getDuplicateItemDetails).mockImplementation(async (itemId) => {
+      if (itemId === 11) return details(itemId, 'left', 'Left image');
+      if (itemId === 22) return details(itemId, 'right', 'Right image');
+      if (itemId === 33) return details(itemId, 'next-left', 'Next left image');
+      return details(itemId, 'next-right', 'Next right image');
+    });
+
+    const user = setupUser();
+    await renderScreen();
+    await screen.findByText('Left image');
+    const oldFull = document.querySelector<HTMLImageElement>('img[src="media://localhost/file/left.png"]')!;
+    fireEvent.load(oldFull);
+    fireEvent.transitionEnd(oldFull, { propertyName: 'opacity' });
+
+    await user.click(screen.getByRole('button', { name: 'Next pair' }));
+    const leftLayers = screen.getByTestId('left-preview-layers');
+    await waitFor(() => {
+      expect(leftLayers.querySelector('img[src="media://localhost/file/left.png"]')).not.toBeNull();
+      expect(leftLayers.querySelector('img[src="media://localhost/thumb/next-left.jpg"]')).not.toBeNull();
+    });
+
+    fireEvent.load(leftLayers.querySelector('img[src="media://localhost/thumb/next-left.jpg"]')!);
+    await waitFor(() => {
+      expect(leftLayers.querySelector('img[src="media://localhost/file/left.png"]')).toBeNull();
+    });
+  });
+
+  it('uses the shared pixel-snapped toolbar glyphs for fit and difference', async () => {
+    await renderScreen();
+    await screen.findByText('Left image');
+
+    expect(screen.getByRole('button', { name: 'Fit both images' }).querySelector('[data-toolbar-glyph]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Highlight differences' }).querySelector('[data-toolbar-glyph]')).not.toBeNull();
   });
 
   it('keeps decisions disabled while logical details are loading', async () => {

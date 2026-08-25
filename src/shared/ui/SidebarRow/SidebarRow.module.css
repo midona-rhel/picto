@@ -33,6 +33,16 @@
   left: calc(var(--sidebar-list-anchor) + var(--sidebar-row-indent, 0px));
 }
 
+.rowHelpRect {
+  position: absolute;
+  top: var(--sidebar-list-highlight-top);
+  right: var(--sidebar-list-highlight-right-inset);
+  bottom: var(--sidebar-list-highlight-bottom);
+  left: calc(var(--sidebar-list-anchor) + var(--sidebar-row-indent, 0px));
+  border-radius: var(--sidebar-list-highlight-radius);
+  pointer-events: none;
+}
+
 .rowContent {
   position: relative;
   z-index: 1;
@@ -177,7 +187,7 @@
   font-size: var(--font-size-caption);
   color: var(--sidebar-count-color, var(--color-text-tertiary));
   font-variant-numeric: tabular-nums slashed-zero;
-  font-family: 'Roboto Mono', 'Monaco', 'Consolas', monospace;
+  font-family: var(--font-family-mono);
   padding: 0 5px;
   text-align: right;
   line-height: var(--sidebar-row-height);
@@ -217,6 +227,13 @@
 .sectionTitleRow::before {
   right: 0;
   left: 0;
+}
+
+.sectionHelpRect {
+  position: absolute;
+  inset: 0;
+  border-radius: 5px;
+  pointer-events: none;
 }
 
 :global(html:not([data-grid-drag-active]):not([data-sidebar-drag-active])) .section:hover .sectionTitleRow::before,

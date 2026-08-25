@@ -20,6 +20,10 @@ export async function openLibrary(libraryPath) {
   return binding.openLibrary(libraryPath);
 }
 
+export async function openTutorialLibrary(libraryPath, fixtureRoot) {
+  return binding.openTutorialLibrary(libraryPath, fixtureRoot);
+}
+
 export async function closeLibrary() {
   return binding.closeLibrary();
 }
@@ -38,8 +42,8 @@ export function startNativeDrag(windowHandle, filePaths, iconRgba, iconWidth, ic
   return binding.startNativeDrag(windowHandle, filePaths, iconRgba, iconWidth, iconHeight);
 }
 
-export function getAssociatedApplications(filePath) {
-  const result = binding.getAssociatedApplications(filePath);
+export async function getAssociatedApplications(filePath) {
+  const result = await binding.getAssociatedApplications(filePath);
   return JSON.parse(result || '[]');
 }
 

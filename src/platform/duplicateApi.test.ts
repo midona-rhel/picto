@@ -9,7 +9,7 @@ import {
 
 vi.mock('./ipc', () => ({ invoke: vi.fn() }));
 
-const candidate = (): Omit<DuplicatePair, 'similarity_pct' | 'status'> => ({
+const candidate = (): Omit<DuplicatePair, 'status'> => ({
   file_id_a: 4,
   file_id_b: 9,
   distance: 8,
@@ -63,7 +63,6 @@ describe('duplicateApi', () => {
     expect(page.items[0].left.occurrences).toEqual([
       { media_item_id: 41, root_item_id: 41, collection_id: null },
     ]);
-    expect(page.items[0].similarity_pct).toBe(96.875);
     expect(page.total).toBe(1);
   });
 
@@ -74,7 +73,7 @@ describe('duplicateApi', () => {
       freed_file_hash: 'right-hash',
       receipt: { revision: 4, resources: ['duplicates', 'library'], item_ids: [41, 92] },
     });
-    const pair = { ...candidate(), similarity_pct: 96.875, status: 'detected' as const };
+    const pair = { ...candidate(), status: 'detected' as const };
 
     const result = await resolveDuplicatePair('keep_left', pair);
 
@@ -94,7 +93,7 @@ describe('duplicateApi', () => {
       freed_file_hash: 'right-hash',
       receipt: { revision: 5, resources: ['duplicates', 'library'], item_ids: [41, 92] },
     });
-    const pair = { ...candidate(), similarity_pct: 96.875, status: 'detected' as const };
+    const pair = { ...candidate(), status: 'detected' as const };
 
     await resolveDuplicatePair('smart_merge', pair);
 
@@ -106,7 +105,7 @@ describe('duplicateApi', () => {
 
   it('lets the backend make the current quality decision', async () => {
     vi.mocked(invoke).mockResolvedValue(null);
-    const pair = { ...candidate(), decision: 'NeedsChoice' as const, similarity_pct: 96.875, status: 'detected' as const };
+    const pair = { ...candidate(), decision: 'NeedsChoice' as const, status: 'detected' as const };
 
     const result = await resolveDuplicatePair('smart_merge', pair);
 

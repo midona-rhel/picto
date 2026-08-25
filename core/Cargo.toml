@@ -2,6 +2,7 @@
 name = "picto_core"
 version = "0.5.0-alpha.1"
 edition = "2021"
+license = "MIT"
 
 [dependencies]
 # Serialization
@@ -20,7 +21,7 @@ fast_image_resize = { version = "5", features = ["image"] }
 webp = "0.3"
 kmeans_colors = { version = "0.7", default-features = false, features = ["palette_color"] }
 palette = { version = "0.7", default-features = false, features = ["std"] }
-lcms2 = "6.1"
+lcms2 = { version = "6.1", features = ["static"] }
 
 # SVG rendering
 resvg = "0.44"
@@ -50,6 +51,8 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 # Hashing & checksums
 sha2 = "0.10"
 img_hash = "3.2"
+uuid = { version = "1", features = ["v4"] }
+zstd = "0.13"
 
 # Utilities
 chrono = { version = "0.4", features = ["serde"] }
@@ -63,10 +66,10 @@ tempfile = "3.8"
 base64 = "0.22"
 rand = "0.8"
 open = "5"
-notify = "6.1"
 
 # SQLite database engine (WAL mode, FTS5)
-rusqlite = { version = "0.31", features = ["bundled", "functions", "session"] }
+rusqlite = { version = "0.31", features = ["backup", "bundled", "functions", "session"] }
+fallible-streaming-iterator = "0.1"
 
 # Roaring bitmaps for fast set operations
 roaring = "0.10"
@@ -76,9 +79,6 @@ lru = "0.12"
 
 # High-performance locking (no-syscall uncontended, RwLock for concurrent reads)
 parking_lot = "0.12"
-
-# CPU count for connection pool sizing
-num_cpus = "1.16"
 
 # TypeScript type generation from Rust structs (PBI-234)
 ts-rs = { version = "10", features = ["serde-compat", "no-serde-warnings"] }
@@ -93,6 +93,3 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ort = { version = "2.0.0-rc.12", features = ["webgpu"] }
-
-[dev-dependencies]
-tokio-test = "0.4"

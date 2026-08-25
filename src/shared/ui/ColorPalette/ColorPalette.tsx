@@ -7,6 +7,7 @@
 import { useState, useCallback } from 'react';
 import { IconCopy, IconFilter } from '@tabler/icons-react';
 import { ContextMenu, type MenuEntry, useContextMenu } from '../ContextMenu/ContextMenu';
+import { KbdTooltip } from '../KbdTooltip';
 import styles from './ColorPalette.module.css';
 
 interface ColorPaletteProps {
@@ -105,10 +106,8 @@ export function ColorPalette({ colors, onFilter }: ColorPaletteProps) {
   return (
     <div className={styles.palette} style={colors.length === 0 ? { visibility: 'hidden' } : undefined}>
       {(colors.length === 0 ? ['#000000'] : colors).map((hex, i) => (
-        <div
-          key={i}
+        <KbdTooltip key={i} label={copiedColor === hex ? 'Copied!' : `${hex} · Click to filter · Right-click for actions`}><div
           className={styles.swatchWrap}
-          title={copiedColor === hex ? 'Copied!' : `${hex} · Click to filter · Right-click for actions`}
           onClick={() => onFilter?.(hex)}
           onContextMenu={(event) => {
             event.preventDefault();
@@ -117,7 +116,7 @@ export function ColorPalette({ colors, onFilter }: ColorPaletteProps) {
           }}
         >
           <div className={styles.swatch} style={{ backgroundColor: hex }} />
-        </div>
+        </div></KbdTooltip>
       ))}
       {menu.state && (
         <ContextMenu

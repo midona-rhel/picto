@@ -19,13 +19,13 @@ export function QuickLookNavigation({
 }: QuickLookNavigationProps) {
   return (
     <div className={styles.toolbar}>
-      <KbdTooltip label="Previous" shortcut="ArrowLeft">
+      <KbdTooltip label="Previous" shortcutId="view.prevImage">
         <button className={styles.button} type="button" onClick={() => onNavigate(-1)} disabled={!canPrevious}>
           <ToolbarChevronIcon direction="left" />
         </button>
       </KbdTooltip>
       <span className={styles.counter}>{currentIndex + 1} / {totalCount}</span>
-      <KbdTooltip label="Next" shortcut="ArrowRight">
+      <KbdTooltip label="Next" shortcutId="view.nextImage">
         <button className={styles.button} type="button" onClick={() => onNavigate(1)} disabled={!canNext}>
           <ToolbarChevronIcon direction="right" />
         </button>

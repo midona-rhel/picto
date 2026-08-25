@@ -1,13 +1,18 @@
 import { fireEvent, render, screen } from '@testing-library/react';
+import { MantineProvider } from '@mantine/core';
 import { describe, expect, it, vi } from 'vitest';
 import { ColorPalette } from './ColorPalette';
 
 describe('ColorPalette', () => {
   it('filters on left click and opens the shared color action menu on right click', () => {
     const onFilter = vi.fn();
-    render(<ColorPalette colors={['#123456']} onFilter={onFilter} />);
+    render(
+      <MantineProvider>
+        <ColorPalette colors={['#123456']} onFilter={onFilter} />
+      </MantineProvider>,
+    );
 
-    const swatch = screen.getByTitle('#123456 · Click to filter · Right-click for actions');
+    const swatch = document.querySelector('[class*="swatchWrap"]')!;
     fireEvent.click(swatch);
     expect(onFilter).toHaveBeenCalledWith('#123456');
 

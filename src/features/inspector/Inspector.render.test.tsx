@@ -117,7 +117,9 @@ describe('Inspector presentation branches', () => {
   beforeEach(() => {
     useAtomValue.mockReset();
     vi.mocked(entityMutations.getTargetSelectionSummary).mockReset();
+    vi.mocked(entityMutations.setItemRating).mockReset();
     vi.mocked(entityMutations.setTargetNotes).mockReset();
+    vi.mocked(entityMutations.setTargetRating).mockReset();
     vi.mocked(entityMutations.setTargetSourceUrls).mockReset();
     const store = getDefaultStore();
     store.set(tagSelectPortalAtom, { open: false, anchor: null });
@@ -167,12 +169,34 @@ describe('Inspector presentation branches', () => {
     view.unmount();
   });
 
+  it('uses the canonical property row and commits one rating change', () => {
+    const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
+
+    const ratingLabel = screen.getByText('Rating');
+    const itemsLabel = screen.getByText('Items');
+    expect(ratingLabel.parentElement?.className).toBe(itemsLabel.parentElement?.className);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Set rating to 4 stars' }));
+    expect(entityMutations.setItemRating).toHaveBeenCalledTimes(1);
+    expect(entityMutations.setItemRating).toHaveBeenCalledWith(1, 4);
+    view.unmount();
+  });
+
   it('renders the complete persisted dominant-color palette', () => {
     const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
 
     expect(document.querySelector('[class*="previewFrame"]')).toHaveStyle({ background: '#123456' });
-    expect(document.querySelector('[title="#123456 · Click to filter · Right-click for actions"]')).toBeInTheDocument();
-    expect(document.querySelector('[title="#abcdef · Click to filter · Right-click for actions"]')).toBeInTheDocument();
+    const swatches = [...document.querySelectorAll('[class*="swatchWrap"]')];
+    expect(swatches).toHaveLength(2);
+    expect(swatches[0].querySelector('[class*="swatch"]')).toHaveStyle({ backgroundColor: '#123456' });
+    expect(swatches[1].querySelector('[class*="swatch"]')).toHaveStyle({ backgroundColor: '#abcdef' });
+    view.unmount();
+  });
+
+  it('shows the canonical file type label over a single-item preview', () => {
+    const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
+
+    expect(document.querySelector('[data-inspector-format-label]')).toHaveTextContent('JPG');
     view.unmount();
   });
 
@@ -321,7 +345,7 @@ describe('Inspector presentation branches', () => {
     getDefaultStore().set(confirmModalAtom, { open: false, title: '', message: '', onConfirm: () => {} });
     const source = document.querySelector('[data-inspector-anchor="source"]')!;
     fireEvent.click(within(source as HTMLElement).getByRole('button'));
-    fireEvent.click(within(source as HTMLElement).getByTitle('Remove'));
+    fireEvent.click(within(source as HTMLElement).getByRole('button', { name: 'Remove' }));
 
     confirm = getDefaultStore().get(confirmModalAtom);
     expect(confirm).toMatchObject({

@@ -236,11 +236,11 @@
 
 .tagRow {
   width: calc(100% - 8px);
-  height: 34px;
+  height: 26px;
   display: flex;
   align-items: center;
   margin: 0 4px;
-  padding: 3px 7px;
+  padding: 0 6px;
   gap: 6px;
   border: 0;
   border-radius: 6px;
@@ -258,12 +258,36 @@
 
 .tagRowSelected {
   background: var(--color-surface-active);
+  outline: 1px solid var(--color-contrast-25);
+  outline-offset: -1px;
 }
 
-.tagChip {
+.tagBookmark {
+  width: 13px;
+  height: 13px;
+  flex-shrink: 0;
+  color: var(--tag-color, var(--color-text-secondary));
+  opacity: 0.72;
+  filter: saturate(0.9);
+}
+
+.tagRow:hover .tagBookmark,
+.tagRowSelected .tagBookmark {
+  opacity: 1;
+}
+
+.tagName {
   display: inline-flex;
-  max-width: 55%;
+  max-width: 44%;
   min-width: 0;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tagNamespace {
+  flex-shrink: 0;
 }
 
 .tagSeparator,
@@ -307,6 +331,12 @@
   align-items: center;
   color: var(--color-text-tertiary);
   font-size: 11px;
+}
+
+.applyButton.applyButton {
+  height: 28px;
+  padding: 0 12px;
+  font-size: var(--font-size-sm);
 }
 
 .emptyState {

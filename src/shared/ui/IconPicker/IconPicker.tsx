@@ -6,6 +6,7 @@
 import { useState, useMemo } from 'react';
 import { IconFolder, IconRotate2 } from '@tabler/icons-react';
 import { CURATED_ICONS } from './iconRegistry';
+import { KbdTooltip } from '../KbdTooltip';
 import styles from './IconPicker.module.css';
 
 const ICON_SIZE = 19;
@@ -43,25 +44,28 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
           autoFocus
           className={styles.searchInput}
         />
-        <button
-          title="Reset to default"
-          disabled={!local}
-          onClick={() => handleSelect(null)}
-          className={`${styles.resetBtn} ${local ? '' : styles.resetDisabled}`}
-        >
-          <IconRotate2 size={12} />
-        </button>
+        <KbdTooltip label="Reset to default">
+          <button
+            disabled={!local}
+            aria-label="Reset to default"
+            onClick={() => handleSelect(null)}
+            className={`${styles.resetBtn} ${local ? '' : styles.resetDisabled}`}
+          >
+            <IconRotate2 size={12} />
+          </button>
+        </KbdTooltip>
       </div>
 
       <div className={styles.grid}>
-        <button
-          title="Use default folder icon"
-          aria-label="Use default folder icon"
-          onClick={() => handleSelect(null)}
-          className={`${styles.defaultIconBtn} ${!local ? styles.iconSelected : ''}`}
-        >
-          <IconFolder size={ICON_SIZE} stroke={1.5} />
-        </button>
+        <KbdTooltip label="Use default folder icon">
+          <button
+            aria-label="Use default folder icon"
+            onClick={() => handleSelect(null)}
+            className={`${styles.defaultIconBtn} ${!local ? styles.iconSelected : ''}`}
+          >
+            <IconFolder size={ICON_SIZE} stroke={1.5} />
+          </button>
+        </KbdTooltip>
         {filtered.length === 0 && (
           <div className={styles.empty}>No icons found</div>
         )}
@@ -69,14 +73,15 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
           const Icon = icon.component;
           const isSelected = local === icon.name;
           return (
-            <button
-              key={icon.name}
-              title={icon.label}
-              onClick={() => handleSelect(icon.name)}
-              className={`${styles.iconBtn} ${isSelected ? styles.iconSelected : ''}`}
-            >
-              <Icon size={ICON_SIZE} stroke={1.5} />
-            </button>
+            <KbdTooltip key={icon.name} label={icon.label}>
+              <button
+                aria-label={icon.label}
+                onClick={() => handleSelect(icon.name)}
+                className={`${styles.iconBtn} ${isSelected ? styles.iconSelected : ''}`}
+              >
+                <Icon size={ICON_SIZE} stroke={1.5} />
+              </button>
+            </KbdTooltip>
           );
         })}
       </div>

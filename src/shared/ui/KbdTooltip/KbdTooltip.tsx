@@ -4,12 +4,15 @@
  */
 
 import { Tooltip } from '@mantine/core';
-import { formatKeysAsArray } from '../../lib/shortcuts';
+import { formatKeysAsArray, getShortcut } from '../../lib/shortcuts';
 import styles from './KbdTooltip.module.css';
 import type { ReactNode } from 'react';
 
 interface KbdTooltipProps {
   label: string;
+  /** Resolve the current binding from the registry, including user overrides. */
+  shortcutId?: string;
+  /** Use only for local controls that are intentionally absent from the registry. */
   shortcut?: string;
   children: ReactNode;
   position?: 'top' | 'bottom' | 'left' | 'right';
@@ -31,8 +34,9 @@ const tooltipStyles = {
   },
 };
 
-export function KbdTooltip({ label, shortcut, children, position = 'bottom' }: KbdTooltipProps) {
-  const keys = shortcut ? formatKeysAsArray(shortcut) : [];
+export function KbdTooltip({ label, shortcutId, shortcut, children, position = 'bottom' }: KbdTooltipProps) {
+  const binding = shortcutId ? getShortcut(shortcutId)?.keys : shortcut;
+  const keys = binding ? formatKeysAsArray(binding) : [];
 
   const tooltipLabel = (
     <span className={styles.content}>

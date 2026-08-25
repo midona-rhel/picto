@@ -122,3 +122,14 @@ export function ToolbarFitIcon(props: ToolbarIconProps) {
     </Svg>
   );
 }
+
+/** Two aligned image planes used by duplicate review's difference preview. */
+export function ToolbarDifferenceIcon(props: ToolbarIconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="2" y="3" width="8" height="8" rx="1" stroke="currentColor" />
+      <path d="M6 13h6a2 2 0 0 0 2-2V5" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+      <path fill="currentColor" d="M5 6h2v2H5z" />
+    </Svg>
+  );
+}

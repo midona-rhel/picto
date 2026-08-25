@@ -1,19 +1,7 @@
-.row {
-  display: flex;
-  align-items: center;
-  height: 20px;
-}
-
-.label {
-  color: var(--inspector-text-secondary, var(--color-text-secondary));
-  font-size: var(--font-size-caption);
-  min-width: 64px;
-}
-
 .stars {
   display: flex;
+  justify-content: flex-end;
   gap: 0;
-  margin-left: auto;
 }
 
 .star {
@@ -40,4 +28,10 @@
 
 .disabled {
   cursor: default;
+}
+
+.star:focus-visible {
+  outline: 1px solid var(--color-accent);
+  outline-offset: -1px;
+  border-radius: 2px;
 }

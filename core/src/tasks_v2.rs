@@ -33,6 +33,7 @@ pub struct TaskSnapshot {
     pub ingest: QueueCounts,
     pub background: QueueCounts,
     pub subscriptions: QueueCounts,
+    pub cloud: QueueCounts,
     pub issues: Vec<TaskIssue>,
     #[ts(type = "number")]
     pub revision: u64,
@@ -67,6 +68,20 @@ pub fn snapshot(application: &Application) -> Result<TaskSnapshot, String> {
             [],
             counts,
         )?;
+        let cloud = connection.query_row(
+            "SELECT
+                 (SELECT COUNT(*) FROM cloud_outbox WHERE published_at IS NULL)
+                   + (SELECT COUNT(*) FROM cloud_blob_state
+                      WHERE state = 'queued' OR (state = 'available' AND remote_present = 0)),
+                 (SELECT COUNT(*) FROM cloud_state
+                  WHERE singleton = 1 AND state IN ('reconciling', 'syncing'))
+                   + (SELECT COUNT(*) FROM cloud_blob_state WHERE state = 'downloading'),
+                 (SELECT COUNT(*) FROM cloud_quarantine WHERE resolved_at IS NULL)
+                   + (SELECT COUNT(*) FROM cloud_blob_state WHERE last_error IS NOT NULL)
+                   + (SELECT COUNT(*) FROM cloud_state WHERE singleton = 1 AND state = 'error')",
+            [],
+            counts,
+        )?;
         let issues = connection
             .prepare(
                 "SELECT source, task_id, kind, message, updated_at FROM (
@@ -83,6 +98,18 @@ pub fn snapshot(application: &Application) -> Result<TaskSnapshot, String> {
                      SELECT 'subscription', issue_id, issue_kind, message, last_seen_at
                      FROM subscription_issue
                      WHERE status = 'open'
+                     UNION ALL
+                     SELECT 'cloud', quarantine_id, 'quarantined_mutation', reason, created_at
+                     FROM cloud_quarantine
+                     WHERE resolved_at IS NULL
+                     UNION ALL
+                     SELECT 'cloud', 0, 'blob_' || state, last_error, updated_at
+                     FROM cloud_blob_state
+                     WHERE last_error IS NOT NULL
+                     UNION ALL
+                     SELECT 'cloud', 0, 'sync', message, COALESCE(last_sync_at, '')
+                     FROM cloud_state
+                     WHERE singleton = 1 AND state = 'error' AND message != ''
                  )
                  ORDER BY updated_at DESC, source, task_id DESC
                  LIMIT 100",
@@ -101,6 +128,7 @@ pub fn snapshot(application: &Application) -> Result<TaskSnapshot, String> {
             ingest,
             background,
             subscriptions,
+            cloud,
             issues,
             revision: crate::store::schema::revision(connection)?,
         })
@@ -153,6 +181,7 @@ mod tests {
         assert_eq!(tasks.ingest.pending, 1);
         assert_eq!(tasks.ingest.failed, 1);
         assert_eq!(tasks.background.pending, 1);
+        assert_eq!(tasks.cloud, QueueCounts::default());
         assert_eq!(tasks.issues.len(), 2);
         assert_eq!(tasks.issues[0].source, "background");
         assert_eq!(tasks.revision, 1);

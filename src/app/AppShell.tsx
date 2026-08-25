@@ -40,7 +40,8 @@ import { startAppRuntime } from '../runtime/appRuntime';
 import { registerAppSettingsReload } from '../runtime/appSettingsSettle';
 import { useShortcutScope } from '../shared/hooks/useShortcutScope';
 import { zoomController } from '../controllers/zoomController';
-import { canGoBackAtom, canGoForwardAtom, goBack, goForward, navigateToNode, pushSubscriptionsHistory } from '../state/navigationHistory';
+import { gridController } from '../controllers/gridController';
+import { canGoBackAtom, canGoForwardAtom, goBack, goForward, navigateToNode, navigateWithGridFilters, pushSubscriptionsHistory } from '../state/navigationHistory';
 import { subscriptionsSelectionAtom, subscriptionsWorkspaceSnapshotAtom } from '../state/subscriptionsWorkspace';
 import { formatKeysDisplay, getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
 import { KbdTooltip } from '../shared/ui/KbdTooltip';
@@ -54,9 +55,41 @@ import { settingsController } from '../controllers/settingsController';
 import { applyPreviewPreferences } from '../features/viewer/usePreviewPreferences';
 import { configureNotificationPopups } from '../shared/lib/notifications';
 import { aiTaggerPortalAtom, folderPickerPortalAtom, tagSelectPortalAtom } from '../state/portals';
+import { createEmptyItemFilters, itemFiltersEqual } from '../shared/lib/itemFilters';
 import styles from './AppShell.module.css';
 
 const isMacPlatform = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+
+type PanelPresencePhase = 'shown' | 'entering' | 'exiting';
+type PanelPresenceMotion = 'slide' | 'fade';
+
+function usePanelPresence(visible: boolean, duration: number, motion: PanelPresenceMotion = 'slide') {
+  const [presence, setPresence] = useState<{
+    rendered: boolean;
+    phase: PanelPresencePhase;
+    motion: PanelPresenceMotion;
+  }>(() => ({
+    rendered: visible,
+    phase: 'shown',
+    motion,
+  }));
+  const previousVisible = useRef(visible);
+
+  useEffect(() => {
+    if (previousVisible.current === visible) return;
+    previousVisible.current = visible;
+
+    setPresence({ rendered: true, phase: visible ? 'entering' : 'exiting', motion });
+    const timer = window.setTimeout(() => {
+      setPresence(visible
+        ? { rendered: true, phase: 'shown', motion }
+        : { rendered: false, phase: 'shown', motion });
+    }, duration);
+    return () => window.clearTimeout(timer);
+  }, [duration, motion, visible]);
+
+  return presence;
+}
 
 export function buildPanelVisibilityContextEntries({
   toggleAll,
@@ -175,25 +208,59 @@ function ScopeTitle() {
     return <span {...titleProps}>Duplicates</span>;
   }
 
+  const displayedNodeId = snapshot?.nodeId ?? '';
+  const showsSearchResults = snapshot != null && (
+    snapshot.searchText.length > 0
+    || !itemFiltersEqual(snapshot.filters, createEmptyItemFilters())
+  );
+  const searchResultsLabel = showsSearchResults
+    ? `Search results${snapshot.totalCount == null ? '' : ` · ${snapshot.totalCount.toLocaleString()}`}`
+    : '';
+  const crumbSeparator = <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>;
+  const clearSearchResults = (nodeId: string) => {
+    gridController.setSearchText('');
+    navigateWithGridFilters(nodeId, createEmptyItemFilters());
+  };
+
   if (displayedSurfaceNodeId === 'system:tag_manager') {
-    return <span {...titleProps}>Tags</span>;
+    if (!showsSearchResults) return <span {...titleProps}>Tags</span>;
+    return (
+      <span {...titleProps}>
+        <button
+          type="button"
+          className={styles.scopeCrumbLink}
+          onClick={() => {
+            gridController.setSearchText('');
+            navigateToNode('system:tag_manager');
+          }}
+        >
+          Tags
+        </button>
+        {crumbSeparator}
+        {searchResultsLabel}
+      </span>
+    );
   }
 
   if (!label) return null;
 
-  const displayedNodeId = snapshot?.nodeId ?? '';
-
   // Folder / smart folder breadcrumb: full ancestor path
   if (displayedNodeId.startsWith('folder:') || displayedNodeId.startsWith('smart:')) {
     const path = buildBreadcrumbPath(displayedNodeId, nodes);
-    if (path.length > 1) {
+    if (path.length > 0) {
       return (
         <span {...titleProps}>
           {path.map((seg, i) => (
             <span key={seg.id}>
               {i > 0 && <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>}
-              {i < path.length - 1 ? (
-                <button type="button" className={styles.scopeCrumbLink} onClick={() => navigateToNode(seg.id)}>
+              {i < path.length - 1 || showsSearchResults ? (
+                <button
+                  type="button"
+                  className={styles.scopeCrumbLink}
+                  onClick={() => i === path.length - 1
+                    ? clearSearchResults(seg.id)
+                    : navigateToNode(seg.id)}
+                >
                   {seg.name}
                 </button>
               ) : (
@@ -201,9 +268,26 @@ function ScopeTitle() {
               )}
             </span>
           ))}
+          {showsSearchResults && <>{crumbSeparator}{searchResultsLabel}</>}
         </span>
       );
     }
+  }
+
+  if (showsSearchResults) {
+    return (
+      <span {...titleProps}>
+        <button
+          type="button"
+          className={styles.scopeCrumbLink}
+          onClick={() => clearSearchResults(displayedNodeId)}
+        >
+          {label}
+        </button>
+        {crumbSeparator}
+        {searchResultsLabel}
+      </span>
+    );
   }
 
   return <span {...titleProps}>{label}</span>;
@@ -253,6 +337,12 @@ export function AppShell() {
       stopped = true;
       dispose?.();
     };
+  }, []);
+
+  useEffect(() => {
+    const openDiagnostics = () => setDiagnosticsOpen(true);
+    window.addEventListener('picto:open-diagnostics', openDiagnostics);
+    return () => window.removeEventListener('picto:open-diagnostics', openDiagnostics);
   }, []);
 
 
@@ -432,29 +522,40 @@ export function AppShell() {
     if ((e.metaKey || e.ctrlKey) && e.key === '0') { e.preventDefault(); zoomController.resetZoom(); }
   });
 
-  const showInspector = gridActive && !inspectorCollapsed && !isSubscriptionsWorkspace;
+  const inspectorAvailable = gridActive && !isSubscriptionsWorkspace;
+  const showInspector = inspectorAvailable && !inspectorCollapsed;
+  const previousInspectorAvailable = useRef(inspectorAvailable);
+  const inspectorMotion = previousInspectorAvailable.current === inspectorAvailable ? 'slide' : 'fade';
+  const sidebarPresence = usePanelPresence(!sidebarCollapsed, 50);
+  const inspectorPresence = usePanelPresence(showInspector, inspectorMotion === 'fade' ? 170 : 100, inspectorMotion);
+
+  useEffect(() => {
+    previousInspectorAvailable.current = inspectorAvailable;
+  }, [inspectorAvailable]);
 
   return (
     <div
       ref={shellRef}
-      className={styles.shell}
+      className={`${styles.shell} ${isMacPlatform ? styles.shellMac : ''}`}
       style={{
         '--inspector-width': showInspector ? `${inspectorWidth}px` : '0px',
+        '--sidebar-body-width': sidebarCollapsed ? '0px' : 'var(--sidebar-width)',
         '--titlebar-inspector-width': reserveInspectorTitlebar ? `${inspectorWidth}px` : '0px',
       } as CSSProperties}
     >
-      <div className={styles.titlebar}>
-        <div className={titlebarLeftClass}>
+      <div className={styles.titlebar} data-window-drag-region="">
+        <div className={titlebarLeftClass} data-help-region="sidebar">
           <ApplicationMenuButton />
           <div className={styles.titlebarActions}>
-            <KbdTooltip label="Settings" shortcut="Mod+,">
+            <KbdTooltip label="Settings" shortcutId="file.settings">
               <button className={styles.toggleBtn} onClick={openSettings}>
                 <IconSettings size={16} stroke={1.5} />
               </button>
             </KbdTooltip>
-            <KbdTooltip label="Toggle Panels" shortcut="Tab">
+            <KbdTooltip label="Toggle Panels" shortcutId="view.toggleBothPanels">
               <button
                 className={styles.toggleBtn}
+                data-help-id="panel-controls"
                 onClick={toggleBothPanels}
                 onContextMenu={(event) => panelMenu.open(event, buildPanelVisibilityContextEntries({
                   toggleAll: toggleBothPanels,
@@ -467,7 +568,7 @@ export function AppShell() {
             </KbdTooltip>
           </div>
         </div>
-        <div className={styles.titlebarCenter}>
+        <div className={styles.titlebarCenter} data-help-id="toolbar">
           <div
             className={styles.titlebarContent}
             data-viewer-exit-transition={viewerExitTransition || undefined}
@@ -477,12 +578,12 @@ export function AppShell() {
               <ViewerToolbar />
             ) : (
               <>
-                <KbdTooltip label="Back" shortcut="Alt+ArrowLeft">
+                <KbdTooltip label="Back" shortcutId="nav.back">
                   <TitlebarControlButton disabled={!canBack} onClick={canBack ? goBack : undefined}>
                     <ToolbarHistoryIcon direction="back" />
                   </TitlebarControlButton>
                 </KbdTooltip>
-                <KbdTooltip label="Forward" shortcut="Alt+ArrowRight">
+                <KbdTooltip label="Forward" shortcutId="nav.forward">
                   <TitlebarControlButton disabled={!canForward} onClick={canForward ? goForward : undefined}>
                     <ToolbarHistoryIcon direction="forward" />
                   </TitlebarControlButton>
@@ -509,24 +610,35 @@ export function AppShell() {
       )}
 
       <div className={styles.body}>
-        {!sidebarCollapsed && (
-          <div className={styles.sidebar}>
+        {sidebarPresence.rendered && (
+          <div
+            className={styles.sidebar}
+            data-help-id="sidebar"
+            data-presence={sidebarPresence.phase}
+            data-motion={sidebarPresence.motion}
+          >
             <Sidebar />
           </div>
         )}
-        <div className={styles.main}>
+        <div
+          className={styles.main}
+          data-help-id="workspace"
+        >
           <WorkspaceSurface />
         </div>
       </div>
-      {reserveInspectorTitlebar && !showInspector && (
+      {reserveInspectorTitlebar && !inspectorPresence.rendered && (
         <div className={styles.titlebarInspectorHidden} style={{ width: inspectorWidth }}>
           <WindowControls />
         </div>
       )}
-      {showInspector && (
+      {inspectorPresence.rendered && (
         <div
           ref={inspectorElRef}
           className={styles.inspector}
+          data-help-id="inspector"
+          data-presence={inspectorPresence.phase}
+          data-motion={inspectorPresence.motion}
           data-transition-phase={transitionPhase}
           style={{ width: inspectorWidth }}
         >

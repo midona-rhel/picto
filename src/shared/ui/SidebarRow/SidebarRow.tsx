@@ -23,8 +23,10 @@ interface SectionProps {
   onToggle: () => void;
   onAdd?: (event: MouseEvent<HTMLButtonElement>) => void;
   addTooltip?: string;
-  addShortcut?: string;
+  addShortcutId?: string;
   collapsible?: boolean;
+  dataHelpId?: string;
+  dataHelpRegion?: string;
 }
 
 function SectionRow({
@@ -34,8 +36,10 @@ function SectionRow({
   onToggle,
   onAdd,
   addTooltip,
-  addShortcut,
+  addShortcutId,
   collapsible = true,
+  dataHelpId,
+  dataHelpRegion,
 }: SectionProps) {
   return (
     <div
@@ -44,6 +48,8 @@ function SectionRow({
       role="button"
       tabIndex={0}
       aria-expanded={expanded}
+      data-help-id={dataHelpId}
+      data-help-region={dataHelpRegion}
       onKeyDown={(event) => {
         if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
@@ -53,6 +59,7 @@ function SectionRow({
       }}
     >
       <div className={styles.sectionTitleRow}>
+        {(dataHelpId || dataHelpRegion) && <span className={styles.sectionHelpRect} data-help-rect={dataHelpId ?? dataHelpRegion} />}
         <span className={styles.sectionMeta}>
           <span className={styles.sectionTitle}>{label}</span>
           {count != null && count > 0 && <span className={styles.sectionCount}> ({count.toLocaleString()})</span>}
@@ -64,7 +71,7 @@ function SectionRow({
         </span>
       </div>
       {onAdd && (
-        <KbdTooltip label={addTooltip ?? 'Add'} shortcut={addShortcut}>
+        <KbdTooltip label={addTooltip ?? 'Add'} shortcutId={addShortcutId}>
           <button
             className={styles.sectionAddBtn}
             aria-label={addTooltip ?? 'Add'}
@@ -107,6 +114,8 @@ interface RowProps {
   /** Drop position indicator for folder drag reorder. */
   dropPosition?: 'before' | 'inside' | 'after';
   children?: ReactNode;
+  dataHelpId?: string;
+  dataHelpRegion?: string;
 }
 
 const INDENT_PX = 20;
@@ -133,6 +142,8 @@ function StandardRow({
   contextHighlight,
   dropPosition,
   children,
+  dataHelpId,
+  dataHelpRegion,
 }: RowProps) {
   const interactive = !!onClick;
   const cls = [
@@ -169,6 +180,8 @@ function StandardRow({
       tabIndex={interactive ? 0 : undefined}
       aria-current={active ? 'page' : undefined}
       aria-expanded={hasChildren ? expanded : undefined}
+      data-help-id={dataHelpId}
+      data-help-region={dataHelpRegion}
       onKeyDown={interactive ? (event) => {
         if (event.target !== event.currentTarget) return;
         if (event.key === 'Enter' || event.key === ' ') {
@@ -180,6 +193,7 @@ function StandardRow({
       onPointerDown={onPointerDown}
       {...(dropDataAttr ? { [`data-${dropDataAttr.key}`]: dropDataAttr.value } : {})}
     >
+      {(dataHelpId || dataHelpRegion) && <span className={styles.rowHelpRect} data-help-rect={dataHelpId ?? dataHelpRegion} />}
       {/* Tree guide lines — continuation at column (d-1) for siblings at indent d.
           Skip d=0: root-level items don't get tree connectors. */}
       {showGuides && indent > 0 && treeLines && treeLines.map((continues, d) => (continues && d > 0) ? (

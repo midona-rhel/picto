@@ -1,30 +1,53 @@
 import { useState } from 'react';
 import { IconStar, IconStarFilled } from '@tabler/icons-react';
+import { PropertyRow } from '../PropertyRow/PropertyRow';
 import styles from './StarRating.module.css';
 
 interface Props {
   value: number;
   label?: string;
-  onChange?: (star: number) => void;
+  onChange?: (star: number) => void | Promise<void>;
+  onError?: (reason: unknown) => void;
 }
 
-export function StarRating({ value, label = 'Rating', onChange }: Props) {
+export function StarRating({ value, label = 'Rating', onChange, onError }: Props) {
   const [hovered, setHovered] = useState(0);
-  const interactive = !!onChange;
+  const [pending, setPending] = useState(false);
+  const interactive = !!onChange && !pending;
   const display = hovered > 0 ? hovered : value;
 
+  const changeRating = (star: number) => {
+    if (!onChange || pending) return;
+    const next = star === value ? 0 : star;
+    try {
+      const result = onChange(next);
+      if (result && typeof result.then === 'function') {
+        setPending(true);
+        void result
+          .catch((reason) => onError?.(reason))
+          .finally(() => setPending(false));
+      }
+    } catch (reason) {
+      onError?.(reason);
+    }
+  };
+
   return (
-    <div className={styles.row}>
-      <span className={styles.label}>{label}</span>
+    <PropertyRow
+      label={label}
+      value={null}
+      content={(
       <div className={styles.stars} onMouseLeave={() => setHovered(0)}>
         {[1, 2, 3, 4, 5].map((star) => (
           <button
             key={star}
             className={`${styles.star} ${star <= display ? styles.active : styles.inactive} ${!interactive ? styles.disabled : ''}`}
-            onClick={() => onChange?.(star === value ? 0 : star)}
+            onClick={() => changeRating(star)}
             onMouseEnter={() => interactive && setHovered(star)}
             disabled={!interactive}
             type="button"
+            aria-label={star === value ? 'Clear rating' : `Set rating to ${star} star${star === 1 ? '' : 's'}`}
+            aria-pressed={star <= value}
           >
             {star <= display
               ? <IconStarFilled size={12} />
@@ -32,6 +55,7 @@ export function StarRating({ value, label = 'Rating', onChange }: Props) {
           </button>
         ))}
       </div>
-    </div>
+      )}
+    />
   );
 }

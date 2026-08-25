@@ -12,6 +12,7 @@ import type {
   SidebarNodeDto,
 } from '../shared/types/canonical';
 import type { ItemDetails } from '../shared/types/generated/application/ItemDetails';
+import type { ItemFilters } from '../shared/types/generated/application/ItemFilters';
 import { gridActiveAtom } from './grid';
 import { displayedSurfaceNodeIdAtom } from './navigation';
 import {
@@ -36,6 +37,7 @@ export type DisplayedGridSnapshot = {
   totalCount: number | null;
   totalSizeBytes: number | null;
   searchText: string;
+  filters: ItemFilters;
   /** Frozen sidebar node at commit time — prevents live sidebar changes from leaking into inspector during transitions. */
   sidebarNode: SidebarNodeDto | null;
 };

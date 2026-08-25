@@ -1,13 +1,17 @@
-import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+  type TransitionEvent,
+} from 'react';
 import { atom, useAtomValue, useSetAtom } from 'jotai';
 import {
-  IconArrowLeft,
-  IconArrowRight,
   IconArrowsJoin,
-  IconAspectRatio,
   IconCheck,
   IconCopy,
-  IconLayersDifference,
   IconRefresh,
   IconX,
 } from '@tabler/icons-react';
@@ -25,11 +29,11 @@ import type { ItemDetails } from '../../shared/types/generated/application/ItemD
 import type { MediaDetails } from '../../shared/types/generated/application/MediaDetails';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { showErrorNotification, showInfoNotification, showWarningNotification } from '../../shared/lib/notifications';
-import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import btnStyles from '../../shared/styles/actionButton.module.css';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { EmptyState, EmptyStateAction } from '../../shared/ui/EmptyState';
 import { ProgressBar } from '../../shared/ui/ProgressBar';
 import { PropertyRow } from '../../shared/ui/PropertyRow/PropertyRow';
@@ -44,6 +48,11 @@ import { filesController } from '../../controllers/filesController';
 import { windowController } from '../../controllers/windowController';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu/ContextMenu';
 import { buildEntityOpenContextEntries } from '../grid/gridContextMenu';
+import {
+  ToolbarChevronIcon,
+  ToolbarDifferenceIcon,
+  ToolbarFitIcon,
+} from '../../shared/ui/icons/toolbar-icons';
 import styles from './DuplicatesScreen.module.css';
 
 const LOADING_MESSAGE_DELAY_MS = 200;
@@ -89,20 +98,20 @@ export function DuplicatesToolbar() {
       )}
       right={(
         <>
-          <KbdTooltip label="Previous pair" shortcut="ArrowLeft">
+          <KbdTooltip label="Previous pair" shortcutId="dup.prevPair">
             <TitlebarControlButton onClick={model.previous} disabled={!model.canPrevious || model.disabled} aria-label="Previous pair">
-              <IconArrowLeft size={17} />
+              <ToolbarChevronIcon direction="left" />
             </TitlebarControlButton>
           </KbdTooltip>
           <TitlebarCounter current={model.index + 1} total={model.total} />
-          <KbdTooltip label="Next pair" shortcut="ArrowRight">
+          <KbdTooltip label="Next pair" shortcutId="dup.nextPair">
             <TitlebarControlButton onClick={model.next} disabled={!model.canNext || model.disabled} aria-label="Next pair">
-              <IconArrowRight size={17} />
+              <ToolbarChevronIcon direction="right" />
             </TitlebarControlButton>
           </KbdTooltip>
           <KbdTooltip label="Fit both images">
             <TitlebarControlButton active={model.isFit} onClick={model.fit} aria-label="Fit both images" aria-pressed={model.isFit}>
-              <IconAspectRatio size={16} />
+              <ToolbarFitIcon />
             </TitlebarControlButton>
           </KbdTooltip>
           <KbdTooltip label="Hold to highlight differences">
@@ -116,7 +125,7 @@ export function DuplicatesToolbar() {
               aria-label="Highlight differences"
               aria-pressed={model.differenceActive}
             >
-              <IconLayersDifference size={16} />
+              <ToolbarDifferenceIcon />
             </TitlebarControlButton>
           </KbdTooltip>
         </>
@@ -168,9 +177,9 @@ function dimensions(file: FileQuality): string {
 }
 
 function similarityLabel(pair: DuplicatePair): string {
-  return pair.distance === 0
-    ? 'Same perceptual hash'
-    : `${pair.similarity_pct.toFixed(1)}% similar`;
+  // Raw bit agreement misleadingly clusters accepted pairs around 96–100%.
+  const confidence = pair.distance === 0 ? 99 : Math.max(0, 100 - pair.distance * 4);
+  return `${confidence}% similar`;
 }
 
 function mediaForFile(details: ItemDetails, fileHash: string): MediaDetails | null {
@@ -246,15 +255,8 @@ function MediaCard({
 }: MediaCardProps) {
   const label = side === 'left' ? 'Left candidate' : 'Right candidate';
   const contextMenu = useContextMenu();
-  const fullImgRef = useRef<HTMLImageElement>(null);
-  const pipeline = useMediaImagePipeline({
-    hash: file.file_hash,
-    thumbnailHash: file.file_hash,
-    mime: file.mime_type,
-    isVideo: false,
-    fullResolutionDelayMs: 0,
-  });
   const thumbnailUrl = mediaThumbnailUrl(file.file_hash);
+  const fullResolutionUrl = mediaFileUrl(file.file_hash, file.mime_type);
   const media = details.media;
   return (
     <article
@@ -272,7 +274,7 @@ function MediaCard({
     >
       <header className={styles.cardHeader}>
         <span className={styles.sideLabel}>{label}</span>
-        <KbdTooltip label={`Keep ${side}`} shortcut={side === 'left' ? 'L' : 'R'}>
+        <KbdTooltip label={`Keep ${side}`} shortcutId={side === 'left' ? 'dup.keepLeft' : 'dup.keepRight'}>
           <button className={btnStyles.btn} onClick={onKeep} disabled={disabled} aria-label={`Keep ${side}`}>
             <IconCheck size={15} /> <span className={styles.keepLabel}>Keep {side}</span>
           </button>
@@ -292,25 +294,12 @@ function MediaCard({
         {!loading && !details.item && <div className={styles.previewState}>Media details unavailable</div>}
         {!differenceActive && (
           <div className={styles.previewLayers} style={zoom.frameStyle(side)} data-testid={`${side}-preview-layers`}>
-            <img
-              className={styles.thumbnailImage}
-              src={pipeline.thumbUrl || thumbnailUrl}
-              onLoad={pipeline.handleThumbLoad}
+            <ProgressiveDuplicateImage
+              assetKey={file.file_hash}
+              thumbnailUrl={thumbnailUrl}
+              fullResolutionUrl={fullResolutionUrl}
               alt={media?.name ?? file.file_hash}
-              draggable={false}
             />
-            {pipeline.fullUrl && (
-              <img
-                ref={fullImgRef}
-                key={pipeline.fullUrl}
-                className={`${styles.fullImage} ${pipeline.fullVisible ? styles.fullImageVisible : ''}`}
-                src={pipeline.fullUrl}
-                onLoad={pipeline.handleFullLoad}
-                alt=""
-                decoding="async"
-                draggable={false}
-              />
-            )}
           </div>
         )}
         {differenceActive && differenceFiles && (
@@ -345,6 +334,105 @@ function MediaCard({
         />
       )}
     </article>
+  );
+}
+
+interface DuplicateImageLayers {
+  assetKey: string;
+  thumbnailUrl: string;
+  fullResolutionUrl: string;
+  previousUrl: string | null;
+  thumbnailReady: boolean;
+  fullReady: boolean;
+  fullSettled: boolean;
+}
+
+interface ProgressiveDuplicateImageProps {
+  assetKey: string;
+  thumbnailUrl: string;
+  fullResolutionUrl: string;
+  alt: string;
+}
+
+function ProgressiveDuplicateImage({
+  assetKey,
+  thumbnailUrl,
+  fullResolutionUrl,
+  alt,
+}: ProgressiveDuplicateImageProps) {
+  const [layers, setLayers] = useState<DuplicateImageLayers>(() => ({
+    assetKey,
+    thumbnailUrl,
+    fullResolutionUrl,
+    previousUrl: null,
+    thumbnailReady: false,
+    fullReady: false,
+    fullSettled: false,
+  }));
+
+  useLayoutEffect(() => {
+    setLayers((current) => {
+      if (current.assetKey === assetKey) return current;
+      return {
+        assetKey,
+        thumbnailUrl,
+        fullResolutionUrl,
+        previousUrl: current.fullSettled ? current.fullResolutionUrl : current.thumbnailUrl,
+        thumbnailReady: false,
+        fullReady: false,
+        fullSettled: false,
+      };
+    });
+  }, [assetKey, fullResolutionUrl, thumbnailUrl]);
+
+  const markThumbnailReady = () => setLayers((current) => (
+    current.assetKey === assetKey
+      ? { ...current, thumbnailReady: true, previousUrl: null }
+      : current
+  ));
+  const markFullReady = () => setLayers((current) => (
+    current.assetKey === assetKey ? { ...current, fullReady: true } : current
+  ));
+  const settleFullImage = (_event: TransitionEvent<HTMLImageElement>) => {
+    setLayers((current) => (
+      current.assetKey === assetKey ? { ...current, fullSettled: true } : current
+    ));
+  };
+
+  return (
+    <>
+      {layers.previousUrl && !layers.thumbnailReady && (
+        <img
+          key={`previous:${layers.previousUrl}`}
+          className={styles.previousImage}
+          src={layers.previousUrl}
+          alt=""
+          draggable={false}
+        />
+      )}
+      {!layers.fullSettled && (
+        <img
+          key={`thumbnail:${layers.assetKey}`}
+          className={`${styles.thumbnailImage} ${layers.thumbnailReady ? styles.thumbnailImageReady : ''}`}
+          src={layers.thumbnailUrl}
+          onLoad={markThumbnailReady}
+          alt={alt}
+          draggable={false}
+        />
+      )}
+      <img
+        key={`full:${layers.assetKey}`}
+        data-resolution="full"
+        className={`${styles.fullImage} ${layers.fullReady ? styles.fullImageVisible : ''}`}
+        src={layers.fullResolutionUrl}
+        onLoad={markFullReady}
+        onTransitionEnd={settleFullImage}
+        alt=""
+        decoding="async"
+        loading="eager"
+        draggable={false}
+      />
+    </>
   );
 }
 
@@ -553,17 +641,17 @@ export function DuplicatesScreen() {
   ]);
 
   useShortcutScope((event) => {
-      if (event.key === 'ArrowLeft') { goPrevious(); return true; }
-      if (event.key === 'ArrowRight') { goNext(); return true; }
+      if (matchesShortcutDef(event, getShortcut('dup.prevPair')!)) { goPrevious(); return true; }
+      if (matchesShortcutDef(event, getShortcut('dup.nextPair')!)) { goNext(); return true; }
       if (!currentPair || resolving || metadataLoading) return;
-      const shortcuts: Partial<Record<string, DuplicateAction>> = {
-        l: 'keep_left',
-        r: 'keep_right',
-        s: 'smart_merge',
-        n: 'not_duplicate',
-      };
-      const action = shortcuts[event.key.toLowerCase()];
-      if (action) {
+      const shortcuts: Array<[string, DuplicateAction]> = [
+        ['dup.keepLeft', 'keep_left'],
+        ['dup.keepRight', 'keep_right'],
+        ['dup.smartMerge', 'smart_merge'],
+        ['dup.notDuplicate', 'not_duplicate'],
+      ];
+      for (const [shortcutId, action] of shortcuts) {
+        if (!matchesShortcutDef(event, getShortcut(shortcutId)!)) continue;
         void finishResolution(currentPair, action);
         return true;
       }
@@ -614,11 +702,11 @@ export function DuplicatesScreen() {
 
       <footer className={styles.footer}>
         <div className={styles.footerActions}>
-          <KbdTooltip label="These are different media" shortcut="N">
+          <KbdTooltip label="These are different media" shortcutId="dup.notDuplicate">
             <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'not_duplicate')} disabled={resolving || metadataLoading}><IconX size={15} /> Not duplicates</button>
           </KbdTooltip>
           <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'keep_both')} disabled={resolving || metadataLoading}><IconCopy size={15} /> Keep both</button>
-          <KbdTooltip label="Keep the stronger file and preserve item metadata" shortcut="S">
+          <KbdTooltip label="Keep the stronger file and preserve item metadata" shortcutId="dup.smartMerge">
             <button
               className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
               onClick={() => {
@@ -635,12 +723,9 @@ export function DuplicatesScreen() {
               <IconArrowsJoin size={16} /> Smart merge
             </button>
           </KbdTooltip>
-          <span
-            className={styles.similarity}
-            title="Perceptual similarity is not pixel equality"
-          >
+          <KbdTooltip label="Perceptual similarity is not pixel equality"><span className={styles.similarity}>
             {similarityLabel(currentPair)}
-          </span>
+          </span></KbdTooltip>
         </div>
       </footer>
     </section>

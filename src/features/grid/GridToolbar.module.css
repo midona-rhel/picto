@@ -11,12 +11,6 @@
   font-family: var(--font-family-ui);
 }
 
-@container (max-width: 300px) {
-  .centerGroup {
-    display: none;
-  }
-}
-
 .centerGroup {
   flex: 1;
   display: flex;
@@ -119,4 +113,17 @@
 .searchInput:focus {
   border-color: var(--color-primary-60);
   background: var(--color-control-surface);
+}
+
+@container (max-width: 350px) {
+  .centerGroup > .sliderSection {
+    display: none;
+  }
+}
+
+/* Search is the final toolbar control to yield after zoom controls collapse. */
+@container (max-width: 240px) {
+  .searchWrap {
+    display: none;
+  }
 }

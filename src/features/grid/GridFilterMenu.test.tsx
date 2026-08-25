@@ -2,11 +2,15 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { getDefaultStore } from 'jotai';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ItemFilters } from '../../shared/types/generated/application/ItemFilters';
-import { gridFilterToolbarOpenAtom, gridSessionAtom } from '../../state/grid';
+import { gridFilterLockedAtom, gridFilterToolbarOpenAtom, gridSessionAtom } from '../../state/grid';
 import { countActiveGridFilters, GridFilterToolbar } from './GridFilterMenu';
 import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
 import { gridController } from '../../controllers/gridController';
 import { tagSelectPortalAtom } from '../../state/portals';
+
+vi.mock('../../shared/ui/KbdTooltip', () => ({
+  KbdTooltip: ({ children }: { children: unknown }) => children,
+}));
 
 const emptyFilters: ItemFilters = createEmptyItemFilters();
 
@@ -47,7 +51,9 @@ describe('GridFilterToolbar', () => {
   afterEach(() => {
     cleanup();
     window.localStorage.removeItem('picto:grid:pinned-filters');
+    window.localStorage.removeItem('picto:grid:saved-filters');
     getDefaultStore().set(gridFilterToolbarOpenAtom, false);
+    getDefaultStore().set(gridFilterLockedAtom, false);
     getDefaultStore().set(tagSelectPortalAtom, { open: false, anchor: null });
     vi.restoreAllMocks();
     vi.useRealTimers();
@@ -62,10 +68,50 @@ describe('GridFilterToolbar', () => {
     for (const label of ['Color', 'Tags', 'Folders', 'Rating', 'Type']) {
       expect(screen.getByRole('button', { name: label })).toBeTruthy();
     }
+    expect(screen.getByRole('button', { name: 'Saved filters' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Lock filters' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Clear filters' })).toBeDisabled();
     fireEvent.click(screen.getByLabelText('Add filter'));
     for (const label of ['Date Imported', 'Date Modified', 'Resolution', 'Duration', 'File Size', 'Notes', 'URL']) {
       expect(screen.getByText(label)).toBeTruthy();
     }
+  });
+
+  it('locks filter navigation and clears every active filter through the right actions', () => {
+    const store = getDefaultStore();
+    store.set(gridFilterToolbarOpenAtom, true);
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      filters: { ...emptyFilters, include_tags: ['favorite'], ratings: [5] },
+    });
+    const setFilters = vi.spyOn(gridController, 'setFilters').mockImplementation(() => {});
+    render(<GridFilterToolbar />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lock filters' }));
+    expect(store.get(gridFilterLockedAtom)).toBe(true);
+    expect(screen.getByRole('button', { name: 'Unlock filters' })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filters' }));
+    expect(setFilters).toHaveBeenLastCalledWith(emptyFilters);
+  });
+
+  it('saves and reapplies a named filter without losing bigint ranges', () => {
+    const store = getDefaultStore();
+    const active = { ...emptyFilters, include_tags: ['favorite'], min_size_bytes: 2_000_000n };
+    store.set(gridFilterToolbarOpenAtom, true);
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters: active });
+    const setFilters = vi.spyOn(gridController, 'setFilters').mockImplementation(() => {});
+    render(<GridFilterToolbar />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Saved filters' }));
+    fireEvent.change(screen.getByLabelText('Saved filter name'), { target: { value: 'Large favorites' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByText('Large favorites'));
+
+    expect(setFilters).toHaveBeenLastCalledWith(expect.objectContaining({
+      include_tags: ['favorite'],
+      min_size_bytes: 2_000_000n,
+    }));
   });
 
   it('offers every applicable data-backed filter and commits numeric values in canonical units', () => {

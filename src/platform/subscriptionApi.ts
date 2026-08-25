@@ -106,6 +106,7 @@ function mapProgress(
   return {
     subscription_id: String(subscription.subscription_id),
     subscription_name: subscription.name,
+    run_id: runId,
     mode: 'replacement',
     query_id: null,
     query_name: null,
@@ -391,6 +392,7 @@ export function getSubscriptionProgress(
   }).then((current) => current == null ? null : {
     subscription_id: subscription.id,
     subscription_name: subscription.name,
+    run_id: current.run_id,
     mode: 'replacement',
     query_id: null,
     query_name: null,

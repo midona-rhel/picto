@@ -403,9 +403,15 @@ impl Application {
                 ],
             )?;
             let subscription_id = transaction.last_insert_rowid();
+            let mut query_ids = Vec::with_capacity(queries.len());
             for query in &queries {
-                insert_query(transaction, subscription_id, query)?;
+                query_ids.push(insert_query(transaction, subscription_id, query)?);
             }
+            crate::cloud::capture::record_subscription_created(
+                transaction,
+                subscription_id,
+                &query_ids,
+            )?;
             Ok(subscription_id)
         })?;
         Ok((subscription_id, subscription_receipt(revision)))
@@ -419,7 +425,23 @@ impl Application {
         let query = prepare_query(query)?;
         let (query_id, revision) = self.store().transaction(|transaction| {
             require_subscription(transaction, subscription_id)?;
-            insert_query(transaction, subscription_id, &query)
+            let query_id = insert_query(transaction, subscription_id, &query)?;
+            crate::cloud::capture::record_subscription_query_upsert(
+                transaction,
+                query_id,
+                &[
+                    "subscription",
+                    "site_id",
+                    "domain_key",
+                    "query_kind",
+                    "query_text",
+                    "display_name",
+                    "notes",
+                    "group_posts",
+                    "paused",
+                ],
+            )?;
+            Ok(query_id)
         })?;
         Ok((query_id, subscription_receipt(revision)))
     }
@@ -452,6 +474,18 @@ impl Application {
             if changed != 1 {
                 return Err(invalid("subscription query does not exist"));
             }
+            crate::cloud::capture::record_subscription_query_upsert(
+                transaction,
+                query_id,
+                &[
+                    "site_id",
+                    "domain_key",
+                    "query_kind",
+                    "query_text",
+                    "display_name",
+                    "notes",
+                ],
+            )?;
             Ok(())
         })?;
         Ok(subscription_receipt(revision))
@@ -470,6 +504,12 @@ impl Application {
             )?;
             if changed == 0 {
                 require_query(transaction, query_id)?;
+            } else {
+                crate::cloud::capture::record_subscription_query_upsert(
+                    transaction,
+                    query_id,
+                    &["paused"],
+                )?;
             }
             Ok(((), changed != 0))
         })?;
@@ -490,6 +530,12 @@ impl Application {
             )?;
             if changed == 0 {
                 require_query(transaction, query_id)?;
+            } else {
+                crate::cloud::capture::record_subscription_query_upsert(
+                    transaction,
+                    query_id,
+                    &["group_posts"],
+                )?;
             }
             Ok(((), changed != 0))
         })?;
@@ -499,6 +545,11 @@ impl Application {
     pub fn delete_subscription_query(&self, query_id: i64) -> Result<MutationReceipt, String> {
         let (_, revision) = self.store().transaction(|transaction| {
             reject_active_query_edit(transaction, query_id)?;
+            let query_key: String = transaction.query_row(
+                "SELECT query_key FROM subscription_query WHERE query_id = ?1",
+                [query_id],
+                |row| row.get(0),
+            )?;
             let changed = transaction.execute(
                 "DELETE FROM subscription_query WHERE query_id = ?1",
                 [query_id],
@@ -506,6 +557,7 @@ impl Application {
             if changed != 1 {
                 return Err(invalid("subscription query does not exist"));
             }
+            crate::cloud::capture::record_subscription_query_delete(transaction, query_key)?;
             Ok(())
         })?;
         Ok(subscription_receipt(revision))
@@ -536,6 +588,11 @@ impl Application {
                 "UPDATE subscription SET name = ?1 WHERE subscription_id = ?2",
                 params![name, subscription_id],
             )?;
+            crate::cloud::capture::record_subscription_upsert(
+                transaction,
+                subscription_id,
+                &["name"],
+            )?;
             Ok(((), true))
         })?;
         Ok(subscription_receipt(revision))
@@ -553,6 +610,13 @@ impl Application {
                  WHERE subscription_id = ?2 AND paused != ?1",
                 params![paused, subscription_id],
             )?;
+            if changed != 0 {
+                crate::cloud::capture::record_subscription_upsert(
+                    transaction,
+                    subscription_id,
+                    &["paused"],
+                )?;
+            }
             Ok(((), changed != 0))
         })?;
         Ok(subscription_receipt(revision))
@@ -582,6 +646,11 @@ impl Application {
                  WHERE subscription_id = ?3",
                 params![schedule, next_run_at, subscription_id],
             )?;
+            crate::cloud::capture::record_subscription_upsert(
+                transaction,
+                subscription_id,
+                &["schedule"],
+            )?;
             Ok(((), true))
         })?;
         Ok(subscription_receipt(revision))
@@ -606,6 +675,12 @@ impl Application {
             )?;
             if changed == 0 {
                 require_subscription(transaction, subscription_id)?;
+            } else {
+                crate::cloud::capture::record_subscription_upsert(
+                    transaction,
+                    subscription_id,
+                    &["initial_post_limit", "periodic_post_limit"],
+                )?;
             }
             Ok(((), changed != 0))
         })?;
@@ -620,6 +695,11 @@ impl Application {
             subscription_id,
         )?;
         let (_, revision) = self.store().transaction(|transaction| {
+            let subscription_key: String = transaction.query_row(
+                "SELECT subscription_key FROM subscription WHERE subscription_id = ?1",
+                [subscription_id],
+                |row| row.get(0),
+            )?;
             let changed = transaction.execute(
                 "DELETE FROM subscription WHERE subscription_id = ?1",
                 [subscription_id],
@@ -635,6 +715,7 @@ impl Application {
                 "DELETE FROM setting WHERE key = ?1",
                 [cover_setting_key(subscription_id)],
             )?;
+            crate::cloud::capture::record_subscription_delete(transaction, subscription_key)?;
             Ok(())
         })?;
         Ok(subscription_receipt(revision))
@@ -700,6 +781,10 @@ impl Application {
                  )",
                 [subscription_id],
             )?;
+            crate::cloud::capture::record_subscription_source_item_restores(
+                transaction,
+                subscription_id,
+            )?;
             transaction.execute(
                 "UPDATE subscription_query
                  SET resume_cursor = NULL, initial_run_complete = 0,
@@ -711,6 +796,10 @@ impl Application {
             transaction.execute(
                 "DELETE FROM subscription_issue WHERE subscription_id = ?1",
                 [subscription_id],
+            )?;
+            crate::cloud::capture::record_subscription_source_posts_removed(
+                transaction,
+                subscription_id,
             )?;
             transaction.execute(
                 "DELETE FROM subscription_source_post WHERE subscription_id = ?1",

@@ -15,6 +15,7 @@ import {
   IconBox,
   IconCheck,
   IconCommand,
+  IconCloud,
   IconEye,
   IconFolderDown,
   IconDownload,
@@ -50,6 +51,12 @@ import {
 } from '../../shared/lib/audioVisualization';
 import styles from './Settings.module.css';
 import type { NotificationTone } from '../../shared/lib/notifications';
+import { showErrorNotification, showSuccessNotification } from '../../shared/lib/notifications';
+import { invoke } from '../../platform/ipc';
+import type { CloudConfiguration } from '../../shared/types/generated/application/CloudConfiguration';
+import type { CloudSyncStatus } from '../../shared/types/generated/application/CloudSyncStatus';
+import type { RestorePoint } from '../../shared/types/generated/application/RestorePoint';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 
 // ── Settings row definition ──
 
@@ -114,6 +121,11 @@ const PANELS: PanelDef[] = [
     id: 'subscriptions', label: 'Subscriptions', icon: IconDownload,
     keywords: 'subscriptions defaults schedule daily weekly monthly posts run group multi media',
     description: 'Defaults for new subscriptions and source queries.',
+  },
+  {
+    id: 'cloud', label: 'Cloud', icon: IconCloud,
+    keywords: 'cloud sync backup restore google drive dropbox offline retention snapshots',
+    description: 'Library sync, recovery snapshots, and missing files.',
   },
   {
     id: 'aitagging', label: 'AI Models', icon: IconBox,
@@ -323,6 +335,143 @@ const SUBSCRIPTION_SCHEDULE_OPTIONS = [
   { value: 'weekly', label: 'Weekly' },
   { value: 'monthly', label: 'Monthly' },
 ];
+
+function cloudProviderLabel(provider: string | null): string {
+  if (provider === 'google_drive') return 'Google Drive';
+  if (provider === 'dropbox') return 'Dropbox';
+  return 'Not configured';
+}
+
+function formatCloudDate(value: string | null): string {
+  if (!value) return 'Never';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
+}
+
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function CloudPanel() {
+  const [configuration, setConfiguration] = useState<CloudConfiguration | null>(null);
+  const [status, setStatus] = useState<CloudSyncStatus | null>(null);
+  const [restorePoints, setRestorePoints] = useState<RestorePoint[]>([]);
+  const [busy, setBusy] = useState(false);
+
+  const refresh = useCallback(async () => {
+    const [nextConfiguration, nextStatus] = await Promise.all([
+      invoke<CloudConfiguration>('cloud.configuration.get'),
+      invoke<CloudSyncStatus>('cloud.status.get'),
+    ]);
+    setConfiguration(nextConfiguration);
+    setStatus(nextStatus);
+    if (nextConfiguration.provider) {
+      setRestorePoints(await invoke<RestorePoint[]>('cloud.restore.list'));
+    } else {
+      setRestorePoints([]);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh().catch(() => {});
+    const timer = setInterval(() => void refresh().catch(() => {}), 2_000);
+    return () => clearInterval(timer);
+  }, [refresh]);
+
+  const run = async (operation: () => Promise<unknown>, success?: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await operation();
+      await refresh();
+      if (success) showSuccessNotification({ title: success, message: '' });
+    } catch (reason) {
+      showErrorNotification({
+        title: 'Cloud operation failed',
+        message: reason instanceof Error ? reason.message : String(reason),
+      });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!configuration || !status) {
+    return <div className={styles.panelContent}><div className={styles.settingPlaceholder}>Loading cloud status…</div></div>;
+  }
+
+  const configured = configuration.provider != null;
+  const retention = {
+    daily: typeof configuration.retention.daily === 'number' ? configuration.retention.daily : 30,
+    weekly: typeof configuration.retention.weekly === 'number' ? configuration.retention.weekly : 26,
+    yearly: typeof configuration.retention.yearly === 'number' ? configuration.retention.yearly : 5,
+  };
+  const updateRetention = (field: keyof typeof retention, value: number) => {
+    const next = { ...retention, [field]: value };
+    setConfiguration({ ...configuration, retention: next });
+    void run(() => invoke('cloud.retention.update', { value: next }));
+  };
+
+  return (
+    <div className={styles.panelContent}>
+      <div className={styles.settingsBlock}>
+        <div className={styles.blockContent}>
+          <div className={styles.blockTitle}>Library Sync</div>
+          <Row label="Provider"><span className={styles.staticValue}>{cloudProviderLabel(configuration.provider)}</span></Row>
+          <Row label="Folder" sep><span className={styles.staticValue} title={configuration.root_path ?? ''}>{configuration.root_path ?? 'Choose a cloud folder in Libraries'}</span></Row>
+          <Row label="State" sep><span className={styles.staticValue}>{status.message || status.state}</span></Row>
+          <Row label="Last sync" sep><span className={styles.staticValue}>{formatCloudDate(status.last_sync_at)}</span></Row>
+          <div className={styles.rowSep} />
+          <div className={styles.cloudActions}>
+            <button className={styles.inlineButton} type="button" disabled={!configured || busy} onClick={() => void run(() => invoke('cloud.reconcile'))}>Sync now</button>
+            <button className={styles.inlineButton} type="button" disabled={!configured || busy} onClick={() => void run(() => invoke('cloud.pause', { paused: status.state !== 'paused' }))}>{status.state === 'paused' ? 'Resume' : 'Pause'}</button>
+            <button className={styles.inlineButton} type="button" disabled={!configured || busy} onClick={() => void run(() => invoke('cloud.snapshot.create'), 'Recovery snapshot created')}>Create snapshot</button>
+          </div>
+          {!configured ? <p className={styles.settingHint}>Cloud sync is enabled per library from the Libraries window. Picto uses the Google Drive or Dropbox desktop folder already installed on this device.</p> : null}
+        </div>
+      </div>
+
+      <div className={styles.settingsBlock}>
+        <div className={styles.blockContent}>
+          <div className={styles.blockTitle}>Pending Work</div>
+          <Row label="Mutations"><span className={styles.staticValue}>{status.pending_mutations}</span></Row>
+          <Row label="Files" sep><span className={styles.staticValue}>{status.pending_blobs}</span></Row>
+          <Row label="Unavailable files" sep><span className={styles.staticValue}>{status.missing_blobs}</span></Row>
+        </div>
+      </div>
+
+      <div className={styles.settingsBlock}>
+        <div className={styles.blockContent}>
+          <div className={styles.blockTitle}>Recovery Retention</div>
+          <Row label="Daily snapshots"><IntegerSettingInput label="Daily snapshots" min={2} max={365} value={retention.daily} onChange={(value) => updateRetention('daily', value)} /></Row>
+          <Row label="Weekly snapshots" sep><IntegerSettingInput label="Weekly snapshots" min={0} max={260} value={retention.weekly} onChange={(value) => updateRetention('weekly', value)} /></Row>
+          <Row label="Yearly snapshots" sep><IntegerSettingInput label="Yearly snapshots" min={0} max={100} value={retention.yearly} onChange={(value) => updateRetention('yearly', value)} /></Row>
+        </div>
+      </div>
+
+      <div className={styles.settingsBlock}>
+        <div className={styles.blockContent}>
+          <div className={styles.blockTitle}>Restore History</div>
+          {restorePoints.length === 0 ? <p className={styles.settingHint}>No recovery snapshots are available yet.</p> : restorePoints.map((point) => (
+            <Row key={point.snapshot_id} label={formatCloudDate(point.created_at)} sep>
+              <span className={styles.restorePointSize}>{formatBytes(point.size_bytes)}</span>
+              <button
+                className={styles.inlineButton}
+                type="button"
+                disabled={busy || !point.verified}
+                onClick={() => {
+                  if (!window.confirm('Restore this recovery snapshot? Picto will preserve the current database as an emergency copy.')) return;
+                  void run(() => invoke('cloud.restore.start', { snapshot_id: point.snapshot_id }), 'Library restored');
+                }}
+              >Restore</button>
+            </Row>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 function PreferencePanel({ panel, onDirty, appSettings, setAppSettings, prefs, setPrefs, audioVisualization, setAudioVisualization }: {
   panel: 'general' | 'sidebar' | 'controls' | 'preview' | 'notifications' | 'autoimport' | 'subscriptions';
@@ -780,6 +929,12 @@ const ALL_SETTINGS: SettingRow[] = [
     keywords: 'subscriptions schedule daily weekly monthly posts per run group multi media',
     panel: 'subscriptions',
   },
+  {
+    id: 'cloud.sync',
+    label: 'Cloud Sync and Recovery',
+    keywords: 'cloud sync backup restore google drive dropbox snapshots retention offline',
+    panel: 'cloud',
+  },
 ];
 
 // ── Component ──
@@ -912,7 +1067,7 @@ export function Settings() {
     <div className={styles.root}>
       {/* ── Sidebar ── */}
       <div className={styles.sidebar}>
-        <div className={styles.sidebarTitle}>Preferences</div>
+        <div className={styles.sidebarTitle} data-window-drag-region="">Preferences</div>
         <div className={styles.searchWrap}>
           <IconSearch size={14} className={styles.searchIcon} />
           <input
@@ -946,7 +1101,7 @@ export function Settings() {
 
       {/* ── Content ── */}
       <div className={styles.content}>
-        <div className={styles.contentHeader}>
+        <div className={styles.contentHeader} data-window-drag-region="">
           <span className={styles.contentTitle}>
             {isSearching ? `Search results for "${search}"` : activePanel.label}
           </span>
@@ -1014,28 +1169,28 @@ export function Settings() {
                 markDirty();
               }}
             />
+          ) : activePanel.id === 'cloud' ? (
+            <CloudPanel />
           ) : null}
         </div>
 
         {/* ── Footer — always visible ── */}
         <div className={styles.footer}>
           <span className={styles.saveStatus} role="status">{saveError}</span>
-          <button
+          <KbdTooltip label="Save settings and close Preferences"><button
             className={styles.footerBtnPrimary}
             onClick={() => void handleSave(true)}
             disabled={isSaving}
-            title="Save settings and close Preferences"
           >
             {isSaving ? 'Saving…' : 'Save & Close'}
-          </button>
-          <button
+          </button></KbdTooltip>
+          <KbdTooltip label="Save settings and keep Preferences open"><button
             className={styles.footerBtn}
             onClick={() => void handleSave(false)}
             disabled={isSaving}
-            title="Save settings and keep Preferences open"
           >
             Apply
-          </button>
+          </button></KbdTooltip>
         </div>
       </div>
 

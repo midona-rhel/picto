@@ -18,7 +18,7 @@ interface TitlebarControlsProps {
 
 export function TitlebarControls({ label, left, center, right }: TitlebarControlsProps) {
   return (
-    <div className={styles.toolbar} aria-label={label}>
+    <div className={styles.toolbar} aria-label={label} data-window-drag-region="">
       {left ? <div className={styles.left}>{left}</div> : null}
       <div className={styles.center}>{center}</div>
       {right ? <div className={styles.right}>{right}</div> : null}
@@ -98,7 +98,7 @@ export function TitlebarZoomSlider({
 }: TitlebarZoomSliderProps) {
   return (
     <div className={styles.zoomControl}>
-      <KbdTooltip label="Zoom out" shortcut="-">
+      <KbdTooltip label="Zoom out" shortcutId="view.zoomOut">
         <TitlebarControlButton onClick={onZoomOut} disabled={value <= min} aria-label="Zoom out">
           <ToolbarMinusIcon />
         </TitlebarControlButton>
@@ -111,7 +111,7 @@ export function TitlebarZoomSlider({
         value={value}
         onValueChange={onChange}
       />
-      <KbdTooltip label="Zoom in" shortcut="+">
+      <KbdTooltip label="Zoom in" shortcutId="view.zoomIn">
         <TitlebarControlButton onClick={onZoomIn} disabled={value >= max} aria-label="Zoom in">
           <ToolbarPlusIcon />
         </TitlebarControlButton>

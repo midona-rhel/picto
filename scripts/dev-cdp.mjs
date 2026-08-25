@@ -18,7 +18,13 @@ const [, , command, arg] = process.argv;
 async function getPageTarget() {
   const response = await fetch('http://127.0.0.1:9222/json');
   const targets = await response.json();
-  const page = targets.find((t) => t.type === 'page' && t.title !== 'DevTools');
+  const pages = targets.filter((t) => t.type === 'page' && t.title !== 'DevTools');
+  const requestedTitle = process.env.PICTO_CDP_TARGET;
+  const requestedPage = requestedTitle ? pages.find((t) => t.title === requestedTitle) : null;
+  if (requestedTitle && !requestedPage) {
+    throw new Error(`No CDP page named "${requestedTitle}"; found: ${pages.map((page) => page.title).join(', ')}`);
+  }
+  const page = requestedPage ?? pages.find((t) => t.title === 'Picto') ?? pages[0];
   if (!page) throw new Error('No app page target found');
   return page;
 }

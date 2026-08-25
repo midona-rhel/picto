@@ -13,7 +13,6 @@ export type DuplicateAction =
   | 'keep_both';
 
 export type DuplicatePair = DuplicateCandidate & {
-  similarity_pct: number;
   status: 'detected';
 };
 
@@ -33,7 +32,6 @@ export interface DuplicateResolutionResult extends ResolutionResult {
 function toPair(candidate: DuplicateCandidate): DuplicatePair {
   return {
     ...candidate,
-    similarity_pct: Math.max(0, (1 - candidate.distance / 256) * 100),
     status: 'detected',
   };
 }

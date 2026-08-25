@@ -8,6 +8,7 @@ import { atom, getDefaultStore } from 'jotai';
 import { activeNodeIdAtom } from './navigation';
 import {
   gridFiltersAtom,
+  gridFilterLockedAtom,
   gridDrilldownAtom,
   pendingGridIntentAtom,
   pendingGridNavigationAtom,
@@ -47,6 +48,11 @@ function selectionKey(selection: SubscriptionsSelection | undefined): string {
 interface HistoryState {
   stack: HistoryEntry[];
   cursor: number;
+}
+
+export interface NavigationSessionSnapshot {
+  history: HistoryState;
+  scrollPositions: Array<[string, GridScrollPosition]>;
 }
 
 const historyAtom = atom<HistoryState>({
@@ -112,6 +118,38 @@ export function closeTransientViewers() {
 // ── Scroll position per scope ────────────────────────────────────
 const scrollPositions = new Map<string, GridScrollPosition>();
 
+export function captureNavigationSession(): NavigationSessionSnapshot {
+  const history = store.get(historyAtom);
+  return {
+    history: {
+      cursor: history.cursor,
+      stack: history.stack.map((entry) => ({
+        ...entry,
+        filters: entry.filters ? cloneFilters(entry.filters) : undefined,
+        sort: entry.sort ? { ...entry.sort } : undefined,
+        subsSelection: entry.subsSelection ? { ...entry.subsSelection } : undefined,
+      })),
+    },
+    scrollPositions: [...scrollPositions.entries()].map(([nodeId, position]) => [nodeId, { ...position }]),
+  };
+}
+
+export function restoreNavigationSession(snapshot: NavigationSessionSnapshot): void {
+  scrollPositions.clear();
+  snapshot.scrollPositions.forEach(([nodeId, position]) => scrollPositions.set(nodeId, { ...position }));
+  const history: HistoryState = {
+    cursor: snapshot.history.cursor,
+    stack: snapshot.history.stack.map((entry) => ({
+      ...entry,
+      filters: entry.filters ? cloneFilters(entry.filters) : undefined,
+      sort: entry.sort ? { ...entry.sort } : undefined,
+      subsSelection: entry.subsSelection ? { ...entry.subsSelection } : undefined,
+    })),
+  };
+  store.set(historyAtom, history);
+  applyHistoryEntry(history.stack[history.cursor]);
+}
+
 export function resetNavigationHistory(nodeId = 'system:active'): void {
   scrollPositions.clear();
   store.set(gridDrilldownAtom, null);
@@ -148,12 +186,12 @@ export function removeHistoryEntries(nodeIds: Iterable<string>) {
 }
 
 /** Push a new node onto the history stack (called on direct scope navigation, NOT back/forward). */
-export function pushHistory(nodeId: string, sort?: ItemSort) {
+export function pushHistory(nodeId: string, sort?: ItemSort, filters?: QueryFilters) {
   // Direct navigation to the subscriptions node lands on its home.
   if (nodeId === SUBSCRIPTIONS_NODE_ID) {
     store.set(subscriptionsSelectionAtom, null);
   }
-  pushEntry({ nodeId, sort });
+  pushEntry({ nodeId, sort, filters: filters ? cloneFilters(filters) : undefined });
   // Direct navigation = fresh start. Clear saved scroll so grid starts at top.
   // Back/forward never calls pushHistory, so their scroll positions are preserved.
   scrollPositions.delete(nodeId);
@@ -216,15 +254,18 @@ export function navigateToNode(nodeId: string) {
     store.set(viewerExitTransitionAtom, true);
   }
   const sort = nodeId === 'system:random' ? randomSort() : undefined;
-  if (sort) {
+  const lockedFilters = store.get(gridFilterLockedAtom) && nodeIdToGridScope(nodeId)
+    ? cloneFilters(store.get(gridFiltersAtom))
+    : undefined;
+  if (sort || lockedFilters) {
     store.set(pendingGridNavigationAtom, {
       nodeId,
-      filters: createEmptyItemFilters(),
+      filters: lockedFilters ?? createEmptyItemFilters(),
       sort,
     });
   }
   store.set(activeNodeIdAtom, nodeId);
-  pushHistory(nodeId, sort);
+  pushHistory(nodeId, sort, lockedFilters);
 }
 
 /**

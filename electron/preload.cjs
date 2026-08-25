@@ -61,6 +61,7 @@ const search = {
 
 const library = {
   create: (name, savePath) => ipcRenderer.invoke('picto:library:create', { name, savePath }),
+  joinCloud: (input) => ipcRenderer.invoke('picto:library:joinCloud', input),
   open: () => ipcRenderer.invoke('picto:library:open'),
   switch: (path) => ipcRenderer.invoke('picto:library:switch', { path }),
   remove: (path) => ipcRenderer.invoke('picto:library:remove', { path }),
@@ -70,6 +71,13 @@ const library = {
   rename: (path, newName) => ipcRenderer.invoke('picto:library:rename', { path, newName }),
   relocate: (oldPath) => ipcRenderer.invoke('picto:library:relocate', { oldPath }),
   setMeta: (path, meta) => ipcRenderer.invoke('picto:library:setMeta', { path, meta }),
+};
+
+const tutorial = {
+  start: () => ipcRenderer.invoke('picto:tutorial:start'),
+  reset: () => ipcRenderer.invoke('picto:tutorial:reset'),
+  finish: () => ipcRenderer.invoke('picto:tutorial:finish'),
+  status: () => ipcRenderer.invoke('picto:tutorial:status'),
 };
 
 const monitor = {
@@ -140,5 +148,6 @@ contextBridge.exposeInMainWorld('picto', {
   webview,
   search,
   library,
+  tutorial,
   updater,
 });

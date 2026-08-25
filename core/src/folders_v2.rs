@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, MutationReceipt};
+use crate::cloud::capture::{record_folder_created, record_folder_delete, record_folder_upsert};
 use crate::store::history::HistoryDescriptor;
 
 const RANK_GAP: i64 = 1024;
@@ -133,7 +134,9 @@ impl Application {
                      VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
                     params![folder_key, name, parent_id, sort_rank, now],
                 )?;
-                Ok((transaction.last_insert_rowid(), ()))
+                let folder_id = transaction.last_insert_rowid();
+                record_folder_created(transaction, &[folder_id])?;
+                Ok((folder_id, ()))
             },
             |_, ()| Ok(()),
         )?;
@@ -160,6 +163,7 @@ impl Application {
                     "UPDATE folder SET name = ?1, updated_at = ?2 WHERE folder_id = ?3",
                     params![name, now, folder_id.0],
                 )?;
+                record_folder_upsert(transaction, &[folder_id.0], &["name"])?;
                 Ok(((), ()))
             },
             |_, ()| Ok(()),
@@ -217,6 +221,8 @@ impl Application {
                     .ok_or_else(|| invalid("Source folder is missing from its parent"))?;
                 siblings.insert(source_index + 1, duplicate_id);
                 write_folder_order(transaction, &siblings, &now)?;
+                record_folder_created(transaction, &created_ids)?;
+                record_folder_upsert(transaction, &siblings, &["sort_rank"])?;
                 Ok(((duplicate_id, created_ids.clone()), created_ids))
             },
             |_, _| Ok(()),
@@ -249,12 +255,21 @@ impl Application {
                 let next = (icon.clone(), color.clone(), notes.clone());
                 let changed = previous != next;
                 if changed {
+                    let changed_fields = [
+                        ("icon", previous.0 != next.0),
+                        ("color", previous.1 != next.1),
+                        ("notes", previous.2 != next.2),
+                    ]
+                    .into_iter()
+                    .filter_map(|(field, changed)| changed.then_some(field))
+                    .collect::<Vec<_>>();
                     transaction.execute(
                         "UPDATE folder
                          SET icon = ?1, color = ?2, notes = ?3, updated_at = ?4
                          WHERE folder_id = ?5",
                         params![icon, color, notes, now, input.folder_id.0],
                     )?;
+                    record_folder_upsert(transaction, &[input.folder_id.0], &changed_fields)?;
                 }
                 Ok(((), (), changed))
             },
@@ -403,6 +418,7 @@ impl Application {
                  WHERE folder_id = ?4",
                     params![parent_id, sort_rank, now, folder_id.0],
                 )?;
+                record_folder_upsert(transaction, &[folder_id.0], &["parent", "sort_rank"])?;
                 Ok(((), ()))
             },
             |_, ()| Ok(()),
@@ -440,6 +456,11 @@ impl Application {
                         params![(index as i64 + 1) * RANK_GAP, now, folder_id.0],
                     )?;
                 }
+                let ids = folder_ids
+                    .iter()
+                    .map(|folder_id| folder_id.0)
+                    .collect::<Vec<_>>();
+                record_folder_upsert(transaction, &ids, &["sort_rank"])?;
                 Ok(((), ()))
             },
             |_, ()| Ok(()),
@@ -493,6 +514,7 @@ impl Application {
                     changed_ids.extend(ids);
                 }
                 let changed_ids = changed_ids.into_iter().collect::<Vec<_>>();
+                record_folder_upsert(transaction, &changed_ids, &["sort_rank"])?;
                 Ok((changed_ids.clone(), changed_ids))
             },
             |_, _| Ok(()),
@@ -655,10 +677,21 @@ impl Application {
                 for folder_id in &root_folder_ids {
                     deleted_folder_ids.extend(descendant_folder_ids(transaction, folder_id.0)?);
                 }
+                let deleted_folder_keys = deleted_folder_ids
+                    .iter()
+                    .map(|folder_id| {
+                        transaction.query_row(
+                            "SELECT folder_key FROM folder WHERE folder_id = ?1",
+                            [folder_id],
+                            |row| row.get::<_, String>(0),
+                        )
+                    })
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
                 for folder_id in root_folder_ids {
                     transaction
                         .execute("DELETE FROM folder WHERE folder_id = ?1", [folder_id.0])?;
                 }
+                record_folder_delete(transaction, deleted_folder_keys)?;
                 let deleted_folder_ids = deleted_folder_ids.into_iter().collect::<Vec<_>>();
                 Ok((
                     (deleted_folder_ids.clone(), fallback_folder_id),
@@ -970,10 +1003,12 @@ fn resolve_folder_cover(
              JOIN media_file mf ON mf.file_id = ma.file_id
              WHERE fi.folder_id = ?1 AND fi.item_id = ?2",
             params![folder_id, item_id],
-            |row| Ok(FolderCover {
-                entity_hash: row.get(0)?,
-                mime_type: row.get(1)?,
-            }),
+            |row| {
+                Ok(FolderCover {
+                    entity_hash: row.get(0)?,
+                    mime_type: row.get(1)?,
+                })
+            },
         )
         .optional()
 }
@@ -1862,7 +1897,9 @@ mod tests {
         let (_directory, app, media_id) = fixture();
         let folder = create(&app, "Covered", None);
         app.set_folder_membership(
-            &ItemTarget::Explicit { item_ids: vec![ItemId(media_id)] },
+            &ItemTarget::Explicit {
+                item_ids: vec![ItemId(media_id)],
+            },
             folder.0,
             true,
         )

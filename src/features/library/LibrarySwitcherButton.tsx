@@ -54,13 +54,32 @@ export function LibrarySwitcherButton() {
         <button
           ref={buttonRef}
           className={styles.button}
+          data-help-id="sidebar-library-switcher"
+          data-open={anchor != null || undefined}
+          aria-expanded={anchor != null}
           onClick={() =>
             setAnchor((prev) =>
               prev ? null : buttonRef.current?.getBoundingClientRect() ?? null,
             )
           }
         >
-          <LibraryAvatar appearance={meta} size={26} className={styles.icon} />
+          <svg className={styles.highlight} aria-hidden="true" focusable="false">
+            <defs>
+              <mask id="library-switcher-highlight-mask">
+                <rect width="100%" height="100%" fill="black" />
+                <circle cx="24" cy="24" r="24" fill="white" />
+                <rect className={styles.highlightBar} fill="white" />
+                <rect className={styles.highlightBarJoin} fill="white" />
+              </mask>
+            </defs>
+            <rect
+              className={styles.highlightFill}
+              width="100%"
+              height="100%"
+              mask="url(#library-switcher-highlight-mask)"
+            />
+          </svg>
+          <LibraryAvatar appearance={meta} size={39} className={styles.icon} />
           <span className={styles.name}>{name}</span>
           <span className={styles.chevron}><IconSelector size={14} stroke={1.25} /></span>
         </button>

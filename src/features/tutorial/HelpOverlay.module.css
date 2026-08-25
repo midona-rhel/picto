@@ -1,0 +1,27 @@
+.helpButton { position: fixed; right: 8px; bottom: 8px; z-index: 1000; width: 28px; height: 28px; display: grid; place-items: center; padding: 0; border: var(--glass-border-side); border-radius: 50%; background: var(--glass-bg); box-shadow: var(--shadow-panel-small); backdrop-filter: var(--glass-blur); color: var(--color-text-primary); cursor: pointer; -webkit-app-region: no-drag; }
+.helpButton svg { opacity: .5; transition: opacity 160ms var(--ease-default); }
+.helpButton:hover svg { opacity: 1; }
+.overlay { position: fixed; inset: 0; z-index: 2147483646; overflow: hidden; font-family: var(--font-family-ui); cursor: default; -webkit-app-region: no-drag; }
+.spotlight { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.spotlightShade { fill: rgba(0, 0, 0, .84); }
+.targetPointer { position: fixed; z-index: 3; width: 0; height: 0; border: 7px solid transparent; pointer-events: none; }
+.targetPointer[data-placement='right'] { border-right-color: var(--color-primary); }
+.targetPointer[data-placement='left'] { border-left-color: var(--color-primary); }
+.targetPointer[data-placement='bottom'] { border-bottom-color: var(--color-primary); }
+.targetPointer[data-placement='top'] { border-top-color: var(--color-primary); }
+.exploreCard, .coachmark { position: fixed; box-sizing: border-box; width: 320px; padding: 16px; border-radius: 8px; background: var(--color-primary); color: #fff; box-shadow: 0 12px 30px rgba(0, 0, 0, .32); }
+.exploreCard { right: 12px; bottom: 12px; display: grid; gap: 8px; }
+.exploreCard strong { font-size: 14px; }
+.exploreCard span { font-size: 12px; line-height: 17px; color: rgba(255,255,255,.84); }
+.coachmark { min-height: 244px; }
+.coachmark h2 { margin: 10px 24px 7px 0; font-size: 15px; line-height: 20px; }
+.coachmark p { margin: 0; color: rgba(255,255,255,.84); font-size: 12px; line-height: 18px; }
+.progress { font-size: 11px; color: rgba(255,255,255,.68); text-transform: capitalize; }
+.error { color: #ffe0e0 !important; }
+.closeButton { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: rgba(255,255,255,.74); cursor: pointer; }
+.closeButton:hover { background: rgba(255,255,255,.14); color: #fff; }
+.actions { position: absolute; right: 16px; bottom: 14px; left: 16px; display: flex; justify-content: space-between; gap: 8px; }
+.actions button, .primaryButton { height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 10px; border: 0; border-radius: 6px; background: rgba(255,255,255,.16); color: #fff; font: inherit; font-size: 12px; cursor: pointer; }
+.actions button:hover, .primaryButton:hover { background: rgba(255,255,255,.24); }
+.actions button:disabled, .primaryButton:disabled { opacity: .35; cursor: default; }
+.primaryButton { justify-self: start; }

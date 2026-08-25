@@ -11,6 +11,7 @@ import { IconX } from '@tabler/icons-react';
 import styles from './GlassModal.module.css';
 import btnStyles from '../../styles/actionButton.module.css';
 import { useShortcutScope } from '../../hooks/useShortcutScope';
+import { KbdTooltip } from '../KbdTooltip';
 
 export interface GlassModalProps {
   open: boolean;
@@ -97,9 +98,11 @@ export function GlassModal({ open, onClose, title, size = 'md', flush = false, f
       >
         <div className={styles.header}>
           <span className={styles.title} id={titleId}>{title}</span>
-          <button className={styles.closeBtn} onClick={startClose} type="button" title="Close">
-            <IconX size={14} />
-          </button>
+          <KbdTooltip label="Close" shortcutId="view.closeDetail">
+            <button className={styles.closeBtn} onClick={startClose} type="button" aria-label="Close">
+              <IconX size={14} />
+            </button>
+          </KbdTooltip>
         </div>
         <div className={`${styles.body} ${flush ? styles.bodyFlush : ''}`}>
           {children}

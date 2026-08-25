@@ -8,7 +8,7 @@ import {
   resetNavigationHistory,
   saveScrollPosition,
 } from './navigationHistory';
-import { gridDrilldownAtom, gridSessionAtom, pendingGridIntentAtom, pendingGridNavigationAtom } from './grid';
+import { gridDrilldownAtom, gridFilterLockedAtom, gridSessionAtom, pendingGridIntentAtom, pendingGridNavigationAtom } from './grid';
 import { createEmptyItemFilters } from '../shared/lib/itemFilters';
 import {
   quickLookSessionAtom,
@@ -29,6 +29,7 @@ afterEach(() => {
   store.set(viewerDisplayControlsAtom, null);
   store.set(viewerExitTransitionAtom, false);
   store.set(activeNodeIdAtom, 'system:active');
+  store.set(gridFilterLockedAtom, false);
 });
 
 describe('navigateToNode', () => {
@@ -106,6 +107,20 @@ describe('navigateToNode', () => {
     goBack();
 
     expect(store.get(pendingGridNavigationAtom)?.restoreScroll).toBe(true);
+  });
+
+  it('carries locked filters into the next grid scope and its history entry', () => {
+    const filters = { ...createEmptyItemFilters(), include_tags: ['favorite'] };
+    store.set(gridSessionAtom, { ...store.get(gridSessionAtom), filters });
+    store.set(gridFilterLockedAtom, true);
+
+    navigateToNode('system:inbox');
+
+    expect(store.get(pendingGridNavigationAtom)).toMatchObject({ nodeId: 'system:inbox', filters });
+    store.set(pendingGridNavigationAtom, null);
+    navigateToNode('system:trash');
+    goBack();
+    expect(store.get(pendingGridNavigationAtom)?.filters).toEqual(filters);
   });
 
   it('keeps a manager selected while its filtered grid is open and Back restores the manager', () => {

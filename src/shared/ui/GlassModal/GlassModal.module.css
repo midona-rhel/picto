@@ -17,6 +17,7 @@
 }
 
 .panel {
+  position: relative;
   z-index: var(--layer-modal);
   display: flex;
   flex-direction: column;

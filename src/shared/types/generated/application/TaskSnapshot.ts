@@ -2,4 +2,4 @@
 import type { QueueCounts } from "./QueueCounts";
 import type { TaskIssue } from "./TaskIssue";
 
-export type TaskSnapshot = { ingest: QueueCounts, background: QueueCounts, subscriptions: QueueCounts, issues: Array<TaskIssue>, revision: number, };
+export type TaskSnapshot = { ingest: QueueCounts, background: QueueCounts, subscriptions: QueueCounts, cloud: QueueCounts, issues: Array<TaskIssue>, revision: number, };

@@ -63,6 +63,7 @@ function isSubmenu(entry: MenuEntry): entry is MenuSubmenu {
 // ── Hook ──
 
 interface ContextMenuState {
+  id: number;
   entries: MenuEntry[];
   position: { x: number; y: number };
   showSearch: boolean;
@@ -74,20 +75,36 @@ interface ContextMenuOpenOptions {
 
 export function useContextMenu() {
   const [state, setState] = useState<ContextMenuState | null>(null);
+  const nextIdRef = useRef(0);
 
   const open = useCallback((e: React.MouseEvent, entries: MenuEntry[], options?: ContextMenuOpenOptions) => {
     e.preventDefault();
     e.stopPropagation();
-    setState({ entries, position: { x: e.clientX, y: e.clientY }, showSearch: options?.showSearch ?? true });
+    const id = ++nextIdRef.current;
+    setState({ id, entries, position: { x: e.clientX, y: e.clientY }, showSearch: options?.showSearch ?? true });
+    return id;
   }, []);
 
   const openAt = useCallback((position: { x: number; y: number }, entries: MenuEntry[], options?: ContextMenuOpenOptions) => {
-    setState({ entries, position, showSearch: options?.showSearch ?? true });
+    const id = ++nextIdRef.current;
+    setState({ id, entries, position, showSearch: options?.showSearch ?? true });
+    return id;
+  }, []);
+
+  const replaceEntry = useCallback((id: number, label: string, replacement: MenuEntry[]) => {
+    setState((current) => {
+      if (!current || current.id !== id) return current;
+      const index = current.entries.findIndex((entry) => !isSeparator(entry) && !isCustom(entry) && entry.label === label);
+      if (index < 0) return current;
+      const entries = [...current.entries];
+      entries.splice(index, 1, ...replacement);
+      return { ...current, entries };
+    });
   }, []);
 
   const close = useCallback(() => setState(null), []);
 
-  return { state, open, openAt, close };
+  return { state, open, openAt, replaceEntry, close };
 }
 
 // ── Component ──
@@ -392,7 +409,7 @@ function SubmenuPanel({
   return createPortal(
     <div
       ref={ref}
-      className={`${styles.menu} floatingGlassSurface`}
+      className={`${styles.menu} ${styles.submenuMenu} floatingGlassSurface`}
       role="menu"
       aria-label="Context submenu"
       style={{ left: pos.left, top: pos.top, width: 'auto', transformOrigin: subOrigin }}

@@ -10,6 +10,7 @@ import {
 } from './subscriptionsSettle';
 import { libraryInvalidation } from './libraryInvalidation';
 import { startDiagnosticsRuntime } from './diagnosticsRuntime';
+import { startCloudSettle } from './cloudSettle';
 
 let cleanupFns: Array<() => void> = [];
 
@@ -21,6 +22,7 @@ export function startAppRuntime(): () => void {
     startAppSettingsSettle(),
     startApplicationMenuRuntime(),
     startDiagnosticsRuntime(),
+    startCloudSettle(),
     startSidebarSettle(),
     startGridSettle(),
     startHistoryRuntime(),

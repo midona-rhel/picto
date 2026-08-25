@@ -19,7 +19,11 @@
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
-  font-size: var(--font-size-md);
+  /* Selection surfaces use the UI stack directly. Keep this local so
+   * the picker typography cannot drift with unrelated application surfaces. */
+  font-family: var(--font-family-ui);
+  font-size: 13px;
+  font-weight: 400;
   -webkit-font-smoothing: antialiased;
   transition: width 200ms cubic-bezier(0.4, 0, 0.22, 1);
 
@@ -137,8 +141,7 @@
   border: none;
   outline: none;
   color: var(--color-text-primary);
-  font-size: var(--font-size-md);
-  font-family: var(--font-family);
+  font: inherit;
   height: 36px;
   padding: 0;
   min-width: 0;
@@ -147,6 +150,38 @@
 
 .searchInput::placeholder {
   color: var(--color-text-tertiary);
+}
+
+/* ── Compact selection-panel tabs ── */
+
+.viewTabs {
+  display: flex;
+  align-items: center;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--color-control-surface);
+}
+
+.viewTab {
+  width: 28px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  display: grid;
+  place-items: center;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.viewTab:hover {
+  color: var(--color-text-primary);
+}
+
+.viewTabActive {
+  color: var(--color-text-primary);
+  background: var(--color-surface-active);
 }
 
 /* ── Footer buttons: use shared actionButton.module.css directly ── */
@@ -195,7 +230,9 @@
 }
 
 .checkRowActive {
-  background: var(--color-primary-10);
+  background: var(--color-surface-active);
+  outline: 1px solid var(--color-contrast-25);
+  outline-offset: -1px;
 }
 
 .checkBox {
@@ -212,9 +249,9 @@
 }
 
 .checkBoxChecked {
-  background: var(--color-primary);
+  background: var(--color-text-primary);
   outline: 1px solid transparent;
-  color: var(--color-on-primary);
+  color: var(--color-bg-app);
 }
 
 .checkBoxFilterChecked {

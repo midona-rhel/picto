@@ -14,6 +14,21 @@ import {
 
 let operationPending = false;
 
+// Routine edits are already visible where they happen. Reserve popup Undo
+// affordances for broad or destructive changes whose full effect is less obvious.
+const ANNOUNCED_MUTATIONS = new Set([
+  'collections.detach',
+  'collections.organize',
+  'collections.ungroup',
+  'folders.delete',
+  'items.apply_ai_tags',
+  'items.rename_many',
+  'smart_folders.delete',
+  'tags.delete',
+  'tags.delete_unused',
+  'tags.group.delete',
+]);
+
 function runNativeEditHistory(direction: 'undo' | 'redo'): boolean {
   const active = document.activeElement;
   if (!isEditableTarget(active)) return false;
@@ -50,6 +65,7 @@ function showHistoryResult(direction: 'undo' | 'redo', result: HistoryOperationR
 }
 
 export async function announceUndoableMutation(command: string): Promise<void> {
+  if (!ANNOUNCED_MUTATIONS.has(command)) return;
   try {
     const state = await getHistoryState();
     if (state.undo?.command !== command) return;

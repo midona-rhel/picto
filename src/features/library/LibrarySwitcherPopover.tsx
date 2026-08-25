@@ -130,7 +130,7 @@ export function LibrarySwitcherPopover({
                   onClose();
                 }}
               >
-                <LibraryAvatar appearance={entry} size={24} className={styles.itemIcon} />
+                <LibraryAvatar appearance={entry} size={36} className={styles.itemIcon} highlighted={entry.current} />
                 <span className={styles.itemInfo}>
                   <span className={styles.itemName}>{entry.name}</span>
                   <span className={styles.itemPath} title={entry.dir}>{entry.dir}</span>

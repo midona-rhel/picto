@@ -440,7 +440,18 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
         }
 
         let samples_sql = format!(
-            "{} SELECT item_id FROM selected_roots ORDER BY item_id LIMIT 3",
+            "{}
+             SELECT recent.item_id
+             FROM (
+                 SELECT sr.item_id, MAX(ma.imported_at) AS imported_at
+                 FROM selected_roots sr
+                 LEFT JOIN selected_media sm ON sm.root_item_id = sr.item_id
+                 LEFT JOIN media_asset ma ON ma.item_id = sm.media_item_id
+                 GROUP BY sr.item_id
+                 ORDER BY imported_at DESC, sr.item_id DESC
+                 LIMIT 3
+             ) recent
+             ORDER BY recent.imported_at ASC, recent.item_id ASC",
             selection.with_clause
         );
         let sample_item_ids = connection
@@ -1975,7 +1986,7 @@ mod tests {
             .items
             .iter()
             .find(|item| item.item_id == ItemId(10))
-        .unwrap();
+            .unwrap();
         assert_eq!(collection.kind, ItemKind::Collection);
         assert_eq!(collection.display_file_hash.0, "hash-11");
         assert_eq!(collection.media_count, 2);
@@ -2739,6 +2750,43 @@ mod tests {
         assert_eq!(
             summary.shared_source_urls,
             Some(vec!["https://example.com/one".to_string()])
+        );
+    }
+
+    #[test]
+    fn selection_summary_orders_preview_samples_oldest_to_newest_for_stacking() {
+        let (_directory, store) = seed_store();
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE media_asset SET imported_at = CASE item_id
+                         WHEN 3 THEN '2025-12-01T00:00:00Z'
+                         WHEN 2 THEN '2026-01-01T00:00:00Z'
+                         WHEN 11 THEN '2026-02-01T00:00:00Z'
+                         WHEN 12 THEN '2026-02-02T00:00:00Z'
+                         WHEN 1 THEN '2026-03-01T00:00:00Z'
+                         ELSE imported_at END",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let summary = selection_summary(
+            &store,
+            &ItemTarget::Explicit {
+                item_ids: vec![ItemId(1), ItemId(2), ItemId(3), ItemId(10)],
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            summary.sample_hashes,
+            vec![
+                crate::app::FileHash("hash-2".to_string()),
+                crate::app::FileHash("hash-11".to_string()),
+                crate::app::FileHash("hash-1".to_string()),
+            ]
         );
     }
 

@@ -277,7 +277,7 @@ fn manual_group_title(candidates: &[ImportCandidate]) -> Option<String> {
         .or_else(|| Some("Imported Collection".to_string()))
 }
 
-async fn prepare_input(
+pub(crate) async fn prepare_input(
     path: &Path,
     lifecycle: Lifecycle,
     target_folder_id: Option<FolderId>,

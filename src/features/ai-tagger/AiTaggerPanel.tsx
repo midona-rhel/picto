@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
   IconCheck,
+  IconBookmark,
   IconChevronLeft,
   IconChevronRight,
   IconLayoutSidebar,
@@ -16,7 +17,6 @@ import {
 } from '@tabler/icons-react';
 import { OverlayShell } from '../../shared/ui/OverlayShell';
 import { ProgressBar } from '../../shared/ui/ProgressBar/ProgressBar';
-import { TagChip } from '../../shared/ui/TagChip/TagChip';
 import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
 import { aiTaggerPortalAtom } from '../../state/portals';
 import { selectionTargetAtom } from '../../state/selection';
@@ -36,7 +36,10 @@ import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import btnStyles from '../../shared/styles/actionButton.module.css';
 import inspectorStyles from '../inspector/Inspector.module.css';
+import { tagGroupColor } from '../tags/tagGroupPresentation';
 import styles from './AiTaggerPanel.module.css';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 
 type ViewMode = 'suggested' | 'below';
 
@@ -251,11 +254,13 @@ export function AiTaggerPanel() {
   }, [activeItemId, reviewItemIds]);
 
   useShortcutScope((event) => {
-    if (event.key === 'ArrowLeft') {
+    const previous = getShortcut('view.prevImage');
+    const next = getShortcut('view.nextImage');
+    if (previous && matchesShortcutDef(event, previous)) {
       moveActive(-1);
       return true;
     }
-    if (event.key === 'ArrowRight') {
+    if (next && matchesShortcutDef(event, next)) {
       moveActive(1);
       return true;
     }
@@ -343,9 +348,9 @@ export function AiTaggerPanel() {
             <input ref={searchRef} className={shellStyles.searchInput} placeholder="Filter suggestions..." value={query} onChange={(event) => setQuery(event.target.value)} />
           </div>
           {running && <span className={styles.runCounter}>Analyzing {Math.min(progress.done + 1, progress.total)} of {progress.total}</span>}
-          <button className={shellStyles.pinBtn} onClick={() => setShowSidebar((value) => !value)} type="button" title={showSidebar ? 'Hide sidebar' : 'Show sidebar'}>
+          <KbdTooltip label={showSidebar ? 'Hide sidebar' : 'Show sidebar'}><button className={shellStyles.pinBtn} onClick={() => setShowSidebar((value) => !value)} type="button" aria-label={showSidebar ? 'Hide sidebar' : 'Show sidebar'}>
             <IconLayoutSidebar size={14} />
-          </button>
+          </button></KbdTooltip>
         </>
       }
       footer={
@@ -353,7 +358,7 @@ export function AiTaggerPanel() {
           <div className={styles.cutoff}>{backend ? `${backend} inference` : 'Local inference'} · Settings thresholds</div>
           <div className={btnStyles.btnGroup}>
             <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
-            {checkedCount > 0 && <button className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} onClick={() => void applyChecked()} disabled={applying || running} type="button">{applying ? 'Applying…' : `Apply ${checkedCount} ${checkedCount === 1 ? 'tag' : 'tags'}`}</button>}
+            {checkedCount > 0 && <button className={`${btnStyles.btn} ${btnStyles.btnPrimary} ${styles.applyButton}`} onClick={() => void applyChecked()} disabled={applying || running} type="button">{applying ? 'Applying…' : `Apply ${checkedCount} ${checkedCount === 1 ? 'tag' : 'tags'}`}</button>}
           </div>
         </>
       }
@@ -371,20 +376,24 @@ export function AiTaggerPanel() {
           {models.map((model) => {
             const active = runModels.has(model.slug);
             return (
-              <button type="button" key={model.slug} className={`${styles.sidebarItem} ${active ? styles.sidebarItemSelected : ''} ${!model.downloaded ? styles.sidebarItemDisabled : ''}`} title={model.downloaded ? model.dataset : `${model.label} is not downloaded — get it in Settings`} onClick={model.downloaded && !running ? () => toggleModel(model.slug) : undefined} disabled={!model.downloaded || running}>
+              <KbdTooltip key={model.slug} label={model.downloaded ? model.dataset : `${model.label} is not downloaded — get it in Settings`}><button type="button" className={`${styles.sidebarItem} ${active ? styles.sidebarItemSelected : ''} ${!model.downloaded ? styles.sidebarItemDisabled : ''}`} onClick={model.downloaded && !running ? () => toggleModel(model.slug) : undefined} disabled={!model.downloaded || running}>
                 <div className={`${shellStyles.checkBox} ${active ? shellStyles.checkBoxChecked : ''}`}>{active && <IconCheck size={10} />}</div>
                 <span className={styles.sidebarName}>{model.label}</span>
                 <span className={styles.sidebarBadge}>{model.downloaded ? modelCounts.get(model.slug) || '·' : '·'}</span>
-              </button>
+              </button></KbdTooltip>
             );
           })}
         </div>
 
         <section className={styles.reviewPane} aria-label="Media review">
           <div className={styles.reviewNavigation}>
-            <button type="button" className={styles.navButton} aria-label="Previous image" title="Previous image (Left Arrow)" onClick={() => moveActive(-1)} disabled={activeIndex <= 0}><IconChevronLeft size={15} /></button>
+            <KbdTooltip label="Previous image" shortcutId="view.prevImage">
+              <button type="button" className={styles.navButton} aria-label="Previous image" onClick={() => moveActive(-1)} disabled={activeIndex <= 0}><IconChevronLeft size={15} /></button>
+            </KbdTooltip>
             <span className={styles.reviewCounter}>{currentNumber} / {reviewItemIds.length}</span>
-            <button type="button" className={styles.navButton} aria-label="Next image" title="Next image (Right Arrow)" onClick={() => moveActive(1)} disabled={activeIndex >= reviewItemIds.length - 1}><IconChevronRight size={15} /></button>
+            <KbdTooltip label="Next image" shortcutId="view.nextImage">
+              <button type="button" className={styles.navButton} aria-label="Next image" onClick={() => moveActive(1)} disabled={activeIndex >= reviewItemIds.length - 1}><IconChevronRight size={15} /></button>
+            </KbdTooltip>
           </div>
           <div className={inspectorStyles.preview}>
             <div className={inspectorStyles.previewFrame} style={{ background: activeMedia?.dominant_color_hex ?? undefined }}>
@@ -397,9 +406,9 @@ export function AiTaggerPanel() {
           <div className={styles.mediaMeta}>{activePrediction ? `${activePrediction.predictions.length} tag predictions` : running ? 'Waiting for analysis' : 'No prediction result'}</div>
           <div className={styles.thumbnailRail} aria-label="Selected images">
             {reviewMedia.map((media, index) => (
-              <button type="button" key={media.media_item_id} className={`${styles.thumbnailButton} ${media.media_item_id === activeItemId ? styles.thumbnailButtonActive : ''}`} onClick={() => setActiveItemId(media.media_item_id)} title={`Review image ${index + 1}`}>
+              <KbdTooltip key={media.media_item_id} label={`Review image ${index + 1}`}><button type="button" className={`${styles.thumbnailButton} ${media.media_item_id === activeItemId ? styles.thumbnailButtonActive : ''}`} onClick={() => setActiveItemId(media.media_item_id)} aria-label={`Review image ${index + 1}`}>
                 <ThumbnailImage src={mediaThumbnailUrl(media.file_hash)} alt="" draggable={false} />
-              </button>
+              </button></KbdTooltip>
             ))}
           </div>
         </section>
@@ -421,7 +430,11 @@ export function AiTaggerPanel() {
                     return (
                       <button type="button" key={tag.key} className={`${styles.tagRow} ${checked ? styles.tagRowSelected : ''}`} onClick={() => setOverrides((previous) => new Map(previous).set(overrideKey(itemId, tag.key), !checked))}>
                         <div className={`${shellStyles.checkBox} ${checked ? shellStyles.checkBoxChecked : ''}`}>{checked && <IconCheck size={10} />}</div>
-                        <span className={styles.tagChip}><TagChip namespace={tag.namespace} subtag={tag.subtag} /></span>
+                        <IconBookmark className={styles.tagBookmark} style={{ '--tag-color': tagGroupColor(tag.namespace) } as React.CSSProperties} />
+                        <span className={styles.tagName}>
+                          {tag.namespace && tag.namespace !== 'general' && tag.namespace !== 'default' && <span className={styles.tagNamespace}>{tag.namespace}:</span>}
+                          <span>{tag.subtag}</span>
+                        </span>
                         <span className={styles.tagSeparator} aria-hidden="true">·</span>
                         <span className={styles.tagEvidence}>{evidence}</span>
                         <span className={styles.confPct}>{Math.round(tag.confidence * 100)}%</span>

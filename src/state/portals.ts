@@ -30,20 +30,6 @@ export const tagSelectPortalAtom = atom<PortalState>(closed);
 export const folderPickerPortalAtom = atom<PortalState>(closed);
 export const aiTaggerPortalAtom = atom<PortalState>(closed);
 
-// Convenience: simple boolean atoms for backward compat
-export const tagSelectOpenAtom = atom(
-  (get) => get(tagSelectPortalAtom).open,
-  (_get, set, open: boolean) => set(tagSelectPortalAtom, open ? { open: true } : closed),
-);
-export const folderPickerOpenAtom = atom(
-  (get) => get(folderPickerPortalAtom).open,
-  (_get, set, open: boolean) => set(folderPickerPortalAtom, open ? { open: true } : closed),
-);
-export const aiTaggerOpenAtom = atom(
-  (get) => get(aiTaggerPortalAtom).open,
-  (_get, set, open: boolean) => set(aiTaggerPortalAtom, open ? { open: true } : closed),
-);
-
 /**
  * Anchor for panels that dock to the inspector's left edge, used when the
  * opener isn't an inspector button (context menu, keyboard shortcut).

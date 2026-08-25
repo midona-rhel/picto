@@ -39,14 +39,22 @@ describe('historyRuntime', () => {
     mocks.redo.mockReset();
   });
 
-  it('announces only the mutation that owns the newest history entry', async () => {
+  it('keeps routine edits undoable without announcing them', async () => {
     mocks.state.mockResolvedValue({ undo: renameEntry, redo: null });
     await announceUndoableMutation('items.rename');
-    expect(getCurrentNotification()?.title).toBe('Rename item');
+    expect(getCurrentNotification()).toBeNull();
+    expect(mocks.state).not.toHaveBeenCalled();
+  });
+
+  it('announces consequential mutations only when they own the newest history entry', async () => {
+    const deleteEntry = { entry_id: 5, command: 'folders.delete', label: 'Delete folders' };
+    mocks.state.mockResolvedValue({ undo: deleteEntry, redo: null });
+    await announceUndoableMutation('folders.delete');
+    expect(getCurrentNotification()?.title).toBe('Delete folders');
     expect(getCurrentNotification()?.action?.label).toBe('Undo');
 
     clearNotifications();
-    await announceUndoableMutation('items.patch_metadata');
+    await announceUndoableMutation('tags.delete');
     expect(getCurrentNotification()).toBeNull();
   });
 

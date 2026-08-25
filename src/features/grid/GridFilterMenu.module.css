@@ -4,16 +4,129 @@
   flex: 0 0 auto;
   min-height: 38px;
   box-sizing: border-box;
-  padding: 6px 12px 8px;
+  padding: 6px 12px 0;
   color: var(--color-text-primary);
   font: 400 13px/20px var(--font-family-ui);
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.filterViewport {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  margin-left: -10px;
+}
+
+.filterViewport::before,
+.filterViewport::after {
+  content: '';
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  width: 18px;
+  height: 24px;
+  pointer-events: none;
+}
+
+.filterViewport::before {
+  left: 0;
+  width: 10px;
+  background: linear-gradient(to right, var(--color-bg-app), transparent);
+}
+
+.filterViewport::after {
+  right: 0;
+  background: linear-gradient(to left, var(--color-bg-app), transparent);
 }
 
 .filterItems {
   display: flex;
   align-items: flex-start;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
+  padding: 0 18px 0 10px;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
+
+.filterRight {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 2px;
+}
+
+.filterSeparator {
+  width: 1px;
+  height: 18px;
+  margin: 3px 6px 0 0;
+  background: var(--color-border-secondary);
+}
+
+.filterAction {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.filterAction:hover,
+.filterActionActive {
+  color: var(--color-text-primary);
+  background: var(--color-subtle-overlay);
+}
+
+.filterAction:disabled {
+  opacity: .25;
+  cursor: default;
+  background: transparent;
+}
+
+.saveFilterEditor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  padding: 4px;
+}
+
+.saveFilterEditor input {
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  outline: 0;
+  background: var(--color-control-surface);
+  color: var(--color-text-primary);
+  font: 400 13px var(--font-family-ui);
+}
+
+.saveFilterEditor input:focus { border-color: var(--color-primary); }
+
+.saveFilterEditor button {
+  height: 28px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--color-subtle-overlay);
+  color: var(--color-text-primary);
+  font: 500 12px var(--font-family-ui);
+  cursor: pointer;
+}
+
+.saveFilterEditor button:hover { background: var(--color-active-overlay); }
+.saveFilterEditor button:disabled { opacity: .3; cursor: default; }
 
 .filterItem,
 .addButton {
@@ -29,10 +142,10 @@
   position: relative;
   display: inline-flex;
   align-items: center;
-  flex: 0 1 auto;
+  flex: 0 0 auto;
   min-width: 0;
   gap: 4px;
-  margin: 0 2px 2px 0;
+  margin: 0 2px 0 0;
   padding: 0 7px 0 5px;
   cursor: pointer;
   transition: background-color 200ms var(--ease-default);

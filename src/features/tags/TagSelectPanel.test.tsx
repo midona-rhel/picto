@@ -95,4 +95,21 @@ describe('TagSelectPanel assignment', () => {
       'all',
     );
   });
+
+  it('uses the compact multi-column grid and keeps a list layout option', async () => {
+    const store = createStore();
+    store.set(tagSelectPortalAtom, { open: true, selectedTags: [] });
+
+    await act(async () => {
+      render(<MantineProvider><Provider store={store}><TagSelectPanel /></Provider></MantineProvider>);
+      await Promise.resolve();
+    });
+
+    await screen.findByText('alice');
+    expect(document.querySelector('[class*="tagGrid"]')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Tag picker settings' }));
+    expect(screen.getByRole('button', { name: 'Grid tags' })).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'List tags' }));
+    expect(screen.getByRole('button', { name: 'List tags' })).toHaveAttribute('aria-pressed', 'true');
+  });
 });

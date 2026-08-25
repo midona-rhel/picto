@@ -4,6 +4,7 @@
 
 import { useState } from 'react';
 import { IconCheck } from '@tabler/icons-react';
+import { KbdTooltip } from '../KbdTooltip';
 import styles from './ColorPicker.module.css';
 
 export const FOLDER_COLORS: { name: string; hex: string | null }[] = [
@@ -37,14 +38,13 @@ export function ColorPicker({ value, onChange }: ColorPickerProps) {
       {FOLDER_COLORS.map((c) => {
         const isSelected = local === c.hex;
         return (
-          <button
-            key={c.hex ?? 'default'}
+          <KbdTooltip key={c.hex ?? 'default'} label={c.name}><button
             className={`${styles.swatch} ${isSelected ? styles.selected : ''}`}
             style={{
               backgroundColor: c.hex ?? 'var(--color-text-primary)',
               '--swatch-color': c.hex ?? 'var(--color-text-primary)',
             } as React.CSSProperties}
-            title={c.name}
+            aria-label={c.name}
             onClick={() => handleClick(c.hex)}
           >
             {isSelected && (
@@ -54,7 +54,7 @@ export function ColorPicker({ value, onChange }: ColorPickerProps) {
                 color={c.hex ? 'white' : 'var(--color-bg-app)'}
               />
             )}
-          </button>
+          </button></KbdTooltip>
         );
       })}
     </div>

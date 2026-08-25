@@ -47,6 +47,12 @@ fn main() {
     use picto_core::auth_v2::{
         CredentialHealthRecord, CredentialRecord, SetCredentialInput, SourceCatalogEntry,
     };
+    use picto_core::cloud::reconcile::ReconcileResult;
+    use picto_core::cloud::snapshot::RestorePoint;
+    use picto_core::cloud::{
+        CloudConfiguration, CloudLibraryOption, CloudMutation, CloudOperation, CloudSyncStatus,
+        ConfigureCloudInput, HybridTimestamp,
+    };
     use picto_core::duplicates_v2::{
         CandidateOccurrence, CandidateSide, DuplicateCandidate, DuplicateScanResult, FileQuality,
         QualityDecision, ResolutionChoice, ResolutionResult,
@@ -64,13 +70,12 @@ fn main() {
         ListTagsInput, ModelInput, MoveFolderInput, MoveSmartFolderInput, PatchMetadataInput,
         PatchViewSettingsInput, PauseSubscriptionInput, PauseSubscriptionQueryInput,
         QueryItemsInput, RenameFolderInput, RenameSubscriptionInput, RenameTagGroupInput,
-        RenameTagInput,
-        ReorderSmartFoldersInput, ResolveDuplicateInput, ScanDuplicatesInput,
+        RenameTagInput, ReorderSmartFoldersInput, ResolveDuplicateInput, ScanDuplicatesInput,
         ScheduleSubscriptionInput, ScopeInput, SiteInput, SmartFolderInput,
         SubscriptionCoverCandidatesInput, SubscriptionCoverInput, SubscriptionDestinationInput,
         SubscriptionInput, SubscriptionPostsPerRunInput, SubscriptionQueryInput,
-        SubscriptionRunActivityInput, SubscriptionRunsInput, TagAliasInput, TagImplicationInput,
-        TagGroupInput, TagInput, TargetInput, UpdateSmartFolderInput,
+        SubscriptionRunActivityInput, SubscriptionRunsInput, TagAliasInput, TagGroupInput,
+        TagImplicationInput, TagInput, TargetInput, UpdateSmartFolderInput,
         UpdateSubscriptionQueryInput, ValueInput,
     };
     use picto_core::media_io_v2::{
@@ -111,6 +116,9 @@ fn main() {
         ItemId, MediaId, FileHash, ItemKind, Lifecycle, ItemScope, ItemFilters,
         ItemSortField, SortDirection, ItemSort, ItemQuery, ItemTarget,
         MutationReceipt, LibraryChanged,
+        HybridTimestamp, CloudOperation, CloudMutation, CloudSyncStatus,
+        ConfigureCloudInput, CloudLibraryOption, CloudConfiguration,
+        ReconcileResult, RestorePoint,
         ItemPageRequest, ItemSummary, ItemPage, MediaDetails, ItemDetails,
         SelectionSummary, SelectionCollectionCandidate, ScopeCount, SidebarCounts,
         OrganizeIntoCollectionInput, OrganizeIntoCollectionResult, DetachItemsInput,

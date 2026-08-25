@@ -5,26 +5,32 @@
   min-height: 0;
   overflow-y: auto;
   scrollbar-gutter: stable;
-  padding: 4px 0;
+  padding: 4px;
 }
 
 .row {
   display: flex;
   align-items: center;
-  height: var(--control-height-md);
-  padding: 0 6px;
+  height: 26px;
+  padding: 0 4px;
   gap: 4px;
   border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: var(--font-size-md);
+  font: 400 13px/1 var(--font-family-ui);
   color: var(--color-text-primary);
   white-space: nowrap;
-  margin: 0 4px;
+  margin: 0;
   transition: background-color 60ms ease;
 }
 
 .row:hover {
-  background: var(--color-subtle-overlay);
+  background: var(--color-surface-hover);
+}
+
+.rowSelected {
+  background: var(--color-surface-active);
+  outline: 1px solid var(--color-contrast-25);
+  outline-offset: -1px;
 }
 
 .expandBtn {
@@ -48,9 +54,17 @@
   flex-shrink: 0;
 }
 
+.checkSlot {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+}
+
 .folderIcon {
   flex-shrink: 0;
-  opacity: 0.6;
+  opacity: 0.72;
   transition: opacity 120ms ease;
 }
 
@@ -118,7 +132,8 @@
 
 .matchHighlight {
   font-weight: var(--font-weight-bold);
-  color: var(--color-primary);
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-contrast-20);
 }
 
 .empty {

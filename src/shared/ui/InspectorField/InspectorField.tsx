@@ -11,6 +11,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { IconDots, IconLink, IconPlus, IconX, IconExternalLink } from '@tabler/icons-react';
 import { shellController } from '../../../controllers/shellController';
+import { KbdTooltip } from '../KbdTooltip';
 import styles from './InspectorField.module.css';
 
 // ── InspectorField (name, notes, any text) ───────────────────────
@@ -274,22 +275,26 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
                 </span>
               )}
               {url.trim() && editIdx !== idx && (
-                <button
-                  className={styles.urlActionBtn}
-                  onClick={() => { void shellController.openExternalUrl(url); }}
-                  type="button" title="Open link"
-                >
-                  <IconExternalLink size={13} stroke={1.5} />
-                </button>
+                <KbdTooltip label="Open link">
+                  <button
+                    className={styles.urlActionBtn}
+                    onClick={() => { void shellController.openExternalUrl(url); }}
+                    type="button" aria-label="Open link"
+                  >
+                    <IconExternalLink size={13} stroke={1.5} />
+                  </button>
+                </KbdTooltip>
               )}
               {canEdit && (
-                <button
-                  className={styles.urlActionBtn}
-                  onClick={() => handleRemove(idx)}
-                  type="button" title="Remove"
-                >
-                  <IconX size={13} stroke={1.5} />
-                </button>
+                <KbdTooltip label="Remove">
+                  <button
+                    className={styles.urlActionBtn}
+                    onClick={() => handleRemove(idx)}
+                    type="button" aria-label="Remove"
+                  >
+                    <IconX size={13} stroke={1.5} />
+                  </button>
+                </KbdTooltip>
               )}
             </div>
           ))}

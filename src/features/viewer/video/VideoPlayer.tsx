@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { VideoControls } from './VideoControls';
 import { VolumeHUD } from './VolumeHUD';
 import { useVideoPlayer, type UseVideoPlayerOptions } from './useVideoPlayer';
-import { CONTROLS_HIDE_DELAY, VOLUME_STEP } from './videoConstants';
+import { CONTROLS_HIDE_DELAY, SKIP_STEP, VOLUME_STEP } from './videoConstants';
 import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
 import { useAudioVisualizationMode } from '../../../shared/lib/audioVisualization';
 import { AudioVisualizer } from './AudioVisualizer';
@@ -94,7 +94,7 @@ export function VideoPlayer({
     return () => v.removeEventListener('ended', onEnded);
   }, [videoRef, onEnded]);
 
-  // Keyboard shortcuts — uses registry for EU alternative keys
+  // The registry is shared by execution, Settings, and the control tooltips.
   useShortcutScope((e) => {
     const playDef = getShortcut('video.togglePlay')!;
     const seekBackwardDef = getShortcut('video.seekBackward')!;
@@ -105,16 +105,20 @@ export function VideoPlayer({
     const loopDef = getShortcut('video.toggleLoop')!;
     const rateUpDef = getShortcut('video.rateIncrease')!;
     const rateDownDef = getShortcut('video.rateDecrease')!;
+    const rateResetDef = getShortcut('video.rateReset')!;
+    const fullscreenDef = getShortcut('video.fullscreen')!;
 
       if (matchesShortcutDef(e, playDef)) { e.preventDefault(); actions.togglePlay(); resetHideTimer(); return; }
-      if (matchesShortcutDef(e, seekBackwardDef)) { e.preventDefault(); actions.seekRelative(-5); resetHideTimer(); return; }
-      if (matchesShortcutDef(e, seekForwardDef)) { e.preventDefault(); actions.seekRelative(5); resetHideTimer(); return; }
+      if (matchesShortcutDef(e, seekBackwardDef)) { e.preventDefault(); actions.seekRelative(-SKIP_STEP); resetHideTimer(); return; }
+      if (matchesShortcutDef(e, seekForwardDef)) { e.preventDefault(); actions.seekRelative(SKIP_STEP); resetHideTimer(); return; }
       if (matchesShortcutDef(e, volUpDef)) { e.preventDefault(); actions.setVolume(state.volume + VOLUME_STEP); setVolumeHudTrigger(Date.now()); return; }
       if (matchesShortcutDef(e, volDownDef)) { e.preventDefault(); actions.setVolume(state.volume - VOLUME_STEP); setVolumeHudTrigger(Date.now()); return; }
       if (matchesShortcutDef(e, muteDef)) { e.preventDefault(); actions.toggleMute(); return; }
       if (matchesShortcutDef(e, loopDef)) { e.preventDefault(); actions.toggleLoop(); return; }
       if (matchesShortcutDef(e, rateUpDef)) { e.preventDefault(); actions.cyclePlaybackRate(1); return; }
       if (matchesShortcutDef(e, rateDownDef)) { e.preventDefault(); actions.cyclePlaybackRate(-1); return; }
+      if (matchesShortcutDef(e, rateResetDef)) { e.preventDefault(); actions.setPlaybackRate(1); return; }
+      if (!isAudio && matchesShortcutDef(e, fullscreenDef)) { e.preventDefault(); handleToggleFullscreen(); return; }
   }, { enabled: keyboardShortcutsEnabled, priority: 70 });
 
   const showControls = isAudio || controlsVisible || !state.isPlaying || seeking;

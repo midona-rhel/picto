@@ -40,6 +40,7 @@ import {
 import { GroupEditIcon } from '../../shared/ui/icons/group-icons';
 import styles from './GridToolbar.module.css';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { formatKeysDisplay, getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 
 const ZOOM_MIN = 150;
 const ZOOM_MAX = 900;
@@ -85,7 +86,8 @@ function SearchInput() {
   const ref = useRef<HTMLInputElement>(null);
 
   useShortcutScope((e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'f') {
+    const search = getShortcut('nav.search');
+    if (search && matchesShortcutDef(e, search)) {
       e.preventDefault();
       ref.current?.focus();
     }
@@ -153,8 +155,8 @@ export function ViewerToolbar() {
         action: () => zoom.setZoomScale(percent / 100),
       })),
       { separator: true },
-      { label: 'Actual size', shortcut: 'Mod+0', action: zoom.fitActual },
-      { label: 'Fit to window', shortcut: '`', action: zoom.fitToWindow },
+      { label: 'Actual size', shortcut: formatKeysDisplay(getShortcut('view.actualSize')!.keys), action: zoom.fitActual },
+      { label: 'Fit to window', shortcut: formatKeysDisplay(getShortcut('view.fitWindow')!.keys), action: zoom.fitToWindow },
     ], { showSearch: false });
   };
 
@@ -163,7 +165,7 @@ export function ViewerToolbar() {
     <TitlebarControls
       left={(
         <>
-        <KbdTooltip label={controls.backLabel ?? 'Back to grid'} shortcut="Escape">
+        <KbdTooltip label={controls.backLabel ?? 'Back to grid'} shortcutId="view.closeDetail">
           <TitlebarControlButton onClick={controls.close} aria-label={controls.backLabel ?? 'Back to grid'}>
             <ToolbarHistoryIcon direction="back" />
           </TitlebarControlButton>
@@ -210,12 +212,12 @@ export function ViewerToolbar() {
         <>
         {zoom ? (
           <>
-            <KbdTooltip label="Fit to window" shortcut="`">
+            <KbdTooltip label="Fit to window" shortcutId="view.fitWindow">
               <TitlebarControlButton onClick={zoom.fitToWindow} aria-label="Fit to window">
                 <ToolbarFitIcon />
               </TitlebarControlButton>
             </KbdTooltip>
-            <KbdTooltip label="Actual size" shortcut="Mod+0">
+            <KbdTooltip label="Actual size" shortcutId="view.actualSize">
               <TitlebarControlButton onClick={zoom.fitActual} aria-label="Actual size">
                 <ToolbarActualSizeIcon />
               </TitlebarControlButton>
@@ -230,7 +232,7 @@ export function ViewerToolbar() {
           </KbdTooltip>
         ) : null}
         {controls.navigate ? <TitlebarControlGroup>
-          <KbdTooltip label="Previous" shortcut="ArrowLeft">
+          <KbdTooltip label="Previous" shortcutId="view.prevImage">
             <TitlebarControlButton
               disabled={!canPrev}
               onClick={canPrev ? () => controls.navigate?.(-1) : undefined}
@@ -239,7 +241,7 @@ export function ViewerToolbar() {
               <ToolbarChevronIcon direction="left" />
             </TitlebarControlButton>
           </KbdTooltip>
-          <KbdTooltip label="Next" shortcut="ArrowRight">
+          <KbdTooltip label="Next" shortcutId="view.nextImage">
             <TitlebarControlButton
               disabled={!canNext}
               onClick={canNext ? () => controls.navigate?.(1) : undefined}
@@ -282,6 +284,7 @@ export function GridToolbar() {
   return (
     <div
       className={styles.toolbar}
+      data-window-drag-region=""
       data-transition-phase={transitionPhase}
     >
       <div className={styles.centerGroup}>

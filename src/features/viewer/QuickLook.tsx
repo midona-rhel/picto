@@ -148,10 +148,11 @@ export function QuickLookContent({
       if (isImage && matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale / 1.25); return; }
       if (isImage && matchesShortcutDef(e, actualDef)) { e.preventDefault(); zoom.fitActual(); return; }
 
-      // Rating: 0-5
-      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key >= '0' && e.key <= '5') {
+      for (let rating = 0; rating <= 5; rating += 1) {
+        if (!matchesShortcutDef(e, getShortcut(`rate.${rating}`)!)) continue;
         e.preventDefault();
-        void entityMutations.setItemRating(currentItemId, parseInt(e.key, 10));
+        void entityMutations.setItemRating(currentItemId, rating);
+        return;
       }
   }, { priority: 60 });
 

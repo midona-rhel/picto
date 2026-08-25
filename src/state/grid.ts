@@ -114,6 +114,8 @@ export const gridShowResolutionAtom = pick((s) => s.view.showResolution);
 export const gridFitThumbnailsAtom = pick((s) => s.view.fitThumbnails);
 /** Transient grid display mode. It is deliberately not a per-scope library preference. */
 export const gridGrayscaleAtom = atom(false);
+/** Keep the current filters when navigating directly between grid scopes. */
+export const gridFilterLockedAtom = atom(false);
 /** Application-wide spacing density. Wide preserves Picto's original layout. */
 export const gridSpacingAtom = atom<GridSpacing>('wide');
 export const gridShowSubfoldersAtom = pick((s) => s.view.showSubfolders);

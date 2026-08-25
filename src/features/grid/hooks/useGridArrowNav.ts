@@ -16,19 +16,20 @@ import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
 import { useAtomValue } from 'jotai';
 import { gridSpacingAtom } from '../../../state/grid';
 import { gridGapForSpacing } from '../gridAppearance';
-
-/** Map WASD to arrow equivalents so both sets work. */
-const WASD_MAP: Record<string, string> = {
-  w: 'ArrowUp', a: 'ArrowLeft', s: 'ArrowDown', d: 'ArrowRight',
-  W: 'ArrowUp', A: 'ArrowLeft', S: 'ArrowDown', D: 'ArrowRight',
-};
+import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
 
 type NavAction = 'left' | 'right' | 'up' | 'down' | 'first' | 'last' | 'pageUp' | 'pageDown';
 
-const KEY_TO_ACTION: Record<string, NavAction> = {
-  ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
-  Home: 'first', End: 'last', PageUp: 'pageUp', PageDown: 'pageDown',
-};
+const NAV_SHORTCUTS: ReadonlyArray<readonly [string, NavAction]> = [
+  ['grid.moveLeft', 'left'],
+  ['grid.moveRight', 'right'],
+  ['grid.moveUp', 'up'],
+  ['grid.moveDown', 'down'],
+  ['grid.first', 'first'],
+  ['grid.last', 'last'],
+  ['grid.pageUp', 'pageUp'],
+  ['grid.pageDown', 'pageDown'],
+];
 
 export function useGridArrowNav(opts: {
   items: CanonicalEntityGridItem[];
@@ -53,11 +54,10 @@ export function useGridArrowNav(opts: {
 
       const tag = (e.target as HTMLElement)?.tagName;
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-
-      // Map WASD to arrow equivalents, then look up action
-      const mappedKey = WASD_MAP[e.key] ?? e.key;
-      const action = KEY_TO_ACTION[mappedKey];
+      const action = NAV_SHORTCUTS.find(([shortcutId]) => {
+        const shortcut = getShortcut(shortcutId);
+        return shortcut && matchesShortcutDef(e, shortcut, { allowExtraShift: true });
+      })?.[1];
       if (!action) return;
 
       e.preventDefault();

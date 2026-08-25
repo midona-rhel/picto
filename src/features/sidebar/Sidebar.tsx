@@ -15,7 +15,7 @@ import {
   IconClock, IconBookmark,
   IconArrowsShuffle,
   IconFilter, IconLayoutGrid, IconRefresh, IconX,
-  IconStar, IconStarOff, IconTags,
+  IconStar, IconStarOff,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
@@ -170,6 +170,19 @@ const SYSTEM_SCOPE_ORDER = [
 
 const LABEL_OVERRIDES: Record<string, string> = {
   'system:active': 'All',
+};
+
+const SYSTEM_HELP_IDS: Record<string, string> = {
+  'system:active': 'sidebar-all',
+  'system:inbox': 'sidebar-inbox',
+  'system:recent_viewed': 'sidebar-recently-viewed',
+  'system:uncategorized': 'sidebar-uncategorized',
+  'system:untagged': 'sidebar-untagged',
+  'system:tag_manager': 'sidebar-tags',
+  'system:random': 'sidebar-random',
+  'system:subscriptions': 'sidebar-subscriptions',
+  'system:duplicates': 'sidebar-duplicates',
+  'system:trash': 'sidebar-trash',
 };
 
 const EXPAND_FILTERED_TREE = new Set<string>();
@@ -608,7 +621,7 @@ export function Sidebar() {
           folderRename.startRename(duplicateNodeId, duplicateName);
         });
       } },
-      { label: 'Set Auto Tags...', icon: <IconTags size={14} />, shortcut: kbd('folder.autoTags'), action: () => {
+      { label: 'Set Auto Tags...', icon: <IconBookmark size={14} />, shortcut: kbd('folder.autoTags'), action: () => {
         void openFolderAutoTags([folderId], { x: e.clientX, y: e.clientY });
       } },
       { separator: true },
@@ -983,7 +996,7 @@ export function Sidebar() {
     if (allFolders) {
       const autoTagFolderIds = folderIds.map(parseFolderId).filter((id): id is number => id != null);
       entries.push({
-        label: 'Set Auto Tags...', icon: <IconTags size={14} />, shortcut: kbd('folder.autoTags'),
+        label: 'Set Auto Tags...', icon: <IconBookmark size={14} />, shortcut: kbd('folder.autoTags'),
         action: () => { void openFolderAutoTags(autoTagFolderIds, { x: e.clientX, y: e.clientY }); },
       });
     }
@@ -1171,6 +1184,7 @@ export function Sidebar() {
               onClick={() => { if (node.selectable) { setSidebarSelection(new Set()); navigate(node.id); } }}
               onContextMenu={(event) => openSystemMenu(event, node)}
               dropDataAttr={statusDrop ? { key: 'status-drop', value: statusDrop } : undefined}
+              dataHelpId={SYSTEM_HELP_IDS[node.id]}
             />
           );
         })}
@@ -1183,6 +1197,7 @@ export function Sidebar() {
               count={sidebarPreferences.showCounts ? quickAccessNodes.length : undefined}
               expanded={!collapsed.has('quick_access')}
               onToggle={() => toggleCollapse('quick_access')}
+              dataHelpId="sidebar-quick-access"
             />
             {!collapsed.has('quick_access') && quickAccessNodes.map((node) => (
               <SidebarRow
@@ -1198,6 +1213,7 @@ export function Sidebar() {
                   if (node.kind === 'folder') handleFolderContextMenu(event, node);
                   else handleSmartFolderContextMenu(event, node);
                 }}
+                dataHelpRegion="sidebar-quick-access"
               />
             ))}
           </>
@@ -1211,7 +1227,8 @@ export function Sidebar() {
           expanded={treeFilterActive || !collapsed.has('folders')}
           onToggle={() => { if (!treeFilterActive) toggleCollapse('folders'); }}
           onAdd={() => { void createFolderAndRename(); }}
-          addTooltip="New Folder" addShortcut="Mod+Shift+N"
+          addTooltip="New Folder" addShortcutId="file.newFolder"
+          dataHelpId="sidebar-folders"
         />}
         {sidebarPreferences.showFolders && (treeFilterActive || !collapsed.has('folders')) && folderList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
@@ -1242,6 +1259,7 @@ export function Sidebar() {
               folderDragRef.current = { nodeId: node.id, startY: e.clientY };
             }}
             dropDataAttr={{ key: 'folder-drop-id', value: String(parseFolderId(node.id) ?? '') }}
+            dataHelpRegion="sidebar-folders"
           >
             {folderRename.renamingId === node.id ? (
               <input
@@ -1278,6 +1296,7 @@ export function Sidebar() {
             ], { showSearch: false });
           }}
           addTooltip="New Smart Folder or Group"
+          dataHelpId="sidebar-smart-folders"
         />}
         {sidebarPreferences.showSmartFolders && (treeFilterActive || !collapsed.has('smart_folders')) && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
@@ -1314,6 +1333,7 @@ export function Sidebar() {
               folderDragRef.current = { nodeId: node.id, startY: e.clientY };
             }}
             dropDataAttr={{ key: 'smart-drop-id', value: String(parseSmartFolderIdNum(node.id) ?? '') }}
+            dataHelpRegion="sidebar-smart-folders"
           >
             {folderRename.renamingId === node.id ? (
               <input
@@ -1334,7 +1354,7 @@ export function Sidebar() {
         )}
       </div>
 
-      {(sidebarPreferences.showFolders || sidebarPreferences.showSmartFolders) && <div className={styles.treeFilter}>
+      {(sidebarPreferences.showFolders || sidebarPreferences.showSmartFolders) && <div className={styles.treeFilter} data-help-id="sidebar-filter">
         <div className={styles.treeFilterField}>
           <IconFilter className={styles.treeFilterIcon} size={16} aria-hidden="true" />
           <input

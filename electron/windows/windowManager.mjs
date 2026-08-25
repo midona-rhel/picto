@@ -51,12 +51,6 @@ function getThemeInfo(getCachedConfig) {
   return { theme, bgColor };
 }
 
-// Keep backward compat
-function getThemeBgColor(getCachedConfig) {
-  return getThemeInfo(getCachedConfig).bgColor;
-}
-
-
 const MAIN_WINDOW_DEFAULT_WIDTH = 1200;
 const MAIN_WINDOW_DEFAULT_HEIGHT = 800;
 const MAIN_WINDOW_MIN_WIDTH = 700;
@@ -270,7 +264,7 @@ export function createWindowManager({
         preload: path.join(__dirname, 'preload.cjs'),
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
+        sandbox: true,
       },
     };
     if (isMain && savedMainState?.x != null && savedMainState?.y != null) {
@@ -448,6 +442,14 @@ export function createWindowManager({
     return BrowserWindow.getAllWindows();
   }
 
+  function ownsWebContents(contents) {
+    if (!contents || contents.isDestroyed?.()) return false;
+    for (const win of windowsByLabel.values()) {
+      if (!win.isDestroyed() && win.webContents === contents) return true;
+    }
+    return false;
+  }
+
   function sendToFocusedWindow(channel, payload = null) {
     const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
     if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
@@ -508,20 +510,27 @@ export function createWindowManager({
       fullscreenable: false,
       frame: false,
       transparent: useTransparentManager,
-      backgroundColor: useTransparentManager ? '#00000000' : getThemeBgColor(getCachedConfig),
+      backgroundColor: useTransparentManager ? '#00000000' : getThemeInfo(getCachedConfig).bgColor,
       ...(hasParent ? { parent: mainWin, modal: true } : {}),
-      show: true,
+      show: false,
       webPreferences: {
         preload: path.join(__dirname, 'preload.cjs'),
         contextIsolation: true,
         nodeIntegration: false,
-        sandbox: false,
+        sandbox: true,
       },
     });
 
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     windowsByLabel.set(label, win);
-    win.on('closed', () => windowsByLabel.delete(label));
+    const forcedShowTimer = setTimeout(() => {
+      if (!win.isDestroyed() && !win.isVisible()) win.show();
+    }, 5000);
+    win.once('show', () => clearTimeout(forcedShowTimer));
+    win.on('closed', () => {
+      clearTimeout(forcedShowTimer);
+      windowsByLabel.delete(label);
+    });
 
     if (isDev) {
       void win.loadURL(`${DEV_URL}/library-manager.html`);
@@ -544,6 +553,7 @@ export function createWindowManager({
     openLibraryManager,
     openSettingsWindow,
     openSubscriptionsWindow,
+    ownsWebContents,
     saveManualOnlyFansCredential: authSessions.saveManualOnlyFansCredential,
     startAuthSession: authSessions.startAuthSession,
     getMainWindow,

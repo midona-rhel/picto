@@ -663,6 +663,30 @@ pub fn record_post(
             params![post.site_id, post.post_key],
             |row| row.get(0),
         )?;
+        let mut source_post_fields = vec!["exists"];
+        if post.canonical_url.is_some() {
+            source_post_fields.push("canonical_url");
+        }
+        if post.creator_name.is_some() {
+            source_post_fields.push("creator_name");
+        }
+        if post.title.is_some() {
+            source_post_fields.push("title");
+        }
+        if post.description.is_some() {
+            source_post_fields.push("description");
+        }
+        if post.captured_at.is_some() {
+            source_post_fields.push("captured_at");
+        }
+        if post.metadata_json.is_some() {
+            source_post_fields.push("metadata_json");
+        }
+        crate::cloud::capture::record_source_post_upsert(
+            tx,
+            source_post_id,
+            &source_post_fields,
+        )?;
         tx.execute(
             "INSERT INTO subscription_source_post (
                  subscription_id, query_id, source_post_id, last_seen_run_id
@@ -670,6 +694,13 @@ pub fn record_post(
              ON CONFLICT(subscription_id, query_id, source_post_id)
              DO UPDATE SET last_seen_run_id = excluded.last_seen_run_id",
             params![subscription_id, query_id, source_post_id, run_id],
+        )?;
+        crate::cloud::capture::record_subscription_source_post(
+            tx,
+            subscription_id,
+            query_id,
+            source_post_id,
+            true,
         )?;
         for item in &post.items {
             tx.execute(
@@ -696,6 +727,18 @@ pub fn record_post(
                  WHERE source_post_id = ?1 AND item_key = ?2",
                 params![source_post_id, item.item_key],
                 |row| row.get(0),
+            )?;
+            let mut source_item_fields = vec!["exists", "position"];
+            if item.media_url.is_some() {
+                source_item_fields.push("media_url");
+            }
+            if item.canonical_url.is_some() {
+                source_item_fields.push("canonical_url");
+            }
+            crate::cloud::capture::record_source_item_upsert(
+                tx,
+                source_item_id,
+                &source_item_fields,
             )?;
             tx.execute(
                 "INSERT INTO subscription_run_source_item (run_query_id, source_item_id)

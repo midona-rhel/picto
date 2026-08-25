@@ -23,4 +23,20 @@ describe('renderer shortcut ownership', () => {
 
     expect(offenders).toEqual([]);
   });
+
+  it('resolves standard tooltip shortcuts from registry IDs', () => {
+    const offenders = productionSources(SRC_ROOT)
+      .filter((path) => /<KbdTooltip[^>]*\bshortcut=["']/.test(readFileSync(path, 'utf8')))
+      .map((path) => relative(SRC_ROOT, path));
+
+    expect(offenders).toEqual([]);
+  });
+
+  it('does not use native browser tooltips on action buttons', () => {
+    const offenders = productionSources(SRC_ROOT)
+      .filter((path) => /<button[^>]*\btitle=/s.test(readFileSync(path, 'utf8')))
+      .map((path) => relative(SRC_ROOT, path));
+
+    expect(offenders).toEqual([]);
+  });
 });

@@ -574,6 +574,7 @@ export function createAuthSessions({
     });
     const userAgent = sanitizeUserAgent(authWindow.webContents.getUserAgent?.());
     if (userAgent) authWindow.webContents.setUserAgent(userAgent);
+    authWindow.webContents.session?.setPermissionRequestHandler?.((_contents, _permission, callback) => callback(false));
     authWindow.webContents.setWindowOpenHandler(({ url }) => {
       if (/^https:\/\//i.test(url)) queueMicrotask(() => {
         if (!authWindow.isDestroyed()) void authWindow.webContents.loadURL(url);

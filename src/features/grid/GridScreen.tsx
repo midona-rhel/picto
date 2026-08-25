@@ -28,6 +28,7 @@ import {
   gridFitThumbnailsAtom,
   gridGrayscaleAtom,
   gridSearchTextAtom,
+  gridFiltersAtom,
   gridTotalCountAtom,
   gridTotalSizeBytesAtom,
   gridScopeAtom,
@@ -60,7 +61,7 @@ import { sidebarNodesAtom } from '../../state/sidebar';
 import { CanvasGrid } from './canvas/CanvasGrid';
 import { SubfolderGrid, type SubfolderGridHandle } from './SubfolderGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
-import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
+import { buildTileContextMenu, buildEmptyContextMenu, buildEntityOpenContextEntries } from './gridContextMenu';
 import { navigateToNode } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
 import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor, tagSelectPortalAtom } from '../../state/portals';
@@ -156,6 +157,7 @@ export function GridScreen({
   const fitThumbnails = useAtomValue(gridFitThumbnailsAtom);
   const grayscale = useAtomValue(gridGrayscaleAtom);
   const searchText = useAtomValue(gridSearchTextAtom);
+  const filters = useAtomValue(gridFiltersAtom);
   const totalCount = useAtomValue(gridTotalCountAtom);
   const totalSizeBytes = useAtomValue(gridTotalSizeBytesAtom);
   const gridScope = useAtomValue(gridScopeAtom);
@@ -297,6 +299,7 @@ export function GridScreen({
         totalCount,
         totalSizeBytes,
         searchText: searchText.trim(),
+        filters,
         sidebarNode: sidebarNodes.find((n) => n.id === displayedNodeId) ?? null,
       });
       // Manager-owned grids keep their manager scope in the inspector. Commit
@@ -320,6 +323,7 @@ export function GridScreen({
     }
   }, [
     displayedNodeId,
+    filters,
     items,
     liveTarget,
     searchText,
@@ -620,16 +624,17 @@ export function GridScreen({
         e.preventDefault(); setAiTaggerPortalRef.current({ open: true, anchor: inspectorAnchor() }); return;
       }
 
-      // Rating keys 0-5 (plain digits, no modifiers)
-      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && count > 0) {
-        const digit = parseInt(e.key, 10);
-        if (digit >= 0 && digit <= 5) {
+      if (count > 0) {
+        for (let digit = 0; digit <= 5; digit += 1) {
+          const rating = getShortcut(`rate.${digit}`);
+          if (rating && matchesShortcutDef(e, rating)) {
           e.preventDefault();
           void entityMutations.setTargetRating(
             { kind: 'explicit', item_ids: [...itemIds] },
             digit,
           );
           return;
+          }
         }
       }
   }, { priority: 20 });
@@ -637,11 +642,11 @@ export function GridScreen({
   const isEmpty = items.length === 0 && !loading;
 
   useEffect(() => {
-    const hasSubfolders = !viewerSession && !quickLookSession
+    const hasSubfolders = !viewerSession
       && showSubfolders && childFolders.length > 0 && gridScope.kind === 'folder';
     const staticSurfaceCommitted = Boolean(error) || (isEmpty && !hasSubfolders);
     if (transitionPhase === 'waiting' && !loading && staticSurfaceCommitted) onFirstPaint?.();
-  }, [childFolders.length, error, gridScope.kind, isEmpty, loading, onFirstPaint, quickLookSession, showSubfolders, transitionPhase, viewerSession]);
+  }, [childFolders.length, error, gridScope.kind, isEmpty, loading, onFirstPaint, showSubfolders, transitionPhase, viewerSession]);
   const viewerIndex = viewerSession ? resolveViewerIndex(viewerSession, items) : -1;
   const viewerItem = viewerIndex >= 0 ? items[viewerIndex] ?? null : null;
   const quickLookIndex = quickLookSession ? resolveViewerIndex(quickLookSession, items) : -1;
@@ -813,7 +818,9 @@ export function GridScreen({
   ]);
 
   const renderIncomingSurface = () => {
-    const hasSubfolders = !viewerSession && !quickLookSession
+    // Quick Look overlays the settled grid; changing header geometry here would
+    // trigger a needless canvas resize and scroll-anchor settlement.
+    const hasSubfolders = !viewerSession
       && showSubfolders && childFolders.length > 0 && gridScope.kind === 'folder';
 
     if (error) {
@@ -1201,7 +1208,7 @@ export function GridScreen({
           dispatchSelection({ type: 'marquee', itemIds, folderNodeIds, additive: false });
         }}
         collectHeaderMarqueeHits={(rect) => subfolderGridRef.current?.collectMarqueeHits(rect) ?? new Set()}
-        onTileContextMenu={async (_index, item, pos) => {
+        onTileContextMenu={(_index, item, pos) => {
           // Ensure the right-clicked tile is selected
           let effectiveItemIds = selectedItemIds;
           let effectiveSelectionMode = selectionMode;
@@ -1244,12 +1251,29 @@ export function GridScreen({
             .map((value) => Number.parseInt(value, 10))
             .map((folderId) => sidebarNodes.find((node) => node.id === `folder:${folderId}`))
             .find((node) => node != null);
-          const openWithOptions = singleItem?.kind === 'media' && singleItem.display_file_hash
-            ? await filesController.getOpenWithOptionsForHash(singleItem.display_file_hash).catch((reason) => {
-                console.warn('[grid] associated application lookup failed', reason);
-                return null;
-              })
+          const canOpenWith = singleItem?.kind === 'media' && Boolean(singleItem.display_file_hash);
+          const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
+          const isWindows = /Win/.test(navigator.platform);
+          const openWithPending = canOpenWith && isMac;
+          const openWithOptions = canOpenWith && isWindows
+            ? { mode: 'chooser' as const, applications: [] }
             : null;
+          const onOpenWithApplication = (hash: string, applicationPath: string) => {
+            void filesController.openWithApplicationForHash(hash, applicationPath).catch((reason) => {
+              showErrorNotification({
+                title: 'Could not open file',
+                message: reason instanceof Error ? reason.message : String(reason),
+              });
+            });
+          };
+          const onOpenWithChooser = (hash: string) => {
+            void filesController.openWithChooserForHash(hash).catch((reason) => {
+              showErrorNotification({
+                title: 'Could not open application chooser',
+                message: reason instanceof Error ? reason.message : String(reason),
+              });
+            });
+          };
 
           const entries = buildTileContextMenu({
             selectionCount: selCount,
@@ -1280,22 +1304,9 @@ export function GridScreen({
             },
             onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
             openWithOptions,
-            onOpenWithApplication: (hash, applicationPath) => {
-              void filesController.openWithApplicationForHash(hash, applicationPath).catch((reason) => {
-                showErrorNotification({
-                  title: 'Could not open file',
-                  message: reason instanceof Error ? reason.message : String(reason),
-                });
-              });
-            },
-            onOpenWithChooser: (hash) => {
-              void filesController.openWithChooserForHash(hash).catch((reason) => {
-                showErrorNotification({
-                  title: 'Could not open application chooser',
-                  message: reason instanceof Error ? reason.message : String(reason),
-                });
-              });
-            },
+            openWithPending,
+            onOpenWithApplication,
+            onOpenWithChooser,
             onRevealInFolder: (hash) => { void filesController.revealHashInFolder(hash); },
             onCopyFilePath: (hash) => { void filesController.copyFilePath(hash); },
             onCopyFile: (hash) => { void filesController.copyFileForHash(hash); },
@@ -1442,7 +1453,24 @@ export function GridScreen({
             onAccept: () => { void setSelectionLifecycle('active', effectiveTarget); },
             onReject: () => { void setSelectionLifecycle('trash', effectiveTarget); },
           });
-          contextMenu.openAt(pos, entries);
+          const menuId = contextMenu.openAt(pos, entries);
+          if (openWithPending && singleItem?.display_file_hash) {
+            const hash = singleItem.display_file_hash;
+            void filesController.getOpenWithOptionsForHash(hash)
+              .then((resolvedOptions) => {
+                const replacement = buildEntityOpenContextEntries({
+                  hash,
+                  openWithOptions: resolvedOptions,
+                  onOpenWithApplication,
+                  onOpenWithChooser,
+                }).filter((entry) => 'label' in entry && entry.label.startsWith('Open With Other'));
+                contextMenu.replaceEntry(menuId, 'Open With Other', replacement);
+              })
+              .catch((reason) => {
+                console.warn('[grid] associated application lookup failed', reason);
+                contextMenu.replaceEntry(menuId, 'Open With Other', []);
+              });
+          }
         }}
         onEmptyContextMenu={(pos) => { void openEmptyGridContextMenu(pos); }}
         onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
@@ -1452,7 +1480,7 @@ export function GridScreen({
 
   return (
     <div className={styles.root}>
-      {!viewerSession && !quickLookSession ? <GridFilterToolbar /> : null}
+      {!viewerSession ? <GridFilterToolbar /> : null}
       <div className={styles.surfaceViewport}>
         {renderIncomingSurface()}
       </div>

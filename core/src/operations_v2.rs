@@ -1104,6 +1104,18 @@ impl Application {
                         .collect::<rusqlite::Result<Vec<_>>>()?;
                     file_ids
                 };
+                let deleted_source_item_ids = {
+                    let mut statement = transaction.prepare(
+                        "SELECT source_item_id FROM source_item
+                         WHERE media_item_id IN (
+                             SELECT CAST(value AS INTEGER) FROM json_each(?1)
+                         )",
+                    )?;
+                    let source_item_ids = statement
+                        .query_map([&affected_json], |row| row.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    source_item_ids
+                };
                 let now = chrono::Utc::now().to_rfc3339();
                 transaction.execute(
                     "UPDATE source_item
@@ -1112,6 +1124,10 @@ impl Application {
                          SELECT CAST(value AS INTEGER) FROM json_each(?2)
                      )",
                     params![&now, &affected_json],
+                )?;
+                crate::cloud::capture::record_source_item_deletes(
+                    transaction,
+                    &deleted_source_item_ids,
                 )?;
                 transaction.execute(
                     "DELETE FROM library_item
@@ -1529,8 +1545,8 @@ mod tests {
     use rusqlite::params;
 
     use super::{
-        DetachItemsInput, OrganizeIntoCollectionInput, OrganizeIntoCollectionResult,
-        ItemRename, ReorderCollectionInput,
+        DetachItemsInput, ItemRename, OrganizeIntoCollectionInput, OrganizeIntoCollectionResult,
+        ReorderCollectionInput,
     };
     use crate::app::{
         Application, ItemFilters, ItemId, ItemQuery, ItemScope, ItemSort, ItemTarget, Lifecycle,
@@ -2453,22 +2469,35 @@ mod tests {
     fn batch_rename_is_one_atomic_undoable_action() {
         let (_directory, app, ids) = fixture();
         app.rename_items(&[
-            ItemRename { item_id: ids[0], name: "First renamed".to_string() },
-            ItemRename { item_id: ids[1], name: "Second renamed".to_string() },
+            ItemRename {
+                item_id: ids[0],
+                name: "First renamed".to_string(),
+            },
+            ItemRename {
+                item_id: ids[1],
+                name: "Second renamed".to_string(),
+            },
         ])
         .unwrap();
 
         let names = || {
-            app.store().read(|connection| {
-                ids[..2]
-                    .iter()
-                    .map(|item_id| connection.query_row(
-                        "SELECT name FROM media_asset WHERE item_id = ?1",
-                        [item_id.0],
-                        |row| row.get::<_, Option<String>>(0).map(Option::unwrap_or_default),
-                    ))
-                    .collect::<rusqlite::Result<Vec<_>>>()
-            }).unwrap()
+            app.store()
+                .read(|connection| {
+                    ids[..2]
+                        .iter()
+                        .map(|item_id| {
+                            connection.query_row(
+                                "SELECT name FROM media_asset WHERE item_id = ?1",
+                                [item_id.0],
+                                |row| {
+                                    row.get::<_, Option<String>>(0)
+                                        .map(Option::unwrap_or_default)
+                                },
+                            )
+                        })
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
         };
         assert_eq!(names(), vec!["First renamed", "Second renamed"]);
         app.undo().unwrap();

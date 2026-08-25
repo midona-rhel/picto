@@ -42,7 +42,7 @@ export function VolumePanel({ volume, muted, onVolumeChange, onMuteToggle }: Pro
 
   return (
     <div className={styles.volumePanel} onMouseEnter={enter} onMouseLeave={leave}>
-      <KbdTooltip label={muted ? 'Unmute' : 'Mute'} shortcut="M">
+      <KbdTooltip label={muted ? 'Unmute' : 'Mute'} shortcutId="video.toggleMute">
         <button className={styles.icBtn} aria-label={muted ? 'Unmute' : 'Mute'} onClick={(e) => { e.stopPropagation(); onMuteToggle(); }}>
           <Icon size={16} />
         </button>

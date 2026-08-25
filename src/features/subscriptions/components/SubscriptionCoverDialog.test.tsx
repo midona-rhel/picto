@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { SubscriptionCoverCandidate } from '../../../shared/types/generated/application/SubscriptionCoverCandidate';
+import { renderWithProviders } from '../../../test/render';
 import { SubscriptionCoverDialog } from './SubscriptionCoverDialog';
 
 const candidate: SubscriptionCoverCandidate = {
@@ -13,7 +14,7 @@ const candidate: SubscriptionCoverCandidate = {
 
 describe('SubscriptionCoverDialog', () => {
   it('uses thumbnails in the candidate grid and the full file only in the crop step', async () => {
-    render(
+    renderWithProviders(
       <SubscriptionCoverDialog
         target={{ id: '7', name: 'Artist' }}
         busy={false}
@@ -42,7 +43,7 @@ describe('SubscriptionCoverDialog', () => {
       file_hash: `cover-${index + 1}`,
       name: `Candidate ${index + 1}`,
     }));
-    render(
+    renderWithProviders(
       <SubscriptionCoverDialog
         target={{ id: '7', name: 'Artist' }}
         busy={false}
@@ -62,7 +63,7 @@ describe('SubscriptionCoverDialog', () => {
     const firstLoad = vi.fn().mockResolvedValue({ candidates: [candidate], next_cursor: null });
     const onSave = vi.fn().mockResolvedValue(true);
     const target = { id: '7', name: 'Artist' };
-    const view = render(
+    const view = renderWithProviders(
       <SubscriptionCoverDialog
         target={target}
         busy={false}
@@ -93,7 +94,7 @@ describe('SubscriptionCoverDialog', () => {
 
   it('zooms the crop with the mouse wheel and clamps the saved value', async () => {
     const onSave = vi.fn().mockResolvedValue(true);
-    render(
+    renderWithProviders(
       <SubscriptionCoverDialog
         target={{ id: '7', name: 'Artist' }}
         busy={false}
@@ -125,7 +126,7 @@ describe('SubscriptionCoverDialog', () => {
 
   it('moves a zoomed landscape cover vertically and horizontally', async () => {
     const onSave = vi.fn().mockResolvedValue(true);
-    render(
+    renderWithProviders(
       <SubscriptionCoverDialog
         target={{ id: '7', name: 'Artist' }}
         busy={false}

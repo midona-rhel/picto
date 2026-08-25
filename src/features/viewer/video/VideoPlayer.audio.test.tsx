@@ -11,7 +11,9 @@ const actions = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../shared/ui/KbdTooltip', () => ({
-  KbdTooltip: ({ children }: { children: ReactNode }) => children,
+  KbdTooltip: ({ children, label, shortcutId }: { children: ReactNode; label: string; shortcutId?: string }) => (
+    <span data-tooltip-label={label} data-tooltip-shortcut-id={shortcutId ?? ''}>{children}</span>
+  ),
 }));
 
 vi.mock('./useVideoPlayer', () => ({
@@ -63,22 +65,32 @@ describe('VideoPlayer audio mode', () => {
     expect(container.querySelectorAll('button')).toHaveLength(6);
   });
 
-  it('reserves Space for the enclosing viewer and uses P/K plus J/L transport keys', () => {
-    render(<VideoPlayer src="media://localhost/file/hash.mp4" />);
+  it('uses the registered non-conflicting video transport keys', () => {
+    const { container } = render(<VideoPlayer src="media://localhost/file/hash.mp4" />);
 
     fireEvent.keyDown(window, { key: ' ', code: 'Space' });
     expect(actions.togglePlay).not.toHaveBeenCalled();
 
     fireEvent.keyDown(window, { key: 'p' });
     fireEvent.keyDown(window, { key: 'k' });
-    expect(actions.togglePlay).toHaveBeenCalledTimes(2);
+    expect(actions.togglePlay).toHaveBeenCalledOnce();
 
     fireEvent.keyDown(window, { key: 'j' });
     fireEvent.keyDown(window, { key: 'l' });
     expect(actions.seekRelative.mock.calls).toEqual([[-5], [5]]);
     expect(actions.toggleLoop).not.toHaveBeenCalled();
 
-    fireEvent.keyDown(window, { key: 'L', shiftKey: true });
+    fireEvent.keyDown(window, { key: 'o' });
     expect(actions.toggleLoop).toHaveBeenCalledOnce();
+
+    fireEvent.keyDown(window, { key: '\\' });
+    expect(actions.setPlaybackRate).toHaveBeenCalledWith(1);
+
+    expect(container.querySelector('[data-tooltip-label="Play"]')).toHaveAttribute('data-tooltip-shortcut-id', 'video.togglePlay');
+    expect(container.querySelector('[data-tooltip-label="Skip back 5s"]')).toHaveAttribute('data-tooltip-shortcut-id', 'video.seekBackward');
+    expect(container.querySelector('[data-tooltip-label="Skip forward 5s"]')).toHaveAttribute('data-tooltip-shortcut-id', 'video.seekForward');
+    expect(container.querySelector('[data-tooltip-label="Loop on"]')).toHaveAttribute('data-tooltip-shortcut-id', 'video.toggleLoop');
+    expect(container.querySelector('[data-tooltip-label="Mute"]')).toHaveAttribute('data-tooltip-shortcut-id', 'video.toggleMute');
+    expect(container.querySelector('[data-tooltip-label="Fullscreen"]')).toHaveAttribute('data-tooltip-shortcut-id', 'video.fullscreen');
   });
 });

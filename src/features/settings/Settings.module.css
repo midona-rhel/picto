@@ -651,3 +651,15 @@
   cursor: default;
   pointer-events: none;
 }
+
+.cloudActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.restorePointSize {
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+}

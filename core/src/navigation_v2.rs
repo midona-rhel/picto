@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::app::{resources, Application, MutationReceipt};
+use crate::cloud::capture::{
+    record_smart_folder_created, record_smart_folder_delete, record_smart_folder_upsert,
+};
 use crate::smart_v2::SmartFolderPredicate;
 use crate::store::history::HistoryDescriptor;
 
@@ -211,6 +214,7 @@ impl Application {
                 )?;
                 let smart_folder_id = transaction.last_insert_rowid();
                 crate::smart_v2::compile_smart_folder(transaction, smart_folder_id)?;
+                record_smart_folder_created(transaction, &[smart_folder_id])?;
                 Ok((smart_folder_id, ()))
             },
             |_, ()| Ok(()),
@@ -233,6 +237,46 @@ impl Application {
             |transaction| {
                 require_smart_folder(transaction, smart_folder_id)?;
                 validate_parent(transaction, smart_folder_id, input.parent_id)?;
+                let previous: (
+                    String,
+                    Option<i64>,
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                    String,
+                    Option<String>,
+                    Option<String>,
+                ) = transaction.query_row(
+                    "SELECT name, parent_id, icon, color, notes, predicate_json,
+                            sort_field, sort_order
+                     FROM smart_folder WHERE smart_folder_id = ?1",
+                    [smart_folder_id],
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                            row.get(5)?,
+                            row.get(6)?,
+                            row.get(7)?,
+                        ))
+                    },
+                )?;
+                let changed_fields = [
+                    ("name", previous.0 != input.name),
+                    ("parent", previous.1 != input.parent_id),
+                    ("icon", previous.2 != input.icon),
+                    ("color", previous.3 != input.color),
+                    ("notes", previous.4 != input.notes),
+                    ("predicate_json", previous.5 != input.predicate_json),
+                    ("sort_field", previous.6 != input.sort_field),
+                    ("sort_order", previous.7 != input.sort_order),
+                ]
+                .into_iter()
+                .filter_map(|(field, changed)| changed.then_some(field))
+                .collect::<Vec<_>>();
                 transaction.execute(
                     "UPDATE smart_folder
                  SET name = ?1, parent_id = ?2, icon = ?3, color = ?4, notes = ?5,
@@ -255,6 +299,7 @@ impl Application {
                 for id in &affected {
                     crate::smart_v2::compile_smart_folder(transaction, *id)?;
                 }
+                record_smart_folder_upsert(transaction, &[smart_folder_id], &changed_fields)?;
                 Ok((affected, ()))
             },
             |_, ()| Ok(()),
@@ -284,6 +329,11 @@ impl Application {
                 for id in &affected {
                     crate::smart_v2::compile_smart_folder(transaction, *id)?;
                 }
+                record_smart_folder_upsert(
+                    transaction,
+                    &[smart_folder_id],
+                    &["parent", "display_order"],
+                )?;
                 Ok((affected, ()))
             },
             |_, ()| Ok(()),
@@ -322,6 +372,7 @@ impl Application {
                         params![(index as i64 + 1) * RANK_GAP, now, smart_folder_id],
                     )?;
                 }
+                record_smart_folder_upsert(transaction, smart_folder_ids, &["display_order"])?;
                 Ok(((), ()))
             },
             |_, ()| Ok(()),
@@ -350,10 +401,22 @@ impl Application {
                     .optional()?
                     .ok_or_else(|| invalid("smart folder does not exist"))?;
                 let deleted_ids = descendant_ids(transaction, smart_folder_id)?;
+                let deleted_keys = deleted_ids
+                    .iter()
+                    .map(|deleted_id| {
+                        transaction.query_row(
+                            "SELECT smart_folder_key FROM smart_folder
+                             WHERE smart_folder_id = ?1",
+                            [deleted_id],
+                            |row| row.get::<_, String>(0),
+                        )
+                    })
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
                 transaction.execute(
                     "DELETE FROM smart_folder WHERE smart_folder_id = ?1",
                     [smart_folder_id],
                 )?;
+                record_smart_folder_delete(transaction, deleted_keys)?;
                 Ok(((deleted_ids, fallback), ()))
             },
             |_, ()| Ok(()),

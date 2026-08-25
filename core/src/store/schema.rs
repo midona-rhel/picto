@@ -2,7 +2,7 @@
 
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 126;
+pub const CURRENT_SCHEMA_VERSION: i64 = 127;
 pub const CURRENT_PHASH_ANALYSIS_VERSION: i64 = 3;
 pub const PHASH_VERSION_SETTING: &str = "media.perceptual_hash_version";
 
@@ -376,6 +376,138 @@ CREATE TABLE history_entry (
 );
 CREATE INDEX idx_history_entry_applied ON history_entry(applied, entry_id);
 
+CREATE TABLE cloud_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    library_id TEXT NOT NULL UNIQUE,
+    device_id TEXT NOT NULL,
+    provider TEXT CHECK (provider IN ('google_drive', 'dropbox')),
+    account_label TEXT,
+    remote_root TEXT,
+    paused INTEGER NOT NULL DEFAULT 0 CHECK (paused IN (0, 1)),
+    state TEXT NOT NULL DEFAULT 'disabled',
+    phase TEXT NOT NULL DEFAULT 'idle',
+    blocking INTEGER NOT NULL DEFAULT 0 CHECK (blocking IN (0, 1)),
+    completed_units INTEGER NOT NULL DEFAULT 0,
+    total_units INTEGER,
+    message TEXT NOT NULL DEFAULT '',
+    last_sync_at TEXT,
+    last_snapshot_at TEXT,
+    pending_blobs INTEGER NOT NULL DEFAULT 0,
+    missing_blobs INTEGER NOT NULL DEFAULT 0,
+    schema_generation INTEGER NOT NULL DEFAULT 1,
+    hlc_physical_ms INTEGER NOT NULL DEFAULT 0,
+    hlc_logical INTEGER NOT NULL DEFAULT 0,
+    retention_json TEXT NOT NULL DEFAULT '{"daily":30,"weekly":26,"yearly":5,"epochs_days":30,"deleted_blobs_days":30,"full_media_history":false}'
+);
+
+CREATE TABLE cloud_outbox (
+    mutation_id TEXT PRIMARY KEY,
+    library_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    hlc_physical_ms INTEGER NOT NULL,
+    hlc_logical INTEGER NOT NULL,
+    causal_frontier_json TEXT NOT NULL,
+    operation TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    schema_generation INTEGER NOT NULL,
+    checksum TEXT NOT NULL,
+    byte_size INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    published_at TEXT,
+    current_epoch INTEGER NOT NULL DEFAULT 0 CHECK (current_epoch IN (0, 1))
+);
+CREATE INDEX idx_cloud_outbox_pending
+    ON cloud_outbox(published_at, hlc_physical_ms, hlc_logical, mutation_id);
+CREATE INDEX idx_cloud_outbox_current
+    ON cloud_outbox(current_epoch, hlc_physical_ms, hlc_logical, mutation_id);
+
+CREATE TABLE cloud_applied_mutation (
+    mutation_id TEXT PRIMARY KEY,
+    device_id TEXT NOT NULL,
+    hlc_physical_ms INTEGER NOT NULL,
+    hlc_logical INTEGER NOT NULL,
+    checksum TEXT NOT NULL,
+    applied_at TEXT NOT NULL
+);
+
+CREATE TABLE cloud_device_frontier (
+    device_id TEXT PRIMARY KEY,
+    hlc_physical_ms INTEGER NOT NULL,
+    hlc_logical INTEGER NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE cloud_field_clock (
+    object_kind TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    field_name TEXT NOT NULL,
+    hlc_physical_ms INTEGER NOT NULL,
+    hlc_logical INTEGER NOT NULL,
+    device_id TEXT NOT NULL,
+    mutation_id TEXT NOT NULL,
+    PRIMARY KEY (object_kind, object_key, field_name)
+);
+
+CREATE TABLE cloud_membership_clock (
+    relation_kind TEXT NOT NULL,
+    owner_key TEXT NOT NULL,
+    member_key TEXT NOT NULL,
+    present INTEGER NOT NULL CHECK (present IN (0, 1)),
+    hlc_physical_ms INTEGER NOT NULL,
+    hlc_logical INTEGER NOT NULL,
+    device_id TEXT NOT NULL,
+    mutation_id TEXT NOT NULL,
+    causal_frontier_json TEXT NOT NULL,
+    PRIMARY KEY (relation_kind, owner_key, member_key)
+);
+
+CREATE TABLE cloud_tombstone (
+    object_kind TEXT NOT NULL,
+    object_key TEXT NOT NULL,
+    mutation_id TEXT NOT NULL UNIQUE,
+    hlc_physical_ms INTEGER NOT NULL,
+    hlc_logical INTEGER NOT NULL,
+    device_id TEXT NOT NULL,
+    causal_frontier_json TEXT NOT NULL,
+    deleted_at TEXT NOT NULL,
+    purge_after TEXT,
+    PRIMARY KEY (object_kind, object_key)
+);
+
+CREATE TABLE cloud_quarantine (
+    quarantine_id INTEGER PRIMARY KEY,
+    mutation_id TEXT NOT NULL UNIQUE,
+    reason TEXT NOT NULL,
+    envelope_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    resolved_at TEXT
+);
+
+CREATE TABLE cloud_snapshot (
+    snapshot_id TEXT PRIMARY KEY,
+    frontier_json TEXT NOT NULL,
+    database_sha256 TEXT NOT NULL,
+    artifact_sha256 TEXT NOT NULL,
+    size_bytes INTEGER NOT NULL,
+    verified INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
+    created_at TEXT NOT NULL,
+    remote_path TEXT,
+    published_at TEXT
+);
+
+CREATE TABLE cloud_blob_state (
+    file_hash TEXT PRIMARY KEY REFERENCES media_file(file_hash) ON DELETE CASCADE,
+    state TEXT NOT NULL CHECK (state IN ('available', 'queued', 'downloading', 'missing_remote', 'corrupt')),
+    priority INTEGER NOT NULL DEFAULT 0,
+    remote_present INTEGER NOT NULL DEFAULT 0 CHECK (remote_present IN (0, 1)),
+    remote_extension TEXT,
+    last_error TEXT,
+    uploaded_at TEXT,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX idx_cloud_blob_queue ON cloud_blob_state(state, priority DESC, updated_at);
+CREATE INDEX idx_cloud_blob_upload ON cloud_blob_state(remote_present, state, updated_at);
+
 CREATE VIRTUAL TABLE media_fts USING fts5(
     name,
     notes,
@@ -398,6 +530,13 @@ pub fn create(connection: &mut Connection) -> Result<(), String> {
             [CURRENT_SCHEMA_VERSION],
         )
         .map_err(|error| format!("Failed to record schema version: {error}"))?;
+    transaction
+        .execute(
+            "INSERT INTO cloud_state (singleton, library_id, device_id)
+             VALUES (1, lower(hex(randomblob(16))), lower(hex(randomblob(16))))",
+            [],
+        )
+        .map_err(|error| format!("Failed to create cloud identity: {error}"))?;
     transaction
         .execute(
             "INSERT INTO setting (key, value_json) VALUES (?1, ?2)",
@@ -480,6 +619,16 @@ mod tests {
             "work_item",
             "credential",
             "credential_health",
+            "cloud_state",
+            "cloud_outbox",
+            "cloud_applied_mutation",
+            "cloud_device_frontier",
+            "cloud_field_clock",
+            "cloud_membership_clock",
+            "cloud_tombstone",
+            "cloud_quarantine",
+            "cloud_snapshot",
+            "cloud_blob_state",
         ] {
             assert!(
                 names.iter().any(|name| name == expected),
@@ -497,7 +646,7 @@ mod tests {
                 "retained {removed}"
             );
         }
-        assert_eq!(CURRENT_SCHEMA_VERSION, 126);
+        assert_eq!(CURRENT_SCHEMA_VERSION, 127);
     }
 
     #[test]

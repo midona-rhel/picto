@@ -50,6 +50,8 @@
   --color-primary-30: rgba(50, 151, 255, 0.30);
   --color-primary-50: rgba(50, 151, 255, 0.50);
   --color-primary-60: rgba(50, 151, 255, 0.60);
+  --color-selection-bg: rgba(50, 151, 255, 0.20);
+  --color-selection-control: #3297ff;
 
   /* ── Surfaces ───────────────────────────────────────────── */
   --color-bg-app: var(--theme-background);
@@ -91,8 +93,10 @@
   --color-contrast-50: color-mix(in srgb, var(--theme-contrast) 50%, transparent);
 
   /* ── Typography ──────────────────────────────────────────── */
-  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  --font-family-ui: 'Picto Roboto', 'SF Pro Text', -apple-system, 'Roboto', system-ui, 'Segoe UI', 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
+  /* The runtime sets data-platform explicitly. Default to the bundled face so
+   * an unavailable macOS family can never silently select a different host font. */
+  --font-family-ui: 'Picto Roboto', 'Segoe UI', system-ui, 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, sans-serif;
+  --font-family: var(--font-family-ui);
   --font-family-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
@@ -127,6 +131,7 @@
   /* ── Shadows ─────────────────────────────────────────────── */
   --shadow-1: 0 1px 3px var(--color-black-10);
   --shadow-2: 0 4px 12px var(--color-black-30);
+  --shadow-panel-small: 0 3px 12px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.5);
   --shadow-panel: 0 12px 24px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.5);
 
   /* ── Glass panel surface ────────────────────────────────── */
@@ -149,9 +154,12 @@
   --color-menu-separator: var(--color-subtle-overlay);
 
   /* ── Motion ──────────────────────────────────────────────── */
+  --ease-scale-in: cubic-bezier(0, 0.89, 0.44, 1);
   --ease-default: cubic-bezier(0.4, 0, 0.22, 1);
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --duration-fast: 50ms;
+  --duration-menu-in: 70ms;
+  --duration-inspector-rail: 100ms;
   --duration-normal: 200ms;
 
   /* ── Layers (ordered scale, nothing else sets z-index) ──── */
@@ -221,6 +229,18 @@
   --scrollbar-thumb-hover-background: var(--color-contrast-50);
 }
 
+:root[data-platform='mac'] {
+  --font-family-ui: 'Picto Roboto', 'SF Pro Text', -apple-system, system-ui, 'Helvetica Neue', 'Noto Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', sans-serif;
+}
+
+:root[data-platform='windows'] {
+  --font-family-ui: 'Picto Roboto', 'Segoe UI', system-ui, 'Helvetica Neue', Arial, sans-serif;
+}
+
+:root[data-platform='linux'] {
+  --font-family-ui: 'Picto Roboto', system-ui, 'Noto Sans', 'Liberation Sans', Arial, sans-serif;
+}
+
 /* ── Blue theme ──────────────────────────────────────────────── */
 :root[data-theme="blue"] {
   --theme-background: #0d1630;
@@ -248,6 +268,8 @@
   --color-primary-50: rgba(37, 99, 235, 0.50);
   --color-primary-60: rgba(37, 99, 235, 0.60);
   --color-primary-70: rgba(37, 99, 235, 0.70);
+  --color-selection-bg: rgba(0, 114, 239, 0.10);
+  --color-selection-control: #0072ef;
 
   --color-border-primary: color-mix(in srgb, var(--theme-contrast) 15%, transparent);
   --color-border-secondary: color-mix(in srgb, var(--theme-contrast) 10%, transparent);
@@ -261,6 +283,7 @@
   --glass-border-bottom: 1px solid rgba(255, 255, 255, 0.25);
 
   --color-menu-hover: var(--color-hover-overlay);
+  --shadow-panel-small: 0 3px 12px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.15);
   --shadow-panel: 0 12px 24px rgba(0, 0, 0, 0.15), 0 0 0 1px rgba(0, 0, 0, 0.15);
 }
 

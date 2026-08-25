@@ -7,7 +7,7 @@
 }
 
 .label {
-  color: var(--inspector-text-secondary, var(--color-text-secondary));
+  color: var(--inspector-text-primary, var(--color-text-primary));
   font-size: var(--font-size-caption);
   min-width: 64px;
   overflow: hidden;
@@ -23,7 +23,7 @@
 
 .valueMono {
   composes: value;
-  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
+  font-family: var(--font-family-mono);
   font-variant-numeric: tabular-nums slashed-zero;
 }
 

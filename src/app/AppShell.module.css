@@ -8,6 +8,21 @@
   overflow: hidden;
 }
 
+/* The macOS window rim is a fixed topmost layer, separate from panel chrome. */
+.shellMac::after {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  pointer-events: none;
+  border-top: var(--glass-border-top);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
+}
+
 /* Titlebar geometry is stable while body rails independently open and close. */
 .titlebar {
   flex-shrink: 0;
@@ -93,8 +108,12 @@
 
 .scopeTitle {
   position: absolute;
+  top: 0;
+  bottom: 0;
   left: 72px;
   right: 50%;
+  display: flex;
+  align-items: center;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
@@ -125,26 +144,41 @@
   align-items: center;
   gap: 2px;
   margin-left: auto;
-  -webkit-app-region: no-drag;
 }
 
 .toggleBtn { composes: titlebarBtn; }
 
 /* Body — sidebar + main below titlebar, inset by inspector width */
 .body {
+  position: relative;
   flex: 1;
   display: flex;
   min-height: 0;
   overflow: hidden;
+  box-sizing: border-box;
+  padding-left: var(--sidebar-body-width, 0px);
   margin-right: var(--inspector-width, 0px);
 }
 
 .sidebar {
-  flex-shrink: 0;
+  position: absolute;
+  z-index: var(--layer-sidebar-row);
+  top: 0;
+  left: 0;
+  bottom: 0;
   width: var(--sidebar-width);
   height: 100%;
   contain: layout style;
   border-right: 1px solid var(--color-border-secondary);
+}
+
+.sidebar[data-presence='entering'] {
+  animation: sidebarRailIn var(--duration-fast) var(--ease-default) both;
+}
+
+.sidebar[data-presence='exiting'] {
+  pointer-events: none;
+  animation: sidebarRailOut var(--duration-fast) var(--ease-default) both;
 }
 
 .main {
@@ -156,6 +190,7 @@
   background: var(--color-bg-app);
 }
 
+
 .inspector {
   --inspector-surface: var(--color-rail-surface);
   --inspector-text-primary: var(--color-text-primary);
@@ -164,7 +199,7 @@
   --inspector-separator: var(--color-border-secondary);
   --inspector-field-surface: var(--color-control-surface);
   --inspector-field-focus: var(--color-primary);
-  --inspector-font-family: 'SF Pro Text', -apple-system, 'Picto Roboto', 'Roboto', system-ui, 'Segoe UI', 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
+  --inspector-font-family: var(--font-family-ui);
   position: absolute;
   top: 0;
   right: 0;
@@ -175,6 +210,61 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+.inspector[data-motion='slide'][data-presence='entering'] {
+  animation: inspectorRailIn var(--duration-inspector-rail) var(--ease-default) both;
+}
+
+.inspector[data-motion='slide'][data-presence='exiting'] {
+  pointer-events: none;
+  animation: inspectorRailOut var(--duration-inspector-rail) var(--ease-default) both;
+}
+
+.inspector[data-motion='fade'][data-presence='entering'] {
+  animation: inspectorFadeIn 170ms var(--ease-default) both;
+}
+
+.inspector[data-motion='fade'][data-presence='exiting'] {
+  pointer-events: none;
+  animation: inspectorFadeOut 170ms var(--ease-default) both;
+}
+
+@keyframes sidebarRailIn {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes sidebarRailOut {
+  from { transform: translateX(0); }
+  to { transform: translateX(-100%); }
+}
+
+@keyframes inspectorRailIn {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
+@keyframes inspectorRailOut {
+  from { transform: translateX(0); }
+  to { transform: translateX(100%); }
+}
+
+@keyframes inspectorFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes inspectorFadeOut {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar[data-presence],
+  .inspector[data-presence] {
+    animation: none;
+  }
 }
 
 .inspector[data-chrome-transition='leaving_grid'] {

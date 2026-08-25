@@ -3,7 +3,9 @@ export function createLibraryHostService({
   path,
   dialog,
   openLibrary,
+  openTutorialLibrary,
   closeLibrary,
+  invokeSerialized,
   addLibraryToHistory,
   removeLibraryFromHistory,
   togglePinned,
@@ -15,7 +17,21 @@ export function createLibraryHostService({
   createMainWindow,
   sendToAllWindows,
   buildAppMenu,
+  tutorialRoot,
+  tutorialFixtureRoot,
 }) {
+  let openingLibraryPath = null;
+  let tutorialSession = null;
+
+  async function cleanupStaleTutorialLibraries() {
+    if (!tutorialRoot) return;
+    for (const entry of await fs.readdir(tutorialRoot, { withFileTypes: true }).catch(() => [])) {
+      if (entry.isDirectory() && entry.name.startsWith('picto-guided-tour-')) {
+        await fs.rm(path.join(tutorialRoot, entry.name), { recursive: true, force: true });
+      }
+    }
+  }
+
   async function isValidLibrary(libraryPath) {
     try {
       await fs.access(path.join(libraryPath, 'library.sqlite'));
@@ -86,17 +102,215 @@ export function createLibraryHostService({
   }
 
   async function switchLibrary(newPath) {
+    if (tutorialSession) throw new Error('Exit the guided tour before switching libraries');
+    openingLibraryPath = newPath;
     sendToAllWindows('library-switching', { path: newPath });
 
     await closeLibrary();
+    try {
+      await openLibrary(newPath);
+    } catch (error) {
+      openingLibraryPath = null;
+      sendToAllWindows('library-open-failed', { path: newPath, message: error?.message ?? String(error) });
+      throw error;
+    }
 
     setCurrentLibraryRoot(newPath);
-    await openLibrary(newPath);
-
+    openingLibraryPath = null;
     await addLibraryToHistory(newPath);
     buildAppMenu();
 
     sendToAllWindows('library-switched', { path: newPath });
+  }
+
+  async function startTutorialLibrary() {
+    if (tutorialSession) return { path: tutorialSession.path };
+    const previousPath = getCurrentLibraryRoot();
+    if (!previousPath) throw new Error('Open a library before starting the guided tour');
+    await cleanupStaleTutorialLibraries();
+    const sessionPath = await fs.mkdtemp(path.join(tutorialRoot, 'picto-guided-tour-'));
+    const libraryPath = path.join(sessionPath, 'Guided Tour.library');
+    await fs.mkdir(path.join(libraryPath, 'blobs'), { recursive: true });
+    tutorialSession = { path: libraryPath, sessionPath, previousPath };
+    openingLibraryPath = libraryPath;
+    sendToAllWindows('library-switching', { path: libraryPath, tutorial: true });
+    try {
+      await closeLibrary();
+      await openTutorialLibrary(libraryPath, tutorialFixtureRoot);
+      setCurrentLibraryRoot(libraryPath);
+      await seedTutorialLibrary();
+      openingLibraryPath = null;
+      buildAppMenu();
+      sendToAllWindows('library-switched', { path: libraryPath, tutorial: true });
+      return { path: libraryPath };
+    } catch (error) {
+      openingLibraryPath = null;
+      tutorialSession = null;
+      await fs.rm(sessionPath, { recursive: true, force: true });
+      await openLibrary(previousPath);
+      setCurrentLibraryRoot(previousPath);
+      sendToAllWindows('library-switched', { path: previousPath, restored: true });
+      throw error;
+    }
+  }
+
+  async function resetTutorialLibrary() {
+    if (!tutorialSession) throw new Error('The guided tour is not running');
+    const previousPath = tutorialSession.previousPath;
+    const previousSessionPath = tutorialSession.sessionPath;
+    const sessionPath = await fs.mkdtemp(path.join(tutorialRoot, 'picto-guided-tour-'));
+    const libraryPath = path.join(sessionPath, 'Guided Tour.library');
+    await fs.mkdir(path.join(libraryPath, 'blobs'), { recursive: true });
+    openingLibraryPath = libraryPath;
+    sendToAllWindows('library-switching', { path: libraryPath, tutorial: true });
+    await closeLibrary();
+    try {
+      await fs.rm(previousSessionPath, { recursive: true, force: true });
+      tutorialSession = { path: libraryPath, sessionPath, previousPath };
+      await openTutorialLibrary(libraryPath, tutorialFixtureRoot);
+      setCurrentLibraryRoot(libraryPath);
+      await seedTutorialLibrary();
+      openingLibraryPath = null;
+      buildAppMenu();
+      sendToAllWindows('library-switched', { path: libraryPath, tutorial: true });
+      return { path: libraryPath };
+    } catch (error) {
+      openingLibraryPath = null;
+      tutorialSession = null;
+      await fs.rm(sessionPath, { recursive: true, force: true });
+      await openLibrary(previousPath);
+      setCurrentLibraryRoot(previousPath);
+      sendToAllWindows('library-switched', { path: previousPath, restored: true });
+      throw error;
+    }
+  }
+
+  async function seedTutorialLibrary() {
+    const command = async (name, args) => JSON.parse(await invokeSerialized(name, args));
+    const referenceFolder = await command('folders.create', {
+      name: 'Renaissance reference', parent_id: null, folder_key: 'tutorial-reference',
+    });
+    const studiesFolder = await command('folders.create', {
+      name: 'Portrait studies', parent_id: referenceFolder.folder_id, folder_key: 'tutorial-studies',
+    });
+    await command('imports.enqueue', {
+      paths: [
+        path.join(tutorialFixtureRoot, 'seed-mona-detail.jpg'),
+        path.join(tutorialFixtureRoot, 'seed-lady-detail.jpg'),
+        path.join(tutorialFixtureRoot, 'duplicate-a.jpg'),
+        path.join(tutorialFixtureRoot, 'duplicate-b.jpg'),
+      ],
+      tags: ['creator:leonardo da vinci', 'series:renaissance portraits'],
+      source_urls: ['https://commons.wikimedia.org/'],
+      lifecycle: 'active',
+      parent_folder_id: studiesFolder.folder_id,
+      preserve_structure: false,
+      delete_after_ingest: false,
+      group_files: false,
+    });
+    await command('imports.enqueue', {
+      paths: [
+        path.join(tutorialFixtureRoot, 'collection-a.jpg'),
+        path.join(tutorialFixtureRoot, 'collection-b.jpg'),
+      ],
+      tags: ['creator:leonardo da vinci', 'meta:tutorial collection'],
+      source_urls: ['https://commons.wikimedia.org/'],
+      lifecycle: 'active',
+      parent_folder_id: referenceFolder.folder_id,
+      preserve_structure: false,
+      delete_after_ingest: false,
+      group_files: true,
+    });
+    await command('imports.enqueue', {
+      paths: [
+        path.join(tutorialFixtureRoot, 'inbox-study.jpg'),
+        path.join(tutorialFixtureRoot, 'inbox-study-2.jpg'),
+      ],
+      tags: ['creator:leonardo da vinci'],
+      source_urls: ['https://commons.wikimedia.org/'],
+      lifecycle: 'inbox',
+      parent_folder_id: null,
+      preserve_structure: false,
+      delete_after_ingest: false,
+      group_files: false,
+    });
+    const smartGroup = await command('smart_folders.create', {
+      name: 'Renaissance searches',
+      parent_id: null,
+      predicate: { groups: [] },
+      icon: null,
+      color: '#9b7b45',
+      notes: 'A pass-through group for related saved searches',
+      sort_field: null,
+      sort_order: null,
+    });
+    await command('smart_folders.create', {
+      name: 'Leonardo works',
+      parent_id: smartGroup.smart_folder_id,
+      predicate: {
+        groups: [{
+          match_mode: 'all',
+          negate: false,
+          rules: [{ field: 'tags', op: 'includes', value: 'creator:leonardo da vinci', value2: null, values: null }],
+        }],
+      },
+      icon: null,
+      color: '#6f8f72',
+      notes: 'Media tagged with Leonardo da Vinci',
+      sort_field: null,
+      sort_order: null,
+    });
+    await command('settings.patch', {
+      value: {
+        sidebarQuickAccess: [
+          `folder:${referenceFolder.folder_id}`,
+          `smart:${smartGroup.smart_folder_id}`,
+        ],
+      },
+    });
+    const subscription = await command('subscriptions.create', {
+      name: 'Leonardo da Vinci Archive',
+      schedule: 'manual',
+      initial_post_limit: 1,
+      periodic_post_limit: 1,
+      queries: [{
+        site_id: 'twitter',
+        query_text: 'LeonardoDaVinci',
+        display_name: 'Leonardo da Vinci Archive',
+        notes: 'Offline guided-tour source',
+        group_posts: true,
+      }],
+    });
+    await command('subscriptions.destination', {
+      subscription_id: subscription.subscription_id,
+      destination: {
+        target_folder_ids: [referenceFolder.folder_id],
+        automatic_tags: ['creator:leonardo da vinci', 'meta:tutorial subscription'],
+      },
+    });
+  }
+
+  async function finishTutorialLibrary() {
+    if (!tutorialSession) return { restored: false };
+    const session = tutorialSession;
+    tutorialSession = null;
+    openingLibraryPath = session.previousPath;
+    sendToAllWindows('library-switching', { path: session.previousPath, tutorial: false });
+    await closeLibrary();
+    try {
+      await openLibrary(session.previousPath);
+      setCurrentLibraryRoot(session.previousPath);
+      openingLibraryPath = null;
+      buildAppMenu();
+      sendToAllWindows('library-switched', { path: session.previousPath, restored: true });
+    } finally {
+      await fs.rm(session.sessionPath, { recursive: true, force: true });
+    }
+    return { restored: true, path: session.previousPath };
+  }
+
+  function getTutorialSession() {
+    return tutorialSession ? { active: true, path: tutorialSession.path } : { active: false };
   }
 
   async function createLibrary({ name, savePath }) {
@@ -105,6 +319,53 @@ export function createLibraryHostService({
     await fs.mkdir(path.join(libraryPath, 'blobs'), { recursive: true });
     await switchLibrary(libraryPath);
     return libraryPath;
+  }
+
+  async function joinCloudLibrary({ provider, accountLabel, rootPath, libraryId, name }) {
+    const cleanName = String(name ?? '').trim();
+    if (!cleanName) throw new Error('Library name cannot be empty');
+    if (/[/\\]/.test(cleanName)) throw new Error('Library name cannot contain slashes');
+    if (!['google_drive', 'dropbox'].includes(provider)) {
+      throw new Error('Unsupported cloud folder provider');
+    }
+    const picked = await dialog.showOpenDialog({
+      title: `Choose where to store "${cleanName}"`,
+      properties: ['openDirectory', 'createDirectory'],
+      message: 'Picto will restore the verified database here and recover media in the background.',
+    });
+    if (picked.canceled || picked.filePaths.length === 0) return null;
+    const targetRoot = path.join(picked.filePaths[0], `${cleanName}.library`);
+    if (await fs.access(targetRoot).then(() => true, () => false)) {
+      throw new Error(`A library named "${cleanName}" already exists at that location`);
+    }
+
+    const previousPath = getCurrentLibraryRoot();
+    openingLibraryPath = targetRoot;
+    sendToAllWindows('library-switching', { path: targetRoot });
+    try {
+      const serialized = await invokeSerialized('cloud.library.join', {
+        provider,
+        account_label: accountLabel,
+        root_path: rootPath,
+        library_id: libraryId,
+        target_root: targetRoot,
+      });
+      const result = JSON.parse(serialized);
+      setCurrentLibraryRoot(targetRoot);
+      openingLibraryPath = null;
+      await addLibraryToHistory(targetRoot);
+      buildAppMenu();
+      sendToAllWindows('library-switched', { path: targetRoot });
+      return result;
+    } catch (error) {
+      openingLibraryPath = null;
+      sendToAllWindows('library-open-failed', {
+        path: targetRoot,
+        message: error?.message ?? String(error),
+      });
+      if (previousPath) sendToAllWindows('library-switched', { path: previousPath });
+      throw error;
+    }
   }
 
   async function openLibraryDialog() {
@@ -280,6 +541,7 @@ export function createLibraryHostService({
     return {
       ...config,
       currentPath: getCurrentLibraryRoot(),
+      openingPath: openingLibraryPath,
       existsMap,
     };
   }
@@ -300,9 +562,20 @@ export function createLibraryHostService({
   }
 
   async function initializeInitialLibrary(libraryPath) {
+    await cleanupStaleTutorialLibraries();
+    openingLibraryPath = libraryPath;
+    sendToAllWindows('library-switching', { path: libraryPath });
+    try {
+      await openLibrary(libraryPath);
+    } catch (error) {
+      openingLibraryPath = null;
+      sendToAllWindows('library-open-failed', { path: libraryPath, message: error?.message ?? String(error) });
+      throw error;
+    }
     setCurrentLibraryRoot(libraryPath);
-    await openLibrary(libraryPath);
+    openingLibraryPath = null;
     await addLibraryToHistory(libraryPath);
+    sendToAllWindows('library-switched', { path: libraryPath });
   }
 
   return {
@@ -313,12 +586,17 @@ export function createLibraryHostService({
     initializeInitialLibrary,
     isValidLibrary,
     libraryDisplayName,
+    joinCloudLibrary,
     openLibraryAndShow,
     openLibraryDialog,
     relocateLibrary,
     removeLibrary,
     renameLibrary,
     setLibraryMeta,
+    startTutorialLibrary,
+    resetTutorialLibrary,
+    finishTutorialLibrary,
+    getTutorialSession,
     switchLibrary,
     toggleLibraryPin,
   };

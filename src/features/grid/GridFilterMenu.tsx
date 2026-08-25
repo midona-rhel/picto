@@ -1,28 +1,63 @@
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useCallback, useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react';
 import {
-  IconCalendar, IconClock, IconColorSwatch, IconDimensions,
-  IconFile, IconFilterPlus, IconFolder, IconLink, IconNotes,
-  IconPhoto, IconStar, IconTags, IconX,
+  IconBookmark, IconCalendar, IconClock, IconDeviceFloppy, IconDimensions,
+  IconFile, IconFilterPlus, IconFolder, IconLink, IconLock, IconLockOpen, IconNotes,
+  IconPhoto, IconRestore, IconStar, IconX,
 } from '@tabler/icons-react';
 import type { ItemFilters } from '../../shared/types/generated/application/ItemFilters';
 import { ContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { gridController } from '../../controllers/gridController';
-import { gridFiltersAtom, gridFilterToolbarOpenAtom, gridItemsAtom } from '../../state/grid';
+import { gridFilterLockedAtom, gridFiltersAtom, gridFilterToolbarOpenAtom, gridItemsAtom } from '../../state/grid';
 import { folderNodesAtom } from '../../state/sidebar';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
+import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { IconChangeColor } from '../../shared/ui/icons/sidebar-menu-icons';
 import styles from './GridFilterMenu.module.css';
 
 type PinnedFilter = 'color' | 'tags' | 'folders' | 'rating' | 'type'
   | 'imported' | 'modified' | 'duration' | 'size' | 'resolution' | 'notes' | 'url';
 type FilterMenuKind = 'rating' | 'type' | 'pin' | 'imported' | 'modified'
-  | 'color' | 'duration' | 'size' | 'resolution' | 'notes' | 'url';
+  | 'color' | 'duration' | 'size' | 'resolution' | 'notes' | 'url' | 'saved';
 const DEFAULT_PINNED_FILTERS: PinnedFilter[] = ['color', 'tags', 'folders', 'rating', 'type'];
 const ALL_FILTERS: PinnedFilter[] = [
   'color', 'tags', 'folders', 'rating', 'type', 'imported', 'modified',
   'resolution', 'duration', 'size', 'notes', 'url',
 ];
 const PINNED_FILTERS_KEY = 'picto:grid:pinned-filters';
+const SAVED_FILTERS_KEY = 'picto:grid:saved-filters';
+
+interface SavedFilter {
+  id: string;
+  name: string;
+  filters: string;
+}
+
+function serializeFilters(filters: ItemFilters): string {
+  return JSON.stringify(filters, (_key, value) => typeof value === 'bigint'
+    ? { $bigint: String(value) }
+    : value);
+}
+
+function deserializeFilters(value: string): ItemFilters {
+  return JSON.parse(value, (_key, item) => item && typeof item === 'object' && '$bigint' in item
+    ? BigInt(item.$bigint)
+    : item) as ItemFilters;
+}
+
+function loadSavedFilters(): SavedFilter[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const value = JSON.parse(window.localStorage.getItem(SAVED_FILTERS_KEY) ?? '[]');
+    return Array.isArray(value)
+      ? value.filter((item): item is SavedFilter => typeof item?.id === 'string'
+        && typeof item?.name === 'string' && typeof item?.filters === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 function loadPinnedFilters(): Set<PinnedFilter> {
   if (typeof window === 'undefined') return new Set(DEFAULT_PINNED_FILTERS);
@@ -99,36 +134,37 @@ interface FilterControlProps {
 
 function FilterControl({ label, icon, active, onOpen, onClear }: FilterControlProps) {
   return (
-    <div
-      className={`${styles.filterItem} ${active ? styles.filterItemActive : ''}`}
-      role="button"
-      tabIndex={0}
-      onClick={(event) => onOpen(event.currentTarget)}
-      onKeyDown={(event) => {
-        if (event.key !== 'Enter' && event.key !== ' ') return;
-        event.preventDefault();
-        onOpen(event.currentTarget);
-      }}
-      onContextMenu={(event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        onClear();
-      }}
-      title={active ? `${label} — right-click to clear` : label}
-    >
-      <span className={styles.filterIcon}>{icon}</span>
-      <span className={styles.filterLabel}>{label}</span>
-      {active ? (
-        <button
-          type="button"
-          className={styles.clearButton}
-          aria-label={`Clear ${label} filter`}
-          onClick={(event) => { event.stopPropagation(); onClear(); }}
-        >
-          <IconX size={12} stroke={2} />
-        </button>
-      ) : null}
-    </div>
+    <KbdTooltip label={active ? `${label} · Right-click to clear` : label}>
+      <div
+        className={`${styles.filterItem} ${active ? styles.filterItemActive : ''}`}
+        role="button"
+        tabIndex={0}
+        onClick={(event) => onOpen(event.currentTarget)}
+        onKeyDown={(event) => {
+          if (event.key !== 'Enter' && event.key !== ' ') return;
+          event.preventDefault();
+          onOpen(event.currentTarget);
+        }}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          onClear();
+        }}
+      >
+        <span className={styles.filterIcon}>{icon}</span>
+        <span className={styles.filterLabel}>{label}</span>
+        {active ? (
+          <button
+            type="button"
+            className={styles.clearButton}
+            aria-label={`Clear ${label} filter`}
+            onClick={(event) => { event.stopPropagation(); onClear(); }}
+          >
+            <IconX size={12} stroke={2} />
+          </button>
+        ) : null}
+      </div>
+    </KbdTooltip>
   );
 }
 
@@ -429,11 +465,15 @@ function PresenceKeywordEditor({
 export function GridFilterToolbar() {
   const open = useAtomValue(gridFilterToolbarOpenAtom);
   const filters = useAtomValue(gridFiltersAtom);
+  const filterLocked = useAtomValue(gridFilterLockedAtom);
+  const setFilterLocked = useSetAtom(gridFilterLockedAtom);
   const items = useAtomValue(gridItemsAtom);
   const folderNodes = useAtomValue(folderNodesAtom);
   const setTagPortal = useSetAtom(tagSelectPortalAtom);
   const setFolderPortal = useSetAtom(folderPickerPortalAtom);
   const [pinnedFilters, setPinnedFilters] = useState(loadPinnedFilters);
+  const [savedFilters, setSavedFilters] = useState(loadSavedFilters);
+  const [saveName, setSaveName] = useState('');
   const [activeMenu, setActiveMenu] = useState<{
     kind: FilterMenuKind;
     position: { x: number; y: number };
@@ -491,6 +531,22 @@ export function GridFilterToolbar() {
     });
   }, []);
 
+  const persistSavedFilters = useCallback((next: SavedFilter[]) => {
+    setSavedFilters(next);
+    window.localStorage.setItem(SAVED_FILTERS_KEY, JSON.stringify(next));
+  }, []);
+
+  const saveCurrentFilter = useCallback(() => {
+    const name = saveName.trim();
+    if (!name || countActiveGridFilters(filters) === 0) return;
+    persistSavedFilters([...savedFilters, {
+      id: globalThis.crypto?.randomUUID?.() ?? `${Date.now()}`,
+      name,
+      filters: serializeFilters(filters),
+    }]);
+    setSaveName('');
+  }, [filters, persistSavedFilters, saveName, savedFilters]);
+
   if (!open) return null;
 
   const tagLabels = [...filters.include_tags, ...filters.exclude_tags.map((tag) => `Not ${tag}`)];
@@ -539,8 +595,8 @@ export function GridFilterToolbar() {
     }),
   }));
   const pinEntries: MenuEntry[] = [
-    ['color', 'Color', <IconColorSwatch size={15} />],
-    ['tags', 'Tags', <IconTags size={15} />],
+    ['color', 'Color', <IconChangeColor size={15} />],
+    ['tags', 'Tags', <IconBookmark size={15} />],
     ['folders', 'Folders', <IconFolder size={15} />],
     ['rating', 'Rating', <IconStar size={15} />],
     ['type', 'Type', <IconPhoto size={15} />],
@@ -620,7 +676,7 @@ export function GridFilterToolbar() {
       />,
     },
   ];
-  const editorEntries: Record<Exclude<FilterMenuKind, 'rating' | 'type' | 'pin' | 'color'>, MenuEntry[]> = {
+  const editorEntries: Record<Exclude<FilterMenuKind, 'rating' | 'type' | 'pin' | 'color' | 'saved'>, MenuEntry[]> = {
     imported: dateEntries('imported'),
     modified: dateEntries('modified'),
     duration: [{
@@ -654,7 +710,40 @@ export function GridFilterToolbar() {
     url: presenceEntries('url', 'source_url_present', 'source_url_contains'),
   };
 
-  const activeMenuEntries = activeMenu?.kind === 'color' ? [{
+  const savedFilterEntries: MenuEntry[] = [
+    {
+      custom: true,
+      key: 'save-current-filter',
+      render: () => <div className={styles.saveFilterEditor}>
+        <input
+          aria-label="Saved filter name"
+          value={saveName}
+          onChange={(event) => setSaveName(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            saveCurrentFilter();
+          }}
+          placeholder="Filter name"
+        />
+        <button
+          type="button"
+          disabled={!saveName.trim() || countActiveGridFilters(filters) === 0}
+          onClick={saveCurrentFilter}
+        >Save</button>
+      </div>,
+    },
+    ...(savedFilters.length > 0 ? [{ separator: true } as MenuEntry] : []),
+    ...savedFilters.map((saved): MenuEntry => ({
+      label: saved.name,
+      keepOpen: false,
+      action: () => update(deserializeFilters(saved.filters)),
+      contextAction: () => persistSavedFilters(savedFilters.filter((item) => item.id !== saved.id)),
+    })),
+  ];
+
+  const activeMenuEntries = activeMenu?.kind === 'saved' ? savedFilterEntries
+    : activeMenu?.kind === 'color' ? [{
     custom: true as const,
     key: 'color-filter',
     render: () => <ColorFilterEditor value={filters.color_hex} onCommit={(colorHex) => update({ color_hex: colorHex })} />,
@@ -663,7 +752,8 @@ export function GridFilterToolbar() {
     : activeMenu?.kind === 'type' ? typeEntries
     : activeMenu?.kind === 'pin' || !activeMenu ? pinEntries
     : editorEntries[activeMenu.kind];
-  const activeMenuWidth = activeMenu?.kind === 'color' ? 230
+  const activeMenuWidth = activeMenu?.kind === 'saved' ? 250
+    : activeMenu?.kind === 'color' ? 230
     : activeMenu?.kind === 'notes' || activeMenu?.kind === 'url' ? 240
     : activeMenu?.kind === 'imported' || activeMenu?.kind === 'modified' ? 220
     : activeMenu?.kind === 'duration' || activeMenu?.kind === 'size' || activeMenu?.kind === 'resolution' ? 210
@@ -671,19 +761,20 @@ export function GridFilterToolbar() {
 
   return (
     <div className={styles.toolbar} data-grid-filter-toolbar="">
-      <div className={styles.filterItems}>
+      <div className={styles.filterViewport}>
+        <div className={styles.filterItems}>
         {(pinnedFilters.has('color') || filters.color_hex) ? <FilterControl
           label={filters.color_hex?.toUpperCase() ?? 'Color'}
           icon={filters.color_hex
             ? <span className={styles.colorDot} style={{ background: filters.color_hex }} />
-            : <IconColorSwatch size={16} stroke={1.6} />}
+            : <IconChangeColor size={16} stroke={1.6} />}
           active={Boolean(filters.color_hex)}
           onOpen={(element) => openMenu(element, 'color')}
           onClear={() => update({ color_hex: null })}
         /> : null}
         {(pinnedFilters.has('tags') || tagLabels.length > 0) ? <FilterControl
           label={tagLabels.length ? tagLabels.join(', ') : 'Tags'}
-          icon={<IconTags size={16} stroke={1.6} />}
+          icon={<IconBookmark size={16} stroke={1.6} />}
           active={tagLabels.length > 0}
           onOpen={openTagFilter}
           onClear={() => update({ include_tags: [], exclude_tags: [] })}
@@ -762,14 +853,46 @@ export function GridFilterToolbar() {
           onOpen={(element) => openMenu(element, 'url')}
           onClear={() => update({ source_url_present: null, source_url_contains: null })}
         /> : null}
-        <button
-          type="button"
-          className={styles.addButton}
-          aria-label="Add filter"
-          onClick={(event) => openMenu(event.currentTarget, 'pin')}
-        >
-          <IconFilterPlus size={16} stroke={1.6} />
-        </button>
+        <KbdTooltip label="Add or remove filter fields">
+          <button
+            type="button"
+            className={styles.addButton}
+            aria-label="Add filter"
+            onClick={(event) => openMenu(event.currentTarget, 'pin')}
+          >
+            <IconFilterPlus size={16} stroke={1.6} />
+          </button>
+        </KbdTooltip>
+        </div>
+      </div>
+      <div className={styles.filterRight}>
+        <span className={styles.filterSeparator} />
+        <KbdTooltip label="Save or apply a filter">
+          <button
+            type="button"
+            className={styles.filterAction}
+            aria-label="Saved filters"
+            onClick={(event) => openMenu(event.currentTarget, 'saved')}
+          ><IconDeviceFloppy size={16} stroke={1.6} /></button>
+        </KbdTooltip>
+        <KbdTooltip label={filterLocked ? 'Keep filters on navigation: on' : 'Keep filters on navigation'}>
+          <button
+            type="button"
+            className={`${styles.filterAction} ${filterLocked ? styles.filterActionActive : ''}`}
+            aria-label={filterLocked ? 'Unlock filters' : 'Lock filters'}
+            aria-pressed={filterLocked}
+            onClick={() => setFilterLocked((value) => !value)}
+          >{filterLocked ? <IconLock size={16} stroke={1.6} /> : <IconLockOpen size={16} stroke={1.6} />}</button>
+        </KbdTooltip>
+        <KbdTooltip label="Clear all filters">
+          <button
+            type="button"
+            className={styles.filterAction}
+            aria-label="Clear filters"
+            disabled={countActiveGridFilters(filters) === 0}
+            onClick={() => gridController.setFilters(createEmptyItemFilters())}
+          ><IconRestore size={16} stroke={1.6} /></button>
+        </KbdTooltip>
       </div>
       {activeMenu ? (
         <ContextMenu

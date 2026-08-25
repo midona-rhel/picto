@@ -1,8 +1,9 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createStore, Provider } from 'jotai';
 import type { CanonicalTagRecord } from '../../shared/types/canonical';
+import { renderWithProviders } from '../../test/render';
 import { TagManagerScreen, TagsToolbar } from './TagManagerScreen';
 
 const mocks = vi.hoisted(() => ({
@@ -96,9 +97,9 @@ beforeEach(() => {
 });
 
 async function renderScreen() {
-  let result: ReturnType<typeof render>;
+  let result: ReturnType<typeof renderWithProviders>;
   await act(async () => {
-    result = render(
+    result = renderWithProviders(
       <Provider store={createStore()}>
         <TagsToolbar />
         <TagManagerScreen />

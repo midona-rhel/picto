@@ -3,9 +3,9 @@ use napi::threadsafe_function::{
     ThreadSafeCallContext, ThreadsafeFunction, ThreadsafeFunctionCallMode,
 };
 use napi_derive::napi;
-use std::path::PathBuf;
 #[cfg(target_os = "macos")]
 use std::ffi::{CStr, CString};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
@@ -21,7 +21,9 @@ extern "C" {
         icon_width: std::ffi::c_int,
         icon_height: std::ffi::c_int,
     );
-    fn picto_get_associated_applications(file_path: *const std::ffi::c_char) -> *const std::ffi::c_char;
+    fn picto_get_associated_applications(
+        file_path: *const std::ffi::c_char,
+    ) -> *const std::ffi::c_char;
     fn picto_free_string(value: *const std::ffi::c_char);
     fn picto_open_with_application(
         application_path: *const std::ffi::c_char,
@@ -30,15 +32,19 @@ extern "C" {
 }
 
 #[napi]
-pub fn get_associated_applications(file_path: String) -> Result<String> {
+pub async fn get_associated_applications(file_path: String) -> Result<String> {
     #[cfg(target_os = "macos")]
     {
         let path = CString::new(file_path).map_err(|_| Error::from_reason("Invalid file path"))?;
         let value = unsafe { picto_get_associated_applications(path.as_ptr()) };
         if value.is_null() {
-            return Err(Error::from_reason("Could not resolve associated applications"));
+            return Err(Error::from_reason(
+                "Could not resolve associated applications",
+            ));
         }
-        let result = unsafe { CStr::from_ptr(value) }.to_string_lossy().into_owned();
+        let result = unsafe { CStr::from_ptr(value) }
+            .to_string_lossy()
+            .into_owned();
         unsafe { picto_free_string(value) };
         return Ok(result);
     }
@@ -58,7 +64,9 @@ pub fn open_with_application(application_path: String, file_path: String) -> Res
             .map_err(|_| Error::from_reason("Invalid application path"))?;
         let file = CString::new(file_path).map_err(|_| Error::from_reason("Invalid file path"))?;
         if !unsafe { picto_open_with_application(application.as_ptr(), file.as_ptr()) } {
-            return Err(Error::from_reason("Could not open file with the selected application"));
+            return Err(Error::from_reason(
+                "Could not open file with the selected application",
+            ));
         }
         return Ok(());
     }
@@ -66,7 +74,9 @@ pub fn open_with_application(application_path: String, file_path: String) -> Res
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (application_path, file_path);
-        Err(Error::from_reason("Application selection is not supported on this platform yet"))
+        Err(Error::from_reason(
+            "Application selection is not supported on this platform yet",
+        ))
     }
 }
 
@@ -150,6 +160,18 @@ pub async fn open_library(library_path: String) -> Result<()> {
     picto_core::state_v2::open_library(path)
         .await
         .map_err(|e| Error::from_reason(e))?;
+    Ok(())
+}
+
+/// Open an isolated tutorial library backed only by bundled local fixtures.
+#[napi]
+pub async fn open_tutorial_library(library_path: String, fixture_root: String) -> Result<()> {
+    picto_core::state_v2::open_tutorial_library(
+        PathBuf::from(library_path),
+        PathBuf::from(fixture_root),
+    )
+    .await
+    .map_err(Error::from_reason)?;
     Ok(())
 }
 

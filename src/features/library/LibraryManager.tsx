@@ -1,11 +1,38 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
-import { IconX, IconBooks, IconCheck, IconPin, IconAlertTriangle, IconPlus, IconFolderOpen } from '@tabler/icons-react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  IconAlertTriangle,
+  IconBooks,
+  IconCheck,
+  IconCloud,
+  IconDotsVertical,
+  IconFolderOpen,
+  IconPencil,
+  IconPin,
+  IconPlayerPause,
+  IconPlayerPlay,
+  IconPlus,
+  IconRefresh,
+  IconX,
+} from '@tabler/icons-react';
 import { LibraryAvatar } from './LibraryAvatar';
 import { IconPicker } from '../../shared/ui/IconPicker';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
-import { listen } from '../../platform/ipc';
+import { ContextMenu, type MenuEntry, useContextMenu } from '../../shared/ui/ContextMenu';
+import { ProgressBar } from '../../shared/ui/ProgressBar';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { invoke, listen } from '../../platform/ipc';
 import { MediaCoverDialog } from '../subscriptions/components/SubscriptionCoverDialog';
 import { loadLibraryCoverCandidates, saveLibraryCover } from './libraryAppearance';
+import type { CloudConfiguration } from '../../shared/types/generated/application/CloudConfiguration';
+import type { CloudSyncStatus } from '../../shared/types/generated/application/CloudSyncStatus';
+import type { LibraryChanged } from '../../shared/types/generated/application/LibraryChanged';
+import {
+  estimateRemainingSeconds,
+  formatLastSync,
+  formatRemainingTime,
+  presentCloudSync,
+  type SyncRateSample,
+} from './librarySyncPresentation';
 import styles from './LibraryManager.module.css';
 
 interface LibraryConfigResult {
@@ -24,7 +51,21 @@ interface LibraryConfigResult {
   existsMap: Record<string, boolean>;
 }
 
+interface DetectedCloudRoot {
+  provider: 'google_drive' | 'dropbox';
+  account_label: string;
+  path: string;
+}
+
+interface CloudLibraryChoice {
+  root: DetectedCloudRoot;
+  library_id: string;
+  schema_generation: number;
+  created_at: string;
+}
+
 const pictoLibrary = () => (window as any).picto.library;
+const pictoShell = () => (window as any).picto.shell;
 
 function baseName(path: string): string {
   const last = path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -41,13 +82,28 @@ function parentDir(path: string): string {
 export function LibraryManager() {
   const [config, setConfig] = useState<LibraryConfigResult | null>(null);
   const [showLocalCreate, setShowLocalCreate] = useState(false);
+  const [showCloudOpen, setShowCloudOpen] = useState(false);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [showIconEditor, setShowIconEditor] = useState(false);
   const [localName, setLocalName] = useState('');
+  const [cloudName, setCloudName] = useState('');
+  const [selectedCloudLibrary, setSelectedCloudLibrary] = useState<CloudLibraryChoice | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [coverPath, setCoverPath] = useState<string | null>(null);
+  const [renamingPath, setRenamingPath] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const [cloudRoots, setCloudRoots] = useState<DetectedCloudRoot[]>([]);
+  const [cloudConfiguration, setCloudConfiguration] = useState<CloudConfiguration | null>(null);
+  const [cloudStatus, setCloudStatus] = useState<CloudSyncStatus | null>(null);
+  const [cloudLibraries, setCloudLibraries] = useState<CloudLibraryChoice[]>([]);
+  const [syncEtaSeconds, setSyncEtaSeconds] = useState<number | null>(null);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  const syncRateSamples = useRef<SyncRateSample[]>([]);
+  const syncWorkKey = useRef<string | null>(null);
+  const didRequestWindowShow = useRef(false);
+  const libraryMenu = useContextMenu();
 
   const refresh = useCallback(async () => {
     try {
@@ -57,15 +113,87 @@ export function LibraryManager() {
     }
   }, []);
 
+  const refreshCloudStatus = useCallback(async () => {
+    try {
+      const [configuration, status] = await Promise.all([
+        invoke<CloudConfiguration>('cloud.configuration.get'),
+        invoke<CloudSyncStatus>('cloud.status.get'),
+      ]);
+      setCloudConfiguration(configuration);
+      setCloudStatus(status);
+    } catch {
+      setCloudConfiguration(null);
+      setCloudStatus(null);
+    }
+  }, []);
+
+  const refreshCloud = useCallback(async () => {
+    try {
+      const roots = await invoke<DetectedCloudRoot[]>('cloud.providers.detect');
+      setCloudRoots(roots);
+      const discovered = await Promise.all(roots.map(async (root) => {
+        try {
+          const libraries = await invoke<Omit<CloudLibraryChoice, 'root'>[]>('cloud.libraries.discover', { root_path: root.path });
+          return libraries.map((library) => ({ ...library, root }));
+        } catch {
+          return [];
+        }
+      }));
+      setCloudLibraries(discovered.flat());
+    } catch {
+      setCloudRoots([]);
+      setCloudLibraries([]);
+    }
+    await refreshCloudStatus();
+  }, [refreshCloudStatus]);
+
   useEffect(() => {
-    refresh();
-  }, [refresh]);
+    let cancelled = false;
+    void refresh().finally(() => {
+      if (!cancelled) setInitialLoadComplete(true);
+    });
+    void refreshCloud();
+    return () => { cancelled = true; };
+  }, [refresh, refreshCloud]);
+
+  useEffect(() => {
+    if (!initialLoadComplete || didRequestWindowShow.current) return;
+    didRequestWindowShow.current = true;
+    let secondFrame = 0;
+    const firstFrame = window.requestAnimationFrame(() => {
+      secondFrame = window.requestAnimationFrame(() => {
+        void (window as any).picto.api.window.call('show');
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(firstFrame);
+      if (secondFrame) window.cancelAnimationFrame(secondFrame);
+    };
+  }, [initialLoadComplete]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
     void listen('library-meta-changed', refresh).then((value) => { unlisten = value; });
     return () => unlisten?.();
   }, [refresh]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const update = () => { if (!disposed) void refreshCloudStatus(); };
+    const interval = window.setInterval(update, 1_500);
+    void listen<LibraryChanged>('library/changed', ({ payload }) => {
+      if (payload.resources.includes('cloud') || payload.resources.includes('tasks')) update();
+    }).then((value) => {
+      if (disposed) value();
+      else unlisten = value;
+    });
+    return () => {
+      disposed = true;
+      window.clearInterval(interval);
+      unlisten?.();
+    };
+  }, [refreshCloudStatus]);
 
   const localEntries = useMemo(() => {
     if (!config) return [];
@@ -93,10 +221,44 @@ export function LibraryManager() {
     [localEntries, selectedPath],
   );
 
+  const syncPresentation = useMemo(
+    () => presentCloudSync(cloudStatus, cloudConfiguration?.provider ?? null),
+    [cloudConfiguration?.provider, cloudStatus],
+  );
+
   useEffect(() => {
-    if (showLocalCreate || selectedPath || localEntries.length === 0) return;
+    if (syncPresentation.workKey === null || syncPresentation.remaining === null || syncPresentation.remaining <= 0) {
+      syncRateSamples.current = [];
+      syncWorkKey.current = null;
+      setSyncEtaSeconds(null);
+      return;
+    }
+    const now = Date.now();
+    if (syncWorkKey.current !== syncPresentation.workKey) {
+      syncWorkKey.current = syncPresentation.workKey;
+      syncRateSamples.current = [{ at: now, remaining: syncPresentation.remaining }];
+      setSyncEtaSeconds(null);
+      return;
+    }
+    const previous = syncRateSamples.current[syncRateSamples.current.length - 1];
+    if (!previous || syncPresentation.remaining > previous.remaining) {
+      syncRateSamples.current = [{ at: now, remaining: syncPresentation.remaining }];
+      setSyncEtaSeconds(null);
+      return;
+    }
+    if (syncPresentation.remaining !== previous.remaining) {
+      syncRateSamples.current = [
+        ...syncRateSamples.current.filter((sample) => now - sample.at <= 30_000),
+        { at: now, remaining: syncPresentation.remaining },
+      ].slice(-12);
+    }
+    setSyncEtaSeconds(estimateRemainingSeconds(syncRateSamples.current, syncPresentation.remaining));
+  }, [syncPresentation]);
+
+  useEffect(() => {
+    if (showLocalCreate || showCloudOpen || selectedPath || localEntries.length === 0) return;
     setSelectedPath(localEntries.find((entry) => entry.current)?.path ?? localEntries[0].path);
-  }, [localEntries, selectedPath, showLocalCreate]);
+  }, [localEntries, selectedPath, showCloudOpen, showLocalCreate]);
 
   const run = useCallback(
     async (key: string, action: () => Promise<void>) => {
@@ -137,10 +299,159 @@ export function LibraryManager() {
       setMessage(`Created "${name}".`);
     });
 
+  const joinCloud = () => {
+    if (!selectedCloudLibrary || !cloudName.trim()) return;
+    void run(`join-cloud:${selectedCloudLibrary.library_id}`, async () => {
+      const result = await pictoLibrary().joinCloud({
+        provider: selectedCloudLibrary.root.provider,
+        accountLabel: selectedCloudLibrary.root.account_label,
+        rootPath: selectedCloudLibrary.root.path,
+        libraryId: selectedCloudLibrary.library_id,
+        name: cloudName.trim(),
+      });
+      if (!result) return;
+      setSelectedPath(result.path);
+      setShowCloudOpen(false);
+      setSelectedCloudLibrary(null);
+      setCloudName('');
+      setMessage(`Opened "${baseName(result.path)}" from cloud.`);
+      await refreshCloud();
+    });
+  };
+
+  const beginRename = (path: string, name: string) => {
+    setRenamingPath(path);
+    setRenameValue(name);
+    setError(null);
+  };
+
+  const commitRename = (path: string) =>
+    run(`rename:${path}`, async () => {
+      const name = renameValue.trim();
+      if (!name) return;
+      const result = await pictoLibrary().rename(path, name);
+      setSelectedPath(result.newPath);
+      setRenamingPath(null);
+      setRenameValue('');
+    });
+
+  const configureCloud = (root: DetectedCloudRoot) =>
+    run(`cloud:${root.path}`, async () => {
+      await invoke('cloud.configure', {
+        provider: root.provider,
+        account_label: root.account_label,
+        root_path: root.path,
+      });
+      await refreshCloud();
+      setMessage(`Cloud sync enabled through ${root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'}.`);
+    });
+
+  const setCloudPaused = (paused: boolean) =>
+    run('cloud-pause', async () => {
+      await invoke('cloud.pause', { paused });
+      await refreshCloud();
+    });
+
+  const syncNow = () =>
+    run('cloud-sync', async () => {
+      await invoke('cloud.reconcile');
+      await refreshCloudStatus();
+    });
+
+  const createCloudSnapshot = () =>
+    run('cloud-snapshot', async () => {
+      await invoke('cloud.snapshot.create');
+      await refreshCloudStatus();
+      setMessage('Recovery snapshot created.');
+    });
+
+  const removeFromList = (path: string, name: string) => {
+    if (!window.confirm(`Remove "${name}" from this list?\n\nThe library and its files remain on disk.`)) return;
+    setSelectedPath(null);
+    void run(`remove:${path}`, () => pictoLibrary().remove(path));
+  };
+
+  const openLibraryMenu = (event: React.MouseEvent<HTMLButtonElement>) => {
+    if (!selectedEntry) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const entries: MenuEntry[] = [
+      {
+        label: selectedEntry.pinned ? 'Remove from Quick Access' : 'Add to Quick Access',
+        icon: <IconPin size={15} />,
+        action: () => { void run(`pin:${selectedEntry.path}`, () => pictoLibrary().togglePin(selectedEntry.path)); },
+      },
+      {
+        label: 'Rename',
+        icon: <IconPencil size={15} />,
+        disabled: !selectedEntry.exists,
+        action: () => beginRename(selectedEntry.path, selectedEntry.name),
+      },
+      {
+        label: 'Show in File Manager',
+        icon: <IconFolderOpen size={15} />,
+        disabled: !selectedEntry.exists,
+        action: () => { void pictoShell().showInFolder(selectedEntry.path); },
+      },
+    ];
+
+    if (selectedEntry.current) {
+      entries.push({ separator: true });
+      if (cloudConfiguration?.root_path) {
+        entries.push(
+          {
+            label: 'Sync Now',
+            icon: <IconRefresh size={15} />,
+            disabled: busy !== null || syncPresentation.active,
+            action: () => { void syncNow(); },
+          },
+          {
+            label: cloudStatus?.state === 'paused' ? 'Resume Sync' : 'Pause Sync',
+            icon: cloudStatus?.state === 'paused' ? <IconPlayerPlay size={15} /> : <IconPlayerPause size={15} />,
+            disabled: busy !== null,
+            action: () => { void setCloudPaused(cloudStatus?.state !== 'paused'); },
+          },
+          {
+            label: 'Create Recovery Snapshot',
+            icon: <IconCloud size={15} />,
+            disabled: busy !== null || syncPresentation.active,
+            action: () => { void createCloudSnapshot(); },
+          },
+          {
+            label: 'Show Cloud Folder',
+            icon: <IconFolderOpen size={15} />,
+            action: () => { void pictoShell().showInFolder(cloudConfiguration.root_path); },
+          },
+        );
+      } else if (cloudRoots.length > 0) {
+        entries.push({
+          submenu: true,
+          label: 'Enable Cloud Sync',
+          icon: <IconCloud size={15} />,
+          children: cloudRoots.map((root) => ({
+            label: `${root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'} · ${root.account_label}`,
+            action: () => { void configureCloud(root); },
+          })),
+        });
+      }
+    }
+
+    entries.push(
+      { separator: true },
+      {
+        label: 'Remove from List',
+        icon: <IconX size={15} />,
+        danger: true,
+        disabled: selectedEntry.current,
+        action: () => removeFromList(selectedEntry.path, selectedEntry.name),
+      },
+    );
+    libraryMenu.openAt({ x: rect.right, y: rect.bottom + 4 }, entries, { showSearch: false });
+  };
+
   return (
     <div className={styles.root}>
       <section className={styles.panel}>
-        <header className={styles.header}>
+        <header className={styles.header} data-window-drag-region="">
           <div className={styles.title}>Library Manager</div>
           <button className={styles.closeBtn} onClick={() => window.close()} aria-label="Close">
             <IconX size={14} />
@@ -161,16 +472,31 @@ export function LibraryManager() {
                   onClick={() => {
                     setSelectedPath(entry.path);
                     setShowLocalCreate(false);
+                    setShowCloudOpen(false);
                     setShowIconEditor(false);
                   }}
                   onDoubleClick={() => entry.exists && !entry.current && switchTo(entry.path)}
                 >
-                  <LibraryAvatar appearance={entry} size={28} className={styles.rowIcon} />
+                  <LibraryAvatar
+                    appearance={entry}
+                    size={42}
+                    className={styles.rowIcon}
+                    highlighted={selectedPath === entry.path && !showLocalCreate}
+                  />
                   <span className={styles.rowMain}>
                     <span className={styles.rowName}>{entry.name}</span>
                     <span className={styles.rowPath}>{entry.dir}</span>
                   </span>
                   <span className={styles.rowStatus}>
+                    {entry.current && cloudConfiguration?.root_path ? (
+                      <span
+                        className={`${styles.rowSyncStatus} ${styles[`syncState_${syncPresentation.tone}`]}`}
+                        title={`Cloud sync: ${syncPresentation.label}`}
+                        aria-label={`Cloud sync: ${syncPresentation.label}`}
+                      >
+                        <span className={styles.syncDot} />
+                      </span>
+                    ) : null}
                     {entry.current ? <IconCheck size={13} /> : entry.pinned ? <IconPin size={12} /> : !entry.exists ? <IconAlertTriangle size={12} /> : null}
                   </span>
                 </button>
@@ -179,7 +505,44 @@ export function LibraryManager() {
           </aside>
 
           <main className={styles.detailPane}>
-            {showLocalCreate ? (
+            {showCloudOpen ? (
+              <div className={styles.createPane}>
+                <span className={styles.heroIcon}><IconFolderOpen size={26} /></span>
+                <div className={styles.heroTitle}>Open a cloud library</div>
+                <p className={styles.heroDescription}>Choose a verified Picto library found in an installed desktop sync folder.</p>
+                {cloudLibraries.length > 0 ? (
+                  <div className={styles.cloudLibraryList}>
+                    {cloudLibraries.map((library) => (
+                      <button
+                        key={`${library.root.path}:${library.library_id}`}
+                        type="button"
+                        className={selectedCloudLibrary === library ? styles.cloudLibrarySelected : styles.cloudLibraryRow}
+                        onClick={() => {
+                          setSelectedCloudLibrary(library);
+                          if (!cloudName) setCloudName(`Picto ${library.library_id.slice(0, 8)}`);
+                        }}
+                      >
+                        <span>{library.root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'} · {library.root.account_label}</span>
+                        <span className={styles.rowPath}>{library.library_id}</span>
+                      </button>
+                    ))}
+                  </div>
+                ) : (
+                  <p className={styles.cardDescription}>No Picto recovery snapshots were found in the installed cloud folders.</p>
+                )}
+                <label className={styles.fieldLabel} htmlFor="cloud-library-name">Local library name</label>
+                <input
+                  id="cloud-library-name"
+                  className={styles.nameInput}
+                  value={cloudName}
+                  onChange={(event) => setCloudName(event.target.value)}
+                  disabled={!selectedCloudLibrary}
+                />
+                <button className={styles.btnPrimary} onClick={joinCloud} disabled={busy !== null || !selectedCloudLibrary || !cloudName.trim()}>
+                  {busy?.startsWith('join-cloud:') ? 'Opening…' : 'Choose Location…'}
+                </button>
+              </div>
+            ) : showLocalCreate ? (
               <div className={styles.createPane}>
                 <span className={styles.heroIcon}><IconPlus size={26} /></span>
                 <div className={styles.heroTitle}>Create a new library</div>
@@ -200,10 +563,41 @@ export function LibraryManager() {
             ) : selectedEntry ? (
               <>
                 <div className={styles.hero}>
-                  <LibraryAvatar appearance={selectedEntry} size={56} className={styles.heroLibraryIcon} />
+                  <LibraryAvatar appearance={selectedEntry} size={84} className={styles.heroLibraryIcon} highlighted />
                   <span className={styles.heroInfo}>
-                    <span className={styles.heroTitle}>{selectedEntry.name}</span>
+                    {renamingPath === selectedEntry.path ? (
+                      <span className={styles.renameRow}>
+                        <input
+                          className={styles.renameInput}
+                          value={renameValue}
+                          onChange={(event) => setRenameValue(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') void commitRename(selectedEntry.path);
+                            if (event.key === 'Escape') setRenamingPath(null);
+                          }}
+                          autoFocus
+                        />
+                        <button className={styles.btnPrimary} onClick={() => void commitRename(selectedEntry.path)} disabled={busy !== null || !renameValue.trim()}>Save</button>
+                        <button className={styles.btn} onClick={() => setRenamingPath(null)} disabled={busy !== null}>Cancel</button>
+                      </span>
+                    ) : <span className={styles.heroTitle}>{selectedEntry.name}</span>}
                     <span className={styles.heroPath}>{selectedEntry.path}</span>
+                  </span>
+                  <span className={styles.heroActions}>
+                    {!selectedEntry.current && selectedEntry.exists ? (
+                      <button className={styles.btnPrimary} onClick={() => switchTo(selectedEntry.path)} disabled={busy !== null}>Open Library</button>
+                    ) : null}
+                    <button
+                      type="button"
+                      className={styles.iconButton}
+                      aria-label="Library actions"
+                      aria-haspopup="menu"
+                      aria-expanded={libraryMenu.state ? true : undefined}
+                      onClick={openLibraryMenu}
+                      disabled={busy !== null}
+                    >
+                      <IconDotsVertical size={16} />
+                    </button>
                   </span>
                 </div>
 
@@ -211,27 +605,6 @@ export function LibraryManager() {
                   {selectedEntry.current ? <span><IconCheck size={13} /> Current library</span> : null}
                   {selectedEntry.pinned ? <span><IconPin size={12} /> Pinned</span> : null}
                   {!selectedEntry.exists ? <span className={styles.missing}><IconAlertTriangle size={12} /> Missing on disk</span> : null}
-                </div>
-
-                <div className={styles.detailActions}>
-                  {!selectedEntry.current && selectedEntry.exists ? (
-                    <button className={styles.btnPrimary} onClick={() => switchTo(selectedEntry.path)} disabled={busy !== null}>Open Library</button>
-                  ) : null}
-                  <button className={styles.btn} onClick={() => run(`pin:${selectedEntry.path}`, () => pictoLibrary().togglePin(selectedEntry.path))} disabled={busy !== null}>
-                    {selectedEntry.pinned ? 'Unpin' : 'Pin'}
-                  </button>
-                  <button
-                    className={styles.btnDanger}
-                    disabled={busy !== null || selectedEntry.current}
-                    onClick={() => {
-                      if (window.confirm(`Remove "${selectedEntry.name}" from this list?\n\nThe library and its files remain on disk.`)) {
-                        setSelectedPath(null);
-                        void run(`remove:${selectedEntry.path}`, () => pictoLibrary().remove(selectedEntry.path));
-                      }
-                    }}
-                  >
-                    Remove from List
-                  </button>
                 </div>
 
                 <section className={styles.appearanceCard}>
@@ -246,20 +619,64 @@ export function LibraryManager() {
                       {showIconEditor ? 'Done' : 'Change…'}
                     </button>
                     <span className={styles.detailLabel}>Cover</span>
-                    <button
-                      className={styles.btn}
-                      onClick={() => setCoverPath(selectedEntry.path)}
-                      disabled={busy !== null || !selectedEntry.current}
-                      title={selectedEntry.current ? 'Choose a media item and crop the library cover' : 'Open this library before choosing its media'}
-                    >
-                      Choose…
-                    </button>
+                    <KbdTooltip label={selectedEntry.current ? 'Choose a media item and crop the library cover' : 'Open this library before choosing its media'}>
+                      <button
+                        className={styles.btn}
+                        onClick={() => setCoverPath(selectedEntry.path)}
+                        disabled={busy !== null || !selectedEntry.current}
+                      >
+                        Choose…
+                      </button>
+                    </KbdTooltip>
                   </div>
                   {showIconEditor ? (
                     <div className={styles.iconEditor}>
                       <IconPicker value={selectedEntry.icon} onChange={(icon) => void run(`meta:${selectedEntry.path}`, () => pictoLibrary().setMeta(selectedEntry.path, { icon, imageHash: null }))} />
                     </div>
                   ) : null}
+                </section>
+
+                <section className={styles.cloudCard}>
+                  <div className={styles.cardTitle}>Cloud Sync</div>
+                  {!selectedEntry.current ? (
+                    <p className={styles.cardDescription}>Open this library to configure its cloud location.</p>
+                  ) : cloudConfiguration?.root_path ? (
+                    <>
+                      <div className={styles.cloudSummary}>
+                        <span className={styles.detailLabel}>Provider</span>
+                        <span>{cloudConfiguration.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'} · {cloudConfiguration.account_label}</span>
+                        <span className={styles.detailLabel}>State</span>
+                        <span className={`${styles.syncState} ${styles[`syncState_${syncPresentation.tone}`]}`}>
+                          <span className={styles.syncDot} />
+                          {syncPresentation.label}
+                        </span>
+                        <span className={styles.detailLabel}>Last sync</span>
+                        <span>{formatLastSync(cloudStatus?.last_sync_at ?? null)}</span>
+                        <span className={styles.detailLabel}>Changes</span>
+                        <span>{cloudStatus?.pending_mutations ?? 0} pending</span>
+                        <span className={styles.detailLabel}>Files</span>
+                        <span>{cloudStatus?.pending_blobs ?? 0} pending{cloudStatus?.missing_blobs ? ` · ${cloudStatus.missing_blobs} unavailable` : ''}</span>
+                      </div>
+                      {syncPresentation.active ? (
+                        <div className={styles.syncProgress}>
+                          <div className={styles.syncProgressText}>
+                            <span>{cloudStatus?.message || 'Syncing library changes'}</span>
+                            <span>{formatRemainingTime(syncEtaSeconds) ?? (syncPresentation.total !== null ? `${syncPresentation.completed} of ${syncPresentation.total}` : 'Estimating time remaining…')}</span>
+                          </div>
+                          <ProgressBar
+                            done={syncPresentation.completed}
+                            total={syncPresentation.total ?? 0}
+                            indeterminate={syncPresentation.total === null}
+                            height={3}
+                          />
+                        </div>
+                      ) : cloudStatus?.message ? <p className={styles.cloudMessage}>{cloudStatus.message}</p> : null}
+                    </>
+                  ) : cloudRoots.length > 0 ? (
+                    <p className={styles.cardDescription}>Cloud sync is not configured. Choose an installed provider from Library actions.</p>
+                  ) : (
+                    <p className={styles.cardDescription}>Install and sign in to Google Drive or Dropbox on this computer, then reopen Library Manager.</p>
+                  )}
                 </section>
               </>
             ) : (
@@ -272,11 +689,23 @@ export function LibraryManager() {
         </div>
 
         <footer className={styles.footer}>
-          <button className={styles.btn} onClick={() => { setShowLocalCreate(true); setShowIconEditor(false); }} disabled={busy !== null}>
+          <button className={styles.btn} onClick={() => { setShowLocalCreate(true); setShowCloudOpen(false); setShowIconEditor(false); }} disabled={busy !== null}>
             <IconPlus size={14} /> New Library…
           </button>
           <button className={styles.btn} onClick={() => run('open-existing', () => pictoLibrary().open())} disabled={busy !== null}>
             <IconFolderOpen size={14} /> Open Existing…
+          </button>
+          <button
+            className={styles.btn}
+            onClick={() => {
+              setShowCloudOpen(true);
+              setShowLocalCreate(false);
+              setSelectedPath(null);
+              setShowIconEditor(false);
+            }}
+            disabled={busy !== null || cloudRoots.length === 0}
+          >
+            Open from Cloud…
           </button>
         </footer>
       </section>
@@ -299,6 +728,15 @@ export function LibraryManager() {
         }}
         onClose={() => setCoverPath(null)}
       />
+      {libraryMenu.state ? (
+        <ContextMenu
+          entries={libraryMenu.state.entries}
+          position={libraryMenu.state.position}
+          onClose={libraryMenu.close}
+          showSearch={false}
+          width={236}
+        />
+      ) : null}
     </div>
   );
 }

@@ -43,10 +43,16 @@ describe('themeRuntime', () => {
   });
 
   it('applies every document theme surface from one function', () => {
-    applyTheme('lightgray', true);
+    applyTheme('lightgray', true, 'mac');
+    expect(document.documentElement.dataset.platform).toBe('mac');
     expect(document.documentElement.dataset.theme).toBe('lightgray');
     expect(document.documentElement.dataset.mantineColorScheme).toBe('light');
     expect(document.documentElement.style.colorScheme).toBe('light');
+  });
+
+  it.each(['mac', 'windows', 'linux'] as const)('publishes the %s font platform for CSS resolution', (platform) => {
+    applyTheme('dark', true, platform);
+    expect(document.documentElement.dataset.platform).toBe(platform);
   });
 
   it('installs one OS listener and one cross-window listener per active runtime', async () => {

@@ -1,5 +1,6 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { renderWithProviders } from '../../test/render';
 import { GroupOrganizerModal } from './GroupOrganizerModal';
 
 const organizeIntoGroup = vi.hoisted(() => vi.fn());
@@ -16,7 +17,7 @@ describe('GroupOrganizerModal', () => {
   it('requires a name when creating a group from standalone items', async () => {
     const onComplete = vi.fn();
     const onClose = vi.fn();
-    render(
+    renderWithProviders(
       <GroupOrganizerModal
         open
         target={target}
@@ -41,7 +42,7 @@ describe('GroupOrganizerModal', () => {
   });
 
   it('requires the user to choose the winning group when several are selected', async () => {
-    render(
+    renderWithProviders(
       <GroupOrganizerModal
         open
         target={target}

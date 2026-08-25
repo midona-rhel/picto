@@ -60,8 +60,16 @@ import type { CanonicalNamespaceSummary } from '../../shared/types/canonical';
 import { IconAutoTag } from '../../shared/ui/icons/sidebar-menu-icons';
 import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import { showErrorNotification } from '../../shared/lib/notifications';
+import { formatLabelForMime } from '../grid/canvas/primitives';
 
 const store = getDefaultStore();
+
+function reportRatingFailure(reason: unknown): void {
+  showErrorNotification({
+    title: 'Could not change rating',
+    message: reason instanceof Error ? reason.message : String(reason),
+  });
+}
 
 // ── Formatters ──────────────────────────────────────────────────
 
@@ -157,11 +165,13 @@ function Preview({
   hashes,
   backgrounds = [],
   type,
+  formatLabel,
   fontHashes = new Set<string>(),
 }: {
   hashes: string[];
   backgrounds?: readonly (string | null)[];
   type: 'single' | 'collage' | 'stacked';
+  formatLabel?: string;
   fontHashes?: ReadonlySet<string>;
 }) {
   const contextMenu = useContextMenu();
@@ -198,6 +208,7 @@ function Preview({
             fallback={fontHashes.has(hash) ? 'font' : 'broken'}
           />
           <div className={styles.previewGlass} />
+          {formatLabel && <span className={styles.previewTypeLabel} data-inspector-format-label>{formatLabel}</span>}
         </div>
         {contextMenu.state && <ContextMenu entries={contextMenu.state.entries} position={contextMenu.state.position} onClose={contextMenu.close} />}
       </div>
@@ -236,29 +247,31 @@ function Preview({
   // Stacked
   const previews = hashes.slice(0, 3);
   if (previews.length === 0) return null;
-  const rots = [-4, 2, 0];
-  const offs = [{ x: -8, y: 4 }, { x: 6, y: -3 }, { x: 0, y: 0 }];
-  const start = 3 - previews.length;
   return (
     <div className={styles.preview}>
       <div className={styles.stackContainer}>
-        {previews.map((hash, i) => (
-          <div key={hash} className={styles.stackItem} style={{
-            transform: `rotate(${rots[start + i]}deg) translate(${offs[start + i].x}px, ${offs[start + i].y}px)`,
-            zIndex: i, filter: i === previews.length - 1 ? undefined : 'brightness(0.7)',
-          }}>
-            <div className={styles.previewFrame} style={{ background: backgrounds[i] ?? undefined }}>
-              <ThumbnailImage
-                src={`media://localhost/thumb/${hash}.jpg`}
-                alt=""
-                className={styles.previewImage}
-                draggable={false}
-                fallback={fontHashes.has(hash) ? 'font' : 'broken'}
-              />
-              <div className={styles.previewGlass} />
+        {previews.map((hash, i) => {
+          const top = i === previews.length - 1;
+          const motionClass = top
+            ? styles.stackItemTop
+            : i % 2 === 0 ? styles.stackItemLeft : styles.stackItemRight;
+          return (
+            <div key={hash} className={`${styles.stackItem} ${motionClass}`} style={{
+              zIndex: i, filter: top ? undefined : 'brightness(0.7)',
+            }}>
+              <div className={styles.previewFrame} style={{ background: backgrounds[i] ?? undefined }}>
+                <ThumbnailImage
+                  src={`media://localhost/thumb/${hash}.jpg`}
+                  alt=""
+                  className={styles.previewImage}
+                  draggable={false}
+                  fallback={fontHashes.has(hash) ? 'font' : 'broken'}
+                />
+                <div className={styles.previewGlass} />
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
@@ -513,7 +526,7 @@ export function InspectorSkeleton({
           <div className={styles.propsStack} data-inspector-core-properties="">
             {rating && (summaryPending
               ? <div className={styles.pendingRating}>{showSummaryLoading && <SummarySpinner label="Loading shared rating" />}</div>
-              : <StarRating value={rating.value} onChange={rating.onChange} />)}
+              : <StarRating value={rating.value} onChange={rating.onChange} onError={reportRatingFailure} />)}
             {coreProperties.filter((property) => property.loading || (property.value !== '' && property.value !== '—')).map((property) => (
               <div key={property.label} data-inspector-core-property={property.label}>
                 <PropertyRow {...property} />
@@ -622,13 +635,14 @@ export function Inspector() {
         hashes={primary ? [primary.file_hash] : []}
         backgrounds={primary ? [primary.dominant_color_hex] : []}
         type="single"
+        formatLabel={primary ? formatLabelForMime(primary.mime_type) : undefined}
         fontHashes={primary?.mime_type.startsWith('font/') ? new Set([primary.file_hash]) : undefined}
       />}
       palette={palette}
       name={{ value: d.label ?? primary?.name ?? '', onCommit: (value) => { void entityMutations.setItemName(d.item_id, value); } }}
       notes={{ value: primary?.notes ?? '', onCommit: (value) => { void entityMutations.setItemNotes(d.item_id, value); } }}
       source={{ urls: primary?.source_urls ?? [], onChange: (urls) => { void entityMutations.setItemSourceUrls(d.item_id, urls); } }}
-      rating={{ value: sharedRating ?? 0, onChange: (rating) => { void entityMutations.setItemRating(d.item_id, rating); } }}
+      rating={{ value: sharedRating ?? 0, onChange: (rating) => entityMutations.setItemRating(d.item_id, rating) }}
       coreProperties={normalizedCoreProperties({
         Items: { value: d.media.length.toLocaleString() },
         Dimensions: { value: primary?.pixel_width && primary.pixel_height ? `${primary.pixel_width} × ${primary.pixel_height}` : '—' },
@@ -687,7 +701,7 @@ export function Inspector() {
       selectionCount={count}
       notes={{ value: summary?.shared_notes ?? '', onCommit: commitNotes, readOnly: summaryPending }}
       source={{ urls: summary?.shared_source_urls ?? [], onChange: commitSources, unavailable: summaryPending }}
-      rating={{ value: summary?.stats?.rating_stats?.shared ?? 0, onChange: selTarget ? (rating) => { void entityMutations.setTargetRating(selTarget, rating); } : undefined }}
+      rating={{ value: summary?.stats?.rating_stats?.shared ?? 0, onChange: selTarget ? (rating) => entityMutations.setTargetRating(selTarget, rating) : undefined }}
       coreProperties={normalizedCoreProperties({
         Size: summaryPending
           ? { value: '', loading: true, showLoading: showSummaryLoading }
@@ -887,13 +901,13 @@ function TagsSection({ tags, onRemove, editable = true, pending = false, showLoa
             }}
           />
         ))}
-        {editable && !hasTags && <KbdTooltip label="Add Tags" shortcut="T">
+        {editable && !hasTags && <KbdTooltip label="Add Tags" shortcutId="organize.addTag">
           <InspectorActionButton action="add-tags" variant="empty-section" onClick={(e) => openPortal(e, tagSelectPortalAtom)}>
             <InspectorAddIcon />
             <span>Add Tags</span>
           </InspectorActionButton>
         </KbdTooltip>}
-        {editable && hasTags && <KbdTooltip label="Add Tags" shortcut="T">
+        {editable && hasTags && <KbdTooltip label="Add Tags" shortcutId="organize.addTag">
           <button
             aria-label="Add Tags"
             className={styles.tagAddBtn}
@@ -944,13 +958,13 @@ function FoldersSection({ folders, onRemove, onNavigate, editable = true, pendin
             }}
           />
         ))}
-        {editable && !hasFolders && <KbdTooltip label="Add to Folder" shortcut="F">
+        {editable && !hasFolders && <KbdTooltip label="Add to Folder" shortcutId="organize.addFolder">
           <InspectorActionButton action="add-folder" variant="empty-section" onClick={(e) => openPortal(e, folderPickerPortalAtom)}>
             <InspectorAddIcon />
             <span>Add to Folder</span>
           </InspectorActionButton>
         </KbdTooltip>}
-        {editable && hasFolders && <KbdTooltip label="Add to Folder" shortcut="F">
+        {editable && hasFolders && <KbdTooltip label="Add to Folder" shortcutId="organize.addFolder">
           <button aria-label="Add to Folder" className={styles.tagAddBtn} data-inspector-action="add-folder" onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button">
             <InspectorAddIcon />
           </button>

@@ -200,6 +200,10 @@ export function GroupSurface({
       const closeDef = getShortcut('view.closeDetail')!;
       const detailDef = getShortcut('view.detailView')!;
       const quickLookDef = getShortcut('view.quicklook')!;
+      const selectAllDef = getShortcut('edit.selectAll')!;
+      const removeMembersDef = getShortcut('group.removeMembers')!;
+      const previousDef = getShortcut('view.prevImage')!;
+      const nextDef = getShortcut('view.nextImage')!;
       if (mode === 'reader' && (
         matchesShortcutDef(event, closeDef)
         || matchesShortcutDef(event, detailDef)
@@ -214,20 +218,23 @@ export function GroupSurface({
         setQuickLookIndex(members.findIndex((item) => item.item_id === selectedItems[0].item_id));
         return true;
       }
-      if (mode === 'editor' && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'a' && members.length > 0) {
+      if (mode === 'editor' && matchesShortcutDef(event, selectAllDef) && members.length > 0) {
+        event.preventDefault();
         setSelectedItemIds(new Set(members.map((item) => item.item_id)));
         setSelectionAnchorId(members[0]?.item_id ?? null);
         return true;
       }
-      if (mode === 'editor' && selectedItems.length > 0 && (event.key === 'Backspace' || event.key === 'Delete')) {
+      if (mode === 'editor' && selectedItems.length > 0 && matchesShortcutDef(event, removeMembersDef)) {
+        event.preventDefault();
         void detachMembers(selectedItems);
         return true;
       }
-      if (mode === 'reader' && (event.key === 'ArrowLeft' || event.key === 'ArrowRight')) {
-        onNavigateRoot(event.key === 'ArrowLeft' ? -1 : 1);
+      if (mode === 'reader' && (matchesShortcutDef(event, previousDef) || matchesShortcutDef(event, nextDef))) {
+        event.preventDefault();
+        onNavigateRoot(matchesShortcutDef(event, previousDef) ? -1 : 1);
         return true;
       }
-      if (event.key !== 'Escape') return;
+      if (!matchesShortcutDef(event, closeDef)) return;
       if (mode === 'editor' && selectedItemIds.size > 0) {
         setSelectedItemIds(new Set());
         setSelectionAnchorId(null);

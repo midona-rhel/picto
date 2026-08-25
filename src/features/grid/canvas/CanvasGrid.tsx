@@ -54,6 +54,7 @@ import {
 } from '../gridAppearance';
 
 const TEXT_NAME_ROW_H = 20;
+const GRID_RESIZE_RENDER_MARGIN = 500;
 const EMPTY_ITEM_ID_SET = new Set<number>();
 const EMPTY_FOLDER_NODE_SET = new Set<string>();
 
@@ -305,6 +306,9 @@ export function CanvasGrid({
   onScrollPositionChangeRef.current = onScrollPositionChange;
 
   const resizeRedrawRef = useRef<() => void>(() => {});
+  const resizeRedrawNowRef = useRef<() => void>(() => {});
+  const resizePreviewRef = useRef<() => boolean>(() => true);
+  const renderWindowRef = useRef({ scrollTop: 0, viewportHeight: 0 });
   const viewportRefs = useMemo(() => ({
     container: containerRef,
     contentFrame: contentFrameRef,
@@ -313,6 +317,8 @@ export function CanvasGrid({
     overlayCanvas: overlayCanvasRef,
     header: headerRef,
     redraw: resizeRedrawRef,
+    redrawNow: resizeRedrawNowRef,
+    previewResize: resizePreviewRef,
   }), []);
   const { layoutWidth, headerHeight, committedSizeRef } = useCanvasViewport(viewportRefs, headerContent, viewportCommitKey);
 
@@ -455,21 +461,25 @@ export function CanvasGrid({
     const ctx = canvas.getContext('2d', { desynchronized: true });
     if (!ctx) return;
 
-    ensureCanvasSize(canvas, vp.containerWidth, vp.viewportHeight, vp.dpr);
+    const visibleScrollTop = Math.max(0, vp.scrollTop - headerHeight);
+    const renderHeight = vp.viewportHeight + GRID_RESIZE_RENDER_MARGIN * 2;
+    const scrollTop = visibleScrollTop - GRID_RESIZE_RENDER_MARGIN;
+    ensureCanvasSize(canvas, vp.containerWidth, renderHeight, vp.dpr);
+    canvas.style.transform = `translateY(-${GRID_RESIZE_RENDER_MARGIN}px)`;
+    renderWindowRef.current = { scrollTop: visibleScrollTop, viewportHeight: vp.viewportHeight };
 
     // Offset by header height — tile positions start at Y=0 but the header pushes canvas content down
-    const scrollTop = Math.max(0, vp.scrollTop - headerHeight);
     const now = performance.now();
 
     ctx.save();
     ctx.scale(vp.dpr, vp.dpr);
-    ctx.clearRect(0, 0, vp.containerWidth, vp.viewportHeight);
+    ctx.clearRect(0, 0, vp.containerWidth, renderHeight);
 
     // The activation zone controls decode residency. The actual viewport
     // independently controls entity reveal identity.
     const ACTIVATION_MARGIN = 100;
     const zoneTop = scrollTop - ACTIVATION_MARGIN;
-    const zoneBottom = scrollTop + vp.viewportHeight + ACTIVATION_MARGIN;
+    const zoneBottom = scrollTop + renderHeight + ACTIVATION_MARGIN;
 
     // Reuse arrays/sets across frames to avoid per-frame GC pressure.
     const activeTiles = activeTilesRef.current;
@@ -489,13 +499,13 @@ export function CanvasGrid({
       layoutModel.items,
       zoneTop,
       zoneBottom,
-      scrollTop,
-      scrollTop + vp.viewportHeight,
+      visibleScrollTop,
+      visibleScrollTop + vp.viewportHeight,
       activationBuffersRef.current,
     );
 
     // Send plan to worker — deduplicates internally, only posts when visible set changes.
-    pipeline.updatePlan(planTiles, scrollTop + vp.viewportHeight / 2);
+    pipeline.updatePlan(planTiles, visibleScrollTop + vp.viewportHeight / 2);
     revealTrackerRef.current.updateViewport(
       viewportHashes,
       now,
@@ -507,7 +517,7 @@ export function CanvasGrid({
 
     const drawCtx: DrawContext = {
       scrollTop,
-      viewportHeight: vp.viewportHeight,
+      viewportHeight: renderHeight,
       textHeight,
       borderRadius: 4,
     };
@@ -559,12 +569,16 @@ export function CanvasGrid({
     const ctx = canvas.getContext('2d', { desynchronized: true });
     if (!ctx) return;
 
-    ensureCanvasSize(canvas, vp.containerWidth, vp.viewportHeight, vp.dpr);
+    const renderWindow = renderWindowRef.current;
+    const renderHeight = renderWindow.viewportHeight + GRID_RESIZE_RENDER_MARGIN * 2;
+    ensureCanvasSize(canvas, vp.containerWidth, renderHeight, vp.dpr);
+    const visibleScrollTop = Math.max(0, vp.scrollTop - headerHeight);
+    canvas.style.transform = `translateY(${renderWindow.scrollTop - visibleScrollTop - GRID_RESIZE_RENDER_MARGIN}px)`;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     ctx.save();
     ctx.scale(vp.dpr, vp.dpr);
-    const scrollTop = Math.max(0, vp.scrollTop - headerHeight);
+    const scrollTop = renderWindow.scrollTop - GRID_RESIZE_RENDER_MARGIN;
 
     // Selection follows the rendered thumbnail, not the empty tile cell.
     if (selectedItemIds.size > 0) {
@@ -576,7 +590,7 @@ export function CanvasGrid({
         const item = layoutModel.items[i];
         if (!pos || !item) continue;
         const drawY = pos.y - scrollTop;
-        if (drawY + pos.h < -100 || drawY > vp.viewportHeight + 100) continue;
+        if (drawY + pos.h < -100 || drawY > renderHeight + 100) continue;
         const imgH = pos.h - textHeight;
         const useContain = (viewMode === 'grid' && !fitThumbnails)
           || item.mime.startsWith('video/')
@@ -637,7 +651,8 @@ export function CanvasGrid({
       const hovPos = layoutModel.positions[hovIdx];
       if (hovItem && hovPos && !hovItem.display_mime_type.startsWith('video/')) {
         const drawY = hovPos.y - scrollTop;
-        if (drawY + hovPos.h >= 0 && drawY <= vp.viewportHeight) {
+        if (drawY + hovPos.h >= GRID_RESIZE_RENDER_MARGIN
+          && drawY <= GRID_RESIZE_RENDER_MARGIN + vp.viewportHeight) {
           const imgH = hovPos.h - textHeight;
           const ZOOM_SIZE = 24;
           const bgW = ZOOM_SIZE + 4;
@@ -727,7 +742,28 @@ export function CanvasGrid({
     drawBaseRef,
     drawOverlayRef,
   });
+  // Resizing a canvas backing buffer clears it immediately. Repaint resize
+  // commits synchronously so the browser never presents that cleared frame;
+  // ordinary scrolling and animation still use the shared RAF scheduler.
   resizeRedrawRef.current = () => markDirty('both');
+  resizeRedrawNowRef.current = () => {
+    drawBaseRef.current();
+    drawOverlayRef.current();
+  };
+  resizePreviewRef.current = () => {
+    const container = containerRef.current;
+    const viewportLayer = viewportLayerRef.current;
+    if (!container || !viewportLayer) return true;
+    const currentScrollTop = Math.max(0, container.scrollTop - headerHeightRef.current);
+    const rendered = renderWindowRef.current;
+    const scrollDelta = rendered.scrollTop - currentScrollTop;
+    const heightGrowth = container.clientHeight - rendered.viewportHeight;
+    const transform = scrollDelta - GRID_RESIZE_RENDER_MARGIN;
+    if (baseCanvasRef.current) baseCanvasRef.current.style.transform = `translateY(${transform}px)`;
+    if (overlayCanvasRef.current) overlayCanvasRef.current.style.transform = `translateY(${transform}px)`;
+    return Math.abs(scrollDelta) > GRID_RESIZE_RENDER_MARGIN
+      || heightGrowth > GRID_RESIZE_RENDER_MARGIN;
+  };
 
   // ── Redraw on layout/prop changes ──
   useEffect(() => { markDirty('both'); }, [layoutModel, markDirty]);
@@ -737,6 +773,16 @@ export function CanvasGrid({
   useEffect(() => { markDirty('base'); }, [showName, showExtension, showExtensionLabel, showItemCount, showResolution, viewMode, fitThumbnails, grayscale, markDirty]);
   useEffect(() => { markDirty('overlay'); }, [selectedItemIds, markDirty]);
   useEffect(() => { markDirty('both'); }, [headerHeight, markDirty]);
+  useEffect(() => {
+    if (!document.fonts) return;
+    let active = true;
+    void Promise.all([
+      document.fonts.load('400 13px "Picto Roboto"'),
+      document.fonts.load('500 10px "Picto Roboto"'),
+      document.fonts.load('600 10px "Picto Roboto"'),
+    ]).then(() => { if (active) markDirty('both'); });
+    return () => { active = false; };
+  }, [markDirty]);
 
   // ── Redraw on theme change (canvas reads CSS variables, not reactive to theme) ──
   // Deliberately NOT observing the style attribute: AppShell writes its
@@ -1307,6 +1353,7 @@ export function CanvasGrid({
     <div className={styles.root}>
       <div
         ref={containerCallbackRef}
+        data-grid-scroll-container
         className={`${styles.container} ${interactive ? '' : styles.containerFrozen}`}
         onScroll={handleScroll}
         onClick={handleClick}

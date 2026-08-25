@@ -151,7 +151,7 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
     const result: ReactNode[] = [
       <div
         key={node.id}
-        className={`${styles.row} ${isMember ? styles.rowMember : ''} ${isExcluded ? styles.rowExcluded : ''}`}
+        className={`${styles.row} ${isSelected ? styles.rowSelected : ''} ${isMember ? styles.rowMember : ''} ${isExcluded ? styles.rowExcluded : ''}`}
         style={{ paddingLeft: 6 + depth * 20 }}
         onClick={isMember ? undefined : (e) => onToggle(folderId, e)}
         onContextMenu={onExclude || onContextMenu ? (event) => {
@@ -172,17 +172,19 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
           <div className={styles.expandPlaceholder} />
         )}
         {checkable && (
-          isMember ? (
-            <div className={`${checkStyles.checkBox} ${styles.checkMember}`}>
-              <IconCheck size={10} />
-            </div>
-          ) : (
-            <div className={`${checkStyles.checkBox} ${isExcluded ? checkStyles.checkBoxExcluded : isSelected ? (filterSelection ? checkStyles.checkBoxFilterChecked : checkStyles.checkBoxChecked) : ''}`}>
-              {isExcluded ? <IconX size={10} /> : isSelected ? <IconCheck size={10} /> : null}
-            </div>
-          )
+          <div className={styles.checkSlot}>
+            {isMember ? (
+              <div className={`${checkStyles.checkBox} ${styles.checkMember}`}>
+                <IconCheck size={10} />
+              </div>
+            ) : (
+              <div className={`${checkStyles.checkBox} ${isExcluded ? checkStyles.checkBoxExcluded : isSelected ? (filterSelection ? checkStyles.checkBoxFilterChecked : checkStyles.checkBoxChecked) : ''}`}>
+                {isExcluded ? <IconX size={10} /> : isSelected ? <IconCheck size={10} /> : null}
+              </div>
+            )}
+          </div>
         )}
-        <IconFolder size={14} className={styles.folderIcon} style={node.color ? { color: node.color } : undefined} />
+        <IconFolder size={20} stroke={1.5} fill="currentColor" fillOpacity={0.16} className={styles.folderIcon} style={node.color ? { color: node.color } : undefined} />
         <span className={styles.name}>
           {searchLower ? highlightMatch(node.name, searchLower) : node.name}
         </span>

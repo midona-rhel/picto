@@ -1,0 +1,25 @@
+{
+  "retrieved": "2026-08-25",
+  "purpose": "Offline Picto guided-tour fixtures",
+  "assets": [
+    {
+      "files": ["mona-lisa.jpg", "seed-mona-detail.jpg", "inbox-study.jpg", "collection-a.jpg"],
+      "title": "Mona Lisa",
+      "creator": "Leonardo da Vinci",
+      "source": "https://commons.wikimedia.org/wiki/File:Leonardo_da_Vinci_-_Mona_Lisa.jpg",
+      "license": "Public Domain Mark 1.0",
+      "licenseUrl": "https://creativecommons.org/publicdomain/mark/1.0/",
+      "modifications": "Resized and cropped JPEG derivatives for the offline guided tour."
+    },
+    {
+      "files": ["lady-with-an-ermine.jpg", "lady-with-an-ermine-detail.jpg", "seed-lady-detail.jpg", "inbox-study-2.jpg", "collection-b.jpg", "duplicate-a.jpg", "duplicate-b.jpg"],
+      "title": "Lady with an Ermine",
+      "artworkCreator": "Leonardo da Vinci",
+      "photographer": "Abzeronow",
+      "source": "https://commons.wikimedia.org/wiki/File:Lady_With_an_Ermine_by_Leonardo_da_Vinci,_20240806.jpg",
+      "license": "CC0 1.0 Universal; underlying artwork public domain",
+      "licenseUrl": "https://creativecommons.org/publicdomain/zero/1.0/",
+      "modifications": "Resized and cropped JPEG derivatives for the offline guided tour."
+    }
+  ]
+}

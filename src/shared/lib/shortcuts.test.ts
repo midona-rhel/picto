@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
-import { getKeyboardPreset, getShortcut, setKeyboardPreset, setShortcutBinding } from './shortcuts';
+import { getKeyboardPreset, getShortcut, matchesShortcutDef, setKeyboardPreset, setShortcutBinding } from './shortcuts';
 
 describe('keyboard presets', () => {
   afterEach(() => {
@@ -27,5 +27,16 @@ describe('keyboard presets', () => {
       'nav.search': { keys: 'Mod+Shift+F' },
     });
     setShortcutBinding('nav.search', 'keys', 'Mod+F');
+  });
+
+  it('allows Shift to extend a remapped grid movement shortcut', () => {
+    setShortcutBinding('grid.moveRight', 'keys', 'E');
+    const shortcut = getShortcut('grid.moveRight');
+    expect(shortcut).toBeDefined();
+    expect(matchesShortcutDef(new KeyboardEvent('keydown', { key: 'e', shiftKey: true }), shortcut!, {
+      allowExtraShift: true,
+    })).toBe(true);
+    expect(matchesShortcutDef(new KeyboardEvent('keydown', { key: 'e', shiftKey: true }), shortcut!)).toBe(false);
+    setShortcutBinding('grid.moveRight', 'keys', 'ArrowRight');
   });
 });

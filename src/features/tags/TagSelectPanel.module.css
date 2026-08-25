@@ -49,7 +49,7 @@
 }
 
 .sidebarItem:hover {
-  background-color: var(--color-surface-active);
+  background-color: var(--color-surface-hover);
 }
 
 .sidebarItemActive {
@@ -132,23 +132,27 @@
   position: relative;
 }
 
-.tagListInner {
-  position: relative;
-  width: 100%;
+.tagPages {
+  padding: 4px;
+}
+
+.tagGrid {
+  display: grid;
+  grid-auto-flow: row;
+  grid-auto-rows: 26px;
+  align-content: start;
+  column-gap: 4px;
+  box-sizing: border-box;
 }
 
 /* ── Tag row ── */
 
 .tagRow {
-  position: absolute;
-  left: 0;
-  right: 0;
   display: flex;
   align-items: center;
-  height: 28px;
-  margin: 0 4px;
+  height: 26px;
   padding: 0 6px;
-  gap: 8px;
+  gap: 6px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 13px;
@@ -157,11 +161,19 @@
 }
 
 .tagRow:hover {
-  background: var(--color-surface-active);
+  background: var(--color-surface-hover);
 }
 
 .tagRowFocused {
   background: var(--color-surface-active);
+  outline: 1px solid color-mix(in srgb, var(--color-text-primary) 25%, transparent);
+  outline-offset: -1px;
+}
+
+.tagRowSelected {
+  background: var(--color-surface-active);
+  outline: 1px solid var(--color-contrast-25);
+  outline-offset: -1px;
 }
 
 .tagRowExcluded {
@@ -178,12 +190,17 @@
   width: 13px;
   height: 13px;
   flex-shrink: 0;
-  opacity: 0.62;
+  color: var(--tag-color, var(--color-text-secondary));
+  opacity: 0.72;
   filter: saturate(0.9);
   transition: opacity 120ms ease;
 }
 
 .tagRow:hover .tagBookmark {
+  opacity: 1;
+}
+
+.tagRowSelected .tagBookmark {
   opacity: 1;
 }
 
@@ -193,7 +210,8 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  opacity: 0.85;
+  opacity: 0.95;
+  color: var(--color-text-primary);
 }
 
 .tagRow:hover .tagName {
@@ -217,7 +235,8 @@
 
 .matchHighlight {
   font-weight: var(--font-weight-bold);
-  color: var(--color-primary);
+  color: var(--color-text-primary);
+  border-bottom: 1px solid var(--color-contrast-20);
 }
 
 .emptyState {
@@ -227,4 +246,51 @@
   height: 60px;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
+}
+
+.settingsBackdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.settingsPanel {
+  position: absolute;
+  z-index: 3;
+  top: 8px;
+  right: 8px;
+  width: 240px;
+  box-sizing: border-box;
+  padding: 12px;
+  border-top: var(--glass-border-top);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+  border-radius: 8px;
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: var(--glass-blur);
+}
+
+.settingsRow {
+  width: 100%;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+  text-align: left;
+}
+
+button.settingsRow:hover {
+  background: var(--color-surface-hover);
 }

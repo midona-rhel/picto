@@ -1,11 +1,28 @@
 .root {
   width: 100vw;
   height: 100vh;
-  padding: 12px;
+  box-sizing: border-box;
   color: var(--color-text-primary);
   font: 400 13px/1.4 var(--font-family-ui, var(--font-family));
-  background: transparent;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
   overflow: hidden;
+}
+
+/* Keep the directional highlight above all window content. */
+.root::after {
+  content: '';
+  position: fixed;
+  z-index: var(--layer-drag-overlay);
+  inset: 0;
+  pointer-events: none;
+  border-top: var(--glass-border-top);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+  border-radius: 10px;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5);
 }
 
 .panel {
@@ -14,22 +31,14 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--glass-bg);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border-top: var(--glass-border-top);
-  border-right: var(--glass-border-side);
-  border-bottom: var(--glass-border-bottom);
-  border-left: var(--glass-border-side);
-  border-radius: 10px;
-  box-shadow: var(--shadow-panel);
+  background: transparent;
 }
 
 .header {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  height: 44px;
+  min-height: 58px;
   padding: 0 12px 0 16px;
   border-bottom: 1px solid var(--color-border-secondary);
   -webkit-app-region: drag;
@@ -98,16 +107,25 @@
 .rowSelected { composes: row; background: var(--color-surface-active); }
 
 .rowIcon {
-  width: 28px;
-  height: 28px;
-  border-radius: 7px;
+  min-width: 42px;
+}
+
+.row:hover .rowIcon,
+.rowSelected:hover .rowIcon {
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--color-text-primary) 30%, transparent),
+    0 0 0 3px color-mix(in srgb, var(--color-text-primary) 9%, transparent),
+    inset 0 1px 0 var(--color-contrast-20),
+    inset 0 0 0 1px var(--color-border-secondary),
+    inset 0 -1px 2px var(--color-black-20);
 }
 
 .rowMain { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .rowName, .rowPath { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rowName { font-size: 13px; }
 .rowPath { color: var(--color-text-tertiary); font-size: 10px; }
-.rowStatus { display: flex; align-items: center; flex-shrink: 0; color: var(--color-text-secondary); }
+.rowStatus { display: flex; align-items: center; flex-shrink: 0; gap: 6px; color: var(--color-text-secondary); }
+.rowSyncStatus { display: inline-flex; align-items: center; }
 
 .detailPane { min-width: 0; overflow-y: auto; padding: 22px; }
 .hero { display: flex; align-items: center; gap: 12px; }
@@ -126,13 +144,27 @@
 }
 
 .heroLibraryIcon {
+  border-radius: 50%;
   background: transparent;
-  box-shadow: none;
 }
 
-.heroInfo { min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.heroInfo { min-width: 0; flex: 1; display: flex; flex-direction: column; gap: 3px; }
+.heroActions { flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
 .heroTitle { color: var(--color-text-primary); font-size: 16px; font-weight: var(--font-weight-medium); }
 .heroPath { overflow: hidden; color: var(--color-text-tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.renameRow { display: flex; align-items: center; gap: 6px; }
+.renameInput {
+  width: min(240px, 100%);
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: 6px;
+  outline: none;
+  background: var(--color-control-surface);
+  color: var(--color-text-primary);
+  font: 400 13px var(--font-family-ui, var(--font-family));
+}
+.renameInput:focus { border-color: var(--color-primary-60); }
 .heroDescription { max-width: 360px; margin: 6px 0 18px; color: var(--color-text-secondary); font-size: 12px; }
 
 .statusLine {
@@ -147,8 +179,6 @@
 
 .statusLine span { display: inline-flex; align-items: center; gap: 4px; }
 .missing { color: var(--color-negative); }
-.detailActions { display: flex; align-items: center; gap: 8px; margin: 8px 0 20px; }
-
 .btn, .btnPrimary, .btnDanger {
   display: inline-flex;
   align-items: center;
@@ -171,12 +201,78 @@
 .btnPrimary:hover { background: var(--color-primary-60); }
 .btnDanger { color: var(--color-negative); }
 
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.iconButton:hover, .iconButton[aria-expanded='true'] { background: var(--color-surface-hover); color: var(--color-text-primary); }
+.iconButton:disabled { opacity: 0.35; cursor: default; }
+
 .appearanceCard {
   padding: 14px;
   border: 1px solid var(--color-border-secondary);
   border-radius: 8px;
   background: var(--color-control-surface);
 }
+
+.cloudCard {
+  margin-top: 12px;
+  padding: 14px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-control-surface);
+}
+
+.cardDescription { margin: 0; color: var(--color-text-secondary); font-size: 12px; }
+.cloudSummary { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px 12px; font-size: 12px; }
+.syncState { display: inline-flex; align-items: center; gap: 7px; }
+.syncDot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
+.syncState_positive { color: var(--color-success, #5fb56b); }
+.syncState_neutral { color: var(--color-text-secondary); }
+.syncState_warning { color: var(--color-warning, #e8a33d); }
+.syncState_negative { color: var(--color-negative); }
+.syncProgress { display: flex; flex-direction: column; gap: 7px; margin-top: 13px; }
+.syncProgressText { display: flex; align-items: center; justify-content: space-between; gap: 16px; color: var(--color-text-secondary); font-size: 11px; }
+.syncProgressText span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.syncProgressText span:last-child { flex-shrink: 0; color: var(--color-text-tertiary); }
+.cloudMessage { margin: 12px 0 0; color: var(--color-text-secondary); font-size: 11px; }
+
+.cloudLibraryList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(520px, 100%);
+  max-height: 188px;
+  margin-bottom: 14px;
+  overflow-y: auto;
+}
+
+.cloudLibraryRow {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: var(--color-control-surface);
+  color: var(--color-text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.cloudLibraryRow:hover { background: var(--color-surface-hover); }
+.cloudLibrarySelected { composes: cloudLibraryRow; border-color: var(--color-primary-60); background: var(--color-surface-active); }
 
 .cardTitle { margin-bottom: 12px; color: var(--color-text-primary); font-size: 13px; font-weight: var(--font-weight-medium); }
 .detailGrid { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 10px 12px; }

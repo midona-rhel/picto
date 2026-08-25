@@ -1,15 +1,24 @@
 import { Fragment, type ReactNode, useEffect, useRef, useState } from 'react';
 import { IconBooks } from '@tabler/icons-react';
 import { invoke, listen } from '../../platform/ipc';
+import { ProgressBar } from '../../shared/ui/ProgressBar';
 import { WindowControls } from '../../shared/ui/WindowControls';
 import styles from './LibraryGate.module.css';
 
 interface LibraryConfig {
   currentPath: string | null;
+  openingPath?: string | null;
+}
+
+interface CloudSyncStatus {
+  phase: string;
+  completed_units: number;
+  total_units: number | null;
+  message: string;
 }
 
 type LibraryState =
-  | { kind: 'loading' }
+  | { kind: 'loading'; path?: string }
   | { kind: 'closed' }
   | { kind: 'open'; path: string };
 
@@ -23,25 +32,34 @@ function openLibraryManager(): Promise<void> {
 
 export function LibraryGate({ children }: { children: ReactNode }) {
   const [library, setLibrary] = useState<LibraryState>({ kind: 'loading' });
+  const [cloudStatus, setCloudStatus] = useState<CloudSyncStatus | null>(null);
   const managerRequested = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
-    let unlisten: (() => void) | undefined;
+    const unlisteners: Array<() => void> = [];
 
     void listen<{ path: string }>('library-switched', ({ payload }) => {
       if (!cancelled) setLibrary({ kind: 'open', path: payload.path });
     }).then((dispose) => {
       if (cancelled) dispose();
-      else unlisten = dispose;
+      else unlisteners.push(dispose);
+    });
+    void listen<{ path: string }>('library-switching', ({ payload }) => {
+      if (!cancelled) setLibrary({ kind: 'loading', path: payload.path });
+    }).then((dispose) => {
+      if (cancelled) dispose();
+      else unlisteners.push(dispose);
     });
 
     void getLibraryConfig()
       .then((config) => {
         if (cancelled) return;
-        setLibrary(config.currentPath
-          ? { kind: 'open', path: config.currentPath }
-          : { kind: 'closed' });
+        setLibrary(config.openingPath
+          ? { kind: 'loading', path: config.openingPath }
+          : config.currentPath
+            ? { kind: 'open', path: config.currentPath }
+            : { kind: 'closed' });
       })
       .catch(() => {
         if (!cancelled) setLibrary({ kind: 'closed' });
@@ -49,9 +67,32 @@ export function LibraryGate({ children }: { children: ReactNode }) {
 
     return () => {
       cancelled = true;
-      unlisten?.();
+      unlisteners.forEach((dispose) => dispose());
     };
   }, []);
+
+  useEffect(() => {
+    if (library.kind !== 'loading' || !library.path) {
+      setCloudStatus(null);
+      return;
+    }
+    let cancelled = false;
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const poll = async () => {
+      try {
+        const status = await invoke<CloudSyncStatus>('cloud.status.get');
+        if (!cancelled) setCloudStatus(status);
+      } catch {
+        // The native state may still be opening; the next poll retries.
+      }
+      if (!cancelled) timeout = setTimeout(poll, 100);
+    };
+    void poll();
+    return () => {
+      cancelled = true;
+      if (timeout) clearTimeout(timeout);
+    };
+  }, [library]);
 
   useEffect(() => {
     if (library.kind !== 'closed' || managerRequested.current) return;
@@ -65,7 +106,7 @@ export function LibraryGate({ children }: { children: ReactNode }) {
 
   return (
     <div className={styles.root}>
-      <div className={styles.titlebar}>
+      <div className={styles.titlebar} data-window-drag-region="">
         <WindowControls />
       </div>
       {library.kind === 'closed' ? (
@@ -80,6 +121,19 @@ export function LibraryGate({ children }: { children: ReactNode }) {
           >
             Choose Library…
           </button>
+        </main>
+      ) : library.path ? (
+        <main className={styles.content} aria-live="polite">
+          <span className={styles.spinner} aria-hidden="true" />
+          <h1>{cloudStatus?.message || 'Opening your library'}</h1>
+          <div className={styles.progress}>
+            <ProgressBar
+              done={cloudStatus?.completed_units ?? 0}
+              total={cloudStatus?.total_units ?? 0}
+              indeterminate={!cloudStatus?.total_units}
+              height={3}
+            />
+          </div>
         </main>
       ) : null}
     </div>

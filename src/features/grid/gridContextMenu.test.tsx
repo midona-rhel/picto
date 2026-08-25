@@ -135,6 +135,21 @@ describe('buildTileContextMenu', () => {
     expect(onOpenWithApplication).toHaveBeenCalledWith('hash', '/System/Applications/Preview.app');
   });
 
+  it('reserves the Open With Other submenu while macOS discovers applications', () => {
+    const entries = buildEntityOpenContextEntries({
+      hash: 'hash',
+      openWithOptions: null,
+      openWithPending: true,
+    });
+    const submenu = entries.find(
+      (entry) => 'submenu' in entry && entry.submenu && entry.label === 'Open With Other',
+    );
+
+    expect(submenu).toBeDefined();
+    if (!submenu || !('children' in submenu)) throw new Error('missing pending submenu');
+    expect(submenu.children[0]).toMatchObject({ label: 'Loading applications...', disabled: true });
+  });
+
   it('uses the Windows system chooser for Open With Other', () => {
     const onOpenWithChooser = vi.fn();
     const entries = buildEntityOpenContextEntries({

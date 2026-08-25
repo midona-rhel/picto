@@ -28,14 +28,21 @@ const refreshRuntimeState = vi.hoisted(() => vi.fn().mockResolvedValue({
   runningSubscriptionIds: [],
   runningProgress: [],
 }));
+const getRunActivity = vi.hoisted(() => vi.fn());
 const showErrorNotification = vi.hoisted(() => vi.fn());
+const showSuccessNotification = vi.hoisted(() => vi.fn());
 
 vi.mock('../controllers/subscriptionsController', () => ({
-  subscriptionsController: { loadWorkspaceSnapshot, refreshRuntimeState },
+  subscriptionsController: { loadWorkspaceSnapshot, refreshRuntimeState, getRunActivity },
 }));
-vi.mock('../shared/lib/notifications', () => ({ showErrorNotification }));
+vi.mock('../shared/lib/notifications', () => ({ showErrorNotification, showSuccessNotification }));
 
-import { refreshSubscriptionsWorkspace, startSubscriptionsSettle } from './subscriptionsSettle';
+import {
+  refreshSubscriptionsRuntimeState,
+  refreshSubscriptionsWorkspace,
+  resetSubscriptionsSettleForTests,
+  startSubscriptionsSettle,
+} from './subscriptionsSettle';
 import {
   subscriptionsCoversAtom,
   subscriptionsWorkspaceSnapshotAtom,
@@ -49,7 +56,10 @@ describe('subscription settlement', () => {
     register.mockClear();
     loadWorkspaceSnapshot.mockClear();
     refreshRuntimeState.mockClear();
+    getRunActivity.mockReset();
     showErrorNotification.mockClear();
+    showSuccessNotification.mockClear();
+    resetSubscriptionsSettleForTests();
     store.set(subscriptionsCoversAtom, new Map());
     store.set(subscriptionsWorkspaceSnapshotAtom, null);
   });
@@ -135,4 +145,104 @@ describe('subscription settlement', () => {
     await refreshSubscriptionsWorkspace();
     expect(store.get(subscriptionsCoversAtom).get('1')).toEqual(newCover);
   });
+
+  it('notifies when a persisted query crosses into a successful terminal state', async () => {
+    const subscription = { id: '7', name: 'Active feed' };
+    const progress = {
+      subscription_id: '7',
+      subscription_name: 'Active feed',
+      run_id: 44,
+    };
+    store.set(subscriptionsWorkspaceSnapshotAtom, {
+      subscriptions: [subscription],
+      runningSubscriptionIds: ['7'],
+      runningProgress: [progress],
+    } as never);
+    refreshRuntimeState.mockResolvedValue({
+      runningSubscriptionIds: ['7'],
+      runningProgress: [progress],
+    });
+    getRunActivity
+      .mockResolvedValueOnce(runActivity('running', 'running'))
+      .mockResolvedValueOnce(runActivity('running', 'succeeded'));
+
+    await refreshSubscriptionsRuntimeState();
+    await vi.waitFor(() => expect(getRunActivity).toHaveBeenCalledTimes(1));
+    expect(showSuccessNotification).not.toHaveBeenCalled();
+
+    await refreshSubscriptionsRuntimeState();
+    await vi.waitFor(() => expect(showSuccessNotification).toHaveBeenCalledWith({
+      title: 'Query completed',
+      message: 'Active feed · artist-name · 100 posts traversed · 12 media added',
+    }));
+  });
+
+  it('notifies when a persisted subscription run completes', async () => {
+    const subscription = { id: '7', name: 'Active feed' };
+    const progress = {
+      subscription_id: '7',
+      subscription_name: 'Active feed',
+      run_id: 44,
+    };
+    store.set(subscriptionsWorkspaceSnapshotAtom, {
+      subscriptions: [subscription],
+      runningSubscriptionIds: ['7'],
+      runningProgress: [progress],
+    } as never);
+    refreshRuntimeState.mockResolvedValue({
+      runningSubscriptionIds: [],
+      runningProgress: [],
+    });
+    getRunActivity.mockResolvedValue(runActivity('succeeded', 'succeeded'));
+
+    await refreshSubscriptionsRuntimeState();
+    await vi.waitFor(() => expect(showSuccessNotification).toHaveBeenCalledWith({
+      title: 'Subscription completed',
+      message: 'Active feed · 1 query completed · 100 posts traversed · 12 media added',
+    }));
+  });
 });
+
+function runActivity(runStatus: string, queryStatus: string) {
+  const counts = {
+    posts_traversed: 100,
+    posts_added: 12,
+    fetched: 12,
+    downloaded: 12,
+    queued: 12,
+    ingested: 12,
+    failed: 0,
+    deleted: 0,
+  };
+  return {
+    summary: {
+      run_id: 44,
+      subscription_id: 7,
+      requested_by: 'manual',
+      status: runStatus,
+      started_at: null,
+      finished_at: null,
+      failure_kind: null,
+      error_message: null,
+      created_at: '2026-08-25T00:00:00Z',
+      query_count: 1,
+      counts,
+    },
+    queries: [{
+      run_query_id: 45,
+      run_id: 44,
+      query_id: 46,
+      site_id: 'pixiv',
+      query_text: 'artist-name',
+      status: queryStatus,
+      attempt_count: 1,
+      started_at: null,
+      finished_at: null,
+      failure_kind: null,
+      error_message: null,
+      counts,
+      source_items: [],
+      source_items_truncated: false,
+    }],
+  };
+}

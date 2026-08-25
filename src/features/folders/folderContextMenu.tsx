@@ -4,7 +4,7 @@ import {
   IconFolderPlus,
   IconStar,
   IconStarOff,
-  IconTags,
+  IconBookmark,
   IconTrash,
   IconUpload,
 } from '@tabler/icons-react';
@@ -63,7 +63,7 @@ export function buildFolderContextMenu(options: FolderContextMenuOptions): MenuE
     { label: 'Rename', icon: <IconRename size={14} />, action: options.onRename },
     { label: 'Move to...', icon: <IconFolderOpen size={14} />, action: options.onMove },
     { label: 'Duplicate', icon: <IconCopy size={14} />, action: options.onDuplicate },
-    { label: 'Set Auto Tags...', icon: <IconTags size={14} />, action: options.onSetAutoTags },
+    { label: 'Set Auto Tags...', icon: <IconBookmark size={14} />, action: options.onSetAutoTags },
     { separator: true },
     { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: options.onImport },
     { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: options.onAttachWatch },
@@ -111,7 +111,7 @@ export function buildBulkFolderContextMenu(options: BulkFolderContextMenuOptions
     },
     { label: `Duplicate ${options.count} Folders`, icon: <IconCopy size={14} />, action: options.onDuplicate },
     { label: 'Move to...', icon: <IconFolderOpen size={14} />, action: options.onMove },
-    { label: 'Set Auto Tags...', icon: <IconTags size={14} />, action: options.onSetAutoTags },
+    { label: 'Set Auto Tags...', icon: <IconBookmark size={14} />, action: options.onSetAutoTags },
     { label: 'Sort Contents by Name', icon: <IconSort size={14} />, action: options.onSortContents },
     { separator: true },
     {

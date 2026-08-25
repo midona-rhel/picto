@@ -8,8 +8,16 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { useVirtualizer } from '@tanstack/react-virtual';
-import { IconSearch, IconCheck, IconLayoutSidebar, IconX, IconBookmark } from '@tabler/icons-react';
+import {
+  IconAdjustmentsHorizontal,
+  IconBookmark,
+  IconCheck,
+  IconLayoutGrid,
+  IconLayoutList,
+  IconLayoutSidebar,
+  IconSearch,
+  IconX,
+} from '@tabler/icons-react';
 import { OverlayShell } from '../../shared/ui/OverlayShell';
 import { tagSelectPortalAtom } from '../../state/portals';
 import { selectionTargetAtom } from '../../state/selection';
@@ -22,6 +30,7 @@ import { tagGroupColor, tagGroupOrder } from './tagGroupPresentation';
 import styles from './TagSelectPanel.module.css';
 import { commonItemTags } from '../../shared/lib/itemDetails';
 import { FilterLogicTabs } from '../../shared/ui/FilterLogicTabs';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import type { FilterMatchMode } from '../../shared/types/generated/application/FilterMatchMode';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu/ContextMenu';
 import { showTagItems } from '../../controllers/gridNavigationController';
@@ -38,6 +47,7 @@ import {
 } from './tagPreferences';
 
 type SidebarMode = 'selected' | 'starred' | 'all' | 'namespace';
+type TagLayout = 'grid' | 'list';
 const PAGE_SIZE = 100;
 
 
@@ -67,6 +77,11 @@ export function TagSelectPanel() {
 
   const [pinned, setPinned] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
+  const [layout, setLayout] = useState<TagLayout>(() => (
+    localStorage.getItem('picto-tag-picker-layout') === 'list' ? 'list' : 'grid'
+  ));
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [showCounts, setShowCounts] = useState(() => localStorage.getItem('picto-tag-picker-counts') !== 'false');
   const [query, setQuery] = useState('');
   const [tags, setTags] = useState<CanonicalTagRecord[]>([]);
   const [cursor, setCursor] = useState<string | null>(null);
@@ -81,6 +96,8 @@ export function TagSelectPanel() {
   const searchRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const loadingCursorRef = useRef<string | null>(null);
+  const requestGenerationRef = useRef(0);
   const contextMenu = useContextMenu();
   const tagPreferences = useTagPreferences();
 
@@ -91,12 +108,16 @@ export function TagSelectPanel() {
 
   // Load initial tags + namespaces
   const loadTags = useCallback((search: string, ns?: string | null) => {
+    const generation = ++requestGenerationRef.current;
+    loadingCursorRef.current = null;
+    setLoadingMore(false);
     const params: Parameters<typeof tagsController.getPaginated>[0] = {
       limit: PAGE_SIZE,
       search: search.trim() || null,
       namespace: ns ?? null,
     };
     void tagsController.getPaginated(params).then((result) => {
+      if (generation !== requestGenerationRef.current) return;
       setTags(result.items);
       setCursor(result.next_cursor);
       setFocusIdx(-1);
@@ -104,7 +125,9 @@ export function TagSelectPanel() {
   }, []);
 
   const loadMore = useCallback(() => {
-    if (!cursor || loadingMore) return;
+    if (!cursor || loadingCursorRef.current === cursor) return;
+    const generation = requestGenerationRef.current;
+    loadingCursorRef.current = cursor;
     setLoadingMore(true);
     const ns = sidebarMode === 'namespace' ? activeNamespace : null;
     void tagsController.getPaginated({
@@ -113,11 +136,17 @@ export function TagSelectPanel() {
       namespace: ns,
       cursor,
     }).then((result) => {
-      setTags((prev) => [...prev, ...result.items]);
+      if (generation !== requestGenerationRef.current) return;
+      setTags((prev) => {
+        const known = new Set(prev.map((tag) => tag.tag_id));
+        return [...prev, ...result.items.filter((tag) => !known.has(tag.tag_id))];
+      });
       setCursor(result.next_cursor);
+    }).finally(() => {
+      loadingCursorRef.current = null;
       setLoadingMore(false);
-    }).catch(() => { setLoadingMore(false); });
-  }, [cursor, loadingMore, query, sidebarMode, activeNamespace]);
+    });
+  }, [cursor, query, sidebarMode, activeNamespace]);
 
   // Load namespaces on open
   useEffect(() => {
@@ -125,14 +154,17 @@ export function TagSelectPanel() {
     void tagsController.getNamespaceSummary().then((ns) => setNamespaces(ns ?? [])).catch(() => {});
   }, [open]);
 
-  // Search with debounce — reload tags
+  // One request owner for search and namespace changes. The generation guard
+  // prevents a slower previous view from replacing the current result.
   useEffect(() => {
     if (!open) return;
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
-    searchTimerRef.current = setTimeout(() => {
-      const ns = sidebarMode === 'namespace' ? activeNamespace : null;
+    const ns = sidebarMode === 'namespace' ? activeNamespace : null;
+    if (!query.trim()) {
       loadTags(query, ns);
-    }, 150);
+      return;
+    }
+    searchTimerRef.current = setTimeout(() => loadTags(query, ns), 150);
     return () => { if (searchTimerRef.current) clearTimeout(searchTimerRef.current); };
   }, [query, open, loadTags, sidebarMode, activeNamespace]);
 
@@ -140,24 +172,16 @@ export function TagSelectPanel() {
   useEffect(() => {
     if (open) {
       setQuery('');
+      setSettingsOpen(false);
       setSelectedTags(new Set(entityTagKeys));
       setExcluded(new Set(customExcludedTags ?? []));
       setMatchMode(portalState.filterMatchMode ?? 'any');
       setSidebarMode('all');
       setActiveNamespace(null);
       setFocusIdx(-1);
-      loadTags('');
       setTimeout(() => searchRef.current?.focus(), 50);
     }
-  }, [open, loadTags, customExcludedTags, portalState.filterMatchMode]); // entityTagKeys is the opening snapshot
-
-  // Sidebar mode change → reload
-  useEffect(() => {
-    if (!open) return;
-    if (sidebarMode === 'selected' || sidebarMode === 'starred') return; // client-side views
-    const ns = sidebarMode === 'namespace' ? activeNamespace : null;
-    loadTags(query, ns);
-  }, [sidebarMode, activeNamespace]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [open, customExcludedTags, portalState.filterMatchMode]); // entityTagKeys is the opening snapshot
 
   // Display tags — "selected" mode shows entity's tags directly (not from paginated search)
   const displayTags = useMemo(() => {
@@ -184,27 +208,12 @@ export function TagSelectPanel() {
       .sort((a, b) => tagGroupOrder(a.namespace) - tagGroupOrder(b.namespace));
   }, [namespaces]);
 
-  // Estimated total count for the current view (for scroll height estimation)
-  const estimatedTotal = useMemo(() => {
-    if (sidebarMode === 'selected' || sidebarMode === 'starred') return displayTags.length; // client-side, exact
-    if (query.trim()) return displayTags.length; // search results, can't estimate beyond loaded
-    if (sidebarMode === 'namespace' && activeNamespace != null) {
-      const ns = namespaces.find((n) => n.namespace === activeNamespace);
-      return ns ? ns.count : displayTags.length;
-    }
-    // "all" mode — total from namespace summary
-    const total = namespaces.reduce((sum, n) => sum + n.count, 0);
-    return total > 0 ? total : displayTags.length;
-  }, [sidebarMode, activeNamespace, namespaces, displayTags.length, query]);
-
-  // Virtual list — use estimated total so scrollbar reflects all items, not just loaded
-  const virtualCount = cursor ? Math.max(displayTags.length, estimatedTotal) : displayTags.length;
-  const virtualizer = useVirtualizer({
-    count: virtualCount,
-    getScrollElement: () => listRef.current,
-    estimateSize: () => 28,
-    overscan: 15,
-  });
+  const columnCount = layout === 'grid' ? 2 : 1;
+  const navigableTags = displayTags;
+  const displayPages = useMemo(() => Array.from(
+    { length: Math.ceil(displayTags.length / PAGE_SIZE) },
+    (_, index) => displayTags.slice(index * PAGE_SIZE, (index + 1) * PAGE_SIZE),
+  ), [displayTags]);
 
   // Load more on scroll near bottom
   useEffect(() => {
@@ -218,10 +227,24 @@ export function TagSelectPanel() {
     return () => el.removeEventListener('scroll', handleScroll);
   }, [cursor, loadingMore, loadMore]);
 
-  // Scroll focused into view
+  // Keep keyboard focus visible without coupling layout to the tag data source.
   useEffect(() => {
-    if (focusIdx >= 0) virtualizer.scrollToIndex(focusIdx, { align: 'auto' });
-  }, [focusIdx, virtualizer]);
+    if (focusIdx < 0) return;
+    listRef.current?.querySelector<HTMLElement>(`[data-tag-index="${focusIdx}"]`)
+      ?.scrollIntoView({ block: 'nearest' });
+  }, [focusIdx]);
+
+  const changeLayout = useCallback((next: TagLayout) => {
+    setLayout(next);
+    localStorage.setItem('picto-tag-picker-layout', next);
+  }, []);
+
+  const toggleCounts = useCallback(() => {
+    setShowCounts((current) => {
+      localStorage.setItem('picto-tag-picker-counts', String(!current));
+      return !current;
+    });
+  }, []);
 
   const toggleTag = useCallback((tag: string) => {
     const nextSelected = new Set(selectedTags);
@@ -265,14 +288,20 @@ export function TagSelectPanel() {
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
       e.preventDefault();
-      setFocusIdx((i) => Math.min(i + 1, displayTags.length - 1));
+      setFocusIdx((i) => Math.min(i + columnCount, navigableTags.length - 1));
     } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setFocusIdx((i) => Math.max(i - columnCount, -1));
+    } else if (e.key === 'ArrowRight' && columnCount > 1) {
+      e.preventDefault();
+      setFocusIdx((i) => Math.min(i + 1, navigableTags.length - 1));
+    } else if (e.key === 'ArrowLeft' && columnCount > 1) {
       e.preventDefault();
       setFocusIdx((i) => Math.max(i - 1, -1));
     } else if (e.key === 'Enter') {
       e.preventDefault();
       const idx = focusIdx >= 0 ? focusIdx : 0;
-      if (displayTags[idx]) toggleTag(formatTag(displayTags[idx]));
+      if (navigableTags[idx]) toggleTag(formatTag(navigableTags[idx]));
     } else if (e.key === 'Tab') {
       e.preventDefault();
       if (sidebarMode === 'all') {
@@ -286,7 +315,7 @@ export function TagSelectPanel() {
         setSidebarMode('all');
       }
     }
-  }, [displayTags, focusIdx, toggleTag, sidebarMode, nsGroups, activeNamespace]);
+  }, [activeNamespace, columnCount, focusIdx, navigableTags, nsGroups, sidebarMode, toggleTag]);
 
   if (!open) return null;
 
@@ -313,14 +342,20 @@ export function TagSelectPanel() {
             />
           </div>
           {onApplyTagFilter ? <FilterLogicTabs value={matchMode} onChange={changeMatchMode} /> : null}
-          <button
+          <KbdTooltip label="Tag picker settings"><button
+            className={`${shellStyles.pinBtn} ${settingsOpen ? shellStyles.pinBtnActive : ''}`}
+            onClick={() => setSettingsOpen((current) => !current)}
+            type="button"
+            aria-label="Tag picker settings"
+          ><IconAdjustmentsHorizontal size={14} /></button></KbdTooltip>
+          <KbdTooltip label={showSidebar ? 'Hide sidebar' : 'Show sidebar'}><button
             className={shellStyles.pinBtn}
             onClick={() => setShowSidebar((v) => !v)}
             type="button"
-            title={showSidebar ? 'Hide sidebar' : 'Show sidebar'}
+            aria-label={showSidebar ? 'Hide sidebar' : 'Show sidebar'}
           >
             <IconLayoutSidebar size={14} />
-          </button>
+          </button></KbdTooltip>
         </>
       }
       footer={
@@ -328,6 +363,11 @@ export function TagSelectPanel() {
           <span className={shellStyles.kbdHint}>
             <span className={shellStyles.kbd}>Click</span> Select
             {onApplyTagFilter ? <><span className={shellStyles.kbd}>Right-click</span> Exclude</> : null}
+          </span>
+          <span className={shellStyles.kbdHint}>
+            Move <span className={shellStyles.kbd}>↑</span><span className={shellStyles.kbd}>↓</span>
+            {layout === 'grid' ? <><span className={shellStyles.kbd}>←</span><span className={shellStyles.kbd}>→</span></> : null}
+            Select <span className={shellStyles.kbd}>↵</span>
           </span>
           <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
         </>
@@ -381,25 +421,31 @@ export function TagSelectPanel() {
                 {sidebarMode === 'selected' ? 'No tags on this entity' : 'No tags found'}
               </div>
             ) : (
-              <div className={styles.tagListInner} style={{ height: virtualizer.getTotalSize() }}>
-                {virtualizer.getVirtualItems().map((vItem) => {
-                  const tag = displayTags[vItem.index];
-                  // Trigger load-more when rendering near end of loaded data
-                  if (!tag) {
-                    if (cursor && !loadingMore && vItem.index >= displayTags.length) loadMore();
-                    return null;
-                  }
-                  const fullTag = formatTag(tag);
-                  const isExcluded = excluded.has(fullTag);
-                  const showChecked = selectedTags.has(fullTag);
-                  const isFocused = vItem.index === focusIdx;
-                  return (
-                    <div
-                      key={vItem.index}
-                      className={`${styles.tagRow} ${isFocused ? styles.tagRowFocused : ''} ${isExcluded ? styles.tagRowExcluded : ''}`}
-                      style={{ height: vItem.size, transform: `translateY(${vItem.start}px)` }}
-                      onClick={() => toggleTag(fullTag)}
-                      onContextMenu={(event) => {
+              <div className={styles.tagPages}>
+                {displayPages.map((page, pageIndex) => (
+                  <div
+                    className={styles.tagGrid}
+                    key={pageIndex}
+                    style={{
+                      gridTemplateColumns: `repeat(${columnCount}, minmax(0, 1fr))`,
+                    }}
+                  >
+                    {page.map((tag, pageItemIndex) => {
+                      const itemIndex = pageIndex * PAGE_SIZE + pageItemIndex;
+                      const fullTag = formatTag(tag);
+                      const isExcluded = excluded.has(fullTag);
+                      const showChecked = selectedTags.has(fullTag);
+                      const isFocused = itemIndex === focusIdx;
+                      return (
+                        <div
+                          key={fullTag}
+                          data-tag-index={itemIndex}
+                          className={`${styles.tagRow} ${isFocused ? styles.tagRowFocused : ''} ${showChecked ? styles.tagRowSelected : ''} ${isExcluded ? styles.tagRowExcluded : ''}`}
+                          style={{
+                            '--tag-color': tagGroupColor(tag.namespace),
+                          } as React.CSSProperties}
+                          onClick={() => toggleTag(fullTag)}
+                          onContextMenu={(event) => {
                         if (onApplyTagFilter) {
                           event.preventDefault();
                           event.stopPropagation();
@@ -423,31 +469,52 @@ export function TagSelectPanel() {
                             }));
                           } : undefined,
                         }));
-                      }}
-                    >
-                      <div className={`${shellStyles.checkBox} ${isExcluded ? shellStyles.checkBoxExcluded : showChecked ? (onApplyTagFilter ? shellStyles.checkBoxFilterChecked : shellStyles.checkBoxChecked) : ''}`}>
-                        {isExcluded ? <IconX size={10} /> : showChecked ? <IconCheck size={10} /> : null}
-                      </div>
-                      <IconBookmark
-                        aria-hidden="true"
-                        className={styles.tagBookmark}
-                        size={13}
-                        stroke={1.6}
-                        fill="currentColor"
-                        fillOpacity={0.32}
-                        style={{ color: tagGroupColor(tag.namespace) }}
-                      />
-                      <span className={styles.tagName}>
-                        {query.trim() ? highlightMatch(tag.subtag ?? fullTag, query.trim()) : (tag.subtag || fullTag)}
-                      </span>
-                      <span className={styles.tagBadge}>{(tag.file_count ?? 0).toLocaleString()}</span>
-                    </div>
-                  );
-                })}
+                          }}
+                        >
+                          {onApplyTagFilter ? (
+                            <div className={`${shellStyles.checkBox} ${isExcluded ? shellStyles.checkBoxExcluded : showChecked ? shellStyles.checkBoxFilterChecked : ''}`}>
+                              {isExcluded ? <IconX size={10} /> : showChecked ? <IconCheck size={10} /> : null}
+                            </div>
+                          ) : null}
+                          <IconBookmark
+                            aria-hidden="true"
+                            className={styles.tagBookmark}
+                            size={13}
+                            stroke={showChecked && !onApplyTagFilter ? 2 : 1.6}
+                            fill="currentColor"
+                            fillOpacity={showChecked && !onApplyTagFilter ? 0.58 : 0.28}
+                          />
+                          <span className={styles.tagName}>
+                            {query.trim() ? highlightMatch(tag.subtag ?? fullTag, query.trim()) : (tag.subtag || fullTag)}
+                          </span>
+                          {showCounts ? <span className={styles.tagBadge}>({(tag.file_count ?? 0).toLocaleString()})</span> : null}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
               </div>
             )}
           </div>
         </div>
+        {settingsOpen ? (
+          <>
+            <button className={styles.settingsBackdrop} type="button" aria-label="Close tag picker settings" onClick={() => setSettingsOpen(false)} />
+            <div className={styles.settingsPanel}>
+              <div className={styles.settingsRow}>
+                <span>Layout</span>
+                <div className={shellStyles.viewTabs} role="group" aria-label="Tag layout">
+                  <KbdTooltip label="List"><button type="button" className={`${shellStyles.viewTab} ${layout === 'list' ? shellStyles.viewTabActive : ''}`} aria-label="List tags" aria-pressed={layout === 'list'} onClick={() => changeLayout('list')}><IconLayoutList size={14} /></button></KbdTooltip>
+                  <KbdTooltip label="Grid"><button type="button" className={`${shellStyles.viewTab} ${layout === 'grid' ? shellStyles.viewTabActive : ''}`} aria-label="Grid tags" aria-pressed={layout === 'grid'} onClick={() => changeLayout('grid')}><IconLayoutGrid size={14} /></button></KbdTooltip>
+                </div>
+              </div>
+              <button className={styles.settingsRow} type="button" onClick={toggleCounts}>
+                <span>Show counts</span>
+                <span className={`${shellStyles.checkBox} ${showCounts ? shellStyles.checkBoxChecked : ''}`}>{showCounts ? <IconCheck size={10} /> : null}</span>
+              </button>
+            </div>
+          </>
+        ) : null}
       </div>
       {contextMenu.state && (
         <ContextMenu

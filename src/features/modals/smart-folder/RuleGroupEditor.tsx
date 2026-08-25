@@ -14,6 +14,7 @@ import type {
 } from '../../../shared/types/canonical';
 import { RuleEditor } from './RuleEditor';
 import { defaultOperator } from './fieldConfig';
+import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
 
 export interface RuleGroupEditorProps {
   group: SmartFolderPredicateGroup;
@@ -87,14 +88,14 @@ export function RuleGroupEditor({ group, onChange, onRemove, canRemove }: RuleGr
         <span className={modalStyles.inlineLabel}>Negate</span>
         <ToggleSwitch on={!!group.negate} onChange={handleNegateToggle} />
         {canRemove && (
-          <button
+          <KbdTooltip label="Remove group"><button
             className={`${modalStyles.actionBtn} ${modalStyles.actionBtnDanger}`}
             onClick={onRemove}
             type="button"
-            title="Remove group"
+            aria-label="Remove group"
           >
             <IconTrash size={14} />
-          </button>
+          </button></KbdTooltip>
         )}
       </div>
 

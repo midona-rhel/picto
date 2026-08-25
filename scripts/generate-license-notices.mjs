@@ -97,6 +97,7 @@ await Promise.all([
   copyFile(path.join(root, 'LICENSE'), path.join(output, 'PICTO_LICENSE.txt')),
   copyFile(path.join(root, 'THIRD_PARTY_LICENSES'), path.join(output, 'THIRD_PARTY_LICENSES.txt')),
   copyFile(path.join(root, 'src/shared/assets/fonts/LICENSE-Roboto.txt'), path.join(output, 'ROBOTO_LICENSE.txt')),
+  copyFile(path.join(root, 'resources/tutorial/TUTORIAL_ASSETS.json'), path.join(output, 'TUTORIAL_ASSETS.json')),
 ]);
 
 console.log(`Generated release notices in ${path.relative(root, output)}`);

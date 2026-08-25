@@ -40,7 +40,7 @@ export function QuickLookHost({
       data-quick-look-overlay
       data-media-ready={revealed ? 'true' : 'false'}
     >
-      <KbdTooltip label="Close" shortcut="Space" position="bottom">
+      <KbdTooltip label="Close" shortcutId="view.quicklook" position="bottom">
         <button className={styles.closeButton} type="button" onClick={onClose} aria-label="Close Quick Look">
           <ToolbarCloseIcon />
         </button>

@@ -39,6 +39,25 @@ button, a, [role="button"] {
   -webkit-user-select: none;
 }
 
+/* Window chrome owns dragging; interactive descendants always retain input. */
+[data-window-drag-region] {
+  -webkit-app-region: drag;
+}
+
+[data-window-drag-region] :is(
+  button,
+  input,
+  textarea,
+  select,
+  a,
+  [role="button"],
+  [role="slider"],
+  [contenteditable="true"]
+),
+.no-drag-region {
+  -webkit-app-region: no-drag;
+}
+
 /* Smart folder tag input: compact chips */
 .smartfolder-tag-input [class*="chip"] {
   height: 22px;

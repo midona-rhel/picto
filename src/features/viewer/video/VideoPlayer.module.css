@@ -125,7 +125,7 @@
   background: rgba(0,0,0,0.8);
   color: rgba(255,255,255,0.95);
   font-size: 11px;
-  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-family: var(--font-family-mono);
   padding: 2px 6px; border-radius: 3px;
   white-space: nowrap; pointer-events: none;
 }
@@ -146,7 +146,7 @@
   color: rgba(255,255,255,0.8);
   width: 32px; height: 32px; min-width: 32px;
   font-size: 11px;
-  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-family: var(--font-family-mono);
   transition: background 150ms ease;
 }
 .icBtn:hover { background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.95); }
@@ -163,7 +163,7 @@
 /* Time display */
 .timeDisplay {
   font-size: 11px;
-  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-family: var(--font-family-mono);
   color: rgba(255,255,255,0.7);
   white-space: nowrap; cursor: default; user-select: none;
   padding: 0 4px;
@@ -181,7 +181,7 @@
 }
 .volumePercent {
   font-size: 10px;
-  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-family: var(--font-family-mono);
   color: rgba(255,255,255,0.7); user-select: none;
 }
 .volumeTrack {
@@ -209,7 +209,7 @@
   display: block; width: 100%; padding: 4px 12px;
   color: rgba(255,255,255,0.7);
   font-size: 12px;
-  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-family: var(--font-family-mono);
   text-align: center; white-space: nowrap;
   border: none; background: none; cursor: pointer;
 }
@@ -230,7 +230,7 @@
 }
 .volumeHudPercent {
   font-size: 16px;
-  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-family: var(--font-family-mono);
   font-weight: 600;
 }
 @keyframes volumeHudFadeIn {

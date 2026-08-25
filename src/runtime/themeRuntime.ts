@@ -66,9 +66,14 @@ export function resolveTheme(
   };
 }
 
-export function applyTheme(value: unknown, osDark = matchMedia('(prefers-color-scheme: dark)').matches): ResolvedTheme {
-  const resolved = resolveTheme(value, osDark);
+export function applyTheme(
+  value: unknown,
+  osDark = matchMedia('(prefers-color-scheme: dark)').matches,
+  platform: PlatformFamily = currentPlatform(),
+): ResolvedTheme {
+  const resolved = resolveTheme(value, osDark, platform);
   const root = document.documentElement;
+  root.dataset.platform = platform;
   root.dataset.theme = resolved.applied;
   root.dataset.mantineColorScheme = resolved.colorScheme;
   root.style.colorScheme = resolved.colorScheme;

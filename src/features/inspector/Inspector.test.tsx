@@ -1,5 +1,6 @@
-import { render, screen } from '@testing-library/react';
+import { screen } from '@testing-library/react';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { renderWithProviders } from '../../test/render';
 import { InspectorSkeleton } from './Inspector';
 
 const coreLabels = [
@@ -17,7 +18,7 @@ beforeAll(() => {
 
 function renderState(state: 'entity' | 'multi' | 'folder' | 'smart-folder' | 'system' | 'loading' | 'error') {
   const unavailable = state !== 'entity';
-  render(
+  renderWithProviders(
     <InspectorSkeleton
       preview={<div />}
       palette={[]}

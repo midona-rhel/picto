@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import fsModule from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getAssociatedApplications, initRuntime, invoke, invokeSerialized, onNativeEvent, openLibrary, closeLibrary, openWithApplication, startNativeDrag } from './nativeClient.mjs';
+import { getAssociatedApplications, initRuntime, invoke, invokeSerialized, onNativeEvent, openLibrary, openTutorialLibrary, closeLibrary, openWithApplication, startNativeDrag } from './nativeClient.mjs';
 import {
   addLibraryToHistory,
   getCachedConfig,
@@ -236,7 +236,9 @@ const libraryHost = createLibraryHostService({
   path,
   dialog,
   openLibrary,
+  openTutorialLibrary,
   closeLibrary,
+  invokeSerialized,
   addLibraryToHistory,
   removeLibraryFromHistory,
   togglePinned,
@@ -255,6 +257,10 @@ const libraryHost = createLibraryHostService({
   },
   sendToAllWindows: windowManager.sendToAllWindows,
   buildAppMenu: () => buildAppMenu(),
+  tutorialRoot: app.getPath('temp'),
+  tutorialFixtureRoot: app.isPackaged
+    ? path.join(process.resourcesPath, 'tutorial')
+    : path.join(__dirname, '..', 'resources', 'tutorial'),
 });
 
 const menuManager = createMenuManager({
@@ -353,7 +359,11 @@ async function bootstrapApplication() {
 
   if (libraryToOpen) {
     console.info('[main] initializing library', { libraryToOpen });
-    await libraryHost.initializeInitialLibrary(libraryToOpen);
+    const opening = libraryHost.initializeInitialLibrary(libraryToOpen);
+    console.info('[main] creating main window for library reconciliation');
+    const mainWin = windowManager.createWindow('main');
+    setMainWindow(mainWin);
+    await opening;
     reportPackagedSmoke('native-library-initialized');
     console.info('[main] library initialized in native core');
     console.info('[main] library history updated');
@@ -370,10 +380,12 @@ async function bootstrapApplication() {
   buildAppMenu();
   console.info('[main] app menu built');
 
-  console.info('[main] creating main window');
-  const mainWin = windowManager.createWindow('main');
-  setMainWindow(mainWin);
-  console.info('[main] main window creation requested');
+  if (!windowManager.getWindow('main')) {
+    console.info('[main] creating main window');
+    const mainWin = windowManager.createWindow('main');
+    setMainWindow(mainWin);
+    console.info('[main] main window creation requested');
+  }
 }
 
 process.on('uncaughtException', (err) => {

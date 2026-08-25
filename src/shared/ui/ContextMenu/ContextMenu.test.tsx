@@ -1,8 +1,21 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { ContextMenu, searchMenuEntries } from './ContextMenu';
+import { ContextMenu, searchMenuEntries, useContextMenu } from './ContextMenu';
 
 describe('ContextMenu', () => {
+  it('ignores a deferred entry update after a newer menu opens', () => {
+    const { result } = renderHook(() => useContextMenu());
+    let staleId = 0;
+    act(() => {
+      staleId = result.current.openAt({ x: 10, y: 10 }, [{ label: 'Open With Other', action: vi.fn() }]);
+      result.current.openAt({ x: 20, y: 20 }, [{ label: 'Current action', action: vi.fn() }]);
+      result.current.replaceEntry(staleId, 'Open With Other', [{ label: 'Preview', action: vi.fn() }]);
+    });
+
+    expect(result.current.state?.entries).toHaveLength(1);
+    expect(result.current.state?.entries[0]).toMatchObject({ label: 'Current action' });
+  });
+
   it('owns one canonical presentation regardless of the supplied entries', () => {
     const { rerender } = render(
       <ContextMenu
