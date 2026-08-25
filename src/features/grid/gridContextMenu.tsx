@@ -13,7 +13,7 @@ import {
   IconCopy, IconClipboardCopy, IconLink, IconBookmark, IconBookmarks,
   IconRefresh, IconTrash, IconArrowBackUp, IconClipboard, IconFilterPlus, IconFileImport,
   IconSearch,
-  IconFileExport, IconFolder, IconPhoto, IconStar,
+  IconContrastFilled, IconFileExport, IconFolder, IconPhoto, IconStar,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconAutoTag, IconPasteTags, IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
@@ -97,6 +97,8 @@ export interface GridMenuContext {
   onImportFiles?: () => void;
   onImportFolder?: () => void;
   onPasteImport?: () => void;
+  grayscale?: boolean;
+  onToggleGrayscale?: () => void;
 }
 
 function sep(): MenuSeparator {
@@ -111,6 +113,8 @@ function item(
     action?: () => void;
     danger?: boolean;
     disabled?: boolean;
+    checked?: boolean;
+    keepOpen?: boolean;
   } = {},
 ): MenuItem {
   return {
@@ -120,6 +124,8 @@ function item(
     action: opts.action ?? (() => {}),
     danger: opts.danger,
     disabled: opts.disabled ?? !opts.action,
+    checked: opts.checked,
+    keepOpen: opts.keepOpen,
   };
 }
 
@@ -323,6 +329,13 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   if (!viewerSurface) {
     const viewEntries = buildContextMenuViewEntries();
     for (const entry of viewEntries) entries.push(entry);
+    entries.push(item('Grayscale', {
+      icon: <IconContrastFilled size={15} />,
+      shortcut: kbd('view.grayscale'),
+      action: ctx.onToggleGrayscale,
+      checked: ctx.grayscale ?? false,
+      keepOpen: true,
+    }));
     entries.push(sep());
   }
 

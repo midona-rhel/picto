@@ -4,6 +4,32 @@ import type { MenuItem } from '../../shared/ui/ContextMenu/ContextMenu';
 import { buildEmptyContextMenu, buildEntityOpenContextEntries, buildTileContextMenu } from './gridContextMenu';
 
 describe('buildTileContextMenu', () => {
+  it('owns grayscale as a checked context command', () => {
+    const onToggleGrayscale = vi.fn();
+    const entries = buildTileContextMenu({
+      selectionCount: 1,
+      querySelectionActive: false,
+      singleSelected: true,
+      singleHash: 'hash',
+      singleKind: 'media',
+      scopeKind: 'system',
+      statusFilter: null,
+      loadedCount: 1,
+      grayscale: true,
+      onToggleGrayscale,
+      onSelectAll: vi.fn(),
+      onDeselectAll: vi.fn(),
+    });
+    const entry = entries.find(
+      (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Grayscale',
+    );
+
+    expect(entry).toMatchObject({ checked: true, keepOpen: true, disabled: false });
+    expect(renderToStaticMarkup(entry!.icon)).toContain('tabler-icon-contrast-filled');
+    entry!.action();
+    expect(onToggleGrayscale).toHaveBeenCalledOnce();
+  });
+
   it('exposes real creation and import actions on empty grid space', () => {
     const actions = {
       onNewFolder: vi.fn(),

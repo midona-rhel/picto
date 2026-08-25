@@ -1143,6 +1143,8 @@ export function GridScreen({
             scopeKind,
             statusFilter,
             loadedCount: items.length,
+            grayscale,
+            onToggleGrayscale: () => store.set(gridGrayscaleAtom, !store.get(gridGrayscaleAtom)),
             onSelectAll: () => selectAllResults(),
             onDeselectAll: () => clearSelection(),
             onOpen: singleItem ? () => openGridItem(singleItem, items) : undefined,

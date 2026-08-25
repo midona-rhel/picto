@@ -730,7 +730,7 @@ export function CanvasGrid({
   useEffect(() => {
     if (!firstPaintRef.current && onFirstPaint) markDirty('base');
   }, [markDirty, onFirstPaint]);
-  useEffect(() => { markDirty('base'); }, [showName, showExtension, showExtensionLabel, showItemCount, showResolution, viewMode, fitThumbnails, markDirty]);
+  useEffect(() => { markDirty('base'); }, [showName, showExtension, showExtensionLabel, showItemCount, showResolution, viewMode, fitThumbnails, grayscale, markDirty]);
   useEffect(() => { markDirty('overlay'); }, [selectedItemIds, markDirty]);
   useEffect(() => { markDirty('both'); }, [headerHeight, markDirty]);
 
