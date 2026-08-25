@@ -1,0 +1,136 @@
+.pill {
+  position: fixed;
+  z-index: var(--layer-modal);
+  left: 50%;
+  bottom: 96px;
+  display: grid;
+  grid-template-columns: 64px 1px 64px;
+  align-items: stretch;
+  width: 129px;
+  height: 54px;
+  overflow: visible;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-primary);
+  transform: translateX(-50%);
+  opacity: 1;
+  animation: reviewPillIn 130ms var(--ease-default) both;
+  transition:
+    opacity 120ms var(--ease-default),
+    transform 120ms var(--ease-default);
+}
+
+.pill::after {
+  border-radius: inherit;
+}
+
+.leaving {
+  opacity: 0;
+  transform: translateX(-50%) translateY(7px) scale(0.96);
+  pointer-events: none;
+}
+
+.action {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition:
+    background 110ms ease,
+    box-shadow 110ms ease,
+    color 110ms ease,
+    filter 110ms ease,
+    transform 90ms ease;
+}
+
+.action:disabled {
+  cursor: default;
+}
+
+.action svg {
+  filter:
+    drop-shadow(0 1px 2px rgba(0, 0, 0, 0.58))
+    drop-shadow(0 0 7px rgba(255, 255, 255, 0.08));
+}
+
+.accept:hover:not(:disabled),
+.accept:focus-visible,
+.accept.chosen {
+  background: linear-gradient(180deg, rgba(66, 218, 124, 0.27), rgba(40, 174, 92, 0.14));
+  box-shadow: inset 0 1px 0 rgba(196, 255, 218, 0.14);
+}
+
+.accept {
+  border-radius: 999px 0 0 999px;
+}
+
+.reject {
+  border-radius: 0 999px 999px 0;
+}
+
+.reject:hover:not(:disabled),
+.reject:focus-visible,
+.reject.chosen {
+  background: linear-gradient(180deg, rgba(255, 91, 98, 0.27), rgba(200, 52, 60, 0.14));
+  box-shadow: inset 0 1px 0 rgba(255, 205, 207, 0.13);
+}
+
+.accept.chosen {
+  background: linear-gradient(180deg, rgba(68, 222, 128, 0.46), rgba(40, 174, 92, 0.30));
+  box-shadow: inset 0 1px 0 rgba(196, 255, 218, 0.25);
+  filter: drop-shadow(0 0 13px rgba(53, 201, 111, 0.48));
+}
+
+.reject.chosen {
+  background: linear-gradient(180deg, rgba(255, 91, 98, 0.46), rgba(200, 52, 60, 0.30));
+  box-shadow: inset 0 1px 0 rgba(255, 205, 207, 0.24);
+  filter: drop-shadow(0 0 13px rgba(237, 79, 85, 0.48));
+}
+
+.action:active:not(:disabled) {
+  transform: scale(0.94);
+}
+
+.action:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.75);
+  outline-offset: -3px;
+}
+
+.divider {
+  position: relative;
+  z-index: 1;
+  width: 1px;
+  margin-block: 9px;
+  background: linear-gradient(
+    180deg,
+    transparent,
+    rgba(255, 255, 255, 0.25) 20%,
+    rgba(255, 255, 255, 0.16) 80%,
+    transparent
+  );
+  box-shadow: 1px 0 rgba(0, 0, 0, 0.18);
+}
+
+@keyframes reviewPillIn {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(7px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pill {
+    animation: none;
+    transition-duration: 1ms;
+  }
+}

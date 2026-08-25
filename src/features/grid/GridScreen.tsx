@@ -69,6 +69,11 @@ import { organizeIntoGroup, ungroup } from '../../platform/entityApi';
 import { GroupSurface } from '../groups/GroupSurface';
 import { MediaView } from '../viewer/MediaView';
 import { GridQuickLook } from '../viewer/GridQuickLook';
+import {
+  InboxReviewControls,
+  resolveInboxReviewItemId,
+  type InboxReviewDecision,
+} from '../viewer/InboxReviewControls';
 import { useGridArrowNav } from './hooks/useGridArrowNav';
 import type { LayoutResult } from './layout/types';
 import { windowController } from '../../controllers/windowController';
@@ -640,6 +645,23 @@ export function GridScreen({
   const viewerIndex = viewerSession ? resolveViewerIndex(viewerSession, items) : -1;
   const viewerItem = viewerIndex >= 0 ? items[viewerIndex] ?? null : null;
   const quickLookIndex = quickLookSession ? resolveViewerIndex(quickLookSession, items) : -1;
+  const quickLookItem = quickLookIndex >= 0 ? items[quickLookIndex] ?? null : null;
+  const inboxReviewItemId = resolveInboxReviewItemId(viewerItem, quickLookItem);
+  const inboxReviewNextItemIdRef = useRef<number | null>(null);
+  const inboxReviewModeRef = useRef<'detail' | 'quicklook'>('detail');
+
+  const commitInboxReview = useCallback(async (itemId: number, decision: InboxReviewDecision) => {
+    const currentItems = itemsRef.current;
+    const currentIndex = currentItems.findIndex((item) => item.item_id === itemId);
+    inboxReviewNextItemIdRef.current = currentIndex < 0
+      ? null
+      : currentItems[currentIndex + 1]?.item_id ?? currentItems[currentIndex - 1]?.item_id ?? null;
+    inboxReviewModeRef.current = quickLookSessionRef.current ? 'quicklook' : 'detail';
+    await entityMutations.setTargetLifecycle(
+      { kind: 'explicit', item_ids: [itemId] },
+      decision === 'accept' ? 'active' : 'trash',
+    );
+  }, []);
 
   const navigateQuickLook = useCallback((delta: number) => {
     if (!quickLookSession) return;
@@ -703,6 +725,34 @@ export function GridScreen({
     dispatchSelection({ type: 'replace_items', itemIds: new Set([exitItemId]), anchor: exitItemId });
     scrollToItem(items.findIndex((item) => item.item_id === exitItemId));
   }, [dispatchSelection, items, scrollToItem, setViewerSession]);
+
+  const advanceAfterInboxReview = useCallback(() => {
+    const nextItemId = inboxReviewNextItemIdRef.current;
+    inboxReviewNextItemIdRef.current = null;
+    if (nextItemId == null) {
+      if (inboxReviewModeRef.current === 'quicklook') closeQuickLook();
+      else closeRootDetail();
+      return;
+    }
+
+    const next = createViewerSession(itemsRef.current, nextItemId);
+    if (!next) {
+      if (inboxReviewModeRef.current === 'quicklook') closeQuickLook();
+      else closeRootDetail();
+      return;
+    }
+
+    if (inboxReviewModeRef.current === 'quicklook') setQuickLookSession(next);
+    else {
+      setGroupInitialMode('reader');
+      setViewerSession(next);
+    }
+    dispatchSelection({
+      type: 'replace_items',
+      itemIds: new Set([next.currentItemId]),
+      anchor: next.currentItemId,
+    });
+  }, [closeQuickLook, closeRootDetail, dispatchSelection, setQuickLookSession, setViewerSession]);
 
   const openEmptyGridContextMenu = useCallback(async (pos: { x: number; y: number }) => {
     const canImport = gridScope.kind !== 'trash'
@@ -1446,6 +1496,15 @@ export function GridScreen({
           onNavigate={navigateQuickLook}
           onClose={closeQuickLook}
           onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
+        />
+      ) : null}
+
+      {inboxReviewItemId != null && (viewerSession || quickLookSession) ? (
+        <InboxReviewControls
+          key={inboxReviewItemId}
+          itemId={inboxReviewItemId}
+          onCommit={commitInboxReview}
+          onAdvance={advanceAfterInboxReview}
         />
       ) : null}
 
