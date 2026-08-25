@@ -19,7 +19,8 @@ multi-media source posts as one user-visible item.
 - Every import source enters one durable ingest path. Subscriptions use one persisted run worker and
   resume non-terminal source items after restart.
 - Physical bytes are reused by hash without collapsing distinct logical source occurrences.
-- Replaced backend paths, cloud sync, fake verification, and pass-through tests are deleted.
+- Replaced backend paths, the old cloud/oplog implementation, fake verification, and pass-through
+  tests are deleted. Offline-first Cloud Sync uses the replacement application-operation boundary.
 - The current active development library is converted once at the reviewed cutover point. The
   conversion is manual, backup-first, never shipped, and deleted after verification.
 

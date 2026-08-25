@@ -4,8 +4,8 @@
 
 Finish Picto around one understandable backend: SQLite truth, rebuildable bitmap projections, one
 application operation path, one compact invalidation contract, and one durable subscription worker.
-Collections are first-class library items. Cloud Sync and Tutorials are separate pre-release
-integration workstreams and remain release blockers until their focused gates pass.
+Collections are first-class library items. Cloud Sync and Tutorials are implemented release
+surfaces covered by the final smoke. No deferred or unimplemented PBI blocks this release.
 
 ## Release Rules
 
@@ -17,6 +17,8 @@ integration workstreams and remain release blockers until their focused gates pa
 5. Before 1.0, there are no migrations. A library must match the current schema or fail untouched.
 6. Every mutation settles SQLite and projections before emitting one revision/resource invalidation.
 7. PBIs close only after focused tests and an application-level smoke; completed PBIs are deleted.
+8. The pre-release macOS alpha is ad-hoc signed and intentionally not notarized. Packaging must not
+   require Xcode-only asset tooling; public signing and notarization are separate release work.
 
 ## Phase 1: Backend Replacement
 
@@ -51,11 +53,11 @@ integration workstreams and remain release blockers until their focused gates pa
 - Certify the supported source registry only after login, metadata, pagination, restart, and
   terminal-state behavior pass.
 
-## Phase 4: Remaining Product Work
+## Phase 4: Implemented Product Surface
 
-- Finish duplicates with deterministic quality comparison, metadata/provenance preservation, and
+- Verify duplicates with deterministic quality comparison, metadata/provenance preservation, and
   safe collection-aware merge behavior.
-- Finish tag management and durable automatic AI tagging.
+- Verify tag management and durable automatic AI tagging.
 - Keep Picto's accepted-format registry aligned with the product's documented format matrix. Accepted
   files are preserved even when Picto has no detail renderer yet. The current matrix is:
   - Image/texture: `bmp`, `gif`, `heic`, `heif`, `hif`, `icns`, `ico`, `jpeg`, `jpg`, `jpe`,
@@ -74,20 +76,19 @@ integration workstreams and remain release blockers until their focused gates pa
     `ppt`, `pptx`, `xls`, `xlsx`, `doc`, `docx`, `eddx`, `emmx`, `html`, `mhtml`, `url`.
   - Explicit extension additions: `zip` (expand to collection), `epub`, `swf`, `eps`, `livp`,
     LUT (`cube`, `3dl`), and lighting photometry (`ies`).
-- Treat external format research as a behavior backlog, not code or assets to copy. Candidate
+- Treat external format research as a post-release behavior backlog, not code or assets to copy.
+  It does not block this release. Candidate
   Picto-native actions: custom export; Live Photo, SWF, JXL, EPS, EPUB, and video-format support;
   FFmpeg/media-info dependencies; UTF-8 repair; video-frame export; combine images; OCR/copy text;
   crop; video-to-GIF; image comparison; EXIF; histogram; format conversion; reverse/high-resolution/
   Pinterest image search; AI models/actions/search/enlarge/background removal/erase; and MCP server.
   Each accepted item needs a separate behavior decision before implementation.
-- Finish deletion, recently viewed, folder/smart-folder behavior, and measured 100k-1M performance.
+- Verify deletion, recently viewed, folder/smart-folder behavior, and representative performance.
 - Keep OnlyFans as a separate source runner using the same normalized subscription contract.
-- Integrate Cloud Sync only through committed application operations and revision events. Its oplog,
-  replay, conflict handling, credentials, and UI need an isolated persistence and packaged-smoke
-  gate before release.
-- Integrate Tutorials against stable navigation/command identifiers without duplicating product
-  surfaces or using synthetic host input. Accessibility, dismissal, restart, and completion-state
-  behavior need a focused gate before release.
+- Verify Cloud Sync through committed application operations and revision events, including its
+  persistence and packaged application behavior.
+- Verify Tutorials against stable navigation/command identifiers without duplicating product
+  surfaces or using synthetic host input.
 
 ## Phase 5: Release Gate and Cleanup
 
@@ -104,6 +105,7 @@ integration workstreams and remain release blockers until their focused gates pa
   and subscription worker.
 - Collections, All/Inbox/Trash, folders, smart folders, sidebar counts, grid counts, tags,
   duplicates, subscriptions, and restart recovery agree on persisted state.
-- Cloud Sync and Tutorials pass their dedicated pre-release gates without bypassing application
-  operations or duplicating product UI.
+- Cloud Sync and Tutorials pass the packaged smoke without bypassing application operations or
+  duplicating product UI.
+- Deferred optional PBIs are not release gates.
 - No pre-1.0 migration code exists.

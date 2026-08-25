@@ -23,4 +23,22 @@ when its second distinct item arrives, without delaying the first item.
 
 Subscriptions persist definitions, runs, source posts, source items, retries, and progress. Direct
 site sessions are captured in a Picto-owned browser and secrets remain in the operating-system
-credential store. Cloud sync is not part of this release.
+credential store.
+
+## Application boundaries
+
+- React owns presentation and transient interaction state. It does not open SQLite or infer whether
+  a native operation committed.
+- Electron owns windows, menus, protocols, updater delivery, credentials, and packaged sidecars.
+  The preload exposes a narrow typed IPC surface; renderer code has no Node integration.
+- Rust owns library sessions, queries, mutations, background work, and invalidation. A generation
+  change closes the old library before a new session can answer commands.
+- Long-running work is durable and queryable. UI progress is a projection of persisted work rather
+  than an independent queue.
+
+## Pre-release integration seams
+
+Cloud Sync must consume committed revisions and application operations; it must not write SQLite,
+blob files, or Roaring projections behind the core. Tutorials may observe stable navigation and
+command identifiers, but may not fork production components or synthesize host input. Both are
+release gates until their own behavior, persistence, accessibility, and packaged smoke tests pass.

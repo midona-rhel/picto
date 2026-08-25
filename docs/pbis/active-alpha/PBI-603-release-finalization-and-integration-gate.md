@@ -6,19 +6,13 @@ P0
 ## Current evidence
 
 - The worktree has no unresolved merge entries and `git diff --check` passes.
-- Vitest passes 130 files and 596 tests, but emits 242 asynchronous React scheduling warnings.
-- TypeScript and the production renderer build pass. The production build keeps document viewers
-  in lazy chunks; its large RTF/PDF implementation chunk is not part of the initial main bundle.
-- `npm audit --omit=dev` reports no known production dependency vulnerabilities.
-- The source release audit passes, including repository hygiene, license declarations, sidecar
-  pins, platform targets, and package configuration.
-- Gallery-dl and OnlyFans sidecars use pinned source revisions; the OnlyFans transitive lock now
-  resolves on every supported target.
-- The public branch and tags have been rewritten and verified without the audited personal paths,
-  competitor references, copied audit material, or generated captures. Local `main` now descends
-  from that scrubbed public history.
-- The branch remains far ahead of `origin/main` with a large dirty integration surface. Separately
-  owned feature work must reach its own gates before the final integration run.
+- `npm run alpha:verify` passes: TypeScript, 657 Vitest tests, 454 Rust tests, command parity, and
+  source release audit are green without warning spam.
+- Gallery-dl and OnlyFans sidecars build from pinned sources and pass packaged self-tests.
+- The artifact audit, macOS ZIP/DMG assembly, and packaged fresh-library startup/settlement smoke
+  pass. The alpha is intentionally ad-hoc signed and not notarized.
+- The remaining integration work is to commit the reviewed release slices and complete the short
+  packaged behavior smoke before deleting this gate.
 
 ## Scope
 
