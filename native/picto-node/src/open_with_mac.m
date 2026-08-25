@@ -1,4 +1,5 @@
 #import <AppKit/AppKit.h>
+#import <CoreServices/CoreServices.h>
 
 static NSString *picto_png_data_url(NSImage *image) {
     if (image == nil) return nil;
@@ -18,8 +19,17 @@ const char *picto_get_associated_applications(const char *file_path) {
         NSString *path = [NSString stringWithUTF8String:file_path];
         NSURL *fileURL = [NSURL fileURLWithPath:path];
         NSWorkspace *workspace = NSWorkspace.sharedWorkspace;
-        NSURL *defaultURL = [workspace URLForApplicationToOpenURL:fileURL];
-        NSArray<NSURL *> *applicationURLs = [workspace URLsForApplicationsToOpenURL:fileURL];
+        CFURLRef defaultRef = LSCopyDefaultApplicationURLForURL(
+            (__bridge CFURLRef)fileURL,
+            kLSRolesAll,
+            NULL
+        );
+        NSURL *defaultURL = CFBridgingRelease(defaultRef);
+        CFArrayRef applicationsRef = LSCopyApplicationURLsForURL(
+            (__bridge CFURLRef)fileURL,
+            kLSRolesAll
+        );
+        NSArray<NSURL *> *applicationURLs = CFBridgingRelease(applicationsRef) ?: @[];
         NSMutableArray *result = [NSMutableArray arrayWithCapacity:applicationURLs.count];
 
         for (NSURL *applicationURL in applicationURLs) {
