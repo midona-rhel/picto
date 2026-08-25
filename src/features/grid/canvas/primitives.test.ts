@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 import {
   BADGE_PAD_X,
   INSPECTOR_BADGE_PAD_X,
-  INSPECTOR_BADGE_TEXT,
   formatLabelForMime,
 } from './primitives';
 
@@ -11,9 +10,8 @@ describe('grid badge geometry', () => {
     expect(BADGE_PAD_X).toBe(2);
   });
 
-  it('keeps inspector-style left badges distinct from the compact duration badge', () => {
+  it('keeps only the inspector-style horizontal spacing distinct from the duration badge', () => {
     expect(INSPECTOR_BADGE_PAD_X).toBe(4);
-    expect(INSPECTOR_BADGE_TEXT).toBe('#fff');
   });
 });
 

@@ -15,7 +15,6 @@ export const BADGE_H = 18;
 export const BADGE_FONT = GRID_BADGE_FONT;
 export const BADGE_PAD_X = 2;
 export const INSPECTOR_BADGE_PAD_X = 4;
-export const INSPECTOR_BADGE_TEXT = '#fff';
 export const BADGE_RADIUS = GRID_TILE_RADIUS;
 export const NAME_FONT = GRID_NAME_FONT;
 export const INFO_FONT = GRID_INFO_FONT;
@@ -114,7 +113,7 @@ export function drawBadge(
   ctx.lineWidth = 1;
   ctx.stroke();
 
-  ctx.fillStyle = appearance === 'inspector' ? INSPECTOR_BADGE_TEXT : GRID_BADGE_TEXT;
+  ctx.fillStyle = GRID_BADGE_TEXT;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText(text, bx + padX, y + BADGE_H / 2);
