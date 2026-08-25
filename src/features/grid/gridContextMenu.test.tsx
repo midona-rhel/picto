@@ -131,8 +131,9 @@ describe('buildTileContextMenu', () => {
     expect(onMoveToTrash).toHaveBeenCalledOnce();
   });
 
-  it('uses the file-export icon for the export action', () => {
+  it('separates original export from converted export under one menu', () => {
     const onExport = vi.fn();
+    const onExportOriginals = vi.fn();
     const entries = buildTileContextMenu({
       selectionCount: 1,
       querySelectionActive: false,
@@ -144,14 +145,21 @@ describe('buildTileContextMenu', () => {
       onSelectAll: vi.fn(),
       onDeselectAll: vi.fn(),
       onExport,
+      onExportOriginals,
     });
     const exportEntry = entries.find(
-      (entry): entry is MenuItem => 'label' in entry && entry.label === 'Export...',
+      (entry) => 'label' in entry && entry.label === 'Export',
     );
 
     expect(exportEntry).toBeDefined();
-    expect(renderToStaticMarkup(exportEntry!.icon)).toContain('tabler-icon-file-export');
-    exportEntry!.action();
+    if (!exportEntry || !('children' in exportEntry)) throw new Error('missing export submenu');
+    expect(renderToStaticMarkup(exportEntry.icon)).toContain('tabler-icon-file-export');
+    expect(exportEntry.children.flatMap((entry) => 'label' in entry ? [entry.label] : [])).toEqual([
+      'Export Originals...', 'Export As...',
+    ]);
+    if ('action' in exportEntry.children[0]) exportEntry.children[0].action();
+    if ('action' in exportEntry.children[1]) exportEntry.children[1].action();
+    expect(onExportOriginals).toHaveBeenCalledOnce();
     expect(onExport).toHaveBeenCalledOnce();
   });
 
@@ -276,7 +284,8 @@ describe('buildTileContextMenu', () => {
     expect(onAddToLastUsedFolder).toHaveBeenCalledOnce();
   });
 
-  it('does not offer the single-item Copy Tags action for a multi-selection', () => {
+  it('copies only shared tags for a multi-selection', () => {
+    const onCopyTags = vi.fn();
     const entries = buildTileContextMenu({
       selectionCount: 2,
       querySelectionActive: false,
@@ -288,13 +297,63 @@ describe('buildTileContextMenu', () => {
       loadedCount: 2,
       onSelectAll: vi.fn(),
       onDeselectAll: vi.fn(),
-      onCopyTags: vi.fn(),
+      onCopyTags,
       onPasteTags: vi.fn(),
     });
     const labels = entries.flatMap((entry) => ('label' in entry ? [entry.label] : []));
 
     expect(labels).not.toContain('Copy Tags');
+    expect(labels).toContain('Copy Shared Tags');
     expect(labels).toContain('Paste Tags');
+    const copyShared = entries.find(
+      (entry): entry is MenuItem => 'label' in entry && entry.label === 'Copy Shared Tags',
+    );
+    copyShared!.action();
+    expect(onCopyTags).toHaveBeenCalledOnce();
+  });
+
+  it('offers atomic batch rename for an explicit multi-selection', () => {
+    const onBatchRename = vi.fn();
+    const entries = buildTileContextMenu({
+      selectionCount: 3,
+      querySelectionActive: false,
+      singleSelected: false,
+      singleHash: null,
+      scopeKind: 'system',
+      statusFilter: null,
+      loadedCount: 3,
+      onSelectAll: vi.fn(),
+      onDeselectAll: vi.fn(),
+      onBatchRename,
+    });
+    const entry = entries.find(
+      (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Batch Rename 3 Items...',
+    );
+    expect(entry).toBeDefined();
+    entry!.action();
+    expect(onBatchRename).toHaveBeenCalledOnce();
+  });
+
+  it('sets a selected member as the current folder cover', () => {
+    const onSetFolderCover = vi.fn();
+    const entries = buildTileContextMenu({
+      selectionCount: 1,
+      querySelectionActive: false,
+      singleSelected: true,
+      singleHash: 'hash',
+      scopeKind: 'folder',
+      statusFilter: null,
+      loadedCount: 1,
+      onSelectAll: vi.fn(),
+      onDeselectAll: vi.fn(),
+      onSetFolderCover,
+    });
+    const entry = entries.find(
+      (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Set as Folder Cover',
+    );
+    expect(entry).toBeDefined();
+    entry!.action();
+    expect(onSetFolderCover).toHaveBeenCalledOnce();
   });
 
   it('offers group organization for a multi-item selection', () => {

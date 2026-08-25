@@ -63,7 +63,7 @@ import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import { navigateToNode } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
 import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor, tagSelectPortalAtom } from '../../state/portals';
-import { groupOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, folderWatchModalAtom, tagSelectModalAtom, folderPickerModalAtom, smartFolderModalAtom } from '../../state/modals';
+import { groupOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, batchRenameModalAtom, folderWatchModalAtom, tagSelectModalAtom, folderPickerModalAtom, smartFolderModalAtom } from '../../state/modals';
 import { organizeIntoGroup, ungroup } from '../../platform/entityApi';
 import { GroupSurface } from '../groups/GroupSurface';
 import { MediaView } from '../viewer/MediaView';
@@ -1186,6 +1186,12 @@ export function GridScreen({
               const idx = items.findIndex((i) => i.item_id === singleItem.item_id);
               if (idx >= 0) setRenamingIndex(idx);
             } : undefined,
+            onBatchRename: effectiveSelectionMode === 'explicit' && selectedItems.length > 1
+              ? () => store.set(batchRenameModalAtom, {
+                  open: true,
+                  items: selectedItems.map((item) => ({ item_id: item.item_id, name: item.name ?? 'Untitled' })),
+                })
+              : undefined,
             onOrganizeGroup: effectiveTarget && selCount > 1
               ? () => { void organizeSelection(effectiveTarget); }
               : undefined,
@@ -1221,11 +1227,22 @@ export function GridScreen({
                 message: reason instanceof Error ? reason.message : String(reason),
               }));
             },
+            onSetFolderCover: gridScope.kind === 'folder' && singleItem
+              ? () => {
+                  void foldersController.setCover(gridScope.folder_id, singleItem.item_id)
+                    .catch((reason) => showErrorNotification({
+                      title: 'Could not set folder cover',
+                      message: reason instanceof Error ? reason.message : String(reason),
+                    }));
+                }
+              : undefined,
             onCopyTags: () => {
-              if (!singleItem) return;
-              void viewerController.getItemDetails(singleItem.item_id).then((d) => {
-                if (!d?.aggregate_tags) return;
-                const tagStrings = d.aggregate_tags;
+              if (!effectiveTarget) return;
+              const tags = singleItem
+                ? viewerController.getItemDetails(singleItem.item_id).then((details) => details?.aggregate_tags ?? [])
+                : entityMutations.getTargetSelectionSummary(effectiveTarget)
+                  .then((summary) => summary.shared_tags.map((entry) => entry.tag));
+              void tags.then((tagStrings) => {
                 filesController.copyText(JSON.stringify(tagStrings));
                 (window as any).__pictoClipboardTags = tagStrings;
               });
@@ -1278,6 +1295,21 @@ export function GridScreen({
               store.set(exportModalAtom, {
                 open: true, fileCount: selCount, target: effectiveTarget,
               });
+            },
+            onExportOriginals: () => {
+              if (!effectiveTarget) return;
+              void (async () => {
+                const result = await (window as any).picto.dialog.open({
+                  properties: ['openDirectory'], multiple: false, title: 'Export originals',
+                });
+                const outputDir = typeof result === 'string' ? result : result?.[0];
+                if (outputDir) await filesController.exportMedia(effectiveTarget, {
+                  output_dir: outputDir, format: 'original',
+                });
+              })().catch((reason) => showErrorNotification({
+                title: 'Could not export originals',
+                message: reason instanceof Error ? reason.message : String(reason),
+              }));
             },
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(effectiveTarget); },
             onOpenTagSelect: () => { setTagSelectModal({ open: true }); },

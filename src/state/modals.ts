@@ -64,6 +64,12 @@ export interface ExportModalState {
 }
 export const exportModalAtom = atom<ExportModalState>({ open: false, fileCount: 0 });
 
+export interface BatchRenameModalState {
+  open: boolean;
+  items: Array<{ item_id: number; name: string }>;
+}
+export const batchRenameModalAtom = atom<BatchRenameModalState>({ open: false, items: [] });
+
 // ── Folder import modal (shown when dropping a folder into the app) ──
 export interface FolderImportModalState {
   open: boolean;

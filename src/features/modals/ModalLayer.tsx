@@ -9,6 +9,7 @@ import {
   smartFolderModalAtom,
   folderWatchModalAtom,
   exportModalAtom,
+  batchRenameModalAtom,
   folderImportModalAtom,
   groupOrganizerModalAtom,
 } from '../../state/modals';
@@ -22,6 +23,9 @@ import { smartFoldersController } from '../../controllers/smartFoldersController
 import { foldersController } from '../../controllers/foldersController';
 import { filesController } from '../../controllers/filesController';
 import { GroupOrganizerModal } from './GroupOrganizerModal';
+import { BatchRenameModal } from './BatchRenameModal';
+import { setItemNames } from '../../controllers/entityMutations';
+import { showErrorNotification } from '../../shared/lib/notifications';
 
 export function ModalLayer() {
   const confirm = useAtomValue(confirmModalAtom);
@@ -35,6 +39,8 @@ export function ModalLayer() {
 
   const exportState = useAtomValue(exportModalAtom);
   const setExport = useSetAtom(exportModalAtom);
+  const batchRename = useAtomValue(batchRenameModalAtom);
+  const setBatchRename = useSetAtom(batchRenameModalAtom);
 
   const folderImport = useAtomValue(folderImportModalAtom);
   const setFolderImport = useSetAtom(folderImportModalAtom);
@@ -114,6 +120,20 @@ export function ModalLayer() {
           setExport({ open: false, fileCount: 0 });
         }}
         fileCount={exportState.fileCount}
+      />
+
+      <BatchRenameModal
+        open={batchRename.open}
+        items={batchRename.items}
+        onClose={() => setBatchRename({ open: false, items: [] })}
+        onRename={(renames) => {
+          void setItemNames(renames)
+            .then(() => setBatchRename({ open: false, items: [] }))
+            .catch((reason) => showErrorNotification({
+              title: 'Could not rename items',
+              message: reason instanceof Error ? reason.message : String(reason),
+            }));
+        }}
       />
 
       <ConfirmModal

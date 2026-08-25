@@ -47,6 +47,13 @@ pub struct ReorderCollectionInput {
     pub media_item_ids: Vec<ItemId>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct ItemRename {
+    pub item_id: ItemId,
+    pub name: String,
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct MediaMetadataPatch {
@@ -115,6 +122,69 @@ impl Application {
             &[resources::LIBRARY, &item_resource],
             &[item_id.0],
         ))
+    }
+
+    /// Rename an explicit set of visible roots as one atomic, undoable action.
+    pub fn rename_items(&self, renames: &[ItemRename]) -> Result<MutationReceipt, String> {
+        if renames.len() < 2 {
+            return Err("Batch rename requires at least two items".to_string());
+        }
+        let mut item_ids = BTreeSet::new();
+        let mut normalized = Vec::with_capacity(renames.len());
+        for rename in renames {
+            if !item_ids.insert(rename.item_id.0) {
+                return Err(format!("Item {} appears more than once", rename.item_id.0));
+            }
+            let name = rename.name.trim();
+            if name.is_empty() {
+                return Err("An item name cannot be empty".to_string());
+            }
+            if name.chars().count() > 255 {
+                return Err("An item name cannot exceed 255 characters".to_string());
+            }
+            normalized.push((rename.item_id, name.to_string()));
+        }
+        let resources_for_history = std::iter::once(resources::LIBRARY.to_string())
+            .chain(item_ids.iter().map(|item_id| resources::item(*item_id)))
+            .collect();
+        let history_ids = item_ids.iter().copied().collect::<Vec<_>>();
+        let (_, revision, _) = self.undoable_transaction(
+            HistoryDescriptor::new(
+                "items.rename_many",
+                format!("Rename {} items", normalized.len()),
+                resources_for_history,
+                history_ids.clone(),
+            ),
+            |transaction| {
+                let now = chrono::Utc::now().to_rfc3339();
+                for (item_id, name) in &normalized {
+                    let kind: String = transaction
+                        .query_row(
+                            "SELECT li.kind FROM library_root lr
+                             JOIN library_item li ON li.item_id = lr.item_id
+                             WHERE lr.item_id = ?1",
+                            [item_id.0],
+                            |row| row.get(0),
+                        )
+                        .optional()?
+                        .ok_or_else(|| invalid(format!("Item {} is not a library root", item_id.0)))?;
+                    match kind.as_str() {
+                        "collection" => transaction.execute(
+                            "UPDATE library_item SET label = ?1, updated_at = ?2 WHERE item_id = ?3",
+                            params![name, now, item_id.0],
+                        )?,
+                        "media" => transaction.execute(
+                            "UPDATE media_asset SET name = ?1, updated_at = ?2 WHERE item_id = ?3",
+                            params![name, now, item_id.0],
+                        )?,
+                        other => return Err(invalid(format!("Unsupported item kind '{other}'"))),
+                    };
+                }
+                Ok(((), ()))
+            },
+            |_, ()| Ok(()),
+        )?;
+        Ok(receipt(revision, &[resources::LIBRARY], &history_ids))
     }
 
     pub fn set_lifecycle(
@@ -1460,7 +1530,7 @@ mod tests {
 
     use super::{
         DetachItemsInput, OrganizeIntoCollectionInput, OrganizeIntoCollectionResult,
-        ReorderCollectionInput,
+        ItemRename, ReorderCollectionInput,
     };
     use crate::app::{
         Application, ItemFilters, ItemId, ItemQuery, ItemScope, ItemSort, ItemTarget, Lifecycle,
@@ -2377,5 +2447,33 @@ mod tests {
         assert_eq!(receipt.revision, 4);
         assert_eq!(receipt.resources, vec!["library"]);
         assert!(receipt.item_ids.is_empty());
+    }
+
+    #[test]
+    fn batch_rename_is_one_atomic_undoable_action() {
+        let (_directory, app, ids) = fixture();
+        app.rename_items(&[
+            ItemRename { item_id: ids[0], name: "First renamed".to_string() },
+            ItemRename { item_id: ids[1], name: "Second renamed".to_string() },
+        ])
+        .unwrap();
+
+        let names = || {
+            app.store().read(|connection| {
+                ids[..2]
+                    .iter()
+                    .map(|item_id| connection.query_row(
+                        "SELECT name FROM media_asset WHERE item_id = ?1",
+                        [item_id.0],
+                        |row| row.get::<_, Option<String>>(0).map(Option::unwrap_or_default),
+                    ))
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            }).unwrap()
+        };
+        assert_eq!(names(), vec!["First renamed", "Second renamed"]);
+        app.undo().unwrap();
+        assert_eq!(names(), vec!["", ""]);
+        app.redo().unwrap();
+        assert_eq!(names(), vec!["First renamed", "Second renamed"]);
     }
 }

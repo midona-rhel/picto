@@ -12,6 +12,7 @@ import {
   getSelectionSummary,
   patchMediaEntities,
   renameItem,
+  renameItems,
   setItemLifecycle,
 } from '../platform/entityApi';
 import { removeEntitiesFromFolder, updateFolderMembership } from '../platform/folderApi';
@@ -51,6 +52,11 @@ export async function setItemName(itemId: number, name: string): Promise<void> {
   await renameItem(itemId, name);
   await announceUndoableMutation('items.rename');
   void loadInspectorData(itemId);
+}
+
+export async function setItemNames(renames: Array<{ item_id: number; name: string }>): Promise<void> {
+  await renameItems(renames);
+  await announceUndoableMutation('items.rename_many');
 }
 
 export async function setTargetNotes(target: ItemTarget, notes: string): Promise<void> {

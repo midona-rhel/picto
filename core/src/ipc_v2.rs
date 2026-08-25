@@ -178,6 +178,10 @@ pub fn dispatch(
                 application.rename_item(input.item_id, &input.name)?,
             )
         }
+        "items.rename_many" => {
+            let input: RenameItemsInput = parse(args_json)?;
+            publish(application, application.rename_items(&input.renames)?)
+        }
 
         "items.set_lifecycle" => {
             let input: LifecycleInput = parse(args_json)?;
@@ -258,6 +262,14 @@ pub fn dispatch(
         "folders.auto_tags.set" => publish_folder(
             application,
             application.set_folder_auto_tags(&parse::<SetFolderAutoTagsInput>(args_json)?)?,
+        ),
+        "folders.cover.get" => {
+            let input: FolderInput = parse(args_json)?;
+            read(application.folder_cover(input.folder_id)?)
+        }
+        "folders.cover.set" => publish_folder(
+            application,
+            application.set_folder_cover(&parse::<crate::folders_v2::SetFolderCoverInput>(args_json)?)?,
         ),
         "folders.move" => {
             let input: MoveFolderInput = parse(args_json)?;
@@ -829,6 +841,12 @@ pub struct ItemInput {
 pub struct ItemNameInput {
     item_id: ItemId,
     name: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct RenameItemsInput {
+    pub renames: Vec<crate::operations_v2::ItemRename>,
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]

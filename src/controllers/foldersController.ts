@@ -14,6 +14,7 @@ import {
   reorderFolderChildren,
   setFolderMetadata,
   setFolderAutoTags,
+  setFolderCover,
   setFolderWatchConfig,
   sortFolderItemsByName,
   sortFolderTree,
@@ -151,6 +152,11 @@ export const foldersController = {
 
   getCoverHash(folderId: number): Promise<string | null> {
     return getFolderCover(folderId).then((cover) => cover?.entity_hash ?? null);
+  },
+
+  async setCover(folderId: number, itemId: number): Promise<void> {
+    await setFolderCover(folderId, itemId);
+    await announceUndoableMutation('folders.set_cover');
   },
 
   async getCoverHashes(folderIds: number[]): Promise<Array<{ folder_id: number; entity_hash: string | null; mime_type: string | null }>> {

@@ -30,6 +30,10 @@ export function renameItem(itemId: number, name: string): Promise<MutationReceip
   return invoke<MutationReceipt>('items.rename', { item_id: itemId, name });
 }
 
+export function renameItems(renames: Array<{ item_id: number; name: string }>): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('items.rename_many', { renames });
+}
+
 export function patchMediaEntities(target: ItemTarget, patch: MediaEntityPatch): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('items.patch_metadata', { target, patch });
 }

@@ -8,6 +8,7 @@ import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
 import { GlassInput } from '../../shared/ui/GlassInput/GlassInput';
 import { useAtomValue } from 'jotai';
 import { gridSpacingAtom } from '../../state/grid';
+import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 
 interface SubfolderGridProps {
   childFolders: SidebarNodeDto[];
@@ -35,10 +36,16 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
   const [expanded, setExpanded] = useState(true);
   const rootRef = useRef<HTMLDivElement>(null);
   const [covers, setCovers] = useState<Map<number, { hash: string; mime: string }>>(new Map());
+  const [coverRevision, setCoverRevision] = useState(0);
   const coverRequestKey = childFolders
     .map((folder) => parseFolderId(folder.id))
     .filter((folderId): folderId is number => folderId != null)
     .join(',');
+
+  useEffect(
+    () => libraryInvalidation.register('folders', () => setCoverRevision((revision) => revision + 1)),
+    [],
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -63,7 +70,7 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
       if (!cancelled) setCovers(new Map());
     });
     return () => { cancelled = true; };
-  }, [coverRequestKey]);
+  }, [coverRequestKey, coverRevision]);
 
   const handleClick = useCallback((e: React.MouseEvent, nodeId: string) => {
     e.stopPropagation();

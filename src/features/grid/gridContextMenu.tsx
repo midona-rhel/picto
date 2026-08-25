@@ -72,8 +72,10 @@ export interface GridMenuContext {
   onAccept?: () => void;
   onReject?: () => void;
   onRename?: () => void;
+  onBatchRename?: () => void;
   onRegenerateThumbnails?: () => void;
   onSetLibraryIcon?: (hash: string) => void;
+  onSetFolderCover?: () => void;
   onCopyTags?: () => void;
   onPasteTags?: () => void;
   hasClipboardTags?: boolean;
@@ -86,6 +88,7 @@ export interface GridMenuContext {
   onSearchByImage?: (engine: string, hash: string) => void;
   onSetRating?: (rating: number) => void;
   onExport?: () => void;
+  onExportOriginals?: () => void;
   onOrganizeGroup?: () => void;
   onEditGroup?: () => void;
   onUngroup?: () => void;
@@ -361,6 +364,19 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(item('Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.rename'), action: ctx.onRename }));
     entries.push(sep());
   }
+  if (singleSelected && ctx.scopeKind === 'folder' && ctx.onSetFolderCover) {
+    entries.push(item('Set as Folder Cover', {
+      icon: <IconPhoto size={15} />,
+      action: ctx.onSetFolderCover,
+    }));
+    entries.push(sep());
+  }
+  if (selectionCount > 1 && !ctx.querySelectionActive && ctx.onBatchRename) {
+    entries.push(item(`Batch Rename ${selectionCount} Items...`, {
+      icon: <IconRename size={15} />, shortcut: kbd('edit.rename'), action: ctx.onBatchRename,
+    }));
+    entries.push(sep());
+  }
 
   // ── Copy ──
   if (singleSelected && singleHash && ctx.singleKind !== 'collection') {
@@ -385,9 +401,9 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       action: ctx.onOpenAiTagger,
       disabled: !aiTagEnabled,
     }));
-    if (singleSelected) {
-      entries.push(item('Copy Tags', { icon: <IconBookmarks size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags }));
-    }
+    entries.push(item(singleSelected ? 'Copy Tags' : 'Copy Shared Tags', {
+      icon: <IconBookmarks size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags,
+    }));
     entries.push(item('Paste Tags', { icon: <IconPasteTags size={15} />, shortcut: kbd('edit.pasteTags'), action: ctx.onPasteTags, disabled: !ctx.hasClipboardTags }));
     entries.push(sep());
   }
@@ -407,7 +423,15 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 
   // ── Export ──
   if (hasSelection && ctx.onExport) {
-    entries.push(item('Export...', { icon: <IconFileExport size={15} />, action: ctx.onExport }));
+    entries.push({
+      submenu: true,
+      label: 'Export',
+      icon: <IconFileExport size={15} />,
+      children: [
+        item('Export Originals...', { action: ctx.onExportOriginals }),
+        item('Export As...', { action: ctx.onExport }),
+      ],
+    });
     entries.push(sep());
   }
 

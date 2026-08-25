@@ -17,6 +17,7 @@ use crate::store::history::HistoryDescriptor;
 const RANK_GAP: i64 = 1024;
 const APPLICATION_SETTINGS_KEY: &str = "application";
 const FOLDER_AUTO_TAGS_KEY: &str = "folderAutoTags";
+const FOLDER_COVERS_KEY: &str = "folderCovers";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -61,6 +62,20 @@ pub struct SortFolderTreeInput {
 pub struct SetFolderAutoTagsInput {
     pub folder_id: FolderId,
     pub tags: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct SetFolderCoverInput {
+    pub folder_id: FolderId,
+    pub item_id: ItemId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct FolderCover {
+    pub entity_hash: String,
+    pub mime_type: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -740,6 +755,47 @@ impl Application {
         )?;
         Ok(folder_receipt(revision, vec![folder_id], Vec::new(), None))
     }
+
+    pub fn folder_cover(&self, folder_id: FolderId) -> Result<Option<FolderCover>, String> {
+        self.store().read(|connection| {
+            require_folder(connection, folder_id.0)?;
+            let settings = read_application_settings(connection)?;
+            let Some(item_id) = exact_folder_cover_item_id(&settings, folder_id.0) else {
+                return Ok(None);
+            };
+            resolve_folder_cover(connection, folder_id.0, item_id).map_err(Into::into)
+        })
+    }
+
+    pub fn set_folder_cover(
+        &self,
+        input: &SetFolderCoverInput,
+    ) -> Result<FolderMutationReceipt, String> {
+        let (_, revision, _, _) = self.undoable_transaction_if_changed(
+            folder_history("folders.set_cover", "Set folder cover", &[input.folder_id]),
+            |transaction| {
+                require_folder(transaction, input.folder_id.0)?;
+                resolve_folder_cover(transaction, input.folder_id.0, input.item_id.0)?
+                    .ok_or_else(|| invalid("Folder cover item must belong to the folder"))?;
+                let mut settings = read_application_settings(transaction)?;
+                let previous = exact_folder_cover_item_id(&settings, input.folder_id.0);
+                if previous == Some(input.item_id.0) {
+                    return Ok(((), (), false));
+                }
+                write_exact_folder_cover_item_id(
+                    &mut settings,
+                    input.folder_id.0,
+                    input.item_id.0,
+                )?;
+                write_application_settings(transaction, &settings)?;
+                Ok(((), (), true))
+            },
+            |_, ()| Ok(()),
+        )?;
+        let mut receipt = folder_receipt(revision, vec![input.folder_id], Vec::new(), None);
+        receipt.receipt.item_ids.push(input.item_id);
+        Ok(receipt)
+    }
 }
 
 fn folder_history(command: &str, label: &str, folder_ids: &[FolderId]) -> HistoryDescriptor {
@@ -865,6 +921,63 @@ fn write_exact_folder_auto_tags(
     Ok(())
 }
 
+fn exact_folder_cover_item_id(settings: &serde_json::Value, folder_id: i64) -> Option<i64> {
+    settings
+        .get(FOLDER_COVERS_KEY)
+        .and_then(serde_json::Value::as_object)
+        .and_then(|folders| folders.get(&folder_id.to_string()))
+        .and_then(serde_json::Value::as_i64)
+}
+
+fn write_exact_folder_cover_item_id(
+    settings: &mut serde_json::Value,
+    folder_id: i64,
+    item_id: i64,
+) -> rusqlite::Result<()> {
+    let root = settings
+        .as_object_mut()
+        .ok_or_else(|| invalid("Application settings must be an object"))?;
+    let folders = root
+        .entry(FOLDER_COVERS_KEY)
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+        .ok_or_else(|| invalid("Folder covers setting must be an object"))?;
+    folders.insert(folder_id.to_string(), serde_json::json!(item_id));
+    Ok(())
+}
+
+fn resolve_folder_cover(
+    connection: &rusqlite::Connection,
+    folder_id: i64,
+    item_id: i64,
+) -> rusqlite::Result<Option<FolderCover>> {
+    connection
+        .query_row(
+            "SELECT mf.file_hash, mf.mime_type
+             FROM folder_item fi
+             JOIN library_root lr ON lr.item_id = fi.item_id AND lr.lifecycle = 'active'
+             JOIN library_item li ON li.item_id = fi.item_id
+             JOIN media_asset ma ON ma.item_id = CASE
+                 WHEN li.kind = 'collection' THEN (
+                     SELECT cm.media_item_id
+                     FROM collection_member cm
+                     WHERE cm.collection_id = li.item_id
+                     ORDER BY cm.position_rank ASC, cm.media_item_id ASC
+                     LIMIT 1
+                 )
+                 ELSE li.item_id
+             END
+             JOIN media_file mf ON mf.file_id = ma.file_id
+             WHERE fi.folder_id = ?1 AND fi.item_id = ?2",
+            params![folder_id, item_id],
+            |row| Ok(FolderCover {
+                entity_hash: row.get(0)?,
+                mime_type: row.get(1)?,
+            }),
+        )
+        .optional()
+}
+
 pub(crate) fn inherited_folder_auto_tags(
     transaction: &Transaction<'_>,
     folder_id: i64,
@@ -892,8 +1005,8 @@ pub(crate) fn inherited_folder_auto_tags(
     Ok(tags.into_iter().collect())
 }
 
-fn require_folder(transaction: &Transaction<'_>, folder_id: i64) -> rusqlite::Result<()> {
-    transaction
+fn require_folder(connection: &rusqlite::Connection, folder_id: i64) -> rusqlite::Result<()> {
+    connection
         .query_row(
             "SELECT 1 FROM folder WHERE folder_id = ?1",
             [folder_id],
@@ -1111,7 +1224,7 @@ mod tests {
     use super::{
         CreateFolderInput, FolderId, FolderMetadataInput, FolderWatchInput,
         ReorderFolderChildrenInput, ReorderFolderItemsInput, SetFolderAutoTagsInput,
-        SortFolderTreeInput, RANK_GAP,
+        SetFolderCoverInput, SortFolderTreeInput, RANK_GAP,
     };
     use crate::app::{Application, ItemId, ItemTarget};
     use crate::store::Store;
@@ -1742,5 +1855,48 @@ mod tests {
             })
             .unwrap_err();
         assert!(rejected.contains("inside the Picto library"));
+    }
+
+    #[test]
+    fn explicit_folder_cover_is_persistent_and_undoable() {
+        let (_directory, app, media_id) = fixture();
+        let folder = create(&app, "Covered", None);
+        app.set_folder_membership(
+            &ItemTarget::Explicit { item_ids: vec![ItemId(media_id)] },
+            folder.0,
+            true,
+        )
+        .unwrap();
+
+        app.set_folder_cover(&SetFolderCoverInput {
+            folder_id: folder,
+            item_id: ItemId(media_id),
+        })
+        .unwrap();
+        assert_eq!(
+            app.folder_cover(folder).unwrap().unwrap().entity_hash,
+            "folder-test-hash"
+        );
+
+        app.undo().unwrap();
+        assert!(app.folder_cover(folder).unwrap().is_none());
+        app.redo().unwrap();
+        assert_eq!(
+            app.folder_cover(folder).unwrap().unwrap().entity_hash,
+            "folder-test-hash"
+        );
+    }
+
+    #[test]
+    fn folder_cover_rejects_items_outside_the_folder() {
+        let (_directory, app, media_id) = fixture();
+        let folder = create(&app, "Covered", None);
+        let error = app
+            .set_folder_cover(&SetFolderCoverInput {
+                folder_id: folder,
+                item_id: ItemId(media_id),
+            })
+            .unwrap_err();
+        assert!(error.contains("must belong to the folder"));
     }
 }

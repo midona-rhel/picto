@@ -111,6 +111,11 @@ export function clearFolderWatchConfig(folderId: number): Promise<FolderMutation
 }
 
 export async function getFolderCover(folderId: number): Promise<{ entity_hash: string; mime_type: string } | null> {
+  const explicit = await invoke<{ entity_hash: string; mime_type: string } | null>(
+    'folders.cover.get',
+    { folder_id: folderId },
+  );
+  if (explicit) return explicit;
   const page = await queryItems({
     scope: { kind: 'folder', folder_id: folderId },
     filters: createEmptyItemFilters(),
@@ -118,6 +123,13 @@ export async function getFolderCover(folderId: number): Promise<{ entity_hash: s
   }, { offset: 0, limit: 1 });
   const item = page.items[0];
   return item ? { entity_hash: item.display_file_hash, mime_type: item.display_mime_type } : null;
+}
+
+export function setFolderCover(folderId: number, itemId: number): Promise<FolderMutationReceipt> {
+  return invoke<FolderMutationReceipt>('folders.cover.set', {
+    folder_id: folderId,
+    item_id: itemId,
+  });
 }
 
 export function addMedia(paths: string[], params: {
