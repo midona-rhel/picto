@@ -27,7 +27,22 @@ describe('settings API', () => {
     expect(snapshot.revision).toBe(12);
     expect(snapshot.value.colorScheme).toBe('light');
     expect(snapshot.value.showTreeGuides).toBe(false);
+    expect(snapshot.value.showSidebarCounts).toBe(true);
+    expect(snapshot.value.showSidebarSubscriptions).toBe(true);
+    expect(snapshot.value.showSidebarFolders).toBe(true);
+    expect(snapshot.value.gridWheelAction).toBe('scroll');
+    expect(snapshot.value.viewerTrackpadGestures).toBe(false);
+    expect(snapshot.value.gridDoubleClickAction).toBe('detail');
     expect(snapshot.value.gridSpacing).toBe('wide');
+    expect(snapshot.value.imageRendering).toBe('smooth');
+    expect(snapshot.value.imageDefaultZoom).toBe('fit');
+    expect(snapshot.value.showTransparencyGrid).toBe(false);
+    expect(snapshot.value.videoAutoPlay).toBe(true);
+    expect(snapshot.value.videoLoop).toBe(true);
+    expect(snapshot.value.autoImportEnabled).toBe(true);
+    expect(snapshot.value.subscriptionDefaultSchedule).toBe('daily');
+    expect(snapshot.value.subscriptionDefaultPostsPerRun).toBe(100);
+    expect(snapshot.value.subscriptionDefaultGroupPosts).toBe(true);
     expect(snapshot.value.showTagGroups).toBe(true);
     expect(snapshot.value.starredTags).toEqual([]);
     expect(snapshot.value.aiTaggerAutoOnImport).toBe(false);
@@ -49,6 +64,34 @@ describe('settings API', () => {
     invoke.mockResolvedValue({ value: { gridSpacing: 'compact' }, revision: 1 });
 
     await expect(getSettingsSnapshot()).rejects.toThrow('gridSpacing');
+  });
+
+  it('rejects unsupported control behavior values', async () => {
+    invoke.mockResolvedValue({ value: { gridWheelAction: 'rotate' }, revision: 1 });
+
+    await expect(getSettingsSnapshot()).rejects.toThrow('gridWheelAction');
+  });
+
+  it('accepts the macOS media-view trackpad preference', async () => {
+    invoke.mockResolvedValue({ value: { viewerTrackpadGestures: true }, revision: 1 });
+
+    await expect(getSettingsSnapshot()).resolves.toMatchObject({
+      value: { viewerTrackpadGestures: true },
+    });
+  });
+
+  it('rejects malformed auto-import preferences', async () => {
+    invoke.mockResolvedValue({ value: { autoImportEnabled: 'yes' }, revision: 1 });
+
+    await expect(getSettingsSnapshot()).rejects.toThrow('autoImportEnabled');
+  });
+
+  it('rejects invalid subscription defaults', async () => {
+    invoke.mockResolvedValue({ value: { subscriptionDefaultPostsPerRun: 0 }, revision: 1 });
+    await expect(getSettingsSnapshot()).rejects.toThrow('subscriptionDefaultPostsPerRun');
+
+    invoke.mockResolvedValue({ value: { subscriptionDefaultSchedule: 'hourly' }, revision: 1 });
+    await expect(getSettingsSnapshot()).rejects.toThrow('subscriptionDefaultSchedule');
   });
 
   it('uses replacement settings and view commands with their value payloads', async () => {

@@ -40,7 +40,7 @@
   color: var(--sidebar-count-color, var(--color-text-tertiary));
 }
 
-/* reference application's footer visually masks the final scroll rows before the 28px filter field. */
+/* The footer visually masks the final scroll rows before the 28px filter field. */
 .treeFilter::before {
   content: '';
   position: absolute;

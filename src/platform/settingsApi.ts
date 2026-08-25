@@ -1,6 +1,7 @@
 import { invoke } from './ipc';
 import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
 import type { SettingsSnapshot } from '../shared/types/generated/application/SettingsSnapshot';
+import type { NotificationTone } from '../shared/lib/notifications';
 import type { GridSpacing } from '../shared/types/grid';
 
 export interface ViewPrefsDto {
@@ -42,6 +43,35 @@ export interface AppSettings {
   gridSortOrder: string;
   zoomFactor: number | null;
   showTreeGuides: boolean;
+  showSidebarCounts: boolean;
+  showSidebarInbox: boolean;
+  showSidebarRecentlyViewed: boolean;
+  showSidebarUncategorized: boolean;
+  showSidebarUntagged: boolean;
+  showSidebarTagManager: boolean;
+  showSidebarRandom: boolean;
+  showSidebarSubscriptions: boolean;
+  showSidebarDuplicates: boolean;
+  showSidebarQuickAccess: boolean;
+  showSidebarFolders: boolean;
+  showSidebarSmartFolders: boolean;
+  sidebarDoubleClickAction: 'rename' | 'collapse';
+  gridWheelAction: 'scroll' | 'zoom';
+  viewerTrackpadGestures: boolean;
+  gridDoubleClickAction: 'detail' | 'external';
+  gridMiddleClickAction: 'new_window' | 'none';
+  spaceKeyAction: 'quick_look' | 'scroll';
+  imageRendering: 'smooth' | 'pixelated';
+  imageDefaultZoom: 'fit' | 'actual';
+  showTransparencyGrid: boolean;
+  videoAutoPlay: boolean;
+  videoLoop: boolean;
+  notificationPopupsEnabled: boolean;
+  notificationPopupTones: NotificationTone[];
+  autoImportEnabled: boolean;
+  subscriptionDefaultSchedule: 'manual' | 'daily' | 'weekly' | 'monthly';
+  subscriptionDefaultPostsPerRun: number;
+  subscriptionDefaultGroupPosts: boolean;
   showTagGroups: boolean;
   starredTags: string[];
   sidebarQuickAccess: string[];
@@ -69,6 +99,35 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   gridSortOrder: 'ascending',
   zoomFactor: null,
   showTreeGuides: true,
+  showSidebarCounts: true,
+  showSidebarInbox: true,
+  showSidebarRecentlyViewed: true,
+  showSidebarUncategorized: true,
+  showSidebarUntagged: true,
+  showSidebarTagManager: true,
+  showSidebarRandom: true,
+  showSidebarSubscriptions: true,
+  showSidebarDuplicates: true,
+  showSidebarQuickAccess: true,
+  showSidebarFolders: true,
+  showSidebarSmartFolders: true,
+  sidebarDoubleClickAction: 'collapse',
+  gridWheelAction: 'scroll',
+  viewerTrackpadGestures: false,
+  gridDoubleClickAction: 'detail',
+  gridMiddleClickAction: 'new_window',
+  spaceKeyAction: 'quick_look',
+  imageRendering: 'smooth',
+  imageDefaultZoom: 'fit',
+  showTransparencyGrid: false,
+  videoAutoPlay: true,
+  videoLoop: true,
+  notificationPopupsEnabled: true,
+  notificationPopupTones: ['error', 'warning', 'info', 'success'],
+  autoImportEnabled: true,
+  subscriptionDefaultSchedule: 'daily',
+  subscriptionDefaultPostsPerRun: 100,
+  subscriptionDefaultGroupPosts: true,
   showTagGroups: true,
   starredTags: [],
   sidebarQuickAccess: [],
@@ -108,9 +167,23 @@ function numberValue(value: unknown, key: string): number {
   return value;
 }
 
+function integerRangeValue(value: unknown, key: string, min: number, max: number): number {
+  if (!Number.isSafeInteger(value) || (value as number) < min || (value as number) > max) {
+    throw new Error(`Settings field "${key}" must be an integer from ${min} to ${max}.`);
+  }
+  return value as number;
+}
+
 function stringValue(value: unknown, key: string): string {
   if (typeof value !== 'string') throw new Error(`Settings field "${key}" must be a string.`);
   return value;
+}
+
+function enumValue<const T extends readonly string[]>(value: unknown, key: string, allowed: T): T[number] {
+  if (typeof value !== 'string' || !allowed.includes(value)) {
+    throw new Error(`Settings field "${key}" must be one of: ${allowed.join(', ')}.`);
+  }
+  return value as T[number];
 }
 
 function gridSpacingValue(value: unknown): GridSpacing {
@@ -137,6 +210,15 @@ function stringArrayValue(value: unknown, key: string): string[] {
   return [...new Set(value.map((item) => item.trim()).filter(Boolean))];
 }
 
+const NOTIFICATION_TONES = ['error', 'warning', 'info', 'success'] as const;
+
+function notificationTonesValue(value: unknown, key: string): NotificationTone[] {
+  if (!Array.isArray(value) || value.some((tone) => !NOTIFICATION_TONES.includes(tone))) {
+    throw new Error(`Settings field "${key}" must contain only notification tones.`);
+  }
+  return [...new Set(value)] as NotificationTone[];
+}
+
 function storedOrDefault(source: JsonObject, key: string, fallback: unknown): unknown {
   return Object.prototype.hasOwnProperty.call(source, key) ? source[key] : fallback;
 }
@@ -154,6 +236,35 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     gridSortOrder: stringValue(storedOrDefault(source, 'gridSortOrder', APP_SETTINGS_DEFAULTS.gridSortOrder), 'gridSortOrder'),
     zoomFactor: nullableNumberValue(storedOrDefault(source, 'zoomFactor', APP_SETTINGS_DEFAULTS.zoomFactor), 'zoomFactor'),
     showTreeGuides: booleanValue(storedOrDefault(source, 'showTreeGuides', APP_SETTINGS_DEFAULTS.showTreeGuides), 'showTreeGuides'),
+    showSidebarCounts: booleanValue(storedOrDefault(source, 'showSidebarCounts', APP_SETTINGS_DEFAULTS.showSidebarCounts), 'showSidebarCounts'),
+    showSidebarInbox: booleanValue(storedOrDefault(source, 'showSidebarInbox', APP_SETTINGS_DEFAULTS.showSidebarInbox), 'showSidebarInbox'),
+    showSidebarRecentlyViewed: booleanValue(storedOrDefault(source, 'showSidebarRecentlyViewed', APP_SETTINGS_DEFAULTS.showSidebarRecentlyViewed), 'showSidebarRecentlyViewed'),
+    showSidebarUncategorized: booleanValue(storedOrDefault(source, 'showSidebarUncategorized', APP_SETTINGS_DEFAULTS.showSidebarUncategorized), 'showSidebarUncategorized'),
+    showSidebarUntagged: booleanValue(storedOrDefault(source, 'showSidebarUntagged', APP_SETTINGS_DEFAULTS.showSidebarUntagged), 'showSidebarUntagged'),
+    showSidebarTagManager: booleanValue(storedOrDefault(source, 'showSidebarTagManager', APP_SETTINGS_DEFAULTS.showSidebarTagManager), 'showSidebarTagManager'),
+    showSidebarRandom: booleanValue(storedOrDefault(source, 'showSidebarRandom', APP_SETTINGS_DEFAULTS.showSidebarRandom), 'showSidebarRandom'),
+    showSidebarSubscriptions: booleanValue(storedOrDefault(source, 'showSidebarSubscriptions', APP_SETTINGS_DEFAULTS.showSidebarSubscriptions), 'showSidebarSubscriptions'),
+    showSidebarDuplicates: booleanValue(storedOrDefault(source, 'showSidebarDuplicates', APP_SETTINGS_DEFAULTS.showSidebarDuplicates), 'showSidebarDuplicates'),
+    showSidebarQuickAccess: booleanValue(storedOrDefault(source, 'showSidebarQuickAccess', APP_SETTINGS_DEFAULTS.showSidebarQuickAccess), 'showSidebarQuickAccess'),
+    showSidebarFolders: booleanValue(storedOrDefault(source, 'showSidebarFolders', APP_SETTINGS_DEFAULTS.showSidebarFolders), 'showSidebarFolders'),
+    showSidebarSmartFolders: booleanValue(storedOrDefault(source, 'showSidebarSmartFolders', APP_SETTINGS_DEFAULTS.showSidebarSmartFolders), 'showSidebarSmartFolders'),
+    sidebarDoubleClickAction: enumValue(storedOrDefault(source, 'sidebarDoubleClickAction', APP_SETTINGS_DEFAULTS.sidebarDoubleClickAction), 'sidebarDoubleClickAction', ['rename', 'collapse'] as const),
+    gridWheelAction: enumValue(storedOrDefault(source, 'gridWheelAction', APP_SETTINGS_DEFAULTS.gridWheelAction), 'gridWheelAction', ['scroll', 'zoom'] as const),
+    viewerTrackpadGestures: booleanValue(storedOrDefault(source, 'viewerTrackpadGestures', APP_SETTINGS_DEFAULTS.viewerTrackpadGestures), 'viewerTrackpadGestures'),
+    gridDoubleClickAction: enumValue(storedOrDefault(source, 'gridDoubleClickAction', APP_SETTINGS_DEFAULTS.gridDoubleClickAction), 'gridDoubleClickAction', ['detail', 'external'] as const),
+    gridMiddleClickAction: enumValue(storedOrDefault(source, 'gridMiddleClickAction', APP_SETTINGS_DEFAULTS.gridMiddleClickAction), 'gridMiddleClickAction', ['new_window', 'none'] as const),
+    spaceKeyAction: enumValue(storedOrDefault(source, 'spaceKeyAction', APP_SETTINGS_DEFAULTS.spaceKeyAction), 'spaceKeyAction', ['quick_look', 'scroll'] as const),
+    imageRendering: enumValue(storedOrDefault(source, 'imageRendering', APP_SETTINGS_DEFAULTS.imageRendering), 'imageRendering', ['smooth', 'pixelated'] as const),
+    imageDefaultZoom: enumValue(storedOrDefault(source, 'imageDefaultZoom', APP_SETTINGS_DEFAULTS.imageDefaultZoom), 'imageDefaultZoom', ['fit', 'actual'] as const),
+    showTransparencyGrid: booleanValue(storedOrDefault(source, 'showTransparencyGrid', APP_SETTINGS_DEFAULTS.showTransparencyGrid), 'showTransparencyGrid'),
+    videoAutoPlay: booleanValue(storedOrDefault(source, 'videoAutoPlay', APP_SETTINGS_DEFAULTS.videoAutoPlay), 'videoAutoPlay'),
+    videoLoop: booleanValue(storedOrDefault(source, 'videoLoop', APP_SETTINGS_DEFAULTS.videoLoop), 'videoLoop'),
+    notificationPopupsEnabled: booleanValue(storedOrDefault(source, 'notificationPopupsEnabled', APP_SETTINGS_DEFAULTS.notificationPopupsEnabled), 'notificationPopupsEnabled'),
+    notificationPopupTones: notificationTonesValue(storedOrDefault(source, 'notificationPopupTones', APP_SETTINGS_DEFAULTS.notificationPopupTones), 'notificationPopupTones'),
+    autoImportEnabled: booleanValue(storedOrDefault(source, 'autoImportEnabled', APP_SETTINGS_DEFAULTS.autoImportEnabled), 'autoImportEnabled'),
+    subscriptionDefaultSchedule: enumValue(storedOrDefault(source, 'subscriptionDefaultSchedule', APP_SETTINGS_DEFAULTS.subscriptionDefaultSchedule), 'subscriptionDefaultSchedule', ['manual', 'daily', 'weekly', 'monthly'] as const),
+    subscriptionDefaultPostsPerRun: integerRangeValue(storedOrDefault(source, 'subscriptionDefaultPostsPerRun', APP_SETTINGS_DEFAULTS.subscriptionDefaultPostsPerRun), 'subscriptionDefaultPostsPerRun', 1, 10_000),
+    subscriptionDefaultGroupPosts: booleanValue(storedOrDefault(source, 'subscriptionDefaultGroupPosts', APP_SETTINGS_DEFAULTS.subscriptionDefaultGroupPosts), 'subscriptionDefaultGroupPosts'),
     showTagGroups: booleanValue(storedOrDefault(source, 'showTagGroups', APP_SETTINGS_DEFAULTS.showTagGroups), 'showTagGroups'),
     starredTags: stringArrayValue(storedOrDefault(source, 'starredTags', APP_SETTINGS_DEFAULTS.starredTags), 'starredTags'),
     sidebarQuickAccess: stringArrayValue(storedOrDefault(source, 'sidebarQuickAccess', APP_SETTINGS_DEFAULTS.sidebarQuickAccess), 'sidebarQuickAccess'),

@@ -54,6 +54,49 @@ export const toggleBothPanelsAtom = atom(null, (get, set) => {
 
 export const showTreeGuidesAtom = atom(true);
 
+export interface SidebarPreferences {
+  showCounts: boolean;
+  visibleSystemNodes: ReadonlySet<string>;
+  showQuickAccess: boolean;
+  showFolders: boolean;
+  showSmartFolders: boolean;
+  doubleClickAction: 'rename' | 'collapse';
+}
+
+export const sidebarPreferencesAtom = atom<SidebarPreferences>({
+  showCounts: true,
+  visibleSystemNodes: new Set([
+    'system:active',
+    'system:inbox',
+    'system:recent_viewed',
+    'system:uncategorized',
+    'system:untagged',
+    'system:tag_manager',
+    'system:random',
+    'system:subscriptions',
+    'system:duplicates',
+    'system:trash',
+  ]),
+  showQuickAccess: true,
+  showFolders: true,
+  showSmartFolders: true,
+  doubleClickAction: 'collapse',
+});
+
+export interface ControlPreferences {
+  gridWheelAction: 'scroll' | 'zoom';
+  gridDoubleClickAction: 'detail' | 'external';
+  gridMiddleClickAction: 'new_window' | 'none';
+  spaceKeyAction: 'quick_look' | 'scroll';
+}
+
+export const controlPreferencesAtom = atom<ControlPreferences>({
+  gridWheelAction: 'scroll',
+  gridDoubleClickAction: 'detail',
+  gridMiddleClickAction: 'new_window',
+  spaceKeyAction: 'quick_look',
+});
+
 const INSPECTOR_WIDTH_STORAGE_KEY = 'picto-inspector-width';
 export const INSPECTOR_MIN_WIDTH = 260;
 export const INSPECTOR_MAX_WIDTH = 550;

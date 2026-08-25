@@ -68,7 +68,6 @@
 .drop {
   max-height: calc(7 * var(--control-height-sm) + 6 * 2px + 12px);
   overflow-y: auto;
-  scrollbar-gutter: stable;
   z-index: var(--layer-menu);
   background: color-mix(in srgb, var(--color-bg-app) 90%, var(--color-text-primary) 10%);
   border: 1px solid var(--color-border-secondary);
@@ -107,6 +106,10 @@
 }
 
 .opt:hover {
+  background: var(--color-menu-hover);
+}
+
+.optHighlighted {
   background: var(--color-menu-hover);
 }
 

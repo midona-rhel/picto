@@ -10,7 +10,15 @@ import { getZoomFactor, rectToCSS, getViewportCSS } from '../../lib/zoomCompensa
  * Options include an invisible chevron spacer so text aligns with the button.
  */
 
-import { useState, useRef, useEffect, useLayoutEffect } from 'react';
+import {
+  useState,
+  useRef,
+  useEffect,
+  useId,
+  useLayoutEffect,
+  type KeyboardEvent as ReactKeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { createPortal } from 'react-dom';
 import { IconSelector } from '@tabler/icons-react';
 import styles from './CmSelect.module.css';
@@ -18,7 +26,7 @@ import styles from './CmSelect.module.css';
 export interface CmSelectOption {
   value: string;
   label: string;
-  icon?: React.ReactNode;
+  icon?: ReactNode;
 }
 
 interface Props {
@@ -27,15 +35,83 @@ interface Props {
   onChange: (value: string) => void;
   /** Fixed width in px. Overrides auto-sizing. */
   width?: number;
+  ariaLabel?: string;
 }
 
-export function CmSelect({ value, options, onChange, width }: Props) {
+export function CmSelect({ value, options, onChange, width, ariaLabel }: Props) {
   const [open, setOpen] = useState(false);
+  const [highlightedIndex, setHighlightedIndex] = useState(-1);
   const ref = useRef<HTMLDivElement>(null);
   const btnRef = useRef<HTMLButtonElement>(null);
   const dropRef = useRef<HTMLDivElement>(null);
+  const typeaheadRef = useRef('');
+  const typeaheadTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const listboxId = useId();
   const cur = options.find((o) => o.value === value);
   const hasIcons = options.some((o) => o.icon);
+
+  const currentIndex = options.length === 0
+    ? -1
+    : Math.max(0, options.findIndex((option) => option.value === value));
+
+  const openAt = (index = currentIndex) => {
+    if (options.length === 0) return;
+    setHighlightedIndex(index);
+    setOpen(true);
+  };
+
+  const selectHighlighted = () => {
+    const option = options[highlightedIndex];
+    if (!option) return;
+    onChange(option.value);
+    setOpen(false);
+  };
+
+  const handleKeyDown = (event: ReactKeyboardEvent) => {
+    if (options.length === 0) return;
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      if (!open) {
+        openAt(currentIndex);
+        return;
+      }
+      const delta = event.key === 'ArrowDown' ? 1 : -1;
+      setHighlightedIndex((index) => Math.max(0, Math.min(options.length - 1, index + delta)));
+      return;
+    }
+    if (event.key === 'Home' || event.key === 'End') {
+      event.preventDefault();
+      openAt(event.key === 'Home' ? 0 : options.length - 1);
+      return;
+    }
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      if (open) selectHighlighted();
+      else openAt();
+      return;
+    }
+    if (event.key === 'Escape' && open) {
+      event.preventDefault();
+      setOpen(false);
+      return;
+    }
+    if (event.key === 'Tab') {
+      setOpen(false);
+      return;
+    }
+    if (event.metaKey || event.ctrlKey || event.altKey || event.key.length !== 1 || /\s/.test(event.key)) return;
+
+    event.preventDefault();
+    if (typeaheadTimerRef.current) clearTimeout(typeaheadTimerRef.current);
+    const nextQuery = `${typeaheadRef.current}${event.key}`.toLocaleLowerCase();
+    const match = options.findIndex((option) => option.label.toLocaleLowerCase().startsWith(nextQuery));
+    typeaheadRef.current = match >= 0 ? nextQuery : event.key.toLocaleLowerCase();
+    const fallbackMatch = match >= 0
+      ? match
+      : options.findIndex((option) => option.label.toLocaleLowerCase().startsWith(typeaheadRef.current));
+    if (fallbackMatch >= 0) openAt(fallbackMatch);
+    typeaheadTimerRef.current = setTimeout(() => { typeaheadRef.current = ''; }, 700);
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -47,6 +123,15 @@ export function CmSelect({ value, options, onChange, width }: Props) {
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
+
+  useEffect(() => () => {
+    if (typeaheadTimerRef.current) clearTimeout(typeaheadTimerRef.current);
+  }, []);
+
+  useEffect(() => {
+    if (!open || highlightedIndex < 0) return;
+    document.getElementById(`${listboxId}-${highlightedIndex}`)?.scrollIntoView?.({ block: 'nearest' });
+  }, [highlightedIndex, listboxId, open]);
 
   const [pos, setPos] = useState<{ top: number; left: number; width: number; flipUp: boolean }>({ top: 0, left: 0, width: 0, flipUp: false });
 
@@ -83,8 +168,16 @@ export function CmSelect({ value, options, onChange, width }: Props) {
         ref={btnRef}
         className={styles.btn}
         style={width ? { width } : undefined}
-        onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (open) setOpen(false);
+          else openAt();
+        }}
+        onKeyDown={handleKeyDown}
         type="button"
+        aria-label={ariaLabel}
+        aria-haspopup="listbox"
+        aria-expanded={open}
       >
         {cur?.icon && <span className={styles.btnIcon}>{cur.icon}</span>}
         <span className={styles.btnLabel}>
@@ -100,6 +193,11 @@ export function CmSelect({ value, options, onChange, width }: Props) {
         <div
           ref={dropRef}
           className={styles.drop}
+          role="listbox"
+          id={listboxId}
+          aria-label={ariaLabel}
+          aria-activedescendant={highlightedIndex >= 0 ? `${listboxId}-${highlightedIndex}` : undefined}
+          onKeyDown={handleKeyDown}
           style={{
             position: 'fixed',
             left: pos.left,
@@ -108,12 +206,16 @@ export function CmSelect({ value, options, onChange, width }: Props) {
             width: pos.width,
           }}
         >
-          {options.map((o) => (
+          {options.map((o, index) => (
             <button
               key={o.value}
-              className={`${styles.opt} ${o.value === value ? styles.optActive : ''}`}
+              id={`${listboxId}-${index}`}
+              className={`${styles.opt} ${o.value === value ? styles.optActive : ''} ${index === highlightedIndex ? styles.optHighlighted : ''}`}
               onClick={(e) => { e.stopPropagation(); onChange(o.value); setOpen(false); }}
+              onPointerMove={() => setHighlightedIndex(index)}
               type="button"
+              role="option"
+              aria-selected={o.value === value}
             >
               {hasIcons && <span className={styles.optIcon}>{o.icon ?? null}</span>}
               <span className={styles.optLabel}>{o.label}</span>

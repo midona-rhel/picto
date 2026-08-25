@@ -22,6 +22,7 @@ import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
 import { QuickLookHost } from './QuickLookHost';
 import styles from './QuickLook.module.css';
 import { useViewerEntityContextMenu } from './useViewerEntityContextMenu';
+import { usePreviewPreferences } from './usePreviewPreferences';
 
 export interface QuickLookProps {
   items: CanonicalEntityGridItem[];
@@ -45,6 +46,7 @@ export function QuickLookContent({
   const currentHash = currentItem?.display_file_hash ?? '';
   useRecordMediaView(currentItemId);
   const currentMime = currentItem?.display_mime_type ?? '';
+  const previewPreferences = usePreviewPreferences();
   const rendererKind = detailRendererKind(currentMime);
   const isImage = rendererKind === 'image';
   const isVideo = rendererKind === 'video';
@@ -98,7 +100,9 @@ export function QuickLookContent({
   }, [pipeline.displayedHash]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Zoom/pan
-  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef]);
+  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef], {
+    macTrackpadGestures: previewPreferences.viewerTrackpadGestures,
+  });
 
   // Fit when displayed image changes
   useLayoutEffect(() => {
@@ -108,9 +112,11 @@ export function QuickLookContent({
     const cw = el.clientWidth;
     const ch = el.clientHeight;
     if (cw === 0 || ch === 0) return;
-    const fitScale = Math.min(cw / imageSize.width, ch / imageSize.height);
-    zoom.setState({ scale: fitScale, tx: 0, ty: 0 });
-  }, [pipeline.displayedHash, imageSize]); // eslint-disable-line react-hooks/exhaustive-deps
+    const scale = previewPreferences.imageDefaultZoom === 'actual'
+      ? 1
+      : Math.min(cw / imageSize.width, ch / imageSize.height);
+    zoom.setState({ scale, tx: 0, ty: 0 });
+  }, [pipeline.displayedHash, imageSize, previewPreferences.imageDefaultZoom]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const navigate = useCallback((delta: number) => {
     const nextIdx = currentIndex + delta;
@@ -168,7 +174,12 @@ export function QuickLookContent({
             muted={false}
           />
         ) : isVideo ? (
-          <VideoPlayer key={currentHash} src={mediaFileUrl(thumbHash, currentMime)} />
+          <VideoPlayer
+            key={currentHash}
+            src={mediaFileUrl(thumbHash, currentMime)}
+            autoPlay={previewPreferences.videoAutoPlay}
+            loop={previewPreferences.videoLoop}
+          />
         ) : !isImage ? (
           <DetailMediaRenderer
             hash={currentHash}
@@ -184,6 +195,8 @@ export function QuickLookContent({
             fullUrl={pipeline.fullUrl}
             thumbnailVisible={thumbnailReady || pipeline.thumbLoaded}
             fullVisible={pipeline.fullVisible}
+            imageRendering={previewPreferences.imageRendering}
+            showTransparencyGrid={previewPreferences.showTransparencyGrid}
             onThumbnailLoad={pipeline.handleThumbLoad}
             onFullLoad={pipeline.handleFullLoad}
           />

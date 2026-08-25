@@ -32,6 +32,10 @@ export interface ImageSize {
   height: number;
 }
 
+interface ImageZoomOptions {
+  macTrackpadGestures?: boolean;
+}
+
 const MIN_SCALE = 0.05;
 const MAX_SCALE = 8.0;
 const INTERACTIVE_COMMIT_MS = 96;
@@ -40,6 +44,7 @@ export function useImageZoom(
   containerRef: RefObject<HTMLDivElement | null>,
   imageSize: ImageSize | null,
   transformTargets: Array<RefObject<HTMLElement | null>> = [],
+  options: ImageZoomOptions = {},
 ) {
   const [state, setState] = useState<ZoomState>({ scale: 1, tx: 0, ty: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -263,9 +268,20 @@ export function useImageZoom(
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    const useMacTrackpadGestures = options.macTrackpadGestures === true
+      && typeof navigator !== 'undefined'
+      && /Mac|iPhone|iPad/.test(navigator.platform);
 
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault();
+      if (useMacTrackpadGestures && !e.ctrlKey) {
+        updateZoomState((prev) => ({
+          ...prev,
+          tx: prev.tx - e.deltaX,
+          ty: prev.ty - e.deltaY,
+        }), true);
+        return;
+      }
       const rect = container.getBoundingClientRect();
       const focalX = e.clientX - rect.left - rect.width / 2;
       const focalY = e.clientY - rect.top - rect.height / 2;
@@ -301,7 +317,7 @@ export function useImageZoom(
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [containerRef, updateZoomState, animateZoomTo]);
+  }, [containerRef, options.macTrackpadGestures, updateZoomState, animateZoomTo]);
 
   // ── Click-drag pan ──
   const onMouseDown = useCallback((e: React.MouseEvent) => {

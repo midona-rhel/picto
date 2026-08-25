@@ -9,6 +9,7 @@ import {
 import {
   dismissNotification,
   getCurrentNotification,
+  getNotificationPopupPreferences,
   subscribeToNotifications,
   type AppNotification,
   type NotificationTone,
@@ -30,14 +31,20 @@ export function NotificationHost() {
     getCurrentNotification,
     getCurrentNotification,
   );
-  const [displayed, setDisplayed] = useState<AppNotification | null>(notification);
-  const [visible, setVisible] = useState(notification != null);
+  const preferences = getNotificationPopupPreferences();
+  const visibleNotification = notification
+    && preferences.enabled
+    && preferences.tones.includes(notification.tone)
+    ? notification
+    : null;
+  const [displayed, setDisplayed] = useState<AppNotification | null>(visibleNotification);
+  const [visible, setVisible] = useState(visibleNotification != null);
   const exitTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (exitTimer.current) clearTimeout(exitTimer.current);
-    if (notification) {
-      setDisplayed(notification);
+    if (visibleNotification) {
+      setDisplayed(visibleNotification);
       setVisible(true);
       return;
     }
@@ -46,7 +53,7 @@ export function NotificationHost() {
     return () => {
       if (exitTimer.current) clearTimeout(exitTimer.current);
     };
-  }, [notification]);
+  }, [visibleNotification]);
 
   useEffect(() => {
     if (!notification) return;

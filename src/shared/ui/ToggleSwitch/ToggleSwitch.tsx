@@ -12,7 +12,22 @@ interface Props {
 
 export function ToggleSwitch({ on, onChange }: Props) {
   return (
-    <label className={styles.toggle} onClick={(e) => { e.stopPropagation(); onChange(); }}>
+    <label
+      className={styles.toggle}
+      role="switch"
+      aria-checked={on}
+      tabIndex={0}
+      onClick={(event) => {
+        event.stopPropagation();
+        onChange();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        onChange();
+      }}
+    >
       <span className={`${styles.track} ${on ? styles.trackOn : ''}`} />
       <span className={`${styles.knob} ${on ? styles.knobOn : ''}`} />
     </label>

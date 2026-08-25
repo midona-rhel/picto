@@ -24,7 +24,7 @@ describe('isEditableTarget', () => {
 });
 
 describe('panel visibility context menu', () => {
-  it('uses reference application panel actions and keeps the menu open for successive toggles', () => {
+  it('uses shared panel actions and keeps the menu open for successive toggles', () => {
     const toggleAll = vi.fn();
     const toggleSidebar = vi.fn();
     const toggleInspector = vi.fn();

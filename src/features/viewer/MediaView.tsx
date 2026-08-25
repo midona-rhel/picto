@@ -28,6 +28,7 @@ import { FlashControls } from './document/FlashControls';
 import type { CurrentFrameCapture } from './currentFrameCapture';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
+import { usePreviewPreferences } from './usePreviewPreferences';
 import styles from './MediaView.module.css';
 
 export interface MediaViewProps {
@@ -56,6 +57,7 @@ export function MediaView({
   const effectiveRatingItemId = ratingItemId === undefined ? currentItemId : ratingItemId;
   useRecordMediaView(effectiveRecordItemId);
   const currentMime = currentItem?.display_mime_type ?? '';
+  const previewPreferences = usePreviewPreferences();
   const rendererKind = detailRendererKind(currentMime);
   const isImage = rendererKind === 'image';
   const usesRendererZoom = rendererKind === 'pdf' || rendererKind === 'jpeg-xl';
@@ -122,7 +124,9 @@ export function MediaView({
   imageSizeRef.current = imageSize;
 
   // ── Zoom/pan ──
-  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef]);
+  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef], {
+    macTrackpadGestures: previewPreferences.viewerTrackpadGestures,
+  });
 
   // Fit image when displayed hash changes (not when requested hash changes).
   useLayoutEffect(() => {
@@ -132,9 +136,11 @@ export function MediaView({
     const cw = el.clientWidth;
     const ch = el.clientHeight;
     if (cw === 0 || ch === 0) return;
-    const fitScale = Math.min(cw / imageSize.width, ch / imageSize.height);
-    zoom.setState({ scale: fitScale, tx: 0, ty: 0 });
-  }, [pipeline.displayedHash, imageSize]); // eslint-disable-line react-hooks/exhaustive-deps
+    const scale = previewPreferences.imageDefaultZoom === 'actual'
+      ? 1
+      : Math.min(cw / imageSize.width, ch / imageSize.height);
+    zoom.setState({ scale, tx: 0, ty: 0 });
+  }, [pipeline.displayedHash, imageSize, previewPreferences.imageDefaultZoom]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Navigator ──
   useNavigatorRenderer(navigatorRef, navViewportRef, imageSizeRef, zoom.navigatorRect, NAV_SIZE, zoom.onLiveFrameRef, zoom.containerSize);
@@ -259,6 +265,8 @@ export function MediaView({
           onFrameCaptureChange={handleFrameCaptureChange}
           onPdfZoomControlsChange={setPdfZoomControls}
           onPdfZoomPercentChange={setPdfZoomPercent}
+          mediaAutoPlay={rendererKind === 'video' ? previewPreferences.videoAutoPlay : undefined}
+          mediaLoop={rendererKind === 'video' ? previewPreferences.videoLoop : undefined}
         />
       ) : (
         <div ref={containerRef} className={`${styles.zoomContainer} ${zoom.isDragging ? styles.dragging : ''}`}
@@ -272,6 +280,8 @@ export function MediaView({
             fullUrl={pipeline.fullUrl}
             thumbnailVisible={pipeline.thumbLoaded}
             fullVisible={pipeline.fullVisible}
+            imageRendering={previewPreferences.imageRendering}
+            showTransparencyGrid={previewPreferences.showTransparencyGrid}
             onThumbnailLoad={pipeline.handleThumbLoad}
             onFullLoad={pipeline.handleFullLoad}
           />

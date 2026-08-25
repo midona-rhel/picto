@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   clearNotifications,
+  configureNotificationPopups,
   showErrorNotification,
   showInfoNotification,
 } from '../../lib/notifications';
@@ -10,6 +11,7 @@ import { NotificationHost } from './NotificationHost';
 describe('NotificationHost', () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    configureNotificationPopups({ enabled: true, tones: ['error', 'warning', 'info', 'success'] });
     act(() => clearNotifications());
   });
 
@@ -28,7 +30,7 @@ describe('NotificationHost', () => {
     expect(screen.queryByText('Old failure')).not.toBeInTheDocument();
   });
 
-  it('uses the four-second reference application duration and supports explicit dismissal', () => {
+  it('uses the four-second duration and supports explicit dismissal', () => {
     render(<NotificationHost />);
     act(() => showInfoNotification({ title: 'Complete', message: 'Finished' }));
     expect(screen.getByRole('status')).toBeInTheDocument();
@@ -42,5 +44,16 @@ describe('NotificationHost', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Dismiss notification' }));
     act(() => vi.advanceTimersByTime(400));
     expect(screen.queryByText('Dismiss me')).not.toBeInTheDocument();
+  });
+
+  it('suppresses disabled pop-up categories without adding another notification path', () => {
+    configureNotificationPopups({ enabled: true, tones: ['error'] });
+    render(<NotificationHost />);
+
+    act(() => showInfoNotification({ title: 'Hidden', message: 'Do not display' }));
+    expect(screen.queryByText('Hidden')).not.toBeInTheDocument();
+
+    act(() => showErrorNotification({ title: 'Visible', message: 'Display this' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Visible — Display this');
   });
 });

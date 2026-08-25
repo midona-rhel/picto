@@ -15,6 +15,8 @@ describe('ImageCrossfadeFrame', () => {
       fullUrl="full.jpg"
       thumbnailVisible
       fullVisible={false}
+      imageRendering="pixelated"
+      showTransparencyGrid
       onThumbnailLoad={vi.fn()}
       onFullLoad={vi.fn()}
     />);
@@ -39,8 +41,10 @@ describe('ImageCrossfadeFrame', () => {
         maxHeight: 'none',
         objectFit: 'fill',
         objectPosition: 'center',
+        imageRendering: 'pixelated',
       });
     }
+    expect(frame?.className).toContain('transparencyGrid');
   });
 
   it('does not expose intrinsic thumbnail geometry before full media dimensions are known', () => {

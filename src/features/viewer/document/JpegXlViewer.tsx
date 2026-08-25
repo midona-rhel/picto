@@ -4,6 +4,7 @@ import type { ViewerZoomControls } from '../../../state/viewer';
 import { useImageZoom, type ImageSize } from '../hooks/useImageZoom';
 import { useNavigatorDrag } from '../hooks/useNavigatorDrag';
 import { useNavigatorRenderer } from '../hooks/useNavigatorRenderer';
+import { usePreviewPreferences } from '../usePreviewPreferences';
 import styles from './JpegXlViewer.module.css';
 
 interface Props {
@@ -17,6 +18,7 @@ interface Props {
 const NAVIGATOR_SIZE = 120;
 
 export function JpegXlViewer({ src, thumbnailSrc, onReady, onZoomControlsChange, onZoomPercentChange }: Props) {
+  const previewPreferences = usePreviewPreferences();
   const viewportRef = useRef<HTMLDivElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -30,7 +32,9 @@ export function JpegXlViewer({ src, thumbnailSrc, onReady, onZoomControlsChange,
   );
   const imageSizeRef = useRef(imageSize);
   imageSizeRef.current = imageSize;
-  const zoom = useImageZoom(viewportRef, imageSize, [frameRef]);
+  const zoom = useImageZoom(viewportRef, imageSize, [frameRef], {
+    macTrackpadGestures: previewPreferences.viewerTrackpadGestures,
+  });
 
   useEffect(() => {
     const abort = new AbortController();

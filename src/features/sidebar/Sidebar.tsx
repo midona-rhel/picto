@@ -5,7 +5,7 @@
  * Manager surfaces (Tags, Random) are out of scope — see PBI-595, PBI-596.
  */
 
-import { useEffect, useMemo, useCallback, useRef, useState } from 'react';
+import { useEffect, useMemo, useCallback, useRef, useState, type ReactNode } from 'react';
 import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { folderWatchModalAtom, confirmModalAtom, exportModalAtom, smartFolderModalAtom } from '../../state/modals';
 import {
@@ -28,9 +28,10 @@ import {
   smartFolderNodesAtom, sidebarLoadingAtom,
   pendingSidebarRenameNodeIdAtom,
 } from '../../state/sidebar';
-import { displayedSurfaceNodeIdAtom } from '../../state/navigation';
+import { displayedSurfaceNodeIdAtom, sidebarPreferencesAtom } from '../../state/navigation';
 import { navigateToNode } from '../../state/navigationHistory';
 import { sidebarController } from '../../controllers/sidebarController';
+import { settingsController, type AppSettings } from '../../controllers/settingsController';
 import {
   bulkFolderDeletionMessage,
   foldersController,
@@ -211,6 +212,8 @@ export function Sidebar() {
   const pendingRenameNodeId = useAtomValue(pendingSidebarRenameNodeIdAtom);
   const setPendingRenameNodeId = useSetAtom(pendingSidebarRenameNodeIdAtom);
   const activeNodeId = useAtomValue(displayedSurfaceNodeIdAtom);
+  const sidebarPreferences = useAtomValue(sidebarPreferencesAtom);
+  const setSidebarPreferences = useSetAtom(sidebarPreferencesAtom);
   const quickAccessIds = useQuickAccess();
   const setSmartFolderModal = useSetAtom(smartFolderModalAtom);
   const setFolderPortal = useSetAtom(folderPickerPortalAtom);
@@ -219,6 +222,7 @@ export function Sidebar() {
   const [collapsed, toggleCollapse] = usePersistedSet('picto-sidebar-collapsed');
   const [treeFilter, setTreeFilter] = useState('');
   const contextMenu = useContextMenu();
+  const [sidebarVisibilityMenuOpen, setSidebarVisibilityMenuOpen] = useState(false);
 
   // ── Multi-select state ──
   const [sidebarSelection, setSidebarSelection] = useState<Set<string>>(new Set());
@@ -803,6 +807,86 @@ export function Sidebar() {
     contextMenu.open(e, entries);
   }, [collapsed, contextMenu, createSmartFolderGroupAndRename, expandableNodeIds, folderRename, openSmartFolderModal, setNodesExpanded, smartFolderNodes, smartList, toggleCollapse, quickAccessIds]);
 
+  const persistSystemVisibility = useCallback((
+    setting: keyof Pick<AppSettings,
+      | 'showSidebarInbox'
+      | 'showSidebarRecentlyViewed'
+      | 'showSidebarUncategorized'
+      | 'showSidebarUntagged'
+      | 'showSidebarTagManager'
+      | 'showSidebarRandom'
+      | 'showSidebarSubscriptions'
+      | 'showSidebarDuplicates'>,
+    nodeId: string,
+  ) => {
+    const visible = !sidebarPreferences.visibleSystemNodes.has(nodeId);
+    setSidebarPreferences((current) => {
+      const visibleSystemNodes = new Set(current.visibleSystemNodes);
+      if (visible) visibleSystemNodes.add(nodeId);
+      else visibleSystemNodes.delete(nodeId);
+      return { ...current, visibleSystemNodes };
+    });
+    void settingsController.patchSettings({ [setting]: visible });
+  }, [setSidebarPreferences, sidebarPreferences.visibleSystemNodes]);
+
+  const persistSectionVisibility = useCallback((
+    setting: keyof Pick<AppSettings, 'showSidebarQuickAccess' | 'showSidebarFolders' | 'showSidebarSmartFolders'>,
+    preference: 'showQuickAccess' | 'showFolders' | 'showSmartFolders',
+  ) => {
+    const visible = !sidebarPreferences[preference];
+    setSidebarPreferences((current) => ({ ...current, [preference]: visible }));
+    void settingsController.patchSettings({ [setting]: visible });
+  }, [setSidebarPreferences, sidebarPreferences]);
+
+  const sidebarVisibilityEntries = useMemo(() => {
+    const systemEntry = (
+      label: string,
+      icon: ReactNode,
+      nodeId: string,
+      setting: Parameters<typeof persistSystemVisibility>[0],
+    ): MenuEntry => ({
+      label,
+      icon,
+      checked: sidebarPreferences.visibleSystemNodes.has(nodeId),
+      keepOpen: true,
+      action: () => persistSystemVisibility(setting, nodeId),
+    });
+
+    return [
+      { label: 'All', icon: <IconPhoto size={14} />, checked: true, disabled: true, action: () => {} },
+      systemEntry('Inbox', <IconInbox size={14} />, 'system:inbox', 'showSidebarInbox'),
+      systemEntry('Recently Viewed', <IconClock size={14} />, 'system:recent_viewed', 'showSidebarRecentlyViewed'),
+      systemEntry('Uncategorized', <IconFolderQuestionCustom size={14} />, 'system:uncategorized', 'showSidebarUncategorized'),
+      systemEntry('Untagged', <IconBookmarkQuestionCustom size={14} />, 'system:untagged', 'showSidebarUntagged'),
+      systemEntry('Tag Manager', <IconBookmark size={14} />, 'system:tag_manager', 'showSidebarTagManager'),
+      systemEntry('Random', <IconArrowsShuffle size={14} />, 'system:random', 'showSidebarRandom'),
+      systemEntry('Subscriptions', <IconDownload size={14} />, 'system:subscriptions', 'showSidebarSubscriptions'),
+      systemEntry('Duplicates', <IconCopy size={14} />, 'system:duplicates', 'showSidebarDuplicates'),
+      { label: 'Trash', icon: <IconTrash size={14} />, checked: true, disabled: true, action: () => {} },
+      { separator: true },
+      {
+        label: 'Quick Access', icon: <IconStar size={14} />, checked: sidebarPreferences.showQuickAccess,
+        keepOpen: true,
+        action: () => persistSectionVisibility('showSidebarQuickAccess', 'showQuickAccess'),
+      },
+      {
+        label: 'Smart Folders', icon: <IconBookmark size={14} />, checked: sidebarPreferences.showSmartFolders,
+        keepOpen: true,
+        action: () => persistSectionVisibility('showSidebarSmartFolders', 'showSmartFolders'),
+      },
+      {
+        label: 'Folders', icon: <IconFolder size={14} />, checked: sidebarPreferences.showFolders,
+        keepOpen: true,
+        action: () => persistSectionVisibility('showSidebarFolders', 'showFolders'),
+      },
+    ] satisfies MenuEntry[];
+  }, [persistSectionVisibility, persistSystemVisibility, sidebarPreferences]);
+
+  const openSidebarVisibilityMenu = useCallback((event: React.MouseEvent) => {
+    setSidebarVisibilityMenuOpen(true);
+    contextMenu.open(event, sidebarVisibilityEntries, { showSearch: false });
+  }, [contextMenu, sidebarVisibilityEntries]);
+
   const openSystemMenu = useCallback((event: React.MouseEvent, node: SidebarNodeDto) => {
     if (node.id === 'system:recent_viewed') {
       contextMenu.open(event, [{
@@ -816,7 +900,10 @@ export function Sidebar() {
       }], { showSearch: false });
       return;
     }
-    if (node.id !== 'system:trash') return;
+    if (node.id !== 'system:trash') {
+      openSidebarVisibilityMenu(event);
+      return;
+    }
     const target = queryTarget({ kind: 'trash' });
     const disabled = (node.count ?? 0) === 0;
     contextMenu.open(event, [
@@ -845,7 +932,7 @@ export function Sidebar() {
         action: () => { void entityMutations.setTargetLifecycle(target, 'active'); },
       },
     ], { showSearch: false });
-  }, [contextMenu]);
+  }, [contextMenu, openSidebarVisibilityMenu]);
 
   // ── Bulk context menu ──────────────────────────────────────────
 
@@ -1066,7 +1153,7 @@ export function Sidebar() {
         )}
 
         {/* System scopes — fixed order */}
-        {orderedSystemNodes.map((node) => {
+        {orderedSystemNodes.filter((node) => sidebarPreferences.visibleSystemNodes.has(node.id)).map((node) => {
           const ScopeIcon = SYSTEM_ICONS[node.id];
           const statusDropMap: Record<string, string> = {
             'system:active': '1',
@@ -1079,7 +1166,7 @@ export function Sidebar() {
               key={node.id}
               icon={ScopeIcon ? <ScopeIcon size={IC} {...FILL} /> : undefined}
               label={LABEL_OVERRIDES[node.id] ?? node.name}
-              count={node.count}
+              count={sidebarPreferences.showCounts ? node.count : undefined}
               active={activeNodeId === node.id}
               onClick={() => { if (node.selectable) { setSidebarSelection(new Set()); navigate(node.id); } }}
               onContextMenu={(event) => openSystemMenu(event, node)}
@@ -1088,12 +1175,12 @@ export function Sidebar() {
           );
         })}
 
-        {quickAccessNodes.length > 0 && (
+        {sidebarPreferences.showQuickAccess && quickAccessNodes.length > 0 && (
           <>
             <SidebarRow
               variant="section"
               label="Quick Access"
-              count={quickAccessNodes.length}
+              count={sidebarPreferences.showCounts ? quickAccessNodes.length : undefined}
               expanded={!collapsed.has('quick_access')}
               onToggle={() => toggleCollapse('quick_access')}
             />
@@ -1103,7 +1190,7 @@ export function Sidebar() {
                 variant={node.kind === 'folder' ? 'folder' : 'smart_folder'}
                 icon={<NodeIcon node={node} expanded={false} />}
                 label={node.name}
-                count={node.count}
+                count={sidebarPreferences.showCounts ? node.count : undefined}
                 active={activeNodeId === node.id}
                 contextHighlight={contextMenuNodeId === node.id}
                 onClick={(event) => handleRowClick(node.id, event)}
@@ -1117,21 +1204,21 @@ export function Sidebar() {
         )}
 
         {/* Folders */}
-        <SidebarRow
+        {sidebarPreferences.showFolders && <SidebarRow
           variant="section"
           label="Folders"
-          count={folderNodes.length}
+          count={sidebarPreferences.showCounts ? folderNodes.length : undefined}
           expanded={treeFilterActive || !collapsed.has('folders')}
           onToggle={() => { if (!treeFilterActive) toggleCollapse('folders'); }}
           onAdd={() => { void createFolderAndRename(); }}
           addTooltip="New Folder" addShortcut="Mod+Shift+N"
-        />
-        {(treeFilterActive || !collapsed.has('folders')) && folderList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
+        />}
+        {sidebarPreferences.showFolders && (treeFilterActive || !collapsed.has('folders')) && folderList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
             key={node.id} variant="folder"
             icon={<NodeIcon node={node} expanded={(treeFilterActive || !collapsed.has(node.id)) && hasChildren} />}
             label={folderRename.renamingId === node.id ? undefined : node.name}
-            count={node.count}
+            count={sidebarPreferences.showCounts ? node.count : undefined}
 
             active={activeNodeId === node.id} indent={indent}
             selected={sidebarSelection.has(node.id)}
@@ -1141,6 +1228,14 @@ export function Sidebar() {
             dropPosition={folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
             onToggleExpand={treeFilterActive ? undefined : () => toggleCollapse(node.id)}
             onClick={(e) => handleRowClick(node.id, e)}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              if (sidebarPreferences.doubleClickAction === 'rename') {
+                folderRename.startRename(node.id, node.name);
+              } else if (hasChildren && !treeFilterActive) {
+                toggleCollapse(node.id);
+              }
+            }}
             onContextMenu={(e) => handleFolderContextMenu(e, node)}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
@@ -1163,10 +1258,10 @@ export function Sidebar() {
         ))}
 
         {/* Smart Folders */}
-        <SidebarRow
+        {sidebarPreferences.showSmartFolders && <SidebarRow
           variant="section"
           label="Smart Folders"
-          count={smartFolderNodes.length}
+          count={sidebarPreferences.showCounts ? smartFolderNodes.length : undefined}
           expanded={treeFilterActive || !collapsed.has('smart_folders')}
           onToggle={() => { if (!treeFilterActive) toggleCollapse('smart_folders'); }}
           onAdd={(event) => {
@@ -1183,13 +1278,13 @@ export function Sidebar() {
             ], { showSearch: false });
           }}
           addTooltip="New Smart Folder or Group"
-        />
-        {(treeFilterActive || !collapsed.has('smart_folders')) && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
+        />}
+        {sidebarPreferences.showSmartFolders && (treeFilterActive || !collapsed.has('smart_folders')) && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
             key={node.id} variant="smart_folder"
             icon={<NodeIcon node={node} expanded={(treeFilterActive || !collapsed.has(node.id)) && hasChildren} />}
             label={folderRename.renamingId === node.id ? undefined : node.name}
-            count={node.count}
+            count={sidebarPreferences.showCounts ? node.count : undefined}
 
             active={activeNodeId === node.id} indent={indent}
             selected={sidebarSelection.has(node.id)}
@@ -1204,6 +1299,14 @@ export function Sidebar() {
                 return;
               }
               handleRowClick(node.id, e);
+            }}
+            onDoubleClick={(e) => {
+              e.preventDefault();
+              if (sidebarPreferences.doubleClickAction === 'rename') {
+                folderRename.startRename(node.id, node.name);
+              } else if (hasChildren && !treeFilterActive) {
+                toggleCollapse(node.id);
+              }
             }}
             onContextMenu={(e) => handleSmartFolderContextMenu(e, node)}
             onPointerDown={(e) => {
@@ -1226,12 +1329,12 @@ export function Sidebar() {
           </SidebarRow>
         ))}
 
-        {treeFilterActive && folderList.length === 0 && smartList.length === 0 && (
+        {treeFilterActive && ((sidebarPreferences.showFolders && folderList.length === 0) || !sidebarPreferences.showFolders) && ((sidebarPreferences.showSmartFolders && smartList.length === 0) || !sidebarPreferences.showSmartFolders) && (
           <div className={styles.noFilterResults}>No matching folders</div>
         )}
       </div>
 
-      <div className={styles.treeFilter}>
+      {(sidebarPreferences.showFolders || sidebarPreferences.showSmartFolders) && <div className={styles.treeFilter}>
         <div className={styles.treeFilterField}>
           <IconFilter className={styles.treeFilterIcon} size={16} aria-hidden="true" />
           <input
@@ -1253,14 +1356,18 @@ export function Sidebar() {
             </button>
           )}
         </div>
-      </div>
+      </div>}
 
       {/* Context menu portal */}
       {contextMenu.state && (
         <ContextMenu
-          entries={contextMenu.state.entries}
+          entries={sidebarVisibilityMenuOpen ? sidebarVisibilityEntries : contextMenu.state.entries}
           position={contextMenu.state.position}
-          onClose={contextMenu.close}
+          showSearch={contextMenu.state.showSearch}
+          onClose={() => {
+            setSidebarVisibilityMenuOpen(false);
+            contextMenu.close();
+          }}
         />
       )}
 

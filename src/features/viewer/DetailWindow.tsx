@@ -34,6 +34,7 @@ import type { ViewerZoomControls } from '../../state/viewer';
 import { filesController } from '../../controllers/filesController';
 import { windowController } from '../../controllers/windowController';
 import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
+import { usePreviewPreferences } from './usePreviewPreferences';
 import { LibraryCoverDialogHost } from '../library/LibraryCoverDialogHost';
 import styles from './DetailWindow.module.css';
 import viewerStyles from './MediaView.module.css';
@@ -75,6 +76,7 @@ const zoomCache = new Map<string, ZoomState>();
 // ── Component ────────────────────────────────────────────────────
 
 export function DetailWindow({ hash }: DetailWindowProps) {
+  const previewPreferences = usePreviewPreferences();
   const [images, setImages] = useState<LightImage[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -187,7 +189,9 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   imageSizeRef.current = imageSize;
 
   // ── Zoom/pan ──
-  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef]);
+  const zoom = useImageZoom(containerRef, imageSize, [imageFrameRef], {
+    macTrackpadGestures: previewPreferences.viewerTrackpadGestures,
+  });
 
   // ── Media pipeline ──
   const neighborHashes = useMemo(() => {
@@ -227,10 +231,12 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     if (cached) {
       zoom.setState(cached);
     } else {
-      const fitScale = Math.min(cw / imageSize.width, ch / imageSize.height);
-      zoom.setState({ scale: fitScale, tx: 0, ty: 0 });
+      const scale = previewPreferences.imageDefaultZoom === 'actual'
+        ? 1
+        : Math.min(cw / imageSize.width, ch / imageSize.height);
+      zoom.setState({ scale, tx: 0, ty: 0 });
     }
-  }, [currentImage?.hash, imageSize]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentImage?.hash, imageSize, previewPreferences.imageDefaultZoom]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Cache zoom state on change
   useEffect(() => {
@@ -448,6 +454,8 @@ export function DetailWindow({ hash }: DetailWindowProps) {
             onFrameCaptureChange={handleFrameCaptureChange}
             onPdfZoomControlsChange={setPdfZoomControls}
             onPdfZoomPercentChange={setPdfZoomPercent}
+            mediaAutoPlay={rendererKind === 'video' ? previewPreferences.videoAutoPlay : undefined}
+            mediaLoop={rendererKind === 'video' ? previewPreferences.videoLoop : undefined}
           />
         </div>
       ) : (
@@ -466,6 +474,8 @@ export function DetailWindow({ hash }: DetailWindowProps) {
                 fullUrl={pipeline.fullUrl}
                 thumbnailVisible={pipeline.thumbLoaded}
                 fullVisible={pipeline.fullVisible}
+                imageRendering={previewPreferences.imageRendering}
+                showTransparencyGrid={previewPreferences.showTransparencyGrid}
                 onThumbnailLoad={pipeline.handleThumbLoad}
                 onFullLoad={pipeline.handleFullLoad}
               />

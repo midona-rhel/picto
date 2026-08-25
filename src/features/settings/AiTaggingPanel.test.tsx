@@ -22,6 +22,22 @@ const model = {
 const settings = {
   gridTargetSize: 200, gridViewMode: 'grid', gridSpacing: 'wide' as const, inspectorWidth: 320, colorScheme: 'dark',
   gridSortField: 'added_at', gridSortOrder: 'desc', zoomFactor: null, showTreeGuides: true,
+  showSidebarCounts: true, showSidebarInbox: true,
+  showSidebarRecentlyViewed: true, showSidebarUncategorized: true, showSidebarUntagged: true,
+  showSidebarTagManager: true, showSidebarRandom: true, showSidebarSubscriptions: true,
+  showSidebarDuplicates: true, showSidebarQuickAccess: true,
+  showSidebarFolders: true, showSidebarSmartFolders: true,
+  sidebarDoubleClickAction: 'collapse' as const,
+  gridWheelAction: 'scroll' as const, gridDoubleClickAction: 'detail' as const,
+  viewerTrackpadGestures: false,
+  gridMiddleClickAction: 'new_window' as const, spaceKeyAction: 'quick_look' as const,
+  imageRendering: 'smooth' as const, imageDefaultZoom: 'fit' as const,
+  showTransparencyGrid: false, videoAutoPlay: true, videoLoop: true,
+  notificationPopupsEnabled: true,
+  notificationPopupTones: ['error', 'warning', 'info', 'success'] as Array<'error' | 'warning' | 'info' | 'success'>,
+  autoImportEnabled: true,
+  subscriptionDefaultSchedule: 'daily' as const, subscriptionDefaultPostsPerRun: 100,
+  subscriptionDefaultGroupPosts: true,
   showTagGroups: true, starredTags: [], sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false, aiTaggerE621Enabled: false, aiTaggerEva02Enabled: false,
   aiTaggerAutoOnImport: false, aiTaggerWriteRating: false,
@@ -38,9 +54,19 @@ function status(downloaded = false) {
 }
 
 async function renderPanel() {
-  const result = render(<AiTaggingPanel settings={settings} onSettingsChange={vi.fn()} />);
-  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+  let result!: ReturnType<typeof render>;
+  await act(async () => {
+    result = render(<AiTaggingPanel settings={settings} onSettingsChange={vi.fn()} />);
+    await Promise.resolve();
+  });
   return result;
+}
+
+function setupUser() {
+  const user = userEvent.setup();
+  return {
+    click: (...args: Parameters<typeof user.click>) => act(() => user.click(...args)),
+  };
 }
 
 beforeEach(() => {
@@ -64,7 +90,7 @@ describe('AiTaggingPanel', () => {
     mocks.download.mockReturnValue(new Promise((resolve) => { resolveDownload = resolve; }));
     await renderPanel();
     await screen.findByRole('button', { name: 'Download' });
-    await userEvent.setup().click(screen.getByRole('button', { name: 'Download' }));
+    await setupUser().click(screen.getByRole('button', { name: 'Download' }));
     expect(mocks.download).toHaveBeenCalledWith(model.slug);
     expect(await screen.findByText('Downloading…')).toBeInTheDocument();
     await act(async () => { resolveDownload(status(true)); });
@@ -74,12 +100,12 @@ describe('AiTaggingPanel', () => {
   it('cancels an active model operation through the replacement command', async () => {
     let resolveDownload!: (value: unknown) => void;
     mocks.download.mockReturnValue(new Promise((resolve) => { resolveDownload = resolve; }));
-    const user = userEvent.setup();
+    const user = setupUser();
     await renderPanel();
     await user.click(screen.getByRole('button', { name: 'Download' }));
     await user.click(await screen.findByRole('button', { name: 'Cancel' }));
     expect(mocks.cancelDownload).toHaveBeenCalledWith(model.slug);
-    resolveDownload(status(false));
+    await act(async () => { resolveDownload(status(false)); });
   });
 
   it('presents thresholds as percentages without model marketing labels', async () => {

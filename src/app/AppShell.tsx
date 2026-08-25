@@ -29,6 +29,8 @@ import {
   INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH,
   displayedSurfaceNodeIdAtom,
   showTreeGuidesAtom,
+  sidebarPreferencesAtom,
+  controlPreferencesAtom,
 } from '../state/navigation';
 import { sidebarNodesAtom } from '../state/sidebar';
 import { gridActiveAtom, gridScopeLabelAtom, gridSpacingAtom, gridTransitionPhaseAtom } from '../state/grid';
@@ -49,6 +51,8 @@ import { WindowControls } from '../shared/ui/WindowControls';
 import { ApplicationMenuButton } from '../shared/ui/ApplicationMenuButton/ApplicationMenuButton';
 import { appController } from '../controllers/appController';
 import { settingsController } from '../controllers/settingsController';
+import { applyPreviewPreferences } from '../features/viewer/usePreviewPreferences';
+import { configureNotificationPopups } from '../shared/lib/notifications';
 import { aiTaggerPortalAtom, folderPickerPortalAtom, tagSelectPortalAtom } from '../state/portals';
 import styles from './AppShell.module.css';
 
@@ -296,6 +300,8 @@ export function AppShell() {
   }, [inspectorWidth, setInspectorWidth]);
 
   const setShowTreeGuides = useSetAtom(showTreeGuidesAtom);
+  const setSidebarPreferences = useSetAtom(sidebarPreferencesAtom);
+  const setControlPreferences = useSetAtom(controlPreferencesAtom);
   const setGridSpacing = useSetAtom(gridSpacingAtom);
 
   useEffect(() => {
@@ -303,7 +309,37 @@ export function AppShell() {
 
     const loadAppSettings = () => {
       settingsController.getSettings().then((s) => {
+        applyPreviewPreferences(s);
+        configureNotificationPopups({
+          enabled: s.notificationPopupsEnabled,
+          tones: s.notificationPopupTones,
+        });
         setShowTreeGuides(s.showTreeGuides ?? true);
+        setSidebarPreferences({
+          showCounts: s.showSidebarCounts,
+          visibleSystemNodes: new Set([
+            'system:active',
+            s.showSidebarInbox && 'system:inbox',
+            s.showSidebarRecentlyViewed && 'system:recent_viewed',
+            s.showSidebarUncategorized && 'system:uncategorized',
+            s.showSidebarUntagged && 'system:untagged',
+            s.showSidebarTagManager && 'system:tag_manager',
+            s.showSidebarRandom && 'system:random',
+            s.showSidebarSubscriptions && 'system:subscriptions',
+            s.showSidebarDuplicates && 'system:duplicates',
+            'system:trash',
+          ].filter((nodeId): nodeId is string => Boolean(nodeId))),
+          showQuickAccess: s.showSidebarQuickAccess,
+          showFolders: s.showSidebarFolders,
+          showSmartFolders: s.showSidebarSmartFolders,
+          doubleClickAction: s.sidebarDoubleClickAction,
+        });
+        setControlPreferences({
+          gridWheelAction: s.gridWheelAction,
+          gridDoubleClickAction: s.gridDoubleClickAction,
+          gridMiddleClickAction: s.gridMiddleClickAction,
+          spaceKeyAction: s.spaceKeyAction,
+        });
         setGridSpacing(s.gridSpacing);
       }).catch(() => {});
     };

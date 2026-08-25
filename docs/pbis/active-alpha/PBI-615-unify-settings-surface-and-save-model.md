@@ -9,7 +9,7 @@ This makes both the visual hierarchy and the consequence of closing the window u
 
 ## Contract
 
-- Audit Picto and reference application's shipped Preferences source first, then define one Picto Settings shell:
+- Audit Picto's existing settings behavior first, then define one Picto Settings shell:
   stable 200px navigation, one raised content plane, shared header/body/footer geometry, and reusable
   section/card/row/control primitives.
 - Use the resolved Picto UI font and theme tokens. Category titles, descriptions, labels, inputs,

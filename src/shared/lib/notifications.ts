@@ -1,5 +1,10 @@
 export type NotificationTone = 'error' | 'warning' | 'info' | 'success';
 
+export interface NotificationPopupPreferences {
+  enabled: boolean;
+  tones: readonly NotificationTone[];
+}
+
 export interface ShowNotificationOptions {
   title: string;
   message: string;
@@ -20,6 +25,10 @@ type Listener = () => void;
 const listeners = new Set<Listener>();
 let current: AppNotification | null = null;
 let nextId = 1;
+let popupPreferences: NotificationPopupPreferences = {
+  enabled: true,
+  tones: ['error', 'warning', 'info', 'success'],
+};
 
 function emit(): void {
   listeners.forEach((listener) => listener());
@@ -42,6 +51,17 @@ export function subscribeToNotifications(listener: Listener): () => void {
 
 export function getCurrentNotification(): AppNotification | null {
   return current;
+}
+
+export function getNotificationPopupPreferences(): NotificationPopupPreferences {
+  return popupPreferences;
+}
+
+export function configureNotificationPopups(next: NotificationPopupPreferences): void {
+  popupPreferences = {
+    enabled: next.enabled,
+    tones: [...next.tones],
+  };
 }
 
 export function dismissNotification(id: number): void {

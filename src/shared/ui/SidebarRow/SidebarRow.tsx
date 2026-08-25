@@ -97,6 +97,7 @@ interface RowProps {
   isLastChild?: boolean;
   onToggleExpand?: () => void;
   onClick?: (e: React.MouseEvent) => void;
+  onDoubleClick?: (e: React.MouseEvent) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   onPointerDown?: (e: React.PointerEvent) => void;
   /** Data attribute for drag-and-drop targeting (e.g. folder ID or status code). */
@@ -125,6 +126,7 @@ function StandardRow({
   isLastChild,
   onToggleExpand,
   onClick,
+  onDoubleClick,
   onContextMenu,
   onPointerDown,
   dropDataAttr,
@@ -162,6 +164,7 @@ function StandardRow({
       className={cls}
       style={rowStyle}
       onClick={onClick}
+      onDoubleClick={onDoubleClick}
       role={interactive ? 'button' : undefined}
       tabIndex={interactive ? 0 : undefined}
       aria-current={active ? 'page' : undefined}

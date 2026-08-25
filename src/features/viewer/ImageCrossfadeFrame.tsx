@@ -1,6 +1,7 @@
-import type { RefObject, SyntheticEvent } from 'react';
+import type { CSSProperties, RefObject, SyntheticEvent } from 'react';
 import type { ImageSize } from './hooks/useImageZoom';
 import { ProgressiveMediaFrame } from './ProgressiveMediaFrame';
+import styles from './ImageCrossfadeFrame.module.css';
 
 type ImageCrossfadeFrameProps = {
   frameRef: RefObject<HTMLDivElement>;
@@ -10,6 +11,8 @@ type ImageCrossfadeFrameProps = {
   fullUrl: string;
   thumbnailVisible: boolean;
   fullVisible: boolean;
+  imageRendering?: 'smooth' | 'pixelated';
+  showTransparencyGrid?: boolean;
   onThumbnailLoad: (event: SyntheticEvent<HTMLImageElement>) => void;
   onFullLoad: (event: SyntheticEvent<HTMLImageElement>) => void;
 };
@@ -23,11 +26,13 @@ export function ImageCrossfadeFrame({
   fullUrl,
   thumbnailVisible,
   fullVisible,
+  imageRendering = 'smooth',
+  showTransparencyGrid = false,
   onThumbnailLoad,
   onFullLoad,
 }: ImageCrossfadeFrameProps) {
   const hasAuthoritativeSize = Boolean(imageSize?.width && imageSize?.height);
-  const layerStyle = {
+  const layerStyle: CSSProperties = {
     position: 'absolute' as const,
     inset: 0,
     display: 'block',
@@ -37,6 +42,7 @@ export function ImageCrossfadeFrame({
     maxHeight: 'none',
     objectFit: 'fill' as const,
     objectPosition: 'center',
+    imageRendering: imageRendering === 'pixelated' ? 'pixelated' : 'auto',
   };
 
   const thumbnail = (
@@ -66,7 +72,7 @@ export function ImageCrossfadeFrame({
         aspectRatio: hasAuthoritativeSize ? `${imageSize!.width} / ${imageSize!.height}` : undefined,
         overflow: 'hidden',
       }}
-      className="image-crossfade-frame"
+      className={`image-crossfade-frame ${showTransparencyGrid ? styles.transparencyGrid : ''}`}
     >
       {fullUrl && (
         <img
