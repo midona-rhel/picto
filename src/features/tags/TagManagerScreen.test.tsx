@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
   merge: vi.fn(),
   delete: vi.fn(),
   deleteUnused: vi.fn(),
+  renameGroup: vi.fn(),
+  deleteGroup: vi.fn(),
   setAlias: vi.fn(),
   setImplication: vi.fn(),
   registerInvalidation: vi.fn(),
@@ -76,6 +78,8 @@ beforeEach(() => {
   mocks.merge.mockResolvedValue(undefined);
   mocks.delete.mockResolvedValue(undefined);
   mocks.deleteUnused.mockResolvedValue(undefined);
+  mocks.renameGroup.mockResolvedValue(undefined);
+  mocks.deleteGroup.mockResolvedValue(undefined);
   mocks.setAlias.mockResolvedValue(undefined);
   mocks.setImplication.mockResolvedValue(undefined);
   mocks.getSettings.mockResolvedValue({ showTagGroups: true, starredTags: [] });
@@ -325,6 +329,45 @@ describe('TagManagerScreen', () => {
     fireEvent.contextMenu(tag, { clientX: 100, clientY: 100 });
     fireEvent.click(screen.getByRole('menuitem', { name: 'Remove from this Group' }));
     await waitFor(() => expect(mocks.rename).toHaveBeenCalledWith(1, 'alice'));
+  });
+
+  it('offers only applicable group actions and renames the whole group', async () => {
+    const user = setupUser();
+    await renderScreen();
+    const group = screen.getByRole('button', { name: 'character 2' });
+
+    fireEvent.contextMenu(group, { clientX: 100, clientY: 100 });
+    expect(screen.getByRole('menuitem', { name: 'Show Tags in Group' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Rename Group…' })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: 'Delete Group' })).toBeInTheDocument();
+    expect(screen.queryByRole('menuitem', { name: /Delete Tag$/ })).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole('menuitem', { name: 'Rename Group…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Rename tag group' });
+    const input = within(dialog).getByRole('textbox', { name: 'Tag group name' });
+    await user.clear(input);
+    await user.type(input, 'Cast Members');
+    await user.click(within(dialog).getByRole('button', { name: 'Rename' }));
+
+    await waitFor(() => expect(mocks.renameGroup).toHaveBeenCalledWith('character', 'cast_members'));
+  });
+
+  it('deletes a group without deleting its tags', async () => {
+    const user = setupUser();
+    await renderScreen();
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'character 2' }), {
+      clientX: 100,
+      clientY: 100,
+    });
+    await user.click(screen.getByRole('menuitem', { name: 'Delete Group' }));
+
+    const dialog = screen.getByRole('dialog', { name: 'Delete tag group' });
+    expect(dialog).toHaveTextContent('tags will move to General');
+    expect(dialog).toHaveTextContent('no tags or media assignments will be deleted');
+    await user.click(within(dialog).getByRole('button', { name: 'Delete group' }));
+
+    await waitFor(() => expect(mocks.deleteGroup).toHaveBeenCalledWith('character'));
+    expect(mocks.delete).not.toHaveBeenCalled();
   });
 
   it('deletes all truly unused tags through one confirmed mutation', async () => {

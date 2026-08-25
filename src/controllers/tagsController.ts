@@ -1,6 +1,7 @@
 import {
   deleteTag,
   deleteUnusedTags,
+  deleteTagGroup,
   getNamespaceSummary,
   getUnusedTagCount,
   getTagRelations,
@@ -8,6 +9,7 @@ import {
   manageTagAlias,
   manageTagImplication,
   mergeTags,
+  renameTagGroup,
   renameTag,
 } from '../platform/tagApi';
 import type { TagRelationGroups } from '../platform/tagApi';
@@ -60,6 +62,18 @@ export const tagsController = {
   async deleteUnused(): Promise<unknown> {
     const result = await deleteUnusedTags();
     await announceUndoableMutation('tags.delete_unused');
+    return result;
+  },
+
+  async renameGroup(namespace: string, newNamespace: string): Promise<unknown> {
+    const result = await renameTagGroup(namespace, newNamespace);
+    await announceUndoableMutation('tags.group.rename');
+    return result;
+  },
+
+  async deleteGroup(namespace: string): Promise<unknown> {
+    const result = await deleteTagGroup(namespace);
+    await announceUndoableMutation('tags.group.delete');
     return result;
   },
 

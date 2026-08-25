@@ -8,6 +8,7 @@ import {
   IconBookmarks,
   IconPlus,
   IconSearch,
+  IconTags,
   IconStar,
   IconTrash,
   IconX,
@@ -51,6 +52,7 @@ type EditorAction =
   | { kind: 'relation'; mode: RelationMode }
   | { kind: 'delete' }
   | null;
+type GroupAction = { kind: 'rename' | 'delete'; namespace: string } | null;
 
 function tagKey(tag: Pick<CanonicalTagRecord, 'namespace' | 'subtag'>): string {
   return tagName(tag);
@@ -136,6 +138,44 @@ function RelationPicker({ title, excludeTagId, onChoose, onClose }: RelationPick
           ))}
         </div>
       </div>
+    </GlassModal>
+  );
+}
+
+function RenameTagGroupModal({
+  namespace,
+  busy,
+  onClose,
+  onRename,
+}: {
+  namespace: string;
+  busy: boolean;
+  onClose: () => void;
+  onRename: (name: string) => void;
+}) {
+  const [name, setName] = useState(namespace);
+  const normalized = name.trim().toLowerCase().replace(/\s+/g, '_');
+  const canRename = normalized.length > 0 && normalized !== namespace && !normalized.includes(':');
+  return (
+    <GlassModal
+      open
+      onClose={onClose}
+      title="Rename tag group"
+      size="sm"
+      footer={(
+        <>
+          <ActionButton onClick={onClose} disabled={busy}>Cancel</ActionButton>
+          <ActionButton onClick={() => onRename(normalized)} disabled={busy || !canRename}>Rename</ActionButton>
+        </>
+      )}
+    >
+      <GlassInput
+        autoFocus
+        aria-label="Tag group name"
+        value={name}
+        onChange={(event) => setName(event.target.value)}
+        onKeyDown={(event) => { if (event.key === 'Enter' && canRename) onRename(normalized); }}
+      />
     </GlassModal>
   );
 }
@@ -313,6 +353,7 @@ export function TagManagerScreen() {
   const [error, setError] = useState<string | null>(null);
   const [editorAction, setEditorAction] = useState<EditorAction>(null);
   const [cleanupOpen, setCleanupOpen] = useState(false);
+  const [groupAction, setGroupAction] = useState<GroupAction>(null);
   const [reloadToken, setReloadToken] = useState(0);
   const [viewEpoch, setViewEpoch] = useState(0);
   const listGeneration = useRef(0);
@@ -528,8 +569,10 @@ export function TagManagerScreen() {
         await loadRelations(currentTag);
         setEditorAction(null);
       }
+      return true;
     } catch (reason: unknown) {
       setError(errorMessage(reason));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -607,6 +650,30 @@ export function TagManagerScreen() {
     contextMenu.open(event, entries);
   }, [contextMenu, namespaces, runMutation, tagPreferences.starredTags]);
 
+  const openGroupContextMenu = useCallback((
+    event: React.MouseEvent,
+    group: CanonicalNamespaceSummary,
+  ) => {
+    contextMenu.open(event, [
+      {
+        label: 'Show Tags in Group',
+        icon: <IconTags size={16} />,
+        action: () => handleNamespaceChange(group.namespace),
+      },
+      { separator: true },
+      {
+        label: 'Rename Group…',
+        icon: <IconEdit size={16} />,
+        action: () => setGroupAction({ kind: 'rename', namespace: group.namespace }),
+      },
+      {
+        label: 'Delete Group',
+        icon: <IconTrash size={16} />,
+        action: () => setGroupAction({ kind: 'delete', namespace: group.namespace }),
+      },
+    ]);
+  }, [contextMenu, handleNamespaceChange]);
+
   return (
     <div className={styles.root}>
       {error && <div className={styles.error} role="alert">{error}</div>}
@@ -631,6 +698,7 @@ export function TagManagerScreen() {
                 className={`${styles.namespaceItem} ${namespace === item.namespace ? styles.namespaceItemActive : ''}`}
                 key={item.namespace || '__general__'}
                 onClick={() => handleNamespaceChange(item.namespace)}
+                onContextMenu={(event) => openGroupContextMenu(event, item)}
                 type="button"
               >
                 <span className={styles.groupIdentity} style={{ color: tagGroupColor(item.namespace) }}>
@@ -765,6 +833,41 @@ export function TagManagerScreen() {
           message={`Delete ${tagKey(selected)}? Existing media will remain untouched.`}
           confirmLabel="Delete tag"
           danger
+          loading={busy}
+        />
+      )}
+      {groupAction?.kind === 'rename' && (
+        <RenameTagGroupModal
+          namespace={groupAction.namespace}
+          busy={busy}
+          onClose={() => setGroupAction(null)}
+          onRename={(newNamespace) => {
+            const previousNamespace = groupAction.namespace;
+            void runMutation(() => tagsController.renameGroup(previousNamespace, newNamespace))
+              .then((succeeded) => {
+                if (!succeeded) return;
+                setGroupAction(null);
+                if (namespace === previousNamespace) handleNamespaceChange(newNamespace);
+              });
+          }}
+        />
+      )}
+      {groupAction?.kind === 'delete' && (
+        <ConfirmModal
+          open
+          onClose={() => setGroupAction(null)}
+          onConfirm={() => {
+            const deletedNamespace = groupAction.namespace;
+            void runMutation(() => tagsController.deleteGroup(deletedNamespace))
+              .then((succeeded) => {
+                if (!succeeded) return;
+                setGroupAction(null);
+                if (namespace === deletedNamespace) handleNamespaceChange(null);
+              });
+          }}
+          title="Delete tag group"
+          message={`Delete the ${groupAction.namespace} group? Its tags will move to General; no tags or media assignments will be deleted.`}
+          confirmLabel="Delete group"
           loading={busy}
         />
       )}

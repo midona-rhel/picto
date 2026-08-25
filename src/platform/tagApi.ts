@@ -2,9 +2,11 @@ import { invoke } from './ipc';
 import type { ListTagsInput } from '../shared/types/generated/application/ListTagsInput';
 import type { MutationReceipt } from '../shared/types/generated/application/MutationReceipt';
 import type { RenameTagInput } from '../shared/types/generated/application/RenameTagInput';
+import type { RenameTagGroupInput } from '../shared/types/generated/application/RenameTagGroupInput';
 import type { TagAliasInput } from '../shared/types/generated/application/TagAliasInput';
 import type { TagImplicationInput } from '../shared/types/generated/application/TagImplicationInput';
 import type { TagInput } from '../shared/types/generated/application/TagInput';
+import type { TagGroupInput } from '../shared/types/generated/application/TagGroupInput';
 import type { TagPage as ReplacementTagPage } from '../shared/types/generated/application/TagPage';
 import type { TagRelations as ReplacementTagRelations } from '../shared/types/generated/application/TagRelations';
 import type { CanonicalNamespaceSummary, CanonicalTagRelation, TagPage } from '../shared/types/canonical';
@@ -111,6 +113,16 @@ export function deleteTag(tagId: number): Promise<MutationReceipt> {
 
 export function deleteUnusedTags(): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('tags.delete_unused', {});
+}
+
+export function renameTagGroup(namespace: string, newNamespace: string): Promise<MutationReceipt> {
+  const input: RenameTagGroupInput = { namespace, new_namespace: newNamespace };
+  return invoke<MutationReceipt>('tags.group.rename', input);
+}
+
+export function deleteTagGroup(namespace: string): Promise<MutationReceipt> {
+  const input: TagGroupInput = { namespace };
+  return invoke<MutationReceipt>('tags.group.delete', input);
 }
 
 export function manageTagAlias(fromTagId: number, toTagId?: number | null): Promise<MutationReceipt> {

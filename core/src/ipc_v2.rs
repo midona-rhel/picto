@@ -384,6 +384,17 @@ pub fn dispatch(
             publish(application, application.delete_tag(input.tag_id)?)
         }
         "tags.delete_unused" => publish(application, application.delete_unused_tags()?),
+        "tags.group.rename" => {
+            let input: RenameTagGroupInput = parse(args_json)?;
+            publish(
+                application,
+                application.rename_tag_group(&input.namespace, &input.new_namespace)?,
+            )
+        }
+        "tags.group.delete" => {
+            let input: TagGroupInput = parse(args_json)?;
+            publish(application, application.delete_tag_group(&input.namespace)?)
+        }
 
         "duplicates.scan" => {
             let input: ScanDuplicatesInput = parse(args_json)?;
@@ -932,6 +943,17 @@ pub struct RenameTagInput {
     #[ts(type = "number")]
     tag_id: i64,
     name: String,
+}
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct RenameTagGroupInput {
+    namespace: String,
+    new_namespace: String,
+}
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct TagGroupInput {
+    namespace: String,
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]

@@ -345,6 +345,86 @@ impl Application {
         Ok(tag_receipt_with_items(revision, &item_ids))
     }
 
+    pub fn rename_tag_group(
+        &self,
+        namespace: &str,
+        new_namespace: &str,
+    ) -> Result<MutationReceipt, String> {
+        let namespace = normalize_group(namespace)?;
+        let new_namespace = normalize_group(new_namespace)?;
+        if namespace == "general" {
+            return Err("The General group cannot be renamed".to_string());
+        }
+        if namespace == new_namespace {
+            return Ok(tag_receipt(self.store().revision()?));
+        }
+        let (item_ids, revision, _, _) = self.undoable_transaction_if_changed_rebuilding(
+            tag_history("tags.group.rename", "Rename tag group"),
+            |transaction| {
+                let tags = tags_in_namespace(transaction, &namespace)?;
+                if tags.is_empty() {
+                    return Err(invalid(format!("Tag group {namespace} does not exist")));
+                }
+                let mut roots = BTreeSet::new();
+                for (tag_id, subtag) in tags {
+                    let target_id = transaction
+                        .query_row(
+                            "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
+                            params![new_namespace, subtag],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()?;
+                    if let Some(target_id) = target_id {
+                        roots.extend(merge_tag_rows(transaction, tag_id, target_id)?);
+                    } else {
+                        transaction.execute(
+                            "UPDATE tag SET namespace = ?1 WHERE tag_id = ?2",
+                            params![new_namespace, tag_id],
+                        )?;
+                    }
+                }
+                Ok((roots.into_iter().collect::<Vec<_>>(), true))
+            },
+        )?;
+        Ok(tag_receipt_with_items(revision, &item_ids))
+    }
+
+    pub fn delete_tag_group(&self, namespace: &str) -> Result<MutationReceipt, String> {
+        let namespace = normalize_group(namespace)?;
+        if namespace == "general" {
+            return Err("The General group cannot be deleted".to_string());
+        }
+        let (item_ids, revision, _, _) = self.undoable_transaction_if_changed_rebuilding(
+            tag_history("tags.group.delete", "Delete tag group"),
+            |transaction| {
+                let tags = tags_in_namespace(transaction, &namespace)?;
+                if tags.is_empty() {
+                    return Err(invalid(format!("Tag group {namespace} does not exist")));
+                }
+                let mut roots = BTreeSet::new();
+                for (tag_id, subtag) in tags {
+                    let target_id = transaction
+                        .query_row(
+                            "SELECT tag_id FROM tag WHERE namespace = 'general' AND subtag = ?1",
+                            [&subtag],
+                            |row| row.get::<_, i64>(0),
+                        )
+                        .optional()?;
+                    if let Some(target_id) = target_id {
+                        roots.extend(merge_tag_rows(transaction, tag_id, target_id)?);
+                    } else {
+                        transaction.execute(
+                            "UPDATE tag SET namespace = 'general' WHERE tag_id = ?1",
+                            [tag_id],
+                        )?;
+                    }
+                }
+                Ok((roots.into_iter().collect::<Vec<_>>(), true))
+            },
+        )?;
+        Ok(tag_receipt_with_items(revision, &item_ids))
+    }
+
     pub fn delete_tag(&self, tag_id: i64) -> Result<MutationReceipt, String> {
         let (item_ids, revision, _) = self.undoable_transaction_rebuilding(
             tag_history("tags.delete", "Delete tag"),
@@ -426,6 +506,61 @@ fn roots_for_tag(connection: &rusqlite::Connection, tag_id: i64) -> rusqlite::Re
         .collect()
 }
 
+fn tags_in_namespace(
+    connection: &rusqlite::Connection,
+    namespace: &str,
+) -> rusqlite::Result<Vec<(i64, String)>> {
+    connection
+        .prepare("SELECT tag_id, subtag FROM tag WHERE namespace = ?1 ORDER BY tag_id")?
+        .query_map([namespace], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect()
+}
+
+fn merge_tag_rows(
+    transaction: &rusqlite::Transaction<'_>,
+    source_id: i64,
+    target_id: i64,
+) -> rusqlite::Result<Vec<i64>> {
+    let roots = roots_for_tag(transaction, source_id)?;
+    transaction.execute(
+        "INSERT INTO media_tag (media_item_id, tag_id, source, provenance_mask)
+         SELECT media_item_id, ?1, source, provenance_mask FROM media_tag WHERE tag_id = ?2
+         ON CONFLICT(media_item_id, tag_id, source) DO UPDATE SET
+           provenance_mask = media_tag.provenance_mask | excluded.provenance_mask",
+        params![target_id, source_id],
+    )?;
+    transaction.execute("DELETE FROM media_tag WHERE tag_id = ?1", [source_id])?;
+
+    transaction.execute(
+        "UPDATE tag_alias SET to_tag_id = ?1 WHERE to_tag_id = ?2 AND from_tag_id != ?1",
+        params![target_id, source_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM tag_alias WHERE from_tag_id = ?1 OR (from_tag_id = ?2 AND to_tag_id = ?2)",
+        params![source_id, target_id],
+    )?;
+
+    transaction.execute(
+        "INSERT OR IGNORE INTO tag_implication (child_tag_id, parent_tag_id, source)
+         SELECT CASE WHEN child_tag_id = ?1 THEN ?2 ELSE child_tag_id END,
+                CASE WHEN parent_tag_id = ?1 THEN ?2 ELSE parent_tag_id END,
+                source
+         FROM tag_implication
+         WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
+        params![source_id, target_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM tag_implication WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
+        [source_id],
+    )?;
+    transaction.execute(
+        "DELETE FROM tag_implication WHERE child_tag_id = parent_tag_id",
+        [],
+    )?;
+    transaction.execute("DELETE FROM tag WHERE tag_id = ?1", [source_id])?;
+    Ok(roots)
+}
+
 fn require_tag(connection: &rusqlite::Connection, tag_id: i64) -> rusqlite::Result<()> {
     connection
         .query_row("SELECT 1 FROM tag WHERE tag_id = ?1", [tag_id], |_| Ok(()))
@@ -435,6 +570,17 @@ fn require_tag(connection: &rusqlite::Connection, tag_id: i64) -> rusqlite::Resu
 
 fn parse_tag(value: &str) -> Result<(String, String), String> {
     crate::tag_name_v2::parse_local(value)
+}
+
+fn normalize_group(value: &str) -> Result<String, String> {
+    let value = value.trim().to_lowercase().replace(' ', "_");
+    if value.is_empty() {
+        return Err("Tag group name cannot be empty".to_string());
+    }
+    if value.contains(':') {
+        return Err("Tag group name cannot contain ':'".to_string());
+    }
+    Ok(value)
 }
 
 fn normalize_search(value: &str) -> String {
@@ -695,6 +841,88 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 assert_eq!((orphan, relation_only, assigned), (0, 1, 1));
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn group_rename_is_atomic_and_merges_name_collisions() {
+        let (_directory, application, media) = fixture();
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO tag (namespace, subtag) VALUES ('creator', 'melon')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        application.rename_tag_group("character", "creator").unwrap();
+
+        application
+            .store()
+            .read(|connection| {
+                let old_count: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM tag WHERE namespace = 'character'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let target_id: i64 = connection.query_row(
+                    "SELECT tag_id FROM tag WHERE namespace = 'creator' AND subtag = 'melon'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let assignment_count: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM media_tag WHERE media_item_id = ?1 AND tag_id = ?2",
+                    params![media.0, target_id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(old_count, 0);
+                assert_eq!(assignment_count, 1);
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn deleting_a_group_moves_tags_to_general_and_merges_collisions() {
+        let (_directory, application, media) = fixture();
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO tag (namespace, subtag) VALUES ('general', 'melon')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        application.delete_tag_group("character").unwrap();
+
+        application
+            .store()
+            .read(|connection| {
+                let old_count: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM tag WHERE namespace = 'character'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let target_id: i64 = connection.query_row(
+                    "SELECT tag_id FROM tag WHERE namespace = 'general' AND subtag = 'melon'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let assignment_count: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM media_tag WHERE media_item_id = ?1 AND tag_id = ?2",
+                    params![media.0, target_id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(old_count, 0);
+                assert_eq!(assignment_count, 1);
                 Ok(())
             })
             .unwrap();

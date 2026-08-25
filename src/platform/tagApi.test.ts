@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   deleteTag,
+  deleteTagGroup,
   deleteUnusedTags,
   getNamespaceSummary,
   getUnusedTagCount,
@@ -10,6 +11,7 @@ import {
   manageTagImplication,
   mergeTags,
   renameTag,
+  renameTagGroup,
 } from './tagApi';
 import { invoke } from './ipc';
 
@@ -71,6 +73,8 @@ describe('tagApi pagination', () => {
     await expect(mergeTags(7, 'character:alice')).resolves.toEqual(expect.any(Object));
     await expect(deleteTag(7)).resolves.toEqual(expect.any(Object));
     await expect(deleteUnusedTags()).resolves.toEqual(expect.any(Object));
+    await expect(renameTagGroup('character', 'cast')).resolves.toEqual(expect.any(Object));
+    await expect(deleteTagGroup('character')).resolves.toEqual(expect.any(Object));
     await expect(manageTagAlias(8, 7)).resolves.toEqual(expect.any(Object));
     await expect(manageTagImplication(7, 9, false)).resolves.toEqual(expect.any(Object));
 
@@ -80,6 +84,11 @@ describe('tagApi pagination', () => {
     expect(invoke).toHaveBeenCalledWith('tags.rename_or_merge', { tag_id: 7, name: 'character:renamed' });
     expect(invoke).toHaveBeenCalledWith('tags.delete', { tag_id: 7 });
     expect(invoke).toHaveBeenCalledWith('tags.delete_unused', {});
+    expect(invoke).toHaveBeenCalledWith('tags.group.rename', {
+      namespace: 'character',
+      new_namespace: 'cast',
+    });
+    expect(invoke).toHaveBeenCalledWith('tags.group.delete', { namespace: 'character' });
     expect(invoke).toHaveBeenCalledWith('tags.set_alias', { from_tag_id: 8, to_tag_id: 7 });
     expect(invoke).toHaveBeenCalledWith('tags.set_implication', {
       child_tag_id: 7,
