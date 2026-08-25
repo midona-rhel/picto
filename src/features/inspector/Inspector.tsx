@@ -49,7 +49,7 @@ import { showTagItems } from '../../controllers/gridNavigationController';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import { filesController } from '../../controllers/filesController';
 import { windowController } from '../../controllers/windowController';
-import { buildEntityOpenContextEntries } from '../grid/gridContextMenu';
+import { buildEntityOpenContextEntries, buildLibraryCoverContextEntry } from '../grid/gridContextMenu';
 import { gridFiltersAtom, gridFilterToolbarOpenAtom } from '../../state/grid';
 import styles from './Inspector.module.css';
 import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
@@ -58,6 +58,8 @@ import { setTagStarred, useTagPreferences } from '../tags/tagPreferences';
 import { tagsController } from '../../controllers/tagsController';
 import type { CanonicalNamespaceSummary } from '../../shared/types/canonical';
 import { IconAutoTag } from '../../shared/ui/icons/sidebar-menu-icons';
+import { setCurrentLibraryCover } from '../library/libraryAppearance';
+import { showErrorNotification } from '../../shared/lib/notifications';
 
 const store = getDefaultStore();
 
@@ -173,7 +175,12 @@ function Preview({
           onOpenDefault: (value) => { void filesController.openDefaultAppForHash(value); },
           onRevealInFolder: (value) => { void filesController.revealHashInFolder(value); },
           onOpenNewWindow: (value) => { void windowController.openDetailWindow({ hash: value }); },
-        }))}
+        }).concat(buildLibraryCoverContextEntry(hash, () => {
+          void setCurrentLibraryCover(hash).catch((reason) => showErrorNotification({
+            title: 'Could not set library cover',
+            message: reason instanceof Error ? reason.message : String(reason),
+          }));
+        })))}
       >
         <div className={styles.previewFrame} style={{ background: backgrounds[0] ?? undefined }}>
           <ThumbnailImage

@@ -163,8 +163,8 @@ describe('buildTileContextMenu', () => {
     expect(onExport).toHaveBeenCalledOnce();
   });
 
-  it('sets a single image as the library icon', () => {
-    const onSetLibraryIcon = vi.fn();
+  it('sets a single media item as the library cover', () => {
+    const onSetLibraryCover = vi.fn();
     const entries = buildTileContextMenu({
       selectionCount: 1,
       querySelectionActive: false,
@@ -177,19 +177,19 @@ describe('buildTileContextMenu', () => {
       loadedCount: 1,
       onSelectAll: vi.fn(),
       onDeselectAll: vi.fn(),
-      onSetLibraryIcon,
+      onSetLibraryCover,
     });
     const entry = entries.find(
-      (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Set as Library Icon',
+      (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Set as Library Cover',
     );
 
     expect(entry).toBeDefined();
     expect(renderToStaticMarkup(entry!.icon)).toContain('tabler-icon-photo');
     entry!.action();
-    expect(onSetLibraryIcon).toHaveBeenCalledWith('image-hash');
+    expect(onSetLibraryCover).toHaveBeenCalledWith('image-hash');
   });
 
-  it('does not offer a library icon action for non-images or groups', () => {
+  it('offers library cover for non-image media but not groups', () => {
     const base = {
       selectionCount: 1,
       querySelectionActive: false,
@@ -200,15 +200,15 @@ describe('buildTileContextMenu', () => {
       loadedCount: 1,
       onSelectAll: vi.fn(),
       onDeselectAll: vi.fn(),
-      onSetLibraryIcon: vi.fn(),
+      onSetLibraryCover: vi.fn(),
     };
     const videoLabels = buildTileContextMenu({ ...base, singleKind: 'media', singleMime: 'video/mp4' })
       .flatMap((entry) => ('label' in entry ? [entry.label] : []));
     const groupLabels = buildTileContextMenu({ ...base, singleKind: 'collection', singleMime: 'image/jpeg', containsGroup: true })
       .flatMap((entry) => ('label' in entry ? [entry.label] : []));
 
-    expect(videoLabels).not.toContain('Set as Library Icon');
-    expect(groupLabels).not.toContain('Set as Library Icon');
+    expect(videoLabels).toContain('Set as Library Cover');
+    expect(groupLabels).not.toContain('Set as Library Cover');
   });
 
   it('disables auto tag when the current selection cannot be tagged', () => {

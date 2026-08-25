@@ -1,4 +1,4 @@
-export async function setCurrentLibraryImageIcon(hash: string): Promise<void> {
+export async function setCurrentLibraryCover(hash: string): Promise<void> {
   const library = (window as any).picto?.library;
   if (!library) throw new Error('Library service is unavailable.');
   const config = await library.getConfig();

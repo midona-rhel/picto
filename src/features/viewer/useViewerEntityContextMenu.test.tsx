@@ -30,6 +30,18 @@ function LibraryImageMenuHarness() {
   return <><button onContextMenu={menu.open}>Open</button>{menu.menu}</>;
 }
 
+function LibraryVideoMenuHarness() {
+  const menu = useViewerEntityContextMenu({
+    hash: 'video-hash',
+    itemId: 43,
+    kind: 'media',
+    lifecycle: 'active',
+    name: 'Clip',
+    mime: 'video/mp4',
+  });
+  return <><button onContextMenu={menu.open}>Open video</button>{menu.menu}</>;
+}
+
 describe('Flash viewer context menu', () => {
   it('uses the live playback controller for play, stop, and volume actions', () => {
     const togglePlay = vi.fn();
@@ -85,10 +97,16 @@ describe('Image viewer context menu', () => {
     expect(await screen.findByRole('menuitem', { name: /^Add to Folder/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /^Add Tags/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /^Auto Tag/ })).toBeInTheDocument();
-    expect(screen.getByRole('menuitem', { name: /^Export\.\.\./ })).toBeInTheDocument();
+    expect(screen.getByRole('menuitem', { name: /^Export/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /^Regenerate Thumbnail/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /^Move to Trash/ })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Select All' })).not.toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'View in Grayscale' })).not.toBeInTheDocument();
+  });
+
+  it('offers the same library cover action for video media', async () => {
+    render(<LibraryVideoMenuHarness />);
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'Open video' }), { clientX: 20, clientY: 20 });
+    expect(await screen.findByRole('menuitem', { name: 'Set as Library Cover' })).toBeInTheDocument();
   });
 });

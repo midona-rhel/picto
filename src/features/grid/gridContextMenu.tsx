@@ -74,7 +74,7 @@ export interface GridMenuContext {
   onRename?: () => void;
   onBatchRename?: () => void;
   onRegenerateThumbnails?: () => void;
-  onSetLibraryIcon?: (hash: string) => void;
+  onSetLibraryCover?: (hash: string) => void;
   onSetFolderCover?: () => void;
   onCopyTags?: () => void;
   onPasteTags?: () => void;
@@ -121,6 +121,16 @@ function item(
     danger: opts.danger,
     disabled: opts.disabled ?? !opts.action,
   };
+}
+
+export function buildLibraryCoverContextEntry(
+  hash: string,
+  onSetLibraryCover: (hash: string) => void,
+): MenuItem {
+  return item('Set as Library Cover', {
+    icon: <IconPhoto size={15} />,
+    action: () => onSetLibraryCover(hash),
+  });
 }
 
 export function buildEntityOpenContextEntries({
@@ -250,11 +260,10 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const viewerSurface = ctx.surface === 'viewer';
   const hasSelection = selectionCount > 0;
   const aiTagEnabled = ctx.aiTagEnabled ?? !!ctx.onOpenAiTagger;
-  const canSetLibraryIcon = singleSelected
+  const canSetLibraryCover = singleSelected
     && Boolean(singleHash)
     && ctx.singleKind === 'media'
-    && Boolean(ctx.singleMime?.startsWith('image/'))
-    && Boolean(ctx.onSetLibraryIcon);
+    && Boolean(ctx.onSetLibraryCover);
   const entries: MenuEntry[] = [];
 
   // ── Mixed selection (folders + entities) or folders-only: limited menu ──
@@ -305,11 +314,8 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     if (entries.length > 0) entries.push(sep());
   }
 
-  if (canSetLibraryIcon) {
-    entries.push(item('Set as Library Icon', {
-      icon: <IconPhoto size={15} />,
-      action: () => ctx.onSetLibraryIcon!(singleHash!),
-    }));
+  if (canSetLibraryCover) {
+    entries.push(buildLibraryCoverContextEntry(singleHash!, ctx.onSetLibraryCover!));
     entries.push(sep());
   }
 

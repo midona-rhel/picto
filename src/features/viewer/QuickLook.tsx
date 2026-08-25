@@ -21,6 +21,7 @@ import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
 import { QuickLookHost } from './QuickLookHost';
 import styles from './QuickLook.module.css';
+import { useViewerEntityContextMenu } from './useViewerEntityContextMenu';
 
 export interface QuickLookProps {
   items: CanonicalEntityGridItem[];
@@ -49,6 +50,16 @@ export function QuickLookContent({
   const isVideo = rendererKind === 'video';
   const isAudio = rendererKind === 'audio';
   const thumbHash = currentHash;
+  const contextMenu = useViewerEntityContextMenu({
+    hash: currentHash || null,
+    itemId: currentItem?.item_id,
+    kind: currentItem?.kind,
+    lifecycle: currentItem?.lifecycle,
+    name: currentItem?.name,
+    mime: currentMime,
+    width: currentItem?.pixel_width,
+    height: currentItem?.pixel_height,
+  });
 
   // Refs
   const containerRef = useRef<HTMLDivElement>(null);
@@ -146,6 +157,7 @@ export function QuickLookContent({
       ref={containerRef}
       className={`${styles.imageArea} ${zoom.isDragging ? styles.dragging : ''}`}
       onMouseDown={isImage ? zoom.handlers.onMouseDown : undefined}
+      onContextMenu={contextMenu.open}
     >
         {isAudio ? (
           <VideoPlayer
@@ -176,6 +188,7 @@ export function QuickLookContent({
             onFullLoad={pipeline.handleFullLoad}
           />
         )}
+      {contextMenu.menu}
     </div>
   );
 }

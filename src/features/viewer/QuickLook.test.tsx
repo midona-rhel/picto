@@ -1,4 +1,4 @@
-import { render, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { QuickLook } from './QuickLook';
@@ -84,6 +84,29 @@ describe('QuickLook', () => {
 
     const overlay = document.body.querySelector('[data-quick-look-overlay]');
     expect(overlay?.querySelectorAll('[data-image-crossfade-frame]')).toHaveLength(1);
+  });
+
+  it('opens the shared media context menu from Quick Look', async () => {
+    render(
+      <QuickLook
+        items={[{
+          item_id: 1,
+          kind: 'media',
+          lifecycle: 'active',
+          name: 'Image',
+          display_file_hash: 'image-hash',
+          display_mime_type: 'image/jpeg',
+          pixel_width: 100,
+          pixel_height: 100,
+        } as never]}
+        currentIndex={0}
+        onNavigate={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.contextMenu(document.body.querySelector('[data-image-crossfade-frame]')!.parentElement!);
+    expect(await screen.findByRole('menuitem', { name: 'Set as Library Cover' })).toBeInTheDocument();
   });
 
   it('keeps a JPEG quick look transparent until its thumbnail is ready', async () => {

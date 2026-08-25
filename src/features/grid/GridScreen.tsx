@@ -85,7 +85,7 @@ import { GridFilterToolbar } from './GridFilterMenu';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
 import { addQuickAccess, removeQuickAccess, reorderQuickAccess, useQuickAccess } from '../sidebar/quickAccessPreferences';
-import { setCurrentLibraryImageIcon } from '../library/libraryAppearance';
+import { setCurrentLibraryCover } from '../library/libraryAppearance';
 import {
   availableBulkFolderMoveTargets,
   availableFolderMoveTargets,
@@ -1221,9 +1221,9 @@ export function GridScreen({
               const hashes = selectedItems.map((selected) => selected.display_file_hash);
               void filesController.regenerateThumbnailsBatch(hashes);
             },
-            onSetLibraryIcon: (hash) => {
-              void setCurrentLibraryImageIcon(hash).catch((reason) => showErrorNotification({
-                title: 'Could not set library icon',
+            onSetLibraryCover: (hash) => {
+              void setCurrentLibraryCover(hash).catch((reason) => showErrorNotification({
+                title: 'Could not set library cover',
                 message: reason instanceof Error ? reason.message : String(reason),
               }));
             },

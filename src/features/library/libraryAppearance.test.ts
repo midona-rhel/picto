@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { setCurrentLibraryImageIcon } from './libraryAppearance';
+import { setCurrentLibraryCover } from './libraryAppearance';
 
-describe('setCurrentLibraryImageIcon', () => {
+describe('setCurrentLibraryCover', () => {
   afterEach(() => { vi.unstubAllGlobals(); });
 
   it('updates only the current library and replaces its custom icon', async () => {
@@ -10,10 +10,10 @@ describe('setCurrentLibraryImageIcon', () => {
       picto: { library: { getConfig: vi.fn().mockResolvedValue({ currentPath: '/Pictures/Test.library' }), setMeta } },
     });
 
-    await setCurrentLibraryImageIcon('image-hash');
+    await setCurrentLibraryCover('media-hash');
 
     expect(setMeta).toHaveBeenCalledWith('/Pictures/Test.library', {
-      imageHash: 'image-hash',
+      imageHash: 'media-hash',
       icon: null,
     });
   });
