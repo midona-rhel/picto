@@ -34,6 +34,7 @@ import type { ViewerZoomControls } from '../../state/viewer';
 import { filesController } from '../../controllers/filesController';
 import { windowController } from '../../controllers/windowController';
 import { ImageCrossfadeFrame } from './ImageCrossfadeFrame';
+import { LibraryCoverDialogHost } from '../library/LibraryCoverDialogHost';
 import styles from './DetailWindow.module.css';
 import viewerStyles from './MediaView.module.css';
 
@@ -489,6 +490,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
         </div>
       )}
       {contextMenu.menu}
+      <LibraryCoverDialogHost />
     </div>
   );
 }

@@ -14,7 +14,7 @@ import type { Lifecycle } from '../../shared/types/generated/application/Lifecyc
 import type { ItemTarget } from '../../shared/types/generated/application/ItemTarget';
 import type { FlashPlaybackController } from './document/FlashPlayer';
 import type { CurrentFrameCapture } from './currentFrameCapture';
-import { setCurrentLibraryCover } from '../library/libraryAppearance';
+import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import { showErrorNotification } from '../../shared/lib/notifications';
 
 interface ViewerEntityContextMenuOptions {
@@ -163,7 +163,14 @@ export function useViewerEntityContextMenu({
         : undefined,
       onSetLibraryCover: menuKind === 'media'
         ? (fileHash) => {
-            void setCurrentLibraryCover(fileHash).catch((reason) => showErrorNotification({
+            void openCurrentLibraryCoverPicker({
+              media_item_id: itemId ?? -1,
+              file_hash: fileHash,
+              name: name ?? null,
+              pixel_width: width ?? null,
+              pixel_height: height ?? null,
+              mime_type: mime ?? null,
+            }).catch((reason) => showErrorNotification({
               title: 'Could not set library cover',
               message: reason instanceof Error ? reason.message : String(reason),
             }));

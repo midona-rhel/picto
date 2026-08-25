@@ -15,6 +15,9 @@ interface Entry {
   icon: string | null;
   color: string | null;
   imageHash: string | null;
+  imageFocusX: number | null;
+  imageFocusY: number | null;
+  imageZoomPercent: number | null;
 }
 
 /// reference application-style library switcher panel, anchored under the sidebar button:
@@ -52,6 +55,9 @@ export function LibrarySwitcherPopover({
                 icon: config.libraryMeta?.[path]?.icon ?? null,
                 color: config.libraryMeta?.[path]?.color ?? null,
                 imageHash: config.libraryMeta?.[path]?.imageHash ?? null,
+                imageFocusX: config.libraryMeta?.[path]?.imageFocusX ?? null,
+                imageFocusY: config.libraryMeta?.[path]?.imageFocusY ?? null,
+                imageZoomPercent: config.libraryMeta?.[path]?.imageZoomPercent ?? null,
               };
             }),
         );

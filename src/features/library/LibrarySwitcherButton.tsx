@@ -26,7 +26,14 @@ export function LibrarySwitcherButton() {
       .then((config: any) => {
         setName(libraryDisplayName(config.currentPath));
         const m = config.currentPath ? config.libraryMeta?.[config.currentPath] : null;
-        setMeta({ icon: m?.icon ?? null, color: m?.color ?? null, imageHash: m?.imageHash ?? null });
+        setMeta({
+          icon: m?.icon ?? null,
+          color: m?.color ?? null,
+          imageHash: m?.imageHash ?? null,
+          imageFocusX: m?.imageFocusX ?? null,
+          imageFocusY: m?.imageFocusY ?? null,
+          imageZoomPercent: m?.imageZoomPercent ?? null,
+        });
       })
       .catch(() => {});
   }, []);

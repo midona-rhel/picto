@@ -291,6 +291,9 @@ export function createLibraryHostService({
     if ('icon' in meta) existing.icon = meta.icon;
     if ('color' in meta) existing.color = meta.color;
     if ('imageHash' in meta) existing.imageHash = meta.imageHash;
+    if ('imageFocusX' in meta) existing.imageFocusX = meta.imageFocusX;
+    if ('imageFocusY' in meta) existing.imageFocusY = meta.imageFocusY;
+    if ('imageZoomPercent' in meta) existing.imageZoomPercent = meta.imageZoomPercent;
     config.libraryMeta[libraryPath] = existing;
     await saveGlobalConfig(config);
     sendToAllWindows('library-meta-changed', { path: libraryPath });

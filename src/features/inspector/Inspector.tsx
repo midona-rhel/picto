@@ -58,7 +58,7 @@ import { setTagStarred, useTagPreferences } from '../tags/tagPreferences';
 import { tagsController } from '../../controllers/tagsController';
 import type { CanonicalNamespaceSummary } from '../../shared/types/canonical';
 import { IconAutoTag } from '../../shared/ui/icons/sidebar-menu-icons';
-import { setCurrentLibraryCover } from '../library/libraryAppearance';
+import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import { showErrorNotification } from '../../shared/lib/notifications';
 
 const store = getDefaultStore();
@@ -176,7 +176,14 @@ function Preview({
           onRevealInFolder: (value) => { void filesController.revealHashInFolder(value); },
           onOpenNewWindow: (value) => { void windowController.openDetailWindow({ hash: value }); },
         }).concat(buildLibraryCoverContextEntry(hash, () => {
-          void setCurrentLibraryCover(hash).catch((reason) => showErrorNotification({
+          void openCurrentLibraryCoverPicker({
+            media_item_id: -1,
+            file_hash: hash,
+            name: null,
+            pixel_width: null,
+            pixel_height: null,
+            mime_type: null,
+          }).catch((reason) => showErrorNotification({
             title: 'Could not set library cover',
             message: reason instanceof Error ? reason.message : String(reason),
           }));

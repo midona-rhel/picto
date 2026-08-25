@@ -4,13 +4,22 @@ import { LibraryAvatar } from './LibraryAvatar';
 import { IconPicker } from '../../shared/ui/IconPicker';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
 import { listen } from '../../platform/ipc';
+import { MediaCoverDialog } from '../subscriptions/components/SubscriptionCoverDialog';
+import { loadLibraryCoverCandidates, saveLibraryCover } from './libraryAppearance';
 import styles from './LibraryManager.module.css';
 
 interface LibraryConfigResult {
   libraryHistory?: string[];
   pinnedLibraries?: string[];
   lastLibrary?: string | null;
-  libraryMeta?: Record<string, { icon?: string | null; color?: string | null; imageHash?: string | null }>;
+  libraryMeta?: Record<string, {
+    icon?: string | null;
+    color?: string | null;
+    imageHash?: string | null;
+    imageFocusX?: number | null;
+    imageFocusY?: number | null;
+    imageZoomPercent?: number | null;
+  }>;
   currentPath: string | null;
   existsMap: Record<string, boolean>;
 }
@@ -38,6 +47,7 @@ export function LibraryManager() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [coverPath, setCoverPath] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -72,6 +82,9 @@ export function LibraryManager() {
       icon: config.libraryMeta?.[path]?.icon ?? null,
       color: config.libraryMeta?.[path]?.color ?? null,
       imageHash: config.libraryMeta?.[path]?.imageHash ?? null,
+      imageFocusX: config.libraryMeta?.[path]?.imageFocusX ?? null,
+      imageFocusY: config.libraryMeta?.[path]?.imageFocusY ?? null,
+      imageZoomPercent: config.libraryMeta?.[path]?.imageZoomPercent ?? null,
     }));
   }, [config]);
 
@@ -232,6 +245,15 @@ export function LibraryManager() {
                     <button className={styles.btn} onClick={() => setShowIconEditor((value) => !value)} disabled={busy !== null}>
                       {showIconEditor ? 'Done' : 'Change…'}
                     </button>
+                    <span className={styles.detailLabel}>Cover</span>
+                    <button
+                      className={styles.btn}
+                      onClick={() => setCoverPath(selectedEntry.path)}
+                      disabled={busy !== null || !selectedEntry.current}
+                      title={selectedEntry.current ? 'Choose a media item and crop the library cover' : 'Open this library before choosing its media'}
+                    >
+                      Choose…
+                    </button>
                   </div>
                   {showIconEditor ? (
                     <div className={styles.iconEditor}>
@@ -258,6 +280,25 @@ export function LibraryManager() {
           </button>
         </footer>
       </section>
+
+      <MediaCoverDialog<number>
+        target={coverPath && selectedEntry ? { id: coverPath, name: selectedEntry.name } : null}
+        busy={busy !== null}
+        instructions="Select a media item from this library, then adjust its position and zoom."
+        emptyText="This library has no media available for a cover."
+        onLoad={(path, offset) => loadLibraryCoverCandidates(path, offset ?? 0)}
+        onSave={async (path, candidate, crop) => {
+          try {
+            await saveLibraryCover(path, candidate, crop);
+            await refresh();
+            return true;
+          } catch (reason) {
+            setError(reason instanceof Error ? reason.message : String(reason));
+            return false;
+          }
+        }}
+        onClose={() => setCoverPath(null)}
+      />
     </div>
   );
 }

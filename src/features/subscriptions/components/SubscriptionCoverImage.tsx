@@ -40,6 +40,7 @@ export function SubscriptionCoverImage({
   draggable = false,
   onDimensionsChange,
   onError,
+  preferThumbnail = false,
 }: {
   fileHash: string;
   crop: SubscriptionCoverCrop;
@@ -50,14 +51,15 @@ export function SubscriptionCoverImage({
   draggable?: boolean;
   onDimensionsChange?: (dimensions: SubscriptionCoverDimensions) => void;
   onError?: () => void;
+  preferThumbnail?: boolean;
 }) {
   const [dimensions, setDimensions] = useState(fallbackDimensions ?? { width: 1, height: 1 });
-  const [useThumbnail, setUseThumbnail] = useState(false);
+  const [useThumbnail, setUseThumbnail] = useState(preferThumbnail);
 
   useEffect(() => {
-    setUseThumbnail(false);
+    setUseThumbnail(preferThumbnail);
     setDimensions(fallbackDimensions ?? { width: 1, height: 1 });
-  }, [fallbackDimensions?.height, fallbackDimensions?.width, fileHash]);
+  }, [fallbackDimensions?.height, fallbackDimensions?.width, fileHash, preferThumbnail]);
 
   const geometry = subscriptionCoverGeometry(dimensions, crop);
   return (

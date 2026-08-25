@@ -357,8 +357,8 @@ export function SubscriptionsScreen() {
         target={coverTarget}
         busy={busy}
         onLoad={(id, cursor) => subscriptionsController.getCoverCandidates(id, cursor)}
-        onSave={(id, mediaItemId, crop) => act(`cover:${id}`, () => subscriptionsController.setCover(id, {
-          media_item_id: mediaItemId,
+        onSave={(id, candidate, crop) => act(`cover:${id}`, () => subscriptionsController.setCover(id, {
+          media_item_id: candidate.media_item_id,
           focus_x: crop.focusX,
           focus_y: crop.focusY,
           zoom_percent: crop.zoomPercent,

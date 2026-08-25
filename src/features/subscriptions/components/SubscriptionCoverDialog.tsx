@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { SubscriptionCoverCandidate } from '../../../shared/types/generated/application/SubscriptionCoverCandidate';
 import type { SubscriptionCoverCandidateCursor } from '../../../shared/types/generated/application/SubscriptionCoverCandidateCursor';
-import type { SubscriptionCoverCandidatePage } from '../../../shared/types/generated/application/SubscriptionCoverCandidatePage';
 import { mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { showErrorNotification } from '../../../shared/lib/notifications';
 import { GlassModal, modalStyles } from '../../../shared/ui/GlassModal/GlassModal';
@@ -18,30 +17,44 @@ import styles from './SubscriptionCoverDialog.module.css';
 type Target = { id: string; name: string };
 type Crop = { focusX: number; focusY: number; zoomPercent: number };
 
+export type MediaCoverCandidate = SubscriptionCoverCandidate & {
+  mime_type?: string | null;
+};
+
+export interface MediaCoverCandidatePage<TCursor> {
+  candidates: MediaCoverCandidate[];
+  next_cursor: TCursor | null;
+}
+
+export interface MediaCoverDialogProps<TCursor> {
+  target: Target | null;
+  busy: boolean;
+  initialCandidate?: MediaCoverCandidate | null;
+  instructions?: string;
+  emptyText?: string;
+  onLoad: (targetId: string, cursor?: TCursor | null) => Promise<MediaCoverCandidatePage<TCursor>>;
+  onSave: (targetId: string, candidate: MediaCoverCandidate, crop: Crop) => Promise<boolean>;
+  onClose: () => void;
+}
+
 const DEFAULT_CROP: Crop = { focusX: 500, focusY: 500, zoomPercent: 100 };
 
-export function SubscriptionCoverDialog({
+export function MediaCoverDialog<TCursor>({
   target,
   busy,
+  initialCandidate = null,
+  instructions = 'Select one of the images downloaded that has been added to the library.',
+  emptyText = 'No images have been added yet.',
   onLoad,
   onSave,
   onClose,
-}: {
-  target: Target | null;
-  busy: boolean;
-  onLoad: (
-    subscriptionId: string,
-    cursor?: SubscriptionCoverCandidateCursor | null,
-  ) => Promise<SubscriptionCoverCandidatePage>;
-  onSave: (subscriptionId: string, mediaItemId: number, crop: Crop) => Promise<boolean>;
-  onClose: () => void;
-}) {
-  const [candidates, setCandidates] = useState<SubscriptionCoverCandidate[]>([]);
-  const [selected, setSelected] = useState<SubscriptionCoverCandidate | null>(null);
+}: MediaCoverDialogProps<TCursor>) {
+  const [candidates, setCandidates] = useState<MediaCoverCandidate[]>([]);
+  const [selected, setSelected] = useState<MediaCoverCandidate | null>(null);
   const [crop, setCrop] = useState<Crop>(DEFAULT_CROP);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [nextCursor, setNextCursor] = useState<SubscriptionCoverCandidateCursor | null>(null);
+  const [nextCursor, setNextCursor] = useState<TCursor | null>(null);
   const [gridWidth, setGridWidth] = useState(560);
   const [cropDimensions, setCropDimensions] = useState<SubscriptionCoverDimensions>({ width: 1, height: 1 });
   const dragRef = useRef<{ x: number; y: number; focusX: number; focusY: number } | null>(null);
@@ -53,7 +66,7 @@ export function SubscriptionCoverDialog({
   useEffect(() => {
     if (!targetId) return;
     let cancelled = false;
-    setSelected(null);
+    setSelected(initialCandidate);
     setCrop(DEFAULT_CROP);
     setCropDimensions({ width: 1, height: 1 });
     setCandidates([]);
@@ -145,9 +158,14 @@ export function SubscriptionCoverDialog({
     loadMore();
   }, [candidateRowCount, lastVirtualRow, loadMore, loadingMore, nextCursor]);
 
+  useEffect(() => {
+    if (loading || candidates.length > 0 || !nextCursor || loadingMore) return;
+    loadMore();
+  }, [candidates.length, loadMore, loading, loadingMore, nextCursor]);
+
   const commit = async () => {
     if (!target || !selected) return;
-    if (await onSave(target.id, selected.media_item_id, crop)) onClose();
+    if (await onSave(target.id, selected, crop)) onClose();
   };
 
   const setZoom = (zoomPercent: number) => {
@@ -220,6 +238,7 @@ export function SubscriptionCoverDialog({
           >
             <SubscriptionCoverImage
               fileHash={selected.file_hash}
+              preferThumbnail={selected.mime_type != null && !selected.mime_type.startsWith('image/')}
               crop={crop}
               fallbackDimensions={{
                 width: selected.pixel_width ?? 1,
@@ -245,11 +264,11 @@ export function SubscriptionCoverDialog({
         </div>
       ) : (
         <div className={styles.selectStep}>
-          <p className={styles.instructions}>Select one of the images downloaded that has been added to the library.</p>
+          <p className={styles.instructions}>{instructions}</p>
           {loading ? (
             <p className={styles.empty}>Loading…</p>
           ) : candidates.length === 0 ? (
-            <p className={styles.empty}>No images have been added yet.</p>
+            <p className={styles.empty}>{emptyText}</p>
           ) : (
             <div className={styles.candidateGrid} ref={candidateGridRef}>
               <div
@@ -303,4 +322,10 @@ export function SubscriptionCoverDialog({
       )}
     </GlassModal>
   );
+}
+
+export function SubscriptionCoverDialog(
+  props: MediaCoverDialogProps<SubscriptionCoverCandidateCursor>,
+) {
+  return <MediaCoverDialog {...props} />;
 }

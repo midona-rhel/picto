@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react';
 import { IconBooks } from '@tabler/icons-react';
-import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
+import { SubscriptionCoverImage } from '../subscriptions/components/SubscriptionCoverImage';
 import styles from './LibraryAvatar.module.css';
 
 export interface LibraryAppearance {
   icon?: string | null;
   color?: string | null;
   imageHash?: string | null;
+  imageFocusX?: number | null;
+  imageFocusY?: number | null;
+  imageZoomPercent?: number | null;
 }
 
 export function LibraryAvatar({
@@ -30,9 +33,15 @@ export function LibraryAvatar({
       style={{ width: size, height: size, color: appearance.color ?? undefined }}
     >
       {imageHash && !imageFailed ? (
-        <img
+        <SubscriptionCoverImage
           className={styles.image}
-          src={mediaThumbnailUrl(imageHash)}
+          fileHash={imageHash}
+          crop={{
+            focusX: appearance.imageFocusX ?? 500,
+            focusY: appearance.imageFocusY ?? 500,
+            zoomPercent: appearance.imageZoomPercent ?? 100,
+          }}
+          preferThumbnail
           alt=""
           draggable={false}
           onError={() => setImageFailed(true)}

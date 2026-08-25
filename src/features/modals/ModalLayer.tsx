@@ -26,6 +26,7 @@ import { GroupOrganizerModal } from './GroupOrganizerModal';
 import { BatchRenameModal } from './BatchRenameModal';
 import { setItemNames } from '../../controllers/entityMutations';
 import { showErrorNotification } from '../../shared/lib/notifications';
+import { LibraryCoverDialogHost } from '../library/LibraryCoverDialogHost';
 
 export function ModalLayer() {
   const confirm = useAtomValue(confirmModalAtom);
@@ -135,6 +136,8 @@ export function ModalLayer() {
             }));
         }}
       />
+
+      <LibraryCoverDialogHost />
 
       <ConfirmModal
         open={folderImport.open}

@@ -70,6 +70,27 @@ export interface BatchRenameModalState {
 }
 export const batchRenameModalAtom = atom<BatchRenameModalState>({ open: false, items: [] });
 
+export interface LibraryCoverModalState {
+  open: boolean;
+  path: string;
+  name: string;
+  initialCandidate: {
+    media_item_id: number;
+    file_hash: string;
+    name: string | null;
+    pixel_width: number | null;
+    pixel_height: number | null;
+    mime_type?: string | null;
+  } | null;
+}
+
+export const libraryCoverModalAtom = atom<LibraryCoverModalState>({
+  open: false,
+  path: '',
+  name: '',
+  initialCandidate: null,
+});
+
 // ── Folder import modal (shown when dropping a folder into the app) ──
 export interface FolderImportModalState {
   open: boolean;

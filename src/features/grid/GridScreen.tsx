@@ -85,7 +85,7 @@ import { GridFilterToolbar } from './GridFilterMenu';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
 import { addQuickAccess, removeQuickAccess, reorderQuickAccess, useQuickAccess } from '../sidebar/quickAccessPreferences';
-import { setCurrentLibraryCover } from '../library/libraryAppearance';
+import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import {
   availableBulkFolderMoveTargets,
   availableFolderMoveTargets,
@@ -1222,7 +1222,14 @@ export function GridScreen({
               void filesController.regenerateThumbnailsBatch(hashes);
             },
             onSetLibraryCover: (hash) => {
-              void setCurrentLibraryCover(hash).catch((reason) => showErrorNotification({
+              void openCurrentLibraryCoverPicker(singleItem ? {
+                media_item_id: singleItem.item_id,
+                file_hash: hash,
+                name: singleItem.name,
+                pixel_width: singleItem.pixel_width,
+                pixel_height: singleItem.pixel_height,
+                mime_type: singleItem.display_mime_type,
+              } : null).catch((reason) => showErrorNotification({
                 title: 'Could not set library cover',
                 message: reason instanceof Error ? reason.message : String(reason),
               }));

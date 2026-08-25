@@ -118,7 +118,7 @@ describe('SubscriptionCoverDialog', () => {
 
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(
       '7',
-      42,
+      expect.objectContaining({ media_item_id: 42 }),
       expect.objectContaining({ zoomPercent: 105 }),
     ));
   });
@@ -149,7 +149,7 @@ describe('SubscriptionCoverDialog', () => {
 
     await waitFor(() => expect(onSave).toHaveBeenCalledWith(
       '7',
-      42,
+      expect.objectContaining({ media_item_id: 42 }),
       expect.objectContaining({ focusX: expect.any(Number), focusY: expect.any(Number) }),
     ));
     const savedCrop = onSave.mock.calls[0]?.[2];
