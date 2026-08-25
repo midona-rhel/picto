@@ -1,12 +1,4 @@
 import { useCallback, useEffect, useMemo, useState, type SyntheticEvent } from 'react';
-import {
-  IconClipboardCopy,
-  IconCopy,
-  IconLink,
-  IconPhoto,
-  IconRefresh,
-  IconTrash,
-} from '@tabler/icons-react';
 import { useSetAtom } from 'jotai';
 import { viewerController } from '../../controllers/viewerController';
 import { MediaView } from '../viewer/MediaView';
@@ -14,7 +6,7 @@ import { QuickLook } from '../viewer/QuickLook';
 import { DetailMediaRenderer } from '../viewer/document/DetailMediaRenderer';
 import { detailRendererKind } from '../viewer/document/detailRendererKind';
 import { CanvasGrid } from '../grid/canvas/CanvasGrid';
-import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu';
+import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
 import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
 import type { MediaDetails } from '../../shared/types/generated/application/MediaDetails';
@@ -23,15 +15,19 @@ import { ThumbnailImage } from '../../shared/ui/ThumbnailImage/ThumbnailImage';
 import { libraryInvalidation } from '../../runtime/libraryInvalidation';
 import { detachItems, reorderGroup, ungroup } from '../../platform/entityApi';
 import { viewerDisplayControlsAtom, viewerDisplayStateAtom } from '../../state/viewer';
-import { confirmModalAtom } from '../../state/modals';
+import { batchRenameModalAtom, confirmModalAtom, exportModalAtom } from '../../state/modals';
+import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor, tagSelectPortalAtom } from '../../state/portals';
 import { filesController } from '../../controllers/filesController';
 import { windowController } from '../../controllers/windowController';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
-import { buildEntityOpenContextEntries } from '../grid/gridContextMenu';
+import { buildTileContextMenu } from '../grid/gridContextMenu';
 import styles from './GroupSurface.module.css';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
-import { DeselectAllIcon, GroupRemoveIcon, SelectAllIcon } from '../../shared/ui/icons/group-icons';
+import { GroupRemoveIcon, SelectAllIcon } from '../../shared/ui/icons/group-icons';
+import * as entityMutations from '../../controllers/entityMutations';
+import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
+import { showErrorNotification } from '../../shared/lib/notifications';
 
 export interface GroupSurfaceProps {
   groupId: number;
@@ -59,98 +55,6 @@ function memberToGridItem(details: ItemDetails, media: MediaDetails): CanonicalE
     rating: media.rating,
     media_count: 1,
   };
-}
-
-function memberMenu(
-  selected: CanonicalEntityGridItem[],
-  totalCount: number,
-  onOpen: () => void,
-  selectionEnabled: boolean,
-  onSelectAll: () => void,
-  onDeselectAll: () => void,
-  onCopyTags: (() => void) | null,
-  onRemove: () => void,
-  onTrash: () => void,
-): MenuEntry[] {
-  const count = selected.length;
-  const single = count === 1 ? selected[0] : null;
-  return [
-    ...(single ? [
-      {
-        label: 'Open',
-        icon: <IconPhoto size={15} />,
-        action: onOpen,
-      },
-      ...buildEntityOpenContextEntries({
-        hash: single.display_file_hash,
-        onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
-        onRevealInFolder: (hash) => { void filesController.revealHashInFolder(hash); },
-        onOpenNewWindow: (hash) => { void windowController.openDetailWindow({
-          hash,
-          width: single.pixel_width,
-          height: single.pixel_height,
-        }); },
-      }),
-      { separator: true } as const,
-      {
-        label: 'Copy',
-        icon: <IconCopy size={15} />,
-        action: () => { void filesController.copyFileForHash(single.display_file_hash); },
-      },
-      {
-        label: 'Copy File Path',
-        icon: <IconClipboardCopy size={15} />,
-        action: () => { void filesController.copyFilePath(single.display_file_hash); },
-      },
-      ...(single.name ? [{
-        label: 'Copy Name',
-        icon: <IconClipboardCopy size={15} />,
-        action: () => filesController.copyText(single.name!),
-      }] : []),
-      {
-        label: 'Copy as Link',
-        icon: <IconLink size={15} />,
-        action: () => filesController.copyText(mediaFileUrl(single.display_file_hash, single.display_mime_type)),
-      },
-      ...(onCopyTags ? [{
-        label: 'Copy Tags',
-        icon: <IconClipboardCopy size={15} />,
-        action: onCopyTags,
-      }] : []),
-      { separator: true } as const,
-    ] : []),
-    {
-      label: count > 1 ? `Regenerate ${count} Thumbnails` : 'Regenerate Thumbnail',
-      icon: <IconRefresh size={15} />,
-      action: () => { void filesController.regenerateThumbnailsBatch(selected.map((item) => item.display_file_hash)); },
-    },
-    { separator: true },
-    ...(selectionEnabled ? [
-      {
-        label: 'Select All',
-        icon: <SelectAllIcon size={15} />,
-        action: onSelectAll,
-        disabled: totalCount === 0 || count === totalCount,
-      },
-      {
-        label: 'Deselect All',
-        icon: <DeselectAllIcon size={15} />,
-        action: onDeselectAll,
-        disabled: count === 0,
-      },
-      { separator: true } as const,
-    ] : []),
-    {
-      label: count > 1 ? `Remove ${count} from Group` : 'Remove from Group',
-      icon: <GroupRemoveIcon size={15} />,
-      action: onRemove,
-    },
-    {
-      label: count > 1 ? `Move ${count} to Trash` : 'Move to Trash',
-      icon: <IconTrash size={15} />,
-      action: onTrash,
-    },
-  ];
 }
 
 export function groupSelectionForClick(
@@ -230,6 +134,11 @@ export function GroupSurface({
   const setDisplayState = useSetAtom(viewerDisplayStateAtom);
   const setDisplayControls = useSetAtom(viewerDisplayControlsAtom);
   const setConfirmModal = useSetAtom(confirmModalAtom);
+  const setTagPortal = useSetAtom(tagSelectPortalAtom);
+  const setFolderPortal = useSetAtom(folderPickerPortalAtom);
+  const setAiPortal = useSetAtom(aiTaggerPortalAtom);
+  const setExportModal = useSetAtom(exportModalAtom);
+  const setBatchRenameModal = useSetAtom(batchRenameModalAtom);
   const members = useMemo(
     () => details?.media.map((media) => memberToGridItem(details, media)) ?? [],
     [details],
@@ -389,24 +298,102 @@ export function GroupSurface({
       if (!selectedItemIds.has(item.item_id)) setSelectionAnchorId(item.item_id);
     }
     const openIndex = members.findIndex((member) => member.item_id === item.item_id);
-    contextMenu.openAt(position, memberMenu(
-      selected,
-      members.length,
-      () => setViewerIndex(openIndex),
-      selectionEnabled,
-      selectAll,
-      deselectAll,
-      selected.length === 1
-        ? () => {
-            const tags = mediaByItemId.get(selected[0].item_id)?.tags ?? [];
-            filesController.copyText(JSON.stringify(tags));
-            (window as Window & { __pictoClipboardTags?: string[] }).__pictoClipboardTags = tags;
-          }
-        : null,
-      () => { void detachMembers(selected); },
-      () => { void detachMembers(selected, 'trash'); },
-    ));
-  }, [contextMenu, deselectAll, detachMembers, mediaByItemId, members, selectAll, selectedItemIds, selectedItems]);
+    const target = { kind: 'explicit' as const, item_ids: selected.map((entry) => entry.item_id) };
+    const single = selected.length === 1 ? selected[0] : null;
+    const copiedTags = selected.length === 0 ? [] : selected
+      .map((entry) => new Set(mediaByItemId.get(entry.item_id)?.tags ?? []))
+      .reduce((shared, tags) => new Set([...shared].filter((tag) => tags.has(tag))));
+    const entries = buildTileContextMenu({
+      surface: selectionEnabled ? 'grid' : 'viewer',
+      selectionCount: selected.length,
+      querySelectionActive: false,
+      aiTagEnabled: selected.every((entry) => entry.display_mime_type.startsWith('image/')),
+      singleSelected: single != null,
+      singleHash: single?.display_file_hash ?? null,
+      singleKind: single?.kind ?? null,
+      singleName: single?.name ?? null,
+      singleMime: single?.display_mime_type ?? null,
+      containsGroup: false,
+      scopeKind: null,
+      statusFilter: null,
+      loadedCount: members.length,
+      onSelectAll: selectAll,
+      onDeselectAll: deselectAll,
+      onOpen: single ? () => setViewerIndex(openIndex) : undefined,
+      onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
+      onRevealInFolder: (hash) => { void filesController.revealHashInFolder(hash); },
+      onOpenNewWindow: single ? (hash) => { void windowController.openDetailWindow({
+        hash,
+        width: single.pixel_width,
+        height: single.pixel_height,
+      }); } : undefined,
+      onCopyFile: (hash) => { void filesController.copyFileForHash(hash); },
+      onCopyFilePath: (hash) => { void filesController.copyFilePath(hash); },
+      onCopyName: (name) => filesController.copyText(name),
+      onCopyLink: (link) => filesController.copyText(link),
+      onAddToFolder: () => setFolderPortal({ open: true, target, anchor: inspectorAnchor() }),
+      onOpenTagSelect: () => setTagPortal({ open: true, target, anchor: inspectorAnchor() }),
+      onOpenAiTagger: () => setAiPortal({ open: true, target, anchor: inspectorAnchor() }),
+      onCopyTags: () => {
+        const tags = [...copiedTags];
+        filesController.copyText(JSON.stringify(tags));
+        (window as Window & { __pictoClipboardTags?: string[] }).__pictoClipboardTags = tags;
+      },
+      onPasteTags: () => {
+        const tags = (window as Window & { __pictoClipboardTags?: string[] }).__pictoClipboardTags;
+        if (tags?.length) void entityMutations.addTargetTags(target, tags);
+      },
+      hasClipboardTags: Boolean((window as Window & { __pictoClipboardTags?: string[] }).__pictoClipboardTags?.length),
+      onSetRating: (rating) => { void entityMutations.setTargetRating(target, rating); },
+      onExport: () => setExportModal({ open: true, fileCount: selected.length, target }),
+      onExportOriginals: () => {
+        void (async () => {
+          const result = await (window as any).picto.dialog.open({
+            properties: ['openDirectory'], multiple: false, title: 'Export originals',
+          });
+          const outputDir = typeof result === 'string' ? result : result?.[0];
+          if (outputDir) await filesController.exportMedia(target, { output_dir: outputDir, format: 'original' });
+        })();
+      },
+      onBatchRename: selected.length > 1 ? () => setBatchRenameModal({
+        open: true,
+        items: selected.map((entry) => ({ item_id: entry.item_id, name: entry.name ?? 'Untitled' })),
+      }) : undefined,
+      onSearchByImage: (engine, hash) => {
+        const bases: Record<string, string> = {
+          tineye: 'https://tineye.com/search/?url=',
+          saucenao: 'https://saucenao.com/search.php?url=',
+          yandex: 'https://yandex.com/images/search?rpt=imageview&url=',
+          bing: 'https://www.bing.com/images/search?view=detailv2&iss=sbi&form=SBIVSP&sbisrc=UrlPaste&q=imgurl:',
+        };
+        if (bases[engine]) void (window as any).picto?.shell?.openExternal(`${bases[engine]}${encodeURIComponent(mediaThumbnailUrl(hash))}`);
+      },
+      onRegenerateThumbnails: () => { void filesController.regenerateThumbnailsBatch(selected.map((entry) => entry.display_file_hash)); },
+      onSetLibraryCover: single ? (hash) => {
+        void openCurrentLibraryCoverPicker({
+          media_item_id: single.item_id,
+          file_hash: hash,
+          name: single.name,
+          pixel_width: single.pixel_width,
+          pixel_height: single.pixel_height,
+          mime_type: single.display_mime_type,
+        }).catch((reason) => showErrorNotification({
+          title: 'Could not set library cover',
+          message: reason instanceof Error ? reason.message : String(reason),
+        }));
+      } : undefined,
+      onMoveToTrash: () => { void detachMembers(selected, 'trash'); },
+    });
+    const removeEntry = {
+      label: selected.length > 1 ? `Remove ${selected.length} from Group` : 'Remove from Group',
+      icon: <GroupRemoveIcon size={15} />,
+      action: () => { void detachMembers(selected); },
+    };
+    const trashIndex = entries.findIndex((entry) => 'label' in entry && entry.label.startsWith('Move') && entry.label.endsWith('to Trash'));
+    if (trashIndex >= 0) entries.splice(trashIndex, 0, { separator: true }, removeEntry);
+    else entries.push({ separator: true }, removeEntry);
+    contextMenu.openAt(position, entries);
+  }, [contextMenu, deselectAll, detachMembers, mediaByItemId, members, selectAll, selectedItemIds, selectedItems, setAiPortal, setBatchRenameModal, setExportModal, setFolderPortal, setTagPortal]);
 
   const confirmUngroup = useCallback(() => {
     setConfirmModal({

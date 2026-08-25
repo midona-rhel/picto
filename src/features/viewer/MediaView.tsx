@@ -227,10 +227,12 @@ export function MediaView({
   if (!currentItem) return null;
 
   const thumbUrl = mediaThumbnailUrl(thumbHash);
+  const presentationReady = !isImage || pipeline.thumbSettled;
 
   return (
     <div
-      className={styles.mediaView}
+      className={`${styles.mediaView} ${presentationReady ? styles.mediaViewReady : ''}`}
+      data-media-view-ready={presentationReady ? 'true' : 'false'}
       onContextMenuCapture={(event) => {
         if (!(event.target as Element).closest('[data-flash-player]')) contextMenu.open(event);
       }}

@@ -19,6 +19,7 @@ function PipelineHarness(props: MediaPipelineInput) {
       data-thumb-url={pipeline.thumbUrl}
       data-full-url={pipeline.fullUrl}
       data-full-visible={String(pipeline.fullVisible)}
+      data-thumb-settled={String(pipeline.thumbSettled)}
     />
     <img data-testid="full-image" alt="" onLoad={pipeline.handleFullLoad} />
   </>;
@@ -65,12 +66,25 @@ describe('useMediaImagePipeline', () => {
     expect(screen.getByTestId('pipeline')).toHaveAttribute('data-displayed-hash', 'first');
     expect(screen.getByTestId('pipeline')).toHaveAttribute('data-thumb-url', 'media://localhost/thumb/first-thumb.jpg');
     expect(screen.getByTestId('pipeline')).toHaveAttribute('data-full-url', '');
+    expect(screen.getByTestId('pipeline')).toHaveAttribute('data-thumb-settled', 'false');
+
+    act(() => { images[0].onload?.(); });
+    expect(screen.getByTestId('pipeline')).toHaveAttribute('data-thumb-settled', 'true');
 
     act(() => vi.advanceTimersByTime(99));
     expect(screen.getByTestId('pipeline')).toHaveAttribute('data-full-url', '');
 
     act(() => vi.advanceTimersByTime(1));
     expect(screen.getByTestId('pipeline')).toHaveAttribute('data-full-url', 'media://localhost/file/first-thumb.png');
+  });
+
+  it('settles a failed preview so the viewer cannot remain transparent forever', () => {
+    render(<PipelineHarness {...input('broken')} />);
+
+    act(() => { images[0].onerror?.(); });
+
+    expect(screen.getByTestId('pipeline')).toHaveAttribute('data-thumb-settled', 'true');
+    expect(screen.getByTestId('pipeline')).toHaveAttribute('data-displayed-hash', 'broken');
   });
 
   it('swaps on a ready hash change and ignores stale thumbnail loads', () => {

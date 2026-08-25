@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   copyFilePath: vi.fn(),
   copyText: vi.fn(),
   regenerateThumbnailsBatch: vi.fn(),
+  openLibraryCoverPicker: vi.fn(() => Promise.resolve()),
   detailMediaRenderer: vi.fn(),
 }));
 
@@ -44,6 +45,9 @@ vi.mock('../../controllers/filesController', () => ({
 }));
 vi.mock('../../controllers/windowController', () => ({
   windowController: { openDetailWindow: mocks.openDetailWindow },
+}));
+vi.mock('../library/libraryAppearance', () => ({
+  openCurrentLibraryCoverPicker: mocks.openLibraryCoverPicker,
 }));
 vi.mock('../viewer/MediaView', () => ({
   MediaView: ({ currentIndex, backLabel, onClose }: { currentIndex: number; backLabel?: string; onClose: () => void }) => (
@@ -228,6 +232,22 @@ describe('GroupSurface', () => {
       mediaMuted: false,
     }));
     expect(document.querySelector('[data-group-member="3"] > video')).toBeNull();
+  });
+
+  it('uses the shared media actions for a member without enabling reader selection', async () => {
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+
+    fireEvent.contextMenu(document.querySelector('[data-group-member="1"]')!);
+
+    expect(await screen.findByRole('button', { name: 'Set as Library Cover' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add Tags' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Select All' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Set as Library Cover' }));
+    expect(mocks.openLibraryCoverPicker).toHaveBeenCalledWith(expect.objectContaining({
+      media_item_id: 1,
+      file_hash: 'one',
+    }));
   });
 
   it('shows member thumbnails before revealing decoded full images', async () => {

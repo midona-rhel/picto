@@ -44,6 +44,7 @@
 
 .mediaFrame {
   position: relative;
+  box-sizing: border-box;
   width: 100%;
   min-height: 180px;
 }
@@ -55,6 +56,19 @@
   max-width: 100%;
   min-height: 180px;
   contain: layout paint;
+}
+
+.imageFrame,
+.mediaFrame {
+  overflow: hidden;
+  border-top: var(--glass-border-top);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+  border-radius: var(--radius-lg);
+  background: var(--glass-bg);
+  box-shadow: var(--shadow-panel);
+  backdrop-filter: var(--glass-blur);
 }
 
 .imageFrame img {

@@ -10,6 +10,12 @@
   color: var(--color-text-primary);
   font-family: var(--font-family-ui);
   font-weight: var(--font-weight-regular);
+  opacity: 0;
+  transition: opacity 130ms ease-out;
+}
+
+.mediaViewReady {
+  opacity: 1;
 }
 
 /* Zoom container — the viewport for pan/zoom. overflow:hidden clips. */

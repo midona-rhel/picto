@@ -29,6 +29,8 @@ export interface MediaPipelineOutput {
   thumbUrl: string;
   fullUrl: string;
   thumbLoaded: boolean;
+  /** The first thumbnail request has either decoded or failed, so an opaque viewer can paint safely. */
+  thumbSettled: boolean;
   fullVisible: boolean;
   handleThumbLoad: (e: SyntheticEvent<HTMLImageElement>) => void;
   handleFullLoad: (e: SyntheticEvent<HTMLImageElement>) => void;
@@ -48,6 +50,7 @@ export function useMediaImagePipeline({
   const [thumbUrl, setThumbUrl] = useState('');
   const [fullUrl, setFullUrl] = useState('');
   const [thumbLoaded, setThumbLoaded] = useState(false);
+  const [thumbSettled, setThumbSettled] = useState(false);
   const [fullVisible, setFullVisible] = useState(false);
 
   // Preload the next thumbnail in the background. Only swap when ready.
@@ -57,6 +60,7 @@ export function useMediaImagePipeline({
       setDisplayedThumbnailHash(null);
       setThumbUrl('');
       setFullUrl('');
+      setThumbSettled(false);
       return;
     }
 
@@ -70,6 +74,7 @@ export function useMediaImagePipeline({
       setThumbUrl('');
       setFullUrl('');
       setThumbLoaded(true);
+      setThumbSettled(true);
       setFullVisible(false);
       return;
     }
@@ -84,6 +89,7 @@ export function useMediaImagePipeline({
       setDisplayedThumbnailHash(requestedThumbnailHash);
       setThumbUrl(newThumbUrl);
       setThumbLoaded(true);
+      setThumbSettled(true);
       setFullVisible(false);
       setFullUrl('');
     };
@@ -98,6 +104,7 @@ export function useMediaImagePipeline({
       setDisplayedThumbnailHash(requestedThumbnailHash);
       setThumbUrl(newThumbUrl);
       setThumbLoaded(false);
+      setThumbSettled(true);
       setFullVisible(false);
       setFullUrl('');
     };
@@ -134,7 +141,10 @@ export function useMediaImagePipeline({
 
   const handleThumbLoad = useCallback((e: SyntheticEvent<HTMLImageElement>) => {
     const img = e.currentTarget;
-    const reveal = () => setThumbLoaded(true);
+    const reveal = () => {
+      setThumbLoaded(true);
+      setThumbSettled(true);
+    };
     if (typeof img.decode === 'function') img.decode().then(reveal).catch(reveal);
     else reveal();
   }, []);
@@ -149,5 +159,5 @@ export function useMediaImagePipeline({
     else { reveal(); }
   }, []);
 
-  return { displayedHash, thumbUrl, fullUrl, thumbLoaded, fullVisible, handleThumbLoad, handleFullLoad };
+  return { displayedHash, thumbUrl, fullUrl, thumbLoaded, thumbSettled, fullVisible, handleThumbLoad, handleFullLoad };
 }
