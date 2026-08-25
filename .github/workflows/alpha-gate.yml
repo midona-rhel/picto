@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_INCREMENTAL: 0
@@ -25,15 +25,15 @@ jobs:
     name: alpha:verify
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: |
             core -> target
@@ -45,7 +45,6 @@ jobs:
           sudo apt-get install -y \
             pkg-config \
             libdbus-1-dev \
-            liblcms2-dev \
             libssl-dev \
             libclang-dev \
             libfuse2 \
@@ -68,7 +67,6 @@ jobs:
     name: alpha:package + alpha:smoke (${{ matrix.platform }})
     needs: alpha-verify
     if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
-    continue-on-error: ${{ github.event_name == 'pull_request' }}
     strategy:
       fail-fast: false
       matrix:
@@ -85,27 +83,23 @@ jobs:
 
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 20
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
 
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@4360b52568e2003a75bf9bc1d59f33a8e3fc893c # stable
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@49a0bdc70d2e1b713ca9e2869b211fcce03d3c1c # v2
         with:
           workspaces: |
             core -> target
             native/picto-node -> target
-
-      - name: Install system deps (macOS)
-        if: runner.os == 'macOS'
-        run: brew install lcms2 pkg-config
 
       - name: Install system deps (Linux)
         if: runner.os == 'Linux'
@@ -114,7 +108,6 @@ jobs:
           sudo apt-get install -y \
             pkg-config \
             libdbus-1-dev \
-            liblcms2-dev \
             libssl-dev \
             libclang-dev \
             libfuse2 \
@@ -137,10 +130,36 @@ jobs:
         working-directory: native/picto-node
         run: npm ci
 
+      - name: Require release signing credentials
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+        run: |
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            test -n "$MAC_CSC_LINK" && test -n "$MAC_CSC_KEY_PASSWORD"
+            test -n "$APPLE_API_KEY" && test -n "$APPLE_API_KEY_ID" && test -n "$APPLE_API_ISSUER"
+          elif [ "${{ runner.os }}" = "Windows" ]; then
+            test -n "$WIN_CSC_LINK" && test -n "$WIN_CSC_KEY_PASSWORD"
+          fi
+
       - name: Package alpha artifacts
         run: npm run alpha:package
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_LINK: ${{ runner.os == 'macOS' && secrets.MAC_CSC_LINK || '' }}
+          CSC_KEY_PASSWORD: ${{ runner.os == 'macOS' && secrets.MAC_CSC_KEY_PASSWORD || '' }}
+          APPLE_API_KEY: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY || '' }}
+          APPLE_API_KEY_ID: ${{ runner.os == 'macOS' && secrets.APPLE_API_KEY_ID || '' }}
+          APPLE_API_ISSUER: ${{ runner.os == 'macOS' && secrets.APPLE_API_ISSUER || '' }}
+          WIN_CSC_LINK: ${{ runner.os == 'Windows' && secrets.WIN_CSC_LINK || '' }}
+          WIN_CSC_KEY_PASSWORD: ${{ runner.os == 'Windows' && secrets.WIN_CSC_KEY_PASSWORD || '' }}
 
       - name: Run alpha smoke (Linux)
         if: runner.os == 'Linux'
@@ -151,7 +170,7 @@ jobs:
         run: npm run alpha:smoke -- --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
 
       - name: Upload package artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: picto-${{ matrix.artifact }}
           path: |
@@ -160,31 +179,33 @@ jobs:
             dist/*.AppImage
             dist/*.deb
             dist/*.exe
-          if-no-files-found: warn
+          if-no-files-found: error
 
       - name: Upload alpha smoke report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: alpha-smoke-${{ matrix.platform }}
           path: artifacts/alpha-smoke/${{ matrix.platform }}.json
-          if-no-files-found: warn
+          if-no-files-found: error
 
   alpha-release-assets:
     name: Attach Release Assets
     needs: alpha-package
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - name: Download package artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           path: release-artifacts
           pattern: picto-*
           merge-multiple: true
 
       - name: Attach assets to GitHub release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ github.ref_name }}
           prerelease: true

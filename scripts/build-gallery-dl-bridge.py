@@ -15,6 +15,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from python_license_notices import write_python_license_notices
+
 
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "scripts" / "gallery_dl_bridge.py"
@@ -113,6 +115,7 @@ def build(output_dir: Path, platform_name: str | None, dry_run: bool) -> Path:
 
         output_path.unlink(missing_ok=True)
         shutil.copy2(built_path, output_path)
+        write_python_license_notices(output_dir / "THIRD_PARTY_LICENSES.txt")
         if os.name != "nt":
             output_path.chmod(output_path.stat().st_mode | 0o111)
 

@@ -10,11 +10,13 @@ const packageManifest = JSON.parse(await readFile(resolve(source, 'package.json'
 if (rootManifest.dependencies?.['@ruffle-rs/ruffle'] !== packageManifest.version) {
   throw new Error(`Ruffle must be pinned exactly; expected ${rootManifest.dependencies?.['@ruffle-rs/ruffle']}, installed ${packageManifest.version}.`);
 }
-const assets = (await readdir(source)).filter((name) => name.endsWith('.js') || name.endsWith('.wasm'));
+const isRuntimeAsset = (name) => name.endsWith('.js') || name.endsWith('.wasm');
+const isLicenseAsset = (name) => name.startsWith('LICENSE');
+const assets = (await readdir(source)).filter((name) => isRuntimeAsset(name) || isLicenseAsset(name));
 
 await mkdir(destination, { recursive: true });
 for (const name of await readdir(destination)) {
-  if ((name.endsWith('.js') || name.endsWith('.wasm')) && !assets.includes(name)) {
+  if ((isRuntimeAsset(name) || isLicenseAsset(name)) && !assets.includes(name)) {
     await unlink(resolve(destination, name));
   }
 }

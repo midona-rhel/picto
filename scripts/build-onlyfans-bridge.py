@@ -11,6 +11,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from python_license_notices import write_python_license_notices
+
 ROOT = Path(__file__).resolve().parents[1]
 BRIDGE = ROOT / "scripts" / "onlyfans_bridge.py"
 REQUIREMENTS = ROOT / "scripts" / "onlyfans-bridge-requirements.txt"
@@ -75,6 +77,7 @@ def build(output: Path, platform: str | None, dry_run: bool) -> Path:
         if not built.is_file(): raise SystemExit(f"PyInstaller did not produce {built}")
         target.unlink(missing_ok=True)
         shutil.copyfile(built, target)
+        write_python_license_notices(output.resolve() / "THIRD_PARTY_LICENSES.txt")
         if os.name != "nt": target.chmod(target.stat().st_mode | 0o111)
         if sys.platform == "darwin":
             run(["codesign", "--force", "--sign", "-", str(target)])

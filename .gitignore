@@ -2,6 +2,7 @@
 node_modules/
 dist/
 coverage/
+.vite/
 *.tsbuildinfo
 
 # Rust and native-addon build output

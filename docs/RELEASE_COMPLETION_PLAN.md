@@ -4,7 +4,8 @@
 
 Finish Picto around one understandable backend: SQLite truth, rebuildable bitmap projections, one
 application operation path, one compact invalidation contract, and one durable subscription worker.
-Collections are first-class library items. Cloud sync is deferred from this release.
+Collections are first-class library items. Cloud Sync and Tutorials are separate pre-release
+integration workstreams and remain release blockers until their focused gates pass.
 
 ## Release Rules
 
@@ -55,7 +56,7 @@ Collections are first-class library items. Cloud sync is deferred from this rele
 - Finish duplicates with deterministic quality comparison, metadata/provenance preservation, and
   safe collection-aware merge behavior.
 - Finish tag management and durable automatic AI tagging.
-- Keep Picto's accepted-format registry aligned with reference application's documented format matrix. Accepted
+- Keep Picto's accepted-format registry aligned with the product's documented format matrix. Accepted
   files are preserved even when Picto has no detail renderer yet. The current matrix is:
   - Image/texture: `bmp`, `gif`, `heic`, `heif`, `hif`, `icns`, `ico`, `jpeg`, `jpg`, `jpe`,
     `jfif`, `png`, `svg`, `tif`, `tiff`, `webp`, `avif`, `base64`, `insp`, `jxl`, `dds`, `exr`,
@@ -73,9 +74,7 @@ Collections are first-class library items. Cloud sync is deferred from this rele
     `ppt`, `pptx`, `xls`, `xlsx`, `doc`, `docx`, `eddx`, `emmx`, `html`, `mhtml`, `url`.
   - Explicit extension additions: `zip` (expand to collection), `epub`, `swf`, `eps`, `livp`,
     LUT (`cube`, `3dl`), and lighting photometry (`ies`).
-  Source: https://en.reference application.cool/support/article/what-file-formats-does-reference application-support
-  reference application extension inventory: https://community-en.reference application.cool/plugins/format
-- Treat the reference application plugin screenshots as a behavior backlog, not packages to copy. Candidate
+- Treat external format research as a behavior backlog, not code or assets to copy. Candidate
   Picto-native actions: custom export; Live Photo, SWF, JXL, EPS, EPUB, and video-format support;
   FFmpeg/media-info dependencies; UTF-8 repair; video-frame export; combine images; OCR/copy text;
   crop; video-to-GIF; image comparison; EXIF; histogram; format conversion; reverse/high-resolution/
@@ -83,7 +82,12 @@ Collections are first-class library items. Cloud sync is deferred from this rele
   Each accepted item needs a separate behavior decision before implementation.
 - Finish deletion, recently viewed, folder/smart-folder behavior, and measured 100k-1M performance.
 - Keep OnlyFans as a separate source runner using the same normalized subscription contract.
-- Defer cloud sync, oplog, replay, conflict handling, and sync UI until after this release.
+- Integrate Cloud Sync only through committed application operations and revision events. Its oplog,
+  replay, conflict handling, credentials, and UI need an isolated persistence and packaged-smoke
+  gate before release.
+- Integrate Tutorials against stable navigation/command identifiers without duplicating product
+  surfaces or using synthetic host input. Accessibility, dismissal, restart, and completion-state
+  behavior need a focused gate before release.
 
 ## Phase 5: Release Gate and Cleanup
 
@@ -100,5 +104,6 @@ Collections are first-class library items. Cloud sync is deferred from this rele
   and subscription worker.
 - Collections, All/Inbox/Trash, folders, smart folders, sidebar counts, grid counts, tags,
   duplicates, subscriptions, and restart recovery agree on persisted state.
-- Cloud sync is absent from the release build and documentation.
+- Cloud Sync and Tutorials pass their dedicated pre-release gates without bypassing application
+  operations or duplicating product UI.
 - No pre-1.0 migration code exists.

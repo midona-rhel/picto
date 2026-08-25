@@ -16,14 +16,18 @@ DEST_DIR="vendor/ffmpeg"
 FFMPEG_VERSION="8.0.1"
 GYAN_VERSION="8.0.1"
 GYAN_WIN64_ZIP_URL="https://github.com/GyanD/codexffmpeg/releases/download/${GYAN_VERSION}/ffmpeg-${GYAN_VERSION}-full_build.zip"
+GYAN_WIN64_ZIP_SHA256="467cde100a47ed4b03a897988aeb4a296890c1e2b2d2864204657d002bc5fb90"
 
 # Pinned Martin-Riedl release URLs (8.0.1)
-MAC_AMD64_FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/amd64/1766437297_8.0.1/ffmpeg.zip"
-MAC_AMD64_FFPROBE_URL="https://ffmpeg.martin-riedl.de/download/macos/amd64/1766437297_8.0.1/ffprobe.zip"
 MAC_ARM64_FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1766430132_8.0.1/ffmpeg.zip"
 MAC_ARM64_FFPROBE_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1766430132_8.0.1/ffprobe.zip"
 LINUX_AMD64_FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/linux/amd64/1766430728_8.0.1/ffmpeg.zip"
 LINUX_AMD64_FFPROBE_URL="https://ffmpeg.martin-riedl.de/download/linux/amd64/1766430728_8.0.1/ffprobe.zip"
+
+MAC_ARM64_FFMPEG_SHA256="c56f4e2b2ce26a61becf890d8da3415347a1d7d4418cb514915f21612358b790"
+MAC_ARM64_FFPROBE_SHA256="ad74fb26500f9a67864611856a655636d910b47a21c9ee2f2f7bc7cbaa45bbb2"
+LINUX_AMD64_FFMPEG_SHA256="90cdb6066c3b11489df4b8bae1999d2e056e66e728fc482834db92769bf5d202"
+LINUX_AMD64_FFPROBE_SHA256="b31fb885381389186a6220ad53ec9d60b5edc3eb94a2b18470907f453fbf664a"
 
 # ── Detect platform ──────────────────────────────────────────────────────
 detect_platform() {
@@ -35,7 +39,7 @@ detect_platform() {
     Darwin)
       case "$arch" in
         arm64) echo "darwin-arm64" ;;
-        x86_64) echo "darwin-x64" ;;
+        x86_64) echo "Intel macOS is not supported" >&2; exit 1 ;;
         *) echo "Unsupported macOS arch: $arch" >&2; exit 1 ;;
       esac
       ;;
@@ -69,23 +73,36 @@ download() {
   curl -fSL --progress-bar -o "$dest" "$url"
 }
 
+verify_sha256() {
+  local file="$1" expected="$2" actual
+  if command -v sha256sum >/dev/null 2>&1; then
+    actual="$(sha256sum "$file" | awk '{print $1}')"
+  else
+    actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+  fi
+  if [ "$actual" != "$expected" ]; then
+    echo "SHA-256 mismatch for $file" >&2
+    echo "  expected: $expected" >&2
+    echo "  received: $actual" >&2
+    exit 1
+  fi
+}
+
 # ── Platform-specific download ───────────────────────────────────────────
 
 case "$PLATFORM" in
-  darwin-arm64|darwin-x64)
+  darwin-arm64)
     # martin-riedl.de: macOS builds (GPL, signed, notarized), pinned to 8.0.1
-    if [ "$PLATFORM" = "darwin-arm64" ]; then
-      FFMPEG_URL="$MAC_ARM64_FFMPEG_URL"
-      FFPROBE_URL="$MAC_ARM64_FFPROBE_URL"
-    else
-      FFMPEG_URL="$MAC_AMD64_FFMPEG_URL"
-      FFPROBE_URL="$MAC_AMD64_FFPROBE_URL"
-    fi
+    FFMPEG_URL="$MAC_ARM64_FFMPEG_URL"
+    FFPROBE_URL="$MAC_ARM64_FFPROBE_URL"
+    FFMPEG_SHA256="$MAC_ARM64_FFMPEG_SHA256"
+    FFPROBE_SHA256="$MAC_ARM64_FFPROBE_SHA256"
 
     if [ ! -f "${DEST_DIR}/ffmpeg" ]; then
       TMP_ZIP="${DEST_DIR}/ffmpeg.zip"
       echo "Downloading ffmpeg (macOS, release ${FFMPEG_VERSION})..."
       download "$FFMPEG_URL" "$TMP_ZIP"
+      verify_sha256 "$TMP_ZIP" "$FFMPEG_SHA256"
       unzip -qo "$TMP_ZIP" -d "$DEST_DIR"
       rm -f "$TMP_ZIP"
       chmod +x "${DEST_DIR}/ffmpeg"
@@ -97,6 +114,7 @@ case "$PLATFORM" in
       TMP_ZIP="${DEST_DIR}/ffprobe.zip"
       echo "Downloading ffprobe (macOS, release ${FFMPEG_VERSION})..."
       download "$FFPROBE_URL" "$TMP_ZIP"
+      verify_sha256 "$TMP_ZIP" "$FFPROBE_SHA256"
       unzip -qo "$TMP_ZIP" -d "$DEST_DIR"
       rm -f "$TMP_ZIP"
       chmod +x "${DEST_DIR}/ffprobe"
@@ -115,6 +133,8 @@ case "$PLATFORM" in
       echo "Downloading ffmpeg + ffprobe (linux, release ${FFMPEG_VERSION})..."
       download "$LINUX_AMD64_FFMPEG_URL" "$TMP_FFMPEG"
       download "$LINUX_AMD64_FFPROBE_URL" "$TMP_FFPROBE"
+      verify_sha256 "$TMP_FFMPEG" "$LINUX_AMD64_FFMPEG_SHA256"
+      verify_sha256 "$TMP_FFPROBE" "$LINUX_AMD64_FFPROBE_SHA256"
       unzip -qo "$TMP_FFMPEG" -d "$DEST_DIR"
       unzip -qo "$TMP_FFPROBE" -d "$DEST_DIR"
       rm -f "$TMP_FFMPEG" "$TMP_FFPROBE"
@@ -132,6 +152,7 @@ case "$PLATFORM" in
     else
       echo "Downloading Gyan FFmpeg (win64, release ${GYAN_VERSION})..."
       download "$GYAN_WIN64_ZIP_URL" "$ARCHIVE_PATH"
+      verify_sha256 "$ARCHIVE_PATH" "$GYAN_WIN64_ZIP_SHA256"
       echo "  Extracting ffmpeg.exe + ffprobe.exe..."
       TMP_EXTRACT="${DEST_DIR}/_extract"
       mkdir -p "$TMP_EXTRACT"

@@ -14,7 +14,8 @@ not appear in All, folders, smart folders, library search, or those counts.
 
 The product must support imports, subscriptions, duplicate review, automatic tagging, tag
 management, folders, smart folders, search, untagged and uncategorized scopes, recently viewed
-media, collections, and deletion. Cloud sync is deferred from this release.
+media, collections, and deletion. Cloud Sync and Tutorials are owned pre-release integrations;
+release work must preserve explicit seams for them without inventing placeholder implementations.
 
 Every subscription source uses one direct-site authentication flow. Picto opens the source's real
 login page in a Picto-managed browser, captures the resulting session, and stores it in the OS

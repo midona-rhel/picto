@@ -1,5 +1,12 @@
 # One gallery-dl runtime for development and packaged sidecars.
 gallery-dl @ https://codeberg.org/mikf/gallery-dl/archive/d05a77933a89a31ff9d57a2c12cda2ee336845e6.zip
-curl_cffi>=0.9.0
+curl_cffi==0.16.1
 requests==2.32.4
 yt-dlp==2026.8.19
+# Pin runtime transitives as well; a sidecar rebuild must not silently change its network stack.
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.1
+idna==3.19
+pycparser==3.0
+urllib3==2.7.0

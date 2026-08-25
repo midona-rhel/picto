@@ -27,7 +27,7 @@ This directory contains executable work only. Git history retains completed and 
    - replace scattered window listeners with one shortcut dispatcher and scoped suspension leases
 7. [PBI-615-unify-settings-surface-and-save-model.md](PBI-615-unify-settings-surface-and-save-model.md)
    - unify Settings visual primitives and make its Save/Reset contract truthful
-8. [PBI-616-complete-reference application-parity-actions.md](PBI-616-complete-reference application-parity-actions.md)
+8. [PBI-616-complete-product-actions.md](PBI-616-complete-product-actions.md)
    - complete the approved grid, folder, tag, sidebar, viewer, burger-menu, and library actions
 
 ## Backlog policy
