@@ -55,7 +55,6 @@
       "dist/*.html",
       "electron/**/*",
       "native/picto-node/index.node",
-      "native/picto-node/index.*.node",
       "!node_modules/**",
       "node_modules/electron-updater/**",
       "node_modules/builder-util-runtime/**",
