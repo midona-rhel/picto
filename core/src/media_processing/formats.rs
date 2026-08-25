@@ -12,7 +12,7 @@ pub struct AcceptedFormat {
     pub mime_type: &'static str,
 }
 
-// reference application's documented 115 previewable formats, plus formats Picto already supported
+// Picto's accepted preview and preservation formats.
 // and format-extension plugins explicitly selected for the release backlog.
 pub const ACCEPTED_FORMATS: &[AcceptedFormat] = &[
     // Images and textures.
@@ -185,7 +185,7 @@ pub const ACCEPTED_FORMATS: &[AcceptedFormat] = &[
     format("htm", "text/html"),
     format("mhtml", "multipart/related"),
     format("url", "application/internet-shortcut"),
-    // Visualization and production formats exposed by reference application format extensions.
+    // Visualization and production formats accepted for preservation or preview.
     format("cube", "application/x-cube-lut"),
     format("3dl", "application/x-3dl-lut"),
     format("ies", "application/x-ies"),
@@ -248,7 +248,7 @@ mod tests {
     use std::path::Path;
 
     #[test]
-    fn reference_app_audio_source_and_document_formats_are_accepted() {
+    fn audio_source_and_document_formats_are_accepted() {
         for extension in ["mp3", "flac", "fbx", "afdesign", "cr3", "docx", "mhtml"] {
             assert!(format_for_extension(extension).is_some(), "{extension}");
         }

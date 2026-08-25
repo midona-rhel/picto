@@ -1,5 +1,5 @@
 /**
- * TagChip — reference application-matched label-item with namespace coloring and optional icon.
+ * TagChip — shared label item with namespace coloring and optional icon.
  * Used for both tags and folders in the inspector.
  */
 
@@ -20,7 +20,7 @@ const NS_COLORS: Record<string, [number, number, number]> = {
   default: [114, 160, 193],
 };
 
-const reference_app_TEXT_COLORS = {
+const TAG_TEXT_COLORS = {
   neutral: ['var(--inspector-text-primary, var(--color-text-primary))', 'var(--inspector-text-primary, var(--color-text-primary))'],
   red: ['#F8E6E5', '#88403E'],
   orange: ['#F8EFE1', '#7C5435'],
@@ -32,11 +32,11 @@ const reference_app_TEXT_COLORS = {
   pink: ['#F8EEF4', '#7D4A66'],
 } as const;
 
-function reference_appTextColors([r, g, b]: [number, number, number]): readonly [string, string] {
+function tagTextColors([r, g, b]: [number, number, number]): readonly [string, string] {
   const max = Math.max(r, g, b);
   const min = Math.min(r, g, b);
   const delta = max - min;
-  if (delta < 20) return reference_app_TEXT_COLORS.neutral;
+  if (delta < 20) return TAG_TEXT_COLORS.neutral;
 
   let hue: number;
   if (max === r) hue = 60 * (((g - b) / delta) % 6);
@@ -44,14 +44,14 @@ function reference_appTextColors([r, g, b]: [number, number, number]): readonly 
   else hue = 60 * ((r - g) / delta + 4);
   if (hue < 0) hue += 360;
 
-  if (hue < 15 || hue >= 345) return reference_app_TEXT_COLORS.red;
-  if (hue < 45) return reference_app_TEXT_COLORS.orange;
-  if (hue < 75) return reference_app_TEXT_COLORS.yellow;
-  if (hue < 155) return reference_app_TEXT_COLORS.green;
-  if (hue < 195) return reference_app_TEXT_COLORS.aqua;
-  if (hue < 245) return reference_app_TEXT_COLORS.blue;
-  if (hue < 285) return reference_app_TEXT_COLORS.purple;
-  return reference_app_TEXT_COLORS.pink;
+  if (hue < 15 || hue >= 345) return TAG_TEXT_COLORS.red;
+  if (hue < 45) return TAG_TEXT_COLORS.orange;
+  if (hue < 75) return TAG_TEXT_COLORS.yellow;
+  if (hue < 155) return TAG_TEXT_COLORS.green;
+  if (hue < 195) return TAG_TEXT_COLORS.aqua;
+  if (hue < 245) return TAG_TEXT_COLORS.blue;
+  if (hue < 285) return TAG_TEXT_COLORS.purple;
+  return TAG_TEXT_COLORS.pink;
 }
 
 interface Props {
@@ -66,7 +66,7 @@ interface Props {
 
 export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick, onContextMenu }: Props) {
   const [r, g, b] = colorRgb ?? NS_COLORS[(namespace ?? '').toLowerCase()] ?? NS_COLORS.default;
-  const [darkText, lightText] = reference_appTextColors([r, g, b]);
+  const [darkText, lightText] = tagTextColors([r, g, b]);
   const chipStyle = {
     '--chip-bg': `rgba(${r}, ${g}, ${b}, 0.10)`,
     '--chip-border': `rgba(${r}, ${g}, ${b}, 0.25)`,
