@@ -3,4 +3,4 @@
 /**
  * Read-only model state exposed by the replacement AI runtime.
  */
-export type AiModelStatus = { slug: string, label: string, enabled: boolean, downloaded: boolean, sessionLoaded: boolean, recommended: boolean, heavy: boolean, optimizationSupported: boolean, optimized: boolean, sizeBytes: number, dataset: string, };
+export type AiModelStatus = { slug: string, label: string, enabled: boolean, downloaded: boolean, sessionLoaded: boolean, recommended: boolean, heavy: boolean, optimizationSupported: boolean, optimized: boolean, sizeBytes: number, dataset: string, referenceInferenceMs: number, };

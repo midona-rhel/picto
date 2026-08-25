@@ -127,7 +127,7 @@ export function AiTaggingPanel({
                   <div className={styles.modelMain}>
                     <div className={styles.modelName}>{m.label}</div>
                     <div className={styles.modelMeta}>
-                      {m.dataset} · {fmtSize(m.sizeBytes)}{m.recommended ? ' · Recommended' : ''}
+                      {m.dataset} · {fmtSize(m.sizeBytes)} · ≈{Math.round(m.referenceInferenceMs)} ms/image
                     </div>
                   </div>
                   <div className={styles.modelState}>
@@ -192,7 +192,9 @@ export function AiTaggingPanel({
             );
           })}
         </div>
-        <p className={settingsStyles.settingHint}>Selected models run locally one after another. Picto never uploads media for AI tagging.</p>
+        <p className={settingsStyles.settingHint}>
+          Selected models run locally one after another. Warm single-image reference on an Apple M5 Pro; actual speed varies by device and batch size. Picto never uploads media for AI tagging.
+        </p>
       </div>
 
       <div className={settingsStyles.settingsBlock}>

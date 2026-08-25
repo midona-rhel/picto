@@ -79,6 +79,8 @@ pub struct ModelInfo {
     pub size_bytes: u64,
     /// Which tag vocabulary the model produces (shown in the settings panel).
     pub dataset: String,
+    /// Verified warm single-image inference latency on the reference Mac.
+    pub reference_inference_ms: f32,
     /// Heavy models trade speed for accuracy and are only recommended on
     /// machines with plenty of memory.
     pub heavy: bool,
@@ -112,6 +114,7 @@ pub fn known_models() -> Vec<ModelInfo> {
             output_activation: OutputActivation::Probability,
             size_bytes: 467_000_000,
             dataset: "Danbooru · general, character, rating".into(),
+            reference_inference_ms: 17.74,
             heavy: false,
             coreml: coreml.remove("wd14-swinv2-v3"),
         },
@@ -128,6 +131,7 @@ pub fn known_models() -> Vec<ModelInfo> {
             output_activation: OutputActivation::Probability,
             size_bytes: 390_000_000,
             dataset: "e621 · general, creator, series, character, species".into(),
+            reference_inference_ms: 14.71,
             heavy: false,
             coreml: coreml.remove("z3d-e621-convnext"),
         },
@@ -143,6 +147,7 @@ pub fn known_models() -> Vec<ModelInfo> {
             output_activation: OutputActivation::Probability,
             size_bytes: 1_260_000_000,
             dataset: "Danbooru · general, character, rating · Highest accuracy".into(),
+            reference_inference_ms: 48.38,
             heavy: true,
             coreml: coreml.remove("wd14-eva02-large-v3"),
         },

@@ -18,6 +18,7 @@ vi.mock('../../platform/aiTaggerApi', () => ({
 const model = {
   slug: 'wd14-swinv2-v3', label: 'WD14', enabled: false, downloaded: false,
   sessionLoaded: false, recommended: true, heavy: false, sizeBytes: 1024 * 1024, dataset: 'test',
+  referenceInferenceMs: 17.74,
   optimizationSupported: false, optimized: false,
 };
 
@@ -86,7 +87,7 @@ describe('AiTaggingPanel', () => {
     await renderPanel();
     await screen.findByRole('button', { name: 'Download' });
     expect(screen.queryByText('Downloaded')).not.toBeInTheDocument();
-    expect(screen.getByText('test · 1 MB · Recommended')).toBeInTheDocument();
+    expect(screen.getByText('test · 1 MB · ≈18 ms/image')).toBeInTheDocument();
   });
 
   it('refreshes authoritative model status after download completion', async () => {
@@ -158,7 +159,7 @@ describe('AiTaggingPanel', () => {
 
   it('places the serialized local-processing note below the model list', async () => {
     await renderPanel();
-    const note = await screen.findByText('Selected models run locally one after another. Picto never uploads media for AI tagging.');
+    const note = await screen.findByText('Selected models run locally one after another. Warm single-image reference on an Apple M5 Pro; actual speed varies by device and batch size. Picto never uploads media for AI tagging.');
     const modelList = screen.getByText('WD14').closest('[class*="blockContent"]');
 
     expect(modelList).not.toContainElement(note);

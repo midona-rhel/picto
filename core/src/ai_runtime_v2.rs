@@ -46,6 +46,7 @@ pub struct AiModelStatus {
     #[ts(type = "number")]
     pub size_bytes: u64,
     pub dataset: String,
+    pub reference_inference_ms: f32,
 }
 
 /// Replacement AI status derived from settings, the model bundle, and the
@@ -146,6 +147,7 @@ pub async fn model_status(application: &Application) -> Result<AiRuntimeStatus, 
                 optimized,
                 size_bytes: model.size_bytes,
                 dataset: model.dataset,
+                reference_inference_ms: model.reference_inference_ms,
             }
         })
         .collect();
