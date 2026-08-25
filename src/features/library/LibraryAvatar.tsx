@@ -49,7 +49,7 @@ export function LibraryAvatar({
       ) : appearance.icon ? (
         <DynamicIcon name={appearance.icon} size={size} color={appearance.color ?? null} />
       ) : (
-        <IconBooks size={size} stroke={1} />
+        <IconBooks size={size} stroke={0.75} />
       )}
     </span>
   );

@@ -31,6 +31,6 @@ describe('LibraryAvatar', () => {
 
     expect(svg).toHaveAttribute('width', '26');
     expect(svg).toHaveAttribute('height', '26');
-    expect(svg).toHaveAttribute('stroke-width', '1');
+    expect(svg).toHaveAttribute('stroke-width', '0.75');
   });
 });
