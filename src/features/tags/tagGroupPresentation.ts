@@ -3,7 +3,6 @@ import {
   IconBookmark,
   IconPaw,
   IconPencil,
-  IconSettings,
   IconStar,
   IconUser,
   type Icon,
@@ -31,7 +30,6 @@ const GROUPS: Record<string, GroupPresentation> = {
   character: { color: [48, 209, 89], darkText: '#e4f5e9', lightText: '#34403c', icon: IconUser, order: 2 },
   species: { color: [0, 170, 255], darkText: '#dff1f9', lightText: '#3c4e5a', icon: IconPaw, order: 3 },
   rating: { color: [255, 214, 10], darkText: '#f8f5e1', lightText: '#4a4335', icon: IconStar, order: 4 },
-  meta: { color: [189, 190, 192], darkText: '#f8f9fb', lightText: '#2c2f32', icon: IconSettings, order: 5 },
   general: DEFAULT_GROUP,
   '': DEFAULT_GROUP,
 };

@@ -267,7 +267,14 @@ export function AiTaggerPanel() {
     setRunModels(next);
   }, [reviewItemIds, runModels, runPredict]);
 
-  const thresholdFor = useCallback((namespace: string) => thresholds[namespace] ?? thresholds.general ?? 0.35, [thresholds]);
+  const thresholdFor = useCallback((namespace: string) => {
+    const thresholdNamespace = namespace === 'creator'
+      ? 'artist'
+      : namespace === 'series'
+        ? 'copyright'
+        : namespace;
+    return thresholds[thresholdNamespace] ?? thresholds.general ?? 0.35;
+  }, [thresholds]);
   const activeTags = useMemo(() => predictionTags(activePrediction, runModels), [activePrediction, runModels]);
   const suggested = useMemo(() => activeTags.filter((tag) => tag.confidence >= thresholdFor(tag.namespace)), [activeTags, thresholdFor]);
   const below = useMemo(() => activeTags.filter((tag) => tag.confidence < thresholdFor(tag.namespace)), [activeTags, thresholdFor]);

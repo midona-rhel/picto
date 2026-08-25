@@ -130,6 +130,10 @@ describe('AiTaggingPanel', () => {
   it('presents thresholds as percentages without model marketing labels', async () => {
     await renderPanel();
     expect(await screen.findByLabelText('General confidence')).toHaveValue('35');
+    expect(screen.getByLabelText('Creator confidence')).toHaveValue('35');
+    expect(screen.getByLabelText('Series confidence')).toHaveValue('35');
+    expect(screen.queryByLabelText('Artist confidence')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Copyright confidence')).not.toBeInTheDocument();
     expect(screen.getAllByText('35%').length).toBeGreaterThan(0);
     expect(screen.queryByText('Accuracy over speed')).not.toBeInTheDocument();
   });

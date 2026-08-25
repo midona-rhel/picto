@@ -46,8 +46,8 @@ impl Thresholds {
         match namespace {
             "general" => self.general,
             "character" => self.character,
-            "copyright" => self.copyright,
-            "artist" => self.artist,
+            "copyright" | "series" => self.copyright,
+            "artist" | "creator" => self.artist,
             "species" => self.species,
             "rating" => self.rating,
             _ => self.general,

@@ -6,7 +6,6 @@ const EXTERNAL_NAMESPACES: &[&str] = &[
     "character",
     "series",
     "species",
-    "meta",
     "rating",
 ];
 
@@ -32,7 +31,7 @@ pub fn parse_external(value: &str) -> Result<(String, String), String> {
     let namespace = match namespace.as_str() {
         "artist" | "contributor" => "creator",
         "copyright" => "series",
-        "metadata" => "meta",
+        "metadata" => "general",
         "tag" | "ungrouped" => "general",
         value => value,
     };
@@ -63,7 +62,7 @@ mod tests {
         );
         assert_eq!(
             parse_external("metadata:Highres").unwrap(),
-            ("meta".to_string(), "highres".to_string())
+            ("general".to_string(), "highres".to_string())
         );
         assert_eq!(
             parse_external("tag:Blue Eyes").unwrap(),

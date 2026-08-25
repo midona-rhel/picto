@@ -186,6 +186,23 @@ describe('AiTaggerPanel', () => {
     expect(screen.queryByText(/\d+% cutoff/)).not.toBeInTheDocument();
   });
 
+  it('uses Picto group names with their upstream threshold aliases', async () => {
+    mocks.predict.mockResolvedValue({
+      predictions: [{
+        mediaItemId: 1,
+        error: null,
+        predictions: [{ tag: 'example', namespace: 'creator', confidence: 0.5, model: model.slug }],
+      }],
+      thresholds: { general: 0.35, artist: 0.9 },
+    });
+    const user = setupUser();
+    await renderPanel();
+    await screen.findByText('Below cutoff');
+    expect(screen.queryByText('example')).not.toBeInTheDocument();
+    await user.click(screen.getByText('Below cutoff'));
+    expect(await screen.findByText('example')).toBeInTheDocument();
+  });
+
   it('selects rating predictions above their threshold by default', async () => {
     mocks.predict.mockResolvedValue({
       predictions: [{

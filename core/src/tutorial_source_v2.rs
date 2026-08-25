@@ -96,7 +96,10 @@ impl SourceRunner for TutorialSourceRunner {
                     &path,
                     Lifecycle::Inbox,
                     None,
-                    &["creator:leonardo da vinci".into(), "meta:tutorial".into()],
+                    &[
+                        "creator:leonardo da vinci".into(),
+                        "general:tutorial".into(),
+                    ],
                     &[format!(
                         "https://commons.wikimedia.org/wiki/File:{file_name}"
                     )],

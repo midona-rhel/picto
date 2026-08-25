@@ -19,6 +19,7 @@ import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import actionStyles from '../../shared/styles/actionButton.module.css';
 import settingsStyles from './Settings.module.css';
 import styles from './AiTaggingPanel.module.css';
+import { tagGroupColor } from '../tags/tagGroupPresentation';
 
 /** Model slug → AppSettings enable flag. */
 const ENABLE_KEYS: Record<string, string> = {
@@ -28,13 +29,13 @@ const ENABLE_KEYS: Record<string, string> = {
 };
 
 /** Threshold settings keys with their tag-namespace dot colors. */
-const THRESHOLDS: Array<{ key: string; label: string; color: string }> = [
-  { key: 'aiThresholdGeneral', label: 'General', color: 'rgb(114, 160, 193)' },
-  { key: 'aiThresholdCharacter', label: 'Character', color: 'rgb(0, 170, 0)' },
-  { key: 'aiThresholdSpecies', label: 'Species', color: 'rgb(0, 130, 170)' },
-  { key: 'aiThresholdCopyright', label: 'Copyright', color: 'rgb(170, 0, 170)' },
-  { key: 'aiThresholdArtist', label: 'Artist', color: 'rgb(170, 0, 0)' },
-  { key: 'aiThresholdRating', label: 'Rating', color: 'rgb(153, 101, 21)' },
+const THRESHOLDS: Array<{ key: string; label: string; namespace: string }> = [
+  { key: 'aiThresholdGeneral', label: 'General', namespace: 'general' },
+  { key: 'aiThresholdCharacter', label: 'Character', namespace: 'character' },
+  { key: 'aiThresholdSpecies', label: 'Species', namespace: 'species' },
+  { key: 'aiThresholdCopyright', label: 'Series', namespace: 'series' },
+  { key: 'aiThresholdArtist', label: 'Creator', namespace: 'creator' },
+  { key: 'aiThresholdRating', label: 'Rating', namespace: 'rating' },
 ];
 
 function fmtSize(bytes: number): string {
@@ -179,7 +180,7 @@ export function AiTaggingPanel({
                 {index > 0 && <div className={settingsStyles.rowSep} />}
                 <div className={settingsStyles.settingRow}>
                   <span className={`${settingsStyles.settingLabel} ${styles.thresholdLabel}`}>
-                    <span className={styles.thresholdDot} style={{ background: t.color }} />
+                    <span className={styles.thresholdDot} style={{ background: tagGroupColor(t.namespace) }} />
                     {t.label}
                   </span>
                   <div className={settingsStyles.settingControl}>

@@ -7,10 +7,12 @@
 //! | CSV category | Picto namespace |
 //! |:------------:|:---------------:|
 //! | 0            | general         |
-//! | 1            | artist          |
-//! | 3            | copyright       |
+//! | 1            | creator         |
+//! | 3            | series          |
 //! | 4            | character       |
 //! | 5            | species         |
+//! | 7            | general         |
+//! | 8            | general         |
 //! | 9            | rating          |
 
 use std::path::Path;
@@ -123,14 +125,17 @@ fn parse_csv_fields(line: &str) -> Result<Vec<String>, String> {
     Ok(fields)
 }
 
-/// Map WD14/E621 CSV category integers to Picto tag namespaces.
+/// Map WD14/E621 CSV category integers directly to Picto tag groups.
+/// E621 metadata (7) and lore metadata (8) remain ungrouped in Picto; neither
+/// upstream category creates a user-facing Picto group.
 fn category_to_namespace(category: u32) -> &'static str {
     match category {
         0 => "general",
-        1 => "artist",
-        3 => "copyright",
+        1 => "creator",
+        3 => "series",
         4 => "character",
         5 => "species",
+        7 | 8 => "general",
         9 => "rating",
         _ => "general", // fallback for unknown categories
     }
@@ -143,10 +148,12 @@ mod tests {
     #[test]
     fn test_category_mapping() {
         assert_eq!(category_to_namespace(0), "general");
-        assert_eq!(category_to_namespace(1), "artist");
-        assert_eq!(category_to_namespace(3), "copyright");
+        assert_eq!(category_to_namespace(1), "creator");
+        assert_eq!(category_to_namespace(3), "series");
         assert_eq!(category_to_namespace(4), "character");
         assert_eq!(category_to_namespace(5), "species");
+        assert_eq!(category_to_namespace(7), "general");
+        assert_eq!(category_to_namespace(8), "general");
         assert_eq!(category_to_namespace(9), "rating");
         assert_eq!(category_to_namespace(99), "general");
     }

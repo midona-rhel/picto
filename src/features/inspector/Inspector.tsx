@@ -102,7 +102,7 @@ const EXT: Record<string, string> = {
 };
 function fmtExt(mime: string) { const s = mime.split('/')[1] ?? ''; return EXT[s] ?? s.replace(/^x-/, '').toUpperCase(); }
 
-const NS_ORDER: Record<string, number> = { creator: 0, studio: 1, series: 2, character: 3, person: 4, species: 5, meta: 6, system: 7, '': 8, default: 8 };
+const NS_ORDER: Record<string, number> = { creator: 0, studio: 1, series: 2, character: 3, person: 4, species: 5, system: 6, '': 7, default: 7 };
 function tagKey(ns: string, sub: string) { return `${(NS_ORDER[ns.toLowerCase()] ?? 7).toString().padStart(2, '0')}:${sub.toLowerCase()}`; }
 
 function hexToRgb(hex: string | null | undefined): [number, number, number] {

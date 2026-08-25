@@ -782,8 +782,8 @@ fn normalize_predictions(predictions: &[TagPrediction], write_rating: bool) -> V
 fn normalized_prediction(prediction: &TagPrediction, write_rating: bool) -> Option<String> {
     let namespace = match prediction.namespace.as_str() {
         "general" => "general",
-        "artist" => "creator",
-        "copyright" => "series",
+        "artist" | "creator" => "creator",
+        "copyright" | "series" => "series",
         "character" => "character",
         "species" => "species",
         "rating" if write_rating => "rating",
