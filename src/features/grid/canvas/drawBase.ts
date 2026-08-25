@@ -271,7 +271,7 @@ export function drawCanvasBaseLayer({
 
     // Item-kind / extension badge — top-left
     if (item.kind === 'collection') {
-      drawBadge(ctx, 'GROUP', bx + 5, by + 5, 'left', 'inspector');
+      drawBadge(ctx, 'GRP', bx + 5, by + 5, 'left', 'inspector');
     } else if (showBadge) {
       drawBadge(ctx, formatLabel, bx + 5, by + 5, 'left', 'inspector');
     }
