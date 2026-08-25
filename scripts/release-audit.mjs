@@ -32,9 +32,10 @@ const trackedMediaExtensions = new Set([
 ]);
 const approvedReleaseIcons = new Set([
   'build/icon-flat.png',
-  'build/icon-macos.png',
-  'build/icon.icns',
   'build/icon.ico',
+  'build/Picto.icon/Assets/01-spine.png',
+  'build/Picto.icon/Assets/02-under-pages.png',
+  'build/Picto.icon/Assets/03-open-book.png',
 ]);
 const macHomePrefix = `/${'Users'}/`;
 const windowsHomePattern = new RegExp(`[A-Z]:\\\\${'Users'}\\\\`, 'i');
@@ -59,9 +60,19 @@ for (const file of tracked) {
 const packageManifest = JSON.parse(read('package.json'));
 assert(packageManifest.license === 'MIT', 'package.json must declare the project MIT license');
 assert(packageManifest.build.mac.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'arm64'), 'macOS packages must target Apple Silicon only');
+assert(packageManifest.build.mac.icon === 'build/Picto.icon', 'macOS packages must use the native Icon Composer asset');
 assert(packageManifest.build.win.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Windows packages must target x64 only');
 assert(packageManifest.build.linux.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Linux packages must target x64 only');
 assert(packageManifest.build.files.includes('dist/licenses/**/*'), 'packaged files must include generated license notices');
+
+const iconComposer = JSON.parse(read('build/Picto.icon/icon.json'));
+const expectedMacIconLayers = ['01-spine.png', '02-under-pages.png', '03-open-book.png'];
+assert(iconComposer.groups?.length === expectedMacIconLayers.length, 'native macOS icon must contain exactly three material groups');
+for (const [index, imageName] of expectedMacIconLayers.entries()) {
+  const group = iconComposer.groups?.[index];
+  assert(group?.layers?.length === 1 && group.layers[0]?.['image-name'] === imageName, `native macOS icon layer order is invalid: ${imageName}`);
+  assert(group?.layers?.[0]?.glass === true && group?.specular === true, `native macOS icon material is invalid: ${imageName}`);
+}
 for (const sidecar of ['gallery-dl', 'onlyfans']) {
   const entry = packageManifest.build.extraFiles.find((candidate) => candidate.to === `${sidecar}/`);
   assert(entry?.filter?.includes('THIRD_PARTY_LICENSES.txt'), `${sidecar} package must include its frozen Python notices`);
@@ -107,6 +118,10 @@ assert(ffmpegDownload.includes('verify_sha256'), 'FFmpeg downloads must verify p
 
 if (checkArtifacts) {
   for (const file of [
+    'build/Picto.icon/icon.json',
+    'build/Picto.icon/Assets/01-spine.png',
+    'build/Picto.icon/Assets/02-under-pages.png',
+    'build/Picto.icon/Assets/03-open-book.png',
     'dist/licenses/NPM_THIRD_PARTY_NOTICES.txt',
     'dist/licenses/RUST_THIRD_PARTY_NOTICES.txt',
     'vendor/gallery-dl/THIRD_PARTY_LICENSES.txt',

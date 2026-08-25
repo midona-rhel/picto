@@ -8,6 +8,8 @@ import { Resvg } from '@resvg/resvg-js';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const build = path.join(root, 'build');
 const sources = path.join(build, 'icons');
+const iconComposer = path.join(build, 'Picto.icon');
+const iconComposerAssets = path.join(iconComposer, 'Assets');
 
 async function render(source, size) {
   const svg = await readFile(source, 'utf8');
@@ -35,45 +37,59 @@ function createIco(images) {
   return Buffer.concat([header, ...images.map(({ png }) => png)]);
 }
 
-function createIcns(images) {
-  const chunks = images.map(({ type, png }) => {
-    const chunk = Buffer.alloc(8 + png.length);
-    chunk.write(type, 0, 4, 'ascii');
-    chunk.writeUInt32BE(chunk.length, 4);
-    png.copy(chunk, 8);
-    return chunk;
-  });
-  const header = Buffer.alloc(8);
-  header.write('icns', 0, 4, 'ascii');
-  header.writeUInt32BE(8 + chunks.reduce((total, chunk) => total + chunk.length, 0), 4);
-  return Buffer.concat([header, ...chunks]);
+const composerLayers = [
+  ['01-spine', 'picto-macos-01-spine.svg'],
+  ['02-under-pages', 'picto-macos-02-under-pages.svg'],
+  ['03-open-book', 'picto-macos-03-open-book.svg'],
+];
+
+function composerGroup(name) {
+  return {
+    'blur-material': null,
+    layers: [{
+      glass: true,
+      hidden: false,
+      'image-name': `${name}.png`,
+      name,
+      position: {
+        scale: 1,
+        'translation-in-points': [0, 0],
+      },
+    }],
+    lighting: 'individual',
+    shadow: { kind: 'neutral', opacity: 0.28 },
+    specular: true,
+    translucency: { enabled: false, value: 0 },
+  };
 }
 
 async function main() {
-  await mkdir(build, { recursive: true });
-  const flatSource = path.join(sources, 'picto-flat.svg');
-  const macSource = path.join(sources, 'picto-macos.svg');
-  const [flat512, mac1024] = await Promise.all([render(flatSource, 512), render(macSource, 1024)]);
   await Promise.all([
-    writeFile(path.join(build, 'icon-flat.png'), flat512),
-    writeFile(path.join(build, 'icon-macos.png'), mac1024),
+    mkdir(build, { recursive: true }),
+    mkdir(iconComposerAssets, { recursive: true }),
   ]);
+  const flatSource = path.join(sources, 'picto-flat.svg');
+  const flat512 = await render(flatSource, 512);
+  await writeFile(path.join(build, 'icon-flat.png'), flat512);
 
   const icoSizes = [16, 24, 32, 48, 64, 128, 256];
   const icoImages = await Promise.all(icoSizes.map(async (size) => ({ size, png: await render(flatSource, size) })));
   await writeFile(path.join(build, 'icon.ico'), createIco(icoImages));
 
-  const icnsTypes = new Map([
-    [16, 'icp4'], [32, 'icp5'], [64, 'icp6'], [128, 'ic07'],
-    [256, 'ic08'], [512, 'ic09'], [1024, 'ic10'],
-  ]);
-  const icnsImages = await Promise.all([...icnsTypes].map(async ([size, type]) => ({
-    type,
-    png: await render(macSource, size),
-  })));
-  await writeFile(path.join(build, 'icon.icns'), createIcns(icnsImages));
+  await Promise.all(composerLayers.map(async ([name, source]) => {
+    const png = await render(path.join(sources, source), 1024);
+    await writeFile(path.join(iconComposerAssets, `${name}.png`), png);
+  }));
+  await writeFile(path.join(iconComposer, 'icon.json'), `${JSON.stringify({
+    fill: { solid: 'srgb:0.83529,0.84314,0.86275,1.00000' },
+    groups: composerLayers.map(([name]) => composerGroup(name)),
+    'supported-platforms': {
+      circles: [],
+      squares: 'shared',
+    },
+  }, null, 2)}\n`);
 
-  console.log('Generated Picto application icons.');
+  console.log('Generated flat Picto icons and native Icon Composer layers.');
 }
 
 await main();

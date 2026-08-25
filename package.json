@@ -116,7 +116,7 @@
       "repo": "picto"
     },
     "mac": {
-      "icon": "build/icon.icns",
+      "icon": "build/Picto.icon",
       "target": [
         {
           "target": "dmg",

@@ -37,9 +37,9 @@ native addons, and downloaded sidecars must not imply otherwise.
 
 - Cloud Sync and Tutorials are separately owned release gates and are intentionally not modified by
   release-finalization work.
-- The accepted release icon is wired for macOS, Windows, and Linux. The macOS package currently
-  uses the generated flattened ICNS fallback; an Apple Icon Composer export remains the final
-  material pass when that Apple tool is available.
+- The accepted release icon is wired for macOS, Windows, and Linux. macOS packages consume the
+  generated native `Picto.icon` layer bundle on an Apple Silicon macOS 26 runner; Apple `actool`
+  compiles its Liquid Glass asset catalog and legacy ICNS representation during packaging.
 - Code signing and notarization are not part of the `0.6.0-alpha` gate.
 - The pull-request, manual, and tagged CI lanes build and smoke-test macOS Apple Silicon, Windows
   x64, and Linux x64. A normal push to `main` runs verification only. Windows and Linux still need
