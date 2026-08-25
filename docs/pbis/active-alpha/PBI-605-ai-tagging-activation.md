@@ -2,7 +2,7 @@
 
 ## Priority
 
-P1 release blocker
+Post-alpha hardening candidate
 
 ## Behavior
 
@@ -14,7 +14,7 @@ A model is available only when its complete model-and-label bundle has been down
 and activated. Cancellation or failure leaves no active model, partial bundle, stale result, or stuck
 runtime task.
 
-## Proven unfinished behavior
+## Hardening hypotheses to revalidate
 
 - Z3D is currently fed RGB although its reference contract requires BGR.
 - Unknown model names can reach filesystem deletion paths.
@@ -72,5 +72,4 @@ runtime task.
 ## Out of scope
 
 - GPU execution providers. Add them only after the CPU path is release-proven and measured.
-- A broad AI-panel visual redesign. Reuse Picto controls now; visual exploration belongs to the later
-  reference application-reference UI pass.
+- A broad AI-panel visual redesign. Reuse Picto controls now; visual exploration is separate work.
