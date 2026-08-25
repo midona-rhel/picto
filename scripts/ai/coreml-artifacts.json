@@ -1,5 +1,26 @@
 {
   "version": 1,
   "minimum_macos": 14,
-  "assets": {}
+  "assets": {
+    "wd14-swinv2-v3": {
+      "url": "https://github.com/midona-rhel/picto/releases/download/ai-models-v1/wd14-swinv2-v3-coreml-macos14-v1.zip",
+      "sha256": "8bcdc2ea0b529bb5bb22de66e1680afa8a69a967e775faade3ae67aa5ed09b60",
+      "size": 231785291
+    },
+    "wd14-eva02-large-v3": {
+      "url": "https://github.com/midona-rhel/picto/releases/download/ai-models-v1/wd14-eva02-large-v3-coreml-macos14-v1.zip",
+      "sha256": "611862433ce4e56410b153e9c9b758931a995e1f9f1f9725746aab39a6add76e",
+      "size": 630885873
+    },
+    "oppai-oracle-v1-1": {
+      "url": "https://github.com/midona-rhel/picto/releases/download/ai-models-v1/oppai-oracle-v1-1-coreml-macos15-v1.zip",
+      "sha256": "41df456c47ab42fcbd0841964e37d570b0fff3a66bc794e3d08755b8edd2e71f",
+      "size": 992685330
+    },
+    "danbooru-tag-query-b16": {
+      "url": "https://github.com/midona-rhel/picto/releases/download/ai-models-v1/danbooru-tag-query-b16-coreml-macos15-v1.zip",
+      "sha256": "6b0896cc29d7bdfb2fb2851d961e12b8f9296ef2e7cef1eb011a3c6a5a7d5252",
+      "size": 193023234
+    }
+  }
 }

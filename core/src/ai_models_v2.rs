@@ -98,23 +98,26 @@ pub async fn optimize(application: &Application, slug: &str) -> Result<(), Strin
     #[cfg(target_os = "macos")]
     {
         let directory = models::model_dir(&models_root, &model);
-        let package = directory.join("model.mlpackage");
         let compiled = directory.join("model.mlmodelc");
         if compiled.is_dir() {
             return Ok(());
         }
-        if !package.is_dir() {
-            return Err(format!(
-                "Model '{}' has no registered Mac optimization",
-                model.label
-            ));
-        }
-        let _lifecycle = application.ai_model_lifecycle().lock().await;
-        application.ai_sessions().lock().await.remove(slug);
+        let artifact = model
+            .coreml
+            .as_ref()
+            .ok_or_else(|| format!("Model '{}' has no published Mac optimization", model.label))?;
+        let staging = tempfile::Builder::new()
+            .prefix(&format!(".{}.coreml-", model.slug))
+            .tempdir_in(&models_root)
+            .map_err(|error| format!("Failed to create Core ML staging directory: {error}"))?;
+        crate::ai_tagger::download::download_coreml_package(artifact, staging.path()).await?;
+        let package = staging.path().join("model.mlpackage");
         let temporary = tokio::task::spawn_blocking(move || coreml_native::compile_model(&package))
             .await
             .map_err(|error| format!("Core ML optimization task failed: {error}"))?
             .map_err(|error| format!("Failed to optimize model for this Mac: {error}"))?;
+        let _lifecycle = application.ai_model_lifecycle().lock().await;
+        application.ai_sessions().lock().await.remove(slug);
         std::fs::rename(&temporary, &compiled).map_err(|error| {
             format!(
                 "Failed to activate optimized model {}: {error}",

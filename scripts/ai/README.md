@@ -5,10 +5,10 @@ run inference on the GPU and Neural Engine. The application verifies every
 download against `coreml-artifacts.json` before activating it.
 
 Core ML archives are not bundled with Picto. Model weights are optional and
-downloaded only when the user requests them. An optimized archive is offered
-only after it has been published at an immutable URL and registered in
-`coreml-artifacts.json`; the registry is deliberately empty while no such
-release asset exists.
+downloaded only when the user requests them. Optimized archives are published
+under the immutable `ai-models-v1` release and pinned by exact size and SHA-256
+in `coreml-artifacts.json`. Picto downloads one only when the user explicitly
+chooses **Optimize for this Mac**; the portable ONNX model remains the fallback.
 
 All product models use the same portable ONNX download path on macOS, Windows,
 and Linux. Candidate optimized macOS archives are built by the separate model

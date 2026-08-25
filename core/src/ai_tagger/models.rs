@@ -237,13 +237,11 @@ pub fn is_model_downloaded(models_root: &std::path::Path, slug: &str) -> bool {
 pub fn optimization_supported(models_root: &std::path::Path, slug: &str) -> bool {
     #[cfg(target_os = "macos")]
     {
+        let _ = models_root;
         let Some(model) = find_model(slug) else {
             return false;
         };
-        return model.coreml.is_some()
-            && model_dir(models_root, &model)
-                .join("model.mlpackage")
-                .is_dir();
+        return model.coreml.is_some();
     }
     #[cfg(not(target_os = "macos"))]
     {
