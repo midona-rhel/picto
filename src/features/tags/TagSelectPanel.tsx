@@ -18,7 +18,6 @@ import * as entityMutations from '../../controllers/entityMutations';
 import { tagsController } from '../../controllers/tagsController';
 import type { CanonicalTagRecord, CanonicalNamespaceSummary } from '../../shared/types/canonical';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
-import btnStyles from '../../shared/styles/actionButton.module.css';
 import { tagGroupColor, tagGroupOrder } from './tagGroupPresentation';
 import styles from './TagSelectPanel.module.css';
 import { commonItemTags } from '../../shared/lib/itemDetails';
@@ -225,54 +224,42 @@ export function TagSelectPanel() {
   }, [focusIdx, virtualizer]);
 
   const toggleTag = useCallback((tag: string) => {
-    setExcluded((current) => {
-      if (!current.has(tag)) return current;
-      const next = new Set(current);
-      next.delete(tag);
-      return next;
-    });
-    const next = new Set(selectedTags);
-    const removing = next.delete(tag);
-    if (!removing) next.add(tag);
-    setSelectedTags(next);
+    const nextSelected = new Set(selectedTags);
+    const nextExcluded = new Set(excluded);
+    const removing = nextSelected.delete(tag);
+    if (!removing) nextSelected.add(tag);
+    nextExcluded.delete(tag);
+    setSelectedTags(nextSelected);
+    setExcluded(nextExcluded);
 
-    if (onApplyTagFilter) return;
+    if (onApplyTagFilter) {
+      onApplyTagFilter([...nextSelected], [...nextExcluded], matchMode);
+      return;
+    }
     if (onApplyTags) {
-      onApplyTags([...next]);
+      onApplyTags([...nextSelected]);
     } else if (target) {
       void (removing
         ? entityMutations.removeTargetTags(target, [tag])
         : entityMutations.addTargetTags(target, [tag]));
     }
-  }, [onApplyTagFilter, onApplyTags, selectedTags, target]);
+  }, [excluded, matchMode, onApplyTagFilter, onApplyTags, selectedTags, target]);
 
   const toggleExcludedTag = useCallback((tag: string) => {
     if (!onApplyTagFilter) return;
-    setSelectedTags((current) => { const next = new Set(current); next.delete(tag); return next; });
-    setExcluded((current) => {
-      const next = new Set(current);
-      if (next.has(tag)) next.delete(tag);
-      else next.add(tag);
-      return next;
-    });
-  }, [onApplyTagFilter]);
+    const nextSelected = new Set(selectedTags);
+    const nextExcluded = new Set(excluded);
+    nextSelected.delete(tag);
+    if (!nextExcluded.delete(tag)) nextExcluded.add(tag);
+    setSelectedTags(nextSelected);
+    setExcluded(nextExcluded);
+    onApplyTagFilter([...nextSelected], [...nextExcluded], matchMode);
+  }, [excluded, matchMode, onApplyTagFilter, selectedTags]);
 
-  const selectionChanged = [...new Set([...entityTagKeys, ...selectedTags])]
-    .filter((tag) => entityTagKeys.has(tag) !== selectedTags.has(tag)).length;
-
-  const applyFilter = useCallback(() => {
-    const excludedChanged = onApplyTagFilter
-      && [...excluded].sort().join('\n') !== [...(customExcludedTags ?? [])].sort().join('\n');
-    const modeChanged = onApplyTagFilter && matchMode !== (portalState.filterMatchMode ?? 'any');
-    if (!onApplyTagFilter || (!selectionChanged && !excludedChanged && !modeChanged)) return;
-    onApplyTagFilter([...selectedTags], [...excluded], matchMode);
-    if (!pinned) closePortal();
-  }, [closePortal, customExcludedTags, excluded, matchMode, onApplyTagFilter, pinned, portalState.filterMatchMode, selectedTags, selectionChanged]);
-
-  const excludedChanged = Boolean(onApplyTagFilter
-    && [...excluded].sort().join('\n') !== [...(customExcludedTags ?? [])].sort().join('\n'));
-  const modeChanged = Boolean(onApplyTagFilter && matchMode !== (portalState.filterMatchMode ?? 'any'));
-  const changeCount = selectionChanged + (excludedChanged ? 1 : 0) + (modeChanged ? 1 : 0);
+  const changeMatchMode = useCallback((mode: FilterMatchMode) => {
+    setMatchMode(mode);
+    onApplyTagFilter?.([...selectedTags], [...excluded], mode);
+  }, [excluded, onApplyTagFilter, selectedTags]);
 
   // Keyboard
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -325,7 +312,7 @@ export function TagSelectPanel() {
               onKeyDown={handleKeyDown}
             />
           </div>
-          {onApplyTagFilter ? <FilterLogicTabs value={matchMode} onChange={setMatchMode} /> : null}
+          {onApplyTagFilter ? <FilterLogicTabs value={matchMode} onChange={changeMatchMode} /> : null}
           <button
             className={shellStyles.pinBtn}
             onClick={() => setShowSidebar((v) => !v)}
@@ -342,18 +329,7 @@ export function TagSelectPanel() {
             <span className={shellStyles.kbd}>Click</span> Select
             {onApplyTagFilter ? <><span className={shellStyles.kbd}>Right-click</span> Exclude</> : null}
           </span>
-          <div className={btnStyles.btnGroup}>
-            <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
-            {onApplyTagFilter && changeCount > 0 && (
-              <button
-                className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
-                onClick={applyFilter}
-                type="button"
-              >
-                Apply ({changeCount})
-              </button>
-            )}
-          </div>
+          <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
         </>
       }
     >

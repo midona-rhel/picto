@@ -65,7 +65,7 @@ describe('TagSelectPanel assignment', () => {
     expect(onApplyTags).toHaveBeenLastCalledWith(['creator:bob']);
   });
 
-  it('keeps filter changes transactional', async () => {
+  it('updates filters and matching mode immediately', async () => {
     const store = createStore();
     const onApplyTagFilter = vi.fn();
     store.set(tagSelectPortalAtom, {
@@ -82,12 +82,17 @@ describe('TagSelectPanel assignment', () => {
     });
 
     fireEvent.click(await screen.findByText('bob'));
-    expect(onApplyTagFilter).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole('button', { name: 'Apply (1)' }));
-    expect(onApplyTagFilter).toHaveBeenCalledWith(
+    expect(onApplyTagFilter).toHaveBeenLastCalledWith(
       ['creator:alice', 'creator:bob'],
       [],
       'any',
+    );
+    expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Match all' }));
+    expect(onApplyTagFilter).toHaveBeenLastCalledWith(
+      ['creator:alice', 'creator:bob'],
+      [],
+      'all',
     );
   });
 });

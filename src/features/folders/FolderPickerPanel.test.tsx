@@ -56,7 +56,7 @@ describe('FolderPickerPanel row context actions', () => {
     await waitFor(() => expect(foldersController.create).toHaveBeenCalledWith('Sibling', 7));
   });
 
-  it('applies the selected matching rule for folder filters', async () => {
+  it('updates the selected matching rule for folder filters immediately', async () => {
     const onApplyFolderFilter = vi.fn();
     store.set(folderPickerPortalAtom, {
       open: true,
@@ -68,9 +68,8 @@ describe('FolderPickerPanel row context actions', () => {
     render(<MantineProvider><FolderPickerPanel /></MantineProvider>);
 
     fireEvent.click(screen.getByRole('button', { name: 'Match all' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Apply (1)' }));
-
     expect(onApplyFolderFilter).toHaveBeenCalledWith([7], [], 'all');
+    expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
   });
 
   it('updates ordinary multi-folder assignment on each click without an Apply step', () => {

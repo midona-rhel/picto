@@ -2,7 +2,7 @@
  * FolderPickerPanel — OverlayShell portal for adding entities to folders.
  *
  * Same pattern as TagSelectPanel: search in header, tree in body,
- * kbd hints + apply in footer. Draggable, pinnable.
+ * kbd hints in footer. Draggable, pinnable.
  * Supports Shift+click (range) and Ctrl/Cmd+click (toggle) multi-select.
  */
 
@@ -91,6 +91,10 @@ export function FolderPickerPanel() {
     }
   }, [portalState.onApplyFolders, target]);
 
+  const commitFilterSelection = useCallback((nextSelected: Set<number>, nextExcluded: Set<number>, mode = matchMode) => {
+    portalState.onApplyFolderFilter?.([...nextSelected], [...nextExcluded], mode);
+  }, [matchMode, portalState.onApplyFolderFilter]);
+
   const handleToggle = useCallback((folderId: number, event: React.MouseEvent) => {
     if (parentSelection) {
       setSelected(new Set([folderId]));
@@ -106,12 +110,25 @@ export function FolderPickerPanel() {
       return;
     }
     if (filterSelection) {
-      setExcluded((prev) => {
-        if (!prev.has(folderId)) return prev;
-        const next = new Set(prev);
-        next.delete(folderId);
-        return next;
-      });
+      const nextSelected = new Set(selected);
+      const nextExcluded = new Set(excluded);
+      nextExcluded.delete(folderId);
+      if (event.shiftKey && lastClickedRef.current != null) {
+        const startIdx = flatIds.indexOf(lastClickedRef.current);
+        const endIdx = flatIds.indexOf(folderId);
+        if (startIdx !== -1 && endIdx !== -1) {
+          if (!event.metaKey && !event.ctrlKey) nextSelected.clear();
+          const [lo, hi] = [Math.min(startIdx, endIdx), Math.max(startIdx, endIdx)];
+          for (let i = lo; i <= hi; i++) nextSelected.add(flatIds[i]);
+        }
+      } else if (!nextSelected.delete(folderId)) {
+        nextSelected.add(folderId);
+      }
+      setSelected(nextSelected);
+      setExcluded(nextExcluded);
+      lastClickedRef.current = folderId;
+      commitFilterSelection(nextSelected, nextExcluded);
+      return;
     }
     if (event.shiftKey && lastClickedRef.current != null) {
       const startIdx = flatIds.indexOf(lastClickedRef.current);
@@ -135,22 +152,18 @@ export function FolderPickerPanel() {
       setSelected(new Set([folderId]));
       lastClickedRef.current = folderId;
     }
-  }, [commitImmediateSelection, filterSelection, flatIds, immediateSelection, parentSelection, selected]);
+  }, [commitFilterSelection, commitImmediateSelection, excluded, filterSelection, flatIds, immediateSelection, parentSelection, selected]);
 
   const handleExclude = useCallback((folderId: number) => {
     if (!filterSelection) return;
-    setSelected((prev) => {
-      if (!prev.has(folderId)) return prev;
-      const next = new Set(prev);
-      next.delete(folderId);
-      return next;
-    });
-    setExcluded((prev) => {
-      const next = new Set(prev);
-      if (next.has(folderId)) next.delete(folderId); else next.add(folderId);
-      return next;
-    });
-  }, [filterSelection]);
+    const nextSelected = new Set(selected);
+    const nextExcluded = new Set(excluded);
+    nextSelected.delete(folderId);
+    if (!nextExcluded.delete(folderId)) nextExcluded.add(folderId);
+    setSelected(nextSelected);
+    setExcluded(nextExcluded);
+    commitFilterSelection(nextSelected, nextExcluded);
+  }, [commitFilterSelection, excluded, filterSelection, selected]);
 
   const openFolderContextMenu = useCallback((folderId: number, event: React.MouseEvent) => {
     const node = folderNodes.find((candidate) => candidate.id === `folder:${folderId}`);
@@ -187,14 +200,15 @@ export function FolderPickerPanel() {
     setCreateTarget(null);
   }, [commitImmediateSelection, createTarget, folderName, immediateSelection, selected]);
 
-  const applyFolders = useCallback(() => {
-    if (portalState.onApplyFolderFilter) {
-      portalState.onApplyFolderFilter([...selected], [...excluded], matchMode);
-    } else if (portalState.onApplyFolderParent) {
-      portalState.onApplyFolderParent(rootSelected ? null : [...selected][0] ?? null);
-    }
+  const moveFolder = useCallback(() => {
+    portalState.onApplyFolderParent?.(rootSelected ? null : [...selected][0] ?? null);
     close();
-  }, [selected, excluded, rootSelected, matchMode, close, portalState]);
+  }, [close, portalState, rootSelected, selected]);
+
+  const changeMatchMode = useCallback((mode: FilterMatchMode) => {
+    setMatchMode(mode);
+    commitFilterSelection(selected, excluded, mode);
+  }, [commitFilterSelection, excluded, selected]);
 
   if (!open) return null;
 
@@ -220,7 +234,7 @@ export function FolderPickerPanel() {
               onChange={(e) => setQuery(e.target.value)}
             />
           </div>
-          {filterSelection ? <FilterLogicTabs value={matchMode} onChange={setMatchMode} /> : null}
+          {filterSelection ? <FilterLogicTabs value={matchMode} onChange={changeMatchMode} /> : null}
         </>
       }
       footer={
@@ -230,13 +244,13 @@ export function FolderPickerPanel() {
             {filterSelection ? <><span className={shellStyles.kbd}>Right-click</span> Exclude</> : null}
           </span>
           <div className={btnStyles.btnGroup}>
-            {(filterSelection || parentSelection) && (
+            {parentSelection && (
               <button
                 className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
-                onClick={applyFolders}
+                onClick={moveFolder}
                 type="button"
               >
-                {parentSelection ? 'Move' : `Apply (${selected.size})`}
+                Move
               </button>
             )}
           </div>
