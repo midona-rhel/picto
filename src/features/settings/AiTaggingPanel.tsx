@@ -27,6 +27,8 @@ const ENABLE_KEYS: Record<string, string> = {
   'wd14-swinv2-v3': 'aiTaggerWd14Enabled',
   'z3d-e621-convnext': 'aiTaggerE621Enabled',
   'wd14-eva02-large-v3': 'aiTaggerEva02Enabled',
+  'oppai-oracle-v1-1': 'aiTaggerOppaiOracleEnabled',
+  'danbooru-tag-query-b16': 'aiTaggerDanbooruTagQueryEnabled',
 };
 
 /** Threshold settings keys with their tag-namespace dot colors. */
@@ -96,6 +98,12 @@ export function AiTaggingPanel({
     refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    if (downloading.size === 0) return;
+    const timer = window.setInterval(refresh, 200);
+    return () => window.clearInterval(timer);
+  }, [downloading.size, refresh]);
+
   const patchSettings = useCallback((patch: Partial<AppSettings>) => {
     onSettingsChange(patch);
   }, [onSettingsChange]);
@@ -118,6 +126,10 @@ export function AiTaggingPanel({
           {status.models.map((m, index) => {
             const modelDownloading = downloading.has(m.slug);
             const modelOptimizing = optimizing.has(m.slug);
+            const downloadTotal = m.downloadTotalBytes ?? m.sizeBytes;
+            const downloadPercent = downloadTotal > 0
+              ? Math.max(0, Math.min(100, ((m.downloadedBytes ?? 0) / downloadTotal) * 100))
+              : 0;
             const enableKey = ENABLE_KEYS[m.slug];
             const enabled = enableKey ? Boolean(settings[enableKey]) : false;
             return (
@@ -133,9 +145,8 @@ export function AiTaggingPanel({
                   <div className={styles.modelState}>
                     {modelDownloading ? (
                       <div className={styles.downloadWrap}>
-                        <span className={styles.downloadMeta}>Downloading…</span>
                         <button
-                          className={actionStyles.btn}
+                          className={`${actionStyles.btn} ${styles.downloadAction}`}
                           type="button"
                           onClick={() => {
                             void aiTaggerCancelDownload(m.slug).catch((e) => setError(String(e)));
@@ -173,7 +184,7 @@ export function AiTaggingPanel({
                       </>
                     ) : (
                       <button
-                        className={actionStyles.btn}
+                        className={`${actionStyles.btn} ${styles.downloadAction}`}
                         type="button"
                         onClick={() => startDownload(m.slug)}
                       >
@@ -187,6 +198,17 @@ export function AiTaggingPanel({
                       />
                     )}
                   </div>
+                  {modelDownloading ? (
+                    <div
+                      className={styles.modelProgress}
+                      style={{ width: `${downloadPercent}%` }}
+                      role="progressbar"
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                      aria-valuenow={Math.round(downloadPercent)}
+                      aria-label={`Downloading ${m.label}`}
+                    />
+                  ) : null}
                 </div>
               </div>
             );

@@ -20,6 +20,7 @@ const model = {
   sessionLoaded: false, recommended: true, heavy: false, sizeBytes: 1024 * 1024, dataset: 'test',
   referenceInferenceMs: 17.74,
   optimizationSupported: false, optimized: false,
+  downloadedBytes: null, downloadTotalBytes: null,
 };
 
 const settings = {
@@ -44,6 +45,7 @@ const settings = {
   subscriptionDefaultGroupPosts: true,
   showTagGroups: true, starredTags: [], sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false, aiTaggerE621Enabled: false, aiTaggerEva02Enabled: false,
+  aiTaggerOppaiOracleEnabled: false, aiTaggerDanbooruTagQueryEnabled: false,
   aiTaggerAutoOnImport: false, aiTaggerWriteRating: false,
   aiThresholdGeneral: 0.35, aiThresholdCharacter: 0.35, aiThresholdCopyright: 0.35,
   aiThresholdArtist: 0.35, aiThresholdSpecies: 0.35, aiThresholdRating: 0.35,
@@ -97,7 +99,8 @@ describe('AiTaggingPanel', () => {
     await screen.findByRole('button', { name: 'Download' });
     await setupUser().click(screen.getByRole('button', { name: 'Download' }));
     expect(mocks.download).toHaveBeenCalledWith(model.slug);
-    expect(await screen.findByText('Downloading…')).toBeInTheDocument();
+    expect(await screen.findByRole('progressbar')).toBeInTheDocument();
+    expect(screen.queryByText('Downloading…')).not.toBeInTheDocument();
     await act(async () => { resolveDownload(status(true)); });
     await waitFor(() => expect(mocks.status.mock.calls.length).toBeGreaterThan(1));
   });
@@ -118,6 +121,28 @@ describe('AiTaggingPanel', () => {
     await setupUser().click(switches[1]);
     expect(onSettingsChange).toHaveBeenNthCalledWith(1, { aiTaggerWd14Enabled: true });
     expect(onSettingsChange).toHaveBeenNthCalledWith(2, { aiTaggerE621Enabled: true });
+  });
+
+  it('exposes the validated OppaiOracle and DanbooruTagQuery runtimes', async () => {
+    const onSettingsChange = vi.fn();
+    mocks.status.mockResolvedValue({
+      ...status(true),
+      models: [
+        { ...model, slug: 'oppai-oracle-v1-1', label: 'OppaiOracle V1.1', downloaded: true, referenceInferenceMs: 88.58 },
+        { ...model, slug: 'danbooru-tag-query-b16', label: 'DanbooruTagQuery B16', downloaded: true, referenceInferenceMs: 13.23 },
+      ],
+    });
+    await renderPanel(onSettingsChange);
+
+    expect(await screen.findByText('OppaiOracle V1.1')).toBeInTheDocument();
+    expect(screen.getByText('test · 1 MB · ≈89 ms/image')).toBeInTheDocument();
+    expect(screen.getByText('test · 1 MB · ≈13 ms/image')).toBeInTheDocument();
+
+    const switches = screen.getAllByRole('switch');
+    await setupUser().click(switches[0]);
+    await setupUser().click(switches[1]);
+    expect(onSettingsChange).toHaveBeenNthCalledWith(1, { aiTaggerOppaiOracleEnabled: true });
+    expect(onSettingsChange).toHaveBeenNthCalledWith(2, { aiTaggerDanbooruTagQueryEnabled: true });
   });
 
   it('exposes the explicit Mac optimization step for supported downloads', async () => {

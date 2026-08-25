@@ -15,7 +15,10 @@
 //! | 8            | general         |
 //! | 9            | rating          |
 
+use std::collections::HashMap;
 use std::path::Path;
+
+use super::models::ModelAdapter;
 
 /// A single label entry parsed from the CSV.
 #[derive(Debug, Clone)]
@@ -24,6 +27,59 @@ pub struct LabelEntry {
     pub name: String,
     /// Picto namespace derived from the CSV category column.
     pub namespace: String,
+}
+
+pub fn parse_model_labels(
+    model_dir: &Path,
+    adapter: ModelAdapter,
+) -> Result<Vec<LabelEntry>, String> {
+    match adapter {
+        ModelAdapter::DanbooruTagQuery => parse_danbooru_query_labels(
+            &model_dir.join("selected_tags.csv"),
+            &model_dir.join("label-categories.json"),
+        ),
+        ModelAdapter::Wd | ModelAdapter::OppaiOracle => {
+            parse_labels_csv(&model_dir.join("selected_tags.csv"))
+        }
+    }
+}
+
+fn parse_danbooru_query_labels(
+    tags_path: &Path,
+    categories_path: &Path,
+) -> Result<Vec<LabelEntry>, String> {
+    let tags: HashMap<String, usize> = serde_json::from_slice(
+        &std::fs::read(tags_path).map_err(|e| format!("Failed to read tag labels: {e}"))?,
+    )
+    .map_err(|e| format!("Failed to parse tag labels: {e}"))?;
+    let categories: HashMap<String, u32> = serde_json::from_slice(
+        &std::fs::read(categories_path)
+            .map_err(|e| format!("Failed to read tag categories: {e}"))?,
+    )
+    .map_err(|e| format!("Failed to parse tag categories: {e}"))?;
+    if tags.is_empty() {
+        return Err("Tag labels contain no entries".into());
+    }
+
+    let mut labels = vec![None; tags.len()];
+    for (name, index) in tags {
+        let slot = labels
+            .get_mut(index)
+            .ok_or_else(|| format!("Tag '{name}' has out-of-range index {index}"))?;
+        if slot.is_some() {
+            return Err(format!("Tag label index {index} is duplicated"));
+        }
+        let category = categories.get(&name).copied().unwrap_or(0);
+        *slot = Some(LabelEntry {
+            name,
+            namespace: category_to_namespace(category).to_string(),
+        });
+    }
+    labels
+        .into_iter()
+        .enumerate()
+        .map(|(index, label)| label.ok_or_else(|| format!("Tag label index {index} is missing")))
+        .collect()
 }
 
 /// Parse a `selected_tags.csv` file into an ordered `Vec<LabelEntry>`.
@@ -188,5 +244,26 @@ mod tests {
 
         std::fs::write(&path, "tag_id,name,category,count\n0,broken,nope,1\n").unwrap();
         assert!(parse_labels_csv(&path).is_err());
+    }
+
+    #[test]
+    fn danbooru_query_json_preserves_output_order_and_groups() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("selected_tags.csv"),
+            r#"{"series_name":1,"general_tag":0,"character_name":2}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("label-categories.json"),
+            r#"{"general_tag":0,"series_name":3,"character_name":4}"#,
+        )
+        .unwrap();
+
+        let labels = parse_model_labels(dir.path(), ModelAdapter::DanbooruTagQuery).unwrap();
+        assert_eq!(labels[0].name, "general_tag");
+        assert_eq!(labels[0].namespace, "general");
+        assert_eq!(labels[1].namespace, "series");
+        assert_eq!(labels[2].namespace, "character");
     }
 }

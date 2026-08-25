@@ -16,25 +16,31 @@ from PIL import Image
 CATALOG_PATH = Path(__file__).with_name("model-catalog.json")
 
 
-def image_input(path: Path, spec: dict) -> np.ndarray:
+def image_inputs(path: Path, spec: dict) -> dict[str, np.ndarray]:
     size = spec["input_size"]
     image = Image.open(path).convert("RGB")
-    if spec["adapter"] == "oppai_oracle":
-        image = image.resize((size, size), Image.Resampling.LANCZOS)
-    else:
-        scale = size / max(image.size)
-        image = image.resize(
-            tuple(max(1, round(axis * scale)) for axis in image.size),
-            Image.Resampling.LANCZOS,
-        )
-        background = 0 if spec["adapter"] == "danbooru_tag_query" else 255
-        canvas = Image.new("RGB", (size, size), (background,) * 3)
-        canvas.paste(image, ((size - image.width) // 2, (size - image.height) // 2))
-        image = canvas
+    scale = size / max(image.size)
+    image = image.resize(
+        tuple(max(1, round(axis * scale)) for axis in image.size),
+        Image.Resampling.LANCZOS,
+    )
+    background = {
+        "oppai_oracle": 114,
+        "danbooru_tag_query": 0,
+    }.get(spec["adapter"], 255)
+    canvas = Image.new("RGB", (size, size), (background,) * 3)
+    offset = ((size - image.width) // 2, (size - image.height) // 2)
+    canvas.paste(image, offset)
+    mask = np.ones((1, size, size), dtype=np.float32)
+    mask[:, offset[1] : offset[1] + image.height, offset[0] : offset[0] + image.width] = 0
+    image = canvas
     values = np.asarray(image, dtype=np.float32)
     if spec["adapter"] in {"wd_timm", "onnx_trace"}:
         values = values[:, :, ::-1]
-    return np.expand_dims(values, 0).copy()
+    inputs = {"input": np.expand_dims(values, 0).copy()}
+    if spec["adapter"] == "oppai_oracle":
+        inputs["padding_mask"] = mask
+    return inputs
 
 
 def percentile(samples: list[float], fraction: float) -> float:
@@ -59,15 +65,14 @@ def main() -> None:
     if args.slug not in catalog:
         parser.error(f"unknown model: {args.slug}")
     model = ct.models.MLModel(str(args.package), compute_units=ct.ComputeUnit.ALL)
-    input_name = next(iter(model.input_description))
-    values = image_input(args.image, catalog[args.slug])
+    values = image_inputs(args.image, catalog[args.slug])
     for _ in range(args.warmups):
-        model.predict({input_name: values})
+        model.predict(values)
 
     samples = []
     for _ in range(args.runs):
         started = time.perf_counter()
-        model.predict({input_name: values})
+        model.predict(values)
         samples.append((time.perf_counter() - started) * 1000.0)
 
     result = {

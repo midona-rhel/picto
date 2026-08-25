@@ -4,28 +4,22 @@ Picto converts supported taggers to fixed-shape Core ML programs so macOS can
 run inference on the GPU and Neural Engine. The application verifies every
 download against `coreml-artifacts.json` before activating it.
 
-Published artifacts:
+Core ML archives are not bundled with Picto. Model weights are optional and
+downloaded only when the user requests them. An optimized archive is offered
+only after it has been published at an immutable URL and registered in
+`coreml-artifacts.json`; the registry is deliberately empty while no such
+release asset exists.
 
-- WD14 SwinV2 Tagger v3, derived from
-  [SmilingWolf/wd-swinv2-tagger-v3](https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3),
-  licensed under Apache-2.0.
-- WD14 EVA02-Large Tagger v3, derived from
-  [SmilingWolf/wd-eva02-large-tagger-v3](https://huggingface.co/SmilingWolf/wd-eva02-large-tagger-v3),
-  licensed under Apache-2.0.
+All product models use the same portable ONNX download path on macOS, Windows,
+and Linux. Candidate optimized macOS archives are built by the separate model
+workflow:
 
-Picto changes the execution format and fixes the input contract to one
-448-by-448 BGR image. It does not retrain either model.
-
-Validated local conversions which are not part of the published default
-bundle:
-
-- OppaiOracle V1.1 uses a fused, fixed-shape float32 attention graph. Float16
-  is intentionally rejected because it changes tag ranking. On the reference
-  Apple GPU it measures about 79 ms per warm image with exact ONNX parity.
-- DanbooruTagQuery B16 uses a fixed-shape DINOv3 graph. On the same machine it
-  measures about 14 ms per warm image and retains at least 99% of the top 100
-  ONNX tags across the parity fixture set. Distribution must retain the DINOv3
-  license agreement.
+- OppaiOracle V1.1 uses the upstream aspect-preserving gray letterbox and
+  padding-mask contract. Its fused fixed-shape float32 attention graph avoids
+  the ranking changes observed with float16.
+- DanbooruTagQuery B16 uses a fixed-shape DINOv3 graph and retains at least 99%
+  of the top 100 ONNX tags across the parity fixture set. Any distribution of
+  the weights or derived Core ML archive must retain the DINOv3 agreement.
 
 AnimeTimm is deliberately excluded from the catalog.
 

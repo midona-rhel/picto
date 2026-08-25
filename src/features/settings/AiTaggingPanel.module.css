@@ -5,30 +5,39 @@
 }
 
 .modelRow {
+  position: relative;
   gap: 12px;
 }
 
 .modelMain {
+  position: relative;
+  z-index: 1;
   flex: 1;
   min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
 }
 
 .modelName {
+  flex-shrink: 0;
   font-size: 13px;
   font-weight: 400;
   color: var(--color-text-primary);
 }
 
 .modelMeta {
+  min-width: 0;
   font-size: 11.5px;
   color: var(--color-text-tertiary);
-  margin-top: 2px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .modelState {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 10px;
@@ -53,9 +62,31 @@
   gap: 8px;
 }
 
-.downloadMeta {
-  font-size: 12px;
-  color: var(--color-text-secondary);
+.downloadAction {
+  width: 92px;
+  box-sizing: border-box;
+}
+
+.modelProgress {
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  background: linear-gradient(
+    to top,
+    color-mix(in srgb, var(--color-primary) 24%, transparent) 0%,
+    color-mix(in srgb, var(--color-primary) 11%, transparent) 17%,
+    transparent 34%
+  );
+  filter: drop-shadow(0 2px 5px color-mix(in srgb, var(--color-primary) 18%, transparent));
+  transition: width 240ms linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .modelProgress { transition: none; }
 }
 
 .thresholdLabel {

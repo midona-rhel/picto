@@ -130,9 +130,11 @@ class OppaiContract(nn.Module):
         super().__init__()
         self.model = model
 
-    def forward(self, image: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, image: torch.Tensor, padding_mask: torch.Tensor
+    ) -> torch.Tensor:
         image = image.permute(0, 3, 1, 2) / 127.5 - 1.0
-        return self.model(image, None)
+        return self.model(image, padding_mask > 0.5)
 
 
 class DanbooruTagQueryContract(nn.Module):
@@ -276,6 +278,10 @@ def export_model(
         graph = torch.jit.freeze(torch.jit.trace(source, example, strict=False).eval())
         graph = torch.jit.optimize_for_inference(graph)
     elif adapter == "oppai_oracle":
+        mask = torch.zeros((1, input_size, input_size), dtype=torch.float32)
+        input_types.append(
+            ct.TensorType(name="padding_mask", shape=mask.shape, dtype=np.float32)
+        )
         config_path = source_file(spec, "V1.1_onnx/config.json", source)
         onnx_path = source_file(spec, spec["weights"], source)
         config = json.loads(Path(config_path).read_text())
@@ -283,7 +289,7 @@ def export_model(
         model = OppaiOracle(config).eval()
         model.load_state_dict(oppai_state_dict(onnx_model), strict=True)
         source = OppaiContract(model).eval()
-        graph = torch.export.export(source, (example,)).run_decompositions({})
+        graph = torch.export.export(source, (example, mask)).run_decompositions({})
     elif adapter == "danbooru_tag_query":
         onnx_path = source_file(spec, spec["weights"], source)
         source = DanbooruTagQueryContract(fixed_onnx_torch(onnx_path)).eval()

@@ -25,6 +25,7 @@ jobs:
         run: >-
           python scripts/ai/export-coreml-models.py
           wd14-swinv2-v3 wd14-eva02-large-v3
+          oppai-oracle-v1-1 danbooru-tag-query-b16
           --output artifacts/coreml
 
       - name: Verify registered checksums

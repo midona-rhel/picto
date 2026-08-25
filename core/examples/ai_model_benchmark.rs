@@ -41,6 +41,7 @@ fn main() -> Result<(), String> {
             model.input_size,
             model.channel_order,
             model.output_activation,
+            model.adapter,
         )?;
         let load_ms = elapsed_ms(load_started);
         let preprocess_started = Instant::now();

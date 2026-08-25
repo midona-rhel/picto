@@ -1455,7 +1455,7 @@ mod tests {
             .await
             .unwrap();
         let status: crate::ai_runtime_v2::AiRuntimeStatus = serde_json::from_str(&status).unwrap();
-        assert_eq!(status.models.len(), 3);
+        assert_eq!(status.models.len(), crate::ai_tagger::models::known_models().len());
 
         let output = dispatch_async(
             &application,

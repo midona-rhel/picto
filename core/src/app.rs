@@ -239,9 +239,16 @@ pub struct Application {
     projections: Arc<ProjectionStore>,
     ai_sessions: crate::ai_tagger::inference::SharedTaggerSessions,
     ai_prediction_cache: crate::ai_tagger::inference::SharedPredictionCache,
-    ai_model_downloads: tokio::sync::Mutex<HashMap<String, CancellationToken>>,
+    ai_model_downloads: tokio::sync::Mutex<HashMap<String, AiModelDownload>>,
     ai_model_lifecycle: tokio::sync::Mutex<()>,
     ingest_execution: std::sync::Mutex<()>,
+}
+
+#[derive(Clone)]
+pub(crate) struct AiModelDownload {
+    pub cancel: CancellationToken,
+    pub downloaded_bytes: Arc<std::sync::atomic::AtomicU64>,
+    pub total_bytes: u64,
 }
 
 impl Application {
@@ -297,7 +304,7 @@ impl Application {
 
     pub(crate) fn ai_model_downloads(
         &self,
-    ) -> &tokio::sync::Mutex<HashMap<String, CancellationToken>> {
+    ) -> &tokio::sync::Mutex<HashMap<String, AiModelDownload>> {
         &self.ai_model_downloads
     }
 
@@ -306,8 +313,8 @@ impl Application {
     }
 
     pub(crate) async fn cancel_ai_model_downloads(&self) {
-        for token in self.ai_model_downloads.lock().await.values() {
-            token.cancel();
+        for download in self.ai_model_downloads.lock().await.values() {
+            download.cancel.cancel();
         }
     }
 

@@ -79,6 +79,8 @@ export interface AppSettings {
   aiTaggerWd14Enabled: boolean;
   aiTaggerE621Enabled: boolean;
   aiTaggerEva02Enabled: boolean;
+  aiTaggerOppaiOracleEnabled: boolean;
+  aiTaggerDanbooruTagQueryEnabled: boolean;
   aiTaggerAutoOnImport: boolean;
   aiTaggerWriteRating: boolean;
   aiThresholdGeneral: number;
@@ -136,6 +138,8 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   aiTaggerWd14Enabled: false,
   aiTaggerE621Enabled: false,
   aiTaggerEva02Enabled: false,
+  aiTaggerOppaiOracleEnabled: false,
+  aiTaggerDanbooruTagQueryEnabled: false,
   aiTaggerAutoOnImport: false,
   aiTaggerWriteRating: true,
   aiThresholdGeneral: 0.35,
@@ -274,6 +278,8 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     aiTaggerWd14Enabled: booleanValue(storedOrDefault(source, 'aiTaggerWd14Enabled', APP_SETTINGS_DEFAULTS.aiTaggerWd14Enabled), 'aiTaggerWd14Enabled'),
     aiTaggerE621Enabled: booleanValue(storedOrDefault(source, 'aiTaggerE621Enabled', APP_SETTINGS_DEFAULTS.aiTaggerE621Enabled), 'aiTaggerE621Enabled'),
     aiTaggerEva02Enabled: booleanValue(storedOrDefault(source, 'aiTaggerEva02Enabled', APP_SETTINGS_DEFAULTS.aiTaggerEva02Enabled), 'aiTaggerEva02Enabled'),
+    aiTaggerOppaiOracleEnabled: booleanValue(storedOrDefault(source, 'aiTaggerOppaiOracleEnabled', APP_SETTINGS_DEFAULTS.aiTaggerOppaiOracleEnabled), 'aiTaggerOppaiOracleEnabled'),
+    aiTaggerDanbooruTagQueryEnabled: booleanValue(storedOrDefault(source, 'aiTaggerDanbooruTagQueryEnabled', APP_SETTINGS_DEFAULTS.aiTaggerDanbooruTagQueryEnabled), 'aiTaggerDanbooruTagQueryEnabled'),
     aiTaggerAutoOnImport: booleanValue(storedOrDefault(source, 'aiTaggerAutoOnImport', APP_SETTINGS_DEFAULTS.aiTaggerAutoOnImport), 'aiTaggerAutoOnImport'),
     aiTaggerWriteRating: booleanValue(storedOrDefault(source, 'aiTaggerWriteRating', APP_SETTINGS_DEFAULTS.aiTaggerWriteRating), 'aiTaggerWriteRating'),
     aiThresholdGeneral: numberValue(storedOrDefault(source, 'aiThresholdGeneral', APP_SETTINGS_DEFAULTS.aiThresholdGeneral), 'aiThresholdGeneral'),

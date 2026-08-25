@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use super::labels::LabelEntry;
-use super::models::{ChannelOrder, OutputActivation};
+use super::models::{ChannelOrder, ModelAdapter, OutputActivation};
 
 const BELOW_THRESHOLD_REVIEW_LIMIT: usize = 100;
 
@@ -62,6 +62,7 @@ pub struct TaggerSession {
     labels: Vec<LabelEntry>,
     input_size: u32,
     channel_order: ChannelOrder,
+    adapter: ModelAdapter,
     output_activation: OutputActivation,
     slug: String,
 }
@@ -72,6 +73,7 @@ enum SessionRuntime {
     CoreMl {
         model: coreml_native::Model,
         input_name: String,
+        padding_mask_name: Option<String>,
         output_name: String,
     },
 }
@@ -80,6 +82,7 @@ enum SessionRuntime {
 pub struct InputSpec {
     pub input_size: u32,
     pub channel_order: ChannelOrder,
+    pub adapter: ModelAdapter,
 }
 
 #[derive(Clone)]
@@ -87,6 +90,7 @@ pub struct PreparedInput {
     spec: InputSpec,
     batch_size: usize,
     values: Arc<[f32]>,
+    padding_mask: Option<Arc<[bool]>>,
 }
 
 impl TaggerSession {
@@ -97,23 +101,18 @@ impl TaggerSession {
         input_size: u32,
         channel_order: ChannelOrder,
         output_activation: OutputActivation,
+        adapter: ModelAdapter,
     ) -> Result<Self, String> {
         let model_path = model_dir.join("model.onnx");
-        // Labels CSV may be named differently per model
-        let labels_path = ["selected_tags.csv", "tags-selected.csv"]
-            .iter()
-            .map(|name| model_dir.join(name))
-            .find(|p| p.exists())
-            .ok_or_else(|| format!("Labels CSV not found in {}", model_dir.display()))?;
-
         if !model_path.exists() {
             return Err(format!("Model file not found: {}", model_path.display()));
         }
 
-        let labels = super::labels::parse_labels_csv(&labels_path)?;
-        let (runtime, backend) = create_runtime(model_dir, &model_path, input_size, labels.len())?;
+        let labels = super::labels::parse_model_labels(model_dir, adapter)?;
+        let (runtime, backend) =
+            create_runtime(model_dir, &model_path, input_size, labels.len(), adapter)?;
         if let SessionRuntime::Ort(session) = &runtime {
-            validate_session_contract(session, input_size, labels.len())?;
+            validate_session_contract(session, input_size, labels.len(), adapter)?;
         }
 
         tracing::info!(slug, labels = labels.len(), "AI tagger session loaded");
@@ -124,6 +123,7 @@ impl TaggerSession {
             labels,
             input_size,
             channel_order,
+            adapter,
             output_activation,
             slug: slug.to_string(),
         })
@@ -141,6 +141,7 @@ impl TaggerSession {
         InputSpec {
             input_size: self.input_size,
             channel_order: self.channel_order,
+            adapter: self.adapter,
         }
     }
 
@@ -182,38 +183,19 @@ impl TaggerSession {
             ));
         }
         let inference_started = Instant::now();
+        let native_probabilities = runtime_outputs_probabilities(&self.runtime);
         let logits = match &mut self.runtime {
-            SessionRuntime::Ort(session) => {
-                let input_value = ort::value::TensorRef::from_array_view((
-                    [
-                        input.batch_size as i64,
-                        i64::from(input.spec.input_size),
-                        i64::from(input.spec.input_size),
-                        3,
-                    ],
-                    Arc::clone(&input.values),
-                ))
-                .map_err(|e| format!("Failed to create input tensor: {e}"))?;
-                let outputs = session
-                    .run(ort::inputs![input_value])
-                    .map_err(|e| format!("Inference failed: {e}"))?;
-                if outputs.len() == 0 {
-                    return Err("Model produced no output tensors".into());
-                }
-                let (_, logits) = outputs[0]
-                    .try_extract_tensor::<f32>()
-                    .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
-                logits.to_vec()
-            }
+            SessionRuntime::Ort(session) => run_ort(session, input)?,
             #[cfg(target_os = "macos")]
             SessionRuntime::CoreMl {
                 model,
                 input_name,
+                padding_mask_name,
                 output_name,
             } => {
                 let values_per_image = input.values.len() / input.batch_size;
                 let mut logits = Vec::with_capacity(self.labels.len() * input.batch_size);
-                for values in input.values.chunks_exact(values_per_image) {
+                for (index, values) in input.values.chunks_exact(values_per_image).enumerate() {
                     let tensor = coreml_native::BorrowedTensor::from_f32(
                         values,
                         &[
@@ -224,9 +206,34 @@ impl TaggerSession {
                         ],
                     )
                     .map_err(|error| format!("Failed to create Core ML input: {error}"))?;
-                    let prediction = model
-                        .predict(&[(input_name, &tensor)])
-                        .map_err(|error| format!("Core ML inference failed: {error}"))?;
+                    let prediction = if let Some(mask) = &input.padding_mask {
+                        let mask_values = mask[index * input.spec.input_size.pow(2) as usize
+                            ..(index + 1) * input.spec.input_size.pow(2) as usize]
+                            .iter()
+                            .map(|value| f32::from(*value))
+                            .collect::<Vec<_>>();
+                        let mask_tensor = coreml_native::BorrowedTensor::from_f32(
+                            &mask_values,
+                            &[
+                                1,
+                                input.spec.input_size as usize,
+                                input.spec.input_size as usize,
+                            ],
+                        )
+                        .map_err(|error| format!("Failed to create Core ML mask: {error}"))?;
+                        model.predict(&[
+                            (input_name, &tensor),
+                            (
+                                padding_mask_name.as_ref().ok_or_else(|| {
+                                    "Core ML model has no padding-mask input".to_string()
+                                })?,
+                                &mask_tensor,
+                            ),
+                        ])
+                    } else {
+                        model.predict(&[(input_name, &tensor)])
+                    }
+                    .map_err(|error| format!("Core ML inference failed: {error}"))?;
                     let (output, _) = prediction
                         .get_f32(output_name)
                         .map_err(|error| format!("Failed to read Core ML output: {error}"))?;
@@ -250,7 +257,17 @@ impl TaggerSession {
         let postprocess_started = Instant::now();
         let predictions = logits
             .chunks_exact(self.labels.len())
-            .map(|batch| self.rank_predictions(batch, thresholds))
+            .map(|batch| {
+                self.rank_predictions(
+                    batch,
+                    thresholds,
+                    if native_probabilities {
+                        OutputActivation::Probability
+                    } else {
+                        self.output_activation
+                    },
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         let postprocess_ms = postprocess_started.elapsed().as_secs_f64() * 1000.0;
 
@@ -273,10 +290,11 @@ impl TaggerSession {
         &self,
         logits: &[f32],
         thresholds: &Thresholds,
+        activation: OutputActivation,
     ) -> Result<Vec<TagPrediction>, String> {
         let mut ranked = Vec::with_capacity(logits.len());
         for (index, &logit) in logits.iter().enumerate() {
-            ranked.push((index, interpret_output(logit, self.output_activation)?));
+            ranked.push((index, interpret_output(logit, activation)?));
         }
         ranked.sort_unstable_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
@@ -285,6 +303,9 @@ impl TaggerSession {
             .into_iter()
             .filter_map(|(index, confidence)| {
                 let label = &self.labels[index];
+                if label.name.starts_with('<') && label.name.ends_with('>') {
+                    return None;
+                }
                 if confidence < thresholds.for_namespace(&label.namespace) {
                     if below_threshold >= BELOW_THRESHOLD_REVIEW_LIMIT {
                         return None;
@@ -300,6 +321,82 @@ impl TaggerSession {
             })
             .collect())
     }
+}
+
+fn runtime_outputs_probabilities(runtime: &SessionRuntime) -> bool {
+    #[cfg(target_os = "macos")]
+    return matches!(runtime, SessionRuntime::CoreMl { .. });
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = runtime;
+        false
+    }
+}
+
+fn run_ort(session: &mut ort::session::Session, input: &PreparedInput) -> Result<Vec<f32>, String> {
+    let size = input.spec.input_size as usize;
+    let outputs = match input.spec.adapter {
+        ModelAdapter::Wd => {
+            let tensor = ort::value::TensorRef::from_array_view((
+                [input.batch_size as i64, size as i64, size as i64, 3],
+                Arc::clone(&input.values),
+            ))
+            .map_err(|e| format!("Failed to create model input: {e}"))?;
+            session.run(ort::inputs![tensor])
+        }
+        ModelAdapter::OppaiOracle => {
+            let values = normalized_nchw(input, [0.5; 3], [0.5; 3]);
+            let image = ort::value::Tensor::from_array((
+                [input.batch_size, 3, size, size],
+                values.into_boxed_slice(),
+            ))
+            .map_err(|e| format!("Failed to create model input: {e}"))?;
+            let mask = ndarray::Array3::from_shape_vec(
+                (input.batch_size, size, size),
+                input
+                    .padding_mask
+                    .as_ref()
+                    .ok_or_else(|| "OppaiOracle input is missing its padding mask".to_string())?
+                    .to_vec(),
+            )
+            .map_err(|e| format!("Failed to create padding mask: {e}"))?;
+            let mask = ort::value::Tensor::from_array(mask)
+                .map_err(|e| format!("Failed to create padding mask: {e}"))?;
+            session.run(ort::inputs![image, mask])
+        }
+        ModelAdapter::DanbooruTagQuery => {
+            let values = normalized_nchw(input, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]);
+            let tensor = ort::value::Tensor::from_array((
+                [input.batch_size, 3, size, size],
+                values.into_boxed_slice(),
+            ))
+            .map_err(|e| format!("Failed to create model input: {e}"))?;
+            session.run(ort::inputs![tensor])
+        }
+    }
+    .map_err(|e| format!("Inference failed: {e}"))?;
+    if outputs.len() == 0 {
+        return Err("Model produced no output tensors".into());
+    }
+    let (_, logits) = outputs[0]
+        .try_extract_tensor::<f32>()
+        .map_err(|e| format!("Failed to extract output tensor: {e}"))?;
+    Ok(logits.to_vec())
+}
+
+fn normalized_nchw(input: &PreparedInput, mean: [f32; 3], std: [f32; 3]) -> Vec<f32> {
+    let pixels = input.spec.input_size.pow(2) as usize;
+    let mut output = Vec::with_capacity(input.values.len());
+    for image in input.values.chunks_exact(pixels * 3) {
+        for channel in 0..3 {
+            output.extend(
+                image
+                    .chunks_exact(3)
+                    .map(|pixel| (pixel[channel] / 255.0 - mean[channel]) / std[channel]),
+            );
+        }
+    }
+    output
 }
 
 #[cfg(test)]
@@ -322,11 +419,12 @@ fn create_runtime(
     model_path: &Path,
     input_size: u32,
     label_count: usize,
+    adapter: ModelAdapter,
 ) -> Result<(SessionRuntime, String), String> {
     tracing::info!(model = %model_dir.display(), "Loading AI model runtime");
 
     #[cfg(target_os = "macos")]
-    if let Some(runtime) = load_native_coreml(model_dir, input_size, label_count)? {
+    if let Some(runtime) = load_native_coreml(model_dir, input_size, label_count, adapter)? {
         return Ok((runtime, "Core ML GPU/ANE".into()));
     }
 
@@ -378,6 +476,7 @@ fn load_native_coreml(
     model_dir: &Path,
     input_size: u32,
     label_count: usize,
+    adapter: ModelAdapter,
 ) -> Result<Option<SessionRuntime>, String> {
     let compiled = model_dir.join("model.mlmodelc");
     if !compiled.exists() {
@@ -387,9 +486,22 @@ fn load_native_coreml(
         .map_err(|error| format!("Failed to load native Core ML model: {error}"))?;
     let inputs = model.inputs();
     let expected_input = [1, input_size as usize, input_size as usize, 3];
-    if inputs.len() != 1 || inputs[0].shape() != Some(&expected_input[..]) {
+    let expected_inputs = if adapter == ModelAdapter::OppaiOracle {
+        2
+    } else {
+        1
+    };
+    if inputs.len() != expected_inputs || inputs[0].shape() != Some(&expected_input[..]) {
         return Err(format!(
-            "Core ML model must have one float input with shape {expected_input:?}; found {inputs:?}"
+            "Core ML model must have {expected_inputs} input(s) beginning with shape {expected_input:?}; found {inputs:?}"
+        ));
+    }
+    if adapter == ModelAdapter::OppaiOracle
+        && inputs[1].shape() != Some(&[1, input_size as usize, input_size as usize][..])
+    {
+        return Err(format!(
+            "OppaiOracle Core ML padding mask has the wrong shape: {:?}",
+            inputs[1]
         ));
     }
     let outputs = model.outputs();
@@ -400,6 +512,8 @@ fn load_native_coreml(
     }
     Ok(Some(SessionRuntime::CoreMl {
         input_name: inputs[0].name().to_string(),
+        padding_mask_name: (adapter == ModelAdapter::OppaiOracle)
+            .then(|| inputs[1].name().to_string()),
         output_name: outputs[0].name().to_string(),
         model,
     }))
@@ -409,29 +523,53 @@ fn validate_session_contract(
     session: &ort::session::Session,
     input_size: u32,
     label_count: usize,
+    adapter: ModelAdapter,
 ) -> Result<(), String> {
     use ort::value::{TensorElementType, ValueType};
 
-    if session.inputs().len() != 1 || session.outputs().len() != 1 {
+    let expected_inputs = if adapter == ModelAdapter::OppaiOracle {
+        2
+    } else {
+        1
+    };
+    if session.inputs().len() != expected_inputs || session.outputs().len() != 1 {
         return Err(format!(
-            "Tagger model must have one input and one output; found {} inputs and {} outputs",
+            "Tagger model must have {expected_inputs} input(s) and one output; found {} inputs and {} outputs",
             session.inputs().len(),
             session.outputs().len()
         ));
     }
     let expected_size = i64::from(input_size);
+    let channel_first = adapter != ModelAdapter::Wd;
     match session.inputs()[0].dtype() {
         ValueType::Tensor { ty, shape, .. }
             if *ty == TensorElementType::Float32
                 && shape.len() == 4
                 && matches!(shape[0], -1 | 1)
-                && shape[1] == expected_size
-                && shape[2] == expected_size
-                && shape[3] == 3 => {}
+                && if channel_first {
+                    shape[1] == 3 && shape[2] == expected_size && shape[3] == expected_size
+                } else {
+                    shape[1] == expected_size && shape[2] == expected_size && shape[3] == 3
+                } => {}
         other => {
             return Err(format!(
-                "Tagger model input must be float32 NHWC [1,{input_size},{input_size},3], found {other}"
+                "Tagger model input has the wrong tensor contract for {adapter:?}: {other}"
             ))
+        }
+    }
+    if adapter == ModelAdapter::OppaiOracle {
+        match session.inputs()[1].dtype() {
+            ValueType::Tensor { ty, shape, .. }
+                if *ty == TensorElementType::Bool
+                    && shape.len() == 3
+                    && matches!(shape[0], -1 | 1)
+                    && shape[1] == expected_size
+                    && shape[2] == expected_size => {}
+            other => {
+                return Err(format!(
+                    "OppaiOracle padding mask must be bool [1,{input_size},{input_size}], found {other}"
+                ))
+            }
         }
     }
     match session.outputs()[0].dtype() {
@@ -453,7 +591,7 @@ fn validate_session_contract(
 ///
 /// Steps:
 /// 1. Decode image
-/// 2. Pad to square with white background (preserving aspect ratio)
+/// 2. Letterbox using the model's registered background (preserving aspect ratio)
 /// 3. Resize to model input size
 /// 4. Convert byte channels directly to float values in `[0, 255]`
 /// 5. Reorder channels if model expects BGR
@@ -467,13 +605,16 @@ pub fn prepare_inputs(image_bytes: &[&[u8]], spec: InputSpec) -> Result<Prepared
     }
     let image_values = (spec.input_size * spec.input_size * 3) as usize;
     let mut values = Vec::with_capacity(image_values * image_bytes.len());
+    let mut padding_mask = (spec.adapter == ModelAdapter::OppaiOracle)
+        .then(|| Vec::with_capacity((image_values / 3) * image_bytes.len()));
     for bytes in image_bytes {
-        append_preprocessed_image(bytes, spec, &mut values)?;
+        append_preprocessed_image(bytes, spec, &mut values, padding_mask.as_mut())?;
     }
     Ok(PreparedInput {
         spec,
         batch_size: image_bytes.len(),
         values: Arc::from(values),
+        padding_mask: padding_mask.map(Arc::from),
     })
 }
 
@@ -481,6 +622,7 @@ fn append_preprocessed_image(
     image_bytes: &[u8],
     spec: InputSpec,
     values: &mut Vec<f32>,
+    mut padding_mask: Option<&mut Vec<bool>>,
 ) -> Result<(), String> {
     let img =
         image::load_from_memory(image_bytes).map_err(|e| format!("Failed to decode image: {e}"))?;
@@ -500,17 +642,37 @@ fn append_preprocessed_image(
         resized_height,
         image::imageops::FilterType::Lanczos3,
     );
+    let background = match spec.adapter {
+        ModelAdapter::Wd => 255,
+        ModelAdapter::OppaiOracle => 114,
+        ModelAdapter::DanbooruTagQuery => 0,
+    };
     let mut padded = image::RgbImage::from_pixel(
         spec.input_size,
         spec.input_size,
-        image::Rgb([255, 255, 255]),
+        image::Rgb([background; 3]),
     );
+    let offset_x = (spec.input_size - resized_width) / 2;
+    let offset_y = (spec.input_size - resized_height) / 2;
     image::imageops::overlay(
         &mut padded,
         &resized,
-        i64::from((spec.input_size - resized_width) / 2),
-        i64::from((spec.input_size - resized_height) / 2),
+        i64::from(offset_x),
+        i64::from(offset_y),
     );
+
+    if let Some(mask) = padding_mask.as_mut() {
+        for y in 0..spec.input_size {
+            for x in 0..spec.input_size {
+                mask.push(
+                    x < offset_x
+                        || x >= offset_x + resized_width
+                        || y < offset_y
+                        || y >= offset_y + resized_height,
+                );
+            }
+        }
+    }
 
     for pixel in padded.pixels() {
         let channels = match spec.channel_order {
@@ -565,7 +727,11 @@ mod tests {
     use std::io::Cursor;
 
     fn png(pixel: Rgb<u8>) -> Vec<u8> {
-        let image = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(1, 1, pixel));
+        png_with_size(1, 1, pixel)
+    }
+
+    fn png_with_size(width: u32, height: u32, pixel: Rgb<u8>) -> Vec<u8> {
+        let image = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(width, height, pixel));
         let mut bytes = Vec::new();
         image
             .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
@@ -580,6 +746,7 @@ mod tests {
             InputSpec {
                 input_size: 1,
                 channel_order: ChannelOrder::Bgr,
+                adapter: ModelAdapter::Wd,
             },
         )
         .unwrap();
@@ -595,12 +762,51 @@ mod tests {
             InputSpec {
                 input_size: 1,
                 channel_order: ChannelOrder::Bgr,
+                adapter: ModelAdapter::Wd,
             },
         )
         .unwrap();
 
         assert_eq!(input.batch_size, 2);
         assert_eq!(&*input.values, &[30.0, 20.0, 10.0, 60.0, 50.0, 40.0]);
+    }
+
+    #[test]
+    fn oppai_preprocessing_uses_gray_letterbox_and_padding_mask() {
+        let input = prepare_input(
+            &png_with_size(1, 2, Rgb([10, 20, 30])),
+            InputSpec {
+                input_size: 2,
+                channel_order: ChannelOrder::Rgb,
+                adapter: ModelAdapter::OppaiOracle,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            input.padding_mask.as_deref(),
+            Some(&[false, true, false, true][..])
+        );
+        assert_eq!(
+            &input.values[0..6],
+            &[10.0, 20.0, 30.0, 114.0, 114.0, 114.0]
+        );
+    }
+
+    #[test]
+    fn query_preprocessing_uses_black_rgb_letterbox() {
+        let input = prepare_input(
+            &png_with_size(1, 2, Rgb([10, 20, 30])),
+            InputSpec {
+                input_size: 2,
+                channel_order: ChannelOrder::Rgb,
+                adapter: ModelAdapter::DanbooruTagQuery,
+            },
+        )
+        .unwrap();
+
+        assert!(input.padding_mask.is_none());
+        assert_eq!(&input.values[0..6], &[10.0, 20.0, 30.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]

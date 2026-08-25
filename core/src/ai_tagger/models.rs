@@ -12,15 +12,15 @@ use ts_rs::TS;
 pub(crate) const BUNDLE_MARKER: &str = ".bundle-validated";
 
 #[derive(Debug, Clone, Deserialize)]
-pub(crate) struct CoreMlArtifact {
+pub(crate) struct RegisteredArtifact {
     pub url: String,
     pub sha256: String,
     pub size: u64,
 }
 
 #[derive(Deserialize)]
-struct CoreMlArtifactRegistry {
-    assets: std::collections::HashMap<String, CoreMlArtifact>,
+struct ArtifactRegistry {
+    assets: std::collections::HashMap<String, RegisteredArtifact>,
 }
 
 /// Channel ordering expected by the model.
@@ -37,6 +37,15 @@ pub enum ChannelOrder {
 pub enum OutputActivation {
     Probability,
     Logit,
+}
+
+/// Model-specific input and label contract retained by the portable runtime.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum ModelAdapter {
+    #[default]
+    Wd,
+    OppaiOracle,
+    DanbooruTagQuery,
 }
 
 impl Default for OutputActivation {
@@ -74,6 +83,9 @@ pub struct ModelInfo {
     #[serde(skip)]
     #[ts(skip)]
     pub output_activation: OutputActivation,
+    #[serde(skip)]
+    #[ts(skip)]
+    pub adapter: ModelAdapter,
     /// Approximate download size of the ONNX file in bytes.
     #[ts(type = "number")]
     pub size_bytes: u64,
@@ -81,12 +93,15 @@ pub struct ModelInfo {
     pub dataset: String,
     /// Verified warm single-image inference latency on the reference Mac.
     pub reference_inference_ms: f32,
+    #[serde(skip)]
+    #[ts(skip)]
+    pub(crate) label_categories: Option<RegisteredArtifact>,
     /// Heavy models trade speed for accuracy and are only recommended on
     /// machines with plenty of memory.
     pub heavy: bool,
     #[serde(skip)]
     #[ts(skip)]
-    pub(crate) coreml: Option<CoreMlArtifact>,
+    pub(crate) coreml: Option<RegisteredArtifact>,
 }
 
 /// Static registry of known models.
@@ -95,7 +110,7 @@ pub struct ModelInfo {
 /// EVA02-Large v3 is the highest-accuracy WD variant but several times
 /// slower and ~1.3 GB on disk, so it is marked heavy.
 pub fn known_models() -> Vec<ModelInfo> {
-    let mut coreml = serde_json::from_str::<CoreMlArtifactRegistry>(include_str!(concat!(
+    let mut coreml = serde_json::from_str::<ArtifactRegistry>(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../scripts/ai/coreml-artifacts.json"
     )))
@@ -112,9 +127,11 @@ pub fn known_models() -> Vec<ModelInfo> {
             input_size: 448,
             channel_order: ChannelOrder::Bgr,
             output_activation: OutputActivation::Probability,
+            adapter: ModelAdapter::Wd,
             size_bytes: 467_000_000,
             dataset: "Danbooru · general, character, rating".into(),
             reference_inference_ms: 17.74,
+            label_categories: None,
             heavy: false,
             coreml: coreml.remove("wd14-swinv2-v3"),
         },
@@ -129,9 +146,11 @@ pub fn known_models() -> Vec<ModelInfo> {
             // Z3D's reference preprocessing consumes BGR tensors.
             channel_order: ChannelOrder::Bgr,
             output_activation: OutputActivation::Probability,
+            adapter: ModelAdapter::Wd,
             size_bytes: 390_000_000,
             dataset: "e621 · general, creator, series, character, species".into(),
             reference_inference_ms: 14.71,
+            label_categories: None,
             heavy: false,
             coreml: coreml.remove("z3d-e621-convnext"),
         },
@@ -145,11 +164,53 @@ pub fn known_models() -> Vec<ModelInfo> {
             input_size: 448,
             channel_order: ChannelOrder::Bgr,
             output_activation: OutputActivation::Probability,
+            adapter: ModelAdapter::Wd,
             size_bytes: 1_260_000_000,
             dataset: "Danbooru · general, character, rating · Highest accuracy".into(),
             reference_inference_ms: 48.38,
+            label_categories: None,
             heavy: true,
             coreml: coreml.remove("wd14-eva02-large-v3"),
+        },
+        ModelInfo {
+            slug: "oppai-oracle-v1-1".into(),
+            label: "OppaiOracle V1.1".into(),
+            onnx_url: "https://huggingface.co/Grio43/OppaiOracle/resolve/96992fa30568c386e9fe7c8a1a68f798a3202c09/V1.1_onnx/model.onnx".into(),
+            onnx_sha256: "8567852deb135eccfe4b8445d48e4476ee8846436486679adc0642cfeda07d13".into(),
+            labels_url: "https://huggingface.co/Grio43/OppaiOracle/resolve/96992fa30568c386e9fe7c8a1a68f798a3202c09/V1.1_onnx/selected_tags.csv".into(),
+            labels_sha256: "6e51d4a4023d52e5b6485123be113515ba70d137150d7976168f4d5b243e5da8".into(),
+            input_size: 448,
+            channel_order: ChannelOrder::Rgb,
+            output_activation: OutputActivation::Probability,
+            adapter: ModelAdapter::OppaiOracle,
+            size_bytes: 993_246_982,
+            dataset: "Danbooru · wide-vocabulary general tags".into(),
+            reference_inference_ms: 88.58,
+            label_categories: None,
+            heavy: true,
+            coreml: coreml.remove("oppai-oracle-v1-1"),
+        },
+        ModelInfo {
+            slug: "danbooru-tag-query-b16".into(),
+            label: "DanbooruTagQuery B16".into(),
+            onnx_url: "https://huggingface.co/realphongha/danbooru-tag-query/resolve/d2f8da27a23db4adf95c3e663af183b92784ad3e/models/DanbooruTagQuery_b16_448x448/model.onnx".into(),
+            onnx_sha256: "aef21a2a04605ba1b059e6a14471dbc6fec7589753afb92f352336ef60caa987".into(),
+            labels_url: "https://huggingface.co/realphongha/danbooru-tag-query/resolve/d2f8da27a23db4adf95c3e663af183b92784ad3e/models/DanbooruTagQuery_b16_448x448/tag_to_id.json".into(),
+            labels_sha256: "00959521d85ff61574d6cd35ac909dc67cf68cb65ba6267cf27ff64785ee5935".into(),
+            input_size: 448,
+            channel_order: ChannelOrder::Rgb,
+            output_activation: OutputActivation::Logit,
+            adapter: ModelAdapter::DanbooruTagQuery,
+            size_bytes: 387_406_778,
+            dataset: "Danbooru · general, character, series".into(),
+            reference_inference_ms: 13.23,
+            label_categories: Some(RegisteredArtifact {
+                url: "https://huggingface.co/realphongha/danbooru-tag-query/resolve/d2f8da27a23db4adf95c3e663af183b92784ad3e/models/DanbooruTagQuery_b16_448x448/tag_category.json".into(),
+                sha256: "32490933a3054325a6c9d941123fc5ace3fe1f535826756083ce201ef243b396".into(),
+                size: 246_458,
+            }),
+            heavy: false,
+            coreml: coreml.remove("danbooru-tag-query-b16"),
         },
     ]
 }
@@ -213,9 +274,8 @@ fn bundle_marker_content(model: &ModelInfo) -> String {
         "picto-ai-model-bundle-v3\nmodel={}\nlabels={}\n",
         model.onnx_sha256, model.labels_sha256
     );
-    #[cfg(target_os = "macos")]
-    if let Some(artifact) = &model.coreml {
-        marker.push_str(&format!("coreml={}\n", artifact.sha256));
+    if let Some(categories) = &model.label_categories {
+        marker.push_str(&format!("label_categories={}\n", categories.sha256));
     }
     marker
 }
@@ -223,17 +283,14 @@ fn bundle_marker_content(model: &ModelInfo) -> String {
 pub(crate) fn bundle_is_marked(dir: &std::path::Path, model: &ModelInfo) -> bool {
     let portable = dir.join("model.onnx").is_file()
         && dir.join("selected_tags.csv").is_file()
+        && model
+            .label_categories
+            .as_ref()
+            .is_none_or(|_| dir.join("label-categories.json").is_file())
         && std::fs::read_to_string(dir.join(BUNDLE_MARKER))
             .ok()
             .as_deref()
             == Some(bundle_marker_content(model).as_str());
-    #[cfg(target_os = "macos")]
-    return portable
-        && model
-            .coreml
-            .as_ref()
-            .is_none_or(|_| dir.join("model.mlpackage").is_dir());
-    #[cfg(not(target_os = "macos"))]
     portable
 }
 
@@ -252,10 +309,17 @@ pub(crate) fn validate_bundle_integrity(
     if !bundle_is_marked(dir, model) {
         return Err(format!("Model bundle '{}' is incomplete", model.slug));
     }
-    for (path, expected) in [
+    let mut artifacts = vec![
         (dir.join("model.onnx"), model.onnx_sha256.as_str()),
         (dir.join("selected_tags.csv"), model.labels_sha256.as_str()),
-    ] {
+    ];
+    if let Some(categories) = &model.label_categories {
+        artifacts.push((
+            dir.join("label-categories.json"),
+            categories.sha256.as_str(),
+        ));
+    }
+    for (path, expected) in artifacts {
         let mut file = std::fs::File::open(&path)
             .map_err(|error| format!("Failed to read {}: {error}", path.display()))?;
         let mut hasher = Sha256::new();
@@ -286,17 +350,29 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    fn add_platform_artifact(dir: &std::path::Path) {
-        #[cfg(target_os = "macos")]
-        std::fs::create_dir_all(dir.join("model.mlpackage")).unwrap();
-    }
-
     #[test]
     fn unknown_slugs_are_not_downloaded() {
         let root = TempDir::new().unwrap();
         let unknown = "../outside";
 
         assert!(!is_model_downloaded(root.path(), unknown));
+    }
+
+    #[test]
+    fn product_registry_contains_every_validated_tagger() {
+        let models = known_models();
+        assert_eq!(models.len(), 5);
+        assert!(models.iter().any(|model| {
+            model.slug == "oppai-oracle-v1-1"
+                && model.adapter == ModelAdapter::OppaiOracle
+                && model.reference_inference_ms == 88.58
+        }));
+        assert!(models.iter().any(|model| {
+            model.slug == "danbooru-tag-query-b16"
+                && model.adapter == ModelAdapter::DanbooruTagQuery
+                && model.reference_inference_ms == 13.23
+                && model.label_categories.is_some()
+        }));
     }
 
     #[test]
@@ -311,8 +387,6 @@ mod tests {
             b"tag_id,name,category,count\n0,tag,0,1\n",
         )
         .unwrap();
-        add_platform_artifact(&dir);
-
         assert!(!is_model_downloaded(root.path(), "wd14-swinv2-v3"));
         mark_bundle_validated(&dir, &model).unwrap();
         assert!(is_model_downloaded(root.path(), "wd14-swinv2-v3"));
@@ -352,7 +426,6 @@ mod tests {
         model.labels_sha256 = hex::encode(Sha256::digest(labels));
         std::fs::write(dir.join("model.onnx"), onnx).unwrap();
         std::fs::write(dir.join("selected_tags.csv"), labels).unwrap();
-        add_platform_artifact(&dir);
         mark_bundle_validated(&dir, &model).unwrap();
 
         validate_bundle_integrity(&dir, &model).unwrap();

@@ -43,6 +43,10 @@ pub struct AiModelStatus {
     pub heavy: bool,
     pub optimization_supported: bool,
     pub optimized: bool,
+    #[ts(type = "number | null")]
+    pub downloaded_bytes: Option<u64>,
+    #[ts(type = "number | null")]
+    pub download_total_bytes: Option<u64>,
     #[ts(type = "number")]
     pub size_bytes: u64,
     pub dataset: String,
@@ -130,11 +134,13 @@ pub async fn model_status(application: &Application) -> Result<AiRuntimeStatus, 
     let cached_backend = sessions
         .values()
         .find_map(|session| session.lock().ok().map(|session| session.gpu_backend()));
+    let downloads = application.ai_model_downloads().lock().await;
     let models = models::known_models()
         .into_iter()
         .map(|model| {
             let optimization_supported = models::optimization_supported(&models_root, &model.slug);
             let optimized = models::is_model_optimized(&models_root, &model.slug);
+            let download = downloads.get(&model.slug);
             AiModelStatus {
                 enabled: setting_bool(&settings, model_setting_key(&model.slug)).unwrap_or(false),
                 downloaded: models::is_model_downloaded(&models_root, &model.slug),
@@ -145,6 +151,12 @@ pub async fn model_status(application: &Application) -> Result<AiRuntimeStatus, 
                 heavy: model.heavy,
                 optimization_supported,
                 optimized,
+                downloaded_bytes: download.map(|download| {
+                    download
+                        .downloaded_bytes
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                }),
+                download_total_bytes: download.map(|download| download.total_bytes),
                 size_bytes: model.size_bytes,
                 dataset: model.dataset,
                 reference_inference_ms: model.reference_inference_ms,
@@ -521,6 +533,8 @@ fn model_setting_key(slug: &str) -> &'static str {
         "wd14-swinv2-v3" => "aiTaggerWd14Enabled",
         "z3d-e621-convnext" => "aiTaggerE621Enabled",
         "wd14-eva02-large-v3" => "aiTaggerEva02Enabled",
+        "oppai-oracle-v1-1" => "aiTaggerOppaiOracleEnabled",
+        "danbooru-tag-query-b16" => "aiTaggerDanbooruTagQueryEnabled",
         _ => "",
     }
 }
@@ -588,6 +602,7 @@ async fn ensure_sessions(application: &Application, models: &[ModelInfo]) -> Res
     let input_size = model.input_size;
     let channel_order = model.channel_order;
     let output_activation = model.output_activation;
+    let adapter = model.adapter;
     let session = tokio::task::spawn_blocking(move || {
         crate::ai_tagger::inference::TaggerSession::load(
             &model_dir,
@@ -595,6 +610,7 @@ async fn ensure_sessions(application: &Application, models: &[ModelInfo]) -> Res
             input_size,
             channel_order,
             output_activation,
+            adapter,
         )
     })
     .await

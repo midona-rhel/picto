@@ -52,13 +52,6 @@ def prepare_image(
     return np.expand_dims(values, 0).copy(), np.expand_dims(padding_mask, 0)
 
 
-def prepare_stretched_image(path: Path, size: int) -> np.ndarray:
-    image = Image.open(path).convert("RGB").resize(
-        (size, size), Image.Resampling.LANCZOS
-    )
-    return np.expand_dims(np.asarray(image, dtype=np.float32), 0).copy()
-
-
 def verify(
     spec: dict, package: Path, fixtures: list[Path], source_root: Path | None
 ) -> dict:
@@ -89,15 +82,17 @@ def verify(
     threshold_agreements = []
     for fixture in fixtures:
         if spec["adapter"] == "oppai_oracle":
-            values = prepare_stretched_image(fixture, spec["input_size"])
-            padding_mask = np.zeros(
-                (1, spec["input_size"], spec["input_size"]), dtype=bool
+            values, padding_mask = prepare_image(
+                fixture, spec["input_size"], rgb=True, background=114
             )
             expected_inputs = {
                 onnx_inputs[0]: (values.transpose(0, 3, 1, 2) / 127.5 - 1.0),
                 onnx_inputs[1]: padding_mask,
             }
-            actual_inputs = {"input": values}
+            actual_inputs = {
+                "input": values,
+                "padding_mask": padding_mask.astype(np.float32),
+            }
         elif spec["adapter"] == "danbooru_tag_query":
             values, _ = prepare_image(
                 fixture, spec["input_size"], rgb=True, background=0

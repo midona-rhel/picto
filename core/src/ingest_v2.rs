@@ -964,6 +964,8 @@ fn should_enqueue_ai(
         "aiTaggerWd14Enabled",
         "aiTaggerE621Enabled",
         "aiTaggerEva02Enabled",
+        "aiTaggerOppaiOracleEnabled",
+        "aiTaggerDanbooruTagQueryEnabled",
     ]
     .iter()
     .any(|key| {

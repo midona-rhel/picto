@@ -1,26 +1,41 @@
 //! Replacement AI model inventory and filesystem lifecycle.
 
 use std::path::PathBuf;
+use std::sync::{atomic::AtomicU64, Arc};
 
 use tokio_util::sync::CancellationToken;
 
 use crate::ai_tagger::models::{self, ModelInfo};
-use crate::app::Application;
+use crate::app::{AiModelDownload, Application};
 
 pub async fn download(application: &Application, slug: &str) -> Result<(), String> {
     let model = require_model(slug)?;
     let token = CancellationToken::new();
+    let downloaded_bytes = Arc::new(AtomicU64::new(0));
+    let total_bytes = model.size_bytes
+        + model
+            .label_categories
+            .as_ref()
+            .map_or(0, |artifact| artifact.size);
     {
         let mut downloads = application.ai_model_downloads().lock().await;
         if downloads.contains_key(&model.slug) {
             return Err(format!("Model '{}' is already downloading", model.slug));
         }
-        downloads.insert(model.slug.clone(), token.clone());
+        downloads.insert(
+            model.slug.clone(),
+            AiModelDownload {
+                cancel: token.clone(),
+                downloaded_bytes: Arc::clone(&downloaded_bytes),
+                total_bytes,
+            },
+        );
     }
     let result = crate::ai_tagger::download::download_model_quiet(
         &model.slug,
         &models_root(application),
         &token,
+        downloaded_bytes,
         application.ai_model_lifecycle(),
     )
     .await;
@@ -43,7 +58,7 @@ pub async fn cancel_download(application: &Application, slug: &str) -> Result<()
         .await
         .get(&model.slug)
     {
-        token.cancel();
+        token.cancel.cancel();
     }
     Ok(())
 }
