@@ -72,4 +72,29 @@ describe('FolderPickerPanel row context actions', () => {
 
     expect(onApplyFolderFilter).toHaveBeenCalledWith([7], [], 'all');
   });
+
+  it('updates ordinary multi-folder assignment on each click without an Apply step', () => {
+    const onApplyFolders = vi.fn();
+    store.set(sidebarNodesAtom, [
+      {
+        id: 'folder:7', kind: 'folder', name: 'Reference', parent_id: 'section:folders',
+      } as SidebarNodeDto,
+      {
+        id: 'folder:8', kind: 'folder', name: 'Archive', parent_id: 'section:folders',
+      } as SidebarNodeDto,
+    ]);
+    store.set(folderPickerPortalAtom, {
+      open: true,
+      selectedFolderIds: [],
+      onApplyFolders,
+    });
+
+    render(<MantineProvider><FolderPickerPanel /></MantineProvider>);
+
+    expect(screen.queryByRole('button', { name: /Apply/ })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByText('Reference'));
+    expect(onApplyFolders).toHaveBeenLastCalledWith([7]);
+    fireEvent.click(screen.getByText('Archive'));
+    expect(onApplyFolders).toHaveBeenLastCalledWith([7, 8]);
+  });
 });

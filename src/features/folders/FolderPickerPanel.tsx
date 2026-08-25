@@ -35,7 +35,7 @@ export function FolderPickerPanel() {
   const anchor = portalState.anchor ?? null;
   const filterSelection = portalState.onApplyFolderFilter != null;
   const parentSelection = portalState.onApplyFolderParent != null;
-  const customSelection = filterSelection || portalState.onApplyFolders != null || parentSelection;
+  const immediateSelection = !filterSelection && !parentSelection;
   const close = useCallback(() => setPortalState({ open: false }), [setPortalState]);
 
   const [query, setQuery] = useState('');
@@ -50,10 +50,6 @@ export function FolderPickerPanel() {
   const contextMenu = useContextMenu();
   const [createTarget, setCreateTarget] = useState<{ parentId: number | null; title: string } | null>(null);
   const [folderName, setFolderName] = useState('');
-
-  const memberOf = useMemo(() => {
-    return new Set(customSelection ? [] : (entityData?.folder_ids ?? []));
-  }, [customSelection, entityData]);
 
   // Build tree + flat visible IDs for range selection
   const availableFolders = useMemo(() => {
@@ -78,19 +74,35 @@ export function FolderPickerPanel() {
   useEffect(() => {
     if (open) {
       setQuery('');
-      setSelected(customSelection ? new Set(portalState.selectedFolderIds ?? []) : new Set());
+      setSelected(new Set(portalState.selectedFolderIds ?? (immediateSelection ? entityData?.folder_ids ?? [] : [])));
       setRootSelected(parentSelection && (portalState.selectedFolderIds?.length ?? 0) === 0);
       setExcluded(filterSelection ? new Set(portalState.excludedFolderIds ?? []) : new Set());
       setMatchMode(portalState.filterMatchMode ?? 'any');
       lastClickedRef.current = null;
       setTimeout(() => searchRef.current?.focus(), 50);
     }
-  }, [open, customSelection, filterSelection, parentSelection, portalState.selectedFolderIds, portalState.excludedFolderIds, portalState.filterMatchMode]);
+  }, [open, entityData?.folder_ids, filterSelection, immediateSelection, parentSelection, portalState.selectedFolderIds, portalState.excludedFolderIds, portalState.filterMatchMode]);
+
+  const commitImmediateSelection = useCallback((next: Set<number>, folderId: number, adding: boolean) => {
+    if (portalState.onApplyFolders) {
+      portalState.onApplyFolders([...next]);
+    } else if (target) {
+      void entityMutations.updateTargetFolderMembership(target, folderId, adding ? 'add' : 'remove');
+    }
+  }, [portalState.onApplyFolders, target]);
 
   const handleToggle = useCallback((folderId: number, event: React.MouseEvent) => {
     if (parentSelection) {
       setSelected(new Set([folderId]));
       setRootSelected(false);
+      return;
+    }
+    if (immediateSelection) {
+      const next = new Set(selected);
+      const removing = next.delete(folderId);
+      if (!removing) next.add(folderId);
+      setSelected(next);
+      commitImmediateSelection(next, folderId, !removing);
       return;
     }
     if (filterSelection) {
@@ -112,7 +124,7 @@ export function FolderPickerPanel() {
           return next;
         });
       }
-    } else if (customSelection || event.metaKey || event.ctrlKey) {
+    } else if (event.metaKey || event.ctrlKey) {
       setSelected((prev) => {
         const next = new Set(prev);
         if (next.has(folderId)) next.delete(folderId); else next.add(folderId);
@@ -123,7 +135,7 @@ export function FolderPickerPanel() {
       setSelected(new Set([folderId]));
       lastClickedRef.current = folderId;
     }
-  }, [flatIds, customSelection, filterSelection, parentSelection]);
+  }, [commitImmediateSelection, filterSelection, flatIds, immediateSelection, parentSelection, selected]);
 
   const handleExclude = useCallback((folderId: number) => {
     if (!filterSelection) return;
@@ -168,26 +180,21 @@ export function FolderPickerPanel() {
     if (!name || !createTarget) return;
     const nodeId = await foldersController.create(name, createTarget.parentId);
     const folderId = Number(nodeId.slice(7));
-    setSelected(new Set([folderId]));
+    const next = immediateSelection ? new Set([...selected, folderId]) : new Set([folderId]);
+    setSelected(next);
+    if (immediateSelection) commitImmediateSelection(next, folderId, true);
     setRootSelected(false);
     setCreateTarget(null);
-  }, [createTarget, folderName]);
+  }, [commitImmediateSelection, createTarget, folderName, immediateSelection, selected]);
 
   const applyFolders = useCallback(() => {
     if (portalState.onApplyFolderFilter) {
       portalState.onApplyFolderFilter([...selected], [...excluded], matchMode);
     } else if (portalState.onApplyFolderParent) {
       portalState.onApplyFolderParent(rootSelected ? null : [...selected][0] ?? null);
-    } else if (portalState.onApplyFolders) {
-      portalState.onApplyFolders([...selected]);
-    } else {
-      if (!target || selected.size === 0) return;
-      for (const folderId of selected) {
-        void entityMutations.updateTargetFolderMembership(target, folderId, 'add');
-      }
     }
     close();
-  }, [target, selected, excluded, rootSelected, matchMode, close, portalState]);
+  }, [selected, excluded, rootSelected, matchMode, close, portalState]);
 
   if (!open) return null;
 
@@ -223,13 +230,13 @@ export function FolderPickerPanel() {
             {filterSelection ? <><span className={shellStyles.kbd}>Right-click</span> Exclude</> : null}
           </span>
           <div className={btnStyles.btnGroup}>
-            {(customSelection || selected.size > 0) && (
+            {(filterSelection || parentSelection) && (
               <button
                 className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
                 onClick={applyFolders}
                 type="button"
               >
-                {parentSelection ? 'Move' : customSelection ? `Apply (${selected.size})` : `Add (${selected.size})`}
+                {parentSelection ? 'Move' : `Apply (${selected.size})`}
               </button>
             )}
           </div>
@@ -257,7 +264,6 @@ export function FolderPickerPanel() {
         onExclude={filterSelection ? handleExclude : undefined}
         onContextMenu={filterSelection ? undefined : openFolderContextMenu}
         search={query}
-        memberOf={memberOf}
       />
       {contextMenu.state ? (
         <ContextMenu

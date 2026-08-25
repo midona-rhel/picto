@@ -56,8 +56,7 @@
 .body {
   flex: 1;
   min-height: 0;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
 }

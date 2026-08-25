@@ -73,8 +73,7 @@ export function TagSelectPanel() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [namespaces, setNamespaces] = useState<CanonicalNamespaceSummary[]>([]);
-  const [checked, setChecked] = useState<Set<string>>(new Set());    // tags to ADD
-  const [unchecked, setUnchecked] = useState<Set<string>>(new Set()); // tags to REMOVE
+  const [selectedTags, setSelectedTags] = useState<Set<string>>(new Set());
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [matchMode, setMatchMode] = useState<FilterMatchMode>('any');
   const [sidebarMode, setSidebarMode] = useState<SidebarMode>('all');
@@ -142,8 +141,7 @@ export function TagSelectPanel() {
   useEffect(() => {
     if (open) {
       setQuery('');
-      setChecked(new Set());
-      setUnchecked(new Set());
+      setSelectedTags(new Set(entityTagKeys));
       setExcluded(new Set(customExcludedTags ?? []));
       setMatchMode(portalState.filterMatchMode ?? 'any');
       setSidebarMode('all');
@@ -152,7 +150,7 @@ export function TagSelectPanel() {
       loadTags('');
       setTimeout(() => searchRef.current?.focus(), 50);
     }
-  }, [open, loadTags, customExcludedTags, portalState.filterMatchMode]);
+  }, [open, loadTags, customExcludedTags, portalState.filterMatchMode]); // entityTagKeys is the opening snapshot
 
   // Sidebar mode change → reload
   useEffect(() => {
@@ -233,70 +231,48 @@ export function TagSelectPanel() {
       next.delete(tag);
       return next;
     });
-    const isOnEntity = entityTagKeys.has(tag);
-    if (isOnEntity) {
-      // Tag is already on entity — toggle unchecked (pending removal)
-      setUnchecked((prev) => {
-        const next = new Set(prev);
-        if (next.has(tag)) next.delete(tag);
-        else next.add(tag);
-        return next;
-      });
-      // Remove from checked if it was there
-      setChecked((prev) => { const next = new Set(prev); next.delete(tag); return next; });
-    } else {
-      // Tag is not on entity — toggle checked (pending addition)
-      setChecked((prev) => {
-        const next = new Set(prev);
-        if (next.has(tag)) next.delete(tag);
-        else next.add(tag);
-        return next;
-      });
+    const next = new Set(selectedTags);
+    const removing = next.delete(tag);
+    if (!removing) next.add(tag);
+    setSelectedTags(next);
+
+    if (onApplyTagFilter) return;
+    if (onApplyTags) {
+      onApplyTags([...next]);
+    } else if (target) {
+      void (removing
+        ? entityMutations.removeTargetTags(target, [tag])
+        : entityMutations.addTargetTags(target, [tag]));
     }
-  }, [entityTagKeys]);
+  }, [onApplyTagFilter, onApplyTags, selectedTags, target]);
 
   const toggleExcludedTag = useCallback((tag: string) => {
     if (!onApplyTagFilter) return;
-    setChecked((current) => { const next = new Set(current); next.delete(tag); return next; });
-    setUnchecked((current) => {
-      const next = new Set(current);
-      if (entityTagKeys.has(tag)) next.add(tag);
-      return next;
-    });
+    setSelectedTags((current) => { const next = new Set(current); next.delete(tag); return next; });
     setExcluded((current) => {
       const next = new Set(current);
       if (next.has(tag)) next.delete(tag);
       else next.add(tag);
       return next;
     });
-  }, [entityTagKeys, onApplyTagFilter]);
+  }, [onApplyTagFilter]);
 
-  const applyTags = useCallback(() => {
+  const selectionChanged = [...new Set([...entityTagKeys, ...selectedTags])]
+    .filter((tag) => entityTagKeys.has(tag) !== selectedTags.has(tag)).length;
+
+  const applyFilter = useCallback(() => {
     const excludedChanged = onApplyTagFilter
       && [...excluded].sort().join('\n') !== [...(customExcludedTags ?? [])].sort().join('\n');
     const modeChanged = onApplyTagFilter && matchMode !== (portalState.filterMatchMode ?? 'any');
-    if (checked.size === 0 && unchecked.size === 0 && !excludedChanged && !modeChanged) return;
-    const next = new Set(entityTagKeys);
-    checked.forEach((tag) => next.add(tag));
-    unchecked.forEach((tag) => next.delete(tag));
-    if (onApplyTagFilter) {
-      onApplyTagFilter([...next], [...excluded], matchMode);
-    } else if (onApplyTags) {
-      onApplyTags([...next]);
-    } else {
-      if (!target) return;
-      if (checked.size > 0) void entityMutations.addTargetTags(target, [...checked]);
-      if (unchecked.size > 0) void entityMutations.removeTargetTags(target, [...unchecked]);
-    }
+    if (!onApplyTagFilter || (!selectionChanged && !excludedChanged && !modeChanged)) return;
+    onApplyTagFilter([...selectedTags], [...excluded], matchMode);
     if (!pinned) closePortal();
-    setChecked(new Set());
-    setUnchecked(new Set());
-  }, [target, checked, unchecked, excluded, customExcludedTags, matchMode, pinned, closePortal, onApplyTags, onApplyTagFilter, entityTagKeys, portalState.filterMatchMode]);
+  }, [closePortal, customExcludedTags, excluded, matchMode, onApplyTagFilter, pinned, portalState.filterMatchMode, selectedTags, selectionChanged]);
 
   const excludedChanged = Boolean(onApplyTagFilter
     && [...excluded].sort().join('\n') !== [...(customExcludedTags ?? [])].sort().join('\n'));
   const modeChanged = Boolean(onApplyTagFilter && matchMode !== (portalState.filterMatchMode ?? 'any'));
-  const changeCount = checked.size + unchecked.size + (excludedChanged ? 1 : 0) + (modeChanged ? 1 : 0);
+  const changeCount = selectionChanged + (excludedChanged ? 1 : 0) + (modeChanged ? 1 : 0);
 
   // Keyboard
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
@@ -368,10 +344,10 @@ export function TagSelectPanel() {
           </span>
           <div className={btnStyles.btnGroup}>
             <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
-            {changeCount > 0 && (
+            {onApplyTagFilter && changeCount > 0 && (
               <button
                 className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
-                onClick={applyTags}
+                onClick={applyFilter}
                 type="button"
               >
                 Apply ({changeCount})
@@ -422,7 +398,7 @@ export function TagSelectPanel() {
         </div>
 
         {/* Content */}
-        <div className={styles.content}>
+        <div className={`${styles.content} ${!showSidebar ? styles.contentExpanded : ''}`}>
           <div ref={listRef} className={styles.tagListScroller}>
             {displayTags.length === 0 ? (
               <div className={styles.emptyState}>
@@ -438,12 +414,8 @@ export function TagSelectPanel() {
                     return null;
                   }
                   const fullTag = formatTag(tag);
-                  const isOnEntity = entityTagKeys.has(fullTag);
-                  const isPendingAdd = checked.has(fullTag);
-                  const isPendingRemove = unchecked.has(fullTag);
                   const isExcluded = excluded.has(fullTag);
-                  // Show checked if: on entity and not pending removal, OR pending addition
-                  const showChecked = (isOnEntity && !isPendingRemove) || isPendingAdd;
+                  const showChecked = selectedTags.has(fullTag);
                   const isFocused = vItem.index === focusIdx;
                   return (
                     <div
