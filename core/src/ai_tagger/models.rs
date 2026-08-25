@@ -168,6 +168,41 @@ pub fn is_model_downloaded(models_root: &std::path::Path, slug: &str) -> bool {
     bundle_is_marked(&dir, &model)
 }
 
+pub fn optimization_supported(models_root: &std::path::Path, slug: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(model) = find_model(slug) else {
+            return false;
+        };
+        return model.coreml.is_some()
+            && model_dir(models_root, &model)
+                .join("model.mlpackage")
+                .is_dir();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (models_root, slug);
+        false
+    }
+}
+
+pub fn is_model_optimized(models_root: &std::path::Path, slug: &str) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        let Some(model) = find_model(slug) else {
+            return false;
+        };
+        return model_dir(models_root, &model)
+            .join("model.mlmodelc")
+            .is_dir();
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (models_root, slug);
+        false
+    }
+}
+
 fn bundle_marker_content(model: &ModelInfo) -> String {
     let mut marker = format!(
         "picto-ai-model-bundle-v3\nmodel={}\nlabels={}\n",

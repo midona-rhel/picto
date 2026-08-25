@@ -690,6 +690,11 @@ pub async fn dispatch_async(
             crate::ai_models_v2::delete(application, &input.slug).await?;
             return read(crate::ai_runtime_v2::model_status(application).await?);
         }
+        "ai.models.optimize" => {
+            let input: ModelInput = parse(args_json)?;
+            crate::ai_models_v2::optimize(application, &input.slug).await?;
+            return read(crate::ai_runtime_v2::model_status(application).await?);
+        }
         "ai.review.predict" => {
             let input: crate::ai_runtime_v2::ManualPredictionRequest = parse(args_json)?;
             return read(crate::ai_runtime_v2::manual_predict(application, input).await?);

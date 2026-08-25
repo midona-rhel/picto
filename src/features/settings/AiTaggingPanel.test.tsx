@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AiTaggingPanel } from './AiTaggingPanel';
 
 const mocks = vi.hoisted(() => ({
-  status: vi.fn(), download: vi.fn(), cancelDownload: vi.fn(), deleteModel: vi.fn(),
+  status: vi.fn(), download: vi.fn(), cancelDownload: vi.fn(), deleteModel: vi.fn(), optimizeModel: vi.fn(),
 }));
 
 vi.mock('../../platform/aiTaggerApi', () => ({
@@ -12,11 +12,13 @@ vi.mock('../../platform/aiTaggerApi', () => ({
   aiTaggerDownloadModel: mocks.download,
   aiTaggerCancelDownload: mocks.cancelDownload,
   aiTaggerDeleteModel: mocks.deleteModel,
+  aiTaggerOptimizeModel: mocks.optimizeModel,
 }));
 
 const model = {
   slug: 'wd14-swinv2-v3', label: 'WD14', enabled: false, downloaded: false,
   sessionLoaded: false, recommended: true, heavy: false, sizeBytes: 1024 * 1024, dataset: 'test',
+  optimizationSupported: false, optimized: false,
 };
 
 const settings = {
@@ -76,6 +78,7 @@ beforeEach(() => {
   mocks.download.mockResolvedValue(status(true));
   mocks.cancelDownload.mockResolvedValue(undefined);
   mocks.deleteModel.mockResolvedValue(status(false));
+  mocks.optimizeModel.mockResolvedValue(status(true));
 });
 
 describe('AiTaggingPanel', () => {
@@ -114,6 +117,21 @@ describe('AiTaggingPanel', () => {
     await setupUser().click(switches[1]);
     expect(onSettingsChange).toHaveBeenNthCalledWith(1, { aiTaggerWd14Enabled: true });
     expect(onSettingsChange).toHaveBeenNthCalledWith(2, { aiTaggerE621Enabled: true });
+  });
+
+  it('exposes the explicit Mac optimization step for supported downloads', async () => {
+    mocks.status.mockResolvedValue({
+      ...status(true),
+      models: [{ ...model, downloaded: true, optimizationSupported: true }],
+    });
+    mocks.optimizeModel.mockResolvedValue({
+      ...status(true),
+      models: [{ ...model, downloaded: true, optimizationSupported: true, optimized: true }],
+    });
+    await renderPanel();
+    await setupUser().click(await screen.findByRole('button', { name: 'Optimize for this Mac' }));
+    await waitFor(() => expect(mocks.optimizeModel).toHaveBeenCalledWith(model.slug));
+    expect(await screen.findByText('Optimized')).toBeInTheDocument();
   });
 
   it('cancels an active model operation through the replacement command', async () => {

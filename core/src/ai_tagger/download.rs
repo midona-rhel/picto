@@ -55,19 +55,8 @@ async fn download_model_inner(
         .map_err(|e| format!("Failed to download labels CSV: {e}"))?;
         cancelled(cancel)?;
 
-        #[cfg(target_os = "macos")]
-        if let Some(artifact) = &model_info.coreml {
-            let archive = temp_dir.join("coreml.zip");
-            download_file(&artifact.url, &artifact.sha256, &archive, cancel)
-                .await
-                .map_err(|error| format!("Failed to download Core ML model: {error}"))?;
-            cancelled(cancel)?;
-            extract_coreml_archive(&archive, &temp_dir, artifact.size)?;
-            std::fs::remove_file(&archive)
-                .map_err(|error| format!("Failed to remove Core ML archive: {error}"))?;
-        }
-
-        // Validate the complete pair before it can become visible to the app.
+        // Validate the portable pair before adding any platform-specific
+        // optimization. A model download must never hide a Core ML compile.
         let labels = super::labels::parse_labels_csv(&labels_path)?;
         if labels.is_empty() {
             return Err("Downloaded labels CSV is empty".into());
@@ -89,6 +78,19 @@ async fn download_model_inner(
         .map_err(|error| format!("Model validation task failed: {error}"))??;
         drop(session);
         cancelled(cancel)?;
+
+        #[cfg(target_os = "macos")]
+        if let Some(artifact) = &model_info.coreml {
+            let archive = temp_dir.join("coreml.zip");
+            download_file(&artifact.url, &artifact.sha256, &archive, cancel)
+                .await
+                .map_err(|error| format!("Failed to download Core ML model: {error}"))?;
+            cancelled(cancel)?;
+            extract_coreml_archive(&archive, &temp_dir, artifact.size)?;
+            std::fs::remove_file(&archive)
+                .map_err(|error| format!("Failed to remove Core ML archive: {error}"))?;
+        }
+
         super::models::mark_bundle_validated(&temp_dir, &model_info)?;
         let _lifecycle = lifecycle.lock().await;
         activate_bundle(&temp_dir, &model_dir, models_root, slug)?;

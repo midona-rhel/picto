@@ -40,6 +40,11 @@ export function aiTaggerDeleteModel(slug: string): Promise<AiRuntimeStatus> {
   return invoke<AiRuntimeStatus>('ai.models.delete', input);
 }
 
+export function aiTaggerOptimizeModel(slug: string): Promise<AiRuntimeStatus> {
+  const input: ModelInput = { slug };
+  return invoke<AiRuntimeStatus>('ai.models.optimize', input);
+}
+
 /** Predict tags for logical media items; physical file hashes stay backend-only. */
 export function aiTagPredict(itemIds: number[], models?: string[]): Promise<ManualPredictionResponse> {
   return invoke<ManualPredictionResponse>('ai.review.predict', {

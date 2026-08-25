@@ -41,6 +41,8 @@ pub struct AiModelStatus {
     pub session_loaded: bool,
     pub recommended: bool,
     pub heavy: bool,
+    pub optimization_supported: bool,
+    pub optimized: bool,
     #[ts(type = "number")]
     pub size_bytes: u64,
     pub dataset: String,
@@ -129,16 +131,22 @@ pub async fn model_status(application: &Application) -> Result<AiRuntimeStatus, 
         .find_map(|session| session.lock().ok().map(|session| session.gpu_backend()));
     let models = models::known_models()
         .into_iter()
-        .map(|model| AiModelStatus {
-            enabled: setting_bool(&settings, model_setting_key(&model.slug)).unwrap_or(false),
-            downloaded: models::is_model_downloaded(&models_root, &model.slug),
-            session_loaded: sessions.contains_key(&model.slug),
-            recommended: !model.heavy,
-            slug: model.slug,
-            label: model.label,
-            heavy: model.heavy,
-            size_bytes: model.size_bytes,
-            dataset: model.dataset,
+        .map(|model| {
+            let optimization_supported = models::optimization_supported(&models_root, &model.slug);
+            let optimized = models::is_model_optimized(&models_root, &model.slug);
+            AiModelStatus {
+                enabled: setting_bool(&settings, model_setting_key(&model.slug)).unwrap_or(false),
+                downloaded: models::is_model_downloaded(&models_root, &model.slug),
+                session_loaded: sessions.contains_key(&model.slug),
+                recommended: !model.heavy,
+                slug: model.slug,
+                label: model.label,
+                heavy: model.heavy,
+                optimization_supported,
+                optimized,
+                size_bytes: model.size_bytes,
+                dataset: model.dataset,
+            }
         })
         .collect();
 

@@ -11,6 +11,7 @@ import {
   aiTaggerCancelDownload,
   aiTaggerDeleteModel,
   aiTaggerDownloadModel,
+  aiTaggerOptimizeModel,
   aiTaggerStatus,
   type AiRuntimeStatus,
 } from '../../platform/aiTaggerApi';
@@ -53,6 +54,7 @@ export function AiTaggingPanel({
   const [status, setStatus] = useState<AiRuntimeStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [downloading, setDownloading] = useState<Set<string>>(new Set());
+  const [optimizing, setOptimizing] = useState<Set<string>>(new Set());
 
   const refresh = useCallback(() => {
     aiTaggerStatus().then(setStatus).catch((e) => setError(String(e)));
@@ -76,6 +78,19 @@ export function AiTaggingPanel({
         refresh();
       });
   }, [refresh]);
+
+  const optimize = useCallback((slug: string) => {
+    setError(null);
+    setOptimizing((previous) => new Set(previous).add(slug));
+    void aiTaggerOptimizeModel(slug)
+      .then(setStatus)
+      .catch((e) => setError(String(e)))
+      .finally(() => setOptimizing((previous) => {
+        const next = new Set(previous);
+        next.delete(slug);
+        return next;
+      }));
+  }, []);
 
   useEffect(() => {
     refresh();
@@ -102,6 +117,7 @@ export function AiTaggingPanel({
           <div className={settingsStyles.blockTitle}>Models</div>
           {status.models.map((m, index) => {
             const modelDownloading = downloading.has(m.slug);
+            const modelOptimizing = optimizing.has(m.slug);
             const enableKey = ENABLE_KEYS[m.slug];
             const enabled = enableKey ? Boolean(settings[enableKey]) : false;
             return (
@@ -132,8 +148,18 @@ export function AiTaggingPanel({
                       <>
                         <span className={styles.stateDownloaded}>
                           <IconCheck size={13} stroke={2.4} />
-                          Downloaded
+                          {m.optimized ? 'Optimized' : 'Downloaded'}
                         </span>
+                        {m.optimizationSupported && !m.optimized && (
+                          <button
+                            className={actionStyles.btn}
+                            type="button"
+                            disabled={modelOptimizing}
+                            onClick={() => optimize(m.slug)}
+                          >
+                            {modelOptimizing ? 'Optimizing…' : 'Optimize for this Mac'}
+                          </button>
+                        )}
                         <button
                           className={actionStyles.btn}
                           type="button"

@@ -379,20 +379,9 @@ fn load_native_coreml(
     input_size: u32,
     label_count: usize,
 ) -> Result<Option<SessionRuntime>, String> {
-    let package = model_dir.join("model.mlpackage");
     let compiled = model_dir.join("model.mlmodelc");
     if !compiled.exists() {
-        if !package.exists() {
-            return Ok(None);
-        }
-        let temporary = coreml_native::compile_model(&package)
-            .map_err(|error| format!("Failed to compile Core ML model: {error}"))?;
-        std::fs::rename(&temporary, &compiled).map_err(|error| {
-            format!(
-                "Failed to preserve compiled Core ML model {}: {error}",
-                compiled.display()
-            )
-        })?;
+        return Ok(None);
     }
     let model = coreml_native::Model::load(&compiled, coreml_native::ComputeUnits::All)
         .map_err(|error| format!("Failed to load native Core ML model: {error}"))?;
