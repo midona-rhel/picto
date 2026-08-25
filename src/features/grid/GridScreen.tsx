@@ -464,6 +464,7 @@ export function GridScreen({
       addToFolders:    getShortcut('organize.addFolder')!,
       autoTag:         getShortcut('organize.autoTag')!,
       grayscale:       getShortcut('view.grayscale')!,
+      pasteImport:     getShortcut('edit.pasteImport')!,
     };
 
       // Don't handle grid shortcuts while a viewer is open — the viewer handles its own keys.
@@ -492,6 +493,18 @@ export function GridScreen({
         itemIds,
         curItems,
       );
+
+      if (matchesShortcutDef(e, defs.pasteImport)
+        && scope.kind !== 'trash'
+        && scope.kind !== 'smart_folder'
+        && scope.kind !== 'recently_viewed') {
+        e.preventDefault();
+        void pasteImport(scope).catch((reason) => showErrorNotification({
+          title: 'Could not paste import',
+          message: reason instanceof Error ? reason.message : String(reason),
+        }));
+        return;
+      }
 
       if (matchesShortcutDef(e, defs.selectAll)) { e.preventDefault(); selectAllResults(); return; }
       if (matchesShortcutDef(e, defs.deselectAll) && count > 0) { e.preventDefault(); clearSelection(); return; }

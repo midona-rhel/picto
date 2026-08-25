@@ -61,6 +61,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'edit.copyFilePath',  label: 'Copy File Path',  group: 'Edit', keys: 'Mod+Alt+C' },
   { id: 'edit.copyTags',      label: 'Copy Tags',       group: 'Edit', keys: 'Mod+Shift+C' },
   { id: 'edit.pasteTags',     label: 'Paste Tags',      group: 'Edit', keys: 'Mod+Shift+V' },
+  { id: 'edit.pasteImport',   label: 'Paste Import',     group: 'Edit', keys: 'Mod+V' },
 
   // ── Inbox ──
   { id: 'inbox.accept', label: 'Accept', group: 'Inbox', keys: 'Enter',     description: 'Accept inbox image (set to active)' },

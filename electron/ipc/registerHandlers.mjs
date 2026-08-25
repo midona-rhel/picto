@@ -1,37 +1,10 @@
 import { shell } from 'electron';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { isAbsolute, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-function clipboardFilePaths(clipboard) {
-  const candidates = [];
-  if (process.platform === 'darwin') {
-    const bookmark = clipboard.readBookmark();
-    if (bookmark?.url?.startsWith('file:')) {
-      try { candidates.push(fileURLToPath(bookmark.url)); } catch {}
-    }
-  }
-  for (const line of clipboard.readText().split(/\r?\n/)) {
-    const value = line.trim();
-    if (!value) continue;
-    try { candidates.push(value.startsWith('file:') ? fileURLToPath(value) : value); } catch {}
-  }
-  return [...new Set(candidates)].filter((path) => {
-    try {
-      const metadata = isAbsolute(path) && existsSync(path) ? statSync(path) : null;
-      return metadata?.isFile() || metadata?.isDirectory() || false;
-    } catch {
-      return false;
-    }
-  });
-}
-
-function clipboardHasImport(clipboard) {
-  return clipboardFilePaths(clipboard).length > 0 || !clipboard.readImage().isEmpty();
-}
+import { join } from 'node:path';
+import { clipboardFilePaths, clipboardHasImport } from './clipboardImport.mjs';
 
 function createReverseSearchConfigs() {
   const waitForHelper = `
