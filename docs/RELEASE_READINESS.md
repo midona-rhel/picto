@@ -1,4 +1,4 @@
-# Release readiness
+# Picto 0.6.0-alpha release readiness
 
 Picto ships for these platforms only:
 
@@ -49,6 +49,6 @@ native addons, and downloaded sidecars must not imply otherwise.
   OnlyFans lock resolves for macOS ARM64, Windows x64, and Linux x64 on Python 3.12.
 - The frontend suite passes but emits existing React `act(...)` warnings from asynchronous Settings,
   AI Tagger, and Duplicate Review tests; remove this warning noise before treating logs as clean.
-- The repository is already public. Before the local branch is published, rewrite reachable history
-  to remove personal absolute paths, competitor references, copied audit material, and generated
-  captures. A later deletion commit is insufficient because the old blobs remain reachable.
+- The public branch and tags have been rewritten to remove audited personal absolute paths,
+  competitor references, copied audit material, and generated captures. Keep the local lineage on
+  that scrubbed base before publishing further work so removed objects are not reintroduced.
