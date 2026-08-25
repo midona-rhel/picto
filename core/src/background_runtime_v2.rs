@@ -4,7 +4,6 @@
 //! performs the side effect and batches the resulting invalidation receipt.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::time::Instant;
 
 use crate::app::{resources, Application, ItemId, MutationReceipt};
 use crate::media_processing_v2::{self, BlobSource};
@@ -65,7 +64,6 @@ async fn drain_claimed_batch<B: BlobSource>(
     blobs: &B,
     limit: usize,
 ) -> Result<DrainBatchResult, String> {
-    let started = Instant::now();
     let store = application.store();
     let items = workers_v2::claim(store, limit.min(DEFAULT_BATCH_SIZE))?;
     let mut result = DrainBatchResult {
@@ -179,16 +177,6 @@ async fn drain_claimed_batch<B: BlobSource>(
     }
     result.thumbnail_file_hashes = thumbnail_file_hashes.into_iter().collect();
     result.dominant_color_changes = dominant_color_changes.into_values().collect();
-    if result.claimed != 0 {
-        tracing::info!(
-            target: "picto::performance",
-            duration_ms = started.elapsed().as_millis() as u64,
-            claimed = result.claimed as u64,
-            succeeded = result.succeeded as u64,
-            retried = result.retried as u64,
-            "Media processing batch completed"
-        );
-    }
     Ok(result)
 }
 

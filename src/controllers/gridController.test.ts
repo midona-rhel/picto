@@ -282,6 +282,78 @@ describe('gridController pagination', () => {
     expect('page' in query).toBe(false);
   });
 
+  it('reconciles the loaded window without loading state or identity churn', async () => {
+    const first = item(1);
+    const second = item(2);
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      items: [first, second],
+      cursor: null,
+      totalCount: 2,
+      generation: 4,
+      status: 'idle',
+    });
+    let resolvePage: ((value: ItemPage) => void) | undefined;
+    queryItemsMock.mockImplementationOnce(() => new Promise<ItemPage>((resolve) => {
+      resolvePage = resolve;
+    }));
+
+    const reconcile = gridController.reconcile();
+    expect(store.get(gridSessionAtom).status).toBe('idle');
+    expect(store.get(gridSessionAtom).generation).toBe(4);
+
+    resolvePage?.(page([{ ...first }, { ...second }, item(3)], 3));
+    await expect(reconcile).resolves.toBe(true);
+    const after = store.get(gridSessionAtom);
+    expect(queryItemsMock.mock.calls[0][1]).toEqual({ offset: 0, limit: 500 });
+    expect(after.items).toHaveLength(3);
+    expect(after.items[0]).toBe(first);
+    expect(after.items[1]).toBe(second);
+    expect(after.generation).toBe(4);
+    expect(after.status).toBe('idle');
+  });
+
+  it('preserves every already-loaded page while refreshing only the bounded first page', async () => {
+    const loaded = Array.from({ length: 750 }, (_, index) => item(index + 1));
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      items: loaded,
+      cursor: 750,
+      totalCount: 900,
+    });
+    queryItemsMock.mockResolvedValueOnce(page(loaded.slice(0, 500).map((entry) => ({ ...entry })), 900));
+
+    await gridController.reconcile();
+
+    expect(queryItemsMock.mock.calls[0][1]).toEqual({ offset: 0, limit: 500 });
+    expect(store.get(gridSessionAtom).items).toHaveLength(750);
+    expect(store.get(gridSessionAtom).items[749]).toBe(loaded[749]);
+    expect(store.get(gridCursorAtom)).toBe(750);
+  });
+
+  it('removes affected stale rows and fills a complete loaded window from the tail', async () => {
+    const loaded = Array.from({ length: 501 }, (_, index) => item(index + 1));
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      items: loaded,
+      cursor: null,
+      totalCount: 501,
+    });
+    queryItemsMock
+      .mockResolvedValueOnce(page(loaded.slice(1, 501), 501))
+      .mockResolvedValueOnce(appendPage([item(502)]));
+
+    await gridController.reconcile([1]);
+
+    expect(queryItemsMock.mock.calls.map((call) => call[1])).toEqual([
+      { offset: 0, limit: 500 },
+      { offset: 500, limit: 1 },
+    ]);
+    expect(store.get(gridSessionAtom).items.map((entry) => entry.item_id)).not.toContain(1);
+    const reconciled = store.get(gridSessionAtom).items;
+    expect(reconciled[reconciled.length - 1]?.item_id).toBe(502);
+  });
+
   it('settles search after 100 ms of inactivity', async () => {
     vi.useFakeTimers();
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));

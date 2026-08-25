@@ -351,9 +351,62 @@ class GridSessionController {
     });
   }
 
-  async reconcile(_metadataOnly: boolean): Promise<boolean> {
-    await this.loadFirstPage({ preserveItems: true });
-    return true;
+  async reconcile(affectedItemIds: readonly number[] = []): Promise<boolean> {
+    const before = store.get(gridSessionAtom);
+    if (!before.active || before.status === 'loading' || before.status === 'appending') return false;
+    const generation = before.generation;
+
+    try {
+      const query = store.get(currentGridQueryAtom);
+      const result = await queryItems(query, { offset: 0, limit: PAGE_SIZE });
+      const current = store.get(gridSessionAtom);
+      if (current.generation !== generation || !current.active) return false;
+      if (result.visible_item_count == null || result.total_size_bytes == null) {
+        throw new Error('The reconciled grid page did not include exact totals');
+      }
+      const previousById = new Map(current.items.map((item) => [item.item_id, item]));
+      const refreshed = result.items.map((item) => {
+        const previous = previousById.get(item.item_id);
+        return previous != null && itemSummaryEqual(previous, item) ? previous : item;
+      });
+      const refreshedIds = new Set(refreshed.map((item) => item.item_id));
+      const affectedIds = new Set(affectedItemIds);
+      const items = [
+        ...refreshed,
+        ...current.items.filter((item) => !refreshedIds.has(item.item_id) && !affectedIds.has(item.item_id)),
+      ];
+      const desiredLength = current.cursor == null
+        ? result.visible_item_count
+        : Math.min(current.items.length, result.visible_item_count);
+      if (items.length < desiredLength) {
+        const append = await queryItems(query, {
+          offset: items.length,
+          limit: Math.min(PAGE_SIZE, desiredLength - items.length),
+        });
+        if (store.get(gridSessionAtom).generation !== generation) return false;
+        const knownIds = new Set(items.map((item) => item.item_id));
+        for (const item of append.items) {
+          if (knownIds.has(item.item_id)) continue;
+          const previous = previousById.get(item.item_id);
+          items.push(previous != null && itemSummaryEqual(previous, item) ? previous : item);
+          knownIds.add(item.item_id);
+        }
+      }
+      items.length = Math.min(items.length, desiredLength);
+      updateSession({
+        items,
+        cursor: nextOffset(items.length, result.visible_item_count),
+        totalCount: result.visible_item_count,
+        totalSizeBytes: result.total_size_bytes,
+        error: null,
+      });
+      return true;
+    } catch (error) {
+      if (store.get(gridSessionAtom).generation === generation) {
+        updateSession({ error: error instanceof Error ? error.message : String(error) });
+      }
+      return false;
+    }
   }
 
   useManualFolderOrder(): void {
@@ -382,6 +435,25 @@ class GridSessionController {
     clearTimeout(this.searchTimer);
     this.searchTimer = null;
   }
+}
+
+function itemSummaryEqual(
+  left: GridSessionSnapshot['items'][number],
+  right: GridSessionSnapshot['items'][number],
+): boolean {
+  return left.item_id === right.item_id
+    && left.kind === right.kind
+    && left.lifecycle === right.lifecycle
+    && left.name === right.name
+    && left.display_file_hash === right.display_file_hash
+    && left.display_mime_type === right.display_mime_type
+    && left.pixel_width === right.pixel_width
+    && left.pixel_height === right.pixel_height
+    && left.duration_ms === right.duration_ms
+    && left.frame_count === right.frame_count
+    && left.dominant_color_hex === right.dominant_color_hex
+    && left.rating === right.rating
+    && left.media_count === right.media_count;
 }
 
 function createRandomSeed(): string {

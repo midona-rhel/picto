@@ -5,30 +5,57 @@ import { libraryInvalidation } from './libraryInvalidation';
 import { listenDominantColorChanged } from '../shared/lib/thumbnailChanges';
 
 const store = getDefaultStore();
+const RECONCILE_INTERVAL_MS = 2_000;
 
 /** Re-query the current canonical grid after committed library changes. */
 export function startGridSettle(): () => void {
   let cancelled = false;
-  let reloadPending = false;
+  let reconcilePending = false;
+  let reconcileRunning = false;
+  const affectedItemIds = new Set<number>();
+  let reconcileTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastReconcileCompletedAt = -Infinity;
   let removeColorListener: (() => void) | undefined;
 
-  const reload = () => {
+  const runReconcile = async () => {
+    reconcileTimer = undefined;
     if (cancelled || !store.get(gridActiveAtom)) return;
     const phase = store.get(gridTransitionPhaseAtom);
     if (phase === 'fading_out' || phase === 'waiting') {
-      reloadPending = true;
+      reconcilePending = true;
       return;
     }
-    reloadPending = false;
-    void gridController.loadFirstPage({ preserveItems: true });
+    if (reconcileRunning || !reconcilePending) return;
+    reconcilePending = false;
+    reconcileRunning = true;
+    const affected = [...affectedItemIds];
+    affectedItemIds.clear();
+    const reconciled = await gridController.reconcile(affected);
+    reconcileRunning = false;
+    lastReconcileCompletedAt = Date.now();
+    const session = store.get(gridSessionAtom);
+    if (!reconciled && session.active && (session.status === 'loading' || session.status === 'appending')) {
+      reconcilePending = true;
+    }
+    if (reconcilePending) scheduleReconcile();
   };
 
-  const unregister = libraryInvalidation.register('library', reload);
+  const scheduleReconcile = (payload?: { item_ids: number[] }) => {
+    if (cancelled || !store.get(gridActiveAtom)) return;
+    payload?.item_ids.forEach((itemId) => affectedItemIds.add(itemId));
+    reconcilePending = true;
+    if (reconcileRunning || reconcileTimer) return;
+    const delay = Math.max(0, RECONCILE_INTERVAL_MS - (Date.now() - lastReconcileCompletedAt));
+    if (delay === 0) void runReconcile();
+    else reconcileTimer = setTimeout(() => { void runReconcile(); }, delay);
+  };
+
+  const unregister = libraryInvalidation.register('library', scheduleReconcile);
   void listenDominantColorChanged(({ fileHash, dominantColorHex }) => {
     if (cancelled || !store.get(gridActiveAtom)) return;
     const session = store.get(gridSessionAtom);
     if (session.filters.color_hex) {
-      reload();
+      scheduleReconcile();
       return;
     }
     let changed = false;
@@ -45,13 +72,14 @@ export function startGridSettle(): () => void {
     else removeColorListener = remove;
   }).catch(() => {});
   const unsubscribePhase = store.sub(gridTransitionPhaseAtom, () => {
-    if (!reloadPending) return;
+    if (!reconcilePending) return;
     const phase = store.get(gridTransitionPhaseAtom);
-    if (phase === 'idle' || phase === 'fading_in') reload();
+    if (phase === 'idle' || phase === 'fading_in') scheduleReconcile();
   });
 
   return () => {
     cancelled = true;
+    if (reconcileTimer) clearTimeout(reconcileTimer);
     unregister();
     removeColorListener?.();
     unsubscribePhase();

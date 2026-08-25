@@ -4,7 +4,6 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use chrono::{Duration, Utc};
 use rusqlite::{params, OptionalExtension};
@@ -547,7 +546,6 @@ fn claim_at(application: &Application, limit: usize, now: &str) -> Result<Vec<In
 }
 
 pub fn run_batch(application: &Application, limit: usize) -> Result<IngestRunReport, String> {
-    let started = Instant::now();
     let jobs = claim(application, limit)?;
     let mut report = IngestRunReport {
         claimed: jobs.len(),
@@ -588,15 +586,6 @@ pub fn run_batch(application: &Application, limit: usize) -> Result<IngestRunRep
             resources: resources_changed.into_iter().collect(),
             item_ids: report.item_ids.clone(),
         });
-        tracing::info!(
-            target: "picto::performance",
-            duration_ms = started.elapsed().as_millis() as u64,
-            claimed = report.claimed as u64,
-            ingested = report.ingested as u64,
-            retried = report.retried as u64,
-            failed = report.failed as u64,
-            "Ingest batch completed"
-        );
     }
     Ok(report)
 }
