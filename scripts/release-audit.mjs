@@ -59,6 +59,8 @@ for (const file of tracked) {
 const packageManifest = JSON.parse(read('package.json'));
 assert(packageManifest.license === 'MIT', 'package.json must declare the project MIT license');
 assert(packageManifest.build.mac.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'arm64'), 'macOS packages must target Apple Silicon only');
+assert(packageManifest.build.win.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Windows packages must target x64 only');
+assert(packageManifest.build.linux.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Linux packages must target x64 only');
 assert(packageManifest.build.files.includes('dist/licenses/**/*'), 'packaged files must include generated license notices');
 for (const sidecar of ['gallery-dl', 'onlyfans']) {
   const entry = packageManifest.build.extraFiles.find((candidate) => candidate.to === `${sidecar}/`);
