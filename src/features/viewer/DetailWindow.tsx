@@ -203,7 +203,6 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     thumbnailHash: currentImage?.hash ?? null,
     mime: currentImage?.mime ?? '',
     isVideo: !isImage,
-    imgRef: fullImgRef,
     neighborHashes,
   });
 

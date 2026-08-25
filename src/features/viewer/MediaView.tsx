@@ -106,7 +106,6 @@ export function MediaView({
     thumbnailHash: currentItem?.display_file_hash ?? null,
     mime: currentMime,
     isVideo: !isImage,
-    imgRef: fullImgRef,
     neighborHashes,
   });
 

@@ -5,7 +5,7 @@
  * centered modal for forms and confirmations.
  */
 
-import { useEffect, useId, useState, useCallback, type ReactNode } from 'react';
+import { useEffect, useId, useRef, useState, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { IconX } from '@tabler/icons-react';
 import styles from './GlassModal.module.css';
@@ -29,6 +29,7 @@ export function GlassModal({ open, onClose, title, size = 'md', flush = false, f
   const titleId = useId();
   const [visible, setVisible] = useState(false);
   const [closing, setClosing] = useState(false);
+  const backdropPressRef = useRef(false);
 
   // Sync visibility with open prop
   useEffect(() => {
@@ -66,11 +67,18 @@ export function GlassModal({ open, onClose, title, size = 'md', flush = false, f
   return createPortal(
     <div
       className={`${styles.backdrop} ${closing ? styles.backdropClosing : ''}`}
-      onClick={startClose}
+      onPointerDown={(event) => {
+        backdropPressRef.current = event.target === event.currentTarget;
+      }}
+      onPointerUp={(event) => {
+        const closes = backdropPressRef.current && event.target === event.currentTarget;
+        backdropPressRef.current = false;
+        if (closes) startClose();
+      }}
+      onPointerCancel={() => { backdropPressRef.current = false; }}
     >
       <div
         className={`${styles.panel} ${sizeClass} ${closing ? styles.panelClosing : ''}`}
-        onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

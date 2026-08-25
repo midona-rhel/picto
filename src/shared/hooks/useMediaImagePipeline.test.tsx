@@ -1,5 +1,5 @@
-import { act, render, screen } from '@testing-library/react';
-import { useRef, type ComponentProps } from 'react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { type ComponentProps } from 'react';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { useMediaImagePipeline, type MediaPipelineInput } from './useMediaImagePipeline';
 
@@ -10,17 +10,18 @@ interface FakeImage {
   decode?: () => Promise<void>;
 }
 
-function PipelineHarness(props: Omit<MediaPipelineInput, 'imgRef'>) {
-  const imgRef = useRef<HTMLImageElement>(null);
-  const pipeline = useMediaImagePipeline({ ...props, imgRef });
-  return (
+function PipelineHarness(props: MediaPipelineInput) {
+  const pipeline = useMediaImagePipeline(props);
+  return <>
     <output
       data-testid="pipeline"
       data-displayed-hash={pipeline.displayedHash ?? ''}
       data-thumb-url={pipeline.thumbUrl}
       data-full-url={pipeline.fullUrl}
+      data-full-visible={String(pipeline.fullVisible)}
     />
-  );
+    <img data-testid="full-image" alt="" onLoad={pipeline.handleFullLoad} />
+  </>;
 }
 
 const input = (hash: string): ComponentProps<typeof PipelineHarness> => ({
@@ -116,5 +117,16 @@ describe('useMediaImagePipeline', () => {
     act(() => { replacementPreload.onload?.(); });
     expect(screen.getByTestId('pipeline')).toHaveAttribute('data-displayed-hash', 'first');
     expect(screen.getByTestId('pipeline')).toHaveAttribute('data-thumb-url', 'media://localhost/thumb/first-thumb-v2.jpg');
+  });
+
+  it('lets the shared frame own the full-image fade', () => {
+    render(<PipelineHarness {...input('first')} />);
+    const image = screen.getByTestId('full-image');
+
+    fireEvent.load(image);
+
+    expect(screen.getByTestId('pipeline')).toHaveAttribute('data-full-visible', 'true');
+    expect(image).not.toHaveStyle({ opacity: '1' });
+    expect(image).not.toHaveStyle({ transition: 'opacity 130ms ease-out' });
   });
 });

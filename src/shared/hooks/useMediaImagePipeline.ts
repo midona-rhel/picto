@@ -12,7 +12,7 @@
  * 5. Prefetch neighbor thumbnails
  */
 
-import { useState, useEffect, useCallback, type RefObject, type SyntheticEvent } from 'react';
+import { useState, useEffect, useCallback, type SyntheticEvent } from 'react';
 import { mediaThumbnailUrl, mediaFileUrl } from '../lib/mediaUrl';
 
 export interface MediaPipelineInput {
@@ -20,7 +20,6 @@ export interface MediaPipelineInput {
   thumbnailHash: string | null;
   mime: string;
   isVideo: boolean;
-  imgRef: RefObject<HTMLImageElement | null>;
   neighborHashes?: string[];
 }
 
@@ -40,7 +39,6 @@ export function useMediaImagePipeline({
   thumbnailHash,
   mime,
   isVideo,
-  imgRef,
   neighborHashes = [],
 }: MediaPipelineInput): MediaPipelineOutput {
   // What's currently shown to the user (lags behind `hash` until new thumb is ready)
@@ -88,9 +86,6 @@ export function useMediaImagePipeline({
       setThumbLoaded(true);
       setFullVisible(false);
       setFullUrl('');
-      // Reset full-res image opacity
-      const fullImg = imgRef.current;
-      if (fullImg) { fullImg.style.transition = 'none'; fullImg.style.opacity = '0'; }
     };
     img.onload = () => {
       if (typeof img.decode === 'function') img.decode().then(commitThumbnail).catch(commitThumbnail);
@@ -148,8 +143,6 @@ export function useMediaImagePipeline({
     const img = e.currentTarget;
     const reveal = () => {
       img.style.display = '';
-      img.style.transition = 'opacity 130ms ease-out';
-      img.style.opacity = '1';
       setFullVisible(true);
     };
     if (typeof img.decode === 'function') { img.decode().then(reveal).catch(reveal); }

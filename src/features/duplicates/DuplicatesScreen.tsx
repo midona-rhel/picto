@@ -246,7 +246,6 @@ function MediaCard({
     thumbnailHash: file.file_hash,
     mime: file.mime_type,
     isVideo: false,
-    imgRef: fullImgRef,
   });
   const thumbnailUrl = mediaThumbnailUrl(file.file_hash);
   const media = details.media;

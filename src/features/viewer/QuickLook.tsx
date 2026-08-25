@@ -70,7 +70,6 @@ export function QuickLookContent({
     thumbnailHash: currentItem?.display_file_hash ?? null,
     mime: currentMime,
     isVideo: !isImage,
-    imgRef: fullImgRef,
     neighborHashes,
   });
 
