@@ -1,9 +1,28 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
 import type { MenuItem } from '../../shared/ui/ContextMenu/ContextMenu';
-import { buildEmptyContextMenu, buildEntityOpenContextEntries, buildTileContextMenu } from './gridContextMenu';
+import { buildEmptyContextMenu, buildEntityOpenContextEntries, buildExportContextEntry, buildTileContextMenu } from './gridContextMenu';
 
 describe('buildTileContextMenu', () => {
+  it('shares one explicit export submenu across item and scope menus', () => {
+    const originals = vi.fn();
+    const converted = vi.fn();
+    const entry = buildExportContextEntry({
+      onExportOriginals: originals,
+      onExportAs: converted,
+    });
+
+    if (!('children' in entry)) throw new Error('missing export submenu');
+    expect(entry.children.map((child) => 'label' in child ? child.label : '')).toEqual([
+      'Export Originals...',
+      'Export As...',
+    ]);
+    if ('action' in entry.children[0]) entry.children[0].action();
+    if ('action' in entry.children[1]) entry.children[1].action();
+    expect(originals).toHaveBeenCalledOnce();
+    expect(converted).toHaveBeenCalledOnce();
+  });
+
   it('owns grayscale as a checked context command', () => {
     const onToggleGrayscale = vi.fn();
     const entries = buildTileContextMenu({

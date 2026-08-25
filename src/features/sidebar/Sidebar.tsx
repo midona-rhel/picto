@@ -10,11 +10,11 @@ import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { folderWatchModalAtom, confirmModalAtom, exportModalAtom, smartFolderModalAtom } from '../../state/modals';
 import {
   IconFolder, IconFolderOpen, IconFolderPlus,
-  IconCopy, IconUpload, IconDownload,
+  IconCopy, IconDownload,
   IconPhoto, IconInbox, IconTrash,
   IconClock, IconBookmark,
   IconArrowsShuffle,
-  IconFilter, IconX,
+  IconFilter, IconRefresh, IconX,
   IconStar, IconStarOff, IconTags,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
@@ -40,6 +40,7 @@ import { smartFoldersController } from '../../controllers/smartFoldersController
 import { SidebarRow } from '../../shared/ui/SidebarRow';
 import { LibrarySwitcherButton } from '../library/LibrarySwitcherButton';
 import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu';
+import { buildExportContextEntry } from '../grid/gridContextMenu';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
 import { IconPicker } from '../../shared/ui/IconPicker';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
@@ -63,6 +64,8 @@ import {
   useQuickAccess,
 } from './quickAccessPreferences';
 import styles from './Sidebar.module.css';
+import { filesController } from '../../controllers/filesController';
+import { showErrorNotification } from '../../shared/lib/notifications';
 
 const IC = 19;
 const FILL = { stroke: 1.2, fill: 'currentColor', fillOpacity: 0.15 } as const;
@@ -86,6 +89,18 @@ const SYSTEM_ICONS: Record<string, TablerIcon> = {
 };
 
 const store = getDefaultStore();
+
+function scopeExportEntry(target: EntityTarget, fileCount: number): MenuEntry {
+  return buildExportContextEntry({
+    onExportOriginals: () => {
+      void filesController.chooseAndExportOriginals(target).catch((reason) => showErrorNotification({
+        title: 'Could not export originals',
+        message: reason instanceof Error ? reason.message : String(reason),
+      }));
+    },
+    onExportAs: () => store.set(exportModalAtom, { open: true, fileCount, target }),
+  });
+}
 
 export function resolveSidebarTreeDrop(
   element: HTMLElement | null,
@@ -643,12 +658,7 @@ export function Sidebar() {
         <ColorPicker value={node.color ?? null} onChange={(hex) => foldersController.applyColor(folderId, hex)} />
       ) },
       { separator: true },
-      { label: 'Export to Computer...', icon: <IconUpload size={14} />, shortcut: kbd('file.export'), action: () => {
-        store.set(exportModalAtom, {
-          open: true, fileCount: node.count ?? 0,
-          target: queryTarget({ kind: 'folder', folder_id: folderId }),
-        });
-      } },
+      scopeExportEntry(queryTarget({ kind: 'folder', folder_id: folderId }), node.count ?? 0),
       { separator: true },
       { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
         store.set(confirmModalAtom, {
@@ -718,6 +728,15 @@ export function Sidebar() {
       } },
       { separator: true },
       {
+        label: 'Refresh Results', icon: <IconRefresh size={14} />, action: () => {
+          if (sfIdNum == null) return;
+          void smartFoldersController.refresh(sfIdNum).catch((reason) => showErrorNotification({
+            title: 'Could not refresh smart folder',
+            message: reason instanceof Error ? reason.message : String(reason),
+          }));
+        },
+      },
+      {
         label: 'Sort Results by Name', icon: <IconSort size={14} />, action: () => {
           if (sfIdNum != null) void smartFoldersController.update(sfIdNum, {
             ...currentPayload,
@@ -756,14 +775,10 @@ export function Sidebar() {
         }} />
       ) },
       { separator: true },
-      { label: 'Export...', icon: <IconUpload size={14} />, action: () => {
-        if (sfIdNum != null) {
-          store.set(exportModalAtom, {
-            open: true, fileCount: node.count ?? 0,
-            target: queryTarget({ kind: 'smart_folder', smart_folder_id: sfIdNum }),
-          });
-        }
-      } },
+      ...(sfIdNum == null ? [] : [scopeExportEntry(
+        queryTarget({ kind: 'smart_folder', smart_folder_id: sfIdNum }),
+        node.count ?? 0,
+      )]),
       { separator: true },
       { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
         store.set(confirmModalAtom, {

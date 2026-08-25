@@ -90,9 +90,22 @@ export async function pasteImport(scope: BaseScope): Promise<void> {
   }));
 }
 
+/** Pick one destination and export the target's original files unchanged. */
+export async function chooseAndExportOriginals(target: EntityTarget): Promise<void> {
+  const result = await (window as any).picto.dialog.open({
+    properties: ['openDirectory'],
+    multiple: false,
+    title: 'Export originals',
+  });
+  const outputDir = typeof result === 'string' ? result : result?.[0];
+  if (!outputDir) return;
+  await exportMedia(target, { output_dir: outputDir, format: 'original' });
+}
+
 export { hasClipboardImport };
 
 export const filesController = {
+  chooseAndExportOriginals,
   addMedia(
     paths: string[],
     params: MediaImportParams,

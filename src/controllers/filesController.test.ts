@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { BaseScope } from '../shared/types/canonical';
-import { manualImportParamsForScope } from './filesController';
+import { chooseAndExportOriginals, manualImportParamsForScope } from './filesController';
+import * as folderApi from '../platform/folderApi';
 
 describe('manual import destination', () => {
   it('imports from Inbox into Inbox', () => {
@@ -21,5 +22,28 @@ describe('manual import destination', () => {
     { kind: 'smart_folder', smart_folder_id: 9 },
   ])('keeps %j imports active without inventing scope semantics', (scope) => {
     expect(manualImportParamsForScope(scope).lifecycle).toBe('active');
+  });
+});
+
+describe('original export picker', () => {
+  it('uses the selected directory and preserves original format', async () => {
+    const exportMedia = vi.spyOn(folderApi, 'exportMedia').mockResolvedValue({
+      selected_item_count: 1,
+      selected_media_count: 1,
+      exported: 1,
+      skipped: 0,
+      errors: [],
+    });
+    (window as any).picto = {
+      dialog: { open: vi.fn().mockResolvedValue('/tmp/export') },
+    };
+    const target = { kind: 'explicit' as const, item_ids: [7] };
+
+    await chooseAndExportOriginals(target);
+
+    expect(exportMedia).toHaveBeenCalledWith(target, {
+      output_dir: '/tmp/export',
+      format: 'original',
+    });
   });
 });

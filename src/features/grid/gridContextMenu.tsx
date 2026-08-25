@@ -139,6 +139,24 @@ export function buildLibraryCoverContextEntry(
   });
 }
 
+export function buildExportContextEntry({
+  onExportOriginals,
+  onExportAs,
+}: {
+  onExportOriginals?: () => void;
+  onExportAs?: () => void;
+}): MenuEntry {
+  return {
+    submenu: true,
+    label: 'Export',
+    icon: <IconFileExport size={15} />,
+    children: [
+      item('Export Originals...', { action: onExportOriginals }),
+      item('Export As...', { action: onExportAs }),
+    ],
+  };
+}
+
 export function buildEntityOpenContextEntries({
   hash,
   onOpenDefault,
@@ -442,15 +460,10 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 
   // ── Export ──
   if (hasSelection && ctx.onExport) {
-    entries.push({
-      submenu: true,
-      label: 'Export',
-      icon: <IconFileExport size={15} />,
-      children: [
-        item('Export Originals...', { action: ctx.onExportOriginals }),
-        item('Export As...', { action: ctx.onExport }),
-      ],
-    });
+    entries.push(buildExportContextEntry({
+      onExportOriginals: ctx.onExportOriginals,
+      onExportAs: ctx.onExport,
+    }));
     entries.push(sep());
   }
 

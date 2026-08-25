@@ -1307,15 +1307,7 @@ export function GridScreen({
             },
             onExportOriginals: () => {
               if (!effectiveTarget) return;
-              void (async () => {
-                const result = await (window as any).picto.dialog.open({
-                  properties: ['openDirectory'], multiple: false, title: 'Export originals',
-                });
-                const outputDir = typeof result === 'string' ? result : result?.[0];
-                if (outputDir) await filesController.exportMedia(effectiveTarget, {
-                  output_dir: outputDir, format: 'original',
-                });
-              })().catch((reason) => showErrorNotification({
+              void filesController.chooseAndExportOriginals(effectiveTarget).catch((reason) => showErrorNotification({
                 title: 'Could not export originals',
                 message: reason instanceof Error ? reason.message : String(reason),
               }));

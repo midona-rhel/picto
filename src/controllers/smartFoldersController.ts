@@ -17,6 +17,8 @@ import type { SmartFolderPredicate } from '../shared/types/generated/application
 import { activeNodeIdAtom } from '../state/navigation';
 import { navigateToNode, removeHistoryEntries } from '../state/navigationHistory';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
+import { gridController } from './gridController';
+import { sidebarController } from './sidebarController';
 
 const store = getDefaultStore();
 
@@ -68,6 +70,13 @@ export function emptySmartFolderPayload(
 }
 
 export const smartFoldersController = {
+  async refresh(id: number): Promise<void> {
+    await sidebarController.fetchTree();
+    if (store.get(activeNodeIdAtom) === `smart:${id}`) {
+      await gridController.loadFirstPage({ preserveItems: true });
+    }
+  },
+
   async delete(id: string): Promise<void> {
     const smartFolderId = Number(id);
     if (!Number.isSafeInteger(smartFolderId)) throw new Error(`Invalid smart folder ID: ${id}`);
