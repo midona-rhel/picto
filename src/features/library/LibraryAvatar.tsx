@@ -29,7 +29,7 @@ export function LibraryAvatar({
 
   return (
     <span
-      className={`${styles.avatar}${className ? ` ${className}` : ''}`}
+      className={`${styles.avatar}${imageHash && !imageFailed ? ` ${styles.imageBacked}` : ''}${className ? ` ${className}` : ''}`}
       style={{ width: size, height: size, color: appearance.color ?? undefined }}
     >
       {imageHash && !imageFailed ? (
