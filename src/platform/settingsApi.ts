@@ -69,6 +69,7 @@ export interface AppSettings {
   notificationPopupsEnabled: boolean;
   notificationPopupTones: NotificationTone[];
   autoImportEnabled: boolean;
+  multiFileImportBehavior: 'ask' | 'group' | 'separate';
   subscriptionDefaultSchedule: 'manual' | 'daily' | 'weekly' | 'monthly';
   subscriptionDefaultPostsPerRun: number;
   subscriptionDefaultGroupPosts: boolean;
@@ -125,6 +126,7 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   notificationPopupsEnabled: true,
   notificationPopupTones: ['error', 'warning', 'info', 'success'],
   autoImportEnabled: true,
+  multiFileImportBehavior: 'ask',
   subscriptionDefaultSchedule: 'daily',
   subscriptionDefaultPostsPerRun: 100,
   subscriptionDefaultGroupPosts: true,
@@ -262,6 +264,7 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     notificationPopupsEnabled: booleanValue(storedOrDefault(source, 'notificationPopupsEnabled', APP_SETTINGS_DEFAULTS.notificationPopupsEnabled), 'notificationPopupsEnabled'),
     notificationPopupTones: notificationTonesValue(storedOrDefault(source, 'notificationPopupTones', APP_SETTINGS_DEFAULTS.notificationPopupTones), 'notificationPopupTones'),
     autoImportEnabled: booleanValue(storedOrDefault(source, 'autoImportEnabled', APP_SETTINGS_DEFAULTS.autoImportEnabled), 'autoImportEnabled'),
+    multiFileImportBehavior: enumValue(storedOrDefault(source, 'multiFileImportBehavior', APP_SETTINGS_DEFAULTS.multiFileImportBehavior), 'multiFileImportBehavior', ['ask', 'group', 'separate'] as const),
     subscriptionDefaultSchedule: enumValue(storedOrDefault(source, 'subscriptionDefaultSchedule', APP_SETTINGS_DEFAULTS.subscriptionDefaultSchedule), 'subscriptionDefaultSchedule', ['manual', 'daily', 'weekly', 'monthly'] as const),
     subscriptionDefaultPostsPerRun: integerRangeValue(storedOrDefault(source, 'subscriptionDefaultPostsPerRun', APP_SETTINGS_DEFAULTS.subscriptionDefaultPostsPerRun), 'subscriptionDefaultPostsPerRun', 1, 10_000),
     subscriptionDefaultGroupPosts: booleanValue(storedOrDefault(source, 'subscriptionDefaultGroupPosts', APP_SETTINGS_DEFAULTS.subscriptionDefaultGroupPosts), 'subscriptionDefaultGroupPosts'),

@@ -40,6 +40,7 @@ describe('settings API', () => {
     expect(snapshot.value.videoAutoPlay).toBe(true);
     expect(snapshot.value.videoLoop).toBe(true);
     expect(snapshot.value.autoImportEnabled).toBe(true);
+    expect(snapshot.value.multiFileImportBehavior).toBe('ask');
     expect(snapshot.value.subscriptionDefaultSchedule).toBe('daily');
     expect(snapshot.value.subscriptionDefaultPostsPerRun).toBe(100);
     expect(snapshot.value.subscriptionDefaultGroupPosts).toBe(true);
@@ -84,6 +85,9 @@ describe('settings API', () => {
     invoke.mockResolvedValue({ value: { autoImportEnabled: 'yes' }, revision: 1 });
 
     await expect(getSettingsSnapshot()).rejects.toThrow('autoImportEnabled');
+
+    invoke.mockResolvedValue({ value: { multiFileImportBehavior: 'sometimes' }, revision: 1 });
+    await expect(getSettingsSnapshot()).rejects.toThrow('multiFileImportBehavior');
   });
 
   it('rejects invalid subscription defaults', async () => {

@@ -253,7 +253,7 @@ export function GridScreen({
           lifecycle: manualImportParamsForScope(scope).lifecycle,
         });
       } else {
-        requestMediaImport(paths, manualImportParamsForScope(scope,
+        void requestMediaImport(paths, manualImportParamsForScope(scope,
           folderId != null ? { parent_folder_id: folderId } : {}));
       }
     });

@@ -36,6 +36,7 @@ const settings = {
   notificationPopupsEnabled: true,
   notificationPopupTones: ['error', 'warning', 'info', 'success'] as Array<'error' | 'warning' | 'info' | 'success'>,
   autoImportEnabled: true,
+  multiFileImportBehavior: 'ask' as const,
   subscriptionDefaultSchedule: 'daily' as const, subscriptionDefaultPostsPerRun: 100,
   subscriptionDefaultGroupPosts: true,
   showTagGroups: true, starredTags: [], sidebarQuickAccess: [],

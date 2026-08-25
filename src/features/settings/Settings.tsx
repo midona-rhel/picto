@@ -641,22 +641,45 @@ function PreferencePanel({ panel, onDirty, appSettings, setAppSettings, prefs, s
       ) : null}
 
       {panel === 'autoimport' ? (
-        <div className={styles.settingsBlock}>
-          <div className={styles.blockContent}>
-            <div className={styles.blockTitle}>
-              <span>Auto-Import</span>
-              <span className={styles.blockTitleControl}>
-                <ToggleSwitch
-                  on={appSettings?.autoImportEnabled ?? true}
-                  onChange={() => updateAppSetting({ autoImportEnabled: !(appSettings?.autoImportEnabled ?? true) })}
-                />
-              </span>
+        <>
+          <div className={styles.settingsBlock}>
+            <div className={styles.blockContent}>
+              <div className={styles.blockTitle}>
+                <span>Auto-Import</span>
+                <span className={styles.blockTitleControl}>
+                  <ToggleSwitch
+                    on={appSettings?.autoImportEnabled ?? true}
+                    onChange={() => updateAppSetting({ autoImportEnabled: !(appSettings?.autoImportEnabled ?? true) })}
+                  />
+                </span>
+              </div>
+              <p className={styles.settingHint}>
+                Import new files into Inbox from watched folders configured in the folder context menu.
+              </p>
             </div>
-            <p className={styles.settingHint}>
-              Import new files into Inbox from watched folders configured in the folder context menu.
-            </p>
           </div>
-        </div>
+          <div className={styles.settingsBlock}>
+            <div className={styles.blockContent}>
+              <div className={styles.blockTitle}>Manual Imports</div>
+              <Row label="Multiple files">
+                <CmSelect
+                  value={appSettings?.multiFileImportBehavior ?? 'ask'}
+                  options={[
+                    { value: 'ask', label: 'Ask every time' },
+                    { value: 'group', label: 'Group as collection' },
+                    { value: 'separate', label: 'Keep separate' },
+                  ]}
+                  onChange={(value) => updateAppSetting({
+                    multiFileImportBehavior: value as AppSettings['multiFileImportBehavior'],
+                  })}
+                />
+              </Row>
+              <p className={styles.settingHint}>
+                Choose whether batches become one collection, stay separate, or ask each time.
+              </p>
+            </div>
+          </div>
+        </>
       ) : null}
 
       {panel === 'subscriptions' ? (

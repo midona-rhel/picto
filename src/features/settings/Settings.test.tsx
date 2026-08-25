@@ -58,6 +58,7 @@ const appSettings = {
   notificationPopupsEnabled: true,
   notificationPopupTones: ['error', 'warning', 'info', 'success'] as const,
   autoImportEnabled: true,
+  multiFileImportBehavior: 'ask' as const,
   subscriptionDefaultSchedule: 'daily' as const,
   subscriptionDefaultPostsPerRun: 100,
   subscriptionDefaultGroupPosts: true,
@@ -219,6 +220,20 @@ describe('Settings', () => {
 
     await waitFor(() => expect(mocks.replaceSettings).toHaveBeenCalledWith(
       expect.objectContaining({ autoImportEnabled: false }),
+    ));
+  });
+
+  it('persists how manual multi-file imports are represented', async () => {
+    const user = setupUser();
+    await renderSettings();
+
+    await user.click(screen.getByRole('button', { name: 'Auto-Import' }));
+    await user.click(screen.getByRole('button', { name: 'Ask every time' }));
+    await user.click(screen.getByRole('option', { name: 'Group as collection' }));
+    await user.click(screen.getByRole('button', { name: 'Save & Close' }));
+
+    await waitFor(() => expect(mocks.replaceSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ multiFileImportBehavior: 'group' }),
     ));
   });
 

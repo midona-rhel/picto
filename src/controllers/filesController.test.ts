@@ -3,6 +3,7 @@ import { getDefaultStore } from 'jotai';
 import type { BaseScope } from '../shared/types/canonical';
 import { chooseAndExportOriginals, manualImportParamsForScope, requestMediaImport } from './filesController';
 import * as folderApi from '../platform/folderApi';
+import * as settingsApi from '../platform/settingsApi';
 import { multiFileImportModalAtom } from '../state/modals';
 
 const closedMultiFileImport = {
@@ -44,8 +45,12 @@ describe('manual import destination', () => {
 });
 
 describe('multi-file import choice', () => {
-  it('asks how an explicit multi-file batch should be represented', () => {
-    requestMediaImport(['/tmp/one.png', '/tmp/two.png'], {
+  it('asks how an explicit multi-file batch should be represented by default', async () => {
+    vi.spyOn(settingsApi, 'getSettings').mockResolvedValue({
+      multiFileImportBehavior: 'ask',
+    } as settingsApi.AppSettings);
+
+    await requestMediaImport(['/tmp/one.png', '/tmp/two.png'], {
       lifecycle: 'inbox',
       parent_folder_id: 7,
       tags: ['artist:test'],
@@ -62,6 +67,29 @@ describe('multi-file import choice', () => {
       preserveStructure: false,
       deleteAfterIngest: true,
     });
+  });
+
+  it.each([
+    ['group', true],
+    ['separate', false],
+  ] as const)('imports immediately when the saved behavior is %s', async (behavior, groupFiles) => {
+    vi.spyOn(settingsApi, 'getSettings').mockResolvedValue({
+      multiFileImportBehavior: behavior,
+    } as settingsApi.AppSettings);
+    const addMedia = vi.spyOn(folderApi, 'addMedia').mockResolvedValue({
+      discovered: 2,
+      queued: 2,
+      already_queued: 0,
+      skipped: 0,
+    });
+
+    await requestMediaImport(['/tmp/one.png', '/tmp/two.png'], { lifecycle: 'active' });
+
+    expect(addMedia).toHaveBeenCalledWith(
+      ['/tmp/one.png', '/tmp/two.png'],
+      { lifecycle: 'active', group_files: groupFiles },
+    );
+    expect(getDefaultStore().get(multiFileImportModalAtom).open).toBe(false);
   });
 });
 

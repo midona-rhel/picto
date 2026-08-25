@@ -23,6 +23,7 @@ import type { Lifecycle } from '../shared/types/generated/application/Lifecycle'
 import { getDefaultStore } from 'jotai';
 import { multiFileImportModalAtom } from '../state/modals';
 import { showErrorNotification } from '../shared/lib/notifications';
+import { getSettings, type AppSettings } from '../platform/settingsApi';
 
 export interface MediaImportParams {
   tags?: string[];
@@ -45,12 +46,21 @@ function enqueueMediaImport(paths: string[], params: MediaImportParams): void {
   });
 }
 
-/** Import one file directly or ask how a multi-file selection should be represented. */
-export function requestMediaImport(paths: string[], params: MediaImportParams): void {
-  if (paths.length <= 1) {
+/** Resolve one multi-file batch through the user's single persisted import policy. */
+export async function requestMediaImport(paths: string[], params: MediaImportParams): Promise<void> {
+  if (paths.length <= 1 || params.group_files != null) {
     enqueueMediaImport(paths, params);
     return;
   }
+
+  const behavior: AppSettings['multiFileImportBehavior'] = await getSettings()
+    .then((settings) => settings.multiFileImportBehavior)
+    .catch(() => 'ask');
+  if (behavior !== 'ask') {
+    enqueueMediaImport(paths, { ...params, group_files: behavior === 'group' });
+    return;
+  }
+
   store.set(multiFileImportModalAtom, {
     open: true,
     paths,
@@ -89,7 +99,7 @@ export async function chooseAndImportFiles(scope: BaseScope): Promise<void> {
   });
   if (!result) return;
   const paths = Array.isArray(result) ? result : [result];
-  requestMediaImport(paths, manualImportParamsForScope(
+  await requestMediaImport(paths, manualImportParamsForScope(
     scope,
     scope.kind === 'folder' ? { parent_folder_id: scope.folder_id } : {},
   ));
@@ -122,7 +132,7 @@ export async function pasteImport(scope: BaseScope): Promise<void> {
     delete_after_ingest: payload.temporary,
   });
   if (payload.paths.length > 1) {
-    requestMediaImport(payload.paths, params);
+    await requestMediaImport(payload.paths, params);
     return;
   }
   await addMedia(payload.paths, params);
