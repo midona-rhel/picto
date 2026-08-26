@@ -127,8 +127,9 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
 
   // ── Duplicates ──
   { id: 'dup.smartMerge',   label: 'Smart Merge',   group: 'Duplicates', keys: 'S',          description: 'Auto-merge keeping the better file' },
-  { id: 'dup.keepLeft',     label: 'Keep Left',     group: 'Duplicates', keys: 'L',          description: 'Keep the left file, delete right' },
-  { id: 'dup.keepRight',    label: 'Keep Right',    group: 'Duplicates', keys: 'R',          description: 'Keep the right file, delete left' },
+  { id: 'dup.keepLeft',     label: 'Keep Left',     group: 'Duplicates', keys: 'Z',          description: 'Keep the left file, delete right' },
+  { id: 'dup.keepRight',    label: 'Keep Right',    group: 'Duplicates', keys: 'X',          description: 'Keep the right file, delete left' },
+  { id: 'dup.keepBoth',     label: 'Keep Both',     group: 'Duplicates', keys: 'B',          description: 'Keep both files and dismiss the pair' },
   { id: 'dup.notDuplicate', label: 'Not Duplicate', group: 'Duplicates', keys: 'N',          description: 'Mark pair as not duplicate' },
   { id: 'dup.fitToWindow',  label: 'Fit to Window', group: 'Duplicates', keys: 'F',          description: 'Reset zoom to fit images in view' },
   { id: 'dup.prevPair',     label: 'Previous Pair', group: 'Duplicates', keys: 'ArrowLeft',  description: 'Go to previous duplicate pair' },

@@ -39,4 +39,10 @@ describe('keyboard presets', () => {
     expect(matchesShortcutDef(new KeyboardEvent('keydown', { key: 'e', shiftKey: true }), shortcut!)).toBe(false);
     setShortcutBinding('grid.moveRight', 'keys', 'ArrowRight');
   });
+
+  it('uses the inbox decision keys for duplicate sides and exposes keep both', () => {
+    expect(getShortcut('dup.keepLeft')?.keys).toBe('Z');
+    expect(getShortcut('dup.keepRight')?.keys).toBe('X');
+    expect(getShortcut('dup.keepBoth')?.keys).toBe('B');
+  });
 });
