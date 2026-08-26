@@ -1,4 +1,6 @@
 import type { ReactNode, RefObject } from 'react';
+import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
+import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
 import {
   TitlebarControlButton,
@@ -32,6 +34,18 @@ export function DocumentViewerShell({
 }: Props) {
   const canGoPrevious = pageNumber > 1 && Boolean(onPreviousPage);
   const canGoNext = pageCount > 0 && pageNumber < pageCount && Boolean(onNextPage);
+  useShortcutScope((event) => {
+    if (canGoPrevious && matchesShortcutDef(event, getShortcut('document.previousPage')!)) {
+      event.preventDefault();
+      onPreviousPage?.();
+      return;
+    }
+    if (canGoNext && matchesShortcutDef(event, getShortcut('document.nextPage')!)) {
+      event.preventDefault();
+      onNextPage?.();
+    }
+  }, { priority: 70 });
+
   return (
     <div className={styles.root} data-document-viewer>
       <div ref={viewportRef} className={`${styles.viewport} ${viewportClassName ?? ''}`}>
@@ -39,13 +53,13 @@ export function DocumentViewerShell({
       </div>
       <footer className={styles.footer} aria-label={`${navigationLabel} page navigation`}>
         <TitlebarControlGroup>
-          <KbdTooltip label="Previous page">
+          <KbdTooltip label="Previous page" shortcutId="document.previousPage">
             <TitlebarControlButton aria-label={`Previous ${navigationLabel} page`} disabled={!canGoPrevious} onClick={onPreviousPage}>
               <ToolbarChevronIcon direction="left" />
             </TitlebarControlButton>
           </KbdTooltip>
           <span className={styles.pageStatus}>Page {pageNumber} of {pageCount || '—'}</span>
-          <KbdTooltip label="Next page">
+          <KbdTooltip label="Next page" shortcutId="document.nextPage">
             <TitlebarControlButton aria-label={`Next ${navigationLabel} page`} disabled={!canGoNext} onClick={onNextPage}>
               <ToolbarChevronIcon direction="right" />
             </TitlebarControlButton>

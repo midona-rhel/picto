@@ -19,8 +19,8 @@ export function createDocumentThumbnailService({ BrowserWindow, app, path, isDev
   async function renderNow({ hash, mimeType, outputPath }) {
     const window = new BrowserWindow({
       show: false,
-      width: 800,
-      height: 800,
+      width: 1328,
+      height: 1200,
       useContentSize: true,
       paintWhenInitiallyHidden: true,
       backgroundColor: '#2a2a2e',
@@ -38,7 +38,12 @@ export function createDocumentThumbnailService({ BrowserWindow, app, path, isDev
       if (isDev) await window.loadURL(`${devUrl}/document-thumbnail.html?${new URLSearchParams(query)}`);
       else await window.loadFile(path.join(app.getAppPath(), 'dist', 'document-thumbnail.html'), { query });
       const state = await waitForReady(window.webContents);
-      const png = (await window.webContents.capturePage({ x: 0, y: 0, width: state.width, height: state.height })).toPNG();
+      const png = (await window.webContents.capturePage({
+        x: state.x,
+        y: state.y,
+        width: state.width,
+        height: state.height,
+      })).toPNG();
       if (png.length === 0) throw new Error('Document thumbnail capture was empty.');
       await fs.mkdir(path.dirname(outputPath), { recursive: true });
       await fs.writeFile(outputPath, png);

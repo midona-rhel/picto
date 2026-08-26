@@ -120,14 +120,17 @@ export function DetailMediaRenderer({ hash, mimeType, displayName, onFlashPlayba
       <div className={styles.documentPreviewFooter} />
     </div>
   ) : usesRendererSnapshot ? (
-    <div className={styles.rendererSnapshotPreview} data-document-renderer-snapshot>
-      <ThumbnailImage
-        className={styles.rendererSnapshotImage}
-        src={mediaThumbnailUrl(hash)}
-        fallback="broken"
-        alt=""
-        draggable={false}
-      />
+    <div className={styles.documentPreview} data-document-renderer-snapshot data-document-kind={kind}>
+      <div className={`${styles.documentPreviewViewport} ${styles.rendererSnapshotViewport}`}>
+        <ThumbnailImage
+          className={styles.rendererSnapshotImage}
+          src={mediaThumbnailUrl(hash)}
+          fallback="broken"
+          alt=""
+          draggable={false}
+        />
+      </div>
+      <div className={styles.documentPreviewFooter} />
     </div>
   ) : kind === 'flash' ? (
     <div className={styles.flashPreview} data-flash-stage-preview>
@@ -152,7 +155,12 @@ export function DetailMediaRenderer({ hash, mimeType, displayName, onFlashPlayba
   );
 
   return (
-    <div className={styles.frame} data-progressive-media-renderer data-ready={ready ? 'true' : 'false'}>
+    <div
+      className={styles.frame}
+      data-progressive-media-renderer
+      data-document-renderer={kind === 'pdf' || usesRendererSnapshot ? 'true' : undefined}
+      data-ready={ready ? 'true' : 'false'}
+    >
       <ProgressiveMediaFrame
         className={styles.progressiveFrame}
         preview={preview}

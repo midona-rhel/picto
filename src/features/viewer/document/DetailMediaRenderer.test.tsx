@@ -72,6 +72,9 @@ describe('DetailMediaRenderer', () => {
     );
 
     expect(container.querySelector('[data-document-renderer-snapshot]')).toBeInTheDocument();
+    expect(container.querySelector('[data-document-renderer-snapshot]')).toHaveAttribute('data-document-kind', 'text-document');
+    expect(container.querySelector('[data-document-renderer-snapshot]')?.children).toHaveLength(2);
+    expect(container.querySelector('[data-document-renderer="true"]')).toBeInTheDocument();
     expect(container.querySelector('[data-document-page-preview]')).toBeNull();
     expect(await screen.findByTestId('text-renderer')).toBeInTheDocument();
   });

@@ -8,7 +8,14 @@ publishPlatform();
 
 declare global {
   interface Window {
-    __pictoDocumentThumbnail?: { ready?: boolean; error?: string; width?: number; height?: number };
+    __pictoDocumentThumbnail?: {
+      ready?: boolean;
+      error?: string;
+      x?: number;
+      y?: number;
+      width?: number;
+      height?: number;
+    };
   }
 }
 
@@ -17,21 +24,20 @@ const hash = query.get('hash') ?? '';
 const mimeType = query.get('mime') ?? '';
 const root = document.getElementById('root');
 
-function contentIsReady() {
-  const docx = document.querySelector('section.docx');
-  const pptx = document.querySelector('[data-pptx-slide] svg');
-  const text = document.querySelector('[data-text-document-page]');
-  const article = document.querySelector('[data-document-viewer] article');
+function renderedPage(): HTMLElement | null {
+  const docx = document.querySelector<HTMLElement>('section.docx');
+  const pptx = document.querySelector<HTMLElement>('[data-pptx-slide]');
+  const text = document.querySelector<HTMLElement>('[data-text-document-page]');
+  const article = document.querySelector<HTMLElement>('[data-document-viewer] article');
   const image = document.querySelector<HTMLImageElement>('[data-document-viewer] img');
   const canvas = document.querySelector<HTMLCanvasElement>('[data-djvu-page]');
-  return Boolean(
-    docx
-    || pptx
-    || (text && (text.textContent?.trim() || text.children.length > 0))
-    || (article && (article.textContent?.trim() || article.children.length > 0))
-    || (image?.complete && image.naturalWidth > 0)
-    || (canvas && canvas.width > 0 && canvas.height > 0),
-  );
+  if (docx) return docx;
+  if (pptx) return pptx;
+  if (text && (text.textContent?.trim() || text.children.length > 0)) return text;
+  if (article && (article.textContent?.trim() || article.children.length > 0)) return article;
+  if (image?.complete && image.naturalWidth > 0) return image;
+  if (canvas && canvas.width > 0 && canvas.height > 0) return canvas;
+  return null;
 }
 
 async function settle() {
@@ -39,10 +45,16 @@ async function settle() {
   while (performance.now() < deadline) {
     const error = document.querySelector<HTMLElement>('[role="alert"]')?.innerText;
     if (error) throw new Error(error);
-    if (contentIsReady()) {
+    const page = renderedPage();
+    if (page) {
       await document.fonts.ready;
       await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-      window.__pictoDocumentThumbnail = { ready: true, width: 800, height: 752 };
+      const bounds = page.getBoundingClientRect();
+      const x = Math.max(0, Math.floor(bounds.left));
+      const y = Math.max(0, Math.floor(bounds.top));
+      const width = Math.max(1, Math.min(Math.ceil(bounds.width), window.innerWidth - x));
+      const height = Math.max(1, Math.min(Math.ceil(bounds.height), window.innerHeight - y));
+      window.__pictoDocumentThumbnail = { ready: true, x, y, width, height };
       return;
     }
     await new Promise((resolve) => setTimeout(resolve, 50));

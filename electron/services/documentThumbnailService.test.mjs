@@ -11,7 +11,7 @@ afterEach(async () => {
 });
 
 describe('document thumbnail service', () => {
-  it('captures the exact shared document renderer without its footer', async () => {
+  it('captures the rendered document page without its viewport or footer', async () => {
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-document-thumbnail-'));
     temporaryDirectories.push(directory);
     const outputPath = path.join(directory, 'thumbnail.png');
@@ -23,7 +23,7 @@ describe('document thumbnail service', () => {
         this.webContents = {
           setWindowOpenHandler: (handler) => { this.windowOpenHandler = handler; },
           on: (event, handler) => { this.webContentsHandlers = { ...this.webContentsHandlers, [event]: handler }; },
-          executeJavaScript: async () => ({ ready: true, width: 800, height: 752 }),
+          executeJavaScript: async () => ({ ready: true, x: 256, y: 24, width: 816, height: 1056 }),
           capturePage: async (rect) => {
             this.captureRect = rect;
             return { toPNG: () => Buffer.from('document-page') };
@@ -44,13 +44,15 @@ describe('document thumbnail service', () => {
     });
     await service.render({ hash: 'a'.repeat(64), mimeType: 'application/rtf', outputPath });
     expect(windows[0].options.show).toBe(false);
+    expect(windows[0].options.width).toBe(1328);
+    expect(windows[0].options.height).toBe(1200);
     expect(windows[0].windowOpenHandler()).toEqual({ action: 'deny' });
     const navigationEvent = { preventDefault: vi.fn() };
     windows[0].webContentsHandlers['will-navigate'](navigationEvent);
     expect(navigationEvent.preventDefault).toHaveBeenCalledOnce();
     expect(windows[0].url).toContain('document-thumbnail.html?hash=');
     expect(windows[0].url).toContain('mime=application%2Frtf');
-    expect(windows[0].captureRect).toEqual({ x: 0, y: 0, width: 800, height: 752 });
+    expect(windows[0].captureRect).toEqual({ x: 256, y: 24, width: 816, height: 1056 });
     expect(windows[0].destroyed).toBe(true);
     expect(await fs.readFile(outputPath, 'utf8')).toBe('document-page');
   });

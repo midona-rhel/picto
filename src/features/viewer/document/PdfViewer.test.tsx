@@ -4,6 +4,7 @@ import { MantineProvider } from '@mantine/core';
 import type { ComponentProps } from 'react';
 import { PdfViewer } from './PdfViewer';
 import type { ViewerZoomControls } from '../../../state/viewer';
+import { resetShortcutRuntimeForTests } from '../../../runtime/shortcutRuntime';
 
 const renderPdf = (props: Partial<ComponentProps<typeof PdfViewer>> = {}) => render(
   <MantineProvider><PdfViewer src="media://localhost/file/document.pdf" {...props} /></MantineProvider>,
@@ -40,12 +41,14 @@ describe('PdfViewer', () => {
   let contextSpy: { mockRestore(): void };
 
   beforeEach(() => {
+    resetShortcutRuntimeForTests();
     vi.stubGlobal('ResizeObserver', MockResizeObserver);
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, arrayBuffer: () => Promise.resolve(new ArrayBuffer(8)) }));
     contextSpy = vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({} as CanvasRenderingContext2D);
   });
 
   afterEach(() => {
+    resetShortcutRuntimeForTests();
     contextSpy.mockRestore();
     vi.clearAllMocks();
     vi.unstubAllGlobals();
@@ -61,6 +64,17 @@ describe('PdfViewer', () => {
     expect(screen.getByRole('button', { name: 'Previous PDF page' })).toBeEnabled();
     expect(screen.getByRole('contentinfo', { name: 'PDF page navigation' })).toBeInTheDocument();
     expect(screen.queryByRole('slider', { name: 'Zoom' })).not.toBeInTheDocument();
+  });
+
+  it('moves between pages with the document J and L shortcuts', async () => {
+    renderPdf();
+    await waitFor(() => expect(screen.getByText('Page 1 of 2')).toBeInTheDocument());
+
+    await act(async () => { fireEvent.keyDown(window, { key: 'l' }); });
+    expect(screen.getByText('Page 2 of 2')).toBeInTheDocument();
+
+    await act(async () => { fireEvent.keyDown(window, { key: 'j' }); });
+    expect(screen.getByText('Page 1 of 2')).toBeInTheDocument();
   });
 
   it('fits against the measured content box without subtracting CSS padding twice', async () => {

@@ -93,6 +93,8 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'view.toggleTileName',   label: 'Toggle Tile Name',  group: 'View', keys: 'Mod+Alt+4' },
   { id: 'view.toggleTileMetadata', label: 'Toggle Tile Info', group: 'View', keys: 'Mod+Alt+5', description: 'Show or hide resolution and extension on tiles' },
   { id: 'view.toggleLogs',       label: 'Toggle Logs',       group: 'View', keys: 'Mod+L',     description: 'Show or hide the log viewer panel' },
+  { id: 'document.previousPage', label: 'Previous Page',     group: 'View', keys: 'J',         description: 'Open the previous page in a document' },
+  { id: 'document.nextPage',     label: 'Next Page',         group: 'View', keys: 'L',         description: 'Open the next page in a document' },
 
   // ── Grid navigation ──
   { id: 'grid.moveLeft',  label: 'Grid: Move Left',  group: 'Navigation', keys: 'ArrowLeft',  keys2: 'A' },
