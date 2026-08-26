@@ -40,7 +40,9 @@ export function AuthWorkspace({
   const refresh = useCallback(async (preserveSelection = true) => {
     const next = await authController.loadWorkspaceSnapshot();
     const sites = next.sites
-      .filter((entry) => entry.site.id !== 'ehentai')
+      .map((entry) => entry.site.id === 'ehentai'
+        ? { ...entry, site: { ...entry.site, name: 'ExHentai', domain: 'exhentai.org' } }
+        : entry)
       .sort((left, right) => (
         left.site.name.localeCompare(right.site.name, undefined, { sensitivity: 'base' })
       ));

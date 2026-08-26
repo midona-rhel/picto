@@ -109,13 +109,15 @@ describe('direct-site authentication', () => {
   });
 
   it('uses the E-Hentai account login and a separate ExHentai verification step', () => {
-    expect(resolveAuthSite('exhentai')).toMatchObject({
+    expect(resolveAuthSite('ehentai')).toMatchObject({
+      id: 'ehentai',
       loginUrl: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
       verificationUrl: 'https://exhentai.org/',
       cookieNames: ['ipb_member_id', 'ipb_pass_hash', 'igneous'],
       authenticatedCookieNames: ['ipb_member_id', 'ipb_pass_hash'],
       resetSessionOnStart: true,
     });
+    expect(resolveAuthSite('exhentai')).toBe(resolveAuthSite('ehentai'));
   });
 
   it('verifies ExHentai access before persisting its gallery-dl cookies', async () => {
@@ -132,7 +134,7 @@ describe('direct-site authentication', () => {
     });
     const { sessions, persistCredential } = createHarness(browser);
 
-    await sessions.startAuthSession('exhentai');
+    await sessions.startAuthSession('ehentai');
     await browser.instances[0].webContents.listeners.get('did-finish-load')();
     await settle();
     expect(browser.instances[0].loadedUrl).toBe('https://exhentai.org/');
@@ -141,7 +143,7 @@ describe('direct-site authentication', () => {
     await browser.instances[0].webContents.listeners.get('did-finish-load')();
     await settle();
     expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
-      site_id: 'exhentai',
+      site_id: 'ehentai',
       credential_type: 'cookies',
       cookies: {
         ipb_member_id: 'member',
@@ -164,7 +166,7 @@ describe('direct-site authentication', () => {
     });
     const { sessions, persistCredential } = createHarness(browser);
 
-    await sessions.startAuthSession('exhentai');
+    await sessions.startAuthSession('ehentai');
     await browser.instances[0].webContents.listeners.get('did-finish-load')();
     await settle();
     await browser.instances[0].webContents.listeners.get('did-finish-load')();
@@ -180,7 +182,7 @@ describe('direct-site authentication', () => {
     });
   });
 
-  it('opens Newgrounds at desktop width without changing other login windows', async () => {
+  it('opens Newgrounds and DeviantArt at desktop width without changing other login windows', async () => {
     const newgroundsBrowser = createBrowserWindowMock();
     const { sessions: newgroundsSessions } = createHarness(newgroundsBrowser);
     await newgroundsSessions.startAuthSession('newgrounds');
@@ -191,6 +193,17 @@ describe('direct-site authentication', () => {
       minHeight: 640,
     });
     await newgroundsSessions.cancelAuthSession();
+
+    const deviantartBrowser = createBrowserWindowMock();
+    const { sessions: deviantartSessions } = createHarness(deviantartBrowser);
+    await deviantartSessions.startAuthSession('deviantart');
+    expect(deviantartBrowser.instances[0].options).toMatchObject({
+      width: 1000,
+      height: 760,
+      minWidth: 760,
+      minHeight: 640,
+    });
+    await deviantartSessions.cancelAuthSession();
 
     const patreonBrowser = createBrowserWindowMock();
     const { sessions: patreonSessions } = createHarness(patreonBrowser);

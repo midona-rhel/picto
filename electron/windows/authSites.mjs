@@ -1,5 +1,6 @@
 const IDOL_COMPLEX_LOGIN_URL = 'https://login.idol.sankakucomplex.com/oidc/auth?response_type=code&scope=openid&client_id=idol-web-app&redirect_uri=https%3A%2F%2Fwww.idolcomplex.com%2Fsso%2Fcallback&state=return_uri%3Dhttps%3A%2F%2Fwww.idolcomplex.com%2Fen%2Flogin&theme=black&route=login&lang=en';
 const SANKAKU_LOGIN_URL = 'https://login.sankakucomplex.com/oidc/auth?response_type=code&scope=openid&client_id=sankaku-web-app&redirect_uri=https%3A%2F%2Fsankaku.app%2Fsso%2Fcallback&state=return_uri%3Dhttps%3A%2F%2Fsankaku.app%2F&theme=black&route=login&lang=en';
+const WIDE_AUTH_WINDOW = Object.freeze({ width: 1000, height: 760, minWidth: 760, minHeight: 640 });
 
 const cookieSite = (id, label, loginUrl, cookieUrl, options = {}) => Object.freeze({
   id,
@@ -61,7 +62,7 @@ export const AUTH_SITES = Object.freeze({
     {
       cookieNames: Object.freeze(['ng_session']),
       authenticatedCookieNames: Object.freeze(['ng_session']),
-      authWindowSize: Object.freeze({ width: 1000, height: 760, minWidth: 760, minHeight: 640 }),
+      authWindowSize: WIDE_AUTH_WINDOW,
     },
   ),
   hentaifoundry: cookieSite(
@@ -108,6 +109,7 @@ export const AUTH_SITES = Object.freeze({
     tokenField: 'refresh_token',
     cookieUrl: 'https://www.deviantart.com',
     cookieNames: Object.freeze(['auth', 'auth_secure', 'userinfo']),
+    authWindowSize: WIDE_AUTH_WINDOW,
   }),
   patreon: cookieSite(
     'patreon',
@@ -164,8 +166,8 @@ export const AUTH_SITES = Object.freeze({
   konachan: cookieSite('konachan', 'Konachan', 'https://konachan.com/user/login', 'https://konachan.com'),
   safebooru: cookieSite('safebooru', 'Safebooru', 'https://safebooru.org/index.php?page=account&s=login&code=00', 'https://safebooru.org'),
   e621: cookieSite('e621', 'e621', 'https://e621.net/session/new', 'https://e621.net'),
-  exhentai: Object.freeze({
-    id: 'exhentai',
+  ehentai: Object.freeze({
+    id: 'ehentai',
     label: 'ExHentai',
     strategy: 'exhentai',
     loginUrl: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
@@ -183,7 +185,11 @@ export const AUTH_SITES = Object.freeze({
 
 export function resolveAuthSite(siteId) {
   const requested = String(siteId || '').trim().toLowerCase();
-  const canonical = requested === 'pixivuser' ? 'pixiv' : requested;
+  const canonical = requested === 'pixivuser'
+    ? 'pixiv'
+    : requested === 'exhentai'
+      ? 'ehentai'
+      : requested;
   return AUTH_SITES[canonical] ?? null;
 }
 
