@@ -8,7 +8,11 @@ import {
 } from './diagnosticsStore';
 import { invoke } from '../../platform/ipc';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
-import { buildSupportReport, formatDiagnosticEntry } from './supportReport';
+import {
+  buildSupportReport,
+  formatDiagnosticDisplayEntry,
+  formatDiagnosticEntry,
+} from './supportReport';
 import styles from './DiagnosticsPanel.module.css';
 
 const LEVELS: DiagnosticLevel[] = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'];
@@ -171,7 +175,7 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
         >
           {filtered.map((entry) => (
             <div className={styles.logRow} key={entry.id} data-level={entry.level}>
-              {[formatTime(entry.timestamp), ...formatDiagnosticEntry(entry).split('\t').slice(1)].join('\t')}
+              {formatDiagnosticDisplayEntry(entry, formatTime(entry.timestamp))}
             </div>
           ))}
         </div>

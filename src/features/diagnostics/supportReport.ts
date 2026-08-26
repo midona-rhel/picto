@@ -19,6 +19,18 @@ export function formatDiagnosticEntry(entry: DiagnosticEntry): string {
   return [entry.timestamp, entry.level, entry.source, entry.target, duration, entry.message].join('\t');
 }
 
+const DISPLAY_COLUMN_WIDTHS = [14, 8, 10, 34, 38] as const;
+
+/** One selectable line with stable character columns and no truncation. */
+export function formatDiagnosticDisplayEntry(entry: DiagnosticEntry, timestamp: string): string {
+  const fields = formatDiagnosticEntry(entry).split('\t');
+  fields[0] = timestamp;
+  return fields
+    .slice(0, -1)
+    .map((field, index) => field.padEnd(DISPLAY_COLUMN_WIDTHS[index]))
+    .join('') + fields[fields.length - 1];
+}
+
 export function scrubSupportText(value: string): string {
   return value
     .replace(/\/(?:Users|home)\/[^/\s]+/g, '~')

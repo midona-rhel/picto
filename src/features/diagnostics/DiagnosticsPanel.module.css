@@ -93,7 +93,6 @@
   min-width: 100%;
   padding: 0 12px;
   color: var(--color-text-primary);
-  tab-size: 16;
   white-space: pre;
 }
 .logRow:hover { background: var(--color-surface-hover); }
