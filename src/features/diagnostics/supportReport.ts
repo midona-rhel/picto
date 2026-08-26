@@ -25,7 +25,9 @@ export function scrubSupportText(value: string): string {
     .replace(/[A-Za-z]:\\Users\\[^\\\s]+/g, '~')
     .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '<email>')
     .replace(/\b(Bearer\s+)[A-Za-z0-9._~+/=-]+/gi, '$1<redacted>')
-    .replace(/([?&](?:access_token|api_key|apikey|authorization|cookie|password|refresh_token|token)=)[^&\s]+/gi, '$1<redacted>');
+    .replace(/\bhttps?:\/\/[^\s]+/gi, (raw) => {
+      try { return `${new URL(raw).origin}/<redacted>`; } catch { return '<url>'; }
+    });
 }
 
 export function buildSupportReport(
