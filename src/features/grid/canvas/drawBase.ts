@@ -212,7 +212,8 @@ export function drawCanvasBaseLayer({
       }
     } else {
       if (entry?.state === 'error') {
-        fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
+        ctx.fillStyle = theme.placeholderBg;
+        ctx.fillRect(pos.x, drawY, pos.w, imageHeight);
         drawBrokenThumbnail(ctx, pos.x, drawY, pos.w, imageHeight, theme.placeholderBg);
       } else {
         fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
