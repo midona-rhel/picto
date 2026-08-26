@@ -510,6 +510,7 @@ impl Application {
 pub mod resources {
     pub const LIBRARY: &str = "library";
     pub const SIDEBAR: &str = "sidebar";
+    pub const RECENTLY_VIEWED: &str = "recently_viewed";
     pub const FOLDERS: &str = "folders";
     pub const SMART_FOLDERS: &str = "smart_folders";
     pub const TAGS: &str = "tags";

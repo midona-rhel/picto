@@ -47,6 +47,22 @@ describe('grid invalidation', () => {
     stop();
   });
 
+  it('reconciles recent-view changes only while that scope is active', () => {
+    const reconcile = vi.spyOn(gridController, 'reconcile').mockResolvedValue(true);
+    const stop = startGridSettle();
+
+    callbacks.get('recently_viewed')?.();
+    expect(reconcile).not.toHaveBeenCalled();
+
+    store.set(gridSessionAtom, {
+      ...store.get(gridSessionAtom),
+      scope: { kind: 'recently_viewed' },
+    });
+    callbacks.get('recently_viewed')?.();
+    expect(reconcile).toHaveBeenCalledOnce();
+    stop();
+  });
+
   it('coalesces invalidations received during a scope transition', () => {
     const reconcile = vi.spyOn(gridController, 'reconcile').mockResolvedValue(true);
     store.set(gridTransitionPhaseAtom, 'waiting');

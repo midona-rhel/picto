@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
-import { forwardWarn } from '../services/logForwarder.mjs';
+import { forwardLog, forwardWarn } from '../services/logForwarder.mjs';
 
 const DOCUMENT_THUMBNAIL_MIMES = new Set([
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
@@ -314,7 +314,11 @@ export function createMediaProtocolService({
         const missingPath = parsed.kind === 'thumb'
           ? buildBlobPath(parsed.kind, parsed.hash, 'jpg')
           : buildBlobPath(parsed.kind, parsed.hash, parsed.ext);
-        forwardWarn('media', `404: ${parsed.kind} ${parsed.hash.slice(0, 12)} ${missingPath}`);
+        if (parsed.kind === 'thumb') {
+          forwardLog('DEBUG', 'media', `Thumbnail queued: ${parsed.hash.slice(0, 12)} ${missingPath}`);
+        } else {
+          forwardWarn('media', `404: ${parsed.kind} ${parsed.hash.slice(0, 12)} ${missingPath}`);
+        }
         return new Response('Not found', {
           status: 404,
           headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },

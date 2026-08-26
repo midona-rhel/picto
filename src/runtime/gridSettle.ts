@@ -51,6 +51,9 @@ export function startGridSettle(): () => void {
   };
 
   const unregister = libraryInvalidation.register('library', scheduleReconcile);
+  const unregisterRecentlyViewed = libraryInvalidation.register('recently_viewed', (payload) => {
+    if (store.get(gridSessionAtom).scope.kind === 'recently_viewed') scheduleReconcile(payload);
+  });
   void listenDominantColorChanged(({ fileHash, dominantColorHex }) => {
     if (cancelled || !store.get(gridActiveAtom)) return;
     const session = store.get(gridSessionAtom);
@@ -81,6 +84,7 @@ export function startGridSettle(): () => void {
     cancelled = true;
     if (reconcileTimer) clearTimeout(reconcileTimer);
     unregister();
+    unregisterRecentlyViewed();
     removeColorListener?.();
     unsubscribePhase();
   };

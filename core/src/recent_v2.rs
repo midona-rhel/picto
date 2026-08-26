@@ -19,7 +19,7 @@ impl Application {
                 "items.clear_recent_views",
                 "Clear recently viewed",
                 vec![
-                    resources::LIBRARY.to_string(),
+                    resources::RECENTLY_VIEWED.to_string(),
                     resources::SIDEBAR.to_string(),
                 ],
                 Vec::new(),
@@ -38,7 +38,7 @@ impl Application {
         Ok(MutationReceipt {
             revision,
             resources: vec![
-                resources::LIBRARY.to_string(),
+                resources::RECENTLY_VIEWED.to_string(),
                 resources::SIDEBAR.to_string(),
             ],
             item_ids: item_ids.into_iter().map(ItemId).collect(),
@@ -67,9 +67,8 @@ impl Application {
         Ok(MutationReceipt {
             revision,
             resources: vec![
-                resources::LIBRARY.to_string(),
+                resources::RECENTLY_VIEWED.to_string(),
                 resources::SIDEBAR.to_string(),
-                resources::item(root_item_id.0),
             ],
             item_ids: vec![root_item_id],
         })
@@ -172,9 +171,8 @@ mod tests {
         assert_eq!(
             first.resources,
             vec![
-                resources::LIBRARY.to_string(),
-                resources::SIDEBAR.to_string(),
-                "item:1".to_string()
+                resources::RECENTLY_VIEWED.to_string(),
+                resources::SIDEBAR.to_string()
             ]
         );
         assert_eq!(first.item_ids, vec![ItemId(1)]);
@@ -272,7 +270,7 @@ mod tests {
         assert_eq!(receipt.item_ids, vec![ItemId(1), ItemId(10)]);
         assert_eq!(
             receipt.resources,
-            vec![resources::LIBRARY, resources::SIDEBAR]
+            vec![resources::RECENTLY_VIEWED, resources::SIDEBAR]
         );
         let count: i64 = application
             .store()
