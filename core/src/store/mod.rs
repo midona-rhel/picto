@@ -7,8 +7,8 @@ pub mod history;
 pub mod schema;
 
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, RwLock};
-use std::time::Instant;
+use std::sync::{Mutex, RwLock, RwLockWriteGuard};
+use std::time::{Duration, Instant};
 
 use rusqlite::{Connection, OpenFlags, Transaction};
 
@@ -21,6 +21,29 @@ pub struct Store {
     writer: Mutex<Connection>,
     readers: Mutex<Vec<Connection>>,
     consistency: RwLock<()>,
+}
+
+struct TrackedConsistencyWrite<'a> {
+    _guard: RwLockWriteGuard<'a, ()>,
+    caller: &'static std::panic::Location<'static>,
+    wait: Duration,
+    acquired_at: Instant,
+}
+
+impl Drop for TrackedConsistencyWrite<'_> {
+    fn drop(&mut self) {
+        let held = self.acquired_at.elapsed();
+        if self.wait.as_millis() >= 100 || held.as_millis() >= 100 {
+            tracing::warn!(
+                target: "picto::store",
+                caller_file = self.caller.file(),
+                caller_line = self.caller.line(),
+                write_wait_ms = self.wait.as_secs_f64() * 1_000.0,
+                write_hold_ms = held.as_secs_f64() * 1_000.0,
+                "Slow store write ownership"
+            );
+        }
+    }
 }
 
 impl Store {
@@ -67,11 +90,9 @@ impl Store {
         &self.root
     }
 
+    #[track_caller]
     pub fn checkpoint(&self) -> Result<(), String> {
-        let _guard = self
-            .consistency
-            .write()
-            .map_err(|_| "Store consistency lock poisoned".to_string())?;
+        let _guard = self.consistency_write(std::panic::Location::caller())?;
         let connection = self
             .writer
             .lock()
@@ -155,14 +176,12 @@ impl Store {
         result
     }
 
+    #[track_caller]
     pub fn transaction<T>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<T>,
     ) -> Result<(T, u64), String> {
-        let _guard = self
-            .consistency
-            .write()
-            .map_err(|_| "Store consistency lock poisoned".to_string())?;
+        let _guard = self.consistency_write(std::panic::Location::caller())?;
         let mut connection = self
             .writer
             .lock()
@@ -183,14 +202,12 @@ impl Store {
         Ok((value, revision))
     }
 
+    #[track_caller]
     pub fn transaction_if_changed<T>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, bool)>,
     ) -> Result<(T, u64, bool), String> {
-        let _guard = self
-            .consistency
-            .write()
-            .map_err(|_| "Store consistency lock poisoned".to_string())?;
+        let _guard = self.consistency_write(std::panic::Location::caller())?;
         let mut connection = self
             .writer
             .lock()
@@ -218,15 +235,13 @@ impl Store {
     /// Commit SQLite and settle derived state before any Store reader can
     /// observe the new revision. `settle` must recover its projection from
     /// `connection` if an incremental update fails.
+    #[track_caller]
     pub fn transaction_settled<T, D>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D)>,
         settle: impl FnOnce(&Connection, D) -> Result<(), String>,
     ) -> Result<(T, u64), String> {
-        let _guard = self
-            .consistency
-            .write()
-            .map_err(|_| "Store consistency lock poisoned".to_string())?;
+        let _guard = self.consistency_write(std::panic::Location::caller())?;
         let mut connection = self
             .writer
             .lock()
@@ -248,6 +263,7 @@ impl Store {
         Ok((value, revision))
     }
 
+    #[track_caller]
     pub fn transaction_if_changed_settled<T, D>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
@@ -258,6 +274,7 @@ impl Store {
 
     /// Remote semantic mutations already carry their cloud identity. Applying
     /// them must settle projections normally without creating a local echo.
+    #[track_caller]
     pub(crate) fn transaction_if_changed_settled_without_cloud<T, D>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
@@ -266,16 +283,14 @@ impl Store {
         self.transaction_if_changed_settled_inner(operation, settle, false)
     }
 
+    #[track_caller]
     fn transaction_if_changed_settled_inner<T, D>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
         settle: impl FnOnce(&Connection, D) -> Result<(), String>,
         capture_cloud: bool,
     ) -> Result<(T, u64, bool), String> {
-        let _guard = self
-            .consistency
-            .write()
-            .map_err(|_| "Store consistency lock poisoned".to_string())?;
+        let _guard = self.consistency_write(std::panic::Location::caller())?;
         let mut connection = self
             .writer
             .lock()
@@ -309,6 +324,23 @@ impl Store {
 
     pub fn revision(&self) -> Result<u64, String> {
         self.read(schema::revision)
+    }
+
+    fn consistency_write(
+        &self,
+        caller: &'static std::panic::Location<'static>,
+    ) -> Result<TrackedConsistencyWrite<'_>, String> {
+        let started = Instant::now();
+        let guard = self
+            .consistency
+            .write()
+            .map_err(|_| "Store consistency lock poisoned".to_string())?;
+        Ok(TrackedConsistencyWrite {
+            _guard: guard,
+            caller,
+            wait: started.elapsed(),
+            acquired_at: Instant::now(),
+        })
     }
 }
 
