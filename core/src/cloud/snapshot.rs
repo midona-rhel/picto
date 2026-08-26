@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -103,7 +104,7 @@ pub fn create_verified(store: &Store) -> Result<SnapshotArtifact, String> {
     let database_path = staging.join(format!("{snapshot_id}.sqlite"));
     let compressed_path = staging.join(format!("{snapshot_id}.sqlite.zst"));
 
-    store.read_result(|source| {
+    store.read_snapshot_result(|source| {
         let mut destination = Connection::open(&database_path)
             .map_err(|error| format!("Failed to stage SQLite snapshot: {error}"))?;
         let backup = Backup::new(source, &mut destination)
@@ -115,37 +116,48 @@ pub fn create_verified(store: &Store) -> Result<SnapshotArtifact, String> {
         validate_database(&destination)
     })?;
 
-    let database = std::fs::read(&database_path)
+    let database_file = std::fs::File::open(&database_path)
         .map_err(|error| format!("Failed to read staged snapshot: {error}"))?;
-    let database_sha256 = hex::encode(Sha256::digest(&database));
-    let compressed = zstd::stream::encode_all(database.as_slice(), 9)
+    let compressed_file = std::fs::File::create(&compressed_path)
+        .map_err(|error| format!("Failed to create compressed snapshot: {error}"))?;
+    let mut database_reader = HashingReader::new(database_file);
+    let mut encoder = zstd::stream::Encoder::new(compressed_file, 9)
+        .map_err(|error| format!("Failed to initialize snapshot compression: {error}"))?;
+    std::io::copy(&mut database_reader, &mut encoder)
         .map_err(|error| format!("Failed to compress SQLite snapshot: {error}"))?;
-    std::fs::write(&compressed_path, &compressed)
-        .map_err(|error| format!("Failed to write compressed snapshot: {error}"))?;
-    let artifact_sha256 = hex::encode(Sha256::digest(&compressed));
+    encoder
+        .finish()
+        .and_then(|file| file.sync_all())
+        .map_err(|error| format!("Failed to finish compressed snapshot: {error}"))?;
+    let database_sha256 = database_reader.finish();
+    let artifact_sha256 = hash_file(&compressed_path)?;
+    let size_bytes = std::fs::metadata(&compressed_path)
+        .map_err(|error| format!("Failed to inspect compressed snapshot: {error}"))?
+        .len();
     std::fs::remove_file(&database_path)
         .map_err(|error| format!("Failed to remove uncompressed snapshot staging file: {error}"))?;
     Ok(SnapshotArtifact {
         snapshot_id,
         database_sha256,
         artifact_sha256,
-        size_bytes: compressed.len() as u64,
+        size_bytes,
         compressed_path,
     })
 }
 
 pub fn validate_compressed(path: &Path, expected_sha256: &str) -> Result<(), String> {
-    let compressed = std::fs::read(path)
-        .map_err(|error| format!("Failed to read compressed snapshot: {error}"))?;
-    if hex::encode(Sha256::digest(&compressed)) != expected_sha256 {
+    if hash_file(path)? != expected_sha256 {
         return Err("Snapshot artifact checksum mismatch".to_string());
     }
-    let database = zstd::stream::decode_all(compressed.as_slice())
-        .map_err(|error| format!("Failed to decompress snapshot: {error}"))?;
-    let temporary = tempfile::NamedTempFile::new()
+    let compressed = std::fs::File::open(path)
+        .map_err(|error| format!("Failed to read compressed snapshot: {error}"))?;
+    let mut decoder = zstd::stream::Decoder::new(compressed)
+        .map_err(|error| format!("Failed to initialize snapshot decompression: {error}"))?;
+    let mut temporary = tempfile::NamedTempFile::new()
         .map_err(|error| format!("Failed to stage snapshot validation: {error}"))?;
-    std::fs::write(temporary.path(), database)
-        .map_err(|error| format!("Failed to write snapshot validation file: {error}"))?;
+    std::io::copy(&mut decoder, &mut temporary)
+        .map_err(|error| format!("Failed to decompress snapshot: {error}"))?;
+    temporary.flush().map_err(|error| format!("Failed to flush snapshot validation: {error}"))?;
     // FTS5's integrity check uses temporary writes even though the database
     // itself is not modified, so validation needs a writable staging handle.
     let connection = Connection::open(temporary.path())
@@ -165,10 +177,12 @@ pub async fn publish(
     let root = format!("picto/{library_id}/snapshots/{}", artifact.snapshot_id);
     let artifact_path = format!("{root}.sqlite.zst");
     let manifest_path = format!("{root}.json");
-    let compressed = std::fs::read(&artifact.compressed_path)
-        .map_err(|error| format!("Failed to read staged snapshot: {error}"))?;
     provider
-        .upload(&artifact_path, compressed, &artifact.artifact_sha256)
+        .upload_file(
+            &artifact_path,
+            artifact.compressed_path.clone(),
+            &artifact.artifact_sha256,
+        )
         .await?;
     let manifest = SnapshotManifest {
         snapshot_id: artifact.snapshot_id.clone(),
@@ -209,6 +223,38 @@ pub async fn publish(
     })?;
     let _ = std::fs::remove_file(&artifact.compressed_path);
     Ok(manifest)
+}
+
+fn hash_file(path: &Path) -> Result<String, String> {
+    let file = std::fs::File::open(path)
+        .map_err(|error| format!("Failed to hash {}: {error}", path.display()))?;
+    let mut reader = HashingReader::new(file);
+    std::io::copy(&mut reader, &mut std::io::sink())
+        .map_err(|error| format!("Failed to hash {}: {error}", path.display()))?;
+    Ok(reader.finish())
+}
+
+struct HashingReader<R> {
+    inner: R,
+    hasher: Sha256,
+}
+
+impl<R> HashingReader<R> {
+    fn new(inner: R) -> Self {
+        Self { inner, hasher: Sha256::new() }
+    }
+
+    fn finish(self) -> String {
+        hex::encode(self.hasher.finalize())
+    }
+}
+
+impl<R: Read> Read for HashingReader<R> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let read = self.inner.read(buffer)?;
+        self.hasher.update(&buffer[..read]);
+        Ok(read)
+    }
 }
 
 pub async fn list_remote(

@@ -65,6 +65,9 @@ impl Store {
                 .execute_batch(crate::store::schema::SUBSCRIPTION_READ_INDEXES)
                 .map_err(|error| format!("Failed to ensure subscription read indexes: {error}"))?;
             writer
+                .execute_batch(crate::store::schema::PERFORMANCE_INDEXES)
+                .map_err(|error| format!("Failed to ensure performance indexes: {error}"))?;
+            writer
                 .execute_batch(
                     "PRAGMA analysis_limit=1000;
                      ANALYZE;
@@ -128,6 +131,15 @@ impl Store {
         operation: impl FnOnce(&Connection) -> Result<T, String>,
     ) -> Result<T, String> {
         self.with_reader(operation)
+    }
+
+    /// Fallible SQLite-only snapshot read that does not wait for in-memory
+    /// projection settlement. WAL keeps this database view consistent.
+    pub fn read_snapshot_result<T>(
+        &self,
+        operation: impl FnOnce(&Connection) -> Result<T, String>,
+    ) -> Result<T, String> {
+        self.with_reader_unlocked(operation)
     }
 
     fn with_reader<T>(

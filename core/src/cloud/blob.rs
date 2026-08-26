@@ -78,6 +78,9 @@ pub async fn upload_pending(
         "b.state = 'available' AND b.remote_present = 0",
         limit,
     )?;
+    if candidates.is_empty() {
+        return Ok(BlobSyncResult::default());
+    }
     let mut result = BlobSyncResult::default();
     for candidate in candidates {
         let extension = candidate.extension();
@@ -128,11 +131,8 @@ pub async fn recover_pending(
     provider: &dyn CloudProvider,
     limit: usize,
 ) -> Result<BlobSyncResult, String> {
-    let (library_id, candidates) = candidates(
-        application,
-        "b.state IN ('queued', 'missing_remote', 'corrupt')",
-        limit,
-    )?;
+    let retry_before = (Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
+    let (library_id, candidates) = recovery_candidates(application, &retry_before, limit)?;
     if candidates.is_empty() {
         return Ok(BlobSyncResult::default());
     }
@@ -189,6 +189,57 @@ pub async fn recover_pending(
     Ok(result)
 }
 
+fn recovery_candidates(
+    application: &Application,
+    retry_before: &str,
+    limit: usize,
+) -> Result<(String, Vec<Candidate>), String> {
+    application.store().read(|connection| {
+        let library_id = connection.query_row(
+            "SELECT library_id FROM cloud_state WHERE singleton = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        )?;
+        let mut rows = Vec::with_capacity(limit);
+        for (state, threshold) in [
+            ("queued", None),
+            ("missing_remote", Some(retry_before)),
+            ("corrupt", Some(retry_before)),
+        ] {
+            if rows.len() == limit {
+                break;
+            }
+            let remaining = (limit - rows.len()) as i64;
+            let sql = if threshold.is_some() {
+                "SELECT b.file_hash, f.mime_type, b.remote_extension
+                 FROM cloud_blob_state b
+                 JOIN media_file f ON f.file_hash = b.file_hash
+                 WHERE b.state = ?1 AND b.updated_at <= ?2
+                 ORDER BY b.priority DESC, b.updated_at
+                 LIMIT ?3"
+            } else {
+                "SELECT b.file_hash, f.mime_type, b.remote_extension
+                 FROM cloud_blob_state b
+                 JOIN media_file f ON f.file_hash = b.file_hash
+                 WHERE b.state = ?1
+                 ORDER BY b.priority DESC, b.updated_at, b.file_hash
+                 LIMIT ?3"
+            };
+            let mut statement = connection.prepare(sql)?;
+            let mapped = statement.query_map(
+                params![state, threshold, remaining],
+                |row| Ok(Candidate {
+                    hash: row.get(0)?,
+                    mime_type: row.get(1)?,
+                    remote_extension: row.get(2)?,
+                }),
+            )?;
+            rows.extend(mapped.collect::<rusqlite::Result<Vec<_>>>()?);
+        }
+        Ok((library_id, rows))
+    })
+}
+
 pub fn prioritize(
     application: &Application,
     hashes: &[String],
@@ -237,7 +288,7 @@ fn candidates(
              FROM cloud_blob_state b
              JOIN media_file f ON f.file_hash = b.file_hash
              WHERE {predicate}
-             ORDER BY b.priority DESC, b.updated_at, b.file_hash
+             ORDER BY b.priority DESC, b.updated_at
              LIMIT ?1"
         );
         let mut statement = connection.prepare(&sql)?;

@@ -14,6 +14,13 @@ CREATE INDEX IF NOT EXISTS idx_subscription_run_query_success
     WHERE status = 'succeeded';
 "#;
 
+pub const PERFORMANCE_INDEXES: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_cloud_blob_upload_priority
+    ON cloud_blob_state(remote_present, state, priority DESC, updated_at);
+CREATE INDEX IF NOT EXISTS idx_source_post_provisional
+    ON source_post(source_post_id) WHERE root_item_id IS NULL;
+"#;
+
 pub const LIBRARY_DDL: &str = r#"
 CREATE TABLE library_meta (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -513,8 +520,8 @@ CREATE TABLE cloud_blob_state (
     uploaded_at TEXT,
     updated_at TEXT NOT NULL
 );
-CREATE INDEX idx_cloud_blob_queue ON cloud_blob_state(state, priority DESC, updated_at);
-CREATE INDEX idx_cloud_blob_upload ON cloud_blob_state(remote_present, state, updated_at);
+CREATE INDEX idx_cloud_blob_queue ON cloud_blob_state(state, priority DESC, updated_at, file_hash);
+CREATE INDEX idx_cloud_blob_upload ON cloud_blob_state(remote_present, state, priority DESC, updated_at, file_hash);
 
 -- Search text is indexed once per object. Tag and folder membership remains
 -- relational so a rename never rewrites every matching library item.
@@ -859,6 +866,9 @@ pub fn create(connection: &mut Connection) -> Result<(), String> {
     transaction
         .execute_batch(SUBSCRIPTION_READ_INDEXES)
         .map_err(|error| format!("Failed to create subscription read indexes: {error}"))?;
+    transaction
+        .execute_batch(PERFORMANCE_INDEXES)
+        .map_err(|error| format!("Failed to create performance indexes: {error}"))?;
     transaction
         .execute(
             "INSERT INTO library_meta (singleton, schema_version, revision) VALUES (1, ?1, 0)",

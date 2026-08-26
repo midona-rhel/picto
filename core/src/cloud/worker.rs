@@ -6,11 +6,13 @@ use super::reconcile::{self, ReconcileMode};
 use crate::app::Application;
 
 const BLOB_BATCH_SIZE: usize = 8;
+const REMOTE_METADATA_POLL_INTERVAL: Duration = Duration::seconds(10);
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct WorkerState {
     pub connected: bool,
     pub initialized: bool,
+    last_remote_check_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -55,6 +57,7 @@ async fn tick_inner(
     };
     if configuration.paused {
         state.connected = false;
+        state.last_remote_check_at = None;
         return Ok(TickResult::default());
     }
     let provider =
@@ -83,15 +86,27 @@ async fn tick_inner(
         });
     }
 
+    let now = Utc::now();
+    let first_connection = !state.initialized;
     let reconnected = state.initialized && !state.connected;
     state.connected = true;
     state.initialized = true;
     let mut result = TickResult::default();
-    if reconnected || reconcile::remote_metadata_pending(application, &provider).await? {
+    let remote_check_due = first_connection
+        || reconnected
+        || state.last_remote_check_at.is_none_or(|last| now - last >= REMOTE_METADATA_POLL_INTERVAL);
+    let remote_pending = if remote_check_due {
+        let pending = reconcile::remote_metadata_pending(application, &provider).await?;
+        state.last_remote_check_at = Some(now);
+        pending
+    } else {
+        false
+    };
+    if reconnected || remote_pending {
         reconcile::reconcile(application, &provider, ReconcileMode::Reconnect).await?;
         result.reconciled = true;
         result.state_changed = true;
-    } else if epoch::flush_due(application.store(), Utc::now())? {
+    } else if epoch::flush_due(application.store(), now)? {
         let flushed = epoch::flush(application.store(), &provider, false).await?;
         result.published_mutations = flushed.published_mutations;
         result.state_changed |= flushed.published_mutations > 0;

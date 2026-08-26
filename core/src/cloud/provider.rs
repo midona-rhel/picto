@@ -33,6 +33,12 @@ pub trait CloudProvider: Send + Sync {
         bytes: Vec<u8>,
         checksum: &str,
     ) -> ProviderFuture<'_, RemoteObject>;
+    fn upload_file(
+        &self,
+        path: &str,
+        source: PathBuf,
+        checksum: &str,
+    ) -> ProviderFuture<'_, RemoteObject>;
     fn upload_if_revision(
         &self,
         path: &str,
@@ -172,6 +178,67 @@ fn replace_atomically(temporary: &Path, destination: &Path) -> Result<(), String
     {
         std::fs::rename(temporary, destination).map_err(|error| error.to_string())
     }
+}
+
+fn file_checksum(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut HashWriter(&mut hasher)).map_err(|error| error.to_string())?;
+    Ok(hex::encode(hasher.finalize()))
+}
+
+struct HashWriter<'a>(&'a mut Sha256);
+
+impl std::io::Write for HashWriter<'_> {
+    fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
+        self.0.update(buffer);
+        Ok(buffer.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn publish_file(
+    source: &Path,
+    resolved: &Path,
+    object_path: String,
+    checksum: String,
+    expected_revision: Option<String>,
+) -> Result<RemoteObject, String> {
+    if let Some(expected) = expected_revision {
+        if !resolved.exists() {
+            return Err("Cloud metadata was removed on another device".to_string());
+        }
+        if file_checksum(resolved)? != expected {
+            return Err("Cloud metadata changed on another device".to_string());
+        }
+    }
+    if file_checksum(source)? != checksum {
+        return Err("Cloud upload checksum does not match its bytes".to_string());
+    }
+    if let Some(parent) = resolved.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    let temporary = resolved.with_extension(format!("picto-uploading-{}", uuid::Uuid::new_v4()));
+    std::fs::copy(source, &temporary).map_err(|error| error.to_string())?;
+    std::fs::File::open(&temporary)
+        .and_then(|file| file.sync_all())
+        .map_err(|error| error.to_string())?;
+    replace_atomically(&temporary, resolved)?;
+    #[cfg(unix)]
+    if let Some(parent) = resolved.parent() {
+        std::fs::File::open(parent)
+            .and_then(|directory| directory.sync_all())
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(RemoteObject {
+        path: object_path,
+        size_bytes: std::fs::metadata(resolved).map_err(|error| error.to_string())?.len(),
+        checksum: Some(checksum.clone()),
+        revision: Some(checksum),
+    })
 }
 
 pub fn detect_roots() -> Vec<DetectedProviderRoot> {
@@ -344,6 +411,25 @@ impl CloudProvider for DirectoryProvider {
         self.upload_if_revision(path, bytes, _checksum, None)
     }
 
+    fn upload_file(
+        &self,
+        path: &str,
+        source: PathBuf,
+        checksum: &str,
+    ) -> ProviderFuture<'_, RemoteObject> {
+        let resolved = self.resolve(path);
+        let object_path = path.to_string();
+        let checksum = checksum.to_string();
+        Box::pin(async move {
+            let resolved = resolved?;
+            tokio::task::spawn_blocking(move || {
+                publish_file(&source, &resolved, object_path, checksum, None)
+            })
+            .await
+            .map_err(|error| format!("Cloud upload worker failed: {error}"))?
+        })
+    }
+
     fn upload_if_revision(
         &self,
         path: &str,
@@ -357,41 +443,13 @@ impl CloudProvider for DirectoryProvider {
         let expected_revision = expected_revision.map(str::to_string);
         Box::pin(async move {
             let resolved = resolved?;
-            if let Some(expected) = expected_revision {
-                if resolved.exists() {
-                    let existing = std::fs::read(&resolved).map_err(|error| error.to_string())?;
-                    let actual = hex::encode(Sha256::digest(&existing));
-                    if actual != expected {
-                        return Err("Cloud metadata changed on another device".to_string());
-                    }
-                } else {
-                    return Err("Cloud metadata was removed on another device".to_string());
-                }
-            }
-            let actual = hex::encode(Sha256::digest(&bytes));
-            if actual != checksum {
-                return Err("Cloud upload checksum does not match its bytes".to_string());
-            }
-            if let Some(parent) = resolved.parent() {
-                std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            }
-            let temporary =
-                resolved.with_extension(format!("picto-uploading-{}", uuid::Uuid::new_v4()));
-            let mut file = std::fs::File::create(&temporary).map_err(|error| error.to_string())?;
-            std::io::Write::write_all(&mut file, &bytes).map_err(|error| error.to_string())?;
-            file.sync_all().map_err(|error| error.to_string())?;
-            replace_atomically(&temporary, &resolved)?;
-            #[cfg(unix)]
-            if let Some(parent) = resolved.parent() {
-                let directory = std::fs::File::open(parent).map_err(|error| error.to_string())?;
-                directory.sync_all().map_err(|error| error.to_string())?;
-            }
-            Ok(RemoteObject {
-                path,
-                size_bytes: bytes.len() as u64,
-                checksum: Some(actual.clone()),
-                revision: Some(actual),
+            tokio::task::spawn_blocking(move || {
+                let source = tempfile::NamedTempFile::new().map_err(|error| error.to_string())?;
+                std::fs::write(source.path(), bytes).map_err(|error| error.to_string())?;
+                publish_file(source.path(), &resolved, path, checksum, expected_revision)
             })
+            .await
+            .map_err(|error| format!("Cloud upload worker failed: {error}"))?
         })
     }
 

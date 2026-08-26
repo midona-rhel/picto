@@ -101,6 +101,7 @@ pub struct IngestQueue<'a> {
 
 impl<'a> IngestQueue<'a> {
     pub fn start(application: &'a Application) -> Result<Self, String> {
+        compact_succeeded_payloads(application)?;
         discard_abandoned_gallery_sources(application)?;
         reset_running(application)?;
         recover_settled_provisional_collections(application)?;
@@ -115,6 +116,21 @@ impl<'a> IngestQueue<'a> {
     pub fn run_batch(&self, limit: usize) -> Result<IngestRunReport, String> {
         run_batch(self.application, limit)
     }
+}
+
+/// Successful jobs retain their durable identity, but their retry input is no
+/// longer useful. A fresh enqueue supplies fresh input if a terminal job ever
+/// needs to be reactivated.
+pub(crate) fn compact_succeeded_payloads(application: &Application) -> Result<usize, String> {
+    let (compacted, _, _) = application.store().transaction_if_changed(|transaction| {
+        let compacted = transaction.execute(
+            "UPDATE ingest_job SET payload_json = '{}'
+             WHERE status = 'succeeded' AND payload_json <> '{}'",
+            [],
+        )?;
+        Ok((compacted, compacted != 0))
+    })?;
+    Ok(compacted)
 }
 
 /// Removes transient gallery work whose owning job was deleted before the
@@ -861,7 +877,7 @@ fn mark_succeeded(application: &Application, ingest_job_id: i64) -> Result<(), S
     application.store().transaction(|transaction| {
         transaction.execute(
             "UPDATE ingest_job
-             SET status = 'succeeded', last_error = NULL, updated_at = ?1
+             SET status = 'succeeded', payload_json = '{}', last_error = NULL, updated_at = ?1
              WHERE ingest_job_id = ?2 AND status = 'running'",
             params![Utc::now().to_rfc3339(), ingest_job_id],
         )?;
