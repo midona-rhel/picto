@@ -1,5 +1,4 @@
-/* Shared action button used in modals, portals, settings, and forms.
- * Geometry follows Eagle's modal button-xs control. */
+/* Shared action button used in modals, portals, settings, and forms. */
 
 .btn {
   height: var(--action-button-height);

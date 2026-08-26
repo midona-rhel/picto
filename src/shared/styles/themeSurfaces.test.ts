@@ -68,7 +68,7 @@ describe('theme surface ownership', () => {
     expect(folders).toContain('.rowSelected {\n  background: var(--color-surface-active);');
   });
 
-  it('uses Eagle typography roles for application chrome', () => {
+  it('uses the canonical typography roles for application chrome', () => {
     const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
     const modal = readFileSync(resolve(process.cwd(), 'src/shared/ui/GlassModal/GlassModal.module.css'), 'utf8');
     const sidebarRows = readFileSync(resolve(process.cwd(), 'src/shared/ui/SidebarRow/SidebarRow.module.css'), 'utf8');
@@ -89,7 +89,7 @@ describe('theme surface ownership', () => {
     expect(tooltip).toContain('font-size: var(--font-size-xs);');
   });
 
-  it('uses Eagle action and icon button geometry', () => {
+  it('uses the canonical action and icon button geometry', () => {
     const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
     const actions = readFileSync(resolve(process.cwd(), 'src/shared/styles/actionButton.module.css'), 'utf8');
     const icons = readFileSync(resolve(process.cwd(), 'src/shared/styles/iconButton.module.css'), 'utf8');
@@ -106,7 +106,7 @@ describe('theme surface ownership', () => {
     expect(libraries).toContain("composes: btn btnPrimary from '../../shared/styles/actionButton.module.css';");
   });
 
-  it('keeps feature surfaces on the shared Eagle role hierarchy', () => {
+  it('keeps feature surfaces on the shared Picto role hierarchy', () => {
     const select = readFileSync(resolve(process.cwd(), 'src/shared/ui/CmSelect/CmSelect.module.css'), 'utf8');
     const inspectorSection = readFileSync(resolve(process.cwd(), 'src/shared/ui/InspectorSection/InspectorSection.module.css'), 'utf8');
     const propertyRow = readFileSync(resolve(process.cwd(), 'src/shared/ui/PropertyRow/PropertyRow.module.css'), 'utf8');
