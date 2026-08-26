@@ -26,6 +26,7 @@ import { loadLibraryCoverCandidates, saveLibraryCover } from './libraryAppearanc
 import type { CloudConfiguration } from '../../shared/types/generated/application/CloudConfiguration';
 import type { CloudSyncStatus } from '../../shared/types/generated/application/CloudSyncStatus';
 import type { LibraryChanged } from '../../shared/types/generated/application/LibraryChanged';
+import type { LibraryStatistics } from '../../shared/types/generated/application/LibraryStatistics';
 import {
   estimateRemainingSeconds,
   formatLastSync,
@@ -79,6 +80,18 @@ function parentDir(path: string): string {
   return (path.startsWith(sep) ? sep : '') + parts.join(sep);
 }
 
+function formatBytes(value: number): string {
+  if (value < 1024) return `${value.toLocaleString()} B`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let amount = value / 1024;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${units[unit]}`;
+}
+
 export function LibraryManager() {
   const [config, setConfig] = useState<LibraryConfigResult | null>(null);
   const [showLocalCreate, setShowLocalCreate] = useState(false);
@@ -97,6 +110,7 @@ export function LibraryManager() {
   const [cloudRoots, setCloudRoots] = useState<DetectedCloudRoot[]>([]);
   const [cloudConfiguration, setCloudConfiguration] = useState<CloudConfiguration | null>(null);
   const [cloudStatus, setCloudStatus] = useState<CloudSyncStatus | null>(null);
+  const [libraryStatistics, setLibraryStatistics] = useState<LibraryStatistics | null>(null);
   const [cloudLibraries, setCloudLibraries] = useState<CloudLibraryChoice[]>([]);
   const [syncEtaSeconds, setSyncEtaSeconds] = useState<number | null>(null);
   const [initialLoadComplete, setInitialLoadComplete] = useState(false);
@@ -105,11 +119,14 @@ export function LibraryManager() {
   const didRequestWindowShow = useRef(false);
   const libraryMenu = useContextMenu();
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (): Promise<LibraryConfigResult | null> => {
     try {
-      setConfig(await pictoLibrary().getConfig());
+      const nextConfig = await pictoLibrary().getConfig();
+      setConfig(nextConfig);
+      return nextConfig;
     } catch (e) {
       setError(String(e));
+      return null;
     }
   }, []);
 
@@ -124,6 +141,14 @@ export function LibraryManager() {
     } catch {
       setCloudConfiguration(null);
       setCloudStatus(null);
+    }
+  }, []);
+
+  const refreshLibraryStatistics = useCallback(async () => {
+    try {
+      setLibraryStatistics(await invoke<LibraryStatistics>('library.stats'));
+    } catch {
+      setLibraryStatistics(null);
     }
   }, []);
 
@@ -149,12 +174,23 @@ export function LibraryManager() {
 
   useEffect(() => {
     let cancelled = false;
-    void refresh().finally(() => {
-      if (!cancelled) setInitialLoadComplete(true);
+    void Promise.all([
+      refresh(),
+      refreshCloud(),
+      refreshLibraryStatistics(),
+    ]).then(([nextConfig]) => {
+      if (cancelled) return;
+      if (nextConfig) {
+        const pinned = nextConfig.pinnedLibraries ?? [];
+        const history = nextConfig.libraryHistory ?? [];
+        const paths = [...pinned, ...history.filter((path) => !pinned.includes(path))];
+        const current = nextConfig.currentPath;
+        setSelectedPath(current && paths.includes(current) ? current : paths[0] ?? null);
+      }
+      setInitialLoadComplete(true);
     });
-    void refreshCloud();
     return () => { cancelled = true; };
-  }, [refresh, refreshCloud]);
+  }, [refresh, refreshCloud, refreshLibraryStatistics]);
 
   useEffect(() => {
     if (!initialLoadComplete || didRequestWindowShow.current) return;
@@ -180,10 +216,12 @@ export function LibraryManager() {
   useEffect(() => {
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    const update = () => { if (!disposed) void refreshCloudStatus(); };
-    const interval = window.setInterval(update, 1_500);
+    const updateCloud = () => { if (!disposed) void refreshCloudStatus(); };
+    const updateStatistics = () => { if (!disposed) void refreshLibraryStatistics(); };
+    const interval = window.setInterval(updateCloud, 1_500);
     void listen<LibraryChanged>('library/changed', ({ payload }) => {
-      if (payload.resources.includes('cloud') || payload.resources.includes('tasks')) update();
+      if (payload.resources.includes('cloud') || payload.resources.includes('tasks')) updateCloud();
+      if (payload.resources.some((resource) => ['library', 'sidebar', 'tags', 'folders', 'smart_folders', 'subscriptions'].includes(resource))) updateStatistics();
     }).then((value) => {
       if (disposed) value();
       else unlisten = value;
@@ -193,7 +231,7 @@ export function LibraryManager() {
       window.clearInterval(interval);
       unlisten?.();
     };
-  }, [refreshCloudStatus]);
+  }, [refreshCloudStatus, refreshLibraryStatistics]);
 
   const localEntries = useMemo(() => {
     if (!config) return [];
@@ -631,9 +669,27 @@ export function LibraryManager() {
                   </div>
                   {showIconEditor ? (
                     <div className={styles.iconEditor}>
-                      <IconPicker value={selectedEntry.icon} onChange={(icon) => void run(`meta:${selectedEntry.path}`, () => pictoLibrary().setMeta(selectedEntry.path, { icon, imageHash: null }))} />
+                      <IconPicker compact defaultLabel="Use default library icon" value={selectedEntry.icon} onChange={(icon) => void run(`meta:${selectedEntry.path}`, () => pictoLibrary().setMeta(selectedEntry.path, { icon, imageHash: null }))} />
                     </div>
                   ) : null}
+                </section>
+
+                <section className={styles.statisticsCard}>
+                  <div className={styles.cardTitle}>Library</div>
+                  {!selectedEntry.current ? (
+                    <p className={styles.cardDescription}>Open this library to view its statistics.</p>
+                  ) : libraryStatistics ? (
+                    <div className={styles.statisticsGrid}>
+                      <span><strong>{libraryStatistics.active_items.toLocaleString()}</strong><small>All</small></span>
+                      <span><strong>{libraryStatistics.inbox_items.toLocaleString()}</strong><small>Inbox</small></span>
+                      <span><strong>{libraryStatistics.trash_items.toLocaleString()}</strong><small>Trash</small></span>
+                      <span><strong>{libraryStatistics.media_assets.toLocaleString()}</strong><small>Media</small></span>
+                      <span><strong>{libraryStatistics.image_assets.toLocaleString()}</strong><small>Images</small></span>
+                      <span><strong>{libraryStatistics.tags.toLocaleString()}</strong><small>Tags</small></span>
+                      <span><strong>{libraryStatistics.subscriptions.toLocaleString()}</strong><small>Subscriptions</small></span>
+                      <span><strong>{formatBytes(libraryStatistics.original_bytes)}</strong><small>Size</small></span>
+                    </div>
+                  ) : <p className={styles.cardDescription}>Loading library statistics…</p>}
                 </section>
 
                 <section className={styles.cloudCard}>

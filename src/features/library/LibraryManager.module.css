@@ -225,6 +225,7 @@
   background: var(--color-control-surface);
 }
 
+.statisticsCard,
 .cloudCard {
   margin-top: 12px;
   padding: 14px;
@@ -232,6 +233,16 @@
   border-radius: 8px;
   background: var(--color-control-surface);
 }
+
+.statisticsGrid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.statisticsGrid span { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.statisticsGrid strong { overflow: hidden; color: var(--color-text-primary); font-size: 14px; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.statisticsGrid small { color: var(--color-text-tertiary); font-size: 11px; }
 
 .cardDescription { margin: 0; color: var(--color-text-secondary); font-size: 12px; }
 .cloudSummary { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 8px 12px; font-size: 12px; }

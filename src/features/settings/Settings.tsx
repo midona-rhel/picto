@@ -21,6 +21,7 @@ import {
   IconDownload,
   IconLayoutBoard,
   IconLayoutSidebar,
+  IconLibrary,
   IconSearch,
   IconSettings2,
   IconSortAscending,
@@ -38,6 +39,7 @@ import {
 } from '../../shared/lib/shortcuts';
 import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
+import { CompactNumberInput } from '../../shared/ui/CompactNumberInput/CompactNumberInput';
 import { ShortcutsPanel } from './ShortcutsPanel';
 import { AiTaggingPanel } from './AiTaggingPanel';
 import { appController } from '../../controllers/appController';
@@ -52,10 +54,13 @@ import {
 import styles from './Settings.module.css';
 import type { NotificationTone } from '../../shared/lib/notifications';
 import { showErrorNotification, showSuccessNotification } from '../../shared/lib/notifications';
-import { invoke } from '../../platform/ipc';
+import { invoke, listen } from '../../platform/ipc';
+import { GRID_DEFAULTS_SCOPE } from '../../platform/settingsApi';
 import type { CloudConfiguration } from '../../shared/types/generated/application/CloudConfiguration';
 import type { CloudSyncStatus } from '../../shared/types/generated/application/CloudSyncStatus';
 import type { RestorePoint } from '../../shared/types/generated/application/RestorePoint';
+import type { LibraryChanged } from '../../shared/types/generated/application/LibraryChanged';
+import type { LibraryStatistics } from '../../shared/types/generated/application/LibraryStatistics';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 
 // ── Settings row definition ──
@@ -84,6 +89,11 @@ const PANELS: PanelDef[] = [
     id: 'general', label: 'General', icon: IconSettings2,
     keywords: 'general appearance theme color light dark gray blue purple zoom',
     description: 'Appearance and zoom.',
+  },
+  {
+    id: 'library', label: 'Library', icon: IconLibrary,
+    keywords: 'library statistics media images video audio files size all inbox trash tags folders smart subscriptions collections',
+    description: 'Current library contents and storage.',
   },
   {
     id: 'sidebar', label: 'Sidebar', icon: IconLayoutSidebar,
@@ -209,40 +219,6 @@ function Row({ label, sep, children }: { label: string; sep?: boolean; children:
   );
 }
 
-function IntegerSettingInput({ value, min, max, label, onChange }: {
-  value: number;
-  min: number;
-  max: number;
-  label: string;
-  onChange: (value: number) => void;
-}) {
-  const [draft, setDraft] = useState(String(value));
-
-  useEffect(() => setDraft(String(value)), [value]);
-
-  const commit = (next: string) => {
-    const parsed = Number(next);
-    if (Number.isSafeInteger(parsed) && parsed >= min && parsed <= max) onChange(parsed);
-  };
-
-  return (
-    <input
-      aria-label={label}
-      className={styles.numberInput}
-      min={min}
-      max={max}
-      step={1}
-      type="number"
-      value={draft}
-      onBlur={() => setDraft(String(value))}
-      onChange={(event) => {
-        setDraft(event.target.value);
-        commit(event.target.value);
-      }}
-    />
-  );
-}
-
 // ── Appearance panel ──
 
 const THEMES: Array<{ name: string; css: string; color: string | undefined }> = [
@@ -350,8 +326,62 @@ function formatCloudDate(value: string | null): string {
 
 function formatBytes(value: number): string {
   if (value < 1024) return `${value} B`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
-  return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let amount = value / 1024;
+  let unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) {
+    amount /= 1024;
+    unit += 1;
+  }
+  return `${amount.toFixed(amount >= 10 ? 1 : 2)} ${units[unit]}`;
+}
+
+function LibraryPanel({ statistics }: { statistics: LibraryStatistics | null }) {
+  if (!statistics) {
+    return <div className={styles.panelContent} aria-busy="true" />;
+  }
+  const totalRoots = statistics.active_items + statistics.inbox_items + statistics.trash_items;
+  return (
+    <div className={styles.panelContent}>
+      <div className={styles.settingsBlock}>
+        <div className={styles.blockContent}>
+          <div className={styles.blockTitle}>Overview</div>
+          <Row label="Library items"><span className={styles.staticValue}>{totalRoots.toLocaleString()}</span></Row>
+          <Row label="Media assets" sep><span className={styles.staticValue}>{statistics.media_assets.toLocaleString()}</span></Row>
+          <Row label="Size" sep><span className={styles.staticValue}>{formatBytes(statistics.original_bytes)}</span></Row>
+        </div>
+      </div>
+      <div className={styles.settingsBlock}>
+        <div className={styles.blockContent}>
+          <div className={styles.blockTitle}>Library Items</div>
+          <Row label="All"><span className={styles.staticValue}>{statistics.active_items.toLocaleString()}</span></Row>
+          <Row label="Inbox" sep><span className={styles.staticValue}>{statistics.inbox_items.toLocaleString()}</span></Row>
+          <Row label="Trash" sep><span className={styles.staticValue}>{statistics.trash_items.toLocaleString()}</span></Row>
+          <Row label="Standalone" sep><span className={styles.staticValue}>{statistics.standalone_items.toLocaleString()}</span></Row>
+          <Row label="Groups" sep><span className={styles.staticValue}>{statistics.collections.toLocaleString()}</span></Row>
+        </div>
+      </div>
+      <div className={styles.settingsBlock}>
+        <div className={styles.blockContent}>
+          <div className={styles.blockTitle}>Media and Storage</div>
+          <Row label="Images"><span className={styles.staticValue}>{statistics.image_assets.toLocaleString()}</span></Row>
+          <Row label="Videos" sep><span className={styles.staticValue}>{statistics.video_assets.toLocaleString()}</span></Row>
+          <Row label="Audio" sep><span className={styles.staticValue}>{statistics.audio_assets.toLocaleString()}</span></Row>
+          <Row label="Other media" sep><span className={styles.staticValue}>{statistics.other_assets.toLocaleString()}</span></Row>
+          <Row label="Physical files" sep><span className={styles.staticValue}>{statistics.physical_files.toLocaleString()}</span></Row>
+        </div>
+      </div>
+      <div className={styles.settingsBlock}>
+        <div className={styles.blockContent}>
+          <div className={styles.blockTitle}>Organization</div>
+          <Row label="Tags"><span className={styles.staticValue}>{statistics.tags.toLocaleString()}</span></Row>
+          <Row label="Folders" sep><span className={styles.staticValue}>{statistics.folders.toLocaleString()}</span></Row>
+          <Row label="Smart folders" sep><span className={styles.staticValue}>{statistics.smart_folders.toLocaleString()}</span></Row>
+          <Row label="Subscriptions" sep><span className={styles.staticValue}>{statistics.subscriptions.toLocaleString()}</span></Row>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function CloudPanel() {
@@ -444,9 +474,9 @@ function CloudPanel() {
       <div className={styles.settingsBlock}>
         <div className={styles.blockContent}>
           <div className={styles.blockTitle}>Recovery Retention</div>
-          <Row label="Daily snapshots"><IntegerSettingInput label="Daily snapshots" min={2} max={365} value={retention.daily} onChange={(value) => updateRetention('daily', value)} /></Row>
-          <Row label="Weekly snapshots" sep><IntegerSettingInput label="Weekly snapshots" min={0} max={260} value={retention.weekly} onChange={(value) => updateRetention('weekly', value)} /></Row>
-          <Row label="Yearly snapshots" sep><IntegerSettingInput label="Yearly snapshots" min={0} max={100} value={retention.yearly} onChange={(value) => updateRetention('yearly', value)} /></Row>
+          <Row label="Daily snapshots"><CompactNumberInput label="Daily snapshots" min={2} max={365} value={retention.daily} commitOnChange onCommit={(value) => updateRetention('daily', value)} /></Row>
+          <Row label="Weekly snapshots" sep><CompactNumberInput label="Weekly snapshots" min={0} max={260} value={retention.weekly} commitOnChange onCommit={(value) => updateRetention('weekly', value)} /></Row>
+          <Row label="Yearly snapshots" sep><CompactNumberInput label="Yearly snapshots" min={0} max={100} value={retention.yearly} commitOnChange onCommit={(value) => updateRetention('yearly', value)} /></Row>
         </div>
       </div>
 
@@ -473,9 +503,11 @@ function CloudPanel() {
   );
 }
 
-function PreferencePanel({ panel, onDirty, appSettings, setAppSettings, prefs, setPrefs, audioVisualization, setAudioVisualization }: {
+function PreferencePanel({ panel, onDirty, onResetViewOverrides, viewOverridesWillReset, appSettings, setAppSettings, prefs, setPrefs, audioVisualization, setAudioVisualization }: {
   panel: 'general' | 'sidebar' | 'controls' | 'preview' | 'notifications' | 'autoimport' | 'subscriptions';
   onDirty: () => void;
+  onResetViewOverrides: () => void;
+  viewOverridesWillReset: boolean;
   appSettings: AppSettings | null;
   setAppSettings: React.Dispatch<React.SetStateAction<AppSettings | null>>;
   prefs: ViewPrefsDto | null;
@@ -755,6 +787,20 @@ function PreferencePanel({ panel, onDirty, appSettings, setAppSettings, prefs, s
                   <CheckSetting checked={prefs.show_label ?? false} label="Show label" onChange={() => updateViewPref({ show_label: !(prefs.show_label ?? false) })} />
                   <CheckSetting checked={prefs.show_item_count ?? true} label="Show item count" onChange={() => updateViewPref({ show_item_count: !(prefs.show_item_count ?? true) })} />
                 </div>
+                <div className={styles.rowSep} />
+                <Row label="View overrides">
+                  <button
+                    className={styles.inlineButton}
+                    type="button"
+                    disabled={viewOverridesWillReset}
+                    onClick={onResetViewOverrides}
+                  >
+                    Reset all views
+                  </button>
+                </Row>
+                <p className={styles.settingHint}>
+                  Clears saved layout, sorting, and display choices so every view inherits these defaults. Inbox always keeps new items at the bottom.
+                </p>
               </div>
             </div>
           ) : null}
@@ -832,6 +878,7 @@ function PreferencePanel({ panel, onDirty, appSettings, setAppSettings, prefs, s
       ) : null}
 
       {panel === 'subscriptions' ? (
+        <>
         <div className={styles.settingsBlock}>
           <div className={styles.blockContent}>
             <div className={styles.blockTitle}>Defaults for New Subscriptions</div>
@@ -845,12 +892,13 @@ function PreferencePanel({ panel, onDirty, appSettings, setAppSettings, prefs, s
               />
             </Row>
             <Row label="Posts per run" sep>
-              <IntegerSettingInput
+              <CompactNumberInput
                 label="Posts per run"
                 min={1}
                 max={10_000}
                 value={appSettings?.subscriptionDefaultPostsPerRun ?? 100}
-                onChange={(value) => updateAppSetting({ subscriptionDefaultPostsPerRun: value })}
+                commitOnChange
+                onCommit={(value) => updateAppSetting({ subscriptionDefaultPostsPerRun: value })}
               />
             </Row>
             <div className={styles.rowSep} />
@@ -863,6 +911,25 @@ function PreferencePanel({ panel, onDirty, appSettings, setAppSettings, prefs, s
             />
           </div>
         </div>
+        <div className={styles.settingsBlock}>
+          <div className={styles.blockContent}>
+            <div className={styles.blockTitle}>Inbox Capacity</div>
+            <Row label="Maximum Inbox items">
+              <CompactNumberInput
+                label="Maximum Inbox items"
+                min={1}
+                max={1_000_000}
+                value={appSettings?.subscriptionInboxItemLimit ?? 1_000}
+                commitOnChange
+                onCommit={(value) => updateAppSetting({ subscriptionInboxItemLimit: value })}
+              />
+            </Row>
+            <p className={styles.settingHint}>
+              Subscription work waits when the Inbox reaches this many top-level items.
+            </p>
+          </div>
+        </div>
+        </>
       ) : null}
     </div>
   );
@@ -926,7 +993,7 @@ const ALL_SETTINGS: SettingRow[] = [
   {
     id: 'subscriptions.defaults',
     label: 'Subscription Defaults',
-    keywords: 'subscriptions schedule daily weekly monthly posts per run group multi media',
+    keywords: 'subscriptions schedule daily weekly monthly posts per run group multi media inbox maximum limit capacity',
     panel: 'subscriptions',
   },
   {
@@ -939,19 +1006,20 @@ const ALL_SETTINGS: SettingRow[] = [
 
 // ── Component ──
 
-const GRID_SETTINGS_SCOPE = 'system:active';
-
 export function Settings() {
   const [selected, setSelected] = useState('general');
   const [search, setSearch] = useState('');
   const [isDirty, setIsDirty] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const savingRef = useRef(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [pendingKeyboardPreset, setPendingKeyboardPreset] = useState<KeyboardPreset>(getKeyboardPreset);
   const [pendingAudioVisualization, setPendingAudioVisualization] = useState<AudioVisualizationMode>(getAudioVisualizationMode);
 
   const [pendingAppSettings, setPendingAppSettings] = useState<AppSettings | null>(null);
   const [pendingViewPrefs, setPendingViewPrefs] = useState<ViewPrefsDto | null>(null);
+  const [resetViewOverridesPending, setResetViewOverridesPending] = useState(false);
+  const [libraryStatistics, setLibraryStatistics] = useState<LibraryStatistics | null>(null);
   const savedSnapshotRef = useRef<{
     app: AppSettings | null;
     prefs: ViewPrefsDto | null;
@@ -966,17 +1034,44 @@ export function Settings() {
     shortcutOverrides: getShortcutOverrides(),
   });
 
-  // Load from backend on mount + snapshot the saved state
+  const refreshLibraryStatistics = useCallback(async () => {
+    const statistics = await invoke<LibraryStatistics>('library.stats');
+    setLibraryStatistics(statistics);
+  }, []);
+
+  // Preload every settings-owned data source before its panel is selected.
   useEffect(() => {
     void settingsController.getSettings().then((s) => {
       setPendingAppSettings(s);
       savedSnapshotRef.current.app = structuredClone(s);
     }).catch(() => {});
-    void settingsController.getViewPrefs(GRID_SETTINGS_SCOPE).then((p) => {
+    void settingsController.getViewPrefs(GRID_DEFAULTS_SCOPE).then((p) => {
       setPendingViewPrefs(p);
       savedSnapshotRef.current.prefs = structuredClone(p);
     }).catch(() => {});
-  }, []);
+    void refreshLibraryStatistics().catch(() => {});
+  }, [refreshLibraryStatistics]);
+
+  useEffect(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    const refreshTimer = window.setInterval(() => {
+      void refreshLibraryStatistics().catch(() => {});
+    }, 10_000);
+    void listen<LibraryChanged>('library/changed', ({ payload }) => {
+      if (payload.resources.some((resource) => ['library', 'sidebar', 'tags', 'folders', 'smart_folders', 'subscriptions'].includes(resource))) {
+        void refreshLibraryStatistics().catch(() => {});
+      }
+    }).then((value) => {
+      if (disposed) value();
+      else unlisten = value;
+    });
+    return () => {
+      disposed = true;
+      window.clearInterval(refreshTimer);
+      unlisten?.();
+    };
+  }, [refreshLibraryStatistics]);
 
   const markDirty = useCallback(() => setIsDirty(true), []);
 
@@ -1032,17 +1127,19 @@ export function Settings() {
   };
 
   const handleSave = async (closeAfterSave: boolean) => {
-    if (isSaving) return;
+    if (savingRef.current) return;
     const needsRestart = pendingAppSettings
       ? themeNeedsNativeWindowRestart(savedSnapshotRef.current.app?.colorScheme, pendingAppSettings.colorScheme)
       : false;
-    setIsSaving(true);
+    savingRef.current = true;
+    const busyTimer = window.setTimeout(() => setIsSaving(true), 160);
     setSaveError(null);
     try {
       if (pendingAppSettings) await settingsController.replaceSettings(pendingAppSettings);
       if (pendingViewPrefs) {
-        await settingsController.setViewPrefs(GRID_SETTINGS_SCOPE, settingsController.viewPrefsToPatch(pendingViewPrefs));
+        await settingsController.setViewPrefs(GRID_DEFAULTS_SCOPE, settingsController.viewPrefsToPatch(pendingViewPrefs));
       }
+      if (resetViewOverridesPending) await settingsController.resetViewPrefs();
       setKeyboardPreset(pendingKeyboardPreset);
       setAudioVisualizationMode(pendingAudioVisualization);
       persistShortcutState();
@@ -1054,11 +1151,14 @@ export function Settings() {
         shortcutOverrides: getShortcutOverrides(),
       };
       setIsDirty(false);
+      setResetViewOverridesPending(false);
       if (needsRestart) await appController.restartMainWindow();
       if (closeAfterSave) window.close();
     } catch (reason) {
       setSaveError(reason instanceof Error ? reason.message : 'Unable to save settings.');
     } finally {
+      window.clearTimeout(busyTimer);
+      savingRef.current = false;
       setIsSaving(false);
     }
   };
@@ -1139,6 +1239,11 @@ export function Settings() {
               <PreferencePanel
                 panel={activePanel.id as 'general' | 'sidebar' | 'controls' | 'preview' | 'notifications' | 'autoimport' | 'subscriptions'}
                 onDirty={markDirty}
+                onResetViewOverrides={() => {
+                  setResetViewOverridesPending(true);
+                  markDirty();
+                }}
+                viewOverridesWillReset={resetViewOverridesPending}
                 appSettings={pendingAppSettings}
                 setAppSettings={setPendingAppSettings}
                 prefs={pendingViewPrefs}
@@ -1171,6 +1276,8 @@ export function Settings() {
             />
           ) : activePanel.id === 'cloud' ? (
             <CloudPanel />
+          ) : activePanel.id === 'library' ? (
+            <LibraryPanel statistics={libraryStatistics} />
           ) : null}
         </div>
 

@@ -5,6 +5,7 @@ import {
   getViewPrefsSnapshot,
   patchSettings,
   replaceSettings,
+  resetViewPrefs,
   saveSettings,
   setViewPrefs,
   viewPrefsToPatch,
@@ -54,5 +55,9 @@ export const settingsController = {
 
   async setViewPrefs(scopeKey: string, patch: ViewPrefsPatch): Promise<MutationReceipt> {
     return setViewPrefs(scopeKey, patch);
+  },
+
+  resetViewPrefs(): Promise<MutationReceipt> {
+    return resetViewPrefs();
   },
 };

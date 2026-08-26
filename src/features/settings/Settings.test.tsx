@@ -10,7 +10,15 @@ const mocks = vi.hoisted(() => ({
   replaceSettings: vi.fn(),
   getViewPrefs: vi.fn(),
   setViewPrefs: vi.fn(),
+  resetViewPrefs: vi.fn(),
   viewPrefsToPatch: (prefs: Record<string, unknown>) => prefs,
+  invoke: vi.fn(),
+  listen: vi.fn(),
+}));
+
+vi.mock('../../platform/ipc', () => ({
+  invoke: mocks.invoke,
+  listen: mocks.listen,
 }));
 
 vi.mock('../../controllers/settingsController', () => ({
@@ -19,6 +27,7 @@ vi.mock('../../controllers/settingsController', () => ({
     replaceSettings: mocks.replaceSettings,
     getViewPrefs: mocks.getViewPrefs,
     setViewPrefs: mocks.setViewPrefs,
+    resetViewPrefs: mocks.resetViewPrefs,
     viewPrefsToPatch: mocks.viewPrefsToPatch,
   },
 }));
@@ -63,6 +72,7 @@ const appSettings = {
   subscriptionDefaultSchedule: 'daily' as const,
   subscriptionDefaultPostsPerRun: 100,
   subscriptionDefaultGroupPosts: true,
+  subscriptionInboxItemLimit: 1000,
   showTagGroups: true,
   starredTags: [],
   sidebarQuickAccess: [],
@@ -107,20 +117,60 @@ beforeEach(() => {
   mocks.getSettings.mockResolvedValue(appSettings);
   mocks.replaceSettings.mockResolvedValue(undefined);
   mocks.setViewPrefs.mockResolvedValue(undefined);
+  mocks.resetViewPrefs.mockResolvedValue(undefined);
   mocks.getViewPrefs.mockResolvedValue({
-    scope_key: 'system:active', sort_field: 'date_added', sort_order: 'desc', view_mode: 'waterfall',
+    scope_key: 'grid:defaults', sort_field: 'date_added', sort_order: 'desc', view_mode: 'waterfall',
     target_size: 220, show_name: true, show_resolution: false, show_extension: false,
     show_label: false, show_item_count: true, thumbnail_fit: 'contain',
+  });
+  mocks.listen.mockResolvedValue(() => {});
+  mocks.invoke.mockImplementation((command: string) => {
+    if (command === 'library.stats') return Promise.resolve({
+      active_items: 12,
+      inbox_items: 3,
+      trash_items: 2,
+      standalone_items: 14,
+      collections: 3,
+      media_assets: 25,
+      image_assets: 20,
+      video_assets: 3,
+      audio_assets: 1,
+      other_assets: 1,
+      physical_files: 24,
+      original_bytes: 1_572_864,
+      tags: 48,
+      folders: 6,
+      smart_folders: 2,
+      subscriptions: 4,
+      revision: 7,
+    });
+    return Promise.reject(new Error(`Unexpected command: ${command}`));
   });
 });
 
 describe('Settings', () => {
+  it('shows a canonical breakdown of the active library', async () => {
+    const user = setupUser();
+    await renderSettings();
+
+    await waitFor(() => expect(mocks.invoke).toHaveBeenCalledWith('library.stats'));
+
+    await user.click(screen.getByRole('button', { name: 'Library' }));
+
+    await waitFor(() => expect(screen.getByText('25')).toBeInTheDocument());
+    expect(screen.getByText('Overview')).toBeInTheDocument();
+    expect(screen.getByText('Media assets')).toBeInTheDocument();
+    expect(screen.getByText('1.50 MB')).toBeInTheDocument();
+    expect(screen.getByText('Physical files')).toBeInTheDocument();
+    expect(screen.getAllByText('Subscriptions')).toHaveLength(2);
+  });
+
   it('uses the category registry to find and open custom panels', async () => {
     const user = setupUser();
     await renderSettings();
 
     expect(mocks.getSettings).toHaveBeenCalled();
-    expect(mocks.getViewPrefs).toHaveBeenCalledWith('system:active');
+    expect(mocks.getViewPrefs).toHaveBeenCalledWith('grid:defaults');
     await user.type(screen.getByRole('searchbox', { name: 'Search settings' }), 'theme');
     const generalResult = screen.getByRole('button', { name: /General.*Appearance and zoom/i });
     await user.click(generalResult);
@@ -212,6 +262,23 @@ describe('Settings', () => {
     ));
   });
 
+  it('resets scope-specific grid choices only when settings are applied', async () => {
+    const user = setupUser();
+    await renderSettings();
+
+    await user.click(screen.getByRole('button', { name: 'Controls' }));
+    await user.click(screen.getByRole('button', { name: 'Reset all views' }));
+    expect(mocks.resetViewPrefs).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole('button', { name: 'Save & Close' }));
+
+    await waitFor(() => expect(mocks.setViewPrefs).toHaveBeenCalledWith(
+      'grid:defaults',
+      expect.any(Object),
+    ));
+    expect(mocks.resetViewPrefs).toHaveBeenCalledOnce();
+  });
+
   it('persists the global auto-import switch without replacing per-folder watches', async () => {
     const user = setupUser();
     await renderSettings();
@@ -250,6 +317,9 @@ describe('Settings', () => {
     const postsPerRun = screen.getByRole('spinbutton', { name: 'Posts per run' });
     await user.clear(postsPerRun);
     await user.type(postsPerRun, '250');
+    const inboxLimit = screen.getByRole('spinbutton', { name: 'Maximum Inbox items' });
+    await user.clear(inboxLimit);
+    await user.type(inboxLimit, '2000');
     await user.click(screen.getByRole('checkbox', { name: 'Group multi-media posts' }).closest('label')!);
     await user.click(screen.getByRole('button', { name: 'Save & Close' }));
 
@@ -258,6 +328,7 @@ describe('Settings', () => {
         subscriptionDefaultSchedule: 'weekly',
         subscriptionDefaultPostsPerRun: 250,
         subscriptionDefaultGroupPosts: false,
+        subscriptionInboxItemLimit: 2000,
       }),
     ));
   });

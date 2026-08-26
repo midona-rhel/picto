@@ -215,24 +215,6 @@
 
 .settingPlaceholder { font-size: 13px; color: var(--color-text-tertiary); }
 
-.numberInput {
-  width: 88px;
-  height: 26px;
-  padding: 0 8px;
-  box-sizing: border-box;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 6px;
-  outline: none;
-  background: var(--color-control-surface);
-  color: var(--color-text-primary);
-  font: inherit;
-  text-align: right;
-}
-
-.numberInput:focus {
-  border-color: var(--color-primary);
-}
-
 /* ── Settings blocks — matches legacy panelBlock pattern ── */
 
 .settingsBlock {

@@ -94,7 +94,7 @@ export function LibrarySwitcherPopover({
   const rect = rectToCSS(anchor);
   const viewport = getViewportCSS();
   const panelWidth = Math.min(300, viewport.width - 16);
-  const top = Math.max(8, Math.min(rect.bottom + 4, viewport.height - 430));
+  const top = Math.max(8, Math.min(rect.bottom + 8, viewport.height - 430));
   const left = Math.max(8, Math.min(rect.left, viewport.width - panelWidth - 8));
 
   return createPortal(
