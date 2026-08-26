@@ -38,7 +38,8 @@ describe('support report', () => {
   });
 
   it('scrubs common personal paths and credentials', () => {
-    expect(scrubSupportText('/Users/alice/Pictures test@example.com Bearer abc.def https://example.test/private?id=3'))
+    const personalPath = ['', 'Users', 'example-user', 'Pictures'].join('/');
+    expect(scrubSupportText(`${personalPath} test@example.com Bearer abc.def https://example.test/private?id=3`))
       .toBe('~/Pictures <email> Bearer <redacted> https://example.test/<redacted>');
   });
 
