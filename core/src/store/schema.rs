@@ -472,7 +472,7 @@ CREATE TABLE cloud_membership_clock (
 CREATE TABLE cloud_tombstone (
     object_kind TEXT NOT NULL,
     object_key TEXT NOT NULL,
-    mutation_id TEXT NOT NULL UNIQUE,
+    mutation_id TEXT NOT NULL,
     hlc_physical_ms INTEGER NOT NULL,
     hlc_logical INTEGER NOT NULL,
     device_id TEXT NOT NULL,

@@ -2223,6 +2223,15 @@ mod tests {
             })
             .unwrap();
         let grouped = organize(&app, &ids[..2], None, None);
+        app.store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE cloud_state SET provider = 'dropbox' WHERE singleton = 1",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
         let result = app
             .delete_items(&ItemTarget::Explicit {
                 item_ids: vec![grouped.collection_id],
@@ -2267,6 +2276,13 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 assert_eq!(unrelated_orphan, 1);
+                let tombstones: (i64, i64) = connection.query_row(
+                    "SELECT COUNT(*), COUNT(DISTINCT mutation_id)
+                     FROM cloud_tombstone WHERE object_kind = 'item'",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(tombstones, (3, 1));
                 Ok(())
             })
             .unwrap();

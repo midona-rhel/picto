@@ -3498,6 +3498,55 @@ mod tests {
     }
 
     #[test]
+    fn one_batch_can_tombstone_multiple_objects() {
+        let application = application();
+        enable_capture(&application);
+
+        let mutation = application
+            .store()
+            .transaction(|transaction| {
+                record_local(
+                    transaction,
+                    CloudOperation::Batch {
+                        operations: vec![
+                            CloudOperation::DeleteItem {
+                                item_key: "item-a".into(),
+                            },
+                            CloudOperation::DeleteItem {
+                                item_key: "item-b".into(),
+                            },
+                        ],
+                    },
+                )
+            })
+            .unwrap()
+            .0;
+
+        let tombstones = application
+            .store()
+            .read(|connection| {
+                connection
+                    .prepare(
+                        "SELECT object_key, mutation_id FROM cloud_tombstone
+                         WHERE object_kind = 'item' ORDER BY object_key",
+                    )?
+                    .query_map([], |row| {
+                        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap();
+
+        assert_eq!(
+            tombstones,
+            vec![
+                ("item-a".to_string(), mutation.mutation_id.clone()),
+                ("item-b".to_string(), mutation.mutation_id),
+            ]
+        );
+    }
+
+    #[test]
     fn metadata_update_captures_unchanged_item_identity() {
         let application = application();
         let item_id = add_media(&application, "rated-item");
