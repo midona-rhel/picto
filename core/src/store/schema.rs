@@ -974,7 +974,9 @@ mod tests {
             .unwrap();
 
         let dirty_count: i64 = connection
-            .query_row("SELECT COUNT(*) FROM search_dirty_media", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM search_dirty_media", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(dirty_count, 1);
     }

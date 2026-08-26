@@ -84,8 +84,7 @@ pub fn resolve_target_file_paths(
     target: &ItemTarget,
 ) -> Result<Vec<ResolvedFilePath>, String> {
     let item_ids = store.read_result(|connection| {
-        crate::query_v2::resolve_target_ids(connection, target)
-            .map_err(|error| error.to_string())
+        crate::query_v2::resolve_target_ids(connection, target).map_err(|error| error.to_string())
     })?;
     let hashes = ordered_media(store, &item_ids)?
         .into_iter()
