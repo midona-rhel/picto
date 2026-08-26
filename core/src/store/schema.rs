@@ -19,6 +19,24 @@ CREATE INDEX IF NOT EXISTS idx_cloud_blob_upload_priority
     ON cloud_blob_state(remote_present, state, priority DESC, updated_at);
 CREATE INDEX IF NOT EXISTS idx_source_post_provisional
     ON source_post(source_post_id) WHERE root_item_id IS NULL;
+CREATE INDEX IF NOT EXISTS idx_media_file_mime
+    ON media_file(mime_type, file_id);
+CREATE INDEX IF NOT EXISTS idx_media_file_size
+    ON media_file(size_bytes, file_id);
+CREATE INDEX IF NOT EXISTS idx_media_file_width
+    ON media_file(pixel_width, file_id);
+CREATE INDEX IF NOT EXISTS idx_media_file_height
+    ON media_file(pixel_height, file_id);
+CREATE INDEX IF NOT EXISTS idx_media_file_duration
+    ON media_file(duration_ms, file_id);
+CREATE INDEX IF NOT EXISTS idx_media_file_audio
+    ON media_file(has_audio, file_id);
+CREATE INDEX IF NOT EXISTS idx_media_asset_imported
+    ON media_asset(imported_at, item_id);
+CREATE INDEX IF NOT EXISTS idx_media_asset_captured
+    ON media_asset(captured_at, item_id);
+CREATE INDEX IF NOT EXISTS idx_file_color_lookup
+    ON file_color(file_id, hex);
 "#;
 
 pub const LIBRARY_DDL: &str = r#"
