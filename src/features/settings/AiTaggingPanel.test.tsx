@@ -1,5 +1,6 @@
 import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AiTaggingPanel } from './AiTaggingPanel';
 
@@ -13,6 +14,10 @@ vi.mock('../../platform/aiTaggerApi', () => ({
   aiTaggerCancelDownload: mocks.cancelDownload,
   aiTaggerDeleteModel: mocks.deleteModel,
   aiTaggerOptimizeModel: mocks.optimizeModel,
+}));
+
+vi.mock('../../shared/ui/KbdTooltip', () => ({
+  KbdTooltip: ({ children }: { children: ReactNode }) => children,
 }));
 
 const model = {
@@ -42,6 +47,7 @@ const settings = {
   autoImportEnabled: true,
   multiFileImportBehavior: 'ask' as const,
   subscriptionDefaultSchedule: 'daily' as const, subscriptionDefaultPostsPerRun: 100,
+  subscriptionInboxItemLimit: 1000,
   subscriptionDefaultGroupPosts: true,
   showTagGroups: true, starredTags: [], sidebarQuickAccess: [],
   aiTaggerWd14Enabled: false, aiTaggerE621Enabled: false, aiTaggerEva02Enabled: false,
@@ -53,7 +59,7 @@ const settings = {
 
 function status(downloaded = false) {
   return {
-    models: [{ ...model, downloaded }], configuredModelSlugs: [],
+    models: [{ ...model, downloaded }], storageBytes: downloaded ? 1024 * 1024 : 0, configuredModelSlugs: [],
     thresholds: { general: 0.35, character: 0.35, copyright: 0.35, artist: 0.35, species: 0.35, rating: 0.35 },
     cachedBackend: null,
   };
@@ -85,11 +91,20 @@ beforeEach(() => {
 });
 
 describe('AiTaggingPanel', () => {
-  it('does not expose a model enable toggle before download', async () => {
+  it('shows application-wide AI model storage', async () => {
+    mocks.status.mockResolvedValue(status(true));
+    await renderPanel();
+
+    expect(await screen.findByText('Model storage')).toBeInTheDocument();
+    expect(screen.getAllByText('1 MB')).toHaveLength(1);
+  });
+
+  it('treats settings as model installation rather than runtime enablement', async () => {
     await renderPanel();
     await screen.findByRole('button', { name: 'Download' });
     expect(screen.queryByText('Downloaded')).not.toBeInTheDocument();
     expect(screen.getByText('test · 1 MB · ≈18 ms/image')).toBeInTheDocument();
+    expect(screen.getByText('WD14 SWN').closest('[class*="modelRow"]')?.querySelector('[role="switch"]')).toBeNull();
   });
 
   it('refreshes authoritative model status after download completion', async () => {
@@ -105,8 +120,7 @@ describe('AiTaggingPanel', () => {
     await waitFor(() => expect(mocks.status.mock.calls.length).toBeGreaterThan(1));
   });
 
-  it('allows multiple downloaded models to be selected independently', async () => {
-    const onSettingsChange = vi.fn();
+  it('lists multiple downloaded models without implying they stay loaded', async () => {
     mocks.status.mockResolvedValue({
       ...status(true),
       models: [
@@ -114,17 +128,13 @@ describe('AiTaggingPanel', () => {
         { ...model, slug: 'z3d-e621-convnext', label: 'Z3D', downloaded: true },
       ],
     });
-    await renderPanel(onSettingsChange);
+    await renderPanel();
     await screen.findByText('Z3D');
-    const switches = screen.getAllByRole('switch');
-    await setupUser().click(switches[0]);
-    await setupUser().click(switches[1]);
-    expect(onSettingsChange).toHaveBeenNthCalledWith(1, { aiTaggerWd14Enabled: true });
-    expect(onSettingsChange).toHaveBeenNthCalledWith(2, { aiTaggerE621Enabled: true });
+    expect(screen.getByText('WD14 SWN').closest('[class*="modelRow"]')?.querySelector('[role="switch"]')).toBeNull();
+    expect(screen.getByText('Z3D').closest('[class*="modelRow"]')?.querySelector('[role="switch"]')).toBeNull();
   });
 
   it('exposes the validated OppaiOracle and DanbooruTagQuery runtimes', async () => {
-    const onSettingsChange = vi.fn();
     mocks.status.mockResolvedValue({
       ...status(true),
       models: [
@@ -132,31 +142,31 @@ describe('AiTaggingPanel', () => {
         { ...model, slug: 'danbooru-tag-query-b16', label: 'DanbooruTagQuery B16', downloaded: true, referenceInferenceMs: 13.23 },
       ],
     });
-    await renderPanel(onSettingsChange);
+    await renderPanel();
 
-    expect(await screen.findByText('OppaiOracle V1.1')).toBeInTheDocument();
+    expect(await screen.findByText('OppaiOracle')).toBeInTheDocument();
     expect(screen.getByText('test · 1 MB · ≈89 ms/image')).toBeInTheDocument();
     expect(screen.getByText('test · 1 MB · ≈13 ms/image')).toBeInTheDocument();
 
-    const switches = screen.getAllByRole('switch');
-    await setupUser().click(switches[0]);
-    await setupUser().click(switches[1]);
-    expect(onSettingsChange).toHaveBeenNthCalledWith(1, { aiTaggerOppaiOracleEnabled: true });
-    expect(onSettingsChange).toHaveBeenNthCalledWith(2, { aiTaggerDanbooruTagQueryEnabled: true });
+    expect(screen.getByText('OppaiOracle').closest('[class*="modelRow"]')?.querySelector('[role="switch"]')).toBeNull();
+    expect(screen.getByText('DTQuery').closest('[class*="modelRow"]')?.querySelector('[role="switch"]')).toBeNull();
   });
 
   it('exposes the explicit Mac optimization step for supported downloads', async () => {
+    let resolveOptimization!: (value: unknown) => void;
     mocks.status.mockResolvedValue({
       ...status(true),
       models: [{ ...model, downloaded: true, optimizationSupported: true }],
     });
-    mocks.optimizeModel.mockResolvedValue({
-      ...status(true),
-      models: [{ ...model, downloaded: true, optimizationSupported: true, optimized: true }],
-    });
+    mocks.optimizeModel.mockReturnValue(new Promise((resolve) => { resolveOptimization = resolve; }));
     await renderPanel();
     await setupUser().click(await screen.findByRole('button', { name: 'Optimize for this Mac' }));
+    expect(await screen.findByRole('progressbar', { name: 'Optimizing WD14' })).toBeInTheDocument();
     await waitFor(() => expect(mocks.optimizeModel).toHaveBeenCalledWith(model.slug));
+    await act(async () => resolveOptimization({
+      ...status(true),
+      models: [{ ...model, downloaded: true, optimizationSupported: true, optimized: true }],
+    }));
     expect(await screen.findByText('Optimized')).toBeInTheDocument();
   });
 
@@ -185,7 +195,7 @@ describe('AiTaggingPanel', () => {
   it('places the serialized local-processing note below the model list', async () => {
     await renderPanel();
     const note = await screen.findByText('Selected models run locally one after another. Warm single-image reference on an Apple M5 Pro; actual speed varies by device and batch size. Picto never uploads media for AI tagging.');
-    const modelList = screen.getByText('WD14').closest('[class*="blockContent"]');
+    const modelList = screen.getByText('WD14 SWN').closest('[class*="blockContent"]');
 
     expect(modelList).not.toContainElement(note);
     expect(modelList?.nextElementSibling).toBe(note);

@@ -23,6 +23,8 @@ pub async fn download_model_quiet(
 pub(crate) async fn download_coreml_package(
     artifact: &super::models::RegisteredArtifact,
     destination: &Path,
+    cancel: &CancellationToken,
+    downloaded_bytes: &AtomicU64,
 ) -> Result<(), String> {
     std::fs::create_dir_all(destination)
         .map_err(|error| format!("Failed to create Core ML staging directory: {error}"))?;
@@ -41,13 +43,14 @@ pub(crate) async fn download_coreml_package(
             )
         })?;
         verify_file(&archive, &artifact.sha256)?;
+        downloaded_bytes.store(artifact.size, Ordering::Relaxed);
     } else {
         download_file(
             &artifact.url,
             &artifact.sha256,
             &archive,
-            &CancellationToken::new(),
-            &AtomicU64::new(0),
+            cancel,
+            downloaded_bytes,
         )
         .await
         .map_err(|error| format!("Failed to download Core ML model: {error}"))?;

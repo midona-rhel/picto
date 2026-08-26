@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "minimum_macos": 14,
   "assets": {
     "wd14-swinv2-v3": {
@@ -13,9 +13,9 @@
       "size": 630885873
     },
     "oppai-oracle-v1-1": {
-      "url": "https://github.com/midona-rhel/picto/releases/download/ai-models-v1/oppai-oracle-v1-1-coreml-macos15-v1.zip",
-      "sha256": "41df456c47ab42fcbd0841964e37d570b0fff3a66bc794e3d08755b8edd2e71f",
-      "size": 992685330
+      "url": "https://github.com/midona-rhel/picto/releases/download/ai-models-v2/oppai-oracle-v1-1-coreml-macos15-v2.zip",
+      "sha256": "2eec232916a36c5d9d53963efb041310b559d3b60995914c1d632339bf494506",
+      "size": 992693223
     },
     "danbooru-tag-query-b16": {
       "url": "https://github.com/midona-rhel/picto/releases/download/ai-models-v1/danbooru-tag-query-b16-coreml-macos15-v1.zip",

@@ -2,7 +2,6 @@
   flex: 1;
   min-height: 0;
   position: relative;
-  display: flex;
 }
 
 .progressHairline {
@@ -14,23 +13,33 @@
 }
 
 .sidebar {
+  position: absolute;
+  inset: 0 auto 0 0;
   width: 190px;
-  flex: 0 0 190px;
   overflow: hidden;
-  padding: 5px 4px;
+  padding: 8px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   border-right: 1px solid var(--color-border-secondary);
+  opacity: 1;
+  transition: opacity 150ms ease 50ms;
 }
 
 .sidebarHidden {
-  display: none;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 100ms ease;
 }
 
 .sidebarItem {
   width: 100%;
   display: flex;
   align-items: center;
-  height: 28px;
-  padding: 0 10px;
+  min-height: 24px;
+  height: 24px;
+  padding: 0 8px;
   gap: 6px;
   border: 0;
   border-radius: 6px;
@@ -89,14 +98,18 @@
 
 .sidebarSep {
   height: 1px;
-  margin: 5px 10px;
+  margin: 4px 10px;
   background: var(--color-border-secondary);
 }
 
 .reviewPane {
+  position: absolute;
+  top: 0;
+  right: 370px;
+  bottom: 0;
   width: 220px;
-  flex: 0 0 220px;
   min-width: 0;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
   padding: 9px;
@@ -134,6 +147,10 @@
 .navButton:disabled {
   opacity: 0.28;
   cursor: default;
+}
+
+.navButton > svg:global(.tabler-icon) :is(path, rect, circle, line, polyline) {
+  stroke-width: 1.25;
 }
 
 .reviewCounter {
@@ -220,8 +237,13 @@
 }
 
 .content {
-  flex: 1 1 370px;
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 370px;
   min-width: 0;
+  box-sizing: border-box;
   display: flex;
   flex-direction: column;
 }
@@ -333,8 +355,8 @@
   font-size: 11px;
 }
 
-.applyButton.applyButton {
-  height: 28px;
+.footerButton.footerButton {
+  height: var(--control-height-sm);
   padding: 0 12px;
   font-size: var(--font-size-sm);
 }

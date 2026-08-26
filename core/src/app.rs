@@ -241,7 +241,23 @@ pub struct Application {
     ai_prediction_cache: crate::ai_tagger::inference::SharedPredictionCache,
     ai_model_downloads: tokio::sync::Mutex<HashMap<String, AiModelDownload>>,
     ai_model_lifecycle: tokio::sync::Mutex<()>,
+    ai_worker_status: std::sync::Mutex<AiWorkerStatus>,
     ingest_execution: std::sync::Mutex<()>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct AiWorkerStatus {
+    pub active: bool,
+    pub detail: String,
+}
+
+impl Default for AiWorkerStatus {
+    fn default() -> Self {
+        Self {
+            active: false,
+            detail: "Idle".into(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -270,6 +286,7 @@ impl Application {
             ai_prediction_cache: crate::ai_tagger::inference::new_prediction_cache(),
             ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
             ai_model_lifecycle: tokio::sync::Mutex::new(()),
+            ai_worker_status: std::sync::Mutex::new(AiWorkerStatus::default()),
             ingest_execution: std::sync::Mutex::new(()),
         })
     }
@@ -310,6 +327,20 @@ impl Application {
 
     pub(crate) fn ai_model_lifecycle(&self) -> &tokio::sync::Mutex<()> {
         &self.ai_model_lifecycle
+    }
+
+    pub(crate) fn set_ai_worker_status(&self, active: bool, detail: impl Into<String>) {
+        if let Ok(mut status) = self.ai_worker_status.lock() {
+            status.active = active;
+            status.detail = detail.into();
+        }
+    }
+
+    pub(crate) fn ai_worker_status(&self) -> AiWorkerStatus {
+        self.ai_worker_status
+            .lock()
+            .map(|status| status.clone())
+            .unwrap_or_default()
     }
 
     pub(crate) async fn cancel_ai_model_downloads(&self) {

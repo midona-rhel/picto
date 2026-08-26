@@ -7,6 +7,7 @@
 .modelRow {
   position: relative;
   gap: 12px;
+  overflow: hidden;
 }
 
 .modelMain {
@@ -20,13 +21,18 @@
 }
 
 .modelName {
-  flex-shrink: 0;
+  flex: 0 1 92px;
+  min-width: 0;
   font-size: 13px;
   font-weight: 400;
   color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .modelMeta {
+  flex: 1;
   min-width: 0;
   font-size: 11.5px;
   color: var(--color-text-tertiary);
@@ -62,26 +68,21 @@
   gap: 8px;
 }
 
-.downloadAction {
+.modelAction {
   width: 92px;
+  flex: 0 0 92px;
   box-sizing: border-box;
 }
 
 .modelProgress {
   position: absolute;
   z-index: 0;
-  top: 0;
+  height: 33.333%;
   bottom: 0;
   left: 0;
-  border-radius: inherit;
   pointer-events: none;
-  background: linear-gradient(
-    to top,
-    color-mix(in srgb, var(--color-primary) 24%, transparent) 0%,
-    color-mix(in srgb, var(--color-primary) 11%, transparent) 17%,
-    transparent 34%
-  );
-  filter: drop-shadow(0 2px 5px color-mix(in srgb, var(--color-primary) 18%, transparent));
+  background: color-mix(in srgb, var(--color-primary) 24%, transparent);
+  box-shadow: 0 -1px 5px color-mix(in srgb, var(--color-primary) 18%, transparent);
   transition: width 240ms linear;
 }
 

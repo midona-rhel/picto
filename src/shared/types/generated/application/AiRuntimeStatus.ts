@@ -6,4 +6,4 @@ import type { AiThresholds } from "./AiThresholds";
  * Replacement AI status derived from settings, the model bundle, and the
  * in-process session cache. No download or mutation state is implied.
  */
-export type AiRuntimeStatus = { models: Array<AiModelStatus>, configuredModelSlugs: Array<string>, thresholds: AiThresholds, cachedBackend: string | null, };
+export type AiRuntimeStatus = { models: Array<AiModelStatus>, storageBytes: number, configuredModelSlugs: Array<string>, thresholds: AiThresholds, cachedBackend: string | null, };

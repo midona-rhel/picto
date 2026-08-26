@@ -144,8 +144,11 @@ static EVENT_CB: OnceLock<Mutex<ThreadsafeFunction<EventData>>> = OnceLock::new(
 
 /// Initialize tracing and runtime. Called once at process startup.
 #[napi]
-pub fn init_runtime() {
+pub fn init_runtime(application_data_root: String) -> Result<()> {
+    picto_core::state_v2::set_application_data_root(PathBuf::from(application_data_root))
+        .map_err(Error::from_reason)?;
     picto_core::state_v2::init_tracing();
+    Ok(())
 }
 
 #[napi]

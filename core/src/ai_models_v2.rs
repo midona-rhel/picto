@@ -1,6 +1,6 @@
 //! Replacement AI model inventory and filesystem lifecycle.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{atomic::AtomicU64, Arc};
 
 use tokio_util::sync::CancellationToken;
@@ -99,44 +99,140 @@ pub async fn optimize(application: &Application, slug: &str) -> Result<(), Strin
     {
         let directory = models::model_dir(&models_root, &model);
         let compiled = directory.join("model.mlmodelc");
-        if compiled.is_dir() {
+        if models::is_model_optimized(&models_root, slug) {
             return Ok(());
         }
         let artifact = model
             .coreml
             .as_ref()
             .ok_or_else(|| format!("Model '{}' has no published Mac optimization", model.label))?;
-        let staging = tempfile::Builder::new()
-            .prefix(&format!(".{}.coreml-", model.slug))
-            .tempdir_in(&models_root)
-            .map_err(|error| format!("Failed to create Core ML staging directory: {error}"))?;
-        crate::ai_tagger::download::download_coreml_package(artifact, staging.path()).await?;
-        let package = staging.path().join("model.mlpackage");
-        let temporary = tokio::task::spawn_blocking(move || coreml_native::compile_model(&package))
-            .await
-            .map_err(|error| format!("Core ML optimization task failed: {error}"))?
-            .map_err(|error| format!("Failed to optimize model for this Mac: {error}"))?;
-        let _lifecycle = application.ai_model_lifecycle().lock().await;
-        application.ai_sessions().lock().await.remove(slug);
-        std::fs::rename(&temporary, &compiled).map_err(|error| {
-            format!(
-                "Failed to activate optimized model {}: {error}",
-                compiled.display()
+        let cancel = CancellationToken::new();
+        let downloaded_bytes = Arc::new(AtomicU64::new(0));
+        {
+            let mut downloads = application.ai_model_downloads().lock().await;
+            if downloads.contains_key(slug) {
+                return Err(format!(
+                    "Model '{}' already has an active operation",
+                    model.label
+                ));
+            }
+            downloads.insert(
+                slug.to_string(),
+                AiModelDownload {
+                    cancel: cancel.clone(),
+                    downloaded_bytes: Arc::clone(&downloaded_bytes),
+                    total_bytes: artifact.size,
+                },
+            );
+        }
+        let result = async {
+            let staging = tempfile::Builder::new()
+                .prefix(&format!(".{}.coreml-", model.slug))
+                .tempdir_in(&models_root)
+                .map_err(|error| format!("Failed to create Core ML staging directory: {error}"))?;
+            crate::ai_tagger::download::download_coreml_package(
+                artifact,
+                staging.path(),
+                &cancel,
+                &downloaded_bytes,
             )
-        })?;
-        return Ok(());
+            .await?;
+            if cancel.is_cancelled() {
+                return Err("Model optimization cancelled".into());
+            }
+            let package = staging.path().join("model.mlpackage");
+            let temporary =
+                tokio::task::spawn_blocking(move || coreml_native::compile_model(&package))
+                    .await
+                    .map_err(|error| format!("Core ML optimization task failed: {error}"))?
+                    .map_err(|error| format!("Failed to optimize model for this Mac: {error}"))?;
+            let _lifecycle = application.ai_model_lifecycle().lock().await;
+            application.ai_sessions().lock().await.remove(slug);
+            if compiled.is_dir() {
+                std::fs::remove_dir_all(&compiled).map_err(|error| {
+                    format!(
+                        "Failed to replace stale optimization {}: {error}",
+                        compiled.display()
+                    )
+                })?;
+            }
+            std::fs::rename(&temporary, &compiled).map_err(|error| {
+                format!(
+                    "Failed to activate optimized model {}: {error}",
+                    compiled.display()
+                )
+            })?;
+            models::mark_coreml_artifact_current(&directory, &model)?;
+            Ok(())
+        }
+        .await;
+        application.ai_model_downloads().lock().await.remove(slug);
+        return result;
     }
     #[cfg(not(target_os = "macos"))]
     Err("Model optimization is only required on macOS".into())
 }
 
 pub fn models_root(application: &Application) -> PathBuf {
+    if let Some(root) = crate::state_v2::application_data_root() {
+        return root.join("models");
+    }
+    legacy_models_root(application)
+}
+
+fn legacy_models_root(application: &Application) -> PathBuf {
     application
         .store()
         .library_root()
         .parent()
         .unwrap_or_else(|| application.store().library_root())
         .join("models")
+}
+
+pub fn migrate_legacy_storage(application: &Application) -> Result<(), String> {
+    let source = legacy_models_root(application);
+    let target = models_root(application);
+    if source == target || target.exists() || !source.exists() {
+        return Ok(());
+    }
+    let parent = target
+        .parent()
+        .ok_or_else(|| "AI model storage has no parent directory".to_string())?;
+    std::fs::create_dir_all(parent)
+        .map_err(|error| format!("Failed to prepare application model storage: {error}"))?;
+    std::fs::rename(&source, &target).map_err(|error| {
+        format!("Failed to move legacy AI models into application storage: {error}")
+    })
+}
+
+pub fn storage_bytes(application: &Application) -> Result<u64, String> {
+    directory_bytes(&models_root(application))
+}
+
+fn directory_bytes(root: &Path) -> Result<u64, String> {
+    let entries = match std::fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(0),
+        Err(error) => return Err(format!("Failed to inspect AI model storage: {error}")),
+    };
+    let mut total = 0_u64;
+    for entry in entries {
+        let entry =
+            entry.map_err(|error| format!("Failed to inspect AI model storage: {error}"))?;
+        let file_type = entry
+            .file_type()
+            .map_err(|error| format!("Failed to inspect AI model storage: {error}"))?;
+        let bytes = if file_type.is_dir() {
+            directory_bytes(&entry.path())?
+        } else {
+            entry
+                .metadata()
+                .map_err(|error| format!("Failed to inspect AI model storage: {error}"))?
+                .len()
+        };
+        total = total.saturating_add(bytes);
+    }
+    Ok(total)
 }
 
 fn require_model(slug: &str) -> Result<ModelInfo, String> {
@@ -167,5 +263,19 @@ mod tests {
 
         let error = optimize(&application, "wd14-swinv2-v3").await.unwrap_err();
         assert!(error.contains("must be downloaded"));
+    }
+
+    #[test]
+    fn model_storage_counts_nested_artifacts() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("model.mlmodelc/weights")).unwrap();
+        std::fs::write(directory.path().join("model.onnx"), [0_u8; 7]).unwrap();
+        std::fs::write(
+            directory.path().join("model.mlmodelc/weights/weight.bin"),
+            [0_u8; 11],
+        )
+        .unwrap();
+
+        assert_eq!(directory_bytes(directory.path()).unwrap(), 18);
     }
 }

@@ -53,6 +53,11 @@ export function aiTagPredict(itemIds: number[], models?: string[]): Promise<Manu
   });
 }
 
+/** Stop manual review work and release its currently loaded model session. */
+export function aiTaggerUnload(): Promise<void> {
+  return invoke<void>('ai.review.unload');
+}
+
 /** Apply reviewed suggestions through the canonical item mutation path. */
 export function aiTagApply(assignments: AiTagAssignment[]): Promise<MutationReceipt> {
   const input: AiAssignmentsInput = { assignments };

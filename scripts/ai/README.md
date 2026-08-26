@@ -6,17 +6,18 @@ download against `coreml-artifacts.json` before activating it.
 
 Core ML archives are not bundled with Picto. Model weights are optional and
 downloaded only when the user requests them. Optimized archives are published
-under the immutable `ai-models-v1` release and pinned by exact size and SHA-256
-in `coreml-artifacts.json`. Picto downloads one only when the user explicitly
+under immutable versioned releases and pinned by exact size and SHA-256 in
+`coreml-artifacts.json`. Picto downloads one only when the user explicitly
 chooses **Optimize for this Mac**; the portable ONNX model remains the fallback.
 
 All product models use the same portable ONNX download path on macOS, Windows,
 and Linux. Candidate optimized macOS archives are built by the separate model
 workflow:
 
-- OppaiOracle V1.1 uses the upstream aspect-preserving gray letterbox and
-  padding-mask contract. Its fused fixed-shape float32 attention graph avoids
-  the ranking changes observed with float16.
+- OppaiOracle V1.1 uses the same image plus padding-mask contract as its
+  portable ONNX model. The corrected `ai-models-v2` package is registered only
+  after schema, ONNX parity, and warm-performance verification. Invalid local
+  Core ML packages fall back to ONNX rather than failing a tagging run.
 - DanbooruTagQuery B16 uses a fixed-shape DINOv3 graph and retains at least 99%
   of the top 100 ONNX tags across the parity fixture set. Any distribution of
   the weights or derived Core ML archive must retain the DINOv3 agreement.
@@ -47,7 +48,7 @@ Apple M5 Pro using `ComputeUnit.ALL`:
 | E621 ConvNext (Z3D) | 14.71 ms | 16.11 ms | 1.11× |
 | WD14 SwinV2 v3 | 17.74 ms | 20.41 ms | 1.34× |
 | WD14 EVA02-Large v3 | 48.38 ms | 50.03 ms | 3.66× |
-| OppaiOracle V1.1 | 88.58 ms | 91.15 ms | 6.70× |
+| OppaiOracle V1.1 | 86.45 ms | 92.54 ms | 6.53× |
 
 These numbers compare model execution, not download, cold compilation, image
 decode, or post-processing. Picto may select multiple models and media items,

@@ -14,7 +14,7 @@ use ts_rs::TS;
 use crate::ai_tagger::inference::{TagPrediction, Thresholds};
 use crate::ai_tagger::models::{self, ModelInfo};
 use crate::app::{Application, ItemId, MutationReceipt};
-use crate::blob_store::mime_to_extension;
+use crate::blob_store::{mime_to_extension, BlobStore};
 
 const MAX_MANUAL_PREDICTION_ITEMS: usize = 256;
 const MAX_MANUAL_PREDICTION_MODELS: usize = 8;
@@ -60,6 +60,8 @@ pub struct AiModelStatus {
 #[serde(rename_all = "camelCase")]
 pub struct AiRuntimeStatus {
     pub models: Vec<AiModelStatus>,
+    #[ts(type = "number")]
+    pub storage_bytes: u64,
     pub configured_model_slugs: Vec<String>,
     pub thresholds: AiThresholds,
     pub cached_backend: Option<String>,
@@ -166,6 +168,7 @@ pub async fn model_status(application: &Application) -> Result<AiRuntimeStatus, 
 
     Ok(AiRuntimeStatus {
         models,
+        storage_bytes: crate::ai_models_v2::storage_bytes(application)?,
         configured_model_slugs,
         thresholds: public_thresholds(&thresholds_from_settings(&settings)),
         cached_backend,
@@ -248,6 +251,12 @@ pub async fn manual_predict(
         predictions: results,
         thresholds: public_thresholds(&thresholds),
     })
+}
+
+pub async fn unload_sessions(application: &Application) {
+    application.ai_sessions().lock().await.clear();
+    application.set_ai_worker_status(false, "Idle");
+    tracing::debug!(target: "ai_inference", "AI model session unloaded");
 }
 
 fn resolve_prediction_items(
@@ -630,49 +639,79 @@ async fn predict_batch(
     }
     let images = Arc::new(images);
     let mut combined = vec![Vec::new(); images.len()];
-    for model in models {
+    for (model_index, model) in models.iter().enumerate() {
+        application.set_ai_worker_status(
+            true,
+            format!(
+                "Loading {} · model {}/{} · {} images",
+                model.label,
+                model_index + 1,
+                models.len(),
+                images.len()
+            ),
+        );
         ensure_sessions(application, std::slice::from_ref(model)).await?;
-        let (slug, session) = {
+        let (slug, session, backend) = {
             let sessions = application.ai_sessions().lock().await;
             sessions
                 .get(&model.slug)
                 .cloned()
-                .map(|session| (model.slug.clone(), session))
+                .map(|session| {
+                    let backend = session
+                        .lock()
+                        .map(|session| session.gpu_backend())
+                        .unwrap_or_else(|_| "Unavailable".into());
+                    (model.slug.clone(), session, backend)
+                })
                 .ok_or_else(|| format!("AI model session '{}' is not loaded", model.slug))?
         };
-        let images = Arc::clone(&images);
-        let thresholds = thresholds.clone();
-        let inferred = tokio::task::spawn_blocking(move || {
-            let started = Instant::now();
-            let spec = session
-                .lock()
-                .map_err(|_| format!("AI model session '{slug}' lock was poisoned"))?
-                .input_spec();
-            let preprocess_started = Instant::now();
-            let image_refs = images.iter().map(Vec::as_slice).collect::<Vec<_>>();
-            let prepared = crate::ai_tagger::inference::prepare_inputs(&image_refs, spec)?;
-            let preprocess_ms = preprocess_started.elapsed().as_secs_f64() * 1000.0;
-            let predictions = session
-                .lock()
-                .map_err(|_| format!("AI model session '{slug}' lock was poisoned"))?
-                .predict_prepared_batch(&prepared, &thresholds, preprocess_ms)?;
-            tracing::debug!(
-                target: "ai_inference",
-                model = slug,
-                preprocess_ms,
-                total_ms = started.elapsed().as_secs_f64() * 1000.0,
-                images = predictions.len(),
-                "AI model batch completed"
+        for image_index in 0..images.len() {
+            application.set_ai_worker_status(
+                true,
+                format!(
+                    "Running {} on {} · model {}/{} · image {}/{}",
+                    model.label,
+                    backend,
+                    model_index + 1,
+                    models.len(),
+                    image_index + 1,
+                    images.len()
+                ),
             );
-            Ok::<_, String>(predictions)
-        })
-        .await
-        .map_err(|error| format!("AI inference task failed: {error}"))??;
-        if inferred.len() != combined.len() {
-            return Err("AI inference returned an unexpected number of results".into());
-        }
-        for (predictions, model_predictions) in combined.iter_mut().zip(inferred) {
-            predictions.extend(model_predictions);
+            let images = Arc::clone(&images);
+            let session = Arc::clone(&session);
+            let thresholds = thresholds.clone();
+            let slug = slug.clone();
+            let mut inferred = tokio::task::spawn_blocking(move || {
+                let started = Instant::now();
+                let spec = session
+                    .lock()
+                    .map_err(|_| format!("AI model session '{slug}' lock was poisoned"))?
+                    .input_spec();
+                let preprocess_started = Instant::now();
+                let prepared =
+                    crate::ai_tagger::inference::prepare_input(&images[image_index], spec)?;
+                let preprocess_ms = preprocess_started.elapsed().as_secs_f64() * 1000.0;
+                let predictions = session
+                    .lock()
+                    .map_err(|_| format!("AI model session '{slug}' lock was poisoned"))?
+                    .predict_prepared_batch(&prepared, &thresholds, preprocess_ms)?;
+                tracing::debug!(
+                    target: "ai_inference",
+                    model = slug,
+                    preprocess_ms,
+                    total_ms = started.elapsed().as_secs_f64() * 1000.0,
+                    image = image_index + 1,
+                    "AI model image completed"
+                );
+                Ok::<_, String>(predictions)
+            })
+            .await
+            .map_err(|error| format!("AI inference task failed: {error}"))??;
+            let predictions = inferred
+                .pop()
+                .ok_or_else(|| "AI inference returned no image result".to_string())?;
+            combined[image_index].extend(predictions);
         }
     }
     Ok(combined)
@@ -686,7 +725,13 @@ async fn predict_files_cached(
 ) -> Result<Vec<Vec<TagPrediction>>, String> {
     // Manual review and background ingestion share one inference lane. The
     // selected models run serially and only the current model remains loaded.
+    let started = Instant::now();
     let _inference_lane = application.ai_model_lifecycle().lock().await;
+    let mut activity = AiWorkerActivity::new(application, files.len(), models.len(), started);
+    application.set_ai_worker_status(
+        true,
+        format!("Checking prediction cache · {} images", files.len()),
+    );
     let keys = files
         .iter()
         .map(|(file_hash, _)| prediction_cache_key(file_hash, models, &thresholds))
@@ -726,12 +771,7 @@ async fn predict_files_cached(
     if !missing_files.is_empty() {
         let images = missing_files
             .iter()
-            .map(|(file_hash, mime_type)| {
-                application
-                    .blobs()
-                    .read_original(file_hash, Some(mime_to_extension(mime_type)))
-                    .map_err(|error| format!("Failed to read original {file_hash}: {error}"))
-            })
+            .map(|(file_hash, mime_type)| ai_input_bytes(application.blobs(), file_hash, mime_type))
             .collect::<Result<Vec<_>, String>>()?;
         let inferred = predict_batch(application, models, images, thresholds).await?;
         if inferred.len() != missing_files.len() {
@@ -759,14 +799,95 @@ async fn predict_files_cached(
         inferred = missing_files.len(),
         "AI prediction cache resolved batch"
     );
-    results
+    let resolved = results
         .into_iter()
         .map(|predictions| {
             predictions
                 .map(|predictions| (*predictions).clone())
                 .ok_or_else(|| "AI prediction cache left an unresolved result".to_string())
         })
-        .collect()
+        .collect();
+    activity.complete(cache_hits, missing_files.len());
+    resolved
+}
+
+fn ai_input_bytes(blobs: &BlobStore, file_hash: &str, mime_type: &str) -> Result<Vec<u8>, String> {
+    match blobs.read_thumbnail(file_hash) {
+        Ok(Some(thumbnail)) => {
+            tracing::debug!(
+                target: "ai_inference",
+                file_hash,
+                bytes = thumbnail.len(),
+                "Using prepared thumbnail for AI input"
+            );
+            Ok(thumbnail)
+        }
+        Ok(None) => blobs
+            .read_original(file_hash, Some(mime_to_extension(mime_type)))
+            .map_err(|error| format!("Failed to read original {file_hash}: {error}")),
+        Err(error) => Err(format!("Failed to read thumbnail {file_hash}: {error}")),
+    }
+}
+
+struct AiWorkerActivity<'a> {
+    application: &'a Application,
+    files: usize,
+    models: usize,
+    started: Instant,
+    completed: bool,
+}
+
+impl<'a> AiWorkerActivity<'a> {
+    fn new(application: &'a Application, files: usize, models: usize, started: Instant) -> Self {
+        Self {
+            application,
+            files,
+            models,
+            started,
+            completed: false,
+        }
+    }
+
+    fn complete(&mut self, cache_hits: usize, inferred: usize) {
+        let elapsed_ms = self.started.elapsed().as_secs_f64() * 1000.0;
+        self.application.set_ai_worker_status(
+            false,
+            format!(
+                "Last run {:.1} s · {} images · {} model(s) · {} cached · {} inferred",
+                elapsed_ms / 1000.0,
+                self.files,
+                self.models,
+                cache_hits,
+                inferred
+            ),
+        );
+        tracing::info!(
+            target: "ai_inference",
+            total_ms = elapsed_ms,
+            images = self.files,
+            models = self.models,
+            cache_hits,
+            inferred,
+            "AI tagging run completed"
+        );
+        self.completed = true;
+    }
+}
+
+impl Drop for AiWorkerActivity<'_> {
+    fn drop(&mut self) {
+        if !self.completed {
+            self.application.set_ai_worker_status(
+                false,
+                format!(
+                    "Last run stopped after {:.1} s · {} images · {} model(s)",
+                    self.started.elapsed().as_secs_f64(),
+                    self.files,
+                    self.models
+                ),
+            );
+        }
+    }
 }
 
 fn prediction_cache_key(file_hash: &str, models: &[ModelInfo], thresholds: &Thresholds) -> String {
@@ -965,6 +1086,29 @@ mod tests {
                 &[crate::ai_tagger::models::find_model("wd14-swinv2-v3").unwrap()],
                 &changed_thresholds,
             )
+        );
+    }
+
+    #[test]
+    fn ai_input_prefers_the_prepared_thumbnail_and_falls_back_to_the_original() {
+        let directory = tempfile::tempdir().unwrap();
+        let blobs = BlobStore::open(directory.path()).unwrap();
+        let hash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        blobs
+            .write_original(hash, b"large-original", Some("jpg"))
+            .unwrap();
+
+        assert_eq!(
+            ai_input_bytes(&blobs, hash, "image/jpeg").unwrap(),
+            b"large-original"
+        );
+
+        blobs
+            .write_thumbnail(hash, b"small-thumbnail", "jpg")
+            .unwrap();
+        assert_eq!(
+            ai_input_bytes(&blobs, hash, "image/jpeg").unwrap(),
+            b"small-thumbnail"
         );
     }
 

@@ -24,6 +24,7 @@ import {
   aiTagApply,
   aiTagPredict,
   aiTaggerStatus,
+  aiTaggerUnload,
   type AiModelStatus,
   type AiTagPrediction,
   type MediaPrediction,
@@ -135,7 +136,6 @@ export function AiTaggerPanel() {
   const searchRef = useRef<HTMLInputElement>(null);
   const runGenerationRef = useRef(0);
   const runningRef = useRef(false);
-  const ranModelsRef = useRef<Set<string>>(new Set());
 
   const itemIds = useMemo(() => (target?.kind === 'explicit' ? target.item_ids : []), [target]);
   const itemFingerprint = itemIds.join('\n');
@@ -144,6 +144,7 @@ export function AiTaggerPanel() {
     runGenerationRef.current += 1;
     runningRef.current = false;
     setRunning(false);
+    void aiTaggerUnload();
     setPortalState({ open: false });
   }, [setPortalState]);
 
@@ -153,20 +154,30 @@ export function AiTaggerPanel() {
     runningRef.current = true;
     setRunning(true);
     setError(null);
-    setProgress({ done: 0, total: ids.length, currentItemId: ids[0] ?? null });
+    const orderedSlugs = [...slugs];
+    const total = orderedSlugs.length * ids.length;
+    setProgress({ done: 0, total, currentItemId: ids[0] ?? null });
     if (reset) setPredictions([]);
 
     try {
-      const output = await aiTagPredict(ids, [...slugs]);
-      if (generation !== runGenerationRef.current) return;
-      setThresholds(output.thresholds);
-      setPredictions((previous) => mergePredictionResults(previous, output.predictions, slugs));
-      setActiveItemId((current) => current ?? output.predictions[0]?.mediaItemId ?? null);
-      const failures = output.predictions.filter((entry) => entry.error);
-      setProgress({ done: ids.length, total: ids.length, currentItemId: ids[ids.length - 1] ?? null });
-      ranModelsRef.current = new Set([...ranModelsRef.current, ...slugs]);
+      const failures: MediaPrediction[] = [];
+      let done = 0;
+      for (const slug of orderedSlugs) {
+        for (const itemId of ids) {
+          if (generation !== runGenerationRef.current) return;
+          setProgress({ done, total, currentItemId: itemId });
+          const output = await aiTagPredict([itemId], [slug]);
+          if (generation !== runGenerationRef.current) return;
+          setThresholds(output.thresholds);
+          setPredictions((previous) => mergePredictionResults(previous, output.predictions, new Set([slug])));
+          setActiveItemId((current) => current ?? output.predictions[0]?.mediaItemId ?? null);
+          failures.push(...output.predictions.filter((entry) => entry.error));
+          done += 1;
+          setProgress({ done, total, currentItemId: itemId });
+        }
+      }
       if (failures.length > 0) {
-        setError(`${failures.length} of ${ids.length} media items could not be tagged. ${failures[0].error}`);
+        setError(`${failures.length} of ${total} model/image analyses failed. ${failures[0].error}`);
       }
       try {
         const status = await aiTaggerStatus();
@@ -197,8 +208,8 @@ export function AiTaggerPanel() {
     setViewMode('suggested');
     setError(null);
     setBackend(null);
+    setRunning(false);
     setProgress({ done: 0, total: 0, currentItemId: null });
-    ranModelsRef.current = new Set();
 
     void Promise.all([
       aiTaggerStatus(),
@@ -213,10 +224,11 @@ export function AiTaggerPanel() {
       setReviewMedia(media);
       setActiveItemId(media[0]?.media_item_id ?? null);
       if (detailFailures.length > 0) setError(`${detailFailures.length} selected items could not be prepared for AI review.`);
-      const ready = status.models.filter((model) => model.enabled && model.downloaded).map((model) => model.slug);
-      const slugs = new Set(ready);
-      setRunModels(slugs);
-      void runPredict(slugs, media.map((entry) => entry.media_item_id), true);
+      const downloaded = new Set(status.models.filter((model) => model.downloaded).map((model) => model.slug));
+      const previous = status.configuredModelSlugs.filter((slug) => downloaded.has(slug));
+      const fallback = status.models.find((model) => model.downloaded && model.recommended)
+        ?? status.models.find((model) => model.downloaded);
+      setRunModels(new Set(previous.length > 0 ? previous : fallback ? [fallback.slug] : []));
     }).catch((reason) => {
       if (generation === runGenerationRef.current) setError(String(reason));
     });
@@ -226,8 +238,9 @@ export function AiTaggerPanel() {
       clearTimeout(focusTimer);
       runGenerationRef.current += 1;
       runningRef.current = false;
+      void aiTaggerUnload();
     };
-  }, [open, itemFingerprint, runPredict]);
+  }, [open, itemFingerprint]);
 
   const reviewItemIds = useMemo(() => reviewMedia.length > 0
     ? reviewMedia.map((media) => media.media_item_id)
@@ -260,12 +273,9 @@ export function AiTaggerPanel() {
   const toggleModel = useCallback((slug: string) => {
     const next = new Set(runModels);
     if (next.has(slug)) next.delete(slug);
-    else {
-      next.add(slug);
-      if (!runningRef.current && !ranModelsRef.current.has(slug)) void runPredict(new Set([slug]), reviewItemIds);
-    }
+    else next.add(slug);
     setRunModels(next);
-  }, [reviewItemIds, runModels, runPredict]);
+  }, [runModels]);
 
   const thresholdFor = useCallback((namespace: string) => {
     const thresholdNamespace = namespace === 'creator'
@@ -355,7 +365,13 @@ export function AiTaggerPanel() {
           <div className={styles.cutoff}>{backend ? `${backend} inference` : 'Local inference'} · Settings thresholds</div>
           <div className={btnStyles.btnGroup}>
             <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
-            {checkedCount > 0 && <button className={`${btnStyles.btn} ${btnStyles.btnPrimary} ${styles.applyButton}`} onClick={() => void applyChecked()} disabled={applying || running} type="button">{applying ? 'Applying…' : `Apply ${checkedCount} ${checkedCount === 1 ? 'tag' : 'tags'}`}</button>}
+            <button
+              className={`${btnStyles.btn} ${styles.footerButton} ${checkedCount === 0 ? btnStyles.btnPrimary : ''}`}
+              onClick={() => void runPredict(runModels, reviewItemIds, true)}
+              disabled={running || runModels.size === 0 || reviewItemIds.length === 0}
+              type="button"
+            >{running ? 'Running…' : 'Run'}</button>
+            {checkedCount > 0 && <button className={`${btnStyles.btn} ${btnStyles.btnPrimary} ${styles.footerButton}`} onClick={() => void applyChecked()} disabled={applying || running} type="button">{applying ? 'Applying…' : `Apply ${checkedCount} ${checkedCount === 1 ? 'tag' : 'tags'}`}</button>}
           </div>
         </>
       }
@@ -415,7 +431,7 @@ export function AiTaggerPanel() {
           <div className={styles.tagListScroller}>
             {error && visibleTags.length === 0 && !running ? <div className={styles.emptyState}><span className={styles.errorText}>{error}</span></div>
               : itemIds.length === 0 ? <div className={styles.emptyState}>Select specific media items to auto tag</div>
-                : visibleTags.length === 0 ? <div className={styles.emptyState}>{activeIsRunning ? 'Analyzing this image…' : running ? 'Waiting for this image…' : runModels.size === 0 ? 'No models selected — enable one in Settings' : viewMode === 'below' ? 'Nothing below the cutoff' : 'No suggestions'}</div>
+                : visibleTags.length === 0 ? <div className={styles.emptyState}>{activeIsRunning ? 'Analyzing this image…' : running ? 'Waiting for this image…' : runModels.size === 0 ? 'Select at least one downloaded model' : viewMode === 'below' ? 'Nothing below the cutoff' : predictions.length === 0 ? 'Choose models, then press Run' : 'No suggestions'}</div>
                   : visibleTags.map((tag) => {
                     const itemId = activeItemId ?? activePrediction?.mediaItemId;
                     if (itemId == null) return null;

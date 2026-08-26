@@ -699,6 +699,10 @@ pub async fn dispatch_async(
             let input: crate::ai_runtime_v2::ManualPredictionRequest = parse(args_json)?;
             return read(crate::ai_runtime_v2::manual_predict(application, input).await?);
         }
+        "ai.review.unload" => {
+            crate::ai_runtime_v2::unload_sessions(application).await;
+            return read(EmptyOutput {});
+        }
         "ai.review.apply" => {
             let input: AiAssignmentsInput = parse(args_json)?;
             let assignments = input
@@ -1455,7 +1459,10 @@ mod tests {
             .await
             .unwrap();
         let status: crate::ai_runtime_v2::AiRuntimeStatus = serde_json::from_str(&status).unwrap();
-        assert_eq!(status.models.len(), crate::ai_tagger::models::known_models().len());
+        assert_eq!(
+            status.models.len(),
+            crate::ai_tagger::models::known_models().len()
+        );
 
         let output = dispatch_async(
             &application,

@@ -10,6 +10,7 @@ use std::io::Read;
 use ts_rs::TS;
 
 pub(crate) const BUNDLE_MARKER: &str = ".bundle-validated";
+pub(crate) const COREML_MARKER: &str = ".coreml-artifact";
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct RegisteredArtifact {
@@ -185,7 +186,7 @@ pub fn known_models() -> Vec<ModelInfo> {
             adapter: ModelAdapter::OppaiOracle,
             size_bytes: 993_246_982,
             dataset: "Danbooru · wide-vocabulary general tags".into(),
-            reference_inference_ms: 88.58,
+            reference_inference_ms: 86.45,
             label_categories: None,
             heavy: true,
             coreml: coreml.remove("oppai-oracle-v1-1"),
@@ -256,15 +257,36 @@ pub fn is_model_optimized(models_root: &std::path::Path, slug: &str) -> bool {
         let Some(model) = find_model(slug) else {
             return false;
         };
-        return model_dir(models_root, &model)
-            .join("model.mlmodelc")
-            .is_dir();
+        return coreml_artifact_is_current(&model_dir(models_root, &model), &model);
     }
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (models_root, slug);
         false
     }
+}
+
+pub(crate) fn coreml_artifact_is_current(dir: &std::path::Path, model: &ModelInfo) -> bool {
+    let Some(artifact) = &model.coreml else {
+        return false;
+    };
+    dir.join("model.mlmodelc").is_dir()
+        && std::fs::read_to_string(dir.join(COREML_MARKER))
+            .ok()
+            .as_deref()
+            == Some(artifact.sha256.as_str())
+}
+
+pub(crate) fn mark_coreml_artifact_current(
+    dir: &std::path::Path,
+    model: &ModelInfo,
+) -> Result<(), String> {
+    let artifact = model
+        .coreml
+        .as_ref()
+        .ok_or_else(|| format!("Model '{}' has no Core ML artifact", model.slug))?;
+    std::fs::write(dir.join(COREML_MARKER), &artifact.sha256)
+        .map_err(|error| format!("Failed to mark Core ML artifact as current: {error}"))
 }
 
 fn bundle_marker_content(model: &ModelInfo) -> String {
@@ -363,7 +385,8 @@ mod tests {
         assert!(models.iter().any(|model| {
             model.slug == "oppai-oracle-v1-1"
                 && model.adapter == ModelAdapter::OppaiOracle
-                && model.reference_inference_ms == 88.58
+                && model.reference_inference_ms == 86.45
+                && model.coreml.is_some()
         }));
         assert!(models.iter().any(|model| {
             model.slug == "danbooru-tag-query-b16"
@@ -388,6 +411,21 @@ mod tests {
         assert!(!is_model_downloaded(root.path(), "wd14-swinv2-v3"));
         mark_bundle_validated(&dir, &model).unwrap();
         assert!(is_model_downloaded(root.path(), "wd14-swinv2-v3"));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn optimized_status_requires_the_registered_artifact_checksum() {
+        let root = TempDir::new().unwrap();
+        let model = find_model("oppai-oracle-v1-1").unwrap();
+        let dir = model_dir(root.path(), &model);
+        std::fs::create_dir_all(dir.join("model.mlmodelc")).unwrap();
+
+        assert!(!is_model_optimized(root.path(), &model.slug));
+        std::fs::write(dir.join(COREML_MARKER), "stale-v1").unwrap();
+        assert!(!is_model_optimized(root.path(), &model.slug));
+        mark_coreml_artifact_current(&dir, &model).unwrap();
+        assert!(is_model_optimized(root.path(), &model.slug));
     }
 
     #[test]

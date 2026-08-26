@@ -25,7 +25,7 @@ pub struct DiagnosticsSnapshot {
 }
 
 pub fn snapshot(application: &Application) -> Result<DiagnosticsSnapshot, String> {
-    let workers = application.store().read(|connection| {
+    let mut workers = application.store().read(|connection| {
         let ingest = connection.query_row(
             "SELECT
                  COALESCE(SUM(status = 'running'), 0),
@@ -141,6 +141,16 @@ pub fn snapshot(application: &Application) -> Result<DiagnosticsSnapshot, String
             },
         ])
     })?;
+    let ai = application.ai_worker_status();
+    workers.push(WorkerDiagnostic {
+        id: "ai-tagger".into(),
+        label: "AI tagging".into(),
+        state: if ai.active { "working" } else { "waiting" },
+        detail: ai.detail,
+        active: i64::from(ai.active),
+        queued: 0,
+        attention: 0,
+    });
     Ok(DiagnosticsSnapshot {
         captured_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         workers,
@@ -237,13 +247,30 @@ mod tests {
             .unwrap();
 
         let diagnostics = snapshot(&application).unwrap();
-        assert_eq!(diagnostics.workers.len(), 5);
+        assert_eq!(diagnostics.workers.len(), 6);
         assert_eq!(diagnostics.workers[0].state, "working");
         assert!(diagnostics.workers[0].detail.starts_with("manual"));
         assert_eq!(
             diagnostics.workers[1].detail,
             "Generating thumbnails · 1 active · 0 queued"
         );
+    }
+
+    #[test]
+    fn snapshot_reports_live_ai_activity() {
+        let directory = tempfile::tempdir().unwrap();
+        let application = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        application.set_ai_worker_status(true, "Running OppaiOracle · 17 images");
+
+        let diagnostics = snapshot(&application).unwrap();
+        let ai = diagnostics
+            .workers
+            .iter()
+            .find(|worker| worker.id == "ai-tagger")
+            .unwrap();
+        assert_eq!(ai.state, "working");
+        assert_eq!(ai.active, 1);
+        assert_eq!(ai.detail, "Running OppaiOracle · 17 images");
     }
 
     #[test]

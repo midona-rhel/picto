@@ -114,7 +114,9 @@ class OppaiOracle(nn.Module):
         token_mask = None
         if padding_mask is not None:
             patch_mask = torch.nn.functional.avg_pool2d(
-                padding_mask[:, None], self.patch_size, self.patch_size
+                padding_mask[:, None].to(hidden.dtype),
+                self.patch_size,
+                self.patch_size,
             ).flatten(1) >= 0.9
             token_mask = torch.cat(
                 (torch.zeros_like(patch_mask[:, :1]), patch_mask), dim=1
@@ -386,6 +388,11 @@ def main() -> None:
         default="auto",
         help="Override conversion precision for validation experiments",
     )
+    parser.add_argument(
+        "--artifact-version",
+        default="v1",
+        help="Immutable release suffix written into archive filenames",
+    )
     args = parser.parse_args()
     if args.list:
         for model in models.values():
@@ -408,7 +415,8 @@ def main() -> None:
     for slug in slugs:
         model = models[slug]
         archive = args.output / (
-            f"{slug}-coreml-macos{model.get('minimum_macos', 14)}-v1.zip"
+            f"{slug}-coreml-macos{model.get('minimum_macos', 14)}-"
+            f"{args.artifact_version}.zip"
         )
         if args.package:
             package = args.package

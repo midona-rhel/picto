@@ -12,8 +12,8 @@ try {
   );
 }
 
-export function initRuntime() {
-  binding.initRuntime();
+export function initRuntime(applicationDataRoot) {
+  binding.initRuntime(applicationDataRoot);
 }
 
 export async function openLibrary(libraryPath) {

@@ -34,6 +34,17 @@ impl BackendState {
 static STATE: OnceLock<RwLock<Option<Arc<BackendState>>>> = OnceLock::new();
 static LIFECYCLE: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
 static INVOCATIONS: OnceLock<tokio::sync::RwLock<()>> = OnceLock::new();
+static APPLICATION_DATA_ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_application_data_root(root: PathBuf) -> Result<(), String> {
+    APPLICATION_DATA_ROOT
+        .set(root)
+        .map_err(|_| "Application data root is already configured".to_string())
+}
+
+pub(crate) fn application_data_root() -> Option<&'static PathBuf> {
+    APPLICATION_DATA_ROOT.get()
+}
 
 fn state_lock() -> &'static RwLock<Option<Arc<BackendState>>> {
     STATE.get_or_init(|| RwLock::new(None))
@@ -96,6 +107,9 @@ async fn open_library_inner(
 
     let store = Arc::new(Store::open(&library_root)?);
     let application = Arc::new(Application::try_new(store)?);
+    if let Err(error) = crate::ai_models_v2::migrate_legacy_storage(&application) {
+        tracing::warn!(%error, "Could not migrate legacy AI model storage");
+    }
     let cancel = CancellationToken::new();
     let state = Arc::new(BackendState {
         application,

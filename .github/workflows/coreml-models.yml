@@ -24,18 +24,42 @@ jobs:
       - name: Export fixed-shape Core ML programs
         run: >-
           python scripts/ai/export-coreml-models.py
-          wd14-swinv2-v3 wd14-eva02-large-v3
-          oppai-oracle-v1-1 danbooru-tag-query-b16
+          oppai-oracle-v1-1
           --output artifacts/coreml
+          --artifact-version v2
 
       - name: Verify registered checksums
-        run: python scripts/ai/verify-coreml-manifest.py artifacts/coreml
+        run: >-
+          python scripts/ai/verify-coreml-manifest.py artifacts/coreml
+          --slug oppai-oracle-v1-1
+
+      - name: Extract candidate package
+        run: >-
+          unzip -q
+          artifacts/coreml/oppai-oracle-v1-1-coreml-macos15-v2.zip
+          -d artifacts/oppai-oracle-v1-1
+
+      - name: Verify ONNX parity
+        run: >-
+          python scripts/ai/verify-coreml-parity.py
+          oppai-oracle-v1-1
+          artifacts/oppai-oracle-v1-1/model.mlpackage
+          resources/tutorial
+
+      - name: Verify warm performance
+        run: >-
+          python scripts/ai/benchmark-coreml.py
+          oppai-oracle-v1-1
+          artifacts/oppai-oracle-v1-1/model.mlpackage
+          resources/tutorial/mona-lisa.jpg
+          --max-median-ms 500
 
       - name: Publish immutable model assets
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
-          tag_name: ai-models-v1
-          name: Picto AI Models v1
+          tag_name: ai-models-v2
+          name: Picto AI Models v2
           body_path: scripts/ai/README.md
           prerelease: false
+          overwrite_files: false
           files: artifacts/coreml/*.zip

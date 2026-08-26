@@ -109,8 +109,16 @@ impl TaggerSession {
         }
 
         let labels = super::labels::parse_model_labels(model_dir, adapter)?;
-        let (runtime, backend) =
-            create_runtime(model_dir, &model_path, input_size, labels.len(), adapter)?;
+        let coreml_current = super::models::find_model(slug)
+            .is_some_and(|model| super::models::coreml_artifact_is_current(model_dir, &model));
+        let (runtime, backend) = create_runtime(
+            model_dir,
+            &model_path,
+            input_size,
+            labels.len(),
+            adapter,
+            coreml_current,
+        )?;
         if let SessionRuntime::Ort(session) = &runtime {
             validate_session_contract(session, input_size, labels.len(), adapter)?;
         }
@@ -206,7 +214,9 @@ impl TaggerSession {
                         ],
                     )
                     .map_err(|error| format!("Failed to create Core ML input: {error}"))?;
-                    let prediction = if let Some(mask) = &input.padding_mask {
+                    let prediction = if let (Some(mask), Some(padding_mask_name)) =
+                        (&input.padding_mask, padding_mask_name.as_ref())
+                    {
                         let mask_values = mask[index * input.spec.input_size.pow(2) as usize
                             ..(index + 1) * input.spec.input_size.pow(2) as usize]
                             .iter()
@@ -221,15 +231,7 @@ impl TaggerSession {
                             ],
                         )
                         .map_err(|error| format!("Failed to create Core ML mask: {error}"))?;
-                        model.predict(&[
-                            (input_name, &tensor),
-                            (
-                                padding_mask_name.as_ref().ok_or_else(|| {
-                                    "Core ML model has no padding-mask input".to_string()
-                                })?,
-                                &mask_tensor,
-                            ),
-                        ])
+                        model.predict(&[(input_name, &tensor), (padding_mask_name, &mask_tensor)])
                     } else {
                         model.predict(&[(input_name, &tensor)])
                     }
@@ -420,13 +422,23 @@ fn create_runtime(
     input_size: u32,
     label_count: usize,
     adapter: ModelAdapter,
+    coreml_current: bool,
 ) -> Result<(SessionRuntime, String), String> {
     tracing::info!(model = %model_dir.display(), "Loading AI model runtime");
 
     #[cfg(target_os = "macos")]
-    if let Some(runtime) = load_native_coreml(model_dir, input_size, label_count, adapter)? {
-        return Ok((runtime, "Core ML GPU/ANE".into()));
+    if coreml_current {
+        match load_native_coreml(model_dir, input_size, label_count, adapter) {
+            Ok(Some(runtime)) => return Ok((runtime, "Core ML GPU/ANE".into())),
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, "Core ML model is incompatible; falling back to ONNX")
+            }
+        }
     }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = coreml_current;
 
     #[cfg(target_os = "windows")]
     {

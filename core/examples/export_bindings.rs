@@ -91,8 +91,8 @@ fn main() {
         OrganizeIntoCollectionResult, ReorderCollectionInput,
     };
     use picto_core::query_v2::{
-        ItemDetails, ItemPage, ItemPageRequest, ItemSummary, MediaDetails, ScopeCount,
-        SelectionCollectionCandidate, SelectionSummary, SidebarCounts,
+        ItemDetails, ItemPage, ItemPageRequest, ItemSummary, LibraryStatistics, MediaDetails,
+        ScopeCount, SelectionCollectionCandidate, SelectionSummary, SidebarCounts,
     };
     use picto_core::settings_v2::SettingsSnapshot;
     use picto_core::smart_v2::{MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup};
@@ -119,7 +119,7 @@ fn main() {
         HybridTimestamp, CloudOperation, CloudMutation, CloudSyncStatus,
         ConfigureCloudInput, CloudLibraryOption, CloudConfiguration,
         ReconcileResult, RestorePoint,
-        ItemPageRequest, ItemSummary, ItemPage, MediaDetails, ItemDetails,
+        ItemPageRequest, ItemSummary, ItemPage, MediaDetails, ItemDetails, LibraryStatistics,
         SelectionSummary, SelectionCollectionCandidate, ScopeCount, SidebarCounts,
         OrganizeIntoCollectionInput, OrganizeIntoCollectionResult, DetachItemsInput,
         ReorderCollectionInput,

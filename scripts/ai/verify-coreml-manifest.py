@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 import hashlib
+import argparse
 import json
-import sys
 from pathlib import Path
 
 
-root = Path(sys.argv[1])
+parser = argparse.ArgumentParser()
+parser.add_argument("root", type=Path)
+parser.add_argument("--slug", action="append", dest="slugs")
+args = parser.parse_args()
+root = args.root
 manifest = json.loads(
     (Path(__file__).with_name("coreml-artifacts.json")).read_text()
 )
 for slug, artifact in manifest["assets"].items():
+    if args.slugs and slug not in args.slugs:
+        continue
     path = root / artifact["url"].rsplit("/", 1)[-1]
     if not path.is_file():
         raise SystemExit(f"missing Core ML artifact: {path}")

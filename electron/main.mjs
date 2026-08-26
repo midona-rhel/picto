@@ -338,7 +338,7 @@ async function resolveInitialLibrary(config) {
 
 async function bootstrapApplication() {
   console.info('[main] app.whenReady begin');
-  initRuntime();
+  initRuntime(path.join(app.getPath('appData'), 'picto'));
   await mediaProtocol.registerMediaProtocol();
   console.info('[main] media protocol registered');
   console.info('[main] IPC handlers registered');

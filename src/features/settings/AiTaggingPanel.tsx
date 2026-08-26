@@ -17,18 +17,18 @@ import {
 } from '../../platform/aiTaggerApi';
 import type { AppSettings } from '../../controllers/settingsController';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import actionStyles from '../../shared/styles/actionButton.module.css';
 import settingsStyles from './Settings.module.css';
 import styles from './AiTaggingPanel.module.css';
 import { tagGroupColor } from '../tags/tagGroupPresentation';
 
-/** Model slug → AppSettings enable flag. */
-const ENABLE_KEYS: Record<string, string> = {
-  'wd14-swinv2-v3': 'aiTaggerWd14Enabled',
-  'z3d-e621-convnext': 'aiTaggerE621Enabled',
-  'wd14-eva02-large-v3': 'aiTaggerEva02Enabled',
-  'oppai-oracle-v1-1': 'aiTaggerOppaiOracleEnabled',
-  'danbooru-tag-query-b16': 'aiTaggerDanbooruTagQueryEnabled',
+const MODEL_SHORT_LABELS: Record<string, string> = {
+  'wd14-swinv2-v3': 'WD14 SWN',
+  'z3d-e621-convnext': 'Z3D',
+  'wd14-eva02-large-v3': 'WD14 EVA',
+  'oppai-oracle-v1-1': 'OppaiOracle',
+  'danbooru-tag-query-b16': 'DTQuery',
 };
 
 /** Threshold settings keys with their tag-namespace dot colors. */
@@ -86,23 +86,28 @@ export function AiTaggingPanel({
     setOptimizing((previous) => new Set(previous).add(slug));
     void aiTaggerOptimizeModel(slug)
       .then(setStatus)
-      .catch((e) => setError(String(e)))
-      .finally(() => setOptimizing((previous) => {
-        const next = new Set(previous);
-        next.delete(slug);
-        return next;
-      }));
-  }, []);
+      .catch((e) => {
+        setError(String(e));
+        refresh();
+      })
+      .finally(() => {
+        setOptimizing((previous) => {
+          const next = new Set(previous);
+          next.delete(slug);
+          return next;
+        });
+      });
+  }, [refresh]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
   useEffect(() => {
-    if (downloading.size === 0) return;
+    if (downloading.size === 0 && optimizing.size === 0) return;
     const timer = window.setInterval(refresh, 200);
     return () => window.clearInterval(timer);
-  }, [downloading.size, refresh]);
+  }, [downloading.size, optimizing.size, refresh]);
 
   const patchSettings = useCallback((patch: Partial<AppSettings>) => {
     onSettingsChange(patch);
@@ -126,27 +131,25 @@ export function AiTaggingPanel({
           {status.models.map((m, index) => {
             const modelDownloading = downloading.has(m.slug);
             const modelOptimizing = optimizing.has(m.slug);
-            const downloadTotal = m.downloadTotalBytes ?? m.sizeBytes;
-            const downloadPercent = downloadTotal > 0
-              ? Math.max(0, Math.min(100, ((m.downloadedBytes ?? 0) / downloadTotal) * 100))
+            const operationTotal = m.downloadTotalBytes ?? m.sizeBytes;
+            const operationPercent = operationTotal > 0
+              ? Math.max(0, Math.min(100, ((m.downloadedBytes ?? 0) / operationTotal) * 100))
               : 0;
-            const enableKey = ENABLE_KEYS[m.slug];
-            const enabled = enableKey ? Boolean(settings[enableKey]) : false;
+            const displayLabel = MODEL_SHORT_LABELS[m.slug] ?? m.label;
+            const metadata = `${m.dataset} · ${fmtSize(m.sizeBytes)} · ≈${Math.round(m.referenceInferenceMs)} ms/image`;
             return (
               <div key={m.slug}>
                 {index > 0 && <div className={settingsStyles.rowSep} />}
                 <div className={`${settingsStyles.settingRow} ${styles.modelRow}`}>
                   <div className={styles.modelMain}>
-                    <div className={styles.modelName}>{m.label}</div>
-                    <div className={styles.modelMeta}>
-                      {m.dataset} · {fmtSize(m.sizeBytes)} · ≈{Math.round(m.referenceInferenceMs)} ms/image
-                    </div>
+                    <KbdTooltip label={m.label}><div className={styles.modelName}>{displayLabel}</div></KbdTooltip>
+                    <KbdTooltip label={metadata}><div className={styles.modelMeta}>{metadata}</div></KbdTooltip>
                   </div>
                   <div className={styles.modelState}>
-                    {modelDownloading ? (
+                    {modelDownloading || modelOptimizing ? (
                       <div className={styles.downloadWrap}>
                         <button
-                          className={`${actionStyles.btn} ${styles.downloadAction}`}
+                          className={`${actionStyles.btn} ${styles.modelAction}`}
                           type="button"
                           onClick={() => {
                             void aiTaggerCancelDownload(m.slug).catch((e) => setError(String(e)));
@@ -162,20 +165,17 @@ export function AiTaggingPanel({
                           {m.optimized ? 'Optimized' : 'Downloaded'}
                         </span>
                         {m.optimizationSupported && !m.optimized && (
-                          <button
-                            className={actionStyles.btn}
+                          <KbdTooltip label="Optimize for this Mac"><button
+                            className={`${actionStyles.btn} ${styles.modelAction}`}
                             type="button"
-                            disabled={modelOptimizing}
+                            aria-label="Optimize for this Mac"
                             onClick={() => optimize(m.slug)}
-                          >
-                            {modelOptimizing ? 'Optimizing…' : 'Optimize for this Mac'}
-                          </button>
+                          >Optimize</button></KbdTooltip>
                         )}
                         <button
-                          className={actionStyles.btn}
+                          className={`${actionStyles.btn} ${styles.modelAction}`}
                           type="button"
                           onClick={() => {
-                            if (enableKey && enabled) patchSettings({ [enableKey]: false });
                             void aiTaggerDeleteModel(m.slug).then(refresh).catch((e) => setError(String(e)));
                           }}
                         >
@@ -184,35 +184,34 @@ export function AiTaggingPanel({
                       </>
                     ) : (
                       <button
-                        className={`${actionStyles.btn} ${styles.downloadAction}`}
+                        className={`${actionStyles.btn} ${styles.modelAction}`}
                         type="button"
                         onClick={() => startDownload(m.slug)}
                       >
                         Download
                       </button>
                     )}
-                    {enableKey && m.downloaded && (
-                      <ToggleSwitch
-                        on={enabled}
-                        onChange={() => patchSettings({ [enableKey]: !enabled })}
-                      />
-                    )}
                   </div>
-                  {modelDownloading ? (
+                  {modelDownloading || modelOptimizing ? (
                     <div
                       className={styles.modelProgress}
-                      style={{ width: `${downloadPercent}%` }}
+                      style={{ width: `${operationPercent}%` }}
                       role="progressbar"
                       aria-valuemin={0}
                       aria-valuemax={100}
-                      aria-valuenow={Math.round(downloadPercent)}
-                      aria-label={`Downloading ${m.label}`}
+                      aria-valuenow={Math.round(operationPercent)}
+                      aria-label={`${modelOptimizing ? 'Optimizing' : 'Downloading'} ${m.label}`}
                     />
                   ) : null}
                 </div>
               </div>
             );
           })}
+          <div className={settingsStyles.rowSep} />
+          <div className={settingsStyles.settingRow}>
+            <span className={settingsStyles.settingLabel}>Model storage</span>
+            <span className={settingsStyles.staticValue}>{fmtSize(status.storageBytes)}</span>
+          </div>
         </div>
         <p className={settingsStyles.settingHint}>
           Selected models run locally one after another. Warm single-image reference on an Apple M5 Pro; actual speed varies by device and batch size. Picto never uploads media for AI tagging.
