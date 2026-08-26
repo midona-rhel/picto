@@ -19,8 +19,8 @@ export function drawBrokenThumbnail(
   context.save();
   context.translate(x + (width - markWidth) / 2, y + (height - markHeight) / 2);
   context.scale(markWidth / 160, markHeight / 176);
-  context.shadowColor = 'rgba(0,0,0,.26)';
-  context.shadowBlur = 7;
+  context.shadowColor = 'rgba(0,0,0,.36)';
+  context.shadowBlur = 9;
   context.shadowOffsetY = 6;
   const paper = context.createLinearGradient(45, 18, 112, 160);
   paper.addColorStop(0, 'rgba(247,248,250,.9)');

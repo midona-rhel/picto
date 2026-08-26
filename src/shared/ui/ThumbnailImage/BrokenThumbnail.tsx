@@ -21,8 +21,9 @@ export function BrokenThumbnail(props: SVGProps<SVGSVGElement>) {
           <stop stopColor="#ECEEF1" stopOpacity=".86" />
           <stop offset="1" stopColor="#9DA2AA" stopOpacity=".62" />
         </linearGradient>
-        <filter id={shadow} x="7" y="3" width="149" height="174" colorInterpolationFilters="sRGB">
-          <feDropShadow dx="0" dy="6" stdDeviation="7" floodColor="#000" floodOpacity=".26" />
+        <filter id={shadow} x="3" y="0" width="157" height="176" colorInterpolationFilters="sRGB">
+          <feDropShadow dx="0" dy="1" stdDeviation="2" floodColor="#000" floodOpacity=".42" />
+          <feDropShadow dx="0" dy="7" stdDeviation="8" floodColor="#000" floodOpacity=".3" />
         </filter>
       </defs>
       <g filter={`url(#${shadow})`}>

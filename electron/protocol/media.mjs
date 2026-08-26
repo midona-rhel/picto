@@ -124,7 +124,10 @@ export function createMediaProtocolService({
     const root = syncCachesForCurrentRoot();
     if (!root) return null;
     const cached = fileMetaCache.get(hash);
-    if (cached) return cached;
+    if (cached) {
+      if (await tryStat(cached.filePath)) return cached;
+      fileMetaCache.delete(hash);
+    }
     const ab = hash.slice(0, 2);
     const cd = hash.slice(2, 4);
     const dir = path.join(root, 'blobs', 'f', ab, cd);

@@ -160,4 +160,33 @@ describe('media protocol helpers', () => {
     }
   });
 
+  it('stops serving a thumbnail after a cached original is removed', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-removed-original-'));
+    const hash = 'e'.repeat(64);
+    let handler;
+    try {
+      const originalDirectory = path.join(root, 'blobs', 'f', 'ee', 'ee');
+      const thumbnailDirectory = path.join(root, 'blobs', 't', 'ee', 'ee');
+      const originalPath = path.join(originalDirectory, `${hash}.jpg`);
+      await fs.mkdir(originalDirectory, { recursive: true });
+      await fs.mkdir(thumbnailDirectory, { recursive: true });
+      await fs.writeFile(originalPath, 'original');
+      await fs.writeFile(path.join(thumbnailDirectory, `${hash}.jpg`), 'thumbnail');
+      const service = createMediaProtocolService({
+        protocol: { handle(_scheme, next) { handler = next; } },
+        path,
+        invoke: async () => null,
+        isDev: true,
+        getCurrentLibraryRoot: () => root,
+      });
+      await service.registerMediaProtocol();
+
+      expect((await handler(new Request(`media://localhost/thumb/${hash}.jpg`))).status).toBe(200);
+      await fs.rm(originalPath);
+      expect((await handler(new Request(`media://localhost/thumb/${hash}.jpg`))).status).toBe(404);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
 });
