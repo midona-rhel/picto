@@ -10,6 +10,7 @@ export interface ViewPrefsDto {
   sort_order: string | null;
   view_mode: string | null;
   target_size: number | null;
+  spacing: GridSpacing | null;
   show_name: boolean | null;
   show_resolution: boolean | null;
   show_extension: boolean | null;
@@ -24,6 +25,7 @@ export interface ViewPrefsPatch {
   sort_order?: string | null;
   view_mode?: string | null;
   target_size?: number | null;
+  spacing?: GridSpacing | null;
   show_name?: boolean | null;
   show_resolution?: boolean | null;
   show_extension?: boolean | null;
@@ -32,6 +34,8 @@ export interface ViewPrefsPatch {
   thumbnail_fit?: string | null;
   show_subfolders?: boolean | null;
 }
+
+export const GRID_DEFAULTS_SCOPE = 'grid:defaults';
 
 export interface AppSettings {
   gridTargetSize: number;
@@ -73,6 +77,7 @@ export interface AppSettings {
   subscriptionDefaultSchedule: 'manual' | 'daily' | 'weekly' | 'monthly';
   subscriptionDefaultPostsPerRun: number;
   subscriptionDefaultGroupPosts: boolean;
+  subscriptionInboxItemLimit: number;
   showTagGroups: boolean;
   starredTags: string[];
   sidebarQuickAccess: string[];
@@ -132,6 +137,7 @@ const APP_SETTINGS_DEFAULTS: AppSettings = {
   subscriptionDefaultSchedule: 'daily',
   subscriptionDefaultPostsPerRun: 100,
   subscriptionDefaultGroupPosts: true,
+  subscriptionInboxItemLimit: 1000,
   showTagGroups: true,
   starredTags: [],
   sidebarQuickAccess: [],
@@ -272,6 +278,7 @@ function parseAppSettings(snapshot: SettingsSnapshot): { value: AppSettings; rev
     subscriptionDefaultSchedule: enumValue(storedOrDefault(source, 'subscriptionDefaultSchedule', APP_SETTINGS_DEFAULTS.subscriptionDefaultSchedule), 'subscriptionDefaultSchedule', ['manual', 'daily', 'weekly', 'monthly'] as const),
     subscriptionDefaultPostsPerRun: integerRangeValue(storedOrDefault(source, 'subscriptionDefaultPostsPerRun', APP_SETTINGS_DEFAULTS.subscriptionDefaultPostsPerRun), 'subscriptionDefaultPostsPerRun', 1, 10_000),
     subscriptionDefaultGroupPosts: booleanValue(storedOrDefault(source, 'subscriptionDefaultGroupPosts', APP_SETTINGS_DEFAULTS.subscriptionDefaultGroupPosts), 'subscriptionDefaultGroupPosts'),
+    subscriptionInboxItemLimit: integerRangeValue(storedOrDefault(source, 'subscriptionInboxItemLimit', APP_SETTINGS_DEFAULTS.subscriptionInboxItemLimit), 'subscriptionInboxItemLimit', 1, 1_000_000),
     showTagGroups: booleanValue(storedOrDefault(source, 'showTagGroups', APP_SETTINGS_DEFAULTS.showTagGroups), 'showTagGroups'),
     starredTags: stringArrayValue(storedOrDefault(source, 'starredTags', APP_SETTINGS_DEFAULTS.starredTags), 'starredTags'),
     sidebarQuickAccess: stringArrayValue(storedOrDefault(source, 'sidebarQuickAccess', APP_SETTINGS_DEFAULTS.sidebarQuickAccess), 'sidebarQuickAccess'),
@@ -314,6 +321,7 @@ function parseViewPrefs(snapshot: SettingsSnapshot, scopeKey: string): { value: 
       sort_order: nullableField(source, 'sort_order', 'string'),
       view_mode: nullableField(source, 'view_mode', 'string'),
       target_size: nullableField(source, 'target_size', 'number'),
+      spacing: nullableField(source, 'spacing', 'string') as GridSpacing | null,
       show_name: nullableField(source, 'show_name', 'boolean'),
       show_resolution: nullableField(source, 'show_resolution', 'boolean'),
       show_extension: nullableField(source, 'show_extension', 'boolean'),
@@ -364,6 +372,7 @@ export function viewPrefsToPatch(prefs: ViewPrefsDto): ViewPrefsPatch {
     sort_order: prefs.sort_order,
     view_mode: prefs.view_mode,
     target_size: prefs.target_size,
+    spacing: prefs.spacing,
     show_name: prefs.show_name,
     show_resolution: prefs.show_resolution,
     show_extension: prefs.show_extension,
@@ -376,4 +385,8 @@ export function viewPrefsToPatch(prefs: ViewPrefsDto): ViewPrefsPatch {
 
 export function setViewPrefs(scopeKey: string, patch: ViewPrefsPatch): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('settings.view.patch', { scope: scopeKey, value: patch });
+}
+
+export function resetViewPrefs(): Promise<MutationReceipt> {
+  return invoke<MutationReceipt>('settings.view.reset', {});
 }

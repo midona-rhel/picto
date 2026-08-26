@@ -2,7 +2,7 @@
 
 import { getDefaultStore } from 'jotai';
 import { queryItems } from '../platform/entityApi';
-import { getViewPrefs, setViewPrefs } from '../platform/settingsApi';
+import { getViewPrefs, GRID_DEFAULTS_SCOPE, setViewPrefs } from '../platform/settingsApi';
 import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { ItemSort } from '../shared/types/generated/application/ItemSort';
 import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
@@ -55,12 +55,16 @@ function updateSession(
 
 function viewFromPreferences(
   scope: BaseScope,
-  prefs: ViewPrefsDto | null,
+  defaults: ViewPrefsDto | null,
+  overrides: ViewPrefsDto | null,
 ): GridViewPreferences {
-  const value = (field: keyof ViewPrefsDto) => prefs?.[field] ?? null;
+  const value = (field: keyof ViewPrefsDto) => overrides?.[field] ?? defaults?.[field] ?? null;
   return {
     mode: (value('view_mode') as GridViewPreferences['mode']) || initialGridView.mode,
     targetSize: (value('target_size') as number) ?? initialGridView.targetSize,
+    spacing: value('spacing') === 'tight' || value('spacing') === 'wide'
+      ? value('spacing') as GridViewPreferences['spacing']
+      : null,
     showName: (value('show_name') as boolean) ?? initialGridView.showName,
     showResolution: (value('show_resolution') as boolean) ?? initialGridView.showResolution,
     showExtension: (value('show_extension') as boolean) ?? initialGridView.showExtension,
@@ -93,24 +97,31 @@ function preferenceSortDirection(value: string | null): SortDirection {
 }
 
 function defaultSort(scope: BaseScope): { field: SortField; direction: SortDirection } {
-  if (scope.kind === 'folder') return { field: 'folder_order', direction: 'ascending' };
   if (scope.kind === 'inbox') return { field: 'imported_at', direction: 'ascending' };
   return { field: 'imported_at', direction: 'descending' };
 }
 
-function stateFromPreferences(scope: BaseScope, prefs: ViewPrefsDto | null) {
+function stateFromPreferences(
+  scope: BaseScope,
+  defaults: ViewPrefsDto | null,
+  overrides: ViewPrefsDto | null,
+) {
   const fallbackSort = defaultSort(scope);
-  const field = prefs?.sort_field == null
+  const configuredField = overrides?.sort_field ?? defaults?.sort_field ?? null;
+  const configuredDirection = overrides?.sort_order ?? defaults?.sort_order ?? null;
+  const field = scope.kind === 'inbox' || configuredField == null
     ? fallbackSort.field
-    : preferenceSortField(prefs.sort_field);
+    : preferenceSortField(configuredField);
   return {
     sort: {
       field,
-      direction: prefs?.sort_order == null
+      direction: scope.kind === 'inbox'
+        ? fallbackSort.direction
+        : configuredDirection == null
         ? (field === 'folder_order' ? 'ascending' : fallbackSort.direction)
-        : preferenceSortDirection(prefs.sort_order),
+        : preferenceSortDirection(configuredDirection),
     },
-    view: viewFromPreferences(scope, prefs),
+    view: viewFromPreferences(scope, defaults, overrides),
   };
 }
 
@@ -160,14 +171,17 @@ class GridSessionController {
     this.cancelSearch();
     const current = store.get(gridSessionAtom);
     const scopeKey = scopeToKey(scope);
-    const prefs = await getViewPrefs(scopeKey).catch(() => null);
-    const preferred = stateFromPreferences(scope, prefs);
+    const [defaults, overrides] = await Promise.all([
+      getViewPrefs(GRID_DEFAULTS_SCOPE).catch(() => null),
+      getViewPrefs(scopeKey).catch(() => null),
+    ]);
+    const preferred = stateFromPreferences(scope, defaults, overrides);
     const session: GridSessionSnapshot = {
       ...current,
       scope,
       searchText: '',
       filters: cloneFilters(options?.filters ?? initialGridFilters),
-      sort: options?.sort ? {
+      sort: options?.sort && scope.kind !== 'inbox' ? {
         field: options.sort.field,
         direction: options.sort.direction,
         randomSeed: options.sort.random_seed,
@@ -422,6 +436,12 @@ class GridSessionController {
   }
 
   private setSortNow(field: SortField, direction: SortDirection): void {
+    const scope = store.get(gridSessionAtom).scope;
+    const persistSort = scope.kind !== 'inbox';
+    if (scope.kind === 'inbox') {
+      field = 'imported_at';
+      direction = 'ascending';
+    }
     updateSession({
       sort: {
         field,
@@ -429,7 +449,7 @@ class GridSessionController {
         randomSeed: field === 'random' ? createRandomSeed() : null,
       },
     });
-    this.saveViewPref({ sort_field: field, sort_order: direction });
+    if (persistSort) this.saveViewPref({ sort_field: field, sort_order: direction });
     void this.loadFirstPage({ preserveItems: true });
   }
 

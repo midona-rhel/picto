@@ -599,6 +599,7 @@ pub fn dispatch(
                 application.patch_view_preferences(&input.scope, &input.value)?,
             )
         }
+        "settings.view.reset" => publish(application, application.reset_view_preferences()?),
         _ => Err(format!("Unknown replacement command: {command}")),
     }
 }

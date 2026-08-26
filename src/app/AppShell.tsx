@@ -33,7 +33,7 @@ import {
   controlPreferencesAtom,
 } from '../state/navigation';
 import { sidebarNodesAtom } from '../state/sidebar';
-import { gridActiveAtom, gridScopeLabelAtom, gridSpacingAtom, gridTransitionPhaseAtom } from '../state/grid';
+import { gridActiveAtom, gridDefaultSpacingAtom, gridScopeLabelAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
 import { viewerExitTransitionAtom, viewerSessionAtom } from '../state/viewer';
 import { startAppRuntime } from '../runtime/appRuntime';
@@ -392,7 +392,7 @@ export function AppShell() {
   const setShowTreeGuides = useSetAtom(showTreeGuidesAtom);
   const setSidebarPreferences = useSetAtom(sidebarPreferencesAtom);
   const setControlPreferences = useSetAtom(controlPreferencesAtom);
-  const setGridSpacing = useSetAtom(gridSpacingAtom);
+  const setGridSpacing = useSetAtom(gridDefaultSpacingAtom);
 
   useEffect(() => {
     const stopRuntime = startAppRuntime();

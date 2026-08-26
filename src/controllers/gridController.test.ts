@@ -9,6 +9,7 @@ import {
   gridItemsAtom,
   gridLoadingAtom,
   gridShowSubfoldersAtom,
+  gridSpacingAtom,
   gridSessionAtom,
   gridTotalCountAtom,
   gridTotalSizeBytesAtom,
@@ -22,6 +23,7 @@ const { queryItemsMock, getViewPrefsMock } = vi.hoisted(() => ({
 
 vi.mock('../platform/entityApi', () => ({ queryItems: queryItemsMock }));
 vi.mock('../platform/settingsApi', () => ({
+  GRID_DEFAULTS_SCOPE: 'grid:defaults',
   getViewPrefs: getViewPrefsMock,
   setViewPrefs: vi.fn().mockResolvedValue(undefined),
 }));
@@ -72,7 +74,7 @@ describe('gridController pagination', () => {
   beforeEach(() => {
     queryItemsMock.mockReset();
     getViewPrefsMock.mockReset();
-    getViewPrefsMock.mockResolvedValue(null);
+    getViewPrefsMock.mockResolvedValue({});
     store.set(gridSessionAtom, {
       ...store.get(gridSessionAtom),
       scope: { kind: 'all' },
@@ -87,21 +89,21 @@ describe('gridController pagination', () => {
     });
   });
 
-  it('loads only the canonical non-empty preference scope when navigating', async () => {
+  it('loads global defaults and the sparse scope override when navigating', async () => {
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
 
     await gridController.navigateTo({ kind: 'all' });
 
-    expect(getViewPrefsMock).toHaveBeenCalledOnce();
-    expect(getViewPrefsMock).toHaveBeenCalledWith('system:active');
+    expect(getViewPrefsMock.mock.calls.map(([scope]) => scope)).toEqual([
+      'grid:defaults',
+      'system:active',
+    ]);
   });
 
   it('prepares the complete replacement without changing the visible session', async () => {
-    getViewPrefsMock.mockResolvedValueOnce({
-      view_mode: 'grid',
-      target_size: 333,
-      show_subfolders: false,
-    });
+    getViewPrefsMock.mockImplementation(async (scope: string) => scope === 'grid:defaults'
+      ? { view_mode: 'grid', target_size: 333 }
+      : { show_subfolders: false });
     let resolvePage: ((value: ItemPage) => void) | undefined;
     queryItemsMock.mockImplementationOnce(() => new Promise<ItemPage>((resolve) => {
       resolvePage = resolve;
@@ -147,13 +149,16 @@ describe('gridController pagination', () => {
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
   });
 
-  it('uses persisted manual order as the default folder presentation', async () => {
+  it('lets untouched folders inherit the global sort defaults', async () => {
+    getViewPrefsMock.mockImplementation(async (scope: string) => scope === 'grid:defaults'
+      ? { sort_field: 'name', sort_order: 'ascending' }
+      : {});
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
 
     await gridController.navigateTo({ kind: 'folder', folder_id: 7 });
 
     expect(queryItemsMock.mock.calls[0][0].sort).toEqual({
-      field: 'folder_order',
+      field: 'name',
       direction: 'ascending',
       random_seed: null,
     });
@@ -174,7 +179,9 @@ describe('gridController pagination', () => {
   });
 
   it('restores the saved subfolder visibility for folder views', async () => {
-    getViewPrefsMock.mockResolvedValueOnce({ show_subfolders: false });
+    getViewPrefsMock.mockImplementation(async (scope: string) => scope === 'grid:defaults'
+      ? { show_subfolders: true }
+      : { show_subfolders: false });
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
 
     await gridController.navigateTo({ kind: 'folder', folder_id: 7 });
@@ -182,10 +189,31 @@ describe('gridController pagination', () => {
     expect(store.get(gridShowSubfoldersAtom)).toBe(false);
   });
 
-  it('defaults Inbox to oldest first without overriding saved preferences', async () => {
+  it('lets a scope override the application grid spacing without requerying', async () => {
+    getViewPrefsMock.mockImplementation(async (scope: string) => scope === 'grid:defaults'
+      ? { spacing: 'wide' }
+      : { spacing: 'tight' });
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
 
-    await gridController.navigateTo({ kind: 'inbox' });
+    await gridController.navigateTo({ kind: 'folder', folder_id: 7 });
+
+    expect(store.get(gridSpacingAtom)).toBe('tight');
+    const callsBeforeChange = queryItemsMock.mock.calls.length;
+    gridController.updateView({ spacing: 'wide' });
+    gridController.saveViewPref({ spacing: 'wide' });
+    expect(store.get(gridSpacingAtom)).toBe('wide');
+    expect(queryItemsMock).toHaveBeenCalledTimes(callsBeforeChange);
+  });
+
+  it('keeps Inbox oldest first despite global or saved scope preferences', async () => {
+    getViewPrefsMock.mockImplementation(async (scope: string) => scope === 'grid:defaults'
+      ? { sort_field: 'name', sort_order: 'descending' }
+      : { sort_field: 'rating', sort_order: 'descending' });
+    queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
+
+    await gridController.navigateTo({ kind: 'inbox' }, {
+      sort: { field: 'name', direction: 'descending', random_seed: null },
+    });
 
     expect(queryItemsMock.mock.calls[0][0].sort).toEqual({
       field: 'imported_at',
@@ -193,12 +221,15 @@ describe('gridController pagination', () => {
       random_seed: null,
     });
 
-    getViewPrefsMock.mockResolvedValueOnce({ sort_field: 'imported_at', sort_order: 'descending' });
     queryItemsMock.mockResolvedValueOnce(page([item(1)], 1));
 
     await gridController.navigateTo({ kind: 'inbox' });
 
-    expect(queryItemsMock.mock.calls[1][0].sort.direction).toBe('descending');
+    expect(queryItemsMock.mock.calls[1][0].sort).toEqual({
+      field: 'imported_at',
+      direction: 'ascending',
+      random_seed: null,
+    });
   });
 
   it('queries the replacement page contract and appends by item_id', async () => {

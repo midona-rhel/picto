@@ -14,6 +14,7 @@ import {
   gridShowNameAtom, gridShowExtensionAtom, gridShowResolutionAtom,
   gridShowExtensionLabelAtom, gridFitThumbnailsAtom, gridScopeAtom,
   gridShowItemCountAtom,
+  gridSpacingAtom,
   type SortField, type SortDirection, type GridViewMode,
 } from '../../state/grid';
 import { sidebarCollapsedAtom } from '../../state/navigation';
@@ -108,6 +109,7 @@ function DisplayPanel() {
   const showExt = useAtomValue(gridShowExtensionAtom);
   const showExtLabel = useAtomValue(gridShowExtensionLabelAtom);
   const showItemCount = useAtomValue(gridShowItemCountAtom);
+  const spacing = useAtomValue(gridSpacingAtom);
   const scope = useAtomValue(gridScopeAtom);
   const fitThumbs = useAtomValue(gridFitThumbnailsAtom);
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
@@ -130,6 +132,11 @@ function DisplayPanel() {
       {toggle('Show Extension', showExt, () => { gridController.updateView({ showExtension: !showExt }); gridController.saveViewPref({ show_extension: !showExt }); })}
       {toggle('Show File Type', showExtLabel, () => { gridController.updateView({ showExtensionLabel: !showExtLabel }); gridController.saveViewPref({ show_label: !showExtLabel }); })}
       {toggle('Show Item Count', showItemCount, () => { gridController.updateView({ showItemCount: !showItemCount }); gridController.saveViewPref({ show_item_count: !showItemCount }); })}
+      {toggle('Compact', spacing === 'tight', () => {
+        const next = spacing === 'tight' ? 'wide' : 'tight';
+        gridController.updateView({ spacing: next });
+        gridController.saveViewPref({ spacing: next });
+      })}
       {toggle('Fit Thumbnails', fitThumbs, () => { gridController.updateView({ fitThumbnails: !fitThumbs }); gridController.saveViewPref({ thumbnail_fit: !fitThumbs ? 'cover' : 'contain' }); }, viewMode !== 'grid')}
       {scope.kind === 'folder' && toggle('Show Subfolders', showSubfolders, () => {
         gridController.updateView({ showSubfolders: !showSubfolders });

@@ -12,5 +12,6 @@ describe('GridViewMenu', () => {
     render(display!.render());
 
     expect(screen.queryByText('Grayscale Preview')).not.toBeInTheDocument();
+    expect(screen.getByText('Compact')).toBeInTheDocument();
   });
 });

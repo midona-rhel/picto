@@ -23,6 +23,8 @@ export type CanonicalEntityGridItem = ItemSummary;
 export interface GridViewPreferences {
   mode: GridViewMode;
   targetSize: number;
+  /** Null inherits the application-wide spacing default. */
+  spacing: GridSpacing | null;
   showName: boolean;
   showExtension: boolean;
   showExtensionLabel: boolean;
@@ -57,6 +59,7 @@ export type GridIntent =
 export const initialGridView: GridViewPreferences = {
   mode: 'waterfall',
   targetSize: 220,
+  spacing: null,
   showName: true,
   showExtension: false,
   showExtensionLabel: false,
@@ -116,8 +119,11 @@ export const gridFitThumbnailsAtom = pick((s) => s.view.fitThumbnails);
 export const gridGrayscaleAtom = atom(false);
 /** Keep the current filters when navigating directly between grid scopes. */
 export const gridFilterLockedAtom = atom(false);
-/** Application-wide spacing density. Wide preserves Picto's original layout. */
-export const gridSpacingAtom = atom<GridSpacing>('wide');
+/** Settings owns the fallback; an explicit per-scope view preference wins. */
+export const gridDefaultSpacingAtom = atom<GridSpacing>('wide');
+export const gridSpacingAtom = atom((get) => (
+  get(gridSessionAtom).view.spacing ?? get(gridDefaultSpacingAtom)
+));
 export const gridShowSubfoldersAtom = pick((s) => s.view.showSubfolders);
 export const gridItemsAtom = pick((s) => s.items);
 export const gridCursorAtom = pick((s) => s.cursor);

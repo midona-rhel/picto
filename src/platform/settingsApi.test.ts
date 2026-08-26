@@ -9,6 +9,7 @@ import {
   getViewPrefs,
   patchSettings,
   replaceSettings,
+  resetViewPrefs,
   setViewPrefs,
 } from './settingsApi';
 
@@ -44,6 +45,7 @@ describe('settings API', () => {
     expect(snapshot.value.subscriptionDefaultSchedule).toBe('daily');
     expect(snapshot.value.subscriptionDefaultPostsPerRun).toBe(100);
     expect(snapshot.value.subscriptionDefaultGroupPosts).toBe(true);
+    expect(snapshot.value.subscriptionInboxItemLimit).toBe(1000);
     expect(snapshot.value.showTagGroups).toBe(true);
     expect(snapshot.value.starredTags).toEqual([]);
     expect(snapshot.value.aiTaggerAutoOnImport).toBe(false);
@@ -96,6 +98,9 @@ describe('settings API', () => {
 
     invoke.mockResolvedValue({ value: { subscriptionDefaultSchedule: 'hourly' }, revision: 1 });
     await expect(getSettingsSnapshot()).rejects.toThrow('subscriptionDefaultSchedule');
+
+    invoke.mockResolvedValue({ value: { subscriptionInboxItemLimit: 0 }, revision: 1 });
+    await expect(getSettingsSnapshot()).rejects.toThrow('subscriptionInboxItemLimit');
   });
 
   it('uses replacement settings and view commands with their value payloads', async () => {
@@ -106,11 +111,13 @@ describe('settings API', () => {
     await patchSettings(settings);
     await replaceSettings(settings as never);
     await setViewPrefs('system:all', viewPatch);
+    await resetViewPrefs();
 
     expect(invoke.mock.calls).toEqual([
       ['settings.patch', { value: settings }],
       ['settings.replace', { value: settings }],
       ['settings.view.patch', { scope: 'system:all', value: viewPatch }],
+      ['settings.view.reset', {}],
     ]);
   });
 
@@ -126,6 +133,7 @@ describe('settings API', () => {
       sort_order: null,
       view_mode: 'grid',
       target_size: 240,
+      spacing: null,
       show_name: true,
       show_resolution: null,
       show_extension: null,
