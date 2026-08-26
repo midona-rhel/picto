@@ -16,7 +16,7 @@
   gap: 4px;
   border-radius: var(--radius-md);
   cursor: pointer;
-  font: var(--font-weight-regular) var(--font-size-md)/1 var(--font-family-ui);
+  font: var(--font-weight-regular) var(--font-size-md)/26px var(--font-family-ui);
   color: var(--color-text-primary);
   white-space: nowrap;
   margin: 0;
