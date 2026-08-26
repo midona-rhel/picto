@@ -6,8 +6,12 @@ import {
   resetShortcutRuntimeForTests,
 } from './shortcutRuntime';
 
-function press(key: string, target: EventTarget = window): KeyboardEvent {
-  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+function press(
+  key: string,
+  target: EventTarget = window,
+  init: KeyboardEventInit = {},
+): KeyboardEvent {
+  const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...init });
   target.dispatchEvent(event);
   return event;
 }
@@ -66,5 +70,37 @@ describe('shortcutRuntime', () => {
     const event = press('Space');
     expect(event.defaultPrevented).toBe(false);
     release();
+  });
+
+  it('leaves standard editing commands with an active text selection', () => {
+    const handler = vi.fn(() => true);
+    registerShortcutScope(handler);
+    const text = document.createElement('div');
+    text.textContent = 'copy this diagnostic line';
+    document.body.append(text);
+    const range = document.createRange();
+    range.selectNodeContents(text);
+    window.getSelection()?.addRange(range);
+
+    const event = press('c', text, { metaKey: true });
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(event.defaultPrevented).toBe(false);
+    window.getSelection()?.removeAllRanges();
+    text.remove();
+  });
+
+  it('keeps editing commands inside explicit selectable-text surfaces', () => {
+    const handler = vi.fn(() => true);
+    registerShortcutScope(handler);
+    const panel = document.createElement('section');
+    panel.dataset.pictoTextShortcuts = '';
+    document.body.append(panel);
+
+    press('a', panel, { ctrlKey: true });
+    press('v', panel, { ctrlKey: true });
+
+    expect(handler).not.toHaveBeenCalled();
+    panel.remove();
   });
 });

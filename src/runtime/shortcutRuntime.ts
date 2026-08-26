@@ -24,8 +24,22 @@ function orderedScopes(): ShortcutScope[] {
   );
 }
 
+function standardTextCommand(event: KeyboardEvent): boolean {
+  if (!(event.metaKey || event.ctrlKey) || event.altKey) return false;
+  return ['a', 'c', 'v', 'x'].includes(event.key.toLowerCase());
+}
+
+function textSurfaceOwns(event: KeyboardEvent): boolean {
+  if (isEditableTarget(event.target)) return true;
+  if (event.target instanceof HTMLElement
+    && event.target.closest('[data-picto-text-shortcuts]')) return true;
+  const selection = window.getSelection();
+  return selection != null && !selection.isCollapsed && selection.rangeCount > 0;
+}
+
 function dispatchShortcut(event: KeyboardEvent): void {
   if (suspensionLeases.size > 0) return;
+  if (standardTextCommand(event) && textSurfaceOwns(event)) return;
   const editable = isEditableTarget(event.target);
   for (const scope of orderedScopes()) {
     if (editable && !scope.allowInEditable) continue;

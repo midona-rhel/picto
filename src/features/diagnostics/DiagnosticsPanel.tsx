@@ -97,6 +97,8 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
       ref={panelRef}
       className={styles.panel}
       aria-label="Diagnostics"
+      data-picto-text-shortcuts
+      tabIndex={-1}
       style={height == null ? undefined : { height }}
     >
       <div

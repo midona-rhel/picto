@@ -459,7 +459,9 @@ pub struct ApplySummary {
 }
 
 pub fn status(application: &Application) -> Result<CloudSyncStatus, String> {
-    application.store().read(|connection| {
+    // Status is a single SQLite snapshot and has no projection dependency.
+    // It must remain responsive while ingestion or reconciliation is settling.
+    application.store().read_snapshot(|connection| {
         connection.query_row(
             "SELECT state, phase, blocking, completed_units, total_units, message, last_sync_at,
                     (SELECT COUNT(*) FROM cloud_outbox WHERE published_at IS NULL),
@@ -485,7 +487,7 @@ pub fn status(application: &Application) -> Result<CloudSyncStatus, String> {
 }
 
 pub fn configuration(application: &Application) -> Result<CloudConfiguration, String> {
-    application.store().read(|connection| {
+    application.store().read_snapshot(|connection| {
         connection.query_row(
             "SELECT provider, account_label, remote_root, library_id, device_id, retention_json
              FROM cloud_state WHERE singleton = 1",
