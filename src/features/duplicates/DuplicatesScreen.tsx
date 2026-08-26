@@ -610,6 +610,11 @@ export function DuplicatesScreen() {
     }
   }, [loadPairs, reportFailure]);
 
+  const resolveCurrent = useCallback((action: DuplicateAction) => {
+    if (!currentPair || resolving || navigating) return;
+    void finishResolution(currentPair, action);
+  }, [currentPair, finishResolution, navigating, resolving]);
+
   const scan = useCallback(async () => {
     if (scanningRef.current) return;
     scanningRef.current = true;
@@ -653,7 +658,7 @@ export function DuplicatesScreen() {
       total,
       canPrevious: index > 0,
       canNext: index < pairs.length - 1,
-      disabled: resolving || metadataLoading || navigating,
+      disabled: resolving,
       zoomPercent: zoom.zoomPercent,
       isFit: zoom.isFit,
       isActual: zoom.isActual,
@@ -671,8 +676,6 @@ export function DuplicatesScreen() {
     goPrevious,
     index,
     loading,
-    metadataLoading,
-    navigating,
     pairs.length,
     resolving,
     setDuplicateToolbar,
@@ -692,7 +695,6 @@ export function DuplicatesScreen() {
       if (matchesShortcutDef(event, getShortcut('dup.nextPair')!)) { goNext(); return true; }
       if (matchesShortcutDef(event, getShortcut('dup.fitToWindow')!)) { zoom.fit(); return true; }
       if (matchesShortcutDef(event, getShortcut('view.actualSize')!)) { zoom.actual(); return true; }
-      if (!currentPair || resolving || metadataLoading || navigating) return;
       const shortcuts: Array<[string, DuplicateAction]> = [
         ['dup.keepLeft', 'keep_left'],
         ['dup.keepRight', 'keep_right'],
@@ -702,7 +704,7 @@ export function DuplicatesScreen() {
       ];
       for (const [shortcutId, action] of shortcuts) {
         if (!matchesShortcutDef(event, getShortcut(shortcutId)!)) continue;
-        void finishResolution(currentPair, action);
+        resolveCurrent(action);
         return true;
       }
   }, { priority: 30 });
@@ -766,17 +768,17 @@ export function DuplicatesScreen() {
       )}
 
       <div className={styles.comparison}>
-        <MediaCard side="left" file={currentPair.left.file} occurrenceCount={currentPair.left.occurrences.length} previewRef={leftPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'left'} details={left} loading={metadataLoading} disabled={resolving || metadataLoading || navigating} onKeep={() => void finishResolution(currentPair, 'keep_left')} pairKey={pairKey} pairThumbnailsReady={pairThumbnailsReady} onThumbnailReady={markThumbnailReady} />
-        <MediaCard side="right" file={currentPair.right.file} occurrenceCount={currentPair.right.occurrences.length} previewRef={rightPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'right'} details={right} loading={metadataLoading} disabled={resolving || metadataLoading || navigating} onKeep={() => void finishResolution(currentPair, 'keep_right')} pairKey={pairKey} pairThumbnailsReady={pairThumbnailsReady} onThumbnailReady={markThumbnailReady} />
+        <MediaCard side="left" file={currentPair.left.file} occurrenceCount={currentPair.left.occurrences.length} previewRef={leftPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'left'} details={left} loading={metadataLoading} disabled={resolving} onKeep={() => resolveCurrent('keep_left')} pairKey={pairKey} pairThumbnailsReady={pairThumbnailsReady} onThumbnailReady={markThumbnailReady} />
+        <MediaCard side="right" file={currentPair.right.file} occurrenceCount={currentPair.right.occurrences.length} previewRef={rightPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'right'} details={right} loading={metadataLoading} disabled={resolving} onKeep={() => resolveCurrent('keep_right')} pairKey={pairKey} pairThumbnailsReady={pairThumbnailsReady} onThumbnailReady={markThumbnailReady} />
       </div>
 
       <footer className={styles.footer}>
         <div className={styles.footerActions}>
           <KbdTooltip label="These are different media" shortcutId="dup.notDuplicate">
-            <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'not_duplicate')} disabled={resolving || metadataLoading || navigating}><IconX size={15} /> Not duplicates</button>
+            <button className={btnStyles.btn} onClick={() => resolveCurrent('not_duplicate')} disabled={resolving}><IconX size={15} /> Not duplicates</button>
           </KbdTooltip>
           <KbdTooltip label="Keep both files" shortcutId="dup.keepBoth">
-            <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'keep_both')} disabled={resolving || metadataLoading || navigating}><IconCopy size={15} /> Keep both</button>
+            <button className={btnStyles.btn} onClick={() => resolveCurrent('keep_both')} disabled={resolving}><IconCopy size={15} /> Keep both</button>
           </KbdTooltip>
           <KbdTooltip label="Show differences while held">
             <button
@@ -785,7 +787,7 @@ export function DuplicatesScreen() {
               onMouseLeave={() => setDifferenceHovered(false)}
               onFocus={() => setDifferenceFocused(true)}
               onBlur={() => setDifferenceFocused(false)}
-              disabled={resolving || metadataLoading || navigating || !differenceFiles}
+              disabled={resolving || !differenceFiles}
               aria-label="Show Difference"
               aria-pressed={differenceActive}
             >
@@ -798,13 +800,13 @@ export function DuplicatesScreen() {
               onClick={() => {
                 setSmartMergeHovered(false);
                 setSmartMergeFocused(false);
-                void finishResolution(currentPair, 'smart_merge');
+                resolveCurrent('smart_merge');
               }}
               onMouseEnter={() => setSmartMergeHovered(true)}
               onMouseLeave={() => setSmartMergeHovered(false)}
               onFocus={() => setSmartMergeFocused(true)}
               onBlur={() => setSmartMergeFocused(false)}
-              disabled={resolving || metadataLoading || navigating}
+              disabled={resolving}
             >
               <IconArrowsJoin size={16} /> Smart merge
             </button>

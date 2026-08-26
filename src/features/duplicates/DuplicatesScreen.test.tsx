@@ -444,7 +444,10 @@ describe('DuplicatesScreen', () => {
     fireEvent.load(oldFull);
     fireEvent.transitionEnd(oldFull, { propertyName: 'opacity' });
 
-    await user.click(screen.getByRole('button', { name: 'Next pair' }));
+    const nextPairButton = screen.getByRole('button', { name: 'Next pair' });
+    await user.click(nextPairButton);
+    expect(nextPairButton).toHaveFocus();
+    expect(nextPairButton).toBeEnabled();
     expect(screen.getByTestId('left-preview-layers').querySelector('img[src="media://localhost/file/left.png"]')).not.toBeNull();
     expect(screen.getByTestId('right-preview-layers').querySelector('img[src="media://localhost/thumb/right.jpg"]')).not.toBeNull();
     const pendingLeft = screen.getByTestId('pending-left-thumbnail');
@@ -506,13 +509,13 @@ describe('DuplicatesScreen', () => {
     expect(actual).toHaveAttribute('aria-pressed', 'false');
   });
 
-  it('keeps decisions disabled while logical details are loading', async () => {
+  it('keeps decision controls visually stable while logical details are loading', async () => {
     vi.mocked(getDuplicateItemDetails).mockImplementation(() => new Promise(() => {}));
     await renderScreen();
 
-    expect(await screen.findByRole('button', { name: 'Keep left' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Keep right' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Smart merge' })).toBeDisabled();
+    expect(await screen.findByRole('button', { name: 'Keep left' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Keep right' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Smart merge' })).toBeEnabled();
   });
 
   it('keeps the empty state stable and reports scan progress', async () => {
