@@ -11,26 +11,20 @@ describe('folder auto tags workflow', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     clearNotifications();
-    store.set(folderAutoTagsModalAtom, {
-      open: false,
-      folderIds: [],
-      folderName: null,
-      initialTags: [],
-    });
+    store.set(folderAutoTagsModalAtom, { open: false, folderIds: [], initialTags: [] });
   });
 
-  it('opens one editor with tags common to every selected folder', async () => {
+  it('opens the shared tag picker with tags common to every selected folder', async () => {
     vi.spyOn(foldersController, 'getAutoTags')
       .mockResolvedValueOnce(['creator:alice', 'rating:safe'])
       .mockResolvedValueOnce(['rating:safe', 'series:test']);
 
-    await openFolderAutoTagsEditor([9, 9, 12], 'Ignored for bulk');
+    await openFolderAutoTagsEditor([9, 9, 12]);
 
     expect(foldersController.getAutoTags).toHaveBeenCalledTimes(2);
     expect(store.get(folderAutoTagsModalAtom)).toEqual({
       open: true,
       folderIds: [9, 12],
-      folderName: null,
       initialTags: ['rating:safe'],
     });
   });
@@ -38,7 +32,7 @@ describe('folder auto tags workflow', () => {
   it('uses the notification path and leaves the modal closed when loading fails', async () => {
     vi.spyOn(foldersController, 'getAutoTags').mockRejectedValue(new Error('database unavailable'));
 
-    await openFolderAutoTagsEditor([7], 'References');
+    await openFolderAutoTagsEditor([7]);
 
     expect(store.get(folderAutoTagsModalAtom).open).toBe(false);
     expect(getCurrentNotification()).toMatchObject({

@@ -1006,7 +1006,7 @@ export function GridScreen({
                 });
               },
               onSetAutoTags: () => {
-                void openFolderAutoTagsEditor(selectedFolderIds, null);
+                void openFolderAutoTagsEditor(selectedFolderIds);
               },
               onSortContents: () => {
                 void Promise.all(selectedFolderIds.map((id) => foldersController.sortByName(id)));
@@ -1055,7 +1055,7 @@ export function GridScreen({
               void foldersController.duplicate(folderId).then(setRenamingSubfolderId);
             },
             onSetAutoTags: () => {
-              void openFolderAutoTagsEditor([folderId], folder.name);
+              void openFolderAutoTagsEditor([folderId]);
             },
             onImport: () => {
               void (async () => {

@@ -467,10 +467,7 @@ export function Sidebar() {
     }
     if (autoTags && matchesShortcutDef(event, autoTags) && targetFolderIds.length > 0) {
       event.preventDefault();
-      const folderName = targetFolderIds.length === 1
-        ? folderNodes.find((node) => parseFolderId(node.id) === targetFolderIds[0])?.name ?? null
-        : null;
-      void openFolderAutoTagsEditor(targetFolderIds, folderName);
+      void openFolderAutoTagsEditor(targetFolderIds);
     }
   }, { priority: 20 });
 
@@ -609,7 +606,7 @@ export function Sidebar() {
         });
       } },
       { label: 'Set Auto Tags...', icon: <IconAutoTags size={14} />, shortcut: kbd('folder.autoTags'), action: () => {
-        void openFolderAutoTagsEditor([folderId], node.name);
+        void openFolderAutoTagsEditor([folderId]);
       } },
       { separator: true },
       { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => {
@@ -984,7 +981,7 @@ export function Sidebar() {
       const autoTagFolderIds = folderIds.map(parseFolderId).filter((id): id is number => id != null);
       entries.push({
         label: 'Set Auto Tags...', icon: <IconAutoTags size={14} />, shortcut: kbd('folder.autoTags'),
-        action: () => { void openFolderAutoTagsEditor(autoTagFolderIds, null); },
+        action: () => { void openFolderAutoTagsEditor(autoTagFolderIds); },
       });
     }
     entries.push({ separator: true });

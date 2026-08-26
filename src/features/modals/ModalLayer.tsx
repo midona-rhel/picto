@@ -133,14 +133,8 @@ export function ModalLayer() {
       <FolderAutoTagsModal
         open={folderAutoTags.open}
         folderIds={folderAutoTags.folderIds}
-        folderName={folderAutoTags.folderName}
         initialTags={folderAutoTags.initialTags}
-        onClose={() => setFolderAutoTags({
-          open: false,
-          folderIds: [],
-          folderName: null,
-          initialTags: [],
-        })}
+        onClose={() => setFolderAutoTags({ open: false, folderIds: [], initialTags: [] })}
       />
 
       <ExportModal

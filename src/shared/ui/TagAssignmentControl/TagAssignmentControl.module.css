@@ -1,0 +1,47 @@
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--color-text-tertiary);
+  font-size: 11.5px;
+}
+
+.values {
+  min-height: 26px;
+  display: flex;
+  align-items: center;
+  align-content: flex-start;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.add,
+.empty {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  border: 0;
+  border-radius: 6px;
+  background: var(--color-surface-hover);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.add {
+  width: 26px;
+  padding: 0;
+}
+
+.empty {
+  width: 100%;
+  gap: 8px;
+  padding: 0 24px 0 16px;
+  font: 400 12px/26px var(--font-family-ui);
+}
+
+.add:hover,
+.empty:hover {
+  background: var(--color-surface-active);
+  color: var(--color-text-primary);
+}

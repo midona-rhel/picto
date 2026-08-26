@@ -1,39 +1,33 @@
 import { useEffect, useState } from 'react';
+import { useSetAtom } from 'jotai';
 import { foldersController } from '../../controllers/foldersController';
 import { showErrorNotification } from '../../shared/lib/notifications';
-import { GlassInput } from '../../shared/ui/GlassInput';
-import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
-import { TagTokenInput } from '../../shared/ui/TagTokenInput';
+import { GlassModal } from '../../shared/ui/GlassModal';
+import { TagAssignmentControl } from '../../shared/ui/TagAssignmentControl';
+import { tagSelectPortalAtom } from '../../state/portals';
 
 export function FolderAutoTagsModal({
   open,
   folderIds,
-  folderName,
   initialTags,
   onClose,
 }: {
   open: boolean;
   folderIds: number[];
-  folderName: string | null;
   initialTags: string[];
   onClose: () => void;
 }) {
-  const [tags, setTags] = useState<string[]>(initialTags);
-  const [saving, setSaving] = useState(false);
+  const [tags, setTags] = useState(initialTags);
+  const openTagPicker = useSetAtom(tagSelectPortalAtom);
 
   useEffect(() => {
-    if (!open) return;
-    setTags(initialTags);
-    setSaving(false);
+    if (open) setTags(initialTags);
   }, [open, initialTags]);
 
-  const save = () => {
-    if (saving || folderIds.length === 0) return;
-    setSaving(true);
-    void Promise.all(folderIds.map((folderId) => foldersController.setAutoTags(folderId, tags)))
-      .then(onClose)
+  const apply = (nextTags: string[]) => {
+    setTags(nextTags);
+    void Promise.all(folderIds.map((folderId) => foldersController.setAutoTags(folderId, nextTags)))
       .catch((reason) => {
-        setSaving(false);
         showErrorNotification({
           title: 'Could not set folder auto tags',
           message: reason instanceof Error ? reason.message : String(reason),
@@ -41,41 +35,22 @@ export function FolderAutoTagsModal({
       });
   };
 
-  const displayName = folderName ?? `${folderIds.length} folders selected`;
-
   return (
-    <GlassModal
-      open={open}
-      onClose={onClose}
-      title="Set Auto Tags"
-      size="sm"
-      footer={
-        <>
-          <button className={modalStyles.btn} onClick={onClose} disabled={saving} type="button">
-            Cancel
-          </button>
-          <button
-            className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
-            data-modal-primary="true"
-            onClick={save}
-            disabled={saving || folderIds.length === 0}
-            type="button"
-          >
-            Save
-          </button>
-        </>
-      }
-    >
-      <div className={modalStyles.stack}>
-        <label className={modalStyles.field}>
-          <span className={modalStyles.fieldLabel}>{folderIds.length === 1 ? 'Folder Name' : 'Folders'}</span>
-          <GlassInput value={displayName} readOnly />
-        </label>
-        <label className={modalStyles.field}>
-          <span className={modalStyles.fieldLabel}>Auto Tags</span>
-          <TagTokenInput values={tags} onChange={setTags} autoFocus ariaLabel="Auto Tags" />
-        </label>
-      </div>
+    <GlassModal open={open} onClose={onClose} title="Set Auto Tags" size="sm">
+      <TagAssignmentControl
+        tags={tags}
+        onRemove={(tag) => apply(tags.filter((current) => current !== tag))}
+        onOpen={(button) => {
+          const rect = button.getBoundingClientRect();
+          openTagPicker({
+            open: true,
+            anchor: { x: rect.left, y: rect.top },
+            anchorPlacement: 'above',
+            selectedTags: tags,
+            onApplyTags: apply,
+          });
+        }}
+      />
     </GlassModal>
   );
 }

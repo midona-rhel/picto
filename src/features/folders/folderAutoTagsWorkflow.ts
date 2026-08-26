@@ -7,7 +7,6 @@ const store = getDefaultStore();
 
 export async function openFolderAutoTagsEditor(
   folderIds: number[],
-  folderName: string | null,
 ): Promise<void> {
   const uniqueIds = [...new Set(folderIds)];
   if (uniqueIds.length === 0) return;
@@ -23,7 +22,6 @@ export async function openFolderAutoTagsEditor(
     store.set(folderAutoTagsModalAtom, {
       open: true,
       folderIds: uniqueIds,
-      folderName: uniqueIds.length === 1 ? folderName : null,
       initialTags: commonTags,
     });
   } catch (reason) {

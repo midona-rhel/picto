@@ -9,6 +9,7 @@ import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
 import { folderNodesAtom } from '../../../state/sidebar';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../../state/portals';
 import { TagChip } from '../../../shared/ui/TagChip/TagChip';
+import { TagAssignmentControl } from '../../../shared/ui/TagAssignmentControl';
 import { GlassModal } from '../../../shared/ui/GlassModal/GlassModal';
 import { CompactNumberInput } from '../../../shared/ui/CompactNumberInput/CompactNumberInput';
 import { ActionButton } from './ActionButton';
@@ -89,13 +90,6 @@ function PostsPerRunInput({
     <CompactNumberInput value={value} min={1} max={10_000} label="Posts per run"
       disabled={disabled} onCommit={onCommit} />
   );
-}
-
-function splitTag(tag: string): { namespace: string; subtag: string } {
-  const separator = tag.indexOf(':');
-  return separator < 0
-    ? { namespace: '', subtag: tag }
-    : { namespace: tag.slice(0, separator), subtag: tag.slice(separator + 1) };
 }
 
 function hexToRgb(hex: string | null): [number, number, number] | undefined {
@@ -319,34 +313,23 @@ export function SubscriptionDetail({
               </button>
             </div>
           </div>
-          <div className={styles.subscriptionRailField}>
-            <span>Automatically add tags</span>
-            <div className={styles.subscriptionDestinationValues}>
-              {subscription.automatic_tags.map((tag) => {
-                const value = splitTag(tag);
-                return <TagChip key={tag} namespace={value.namespace} subtag={value.subtag} onRemove={() => void controller.setDestination(subscription.id, {
-                  target_folder_ids: subscription.target_folder_ids,
-                  automatic_tags: subscription.automatic_tags.filter((current) => current !== tag),
-                })} />;
-              })}
-              <button
-                type="button"
-                className={subscription.automatic_tags.length === 0 ? styles.subscriptionDestinationEmpty : styles.subscriptionDestinationAdd}
-                onClick={(event) => {
-                  const rect = event.currentTarget.getBoundingClientRect();
-                  openTagPicker({
-                    open: true,
-                    anchor: { x: rect.left, y: rect.top },
-                    anchorPlacement: 'above',
-                    selectedTags: subscription.automatic_tags,
-                    onApplyTags: (automatic_tags) => void controller.setDestination(subscription.id, { target_folder_ids: subscription.target_folder_ids, automatic_tags }),
-                  });
-                }}
-              >
-                <IconPlus size={14} />{subscription.automatic_tags.length === 0 && <span>Add tags</span>}
-              </button>
-            </div>
-          </div>
+          <TagAssignmentControl
+            tags={subscription.automatic_tags}
+            onRemove={(tag) => void controller.setDestination(subscription.id, {
+              target_folder_ids: subscription.target_folder_ids,
+              automatic_tags: subscription.automatic_tags.filter((current) => current !== tag),
+            })}
+            onOpen={(button) => {
+              const rect = button.getBoundingClientRect();
+              openTagPicker({
+                open: true,
+                anchor: { x: rect.left, y: rect.top },
+                anchorPlacement: 'above',
+                selectedTags: subscription.automatic_tags,
+                onApplyTags: (automatic_tags) => void controller.setDestination(subscription.id, { target_folder_ids: subscription.target_folder_ids, automatic_tags }),
+              });
+            }}
+          />
         </div>
       </aside>
 

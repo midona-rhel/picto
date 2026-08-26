@@ -60,14 +60,12 @@ export const folderWatchModalAtom = atom<FolderWatchModalState>({ open: false })
 export interface FolderAutoTagsModalState {
   open: boolean;
   folderIds: number[];
-  folderName: string | null;
   initialTags: string[];
 }
 
 export const folderAutoTagsModalAtom = atom<FolderAutoTagsModalState>({
   open: false,
   folderIds: [],
-  folderName: null,
   initialTags: [],
 });
 

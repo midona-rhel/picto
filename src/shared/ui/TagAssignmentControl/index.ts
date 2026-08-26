@@ -1,0 +1,1 @@
+export { TagAssignmentControl } from './TagAssignmentControl';

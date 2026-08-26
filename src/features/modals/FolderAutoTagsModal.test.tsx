@@ -1,60 +1,40 @@
 import { MantineProvider } from '@mantine/core';
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ReactNode } from 'react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { getDefaultStore } from 'jotai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { foldersController } from '../../controllers/foldersController';
+import { tagSelectPortalAtom } from '../../state/portals';
 import { FolderAutoTagsModal } from './FolderAutoTagsModal';
 
 describe('FolderAutoTagsModal', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    getDefaultStore().set(tagSelectPortalAtom, { open: false, anchor: null });
   });
 
-  const renderModal = (modal: ReactNode) => render(
-    <MantineProvider>{modal}</MantineProvider>,
-  );
-
-  it('keeps edits local until Save and writes the final tags once', async () => {
+  it('uses the subscription tag assignment control and applies picker changes', async () => {
     const setAutoTags = vi.spyOn(foldersController, 'setAutoTags').mockResolvedValue();
-    const onClose = vi.fn();
-    renderModal(
-      <FolderAutoTagsModal
-        open
-        folderIds={[4]}
-        folderName="References"
-        initialTags={['creator:alice']}
-        onClose={onClose}
-      />,
+    render(
+      <MantineProvider>
+        <FolderAutoTagsModal
+          open
+          folderIds={[4, 7]}
+          initialTags={[]}
+          onClose={vi.fn()}
+        />
+      </MantineProvider>,
     );
 
-    const input = screen.getByRole('textbox', { name: 'Auto Tags' });
-    fireEvent.change(input, { target: { value: 'rating:safe' } });
-    fireEvent.keyDown(input, { key: 'Enter' });
-    expect(setAutoTags).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Add tags' }));
+    const portal = getDefaultStore().get(tagSelectPortalAtom);
+    expect(portal).toMatchObject({ open: true, selectedTags: [] });
+    await act(async () => {
+      portal.onApplyTags?.(['creator:alice']);
+    });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
-    await waitFor(() => expect(setAutoTags).toHaveBeenCalledWith(4, [
-      'creator:alice',
-      'rating:safe',
-    ]));
-    expect(onClose).toHaveBeenCalledOnce();
-  });
-
-  it('discards the draft on Cancel', () => {
-    const setAutoTags = vi.spyOn(foldersController, 'setAutoTags').mockResolvedValue();
-    const onClose = vi.fn();
-    renderModal(
-      <FolderAutoTagsModal
-        open
-        folderIds={[4]}
-        folderName="References"
-        initialTags={[]}
-        onClose={onClose}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(setAutoTags).not.toHaveBeenCalled();
-    expect(onClose).toHaveBeenCalledOnce();
+    await waitFor(() => {
+      expect(setAutoTags).toHaveBeenCalledWith(4, ['creator:alice']);
+      expect(setAutoTags).toHaveBeenCalledWith(7, ['creator:alice']);
+    });
   });
 });
