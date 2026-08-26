@@ -14,7 +14,7 @@ import {
   IconPhoto, IconInbox, IconTrash,
   IconClock, IconBookmark,
   IconArrowsShuffle,
-  IconLayoutGrid, IconRefresh, IconX,
+  IconLayoutGrid, IconRefresh, IconX, IconFilterPlus,
   IconAdjustments,
   IconStar, IconStarOff,
 } from '@tabler/icons-react';
@@ -1214,7 +1214,7 @@ export function Sidebar() {
                 action: () => { void createFolderAndRename(); },
               },
               {
-                label: 'Import Folder...', icon: <IconDownload size={14} />,
+                label: 'Import Folder...', icon: <IconFolderPlus size={14} />,
                 action: () => { void chooseAndImportFolder({ kind: 'all' }); },
               },
             ]);
@@ -1278,7 +1278,7 @@ export function Sidebar() {
             const rect = event.currentTarget.getBoundingClientRect();
             contextMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, [
               {
-                label: 'New Smart Folder', icon: <IconFolderPlus size={14} />,
+                label: 'New Smart Folder', icon: <IconFilterPlus size={14} />,
                 action: () => openSmartFolderModal('create', { name: 'New Smart Folder', predicate: { groups: [] } }),
               },
               {
@@ -1291,7 +1291,7 @@ export function Sidebar() {
           onContextMenu={(event) => {
             contextMenu.open(event, [
               {
-                label: 'New Smart Folder', icon: <IconFolderPlus size={14} />,
+                label: 'New Smart Folder', icon: <IconFilterPlus size={14} />,
                 action: () => openSmartFolderModal('create', { name: 'New Smart Folder', predicate: { groups: [] } }),
               },
               {
