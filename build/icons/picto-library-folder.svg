@@ -14,14 +14,18 @@
     </linearGradient>
   </defs>
 
-  <!-- Match the visual footprint of native macOS library/package icons. -->
-  <g transform="translate(-71.68 -71.68) scale(1.14)">
+  <!-- Use the full legacy ICNS canvas while preserving the Picto mark's proportions. -->
+  <g transform="translate(-122.88 -122.88) scale(1.24)">
+
+  <!-- Native document-package icons are taller than a normal folder silhouette. -->
+  <g transform="matrix(1 0 0 1.2 0 -102.4)">
 
   <!-- Raised tab extends behind the body's rounded top-left corner. -->
   <path d="M104 366V280Q104 231 153 231H371Q400 231 421 252L487 318H152Q104 318 104 366Z" fill="url(#tab-shading)"/>
 
   <!-- Main folder body: rounded exposed corners and aligned with the tab at the left edge. -->
   <path d="M104 366Q104 318 152 318H872Q920 318 920 366V790Q920 838 872 838H152Q104 838 104 790Z" fill="url(#body-shading)"/>
+  </g>
 
   <g fill="none" stroke="#3e4046" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
     <path d="M512 654C457 606 392 581 321 590L356 438C413 426 467 451 512 499C557 451 611 426 668 438L703 590C632 581 567 606 512 654Z"/>
