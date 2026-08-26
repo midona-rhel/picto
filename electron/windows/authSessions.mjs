@@ -186,6 +186,8 @@ async function inspectExhentaiPage(webContents) {
       return {
         href,
         host,
+        hasChallenge: Boolean(document.querySelector('#challenge-running, #challenge-stage, .cf-challenge'))
+          || /just a moment|verify (?:that )?you are human|checking your browser|cloudflare/i.test(pageIdentity),
         hasLoginForm: Boolean(document.querySelector('input[type="password"], input[name="PassWord"]')),
         accessDenied: /sad\s*panda|sadpanda|kokomade/i.test(pageIdentity),
         blank: text.length === 0 && document.links.length === 0,
@@ -223,13 +225,27 @@ function createExhentaiAdapter(site) {
 
       if (onExhentai) {
         navigatingToVerification = false;
-        if (page.accessDenied || page.blank || !hasSession) {
+        if (page.hasChallenge) {
+          return {
+            show: true,
+            status: 'active',
+            message: 'Complete the ExHentai browser check; Picto will continue automatically.',
+          };
+        }
+        if (page.accessDenied || page.blank) {
           try { await contents.session.clearStorageData(); } catch {}
           return {
             navigate: site.loginUrl,
             show: true,
             status: 'active',
             message: 'ExHentai rejected this session (Sad Panda). Sign in again to refresh it.',
+          };
+        }
+        if (!hasSession) {
+          return {
+            show: true,
+            status: 'active',
+            message: 'Waiting for ExHentai to finish establishing the authenticated session…',
           };
         }
         const cookies = Object.fromEntries(site.cookieNames

@@ -115,6 +115,8 @@ describe('direct-site authentication', () => {
       verificationUrl: 'https://exhentai.org/',
       cookieNames: ['ipb_member_id', 'ipb_pass_hash', 'igneous'],
       authenticatedCookieNames: ['ipb_member_id', 'ipb_pass_hash'],
+      allowStorageAccess: true,
+      preserveUserAgent: true,
       resetSessionOnStart: true,
     });
     expect(resolveAuthSite('exhentai')).toBe(resolveAuthSite('ehentai'));
@@ -179,6 +181,48 @@ describe('direct-site authentication', () => {
     expect(sessions.getAuthSessionState()).toMatchObject({
       status: 'active',
       message: expect.stringContaining('Sad Panda'),
+    });
+  });
+
+  it('lets ExHentai finish a Cloudflare challenge without clearing its progress', async () => {
+    const browser = createBrowserWindowMock({
+      pageResult: (url) => url.includes('exhentai.org')
+        ? {
+            href: url,
+            host: 'exhentai.org',
+            hasChallenge: true,
+            hasLoginForm: false,
+            accessDenied: false,
+            blank: false,
+          }
+        : {
+            href: url,
+            host: 'forums.e-hentai.org',
+            hasChallenge: false,
+            hasLoginForm: false,
+            accessDenied: false,
+            blank: false,
+          },
+      cookies: [
+        { name: 'ipb_member_id', value: 'member' },
+        { name: 'ipb_pass_hash', value: 'hash' },
+      ],
+    });
+    const { sessions, persistCredential } = createHarness(browser);
+
+    await sessions.startAuthSession('ehentai');
+    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    await settle();
+    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    await settle();
+
+    expect(persistCredential).not.toHaveBeenCalled();
+    expect(browser.instances[0].loadedUrl).toBe('https://exhentai.org/');
+    expect(browser.instances[0].webContents.session.clearStorageData).toHaveBeenCalledTimes(1);
+    expect(browser.instances[0].showCalls).toBeGreaterThan(0);
+    expect(sessions.getAuthSessionState()).toMatchObject({
+      status: 'active',
+      message: expect.stringContaining('browser check'),
     });
   });
 
