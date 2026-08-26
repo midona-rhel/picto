@@ -40,9 +40,14 @@ import inspectorStyles from '../inspector/Inspector.module.css';
 import { tagGroupColor } from '../tags/tagGroupPresentation';
 import styles from './AiTaggerPanel.module.css';
 import { KbdTooltip } from '../../shared/ui/KbdTooltip';
+import { TitlebarRangeSlider } from '../../shared/ui/TitlebarControls';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 
 type ViewMode = 'suggested' | 'below';
+
+const MIN_REVIEW_CONFIDENCE = 5;
+const MAX_REVIEW_CONFIDENCE = 95;
+const DEFAULT_REVIEW_CONFIDENCE = 35;
 
 interface ReviewTag {
   key: string;
@@ -130,7 +135,8 @@ export function AiTaggerPanel() {
   const [running, setRunning] = useState(false);
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [thresholds, setThresholds] = useState<Record<string, number>>({ general: 0.35 });
+  const [confidence, setConfidence] = useState(DEFAULT_REVIEW_CONFIDENCE);
+  const [confidenceDraft, setConfidenceDraft] = useState(DEFAULT_REVIEW_CONFIDENCE);
   const [viewMode, setViewMode] = useState<ViewMode>('suggested');
   const [overrides, setOverrides] = useState<Map<string, boolean>>(new Map());
   const searchRef = useRef<HTMLInputElement>(null);
@@ -168,7 +174,6 @@ export function AiTaggerPanel() {
           setProgress({ done, total, currentItemId: itemId });
           const output = await aiTagPredict([itemId], [slug]);
           if (generation !== runGenerationRef.current) return;
-          setThresholds(output.thresholds);
           setPredictions((previous) => mergePredictionResults(previous, output.predictions, new Set([slug])));
           setActiveItemId((current) => current ?? output.predictions[0]?.mediaItemId ?? null);
           failures.push(...output.predictions.filter((entry) => entry.error));
@@ -210,6 +215,8 @@ export function AiTaggerPanel() {
     setBackend(null);
     setRunning(false);
     setProgress({ done: 0, total: 0, currentItemId: null });
+    setConfidence(DEFAULT_REVIEW_CONFIDENCE);
+    setConfidenceDraft(DEFAULT_REVIEW_CONFIDENCE);
 
     void Promise.all([
       aiTaggerStatus(),
@@ -219,7 +226,12 @@ export function AiTaggerPanel() {
       const media = uniqueMedia(detailResults.flatMap((result) => result.status === 'fulfilled' ? result.value.media : []));
       const detailFailures = detailResults.filter((result) => result.status === 'rejected');
       setModels(status.models);
-      setThresholds(status.thresholds);
+      const initialConfidence = Math.min(
+        MAX_REVIEW_CONFIDENCE,
+        Math.max(MIN_REVIEW_CONFIDENCE, Math.round((status.thresholds.general ?? DEFAULT_REVIEW_CONFIDENCE / 100) * 100)),
+      );
+      setConfidence(initialConfidence);
+      setConfidenceDraft(initialConfidence);
       setBackend(status.cachedBackend);
       setReviewMedia(media);
       setActiveItemId(media[0]?.media_item_id ?? null);
@@ -277,21 +289,14 @@ export function AiTaggerPanel() {
     setRunModels(next);
   }, [runModels]);
 
-  const thresholdFor = useCallback((namespace: string) => {
-    const thresholdNamespace = namespace === 'creator'
-      ? 'artist'
-      : namespace === 'series'
-        ? 'copyright'
-        : namespace;
-    return thresholds[thresholdNamespace] ?? thresholds.general ?? 0.35;
-  }, [thresholds]);
+  const confidenceCutoff = confidence / 100;
   const activeTags = useMemo(() => predictionTags(activePrediction, runModels), [activePrediction, runModels]);
-  const suggested = useMemo(() => activeTags.filter((tag) => tag.confidence >= thresholdFor(tag.namespace)), [activeTags, thresholdFor]);
-  const below = useMemo(() => activeTags.filter((tag) => tag.confidence < thresholdFor(tag.namespace)), [activeTags, thresholdFor]);
+  const suggested = useMemo(() => activeTags.filter((tag) => tag.confidence >= confidenceCutoff), [activeTags, confidenceCutoff]);
+  const below = useMemo(() => activeTags.filter((tag) => tag.confidence < confidenceCutoff), [activeTags, confidenceCutoff]);
   const isChecked = useCallback((itemId: number, tag: ReviewTag) => (
     overrides.get(overrideKey(itemId, tag.key))
-      ?? tag.confidence >= thresholdFor(tag.namespace)
-  ), [overrides, thresholdFor]);
+      ?? tag.confidence >= confidenceCutoff
+  ), [confidenceCutoff, overrides]);
 
   const assignments = useMemo(() => predictions.flatMap((prediction) => {
     const tags = predictionTags(prediction, runModels)
@@ -338,6 +343,7 @@ export function AiTaggerPanel() {
 
   const currentNumber = reviewItemIds.length > 0 ? activeIndex + 1 : 0;
   const activeIsRunning = running && progress.currentItemId === activeItemId;
+  const commitConfidence = () => setConfidence(confidenceDraft);
 
   return (
     <OverlayShell
@@ -362,7 +368,23 @@ export function AiTaggerPanel() {
       }
       footer={
         <>
-          <div className={styles.cutoff}>{backend ? `${backend} inference` : 'Local inference'} · Settings thresholds</div>
+          <div className={styles.confidenceControl}>
+            <span>Confidence</span>
+            <TitlebarRangeSlider
+              aria-label="Run confidence"
+              min={MIN_REVIEW_CONFIDENCE}
+              max={MAX_REVIEW_CONFIDENCE}
+              step={1}
+              value={confidenceDraft}
+              onValueChange={setConfidenceDraft}
+              onPointerUp={commitConfidence}
+              onKeyUp={commitConfidence}
+              onBlur={commitConfidence}
+              className={styles.confidenceSlider}
+            />
+            <span className={styles.confidenceValue}>{confidenceDraft}%</span>
+            <span className={styles.inferenceBackend}>· {backend ? `${backend} inference` : 'Local inference'}</span>
+          </div>
           <div className={btnStyles.btnGroup}>
             <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
             <button

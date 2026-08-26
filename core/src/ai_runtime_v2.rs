@@ -18,6 +18,7 @@ use crate::blob_store::{mime_to_extension, BlobStore};
 
 const MAX_MANUAL_PREDICTION_ITEMS: usize = 256;
 const MAX_MANUAL_PREDICTION_MODELS: usize = 8;
+const MIN_MANUAL_REVIEW_CONFIDENCE: f32 = 0.05;
 
 /// Provenance bit shared with the existing AI tagger.
 pub(crate) const AI_PROVENANCE_MASK: i64 = 1 << 1;
@@ -202,6 +203,7 @@ pub async fn manual_predict(
     let models = select_prediction_models(&request.model_slugs, application).await?;
     let settings = crate::settings_v2::application_settings(application)?.value;
     let thresholds = thresholds_from_settings(&settings);
+    let review_thresholds = manual_review_thresholds();
     let mut results = media_item_ids
         .iter()
         .map(|media_item_id| MediaPrediction {
@@ -225,7 +227,7 @@ pub async fn manual_predict(
             .iter()
             .map(|(_, original)| (original.file_hash.clone(), original.mime_type.clone()))
             .collect::<Vec<_>>();
-        match predict_files_cached(application, &models, &files, thresholds.clone()).await {
+        match predict_files_cached(application, &models, &files, review_thresholds).await {
             Ok(predictions) => {
                 for ((index, _), predictions) in valid.into_iter().zip(predictions) {
                     results[index].predictions = predictions
@@ -560,6 +562,17 @@ fn thresholds_from_settings(settings: &serde_json::Value) -> Thresholds {
         artist: setting_threshold(settings, "aiThresholdArtist", 0.85),
         species: setting_threshold(settings, "aiThresholdSpecies", 0.35),
         rating: setting_threshold(settings, "aiThresholdRating", 0.50),
+    }
+}
+
+fn manual_review_thresholds() -> Thresholds {
+    Thresholds {
+        general: MIN_MANUAL_REVIEW_CONFIDENCE,
+        character: MIN_MANUAL_REVIEW_CONFIDENCE,
+        copyright: MIN_MANUAL_REVIEW_CONFIDENCE,
+        artist: MIN_MANUAL_REVIEW_CONFIDENCE,
+        species: MIN_MANUAL_REVIEW_CONFIDENCE,
+        rating: MIN_MANUAL_REVIEW_CONFIDENCE,
     }
 }
 
@@ -1020,6 +1033,17 @@ mod tests {
         assert_eq!(thresholds.character, 0.0);
         assert_eq!(thresholds.species, 0.35);
         assert_eq!(thresholds.rating, 0.50);
+    }
+
+    #[test]
+    fn manual_review_retains_predictions_down_to_the_slider_minimum() {
+        let thresholds = manual_review_thresholds();
+        assert_eq!(thresholds.general, MIN_MANUAL_REVIEW_CONFIDENCE);
+        assert_eq!(thresholds.character, MIN_MANUAL_REVIEW_CONFIDENCE);
+        assert_eq!(thresholds.copyright, MIN_MANUAL_REVIEW_CONFIDENCE);
+        assert_eq!(thresholds.artist, MIN_MANUAL_REVIEW_CONFIDENCE);
+        assert_eq!(thresholds.species, MIN_MANUAL_REVIEW_CONFIDENCE);
+        assert_eq!(thresholds.rating, MIN_MANUAL_REVIEW_CONFIDENCE);
     }
 
     #[test]

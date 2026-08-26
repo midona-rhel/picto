@@ -209,8 +209,8 @@ describe('AiTaggerPanel', () => {
     expect(z3dButton?.className).toContain('sidebarItemSelected');
   });
 
-  it('uses namespace thresholds returned by the backend', async () => {
-    mocks.predict.mockResolvedValue({ predictions: [prediction(1, 'miku', 0.5)], thresholds: { general: 0.35, character: 0.9 } });
+  it('starts manual review at the general confidence setting', async () => {
+    mocks.predict.mockResolvedValue({ predictions: [prediction(1, 'miku', 0.3)], thresholds: { general: 0.35, character: 0.9 } });
     const user = setupUser();
     await renderPanel();
     await startRun();
@@ -221,12 +221,12 @@ describe('AiTaggerPanel', () => {
     expect(screen.queryByText(/\d+% cutoff/)).not.toBeInTheDocument();
   });
 
-  it('uses Picto group names with their upstream threshold aliases', async () => {
+  it('uses the same run confidence for Picto namespaces', async () => {
     mocks.predict.mockResolvedValue({
       predictions: [{
         mediaItemId: 1,
         error: null,
-        predictions: [{ tag: 'example', namespace: 'creator', confidence: 0.5, model: model.slug }],
+        predictions: [{ tag: 'example', namespace: 'creator', confidence: 0.3, model: model.slug }],
       }],
       thresholds: { general: 0.35, artist: 0.9 },
     });
@@ -256,6 +256,44 @@ describe('AiTaggerPanel', () => {
     await waitFor(() => expect(mocks.apply).toHaveBeenCalledWith([
       { media_item_id: 1, tags: ['rating:explicit'] },
     ]));
+  });
+
+  it('reclassifies and selects retained predictions when run confidence is released', async () => {
+    mocks.predict.mockResolvedValue({ predictions: [prediction(1, 'miku', 0.3)], thresholds: { general: 0.35, character: 0.9 } });
+    const user = setupUser();
+    await renderPanel();
+    await startRun();
+
+    await user.click(screen.getByText('Below cutoff'));
+    expect(await screen.findByText('miku')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply 1 tag' })).not.toBeInTheDocument();
+
+    const slider = screen.getByRole('slider', { name: 'Run confidence' });
+    fireEvent.change(slider, { target: { value: '25' } });
+    expect(screen.getByText('25%')).toBeInTheDocument();
+    expect(screen.getByText('miku')).toBeInTheDocument();
+
+    fireEvent.pointerUp(slider);
+    expect(screen.queryByText('miku')).not.toBeInTheDocument();
+    await user.click(screen.getByText('Suggested'));
+    expect(await screen.findByText('miku')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply 1 tag' })).toBeInTheDocument();
+  });
+
+  it('preserves an explicit tag choice while confidence changes', async () => {
+    mocks.predict.mockResolvedValue({ predictions: [prediction(1, 'miku', 0.3)], thresholds: { general: 0.35, character: 0.9 } });
+    const user = setupUser();
+    await renderPanel();
+    await startRun();
+    await user.click(screen.getByText('Below cutoff'));
+    await user.click(await screen.findByText('miku'));
+
+    const slider = screen.getByRole('slider', { name: 'Run confidence' });
+    fireEvent.change(slider, { target: { value: '25' } });
+    fireEvent.pointerUp(slider);
+    await user.click(screen.getByText('Suggested'));
+
+    expect(screen.getByRole('button', { name: 'Apply 1 tag' })).toBeInTheDocument();
   });
 
   it('uses the inspector preview frame for the reviewed image', async () => {

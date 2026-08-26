@@ -346,11 +346,27 @@
   font: var(--font-size-caption) var(--font-family-mono);
 }
 
-.cutoff {
+.confidenceControl {
   display: flex;
   align-items: center;
+  gap: 7px;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-caption);
+}
+
+.confidenceSlider.confidenceSlider {
+  width: 88px;
+}
+
+.confidenceValue {
+  min-width: 28px;
+  color: var(--color-text-secondary);
+  font-family: var(--font-family-mono);
+  text-align: right;
+}
+
+.inferenceBackend {
+  white-space: nowrap;
 }
 
 .footerButton.footerButton {
