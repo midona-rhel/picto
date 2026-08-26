@@ -208,6 +208,14 @@ async function readCookiesForUrls(contents, urls) {
   return values;
 }
 
+async function clearCookiesForUrls(contents, urls, names) {
+  for (const url of urls) {
+    for (const name of names) {
+      try { await contents.session.cookies.remove(url, name); } catch {}
+    }
+  }
+}
+
 function createExhentaiAdapter(site) {
   let navigatingToVerification = false;
   return {
@@ -233,7 +241,7 @@ function createExhentaiAdapter(site) {
           };
         }
         if (page.accessDenied || page.blank) {
-          try { await contents.session.clearStorageData(); } catch {}
+          await clearCookiesForUrls(contents, site.cookieUrls, site.cookieNames);
           return {
             navigate: site.loginUrl,
             show: true,

@@ -44,6 +44,7 @@ function createBrowserWindowMock({ pageResult = false, cookies = [] } = {}) {
           },
           cookies: {
             get: vi.fn(async () => (typeof cookies === 'function' ? cookies() : cookies)),
+            remove: vi.fn(async () => {}),
           },
         },
       };
@@ -117,7 +118,6 @@ describe('direct-site authentication', () => {
       authenticatedCookieNames: ['ipb_member_id', 'ipb_pass_hash'],
       allowStorageAccess: true,
       preserveUserAgent: true,
-      resetSessionOnStart: true,
     });
     expect(resolveAuthSite('exhentai')).toBe(resolveAuthSite('ehentai'));
   });
@@ -176,7 +176,12 @@ describe('direct-site authentication', () => {
 
     expect(persistCredential).not.toHaveBeenCalled();
     expect(browser.instances[0].loadedUrl).toBe('https://forums.e-hentai.org/index.php?act=Login&CODE=00');
-    expect(browser.instances[0].webContents.session.clearStorageData).toHaveBeenCalledTimes(2);
+    expect(browser.instances[0].webContents.session.clearStorageData).not.toHaveBeenCalled();
+    expect(browser.instances[0].webContents.session.cookies.remove).toHaveBeenCalledTimes(9);
+    expect(browser.instances[0].webContents.session.cookies.remove).not.toHaveBeenCalledWith(
+      expect.any(String),
+      'cf_clearance',
+    );
     expect(browser.instances[0].showCalls).toBeGreaterThan(0);
     expect(sessions.getAuthSessionState()).toMatchObject({
       status: 'active',
@@ -218,7 +223,8 @@ describe('direct-site authentication', () => {
 
     expect(persistCredential).not.toHaveBeenCalled();
     expect(browser.instances[0].loadedUrl).toBe('https://exhentai.org/');
-    expect(browser.instances[0].webContents.session.clearStorageData).toHaveBeenCalledTimes(1);
+    expect(browser.instances[0].webContents.session.clearStorageData).not.toHaveBeenCalled();
+    expect(browser.instances[0].webContents.session.cookies.remove).not.toHaveBeenCalled();
     expect(browser.instances[0].showCalls).toBeGreaterThan(0);
     expect(sessions.getAuthSessionState()).toMatchObject({
       status: 'active',
