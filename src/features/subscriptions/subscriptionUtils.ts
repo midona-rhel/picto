@@ -10,6 +10,10 @@ import type {
 
 const DEFAULT_SOURCE_POST_BATCH_SIZE = 100;
 
+export function isGalleryImportJob(subscription: SubscriptionInfo): boolean {
+  return subscription.queries?.length === 1 && subscription.queries[0]?.site_id === 'ehentai';
+}
+
 export function getSubscriptionRunTarget(
   subscription: SubscriptionInfo,
 ): number {

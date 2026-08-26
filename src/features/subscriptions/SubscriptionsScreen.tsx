@@ -23,6 +23,7 @@ import { SubscriptionCoverDialog } from './components/SubscriptionCoverDialog';
 import { EmptyState } from './components/EmptyState';
 import { NewSubscriptionDialog, type CreateSubscriptionInput } from './components/NewSubscriptionDialog';
 import { AddGalleryDialog, type AddGalleryInput } from './components/AddGalleryDialog';
+import { isGalleryImportJob } from './subscriptionUtils';
 import {
   EMPTY_SUBSCRIPTION_DETAIL_STATE,
   subscriptionsAccountsModalAtom,
@@ -173,14 +174,17 @@ export function SubscriptionsScreen() {
         await subscriptionsController.delete(subscription.id).catch(() => undefined);
         throw error;
       }
-      navigateTo({ kind: 'subscription', id: subscription.id });
       markSubscriptionRunTriggered();
       await subscriptionsController.run(subscription.id);
     });
     if (succeeded || createdId != null) setGalleryDialogOpen(false);
-  }, [act, navigateTo]);
+  }, [act]);
 
   const busy = busyKey != null;
+  const galleryJobs = snapshot?.subscriptions.filter(isGalleryImportJob) ?? [];
+  const visibleSubscriptions = snapshot?.subscriptions.filter(
+    (subscription) => !isGalleryImportJob(subscription),
+  ) ?? [];
   const detailController = {
     run: (id: string) => {
       markSubscriptionRunTriggered();
@@ -313,7 +317,8 @@ export function SubscriptionsScreen() {
       <main className={styles.detailPane}>
         {selection == null && snapshot ? (
           <SubscriptionsGrid
-            subscriptions={snapshot.subscriptions}
+            subscriptions={visibleSubscriptions}
+            galleryJobs={galleryJobs}
             listMetrics={snapshot.listMetrics}
             covers={covers}
             progressBySubscriptionId={progressBySubscriptionId}

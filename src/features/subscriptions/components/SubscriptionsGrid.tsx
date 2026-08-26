@@ -11,6 +11,7 @@ import { SubscriptionCoverDisplay } from './SubscriptionCoverImage';
 import { isSubscriptionCompleted } from '../subscriptionUtils';
 import { ActionButton } from './ActionButton';
 import { StatusBadge } from './StatusBadge';
+import { ProgressBar } from '../../../shared/ui/ProgressBar/ProgressBar';
 import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
 import styles from '../SubscriptionsScreen.module.css';
 
@@ -110,6 +111,7 @@ function FollowCard({
  */
 export function SubscriptionsGrid({
   subscriptions,
+  galleryJobs,
   listMetrics,
   covers,
   progressBySubscriptionId,
@@ -122,6 +124,7 @@ export function SubscriptionsGrid({
   onMultiMenu,
 }: {
   subscriptions: SubscriptionInfo[];
+  galleryJobs: SubscriptionInfo[];
   listMetrics: Record<string, SubscriptionListMetrics>;
   covers: Map<string, SubscriptionCover>;
   progressBySubscriptionId: Map<string, SubscriptionProgressEvent>;
@@ -238,6 +241,34 @@ export function SubscriptionsGrid({
           </ActionButton>
         </div>
       </div>
+
+      {galleryJobs.length > 0 && (
+        <section className={styles.galleryJobs} aria-label="Gallery downloads">
+          <div className={styles.galleryJobsHeader}>
+            <span>Gallery downloads</span>
+            <span>{galleryJobs.length}</span>
+          </div>
+          {galleryJobs.map((job) => {
+            const progress = progressBySubscriptionId.get(job.id);
+            return (
+              <div className={styles.galleryJob} key={job.id}>
+                <IconDownload size={15} stroke={1.6} aria-hidden />
+                <div className={styles.galleryJobBody}>
+                  <div className={styles.galleryJobText}>
+                    <span>{job.name}</span>
+                    <span>
+                      {progress
+                        ? `${progress.files_downloaded} downloaded · ${progress.media_added} added`
+                        : 'Queued'}
+                    </span>
+                  </div>
+                  <ProgressBar indeterminate height={2} />
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      )}
 
       {cards.length === 0 ? (
         <div className={styles.sectionEmptyLine}>

@@ -29,11 +29,19 @@ const refreshRuntimeState = vi.hoisted(() => vi.fn().mockResolvedValue({
   runningProgress: [],
 }));
 const getRunActivity = vi.hoisted(() => vi.fn());
+const listRuns = vi.hoisted(() => vi.fn());
+const deleteSubscription = vi.hoisted(() => vi.fn());
 const showErrorNotification = vi.hoisted(() => vi.fn());
 const showSuccessNotification = vi.hoisted(() => vi.fn());
 
 vi.mock('../controllers/subscriptionsController', () => ({
-  subscriptionsController: { loadWorkspaceSnapshot, refreshRuntimeState, getRunActivity },
+  subscriptionsController: {
+    loadWorkspaceSnapshot,
+    refreshRuntimeState,
+    getRunActivity,
+    listRuns,
+    delete: deleteSubscription,
+  },
 }));
 vi.mock('../shared/lib/notifications', () => ({ showErrorNotification, showSuccessNotification }));
 
@@ -57,6 +65,8 @@ describe('subscription settlement', () => {
     loadWorkspaceSnapshot.mockClear();
     refreshRuntimeState.mockClear();
     getRunActivity.mockReset();
+    listRuns.mockReset();
+    deleteSubscription.mockReset();
     showErrorNotification.mockClear();
     showSuccessNotification.mockClear();
     resetSubscriptionsSettleForTests();
@@ -200,6 +210,40 @@ describe('subscription settlement', () => {
       title: 'Subscription completed',
       message: 'Active feed · 1 query completed · 100 posts traversed · 12 media added',
     }));
+  });
+
+  it('removes a completed gallery import without treating it as a subscription', async () => {
+    const galleryJob = {
+      id: '9',
+      name: 'E-Hentai Gallery 12345',
+      queries: [{ site_id: 'ehentai' }],
+    };
+    store.set(subscriptionsWorkspaceSnapshotAtom, {
+      subscriptions: [galleryJob],
+      runningSubscriptionIds: ['9'],
+      runningProgress: [{
+        subscription_id: '9',
+        subscription_name: galleryJob.name,
+        run_id: 90,
+      }],
+    } as never);
+    refreshRuntimeState.mockResolvedValue({ runningSubscriptionIds: [], runningProgress: [] });
+    listRuns.mockResolvedValue([{
+      status: 'succeeded',
+      media_added: 24,
+      error_message: null,
+    }]);
+    deleteSubscription.mockResolvedValue(undefined);
+
+    await refreshSubscriptionsRuntimeState();
+    await vi.waitFor(() => expect(deleteSubscription).toHaveBeenCalledWith('9'));
+
+    expect(showSuccessNotification).toHaveBeenCalledWith({
+      title: 'Gallery imported',
+      message: '24 media added',
+    });
+    expect(store.get(subscriptionsWorkspaceSnapshotAtom)?.subscriptions).toEqual([]);
+    expect(getRunActivity).not.toHaveBeenCalled();
   });
 });
 

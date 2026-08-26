@@ -958,6 +958,59 @@
   gap: 12px;
 }
 
+.galleryJobs {
+  display: flex;
+  flex-direction: column;
+  border-block: 1px solid var(--color-border-secondary);
+}
+
+.galleryJobsHeader,
+.galleryJob,
+.galleryJobText {
+  display: flex;
+  align-items: center;
+}
+
+.galleryJobsHeader {
+  justify-content: space-between;
+  min-height: 28px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.galleryJob {
+  gap: 9px;
+  min-height: 38px;
+  color: var(--color-text-primary);
+}
+
+.galleryJobBody {
+  min-width: 0;
+  flex: 1;
+  display: grid;
+  gap: 5px;
+}
+
+.galleryJobText {
+  justify-content: space-between;
+  gap: 16px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.galleryJobText > :first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.galleryJobText > :last-child {
+  flex: none;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
 .followingGrid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(150px, 180px));

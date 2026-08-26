@@ -9,6 +9,7 @@ import {
   getQueryAuthState,
   getSubscriptionRunTarget,
   isQueryCompleted,
+  isGalleryImportJob,
   isSubscriptionCompleted,
 } from './subscriptionUtils';
 import { getCredentialOwnerSiteId } from '../../shared/lib/subscriptionHelpers';
@@ -78,6 +79,15 @@ describe('subscription completion', () => {
     expect(isSubscriptionCompleted(current, 0, 1)).toBe(false);
     expect(isSubscriptionCompleted(subscription([]))).toBe(false);
     expect(isSubscriptionCompleted(subscription([query({ completed_initial_run: false })]))).toBe(false);
+  });
+});
+
+describe('gallery imports', () => {
+  it('classifies only the dedicated E-Hentai URL job', () => {
+    expect(isGalleryImportJob(subscription([
+      query({ site_id: 'ehentai', query_kind: 'user', query_text: 'https://e-hentai.org/g/1/0123456789/' }),
+    ]))).toBe(true);
+    expect(isGalleryImportJob(subscription([query({ site_id: 'twitter' })]))).toBe(false);
   });
 });
 

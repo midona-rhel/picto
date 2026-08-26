@@ -8,6 +8,8 @@ import {
 } from '../state/subscriptionsWorkspace';
 import { showErrorNotification, showSuccessNotification } from '../shared/lib/notifications';
 import type { SubscriptionProgressEvent } from '../shared/types/subscriptions';
+import type { SubscriptionWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
+import { isGalleryImportJob } from '../features/subscriptions/subscriptionUtils';
 
 const authRefreshCallbacks = new Set<() => void>();
 const store = getDefaultStore();
@@ -21,6 +23,7 @@ let runGraceUntil = 0;
 let syncPolling: (() => void) | null = null;
 const observedQueryStatuses = new Map<number, Map<number, string>>();
 const notifiedRunIds = new Set<number>();
+const settlingGalleryIds = new Set<string>();
 
 export function resetSubscriptionsSettleForTests(): void {
   workspaceRefreshPromise = null;
@@ -29,6 +32,7 @@ export function resetSubscriptionsSettleForTests(): void {
   syncPolling = null;
   observedQueryStatuses.clear();
   notifiedRunIds.clear();
+  settlingGalleryIds.clear();
 }
 
 function isSuccessfulTerminal(status: string): boolean {
@@ -41,9 +45,13 @@ function completionSummary(posts: number, media: number): string {
   return parts.join(' · ');
 }
 
-async function observeQueryCompletions(progress: SubscriptionProgressEvent[]): Promise<void> {
-  await Promise.all(progress.flatMap((entry) => entry.run_id == null ? [] : [
-    subscriptionsController.getRunActivity(entry.run_id).then((activity) => {
+async function observeQueryCompletions(
+  progress: SubscriptionProgressEvent[],
+  ignoredSubscriptionIds = new Set<string>(),
+): Promise<void> {
+  await Promise.all(progress.flatMap((entry) => {
+    if (entry.run_id == null || ignoredSubscriptionIds.has(entry.subscription_id)) return [];
+    return [subscriptionsController.getRunActivity(entry.run_id).then((activity) => {
       const previous = observedQueryStatuses.get(entry.run_id!);
       const current = new Map(activity.queries.map((query) => [query.query_id, query.status]));
       observedQueryStatuses.set(entry.run_id!, current);
@@ -57,17 +65,21 @@ async function observeQueryCompletions(progress: SubscriptionProgressEvent[]): P
       }
     }).catch(() => {
       // A later progress poll retries this read.
-    }),
-  ]));
+    })];
+  }));
 }
 
 async function observeSubscriptionCompletions(
   previous: SubscriptionProgressEvent[],
   current: SubscriptionProgressEvent[],
+  ignoredSubscriptionIds = new Set<string>(),
 ): Promise<void> {
   const activeRunIds = new Set(current.flatMap((entry) => entry.run_id == null ? [] : [entry.run_id]));
   await Promise.all(previous.flatMap((entry) => {
-    if (entry.run_id == null || activeRunIds.has(entry.run_id) || notifiedRunIds.has(entry.run_id)) return [];
+    if (entry.run_id == null
+      || ignoredSubscriptionIds.has(entry.subscription_id)
+      || activeRunIds.has(entry.run_id)
+      || notifiedRunIds.has(entry.run_id)) return [];
     return [subscriptionsController.getRunActivity(entry.run_id).then((activity) => {
       observedQueryStatuses.delete(entry.run_id!);
       if (!isSuccessfulTerminal(activity.summary.status)) return;
@@ -81,6 +93,39 @@ async function observeSubscriptionCompletions(
       // Completion notifications must never affect persisted run settlement.
     })];
   }));
+}
+
+function settleFinishedGalleryImports(snapshot: SubscriptionWorkspaceSnapshot): void {
+  const runningIds = new Set(snapshot.runningSubscriptionIds);
+  for (const job of snapshot.subscriptions.filter(isGalleryImportJob)) {
+    if (runningIds.has(job.id) || settlingGalleryIds.has(job.id)) continue;
+    settlingGalleryIds.add(job.id);
+    void subscriptionsController.listRuns(job.id).then(async (runs) => {
+      const latest = runs[0];
+      if (latest?.status === 'succeeded') {
+        showSuccessNotification({
+          title: 'Gallery imported',
+          message: `${latest.media_added} media added`,
+        });
+      } else if (latest) {
+        showErrorNotification({
+          title: 'Gallery import failed',
+          message: latest.error_message ?? 'GalleryDL could not import this gallery.',
+        });
+      }
+      await subscriptionsController.delete(job.id);
+      store.set(subscriptionsWorkspaceSnapshotAtom, (current) => current ? {
+        ...current,
+        subscriptions: current.subscriptions.filter((subscription) => subscription.id !== job.id),
+        runningSubscriptionIds: current.runningSubscriptionIds.filter((id) => id !== job.id),
+        runningProgress: current.runningProgress.filter((entry) => entry.subscription_id !== job.id),
+      } : current);
+    }).catch((error) => {
+      console.error('gallery import cleanup failed', error);
+    }).finally(() => {
+      settlingGalleryIds.delete(job.id);
+    });
+  }
 }
 
 function trigger(callbacks: Set<() => void>) {
@@ -117,16 +162,21 @@ export function refreshSubscriptionsWorkspace(): Promise<void> {
       store.set(subscriptionsWorkspaceSnapshotAtom, snapshot);
       store.set(subscriptionsCoversAtom, covers);
       store.set(subscriptionsSelectionAtom, (current) => {
-        if (current?.kind === 'subscription' && snapshot.subscriptions.some((sub) => sub.id === current.id)) {
+        if (current?.kind === 'subscription' && snapshot.subscriptions.some(
+          (sub) => sub.id === current.id && !isGalleryImportJob(sub),
+        )) {
           return current;
         }
         return null;
       });
-      void observeQueryCompletions(snapshot.runningProgress);
+      const galleryIds = new Set(snapshot.subscriptions.filter(isGalleryImportJob).map((job) => job.id));
+      void observeQueryCompletions(snapshot.runningProgress, galleryIds);
       void observeSubscriptionCompletions(
         previousSnapshot?.runningProgress ?? [],
         snapshot.runningProgress,
+        galleryIds,
       );
+      settleFinishedGalleryImports(snapshot);
     } catch (error) {
       showErrorNotification({
         title: 'Subscriptions unavailable',
@@ -150,8 +200,10 @@ export function refreshSubscriptionsRuntimeState(): Promise<void> {
     .then((runtime) => {
       const previousProgress = snapshot?.runningProgress ?? [];
       store.set(subscriptionsWorkspaceSnapshotAtom, (current) => (current ? { ...current, ...runtime } : current));
-      void observeQueryCompletions(runtime.runningProgress);
-      void observeSubscriptionCompletions(previousProgress, runtime.runningProgress);
+      const galleryIds = new Set(snapshot?.subscriptions.filter(isGalleryImportJob).map((job) => job.id) ?? []);
+      void observeQueryCompletions(runtime.runningProgress, galleryIds);
+      void observeSubscriptionCompletions(previousProgress, runtime.runningProgress, galleryIds);
+      if (snapshot) settleFinishedGalleryImports({ ...snapshot, ...runtime });
     })
     .catch(() => {
       // A later invalidation or poll retries transient runtime failures.

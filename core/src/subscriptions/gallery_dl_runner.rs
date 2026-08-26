@@ -167,6 +167,12 @@ fn bridge_ranges_for_site(
     start: u32,
     limit: Option<u32>,
 ) -> (Option<String>, Option<String>) {
+    // A concrete E-Hentai gallery URL is one finite import unit. Applying the
+    // subscription item range here would silently truncate galleries above
+    // the normal per-run source limit.
+    if site_id == "ehentai" {
+        return (None, None);
+    }
     if site_id == "artstation" {
         return (None, None);
     }
@@ -810,6 +816,14 @@ mod tests {
             (None, Some("5-6".to_string()))
         );
         assert_eq!(bridge_ranges_for_site("webtoons", 1, None), (None, None));
+    }
+
+    #[test]
+    fn ehentai_downloads_the_complete_concrete_gallery() {
+        assert_eq!(
+            bridge_ranges_for_site("ehentai", 1, Some(100)),
+            (None, None)
+        );
     }
 
     #[test]
