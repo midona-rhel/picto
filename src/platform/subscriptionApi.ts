@@ -305,6 +305,14 @@ export function runSubscription(id: string): Promise<void> {
   return invoke<CreatedSubscriptionRun>('subscriptions.run', { subscription_id: Number(id) }).then(() => undefined);
 }
 
+export function startGalleryImport(url: string): Promise<void> {
+  return invoke<CreatedSubscriptionRun>('subscriptions.gallery.start', { url }).then(() => undefined);
+}
+
+export function cleanupGalleryImport(id: string): Promise<void> {
+  return invoke('subscriptions.gallery.cleanup', { subscription_id: Number(id) }).then(() => undefined);
+}
+
 export function stopSubscription(id: string): Promise<void> {
   return invoke<MutationReceipt>('subscriptions.cancel', { subscription_id: Number(id) }).then(() => undefined);
 }

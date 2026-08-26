@@ -229,25 +229,11 @@ export function SubscriptionsGrid({
                 : `${cards.length} subscription${cards.length === 1 ? '' : 's'}`}
           </span>
         </div>
-        <div className={styles.heroActions}>
-          <ActionButton variant="primary" onClick={onAdd}>
-            <IconPlus size={14} /> Add
-          </ActionButton>
-          <ActionButton variant="secondary" onClick={onAddGallery}>
-            <IconLibraryPlus size={14} /> Add Gallery
-          </ActionButton>
-          <ActionButton variant="ghost" onClick={onOpenAccounts}>
-            <IconShieldLock size={14} /> Accounts
-          </ActionButton>
-        </div>
-      </div>
-
-      {galleryJobs.length > 0 && (
-        <section className={styles.galleryJobs} aria-label="Gallery downloads">
-          <div className={styles.galleryJobsHeader}>
-            <span>Gallery downloads</span>
-            <span>{galleryJobs.length}</span>
-          </div>
+        <section
+          className={styles.galleryJobs}
+          data-active={galleryJobs.length > 0 || undefined}
+          aria-label="Gallery downloads"
+        >
           {galleryJobs.map((job) => {
             const progress = progressBySubscriptionId.get(job.id);
             return (
@@ -268,7 +254,18 @@ export function SubscriptionsGrid({
             );
           })}
         </section>
-      )}
+        <div className={styles.heroActions}>
+          <ActionButton variant="primary" onClick={onAdd}>
+            <IconPlus size={14} /> Add
+          </ActionButton>
+          <ActionButton variant="secondary" onClick={onAddGallery}>
+            <IconLibraryPlus size={14} /> Add Gallery
+          </ActionButton>
+          <ActionButton variant="ghost" onClick={onOpenAccounts}>
+            <IconShieldLock size={14} /> Accounts
+          </ActionButton>
+        </div>
+      </div>
 
       {cards.length === 0 ? (
         <div className={styles.sectionEmptyLine}>

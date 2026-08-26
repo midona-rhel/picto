@@ -1,6 +1,7 @@
 import { openExternalUrl } from '../platform/shellApi';
 import {
   addSubscriptionQuery,
+  cleanupGalleryImport,
   createSubscription,
   deleteCredential,
   deleteSubscription,
@@ -22,6 +23,7 @@ import {
   renameSubscription,
   resetSubscription,
   runSubscription,
+  startGalleryImport,
   setSubscriptionSchedule,
   setSubscriptionPostsPerRun,
   setSubscriptionDestination,
@@ -160,6 +162,14 @@ export const subscriptionsController = {
 
   run(id: string): Promise<void> {
     return runSubscription(id);
+  },
+
+  startGalleryImport(url: string): Promise<void> {
+    return startGalleryImport(url);
+  },
+
+  cleanupGalleryImport(id: string): Promise<void> {
+    return cleanupGalleryImport(id);
   },
 
   stop(id: string): Promise<void> {

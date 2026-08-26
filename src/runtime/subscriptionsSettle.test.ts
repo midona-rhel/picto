@@ -31,6 +31,7 @@ const refreshRuntimeState = vi.hoisted(() => vi.fn().mockResolvedValue({
 const getRunActivity = vi.hoisted(() => vi.fn());
 const listRuns = vi.hoisted(() => vi.fn());
 const deleteSubscription = vi.hoisted(() => vi.fn());
+const cleanupGalleryImport = vi.hoisted(() => vi.fn());
 const showErrorNotification = vi.hoisted(() => vi.fn());
 const showSuccessNotification = vi.hoisted(() => vi.fn());
 
@@ -41,6 +42,7 @@ vi.mock('../controllers/subscriptionsController', () => ({
     getRunActivity,
     listRuns,
     delete: deleteSubscription,
+    cleanupGalleryImport,
   },
 }));
 vi.mock('../shared/lib/notifications', () => ({ showErrorNotification, showSuccessNotification }));
@@ -67,6 +69,7 @@ describe('subscription settlement', () => {
     getRunActivity.mockReset();
     listRuns.mockReset();
     deleteSubscription.mockReset();
+    cleanupGalleryImport.mockReset();
     showErrorNotification.mockClear();
     showSuccessNotification.mockClear();
     resetSubscriptionsSettleForTests();
@@ -233,10 +236,10 @@ describe('subscription settlement', () => {
       media_added: 24,
       error_message: null,
     }]);
-    deleteSubscription.mockResolvedValue(undefined);
+    cleanupGalleryImport.mockResolvedValue(undefined);
 
     await refreshSubscriptionsRuntimeState();
-    await vi.waitFor(() => expect(deleteSubscription).toHaveBeenCalledWith('9'));
+    await vi.waitFor(() => expect(cleanupGalleryImport).toHaveBeenCalledWith('9'));
 
     expect(showSuccessNotification).toHaveBeenCalledWith({
       title: 'Gallery imported',

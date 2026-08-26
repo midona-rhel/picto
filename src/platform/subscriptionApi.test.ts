@@ -17,6 +17,8 @@ import {
   listSubscriptionRuns,
   pauseSubscriptionQuery,
   runSubscription,
+  startGalleryImport,
+  cleanupGalleryImport,
   setSubscriptionDestination,
   setSubscriptionCover,
   setSubscriptionPostsPerRun,
@@ -91,6 +93,18 @@ describe('replacement subscription API', () => {
       ['subscriptions.run', { subscription_id: 7 }],
       ['subscriptions.cancel', { subscription_id: 7 }],
       ['subscriptions.queries.pause', { query_id: 9, paused: true }],
+    ]);
+  });
+
+  it('starts and cleans up transient gallery imports through dedicated commands', async () => {
+    invoke.mockResolvedValue({ revision: 5, resources: ['subscriptions'], item_ids: [] });
+
+    await startGalleryImport('https://e-hentai.org/g/2771523/3fc69c861a/');
+    await cleanupGalleryImport('7');
+
+    expect(invoke.mock.calls).toEqual([
+      ['subscriptions.gallery.start', { url: 'https://e-hentai.org/g/2771523/3fc69c861a/' }],
+      ['subscriptions.gallery.cleanup', { subscription_id: 7 }],
     ]);
   });
 

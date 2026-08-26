@@ -113,7 +113,7 @@ function settleFinishedGalleryImports(snapshot: SubscriptionWorkspaceSnapshot): 
           message: latest.error_message ?? 'GalleryDL could not import this gallery.',
         });
       }
-      await subscriptionsController.delete(job.id);
+      await subscriptionsController.cleanupGalleryImport(job.id);
       store.set(subscriptionsWorkspaceSnapshotAtom, (current) => current ? {
         ...current,
         subscriptions: current.subscriptions.filter((subscription) => subscription.id !== job.id),

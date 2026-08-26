@@ -23,6 +23,7 @@ use crate::subscription_catalog_v2::{
     NewSubscription, NewSubscriptionQuery, SubscriptionCoverCandidateCursor,
     SubscriptionCoverSelection, SubscriptionDestinationPolicy,
 };
+use crate::subscriptions::gallery_dl_runner::normalize_ehentai_gallery_url;
 
 pub fn dispatch(
     application: &Application,
@@ -466,6 +467,46 @@ pub fn dispatch(
                 },
             )
         }
+        "subscriptions.gallery.start" => {
+            let input: GalleryImportInput = parse(args_json)?;
+            let url = normalize_ehentai_gallery_url(&input.url)?;
+            let gallery_id = url
+                .split('/')
+                .nth(4)
+                .ok_or_else(|| "E-Hentai gallery URL has no gallery ID".to_string())?;
+            let definition = NewSubscription {
+                name: format!("E-Hentai Gallery {gallery_id}"),
+                schedule: "manual".to_string(),
+                initial_post_limit: None,
+                periodic_post_limit: None,
+                queries: vec![NewSubscriptionQuery {
+                    site_id: "ehentai".to_string(),
+                    query_text: url,
+                    display_name: Some("Gallery import".to_string()),
+                    notes: None,
+                    group_posts: true,
+                }],
+            };
+            let timestamp = now();
+            let (subscription_id, _) =
+                application.create_subscription_definition(&definition, &timestamp)?;
+            let (run, receipt) =
+                match application.request_subscription_run(subscription_id, &timestamp) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let _ = application.delete_subscription(subscription_id);
+                        return Err(error);
+                    }
+                };
+            publish(
+                application,
+                CreatedSubscriptionRun {
+                    run_id: run.run_id,
+                    created: run.created,
+                    receipt,
+                },
+            )
+        }
         "subscriptions.queries.add" => {
             let input: AddSubscriptionQueryInput = parse(args_json)?;
             let (query_id, receipt) =
@@ -554,6 +595,27 @@ pub fn dispatch(
                 application,
                 application.delete_subscription(input.subscription_id)?,
             )
+        }
+        "subscriptions.gallery.cleanup" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            let catalog = crate::subscription_catalog_v2::list(application)?;
+            let Some(subscription) = catalog
+                .subscriptions
+                .iter()
+                .find(|entry| entry.subscription_id == input.subscription_id)
+            else {
+                return read(false);
+            };
+            if subscription.queries.len() != 1 || subscription.queries[0].site_id != "ehentai" {
+                return Err(
+                    "Only transient E-Hentai gallery jobs can use gallery cleanup".to_string(),
+                );
+            }
+            match application.delete_subscription(input.subscription_id) {
+                Ok(receipt) => publish(application, receipt),
+                Err(error) if error.contains("subscription does not exist") => read(false),
+                Err(error) => Err(error),
+            }
         }
         "subscriptions.run" => {
             let input: SubscriptionInput = parse(args_json)?;
@@ -1127,6 +1189,11 @@ pub struct AddSubscriptionQueryInput {
     #[ts(type = "number")]
     subscription_id: i64,
     query: NewSubscriptionQuery,
+}
+#[derive(Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct GalleryImportInput {
+    url: String,
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]

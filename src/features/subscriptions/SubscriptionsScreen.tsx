@@ -161,23 +161,11 @@ export function SubscriptionsScreen() {
   }, [act, navigateTo, setWizard]);
 
   const addGallery = useCallback(async (result: AddGalleryInput) => {
-    const galleryId = result.url.match(/\/g\/(\d+)\//)?.[1];
-    let createdId: string | null = null;
     const succeeded = await act('gallery', async () => {
-      const subscription = await subscriptionsController.create({
-        name: galleryId ? `E-Hentai Gallery ${galleryId}` : 'E-Hentai Gallery',
-      });
-      createdId = subscription.id;
-      try {
-        await subscriptionsController.addQuery(subscription.id, result.serviceId, result.url);
-      } catch (error) {
-        await subscriptionsController.delete(subscription.id).catch(() => undefined);
-        throw error;
-      }
       markSubscriptionRunTriggered();
-      await subscriptionsController.run(subscription.id);
+      await subscriptionsController.startGalleryImport(result.url);
     });
-    if (succeeded || createdId != null) setGalleryDialogOpen(false);
+    if (succeeded) setGalleryDialogOpen(false);
   }, [act]);
 
   const busy = busyKey != null;
