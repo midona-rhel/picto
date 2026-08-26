@@ -39,6 +39,7 @@ import { ProgressBar } from '../../shared/ui/ProgressBar';
 import { PropertyRow } from '../../shared/ui/PropertyRow/PropertyRow';
 import {
   TitlebarControlButton,
+  TitlebarControlGroup,
   TitlebarControls,
   TitlebarCounter,
   TitlebarZoomSlider,
@@ -85,6 +86,7 @@ export function DuplicatesToolbar() {
   return (
     <TitlebarControls
       label="Duplicate review controls"
+      left={<TitlebarCounter current={model.index + 1} total={model.total} />}
       center={(
         <TitlebarZoomSlider
           min={10}
@@ -97,15 +99,9 @@ export function DuplicatesToolbar() {
       )}
       right={(
         <>
-          <KbdTooltip label="Previous pair" shortcutId="dup.prevPair">
-            <TitlebarControlButton onClick={model.previous} disabled={!model.canPrevious || model.disabled} aria-label="Previous pair">
-              <ToolbarChevronIcon direction="left" />
-            </TitlebarControlButton>
-          </KbdTooltip>
-          <TitlebarCounter current={model.index + 1} total={model.total} />
-          <KbdTooltip label="Next pair" shortcutId="dup.nextPair">
-            <TitlebarControlButton onClick={model.next} disabled={!model.canNext || model.disabled} aria-label="Next pair">
-              <ToolbarChevronIcon direction="right" />
+          <KbdTooltip label="Zoom to fit" shortcutId="view.fitWindow">
+            <TitlebarControlButton active={model.isFit} onClick={model.fit} aria-label="Zoom to fit" aria-pressed={model.isFit}>
+              <ToolbarFitIcon />
             </TitlebarControlButton>
           </KbdTooltip>
           <KbdTooltip label="Actual pixels" shortcutId="view.actualSize">
@@ -113,11 +109,18 @@ export function DuplicatesToolbar() {
               <ToolbarActualSizeIcon />
             </TitlebarControlButton>
           </KbdTooltip>
-          <KbdTooltip label="Zoom to fit" shortcutId="view.fitWindow">
-            <TitlebarControlButton active={model.isFit} onClick={model.fit} aria-label="Zoom to fit" aria-pressed={model.isFit}>
-              <ToolbarFitIcon />
-            </TitlebarControlButton>
-          </KbdTooltip>
+          <TitlebarControlGroup>
+            <KbdTooltip label="Previous pair" shortcutId="dup.prevPair">
+              <TitlebarControlButton onClick={model.previous} disabled={!model.canPrevious || model.disabled} aria-label="Previous pair">
+                <ToolbarChevronIcon direction="left" />
+              </TitlebarControlButton>
+            </KbdTooltip>
+            <KbdTooltip label="Next pair" shortcutId="dup.nextPair">
+              <TitlebarControlButton onClick={model.next} disabled={!model.canNext || model.disabled} aria-label="Next pair">
+                <ToolbarChevronIcon direction="right" />
+              </TitlebarControlButton>
+            </KbdTooltip>
+          </TitlebarControlGroup>
         </>
       )}
     />

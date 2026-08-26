@@ -492,6 +492,22 @@ describe('DuplicatesScreen', () => {
     expect(difference.closest('footer')).not.toBeNull();
   });
 
+  it('uses the Detail View toolbar order and grouped media navigation', async () => {
+    await renderScreen();
+    await screen.findByText('Left image');
+
+    const toolbar = screen.getByLabelText('Duplicate review controls');
+    const fit = screen.getByRole('button', { name: 'Zoom to fit' });
+    const actual = screen.getByRole('button', { name: 'Actual pixels' });
+    const previous = screen.getByRole('button', { name: 'Previous pair' });
+    const next = screen.getByRole('button', { name: 'Next pair' });
+
+    expect(fit.compareDocumentPosition(actual) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(actual.compareDocumentPosition(previous) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(previous.parentElement).toBe(next.parentElement);
+    expect(toolbar.textContent).toContain('1 / 1');
+  });
+
   it('switches the linked pair between actual pixels and zoom to fit', async () => {
     const user = setupUser();
     await renderScreen();

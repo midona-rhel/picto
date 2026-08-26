@@ -78,4 +78,19 @@ describe('InboxReviewControls', () => {
     expect(onAdvance).not.toHaveBeenCalled();
     expect(document.querySelector('[data-inbox-review-controls]')).toHaveAttribute('data-review-decision', 'idle');
   });
+
+  it('retargets the persistent controls without replaying their mount transition', () => {
+    const onCommit = vi.fn(() => new Promise<void>(() => {}));
+    const onAdvance = vi.fn();
+    const { rerender } = render(
+      <InboxReviewControls itemId={42} onCommit={onCommit} onAdvance={onAdvance} />,
+    );
+    const controls = document.querySelector('[data-inbox-review-controls]');
+
+    rerender(<InboxReviewControls itemId={43} onCommit={onCommit} onAdvance={onAdvance} />);
+
+    expect(document.querySelector('[data-inbox-review-controls]')).toBe(controls);
+    fireEvent.click(screen.getByRole('button', { name: 'Accept item' }));
+    expect(onCommit).toHaveBeenCalledWith(43, 'accept');
+  });
 });

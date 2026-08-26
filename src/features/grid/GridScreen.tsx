@@ -1540,7 +1540,6 @@ export function GridScreen({
 
       {inboxReviewItemId != null && (viewerSession || quickLookSession) ? (
         <InboxReviewControls
-          key={inboxReviewItemId}
           itemId={inboxReviewItemId}
           onCommit={commitInboxReview}
           onAdvance={advanceAfterInboxReview}
