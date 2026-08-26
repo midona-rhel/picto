@@ -43,7 +43,7 @@
   border-radius: 4px;
   background: color-mix(in srgb, var(--subscription-status-color) 10%, transparent);
   color: color-mix(in srgb, var(--subscription-status-color) 45%, var(--color-text-primary));
-  font-family: var(--font-family-ui);
+  font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-regular);
   letter-spacing: 0.04em;
