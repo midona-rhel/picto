@@ -2,9 +2,10 @@ name: Alpha Gate
 
 on:
   pull_request:
+    branches:
+      - "release/**"
   push:
     branches:
-      - main
       - "release/**"
     tags:
       - "v*alpha*"
