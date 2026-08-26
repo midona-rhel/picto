@@ -101,10 +101,32 @@ impl Application {
                                     media_item_id,
                                     root_item_id,
                                 } => {
+                                    let mut delta = StructureProjectionDelta::default();
+                                    let tag_ids = insert_tags(
+                                        transaction,
+                                        media_item_id,
+                                        &input.tags,
+                                        input.provenance_mask,
+                                        true,
+                                    )?;
+                                    delta.tags.extend(tag_ids.into_iter().map(|tag_id| {
+                                        TagProjectionChange {
+                                            media_id: media_item_id,
+                                            tag_id,
+                                            present: true,
+                                        }
+                                    }));
+                                    let metadata_changed = merge_reused_metadata(
+                                        transaction,
+                                        media_item_id,
+                                        input,
+                                        &now,
+                                    )?;
+                                    let changed = metadata_changed || !delta.tags.is_empty();
                                     return Ok((
                                         (media_item_id, root_item_id, true, false),
-                                        StructureProjectionDelta::default(),
-                                        false,
+                                        delta,
+                                        changed,
                                     ));
                                 }
                                 ExistingSourceItem::Deleted => {
@@ -138,7 +160,9 @@ impl Application {
                             root_item_id,
                             &mut delta,
                         )?;
-                        let changed = folder_changed || !delta.tags.is_empty();
+                        let metadata_changed =
+                            merge_reused_metadata(transaction, media_item_id, input, &now)?;
+                        let changed = folder_changed || metadata_changed || !delta.tags.is_empty();
                         return Ok(((media_item_id, root_item_id, true, false), delta, changed));
                     }
 
@@ -367,6 +391,70 @@ fn existing_manual_item(
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()
+}
+
+fn merge_reused_metadata(
+    transaction: &Transaction<'_>,
+    media_item_id: i64,
+    input: &PreparedMediaInput,
+    now: &str,
+) -> rusqlite::Result<bool> {
+    let (existing_notes, existing_sources): (Option<String>, Option<String>) = transaction
+        .query_row(
+            "SELECT notes, source_urls_json FROM media_asset WHERE item_id = ?1",
+            [media_item_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+
+    let merged_notes = input
+        .notes
+        .as_deref()
+        .map(str::trim)
+        .filter(|notes| !notes.is_empty())
+        .and_then(|incoming| {
+            let current = existing_notes.as_deref().unwrap_or_default().trim();
+            if current.split("\n\n").any(|part| part.trim() == incoming) {
+                None
+            } else if current.is_empty() {
+                Some(incoming.to_string())
+            } else {
+                Some(format!("{current}\n\n{incoming}"))
+            }
+        });
+
+    let mut sources: Vec<String> = existing_sources
+        .as_deref()
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_default();
+    let original_source_count = sources.len();
+    for source in &input.source_urls {
+        let source = source.trim();
+        if !source.is_empty() && !sources.iter().any(|existing| existing == source) {
+            sources.push(source.to_string());
+        }
+    }
+    let sources_changed = sources.len() != original_source_count;
+    let merged_sources = if sources_changed {
+        Some(
+            serde_json::to_string(&sources)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
+        )
+    } else {
+        None
+    };
+
+    if merged_notes.is_none() && merged_sources.is_none() {
+        return Ok(false);
+    }
+    transaction.execute(
+        "UPDATE media_asset
+         SET notes = COALESCE(?1, notes),
+             source_urls_json = COALESCE(?2, source_urls_json),
+             updated_at = ?3
+         WHERE item_id = ?4",
+        params![merged_notes, merged_sources, now, media_item_id],
+    )?;
+    Ok(true)
 }
 
 fn attach_target_folder(
@@ -1176,18 +1264,66 @@ mod tests {
     fn repeated_source_item_is_idempotent_and_deleted_source_does_not_resurrect() {
         let directory = tempfile::tempdir().unwrap();
         let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
-        let input = input("hash", "post", "item", 0);
-        let first = app.ingest_prepared(&input).unwrap();
-        let repeated = app.ingest_prepared(&input).unwrap();
+        let mut original = input("hash", "post", "item", 0);
+        original.name = Some("Accepted name".to_string());
+        original.notes = Some("Original note".to_string());
+        original.rating = Some(4);
+        original.source_urls = vec!["https://example.test/first".to_string()];
+        let first = app.ingest_prepared(&original).unwrap();
+
+        let mut update = original.clone();
+        update.name = Some("Incoming generated name".to_string());
+        update.notes = Some("Additional note".to_string());
+        update.rating = Some(1);
+        update.source_urls = vec![
+            "https://example.test/first".to_string(),
+            "https://example.test/second".to_string(),
+        ];
+        update.tags.push("creator:leonardo".to_string());
+        let repeated = app.ingest_prepared(&update).unwrap();
         assert!(repeated.reused_existing_item);
-        assert!(repeated.receipt.is_none());
+        assert!(repeated.receipt.is_some());
         assert_eq!(first.media_item_id, repeated.media_item_id);
+
+        let repeated_again = app.ingest_prepared(&update).unwrap();
+        assert!(repeated_again.receipt.is_none());
+        app.store()
+            .read(|connection| {
+                let (name, notes, rating, sources): (String, String, i64, String) = connection
+                    .query_row(
+                        "SELECT name, notes, rating, source_urls_json
+                         FROM media_asset WHERE item_id = ?1",
+                        [first.media_item_id.0],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )?;
+                assert_eq!(name, "Accepted name");
+                assert_eq!(notes, "Original note\n\nAdditional note");
+                assert_eq!(rating, 4);
+                assert_eq!(
+                    serde_json::from_str::<Vec<String>>(&sources).unwrap(),
+                    vec![
+                        "https://example.test/first".to_string(),
+                        "https://example.test/second".to_string()
+                    ]
+                );
+                let creator_tags: i64 = connection.query_row(
+                    "SELECT COUNT(*)
+                     FROM media_tag mt JOIN tag t ON t.tag_id = mt.tag_id
+                     WHERE mt.media_item_id = ?1
+                       AND t.namespace = 'creator' AND t.subtag = 'leonardo'",
+                    [first.media_item_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(creator_tags, 1);
+                Ok(())
+            })
+            .unwrap();
 
         app.delete_items(&ItemTarget::Explicit {
             item_ids: vec![first.root_item_id],
         })
         .unwrap();
-        let error = app.ingest_prepared(&input).unwrap_err();
+        let error = app.ingest_prepared(&original).unwrap_err();
         assert!(error.contains("cannot be resurrected"));
     }
 
