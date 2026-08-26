@@ -332,6 +332,12 @@ function StackedPreview({
 
   if (displayed.length === 0) return null;
   const topHash = previews[previews.length - 1];
+  const activeLayer = new Map(
+    displayed
+      .filter((entry) => !entry.exiting)
+      .sort((left, right) => left.z - right.z)
+      .map((entry, index) => [entry.hash, index + 1]),
+  );
   return (
     <div className={styles.preview}>
       <div className={styles.stackContainer}>
@@ -350,7 +356,7 @@ function StackedPreview({
               data-inspector-preview-hash={entry.hash}
               data-inspector-stack-position={entry.exiting ? 'exiting' : top ? 'top' : 'behind'}
               style={{
-              zIndex: entry.z,
+              zIndex: entry.exiting ? 0 : activeLayer.get(entry.hash),
               opacity: entry.exiting ? 0 : entry.opacity,
               }}
             >
