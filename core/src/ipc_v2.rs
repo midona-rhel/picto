@@ -467,46 +467,6 @@ pub fn dispatch(
                 },
             )
         }
-        "subscriptions.gallery.start" => {
-            let input: GalleryImportInput = parse(args_json)?;
-            let url = normalize_ehentai_gallery_url(&input.url)?;
-            let gallery_id = url
-                .split('/')
-                .nth(4)
-                .ok_or_else(|| "E-Hentai gallery URL has no gallery ID".to_string())?;
-            let definition = NewSubscription {
-                name: format!("E-Hentai Gallery {gallery_id}"),
-                schedule: "manual".to_string(),
-                initial_post_limit: None,
-                periodic_post_limit: None,
-                queries: vec![NewSubscriptionQuery {
-                    site_id: "ehentai".to_string(),
-                    query_text: url,
-                    display_name: Some("Gallery import".to_string()),
-                    notes: None,
-                    group_posts: true,
-                }],
-            };
-            let timestamp = now();
-            let (subscription_id, _) =
-                application.create_subscription_definition(&definition, &timestamp)?;
-            let (run, receipt) =
-                match application.request_subscription_run(subscription_id, &timestamp) {
-                    Ok(result) => result,
-                    Err(error) => {
-                        let _ = application.delete_subscription(subscription_id);
-                        return Err(error);
-                    }
-                };
-            publish(
-                application,
-                CreatedSubscriptionRun {
-                    run_id: run.run_id,
-                    created: run.created,
-                    receipt,
-                },
-            )
-        }
         "subscriptions.queries.add" => {
             let input: AddSubscriptionQueryInput = parse(args_json)?;
             let (query_id, receipt) =
@@ -596,27 +556,6 @@ pub fn dispatch(
                 application.delete_subscription(input.subscription_id)?,
             )
         }
-        "subscriptions.gallery.cleanup" => {
-            let input: SubscriptionInput = parse(args_json)?;
-            let catalog = crate::subscription_catalog_v2::list(application)?;
-            let Some(subscription) = catalog
-                .subscriptions
-                .iter()
-                .find(|entry| entry.subscription_id == input.subscription_id)
-            else {
-                return read(false);
-            };
-            if subscription.queries.len() != 1 || subscription.queries[0].site_id != "ehentai" {
-                return Err(
-                    "Only transient E-Hentai gallery jobs can use gallery cleanup".to_string(),
-                );
-            }
-            match application.delete_subscription(input.subscription_id) {
-                Ok(receipt) => publish(application, receipt),
-                Err(error) if error.contains("subscription does not exist") => read(false),
-                Err(error) => Err(error),
-            }
-        }
         "subscriptions.run" => {
             let input: SubscriptionInput = parse(args_json)?;
             let (run, receipt) =
@@ -684,6 +623,82 @@ pub async fn dispatch_async(
         return read(crate::diagnostics_v2::snapshot(application)?);
     }
     match command {
+        "subscriptions.gallery.start" => {
+            let input: GalleryImportInput = parse(args_json)?;
+            let url = normalize_ehentai_gallery_url(&input.url)?;
+            let gallery_id = url
+                .split('/')
+                .nth(4)
+                .ok_or_else(|| "E-Hentai gallery URL has no gallery ID".to_string())?;
+            let definition = NewSubscription {
+                name: format!("E-Hentai Gallery {gallery_id}"),
+                schedule: "manual".to_string(),
+                initial_post_limit: None,
+                periodic_post_limit: None,
+                queries: vec![NewSubscriptionQuery {
+                    site_id: "ehentai".to_string(),
+                    query_text: url,
+                    display_name: Some("Gallery import".to_string()),
+                    notes: None,
+                    group_posts: true,
+                }],
+            };
+            let timestamp = now();
+            let (subscription_id, _) =
+                application.create_subscription_definition(&definition, &timestamp)?;
+            if let Err(error) =
+                crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
+                    application.store().library_root(),
+                    subscription_id,
+                )
+                .await
+            {
+                let _ = application.delete_subscription(subscription_id);
+                return Err(error);
+            }
+            let (run, receipt) =
+                match application.request_subscription_run(subscription_id, &timestamp) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        let _ = application.delete_subscription(subscription_id);
+                        return Err(error);
+                    }
+                };
+            return publish(
+                application,
+                CreatedSubscriptionRun {
+                    run_id: run.run_id,
+                    created: run.created,
+                    receipt,
+                },
+            );
+        }
+        "subscriptions.gallery.cleanup" => {
+            let input: SubscriptionInput = parse(args_json)?;
+            let catalog = crate::subscription_catalog_v2::list(application)?;
+            let Some(subscription) = catalog
+                .subscriptions
+                .iter()
+                .find(|entry| entry.subscription_id == input.subscription_id)
+            else {
+                return read(false);
+            };
+            if subscription.queries.len() != 1 || subscription.queries[0].site_id != "ehentai" {
+                return Err(
+                    "Only transient E-Hentai gallery jobs can use gallery cleanup".to_string(),
+                );
+            }
+            crate::subscriptions::archive::clear_subscription_archive_entries_at_root(
+                application.store().library_root(),
+                input.subscription_id,
+            )
+            .await?;
+            return match application.delete_subscription(input.subscription_id) {
+                Ok(receipt) => publish(application, receipt),
+                Err(error) if error.contains("subscription does not exist") => read(false),
+                Err(error) => Err(error),
+            };
+        }
         "cloud.libraries.discover" => {
             let input: CloudRootInput = parse(args_json)?;
             return read(crate::cloud::discover_libraries(&input.root_path).await?);

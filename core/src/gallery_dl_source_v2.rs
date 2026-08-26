@@ -178,7 +178,13 @@ impl GalleryDlSourceRunner {
                     })?;
             }
         }
-        let result = settle_summary(summary, downloaded, ignored_non_media, &batch);
+        let result = settle_summary(
+            summary,
+            downloaded,
+            ignored_non_media,
+            &batch,
+            query.site_id == "ehentai",
+        );
         if let Some(mut item) = pending_item {
             set_post_complete(&mut item, result.is_ok());
             send_download(&output, item).await?;
@@ -619,6 +625,7 @@ fn settle_summary(
     downloaded: usize,
     ignored_non_media: usize,
     batch: &BatchPosition,
+    require_media: bool,
 ) -> Result<RunnerSuccess, RunnerFailure> {
     if summary.had_download_errors || !summary.failed_items.is_empty() {
         return Err(RunnerFailure::retryable(
@@ -657,6 +664,12 @@ fn settle_summary(
                         .skipped_archive_items
                         .saturating_add(ignored_non_media)
             ),
+        ));
+    }
+    if require_media && downloaded == 0 && summary.discovered_items == 0 {
+        return Err(RunnerFailure::terminal(
+            RunnerFailureKind::InvalidOutput,
+            "The gallery completed without discovering any media".to_string(),
         ));
     }
     Ok(RunnerSuccess {
@@ -881,18 +894,24 @@ mod tests {
         };
         let up_to_date = summary(0, 10, 10);
         assert_eq!(
-            settle_summary(up_to_date, 0, 0, &complete)
+            settle_summary(up_to_date, 0, 0, &complete, false)
                 .unwrap()
                 .resume_cursor,
             Some(String::new())
         );
 
-        let broken = settle_summary(summary(0, 10, 0), 0, 0, &complete).unwrap_err();
+        let broken = settle_summary(summary(0, 10, 0), 0, 0, &complete, false).unwrap_err();
         assert_eq!(broken.kind, RunnerFailureKind::InvalidOutput);
         assert!(!broken.retryable);
 
-        let attachments_only = settle_summary(summary(0, 1, 0), 0, 1, &complete).unwrap();
+        let attachments_only = settle_summary(summary(0, 1, 0), 0, 1, &complete, false).unwrap();
         assert_eq!(attachments_only.resume_cursor, Some(String::new()));
+
+        let empty_gallery = settle_summary(summary(0, 0, 0), 0, 0, &complete, true).unwrap_err();
+        assert_eq!(empty_gallery.kind, RunnerFailureKind::InvalidOutput);
+        assert!(empty_gallery
+            .message
+            .contains("without discovering any media"));
     }
 
     #[test]
@@ -984,7 +1003,9 @@ mod tests {
         result.source_page_items = 5;
 
         assert_eq!(
-            settle_summary(result, 0, 0, &batch).unwrap().resume_cursor,
+            settle_summary(result, 0, 0, &batch, false)
+                .unwrap()
+                .resume_cursor,
             Some("range:6".into())
         );
     }
