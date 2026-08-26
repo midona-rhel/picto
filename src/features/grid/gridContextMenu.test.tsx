@@ -266,6 +266,33 @@ describe('buildTileContextMenu', () => {
     expect(onMoveToTrash).toHaveBeenCalledOnce();
   });
 
+  it('accepts or rejects an Inbox multi-selection from the context menu', () => {
+    const onAccept = vi.fn();
+    const onReject = vi.fn();
+    const entries = buildTileContextMenu({
+      selectionCount: 3,
+      querySelectionActive: false,
+      singleSelected: false,
+      singleHash: null,
+      scopeKind: 'system',
+      statusFilter: 'inbox',
+      loadedCount: 3,
+      onSelectAll: vi.fn(),
+      onDeselectAll: vi.fn(),
+      onAccept,
+      onReject,
+    });
+    const actions = new Map(entries.flatMap((entry) => (
+      'label' in entry && 'action' in entry ? [[entry.label, entry.action] as const] : []
+    )));
+
+    actions.get('Accept 3 Items')?.();
+    actions.get('Reject 3 Items')?.();
+
+    expect(onAccept).toHaveBeenCalledOnce();
+    expect(onReject).toHaveBeenCalledOnce();
+  });
+
   it('separates original export from converted export under one menu', () => {
     const onExport = vi.fn();
     const onExportOriginals = vi.fn();

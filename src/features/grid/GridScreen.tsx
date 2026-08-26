@@ -538,6 +538,8 @@ export function GridScreen({
       grayscale:       getShortcut('view.grayscale')!,
       pasteImport:     getShortcut('edit.pasteImport')!,
       copy:           getShortcut('edit.copy')!,
+      accept:         getShortcut('inbox.accept')!,
+      reject:         getShortcut('inbox.reject')!,
     };
 
       // Don't handle grid shortcuts while a viewer is open — the viewer handles its own keys.
@@ -586,6 +588,17 @@ export function GridScreen({
             title: 'Could not copy selection',
             message: reason instanceof Error ? reason.message : String(reason),
           }));
+        return;
+      }
+
+      if (scope.kind === 'inbox' && count > 0 && matchesShortcutDef(e, defs.accept)) {
+        e.preventDefault();
+        void setSelectionLifecycle('active');
+        return;
+      }
+      if (scope.kind === 'inbox' && count > 0 && matchesShortcutDef(e, defs.reject)) {
+        e.preventDefault();
+        void setSelectionLifecycle('trash');
         return;
       }
 
@@ -1277,8 +1290,12 @@ export function GridScreen({
           const scopeKind = gridScope.kind === 'folder' ? 'folder'
             : gridScope.kind === 'smart_folder' ? 'smart_folder'
             : 'system';
-          const statusFilter = gridScope.kind === 'inbox' ? 'inbox'
-            : gridScope.kind === 'trash' ? 'trash'
+          const selectionLifecycle = selectedItems.length > 0
+            && selectedItems.every((selected) => selected.lifecycle === selectedItems[0]?.lifecycle)
+            ? selectedItems[0]?.lifecycle ?? null
+            : null;
+          const statusFilter = selectionLifecycle === 'inbox' || gridScope.kind === 'inbox' ? 'inbox'
+            : selectionLifecycle === 'trash' || gridScope.kind === 'trash' ? 'trash'
             : gridScope.kind === 'all' ? 'active'
             : null;
           const lastUsedFolder = readRecentItems('picto-recent-folders')
