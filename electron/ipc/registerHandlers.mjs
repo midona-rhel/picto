@@ -27,7 +27,7 @@ function createReverseSearchConfigs() {
       url: 'https://images.google.com/',
       preSetup: `(async () => {
         ${waitForHelper}
-        const btn = await __waitFor('button[aria-label="Search by image"]');
+        const btn = await __waitFor('[jsname="R5mgy"][role="button"], [data-is-images-mode="true"][role="button"], [aria-label="Search by image"]');
         btn.click();
         await __waitFor('input[type="file"][name="encoded_image"]', 8000);
       })()`,
