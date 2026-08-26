@@ -327,7 +327,7 @@ describe('Inspector presentation branches', () => {
     vi.useRealTimers();
   });
 
-  it('stacks at most the five most recently selected previews with the newest on top', async () => {
+  it('stacks six recent previews from 30% to full opacity with the newest on top', async () => {
     vi.mocked(entityMutations.getTargetSelectionSummary).mockResolvedValue({
       total_count: 6,
       selected_count: 6,
@@ -356,9 +356,11 @@ describe('Inspector presentation branches', () => {
     await screen.findByText('6 items selected');
     const previews = [...document.querySelectorAll('[data-inspector-preview-hash]')];
     expect(previews.map((node) => node.getAttribute('data-inspector-preview-hash')))
-      .toEqual(['file-2', 'file-3', 'file-4', 'file-5', 'file-6']);
+      .toEqual(['file-1', 'file-2', 'file-3', 'file-4', 'file-5', 'file-6']);
     expect(previews.map((node) => node.getAttribute('data-inspector-stack-position')))
-      .toEqual(['behind', 'behind', 'behind', 'behind', 'top']);
+      .toEqual(['behind', 'behind', 'behind', 'behind', 'behind', 'top']);
+    expect((previews[0] as HTMLElement).style.opacity).toBe('0.3');
+    expect((previews[5] as HTMLElement).style.opacity).toBe('1');
     view.unmount();
   });
 

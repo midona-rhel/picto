@@ -482,7 +482,7 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
             ItemTarget::Explicit { item_ids } => item_ids
                 .iter()
                 .rev()
-                .take(5)
+                .take(6)
                 .rev()
                 .map(|item_id| item_id.0)
                 .collect(),
@@ -497,7 +497,7 @@ pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<Selection
                          LEFT JOIN media_asset ma ON ma.item_id = sm.media_item_id
                          GROUP BY sr.item_id
                          ORDER BY imported_at DESC, sr.item_id DESC
-                         LIMIT 5
+                         LIMIT 6
                      ) recent
                      ORDER BY recent.imported_at ASC, recent.item_id ASC",
                     selection.with_clause

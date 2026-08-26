@@ -256,7 +256,7 @@ function StackedPreview({
   backgrounds: readonly (string | null)[];
   fontHashes: ReadonlySet<string>;
 }) {
-  const previews = hashes.slice(-5);
+  const previews = hashes.slice(-6);
   const previewOffset = hashes.length - previews.length;
   type StackPose = 'base' | 'left' | 'right';
   type StackEntry = {
@@ -265,6 +265,7 @@ function StackedPreview({
     font: boolean;
     pose: StackPose;
     z: number;
+    opacity: number;
     entering: boolean;
     exiting: boolean;
   };
@@ -284,6 +285,7 @@ function StackedPreview({
       font: fontHashes.has(hash),
       pose,
       z: nextZ.current++,
+      opacity: previews.length <= 1 ? 1 : 0.3 + (index / (previews.length - 1)) * 0.7,
       entering,
       exiting: false,
     };
@@ -300,20 +302,21 @@ function StackedPreview({
     setDisplayed((current) => {
       const byHash = new Map(current.map((entry) => [entry.hash, entry]));
       const next = previews.map((hash, index) => {
+        const opacity = previews.length <= 1 ? 1 : 0.3 + (index / (previews.length - 1)) * 0.7;
         const existing = byHash.get(hash);
         if (!existing) return makeEntry(hash, index, true);
         return {
           ...existing,
           background: backgrounds[previewOffset + index] ?? null,
           font: fontHashes.has(hash),
+          opacity,
           entering: false,
           exiting: false,
         };
       });
-      const availableExitSlots = Math.max(0, 5 - next.length);
       const exiting = current
         .filter((entry) => !previews.includes(entry.hash) && !entry.exiting)
-        .slice(-availableExitSlots)
+        .slice(-1)
         .map((entry) => ({ ...entry, entering: false, exiting: true }));
       return [...next, ...exiting];
     });
@@ -347,7 +350,8 @@ function StackedPreview({
               data-inspector-preview-hash={entry.hash}
               data-inspector-stack-position={entry.exiting ? 'exiting' : top ? 'top' : 'behind'}
               style={{
-              zIndex: entry.z, filter: top ? undefined : 'brightness(0.7)',
+              zIndex: entry.z,
+              opacity: entry.exiting ? 0 : entry.opacity,
               }}
             >
               <div className={styles.previewFrame} style={{ background: entry.background ?? undefined }}>
