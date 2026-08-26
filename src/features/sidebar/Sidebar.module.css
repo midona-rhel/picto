@@ -5,7 +5,7 @@
   flex-direction: column;
   height: 100%;
   overflow: hidden;
-  font-family: var(--font-family-ui, var(--font-family));
+  font-family: var(--font-family-ui);
   font-size: var(--font-size-md);
   color: var(--sidebar-text-primary, var(--color-text-primary));
   background: var(--sidebar-surface, var(--color-surface-1));
@@ -84,7 +84,7 @@
   border: none;
   background: transparent;
   color: var(--sidebar-text-primary, var(--color-text-primary));
-  font: 400 12px/28px var(--font-family-ui, var(--font-family));
+  font: var(--font-weight-regular) var(--font-size-md)/28px var(--font-family-ui);
   outline: none;
   padding: 0 10px 0 30px;
 }
@@ -129,7 +129,7 @@
 .noFilterResults {
   margin: 6px 0 0 var(--sidebar-list-anchor);
   color: var(--sidebar-section-text, var(--color-text-tertiary));
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 
@@ -161,5 +161,5 @@
   margin: 6px 0 0 var(--sidebar-list-anchor);
   padding: 0;
   color: var(--sidebar-section-text, var(--color-text-tertiary));
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }

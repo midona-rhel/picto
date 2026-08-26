@@ -9,7 +9,7 @@
   overflow: hidden;
   background: var(--color-bg-app);
   color: var(--duplicate-text-primary);
-  font-family: var(--font-family-ui, var(--font-family));
+  font-family: var(--font-family-ui);
   container-type: inline-size;
 }
 .comparison {
@@ -52,8 +52,8 @@
 .cardHeader button { height: 28px; padding-inline: 10px; font-size: var(--font-size-sm); }
 .sideLabel {
   color: var(--duplicate-text-secondary);
-  font-size: 12px;
-  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-regular);
 }
 
 .differenceButton {
@@ -61,7 +61,7 @@
   min-width: 28px;
   gap: 6px;
   padding-inline: 9px;
-  font-family: var(--font-family-ui, var(--font-family));
+  font-family: var(--font-family-ui);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-regular);
   white-space: nowrap;
@@ -110,7 +110,7 @@
   margin-bottom: 4px;
   overflow: hidden;
   color: var(--duplicate-text-primary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-weight: var(--font-weight-regular);
   line-height: 16px;
   text-overflow: ellipsis; white-space: nowrap;
@@ -129,7 +129,7 @@
 .footerActions { justify-content: center; }
 .footerActions button {
   height: 36px;
-  font-family: var(--font-family-ui, var(--font-family));
+  font-family: var(--font-family-ui);
 }
 .similarity {
   margin-left: 8px;

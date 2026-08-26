@@ -173,7 +173,7 @@
 .metas {
   overflow: hidden;
   color: var(--color-text-tertiary);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-medium);
   line-height: 1.3;
   text-overflow: ellipsis;

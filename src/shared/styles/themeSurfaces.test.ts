@@ -54,9 +54,10 @@ describe('theme surface ownership', () => {
     const folders = readFileSync(resolve(process.cwd(), 'src/shared/ui/FolderTree/FolderTree.module.css'), 'utf8');
 
     expect(overlay).toContain('font-family: var(--font-family-ui);');
-    expect(tokens).toContain(":root[data-platform='mac']");
-    expect(tokens).toContain(":root[data-platform='windows']");
-    expect(tokens).toContain(":root[data-platform='linux']");
+    expect(tokens).toContain("--font-family-ui: 'SF Pro Text', -apple-system, 'Roboto'");
+    expect(tokens).not.toContain(":root[data-platform='mac']");
+    expect(tokens).not.toContain(":root[data-platform='windows']");
+    expect(tokens).not.toContain(":root[data-platform='linux']");
     expect(overlay).toContain('.checkBoxChecked {\n  background: var(--color-text-primary);');
     expect(tags).toContain('.tagRowSelected {\n  background: var(--color-surface-active);');
     expect(tags).not.toContain('var(--color-selection-bg)');
@@ -64,5 +65,48 @@ describe('theme surface ownership', () => {
     expect(tagPanel).not.toContain('tagGroupTextColor');
     expect(tagPanel).toContain('fillOpacity={showChecked && !onApplyTagFilter ? 0.58 : 0.28}');
     expect(folders).toContain('.rowSelected {\n  background: var(--color-surface-active);');
+  });
+
+  it('uses Eagle typography roles for application chrome', () => {
+    const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
+    const modal = readFileSync(resolve(process.cwd(), 'src/shared/ui/GlassModal/GlassModal.module.css'), 'utf8');
+    const sidebarRows = readFileSync(resolve(process.cwd(), 'src/shared/ui/SidebarRow/SidebarRow.module.css'), 'utf8');
+    const tooltip = readFileSync(resolve(process.cwd(), 'src/shared/ui/KbdTooltip/KbdTooltip.module.css'), 'utf8');
+
+    expect(tokens).toContain('--font-size-caption: 11px;');
+    expect(tokens).toContain('--font-size-sm: 12px;');
+    expect(tokens).toContain('--font-size-md: 13px;');
+    expect(tokens).toContain('--font-size-lg: 14px;');
+    expect(tokens).toContain('--font-weight-bold: 600;');
+    expect(tokens).toContain('--color-text-secondary: color-mix(in srgb, var(--theme-text) 70%, transparent);');
+    expect(tokens).toContain('--color-text-tertiary: color-mix(in srgb, var(--theme-text) 60%, transparent);');
+    expect(modal).toContain('font-size: var(--font-size-md);');
+    expect(modal).toContain('.title {\n  flex: 1;\n  font-size: var(--font-size-lg);\n  font-weight: var(--font-weight-bold);');
+    expect(modal).toContain('.fieldLabel {\n  font-size: var(--font-size-md);');
+    expect(sidebarRows).toContain('font-size: var(--font-size-md);');
+    expect(tooltip).toContain('font-size: var(--font-size-md);');
+    expect(tooltip).toContain('font-size: var(--font-size-xs);');
+  });
+
+  it('keeps feature surfaces on the shared Eagle role hierarchy', () => {
+    const select = readFileSync(resolve(process.cwd(), 'src/shared/ui/CmSelect/CmSelect.module.css'), 'utf8');
+    const inspectorSection = readFileSync(resolve(process.cwd(), 'src/shared/ui/InspectorSection/InspectorSection.module.css'), 'utf8');
+    const propertyRow = readFileSync(resolve(process.cwd(), 'src/shared/ui/PropertyRow/PropertyRow.module.css'), 'utf8');
+    const toolbar = readFileSync(resolve(process.cwd(), 'src/features/grid/GridToolbar.module.css'), 'utf8');
+    const appShell = readFileSync(resolve(process.cwd(), 'src/app/AppShell.module.css'), 'utf8');
+    const subscriptions = readFileSync(resolve(process.cwd(), 'src/features/subscriptions/SubscriptionsScreen.module.css'), 'utf8');
+    const duplicates = readFileSync(resolve(process.cwd(), 'src/features/duplicates/DuplicatesScreen.module.css'), 'utf8');
+    const tagManager = readFileSync(resolve(process.cwd(), 'src/features/tags/TagManagerScreen.module.css'), 'utf8');
+
+    expect(select.match(/font-size: var\(--font-size-md\);/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(inspectorSection).toContain('font-size: var(--font-size-sm);');
+    expect(inspectorSection).toContain('font-weight: var(--font-weight-bold);');
+    expect(propertyRow.match(/font-size: var\(--font-size-caption\);/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(toolbar).toContain('font-size: var(--font-size-md);');
+    expect(appShell).toContain('font-weight: var(--font-weight-regular);');
+    expect(subscriptions).toContain('font-size: var(--font-size-caption);');
+    expect(subscriptions).toContain('font-size: var(--font-size-md);');
+    expect(duplicates).toContain('font-size: var(--font-size-md);');
+    expect(tagManager).toContain('font: var(--font-size-md)/26px var(--font-family-ui);');
   });
 });

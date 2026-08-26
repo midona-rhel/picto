@@ -30,7 +30,7 @@
   display: flex;
   margin-right: var(--titlebar-inspector-width, 0px);
   -webkit-app-region: drag;
-  font-family: var(--font-family-ui, var(--font-family));
+  font-family: var(--font-family-ui);
 }
 
 .titlebarLeft {
@@ -117,7 +117,7 @@
   display: flex;
   align-items: center;
   font-size: var(--font-size-md);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-regular);
   color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -335,7 +335,7 @@
   padding: 0;
   font: inherit;
   color: inherit;
-  opacity: 0.6;
+  color: var(--color-text-secondary);
   cursor: pointer;
   /* Re-enable clicks — .scopeTitle is pointer-events:none so the titlebar
      drag region works around the text; the crumbs themselves must opt back in. */
@@ -344,6 +344,6 @@
 }
 
 .scopeCrumbLink:hover {
-  opacity: 1;
+  color: var(--color-text-primary);
   text-decoration: underline;
 }

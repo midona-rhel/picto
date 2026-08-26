@@ -54,7 +54,7 @@
   outline: none;
   background: var(--color-surface-hover);
   color: var(--color-text-primary);
-  font: 12px var(--font-family-ui);
+  font: var(--font-size-md) var(--font-family-ui);
 }
 
 .titlebarSearch input:focus {
@@ -123,7 +123,7 @@
   padding-left: 4px;
   justify-content: space-between;
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .namespaceItem {
@@ -140,13 +140,13 @@
   background: transparent;
   color: var(--color-text-primary);
   cursor: pointer;
-  font: 13px/26px var(--font-family-ui);
+  font: var(--font-size-md)/26px var(--font-family-ui);
   text-align: left;
 }
 
 .namespaceItem:hover { background: var(--color-surface-hover); }
 .namespaceItemActive { background: var(--color-surface-active); }
-.namespaceCount { margin-left: auto; opacity: .5; font: 11px var(--font-family-mono); }
+.namespaceCount { margin-left: auto; opacity: .5; font: var(--font-size-caption) var(--font-family-mono); }
 .groupIdentity { min-width: 0; display: inline-flex; align-items: center; gap: 8px; }
 .groupIdentity svg { flex: 0 0 auto; }
 .groupName { overflow: hidden; color: var(--color-text-primary); text-overflow: ellipsis; white-space: nowrap; }
@@ -164,7 +164,7 @@
   background: transparent;
   color: var(--color-text-secondary);
   cursor: pointer;
-  font: 12px/26px var(--font-family-ui);
+  font: var(--font-size-sm)/26px var(--font-family-ui);
   text-align: left;
 }
 
@@ -195,8 +195,8 @@
   padding: 0 16px;
 }
 
-.canvasTitle { font-size: 16px; font-weight: 400; }
-.canvasCount { margin-left: 6px; opacity: .5; font: 12px var(--font-family-mono); }
+.canvasTitle { font-size: var(--font-size-xl); font-weight: var(--font-weight-regular); }
+.canvasCount { margin-left: 6px; opacity: .5; font: var(--font-size-caption) var(--font-family-mono); }
 .canvasQuery { color: var(--color-text-tertiary); font-size: var(--font-size-sm); }
 .muted { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
 
@@ -237,7 +237,7 @@
   color: inherit;
   cursor: pointer;
   text-align: left;
-  font: 13px/26px var(--font-family-ui);
+  font: var(--font-size-md)/26px var(--font-family-ui);
 }
 
 .tagCard:hover {
@@ -259,12 +259,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  opacity: .95;
 }
 
-.tagCardCount { margin-left: 6px; opacity: .5; font: 12px var(--font-family-mono); }
+.tagCardCount { margin-left: 6px; opacity: .5; font: var(--font-size-caption) var(--font-family-mono); }
 .starredIcon { flex: 0 0 auto; margin-left: auto; color: var(--color-warning); }
-.tagCard:hover .tagDot, .tagCard:hover .tagName { opacity: 1; }
+.tagCard:hover .tagDot { opacity: 1; }
 
 .tagSkeleton {
   height: 26px;
@@ -287,12 +286,12 @@
 .editorCount { margin-top: 7px; color: var(--color-text-secondary); font-size: var(--font-size-sm); }
 .editorSection { display: flex; flex-direction: column; gap: 8px; }
 .sectionHeader { justify-content: space-between; gap: 12px; }
-.sectionHeader h2 { margin: 0; font-size: 13px; font-weight: 600; }
+.sectionHeader h2 { margin: 0; font-size: var(--font-size-md); font-weight: var(--font-weight-bold); }
 .editorActions { gap: 8px; padding-top: 2px; border-top: 1px solid var(--color-border-secondary); }
 
 .relationList { max-height: 150px; overflow-y: auto; scrollbar-gutter: stable; }
 .relationRow { gap: 8px; min-height: 32px; padding: 2px 0; }
-.relationKind { margin-left: auto; color: var(--color-text-secondary); font-size: 11px; }
+.relationKind { margin-left: auto; color: var(--color-text-secondary); font-size: var(--font-size-caption); }
 .relationEmpty { color: var(--color-text-tertiary); font-size: var(--font-size-sm); }
 
 .pickerBody { display: flex; min-height: 260px; flex-direction: column; gap: 10px; }
@@ -313,7 +312,7 @@
 }
 
 .pickerResult:hover { background: var(--color-subtle-overlay); }
-.pickerCount { margin-left: auto; color: var(--color-text-secondary); font: 12px var(--font-family-mono); }
+.pickerCount { margin-left: auto; color: var(--color-text-secondary); font: var(--font-size-caption) var(--font-family-mono); }
 .pickerHint { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
 
 @media (max-width: 760px) {

@@ -17,7 +17,7 @@
 .rowLabel {
   flex: 0 0 84px;
   padding-top: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
   text-align: right;
   user-select: none;
@@ -41,7 +41,7 @@
   background: rgba(0, 0, 0, 0.25); /* guard:allow — matches .field input wells in this feature */
   color: var(--color-text-primary);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   outline: none;
   transition: border-color var(--duration-fast) var(--ease-default);
 }

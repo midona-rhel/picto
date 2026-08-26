@@ -13,7 +13,7 @@
   color: var(--sidebar-text-primary, var(--color-text-primary));
   cursor: pointer;
   text-align: left;
-  font-family: var(--font-family-ui, var(--font-family));
+  font-family: var(--font-family-ui);
 }
 
 .highlight {
@@ -78,8 +78,8 @@
   z-index: 1;
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 13px;
-  font-weight: 400;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
   line-height: 24px;
   text-transform: none;
   overflow: hidden;

@@ -8,7 +8,7 @@
   background: var(--color-control-surface);
   color: var(--color-text-primary);
   font-size: var(--font-size-md);
-  font-family: var(--font-family);
+  font-family: var(--font-family-ui);
   outline: none;
   width: 100%;
   box-sizing: border-box;
@@ -42,7 +42,7 @@
   background: var(--color-control-surface);
   color: var(--color-text-primary);
   font-size: var(--font-size-md);
-  font-family: var(--font-family);
+  font-family: var(--font-family-ui);
   outline: none;
   width: 100%;
   box-sizing: border-box;
@@ -83,7 +83,7 @@
   outline: none;
   color: var(--color-text-primary);
   font-size: var(--font-size-md);
-  font-family: var(--font-family);
+  font-family: var(--font-family-ui);
   height: 36px;
   padding: 0;
   min-width: 0;

@@ -44,7 +44,7 @@
   background: color-mix(in srgb, var(--subscription-status-color) 10%, transparent);
   color: color-mix(in srgb, var(--subscription-status-color) 45%, var(--color-text-primary));
   font-family: var(--font-family-ui);
-  font-size: 10px;
+  font-size: var(--font-size-xs);
   font-weight: var(--font-weight-regular);
   letter-spacing: 0.04em;
   line-height: 1;
@@ -85,10 +85,10 @@
 
 .heroTitle {
   color: var(--color-text-primary);
-  font-size: 19px;
-  font-weight: 600;
+  font-size: var(--font-size-title);
+  font-weight: var(--font-weight-bold);
   letter-spacing: -0.01em;
-  line-height: 26px;
+  line-height: var(--line-height-lg);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -112,8 +112,9 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
 }
 
 /* Buttons — matches settings footerBtn / legacy textBtn exactly */
@@ -127,8 +128,8 @@
   align-items: center;
   gap: 6px;
   padding: 0 16px;
-  font-size: 13px;
-  font-weight: 400;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-regular);
   font-family: inherit;
   color: var(--color-text-primary);
   border: 1px solid var(--color-border-primary);
@@ -255,7 +256,7 @@
   border-radius: 5px;
   background: transparent;
   color: var(--color-text-primary);
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   cursor: pointer;
   text-align: left;
 }
@@ -273,14 +274,14 @@
 }
 
 .acItemCount {
-  font-size: 10.5px;
+  font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 
 .acItemCategory {
-  font-size: 9.5px;
-  font-weight: 600;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
   padding: 1px 5px;
   border-radius: 4px;
   background: var(--color-surface-2);
@@ -361,15 +362,15 @@
   justify-content: center;
   color: var(--color-text-tertiary);
   font-size: 28px;
-  font-weight: 600;
+  font-weight: var(--font-weight-bold);
 }
 
 .subscriptionName {
   max-width: 100%;
   overflow: hidden;
   color: var(--color-text-primary);
-  font-size: 16px;
-  font-weight: 600;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
   line-height: 24px;
   margin-bottom: 8px;
   text-overflow: ellipsis;
@@ -385,7 +386,7 @@
   align-items: center;
   gap: 7px;
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   justify-content: center;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -430,7 +431,7 @@
   justify-content: space-between;
   gap: 8px;
   color: var(--color-text-tertiary);
-  font-size: 10.5px;
+  font-size: var(--font-size-caption);
   white-space: nowrap;
 }
 
@@ -468,7 +469,7 @@
   justify-content: space-between;
   gap: 12px;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 26px;
   margin-bottom: 2px;
 }
@@ -477,7 +478,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--color-text-primary);
-  font: 400 12px/26px var(--font-family-ui);
+  font: var(--font-weight-regular) var(--font-size-sm)/26px var(--font-family-ui);
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -492,8 +493,8 @@
 
 .subscriptionRailHeading {
   color: var(--color-text-primary);
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
 }
 
 .subscriptionRailField {
@@ -501,7 +502,7 @@
   flex-direction: column;
   gap: 5px;
   color: var(--color-text-tertiary);
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
 }
 
 .subscriptionDestinationValues {
@@ -535,7 +536,7 @@
   width: 100%;
   gap: 8px;
   padding: 0 24px 0 16px;
-  font: 400 12px/26px var(--font-family-ui);
+  font: var(--font-weight-regular) var(--font-size-sm)/26px var(--font-family-ui);
 }
 
 .subscriptionDestinationAdd:hover,
@@ -574,7 +575,6 @@
   justify-content: center;
   padding: 0 12px;
   border-bottom: 0;
-  opacity: 0.8;
 }
 
 .subscriptionTabs {
@@ -600,7 +600,7 @@
   border-radius: 4px;
   background: transparent;
   color: var(--color-text-tertiary);
-  font: 400 13px/28px var(--font-family-ui);
+  font: var(--font-weight-regular) var(--font-size-md)/28px var(--font-family-ui);
   cursor: pointer;
 }
 
@@ -675,7 +675,7 @@
   align-items: center;
   justify-content: center;
   color: var(--color-text-tertiary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 /* ── Overflow menu ──────────────────────────────────────────────── */
@@ -702,19 +702,19 @@
   align-items: center;
   justify-content: flex-start;
   gap: 6px;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
   color: var(--color-text-primary);
 }
 
 .formField .helper {
   display: block;
-  font-size: 11.5px;
-  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 
 .sectionEmptyLine {
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--color-text-tertiary);
   padding: 4px 0;
 }
@@ -731,7 +731,7 @@
   align-items: center;
   min-height: 32px;
   padding: 0 12px;
-  font-size: 12.5px;
+  font-size: var(--font-size-md);
   color: var(--color-text-primary);
 }
 
@@ -747,8 +747,8 @@
   min-height: 28px;
   color: var(--color-text-tertiary);
   background: var(--color-footer-surface);
-  font-size: 10.5px;
-  font-weight: 600;
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-bold);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   user-select: none;
@@ -807,7 +807,7 @@
   min-width: 0;
   overflow: hidden;
   color: #f0ad91;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -867,7 +867,7 @@
   gap: 12px;
   border-bottom: 1px solid var(--color-border-secondary);
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .queryStats > div:last-child {
@@ -878,7 +878,7 @@
   min-width: 0;
   overflow-wrap: anywhere;
   color: var(--color-text-primary);
-  font-weight: 400;
+  font-weight: var(--font-weight-regular);
   text-align: right;
 }
 
@@ -932,7 +932,7 @@
   background: none;
   padding: 7px 12px;
   font: inherit;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--color-primary);
   cursor: pointer;
   text-align: left;
@@ -1079,7 +1079,7 @@
   align-items: center;
   justify-content: center;
   font-size: 34px;
-  font-weight: 700;
+  font-weight: var(--font-weight-bold);
   color: var(--color-text-tertiary);
   background:
     linear-gradient(160deg, var(--color-contrast-05), transparent),
@@ -1096,14 +1096,14 @@
 .followNameText {
   flex: 1 1 auto;
   min-width: 0;
-  font-size: 13px;
-  font-weight: 400;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .followMeta {
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
 }

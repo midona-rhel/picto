@@ -15,12 +15,21 @@ html, body, #root {
 }
 
 body {
-  font-family: var(--font-family);
+  font-family: var(--font-family-ui);
   font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
   color: var(--color-text-primary);
   background: var(--color-bg-app);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+  color: inherit;
 }
 
 /* Disable tab focus outlines on all elements — app uses custom keyboard handling */
@@ -61,7 +70,7 @@ button, a, [role="button"] {
 /* Smart folder tag input: compact chips */
 .smartfolder-tag-input [class*="chip"] {
   height: 22px;
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 
 ::selection {

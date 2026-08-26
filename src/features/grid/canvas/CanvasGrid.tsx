@@ -781,9 +781,9 @@ export function CanvasGrid({
     if (!document.fonts) return;
     let active = true;
     void Promise.all([
-      document.fonts.load('400 13px "Picto Roboto"'),
-      document.fonts.load('500 10px "Picto Roboto"'),
-      document.fonts.load('600 10px "Picto Roboto"'),
+      document.fonts.load('400 13px "SF Pro Text"'),
+      document.fonts.load('500 10px "SF Pro Text"'),
+      document.fonts.load('600 10px "SF Pro Text"'),
     ]).then(() => { if (active) markDirty('both'); });
     return () => { active = false; };
   }, [markDirty]);

@@ -22,8 +22,8 @@
   /* Selection surfaces use the UI stack directly. Keep this local so
    * the picker typography cannot drift with unrelated application surfaces. */
   font-family: var(--font-family-ui);
-  font-size: 13px;
-  font-weight: 400;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
   -webkit-font-smoothing: antialiased;
   transition: width 200ms cubic-bezier(0.4, 0, 0.22, 1);
 

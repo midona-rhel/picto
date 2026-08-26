@@ -13,7 +13,7 @@
 
 .headerLabel {
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .toggleRow {
@@ -26,7 +26,7 @@
 
 .toggleLabel {
   flex: 1;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--color-text-primary);
   white-space: nowrap;
 }

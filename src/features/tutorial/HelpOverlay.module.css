@@ -11,17 +11,17 @@
 .targetPointer[data-placement='top'] { border-top-color: var(--color-primary); }
 .exploreCard, .coachmark { position: fixed; box-sizing: border-box; width: 320px; padding: 16px; border-radius: 8px; background: var(--color-primary); color: #fff; box-shadow: 0 12px 30px rgba(0, 0, 0, .32); }
 .exploreCard { right: 12px; bottom: 12px; display: grid; gap: 8px; }
-.exploreCard strong { font-size: 14px; }
-.exploreCard span { font-size: 12px; line-height: 17px; color: rgba(255,255,255,.84); }
+.exploreCard strong { font-size: var(--font-size-lg); }
+.exploreCard span { font-size: var(--font-size-sm); line-height: 17px; color: rgba(255,255,255,.84); }
 .coachmark { min-height: 244px; }
-.coachmark h2 { margin: 10px 24px 7px 0; font-size: 15px; line-height: 20px; }
-.coachmark p { margin: 0; color: rgba(255,255,255,.84); font-size: 12px; line-height: 18px; }
-.progress { font-size: 11px; color: rgba(255,255,255,.68); text-transform: capitalize; }
+.coachmark h2 { margin: 10px 24px 7px 0; font-size: var(--font-size-xl); line-height: 20px; }
+.coachmark p { margin: 0; color: rgba(255,255,255,.84); font-size: var(--font-size-sm); line-height: 18px; }
+.progress { font-size: var(--font-size-caption); color: rgba(255,255,255,.68); text-transform: capitalize; }
 .error { color: #ffe0e0 !important; }
 .closeButton { position: absolute; top: 8px; right: 8px; width: 24px; height: 24px; display: grid; place-items: center; padding: 0; border: 0; border-radius: 4px; background: transparent; color: rgba(255,255,255,.74); cursor: pointer; }
 .closeButton:hover { background: rgba(255,255,255,.14); color: #fff; }
 .actions { position: absolute; right: 16px; bottom: 14px; left: 16px; display: flex; justify-content: space-between; gap: 8px; }
-.actions button, .primaryButton { height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 10px; border: 0; border-radius: 6px; background: rgba(255,255,255,.16); color: #fff; font: inherit; font-size: 12px; cursor: pointer; }
+.actions button, .primaryButton { height: 28px; display: inline-flex; align-items: center; justify-content: center; gap: 4px; padding: 0 10px; border: 0; border-radius: 6px; background: rgba(255,255,255,.16); color: #fff; font: inherit; font-size: var(--font-size-sm); cursor: pointer; }
 .actions button:hover, .primaryButton:hover { background: rgba(255,255,255,.24); }
 .actions button:disabled, .primaryButton:disabled { opacity: .35; cursor: default; }
 .primaryButton { justify-self: start; }

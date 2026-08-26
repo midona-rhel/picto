@@ -3,9 +3,11 @@
  * Canonical Picto design tokens, consolidated from the legacy globals.
  */
 
-/* Bundled so the sidebar and titlebar do not vary with host font installs. */
+/* Eagle uses the platform UI face first and bundled Roboto as its portable
+ * fallback. Register the local files under the same family name so the
+ * declared stack and the rendered fallback are identical. */
 @font-face {
-  font-family: 'Picto Roboto';
+  font-family: 'Roboto';
   font-style: normal;
   font-weight: 400;
   font-display: swap;
@@ -13,7 +15,7 @@
 }
 
 @font-face {
-  font-family: 'Picto Roboto';
+  font-family: 'Roboto';
   font-style: normal;
   font-weight: 500;
   font-display: swap;
@@ -22,7 +24,7 @@
 
 /* Keep the 600 alias on Roboto Medium to avoid an abrupt weight jump. */
 @font-face {
-  font-family: 'Picto Roboto';
+  font-family: 'Roboto';
   font-style: normal;
   font-weight: 600;
   font-display: swap;
@@ -30,7 +32,7 @@
 }
 
 @font-face {
-  font-family: 'Picto Roboto';
+  font-family: 'Roboto';
   font-style: normal;
   font-weight: 700;
   font-display: swap;
@@ -93,11 +95,9 @@
   --color-contrast-50: color-mix(in srgb, var(--theme-contrast) 50%, transparent);
 
   /* ── Typography ──────────────────────────────────────────── */
-  /* The runtime sets data-platform explicitly. Default to the bundled face so
-   * an unavailable macOS family can never silently select a different host font. */
-  --font-family-ui: 'Picto Roboto', 'Segoe UI', system-ui, 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, sans-serif;
+  --font-family-ui: 'SF Pro Text', -apple-system, 'Roboto', system-ui, 'Segoe UI', 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
   --font-family: var(--font-family-ui);
-  --font-family-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
+  --font-family-mono: 'SF Mono', 'Fira Mono', 'Roboto Mono', Monaco, Consolas, 'Cascadia Code', ui-monospace, monospace;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-bold: 600;
@@ -107,6 +107,11 @@
   --font-size-md: 13px;
   --font-size-lg: 14px;
   --font-size-xl: 16px;
+  --font-size-title: 18px;
+  --line-height-caption: 14px;
+  --line-height-sm: 18px;
+  --line-height-md: 20px;
+  --line-height-lg: 24px;
 
   /* ── Spacing ─────────────────────────────────────────────── */
   --space-1: 4px;
@@ -227,18 +232,6 @@
 
   --scrollbar-thumb-background: var(--color-contrast-25);
   --scrollbar-thumb-hover-background: var(--color-contrast-50);
-}
-
-:root[data-platform='mac'] {
-  --font-family-ui: 'Picto Roboto', 'SF Pro Text', -apple-system, system-ui, 'Helvetica Neue', 'Noto Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', sans-serif;
-}
-
-:root[data-platform='windows'] {
-  --font-family-ui: 'Picto Roboto', 'Segoe UI', system-ui, 'Helvetica Neue', Arial, sans-serif;
-}
-
-:root[data-platform='linux'] {
-  --font-family-ui: 'Picto Roboto', system-ui, 'Noto Sans', 'Liberation Sans', Arial, sans-serif;
 }
 
 /* ── Blue theme ──────────────────────────────────────────────── */

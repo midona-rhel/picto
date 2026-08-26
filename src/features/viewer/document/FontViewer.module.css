@@ -27,7 +27,7 @@
 
 .header { padding: 4px 0 12px; }
 .header h1 { margin: 0; font: 500 32px/48px var(--preview-font); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.header span { color: color-mix(in srgb, var(--font-page-fg) 60%, transparent); font-size: 16px; line-height: 24px; }
+.header span { color: color-mix(in srgb, var(--font-page-fg) 60%, transparent); font-size: var(--font-size-xl); line-height: 24px; }
 
 .toolbar { height: 60px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid color-mix(in srgb, var(--font-page-fg) 8%, transparent); }
 .tabs, .themes { display: flex; align-items: center; gap: 8px; }
@@ -46,7 +46,7 @@
 .content { padding-top: 20px; }
 .message { display: grid; place-items: center; min-height: 240px; color: color-mix(in srgb, var(--font-page-fg) 60%, transparent); }
 .article, .waterfall, .glyphs { font-family: var(--preview-font); outline: none; }
-.article h2 { margin: 0 0 24px; font-size: calc(38px * var(--preview-scale)); line-height: 1.25; font-weight: 500; }
+.article h2 { margin: 0 0 24px; font-size: calc(38px * var(--preview-scale)); line-height: 1.25; font-weight: var(--font-weight-medium); }
 .article p { margin: 0 0 20px; font-size: calc(18px * var(--preview-scale)); line-height: 1.6; }
 .waterfall { overflow-x: auto; scrollbar-gutter: stable; }
 .waterfall > div { min-width: max-content; line-height: 1.35; padding: 4px 0; outline: none; }

@@ -6,7 +6,7 @@
   box-sizing: border-box;
   padding: 6px 12px 0;
   color: var(--color-text-primary);
-  font: 400 13px/20px var(--font-family-ui);
+  font: var(--font-weight-regular) var(--font-size-md)/var(--line-height-md) var(--font-family-ui);
   display: flex;
   align-items: flex-start;
   gap: 8px;
@@ -109,7 +109,7 @@
   outline: 0;
   background: var(--color-control-surface);
   color: var(--color-text-primary);
-  font: 400 13px var(--font-family-ui);
+  font: var(--font-weight-regular) var(--font-size-md) var(--font-family-ui);
 }
 
 .saveFilterEditor input:focus { border-color: var(--color-primary); }
@@ -121,7 +121,7 @@
   border-radius: 6px;
   background: var(--color-subtle-overlay);
   color: var(--color-text-primary);
-  font: 500 12px var(--font-family-ui);
+  font: var(--font-weight-medium) var(--font-size-sm) var(--font-family-ui);
   cursor: pointer;
 }
 
@@ -340,7 +340,7 @@
   outline: none;
   background: var(--color-control-surface);
   color: var(--color-text-primary);
-  font: 12px/30px var(--font-family-mono);
+  font: var(--font-size-sm)/30px var(--font-family-mono);
 }
 
 .hexField input:focus {
@@ -376,7 +376,7 @@
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
   background: var(--color-control-surface);
-  font: 400 12px/26px var(--font-family-ui);
+  font: var(--font-weight-regular) var(--font-size-sm)/26px var(--font-family-ui);
   outline: none;
 }
 
@@ -400,7 +400,7 @@
 
 .unitLabel {
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .resolutionEditor {
@@ -415,7 +415,7 @@
   align-items: center;
   gap: 8px;
   color: var(--color-text-secondary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }
 
 .dateEditor {
@@ -429,7 +429,7 @@
   display: grid;
   gap: 3px;
   color: var(--color-text-secondary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 
 .dateEditor input {

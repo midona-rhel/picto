@@ -40,9 +40,9 @@
 }
 
 .zoomLabel {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   font-family: var(--font-family-ui);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-regular);
   color: var(--color-text-secondary);
   min-width: 40px;
   text-align: center;
@@ -102,7 +102,7 @@
   box-sizing: border-box;
   background: var(--color-primary);
   color: var(--color-on-primary);
-  font: 700 9px/12px var(--font-family-ui);
+  font: var(--font-weight-bold) var(--font-size-xs)/12px var(--font-family-ui);
   text-align: center;
 }
 

@@ -1,5 +1,5 @@
 .error {
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--color-danger, #e5484d); /* guard:allow — danger fallback matches existing usage */
   white-space: pre-wrap;
 }
@@ -23,8 +23,8 @@
 .modelName {
   flex: 0 1 92px;
   min-width: 0;
-  font-size: 13px;
-  font-weight: 400;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
   color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -34,7 +34,7 @@
 .modelMeta {
   flex: 1;
   min-width: 0;
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -54,7 +54,7 @@
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
 
@@ -115,12 +115,12 @@
 }
 
 .settingName {
-  font-size: 13px;
+  font-size: var(--font-size-md);
   color: var(--color-text-primary);
 }
 
 .settingDescription {
-  font-size: 11.5px;
+  font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   line-height: 1.4;
   margin-top: 2px;

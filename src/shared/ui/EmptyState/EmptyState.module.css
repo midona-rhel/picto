@@ -47,16 +47,16 @@
 
 .title {
   color: var(--color-text-primary);
-  font-size: var(--font-size-md);
-  font-weight: 600;
-  line-height: 1.4;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-lg);
 }
 
 .description {
   max-width: 560px;
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
-  line-height: 1.6;
+  line-height: var(--line-height-sm);
 }
 
 .actions {
@@ -86,9 +86,9 @@
   border-radius: var(--radius-md);
   color: var(--color-text-primary);
   background-color: var(--color-surface-hover);
-  font-family: var(--font-family);
+  font-family: var(--font-family-ui);
   font-size: var(--font-size-md);
-  font-weight: 400;
+  font-weight: var(--font-weight-regular);
   white-space: nowrap;
   cursor: pointer;
   transition: background-color 250ms var(--ease-standard), border-color 250ms var(--ease-standard);

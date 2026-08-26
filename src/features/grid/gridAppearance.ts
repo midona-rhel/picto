@@ -20,8 +20,8 @@ export const GRID_BADGE_TEXT = 'rgba(255, 255, 255, 0.80)';
 export const GRID_BADGE_INSET = 5;
 
 // Canvas cannot resolve CSS custom properties, so keep this in the same order
-// as --font-family-ui: Picto's bundled face first on every platform.
-export const GRID_UI_FONT = '"Picto Roboto", "SF Pro Text", -apple-system, system-ui, "Segoe UI", "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, "PingFang SC", "PingFang TC", "Hiragino Sans GB", "Microsoft Yahei", sans-serif';
+// Keep canvas labels on the same platform-first stack as every DOM surface.
+export const GRID_UI_FONT = '"SF Pro Text", -apple-system, "Roboto", system-ui, "Segoe UI", "Helvetica Neue", "Noto Sans", "Liberation Sans", Arial, "PingFang SC", "PingFang TC", "Hiragino Sans GB", "Microsoft Yahei", sans-serif';
 export const GRID_NAME_FONT = `400 13px ${GRID_UI_FONT}`;
 export const GRID_INFO_FONT = `400 11px ${GRID_UI_FONT}`;
 export const GRID_BADGE_FONT = `600 10px ${GRID_UI_FONT}`;

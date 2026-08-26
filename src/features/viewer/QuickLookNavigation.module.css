@@ -34,6 +34,6 @@
   align-items: center;
   justify-content: center;
   color: var(--color-text-primary);
-  font: 13px/1 var(--font-family-mono);
+  font: var(--font-size-md)/1 var(--font-family-mono);
   font-variant-numeric: tabular-nums;
 }

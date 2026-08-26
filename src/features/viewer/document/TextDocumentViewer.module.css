@@ -41,6 +41,6 @@
   tab-size: 4;
   background: transparent;
   color: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 1.6;
 }

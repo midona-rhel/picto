@@ -8,7 +8,7 @@
 .root input {
   height: 26px;
   padding: 0 25px 0 8px;
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   text-align: right;
   appearance: textfield;
   -moz-appearance: textfield;

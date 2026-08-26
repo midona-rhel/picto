@@ -34,8 +34,7 @@ describe('grid spacing', () => {
   });
 
   it('uses canonical grid typography and vertical metrics', () => {
-    expect(GRID_UI_FONT.startsWith('"Picto Roboto"')).toBe(true);
-    expect(GRID_UI_FONT.indexOf('"Picto Roboto"')).toBeLessThan(GRID_UI_FONT.indexOf('"SF Pro Text"'));
+    expect(GRID_UI_FONT.startsWith('"SF Pro Text", -apple-system, "Roboto"')).toBe(true);
     expect(GRID_NAME_FONT).toBe(`400 13px ${GRID_UI_FONT}`);
     expect(GRID_INFO_FONT).toBe(`400 11px ${GRID_UI_FONT}`);
     expect(GRID_BADGE_FONT).toBe(`600 10px ${GRID_UI_FONT}`);

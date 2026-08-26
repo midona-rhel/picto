@@ -52,7 +52,7 @@
   border-bottom: 1px solid var(--color-border-secondary);
 }
 
-.title { margin-right: 6px; font-size: 13px; font-weight: 600; }
+.title { margin-right: 6px; font-size: var(--font-size-md); font-weight: var(--font-weight-bold); }
 .filters { display: flex; gap: 2px; }
 .filter, .filterActive, .iconButton {
   height: 26px;
@@ -60,7 +60,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--color-text-tertiary);
-  font: 500 10px/1 var(--font-family-ui);
+  font: var(--font-weight-medium) var(--font-size-xs)/1 var(--font-family-ui);
   text-transform: capitalize;
 }
 .filter, .filterActive { padding: 0 7px; }
@@ -76,7 +76,7 @@
   outline: none;
   background: var(--color-black-20);
   color: var(--color-text-primary);
-  font: 12px/26px var(--font-family-ui);
+  font: var(--font-size-sm)/26px var(--font-family-ui);
 }
 .search:focus { border-color: var(--color-border-primary); }
 .iconButton { width: 26px; display: grid; place-items: center; padding: 0; }
@@ -85,7 +85,7 @@
   overflow: auto;
   scrollbar-gutter: stable;
   padding: 4px 0 8px;
-  font: 11px/19px var(--font-family-mono);
+  font: var(--font-size-caption)/19px var(--font-family-mono);
   user-select: text;
 }
 .logRow { display: grid; grid-template-columns: 92px 46px 56px minmax(110px, 210px) auto minmax(240px, 1fr); gap: 8px; padding: 0 12px; white-space: nowrap; }
@@ -98,13 +98,13 @@
 .duration { color: var(--color-text-secondary); text-align: right; font-variant-numeric: tabular-nums; }
 .message { color: var(--color-text-primary); }
 .workers { overflow: auto; scrollbar-gutter: stable; border-left: 1px solid var(--color-border-secondary); padding: 10px; }
-.workersTitle { padding: 0 4px 8px; color: var(--color-text-secondary); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+.workersTitle { padding: 0 4px 8px; color: var(--color-text-secondary); font-size: var(--font-size-caption); font-weight: var(--font-weight-bold); text-transform: uppercase; letter-spacing: .04em; }
 .worker { min-height: 48px; display: flex; align-items: flex-start; gap: 9px; padding: 8px; border-radius: 6px; }
 .worker:hover { background: var(--color-surface-hover); }
 .workerDot { width: 7px; height: 7px; margin-top: 5px; flex: none; border-radius: 50%; background: var(--color-text-tertiary); opacity: .55; }
 .workerDot[data-state='working'] { background: #47c976; opacity: 1; }
 .workerDot[data-state='attention'] { background: var(--color-warning, #e8a838); opacity: 1; }
 .workerText { min-width: 0; flex: 1; }
-.workerName { font-size: 12px; color: var(--color-text-primary); }
-.workerDetail { margin-top: 2px; overflow: hidden; color: var(--color-text-tertiary); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.workerCount { color: var(--color-text-tertiary); font: 10px/16px var(--font-family-mono); }
+.workerName { font-size: var(--font-size-sm); color: var(--color-text-primary); }
+.workerDetail { margin-top: 2px; overflow: hidden; color: var(--color-text-tertiary); font-size: var(--font-size-caption); text-overflow: ellipsis; white-space: nowrap; }
+.workerCount { color: var(--color-text-tertiary); font: var(--font-size-xs)/16px var(--font-family-mono); }

@@ -45,7 +45,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--color-text-primary);
-  font: 13px var(--font-family-ui);
+  font: var(--font-size-md) var(--font-family-ui);
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
@@ -85,15 +85,13 @@
   max-width: 122px;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0.88;
 }
 
 .sidebarBadge {
   margin-left: auto;
   flex-shrink: 0;
   color: var(--color-text-tertiary);
-  font: 11px var(--font-family-mono);
-  opacity: 0.7;
+  font: var(--font-size-caption) var(--font-family-mono);
 }
 
 .sidebarSep {
@@ -157,13 +155,13 @@
   min-width: 48px;
   text-align: center;
   color: var(--color-text-secondary);
-  font: 11px var(--font-family-mono);
+  font: var(--font-size-caption) var(--font-family-mono);
 }
 
 .previewEmpty {
   padding: 16px;
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-align: center;
 }
 
@@ -178,22 +176,22 @@
   background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   color: var(--color-text-primary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   text-align: center;
 }
 
 .mediaName {
   overflow: hidden;
   color: var(--color-text-primary);
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .mediaMeta {
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 
 .thumbnailRail {
@@ -268,7 +266,7 @@
   border-radius: 6px;
   background: transparent;
   color: var(--color-text-primary);
-  font: 13px var(--font-family-ui);
+  font: var(--font-size-md) var(--font-family-ui);
   text-align: left;
   cursor: pointer;
   transition: background-color 60ms ease;
@@ -322,7 +320,7 @@
 .tagSeparator {
   flex-shrink: 0;
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
   line-height: 1;
 }
 
@@ -330,7 +328,7 @@
   flex: 1;
   min-width: 0;
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 
 .confPct {
@@ -338,21 +336,21 @@
   margin-left: auto;
   flex-shrink: 0;
   color: var(--color-text-secondary);
-  font: 11px var(--font-family-mono);
+  font: var(--font-size-caption) var(--font-family-mono);
   text-align: right;
 }
 
 .runCounter {
   flex-shrink: 0;
   color: var(--color-text-secondary);
-  font: 11px var(--font-family-mono);
+  font: var(--font-size-caption) var(--font-family-mono);
 }
 
 .cutoff {
   display: flex;
   align-items: center;
   color: var(--color-text-tertiary);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
 }
 
 .footerButton.footerButton {
@@ -383,6 +381,6 @@
   padding: 7px 10px;
   border-bottom: 1px solid var(--color-border-secondary);
   color: var(--color-negative);
-  font-size: 11px;
+  font-size: var(--font-size-caption);
   line-height: 1.35;
 }

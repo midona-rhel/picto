@@ -6,7 +6,7 @@
   gap: 4px;
   white-space: nowrap;
   font-size: var(--font-size-md);
-  font-weight: normal;
+  font-weight: var(--font-weight-regular);
   color: var(--color-text-primary);
 }
 
@@ -18,8 +18,8 @@
   min-width: 16px;
   padding: 0 4px;
   border-radius: 3px;
-  font-size: 10px;
-  font-family: var(--font-family);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family-ui);
   color: var(--color-text-primary);
   background: var(--color-subtle-overlay);
   box-sizing: border-box;

@@ -12,7 +12,7 @@
   border-radius: 6px;
   height: 32px;
   color: var(--color-text-primary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   padding: 0 12px;
   outline: none;
   box-sizing: border-box;
@@ -30,12 +30,12 @@
 }
 
 .groupTitle {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-secondary);
   margin: 16px 0 8px;
 }
-.groupCount { color: var(--color-text-tertiary); font-weight: 400; margin-left: 4px; }
+.groupCount { color: var(--color-text-tertiary); font-weight: var(--font-weight-regular); margin-left: 4px; }
 
 .table {
   border: 1px solid var(--color-border-secondary);
@@ -60,8 +60,8 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.labelText { font-weight: 500; font-size: 13px; color: var(--color-text-primary); }
-.labelDesc { font-size: 11px; color: var(--color-text-secondary); opacity: 0.8; }
+.labelText { font-weight: var(--font-weight-medium); font-size: var(--font-size-md); color: var(--color-text-primary); }
+.labelDesc { font-size: var(--font-size-caption); color: var(--color-text-secondary); opacity: 0.8; }
 
 .binding { flex: 3; padding: 4px; }
 
@@ -74,7 +74,7 @@
   padding: 0 32px 0 8px;
   box-sizing: border-box;
   color: var(--color-text-primary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   outline: none;
   border: 1px solid transparent;
   background: transparent;
@@ -96,4 +96,4 @@
 }
 .clearBtn:hover { color: var(--color-text-primary); background: var(--color-subtle-overlay); }
 
-.empty { padding: 24px; color: var(--color-text-tertiary); font-size: 13px; text-align: center; }
+.empty { padding: 24px; color: var(--color-text-tertiary); font-size: var(--font-size-md); text-align: center; }

@@ -24,7 +24,11 @@
   overflow: hidden;
   user-select: none;
   -webkit-user-select: none;
+  font-family: var(--font-family-ui);
   font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--line-height-md);
+  color: var(--color-text-secondary);
   -webkit-font-smoothing: antialiased;
   animation: modalIn 150ms cubic-bezier(0.4, 0, 0.22, 1);
 
@@ -39,7 +43,7 @@
   box-shadow: var(--shadow-panel);
 }
 
-.sm { width: 440px; max-height: 80vh; }
+.sm { width: 400px; max-height: 80vh; }
 .md { width: 560px; max-height: 80vh; }
 .lg { width: 680px; max-height: 85vh; }
 .xl { width: min(900px, calc(100vw - 48px)); height: min(600px, calc(100vh - 48px)); }
@@ -47,7 +51,7 @@
 /* ── Header ── */
 
 .header {
-  height: 44px;
+  height: 48px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -59,7 +63,8 @@
 .title {
   flex: 1;
   font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-medium);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-md);
   color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -126,9 +131,10 @@
 }
 
 .fieldLabel {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  font-weight: var(--font-weight-medium);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-md);
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-regular);
 }
 
 .fieldRow {
@@ -138,14 +144,14 @@
 }
 
 .textInput {
-  height: 30px;
+  height: var(--control-height-lg);
   padding: 0 10px;
   border: 1px solid var(--color-border-primary);
   border-radius: var(--radius-sm);
   background: var(--color-control-surface);
   color: var(--color-text-primary);
   font-size: var(--font-size-md);
-  font-family: var(--font-family);
+  font-family: var(--font-family-ui);
   outline: none;
   width: 100%;
   box-sizing: border-box;
@@ -160,9 +166,9 @@
 }
 
 .helpText {
-  font-size: var(--font-size-caption);
-  color: var(--color-text-tertiary);
-  line-height: 1.4;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-sm);
 }
 
 /* ── Layout primitives ── */
@@ -180,7 +186,7 @@
 .section { display: flex; flex-direction: column; gap: 8px; }
 .sectionLabel {
   font-size: var(--font-size-caption);
-  font-weight: 600;
+  font-weight: var(--font-weight-bold);
   text-transform: uppercase;
   letter-spacing: 0.03em;
   color: var(--color-text-tertiary);

@@ -36,8 +36,8 @@
   height: 48px;
   display: flex;
   align-items: center;
-  font-size: 14px;
-  font-weight: var(--font-weight-bold, 600);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
   color: var(--color-text-primary);
   -webkit-app-region: drag;
   flex-shrink: 0;
@@ -69,7 +69,7 @@
   border: 1px solid var(--color-border-primary);
   background: var(--color-control-surface);
   color: var(--color-text-primary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   outline: none;
 }
@@ -99,7 +99,7 @@
   gap: 6px;
   height: 32px;
   padding: 0 6px;
-  font-size: 13px;
+  font-size: var(--font-size-md);
   font-family: inherit;
   font-weight: var(--font-weight-regular);
   line-height: 20px;
@@ -141,8 +141,8 @@
 
 .contentTitle {
   flex: 1;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-bold);
   -webkit-app-region: no-drag;
 }
 
@@ -188,8 +188,8 @@
 }
 
 .settingLabel {
-  font-size: 13px;
-  font-weight: 400;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
   color: var(--color-text-secondary);
   min-width: 100px;
   padding-top: 2px;
@@ -208,12 +208,12 @@
 
 .settingHint {
   margin: 8px 0 0;
-  font-size: 12px;
-  color: var(--color-text-tertiary);
-  line-height: 1.4;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: var(--line-height-md);
 }
 
-.settingPlaceholder { font-size: 13px; color: var(--color-text-tertiary); }
+.settingPlaceholder { font-size: var(--font-size-md); color: var(--color-text-tertiary); }
 
 /* ── Settings blocks — matches legacy panelBlock pattern ── */
 
@@ -229,8 +229,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 13px;
-  font-weight: var(--font-weight-bold, 600);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-bold);
   line-height: 26px;
   color: var(--color-text-primary);
 }
@@ -248,7 +248,7 @@
   justify-content: flex-end;
   min-height: 26px;
   color: var(--color-text-primary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
 }
 
 .checkboxGrid {
@@ -269,7 +269,7 @@
   box-sizing: border-box;
   border-radius: 6px;
   color: var(--color-text-primary);
-  font-size: 13px;
+  font-size: var(--font-size-md);
   line-height: 16px;
   cursor: pointer;
   transition: background 100ms ease;
@@ -364,8 +364,8 @@
 }
 
 .valueLabel {
-  font-size: 12px;
-  font-family: var(--font-family-mono, monospace);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family-mono);
   color: var(--color-text-secondary);
   margin-left: 8px;
 }
@@ -443,8 +443,8 @@
   left: 50%;
   transform: translateX(-50%) scale(0.95);
   white-space: nowrap;
-  font-size: 12px;
-  font-weight: 400;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-regular);
   line-height: 24px;
   padding: 0 6px;
   border-radius: 4px;
@@ -524,8 +524,8 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
   color: var(--color-text-secondary);
   margin-bottom: 8px;
   text-transform: uppercase;
@@ -535,11 +535,11 @@
 .searchGroupLink {
   border: none; background: none;
   color: var(--color-primary-60);
-  font-size: 11px; cursor: pointer; padding: 0;
+  font-size: var(--font-size-caption); cursor: pointer; padding: 0;
 }
 .searchGroupLink:hover { text-decoration: underline; }
 
-.searchGroupHint { font-size: 13px; color: var(--color-text-tertiary); padding: 8px 0; }
+.searchGroupHint { font-size: var(--font-size-md); color: var(--color-text-tertiary); padding: 8px 0; }
 
 .searchResult {
   width: 100%;
@@ -561,10 +561,10 @@
 .searchResult:focus-visible { outline: 1px solid var(--color-primary-60); outline-offset: 2px; }
 
 .searchResultCopy { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.searchResultTitle { font-size: 13px; font-weight: 600; }
-.searchResultDescription { font-size: 12px; color: var(--color-text-secondary); line-height: 1.4; }
+.searchResultTitle { font-size: var(--font-size-md); font-weight: var(--font-weight-bold); }
+.searchResultDescription { font-size: var(--font-size-sm); color: var(--color-text-secondary); line-height: 1.4; }
 
-.emptySearch { text-align: center; padding: 32px; color: var(--color-text-tertiary); font-size: 13px; }
+.emptySearch { text-align: center; padding: 32px; color: var(--color-text-tertiary); font-size: var(--font-size-md); }
 
 /* ── Footer — always visible, same bg as sidebar ── */
 
@@ -599,8 +599,8 @@
   align-items: center;
   gap: 6px;
   padding: 0 16px;
-  font-size: 13px;
-  font-weight: 400;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
   font-family: inherit;
   color: var(--color-text-primary);
   border: 1px solid var(--color-border-primary);
@@ -616,7 +616,7 @@
 }
 
 .footerBtnPrimary {
-  font-weight: var(--font-weight-bold, 600);
+  font-weight: var(--font-weight-bold);
   color: #fff;
   border-color: var(--color-primary);
   background: var(--color-primary);
@@ -643,5 +643,5 @@
 
 .restorePointSize {
   color: var(--color-text-tertiary);
-  font-size: 12px;
+  font-size: var(--font-size-sm);
 }

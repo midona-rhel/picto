@@ -4,8 +4,8 @@
   display: flex;
   flex-direction: column;
   font-family: var(--font-family-ui);
-  font-size: 13px;
-  font-weight: 400;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
 }
 
 .searchBar {
@@ -85,12 +85,6 @@
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  opacity: 0.85;
-}
-
-.sidebarItem:hover .sidebarName,
-.sidebarItemActive .sidebarName {
-  opacity: 1;
 }
 
 .sidebarBadge {
@@ -98,7 +92,7 @@
   margin-left: auto;
   color: var(--color-text-tertiary);
   font-family: var(--font-family-mono);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-caption);
   opacity: 0.5;
 }
 
@@ -137,11 +131,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  opacity: 0.85;
-}
-
-.itemRow:hover .itemName {
-  opacity: 1;
 }
 
 .itemBadge {
