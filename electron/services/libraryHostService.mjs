@@ -1,3 +1,8 @@
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execFileAsync = promisify(execFile);
+
 export function createLibraryHostService({
   fs,
   path,
@@ -19,6 +24,10 @@ export function createLibraryHostService({
   buildAppMenu,
   tutorialRoot,
   tutorialFixtureRoot,
+  platform = process.platform,
+  resourcesPath = process.resourcesPath,
+  isDefaultApp = process.defaultApp === true,
+  runFileAttributeCommand = execFileAsync,
 }) {
   let openingLibraryPath = null;
   let tutorialSession = null;
@@ -44,6 +53,28 @@ export function createLibraryHostService({
   function libraryDisplayName(libraryPath) {
     const base = path.basename(libraryPath);
     return base.endsWith('.library') ? base.slice(0, -8) : base;
+  }
+
+  async function applyPlatformLibraryIcon(libraryPath) {
+    if (platform !== 'win32') return;
+    const sourceIcon = isDefaultApp
+      ? path.join(process.cwd(), 'build', 'library.ico')
+      : path.join(resourcesPath, 'library-icons', 'library.ico');
+    const iconName = '.picto-library.ico';
+    const iconPath = path.join(libraryPath, iconName);
+    const desktopIniPath = path.join(libraryPath, 'desktop.ini');
+    try {
+      await fs.copyFile(sourceIcon, iconPath);
+      await fs.writeFile(desktopIniPath, `[.ShellClassInfo]\r\nIconResource=${iconName},0\r\n`, 'utf8');
+      await runFileAttributeCommand('attrib', ['+h', '+s', iconPath]);
+      await runFileAttributeCommand('attrib', ['+h', '+s', desktopIniPath]);
+      await runFileAttributeCommand('attrib', ['+r', libraryPath]);
+    } catch (error) {
+      console.warn('[library] unable to apply Windows folder icon', {
+        libraryPath,
+        message: error?.message ?? String(error),
+      });
+    }
   }
 
   async function handleMissingLibrary(libraryPath) {
@@ -93,6 +124,7 @@ export function createLibraryHostService({
   }
 
   async function openLibraryAndShow(libraryPath) {
+    await applyPlatformLibraryIcon(libraryPath);
     setCurrentLibraryRoot(libraryPath);
     await openLibrary(libraryPath);
 
@@ -105,6 +137,8 @@ export function createLibraryHostService({
     if (tutorialSession) throw new Error('Exit the guided tour before switching libraries');
     openingLibraryPath = newPath;
     sendToAllWindows('library-switching', { path: newPath });
+
+    await applyPlatformLibraryIcon(newPath);
 
     await closeLibrary();
     try {
@@ -351,6 +385,7 @@ export function createLibraryHostService({
         target_root: targetRoot,
       });
       const result = JSON.parse(serialized);
+      await applyPlatformLibraryIcon(targetRoot);
       setCurrentLibraryRoot(targetRoot);
       openingLibraryPath = null;
       await addLibraryToHistory(targetRoot);
@@ -563,6 +598,7 @@ export function createLibraryHostService({
 
   async function initializeInitialLibrary(libraryPath) {
     await cleanupStaleTutorialLibraries();
+    await applyPlatformLibraryIcon(libraryPath);
     openingLibraryPath = libraryPath;
     sendToAllWindows('library-switching', { path: libraryPath });
     try {

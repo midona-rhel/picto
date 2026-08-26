@@ -113,6 +113,10 @@
       {
         "from": "resources/tutorial/",
         "to": "tutorial/"
+      },
+      {
+        "from": "build/library.ico",
+        "to": "library-icons/library.ico"
       }
     ],
     "publish": {
@@ -120,6 +124,16 @@
       "owner": "midona-rhel",
       "repo": "picto"
     },
+    "fileAssociations": [
+      {
+        "ext": "library",
+        "name": "Picto Library",
+        "icon": "library.icns",
+        "role": "Editor",
+        "rank": "Owner",
+        "isPackage": true
+      }
+    ],
     "mac": {
       "icon": "build/Picto.icon",
       "target": [

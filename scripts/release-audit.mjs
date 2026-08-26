@@ -33,6 +33,9 @@ const trackedMediaExtensions = new Set([
 const approvedReleaseIcons = new Set([
   'build/icon-flat.png',
   'build/icon.ico',
+  'build/library-folder.png',
+  'build/library.icns',
+  'build/library.ico',
   'build/Picto.icon/Assets/01-spine.png',
   'build/Picto.icon/Assets/02-under-pages.png',
   'build/Picto.icon/Assets/03-open-book.png',
@@ -62,6 +65,12 @@ const packageManifest = JSON.parse(read('package.json'));
 assert(packageManifest.license === 'MIT', 'package.json must declare the project MIT license');
 assert(packageManifest.build.mac.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'arm64'), 'macOS packages must target Apple Silicon only');
 assert(packageManifest.build.mac.icon === 'build/Picto.icon', 'macOS packages must use the native Icon Composer asset');
+const libraryAssociation = packageManifest.build.fileAssociations?.find((association) => association.ext === 'library');
+assert(libraryAssociation?.name === 'Picto Library', 'macOS packages must identify Picto library packages');
+assert(libraryAssociation?.icon === 'library.icns', 'Picto library packages must use the custom library icon');
+assert(libraryAssociation?.isPackage === true && libraryAssociation?.rank === 'Owner', 'Picto libraries must register as owned macOS document packages');
+const windowsLibraryIcon = packageManifest.build.extraResources.find((resource) => resource.to === 'library-icons/library.ico');
+assert(windowsLibraryIcon?.from === 'build/library.ico', 'Windows packages must include the custom library folder icon');
 assert(packageManifest.build.win.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Windows packages must target x64 only');
 assert(packageManifest.build.linux.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Linux packages must target x64 only');
 assert(packageManifest.build.files.includes('dist/licenses/**/*'), 'packaged files must include generated license notices');
@@ -123,6 +132,9 @@ if (checkArtifacts) {
     'build/Picto.icon/Assets/01-spine.png',
     'build/Picto.icon/Assets/02-under-pages.png',
     'build/Picto.icon/Assets/03-open-book.png',
+    'build/library-folder.png',
+    'build/library.icns',
+    'build/library.ico',
     'dist/licenses/NPM_THIRD_PARTY_NOTICES.txt',
     'dist/licenses/RUST_THIRD_PARTY_NOTICES.txt',
     'vendor/gallery-dl/THIRD_PARTY_LICENSES.txt',

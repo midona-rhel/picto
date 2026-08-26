@@ -44,6 +44,55 @@ test('library image metadata is persisted and broadcast to every window', async 
   ]]);
 });
 
+test('opening a library installs standard Windows folder icon metadata', async () => {
+  const copies = [];
+  const writes = [];
+  const attributes = [];
+  const winPath = path.win32;
+  const libraryPath = 'C:\\Libraries\\Main.library';
+  const service = createLibraryHostService({
+    fs: {
+      copyFile: async (...args) => copies.push(args),
+      writeFile: async (...args) => writes.push(args),
+    },
+    path: winPath,
+    dialog: {},
+    openLibrary: async () => {},
+    closeLibrary: async () => {},
+    addLibraryToHistory: async () => {},
+    removeLibraryFromHistory: async () => {},
+    togglePinned: async () => {},
+    getCachedConfig: () => ({}),
+    saveGlobalConfig: async () => {},
+    updateLibraryPath: async () => {},
+    getCurrentLibraryRoot: () => null,
+    setCurrentLibraryRoot: () => {},
+    createMainWindow: () => {},
+    sendToAllWindows: () => {},
+    buildAppMenu: () => {},
+    platform: 'win32',
+    resourcesPath: 'C:\\Picto\\resources',
+    isDefaultApp: false,
+    runFileAttributeCommand: async (...args) => attributes.push(args),
+  });
+
+  await service.switchLibrary(libraryPath);
+
+  const iconPath = `${libraryPath}\\.picto-library.ico`;
+  const desktopIniPath = `${libraryPath}\\desktop.ini`;
+  expect(copies).toEqual([['C:\\Picto\\resources\\library-icons\\library.ico', iconPath]]);
+  expect(writes).toEqual([[
+    desktopIniPath,
+    '[.ShellClassInfo]\r\nIconResource=.picto-library.ico,0\r\n',
+    'utf8',
+  ]]);
+  expect(attributes).toEqual([
+    ['attrib', ['+h', '+s', iconPath]],
+    ['attrib', ['+h', '+s', desktopIniPath]],
+    ['attrib', ['+r', libraryPath]],
+  ]);
+});
+
 test('guided tour opens an unpersisted isolated library and restores the original', async () => {
   const events = [];
   const calls = [];

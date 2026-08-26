@@ -10,6 +10,8 @@ All macOS layers use the same 1024×1024 canvas. They remain flat and opaque: no
 
 The macOS package points directly at `build/Picto.icon`. Electron Builder compiles it with Xcode 26 or newer `actool`, embeds the resulting `Assets.car`, and also generates the legacy ICNS representation. Do not replace this with a manually composited PNG or ICNS fallback.
 
+`picto-library-folder.svg` is the neutral folder artwork for Picto `.library` packages. The generator produces `library.icns` for macOS Finder, `library.ico` for Windows library folders, and a PNG preview used by release audits. Linux has no portable per-directory icon contract across file managers, so the source remains available to Picto without writing desktop-specific metadata.
+
 Verification:
 
 1. Run `npm run generate:app-icons` and confirm the three generated assets are 1024×1024 RGBA PNGs.

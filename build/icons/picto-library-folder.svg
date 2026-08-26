@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Two-shape Picto library folder: one body, one raised tab, then the Picto mark. -->
+  <defs>
+    <linearGradient id="body-shading" x1="104" y1="318" x2="920" y2="838" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c9cace"/>
+      <stop offset="0.52" stop-color="#b7b9be"/>
+      <stop offset="1" stop-color="#a4a7ad"/>
+    </linearGradient>
+    <linearGradient id="tab-shading" x1="286" y1="231" x2="286" y2="366" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#c9cace"/>
+      <stop offset="0.22" stop-color="#c9cace"/>
+      <stop offset="0.64" stop-color="#96979b"/>
+      <stop offset="1" stop-color="#c4c5c9"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Raised tab extends behind the body's rounded top-left corner. -->
+  <path d="M104 366V280Q104 231 153 231H371Q400 231 421 252L487 318H152Q104 318 104 366Z" fill="url(#tab-shading)"/>
+
+  <!-- Main folder body: rounded exposed corners and aligned with the tab at the left edge. -->
+  <path d="M104 366Q104 318 152 318H872Q920 318 920 366V790Q920 838 872 838H152Q104 838 104 790Z" fill="url(#body-shading)"/>
+
+  <g fill="none" stroke="#3e4046" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" opacity="0.9">
+    <path d="M512 654C457 606 392 581 321 590L356 438C413 426 467 451 512 499C557 451 611 426 668 438L703 590C632 581 567 606 512 654Z"/>
+    <path d="M512 499V654"/>
+    <path d="M297 642Q405 637 512 684"/>
+    <path d="M727 642Q619 637 512 684"/>
+    <path d="M289 693H449C477 693 490 712 512 712C534 712 547 693 575 693H735"/>
+    <g stroke-linecap="butt">
+      <path d="M297 642L304 614"/>
+      <path d="M727 642L720 614"/>
+      <path d="M289 693L295 666"/>
+      <path d="M735 693L729 666"/>
+    </g>
+  </g>
+</svg>

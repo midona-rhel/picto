@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { Resvg } from '@resvg/resvg-js';
 
@@ -10,6 +12,7 @@ const build = path.join(root, 'build');
 const sources = path.join(build, 'icons');
 const iconComposer = path.join(build, 'Picto.icon');
 const iconComposerAssets = path.join(iconComposer, 'Assets');
+const execFileAsync = promisify(execFile);
 
 async function render(source, size) {
   const svg = await readFile(source, 'utf8');
@@ -76,6 +79,23 @@ async function main() {
   const icoImages = await Promise.all(icoSizes.map(async (size) => ({ size, png: await render(flatSource, size) })));
   await writeFile(path.join(build, 'icon.ico'), createIco(icoImages));
 
+  const librarySource = path.join(sources, 'picto-library-folder.svg');
+  const libraryPng = path.join(build, 'library-folder.png');
+  await writeFile(libraryPng, await render(librarySource, 1024));
+  const libraryIcoImages = await Promise.all(icoSizes.map(async (size) => ({ size, png: await render(librarySource, size) })));
+  await writeFile(path.join(build, 'library.ico'), createIco(libraryIcoImages));
+
+  if (process.platform === 'darwin') {
+    const appBuilderArch = process.arch === 'arm64' ? 'arm64' : 'amd64';
+    const appBuilder = path.join(root, 'node_modules', 'app-builder-bin', 'mac', `app-builder_${appBuilderArch}`);
+    const output = path.join(build, 'library-icns-output');
+    await rm(output, { recursive: true, force: true });
+    await mkdir(output, { recursive: true });
+    await execFileAsync(appBuilder, ['icon', '--format=icns', `--out=${output}`, `--input=${libraryPng}`, `--root=${root}`]);
+    await rename(path.join(output, 'icon.icns'), path.join(build, 'library.icns'));
+    await rm(output, { recursive: true, force: true });
+  }
+
   await Promise.all(composerLayers.map(async ([name, source]) => {
     const png = await render(path.join(sources, source), 1024);
     await writeFile(path.join(iconComposerAssets, `${name}.png`), png);
@@ -89,7 +109,7 @@ async function main() {
     },
   }, null, 2)}\n`);
 
-  console.log('Generated flat Picto icons and native Icon Composer layers.');
+  console.log('Generated Picto application and library package icons.');
 }
 
 await main();
