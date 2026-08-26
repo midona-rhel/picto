@@ -235,7 +235,9 @@ fn publish_file(
     }
     Ok(RemoteObject {
         path: object_path,
-        size_bytes: std::fs::metadata(resolved).map_err(|error| error.to_string())?.len(),
+        size_bytes: std::fs::metadata(resolved)
+            .map_err(|error| error.to_string())?
+            .len(),
         checksum: Some(checksum.clone()),
         revision: Some(checksum),
     })

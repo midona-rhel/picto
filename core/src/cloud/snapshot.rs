@@ -157,7 +157,9 @@ pub fn validate_compressed(path: &Path, expected_sha256: &str) -> Result<(), Str
         .map_err(|error| format!("Failed to stage snapshot validation: {error}"))?;
     std::io::copy(&mut decoder, &mut temporary)
         .map_err(|error| format!("Failed to decompress snapshot: {error}"))?;
-    temporary.flush().map_err(|error| format!("Failed to flush snapshot validation: {error}"))?;
+    temporary
+        .flush()
+        .map_err(|error| format!("Failed to flush snapshot validation: {error}"))?;
     // FTS5's integrity check uses temporary writes even though the database
     // itself is not modified, so validation needs a writable staging handle.
     let connection = Connection::open(temporary.path())
@@ -241,7 +243,10 @@ struct HashingReader<R> {
 
 impl<R> HashingReader<R> {
     fn new(inner: R) -> Self {
-        Self { inner, hasher: Sha256::new() }
+        Self {
+            inner,
+            hasher: Sha256::new(),
+        }
     }
 
     fn finish(self) -> String {

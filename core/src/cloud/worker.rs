@@ -94,7 +94,9 @@ async fn tick_inner(
     let mut result = TickResult::default();
     let remote_check_due = first_connection
         || reconnected
-        || state.last_remote_check_at.is_none_or(|last| now - last >= REMOTE_METADATA_POLL_INTERVAL);
+        || state
+            .last_remote_check_at
+            .is_none_or(|last| now - last >= REMOTE_METADATA_POLL_INTERVAL);
     let remote_pending = if remote_check_due {
         let pending = reconcile::remote_metadata_pending(application, &provider).await?;
         state.last_remote_check_at = Some(now);

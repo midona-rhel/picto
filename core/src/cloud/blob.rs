@@ -226,14 +226,13 @@ fn recovery_candidates(
                  LIMIT ?3"
             };
             let mut statement = connection.prepare(sql)?;
-            let mapped = statement.query_map(
-                params![state, threshold, remaining],
-                |row| Ok(Candidate {
+            let mapped = statement.query_map(params![state, threshold, remaining], |row| {
+                Ok(Candidate {
                     hash: row.get(0)?,
                     mime_type: row.get(1)?,
                     remote_extension: row.get(2)?,
-                }),
-            )?;
+                })
+            })?;
             rows.extend(mapped.collect::<rusqlite::Result<Vec<_>>>()?);
         }
         Ok((library_id, rows))
