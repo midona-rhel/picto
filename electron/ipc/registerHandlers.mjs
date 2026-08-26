@@ -1,9 +1,9 @@
 import { shell } from 'electron';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { arch, platform, release, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, extname, join } from 'node:path';
 import { clipboardFilePaths, clipboardHasImport, writeClipboardFilePaths } from './clipboardImport.mjs';
 import { createTrustedIpcHandle } from './trustedIpc.mjs';
 
@@ -23,22 +23,6 @@ function createReverseSearchConfigs() {
   `;
 
   return {
-    google: {
-      url: 'https://lens.google.com/',
-      preSetup: `(async () => {
-        ${waitForHelper}
-        await __waitFor('input[jsname="wcaWdc"][type="file"], input[type="file"][name="encoded_image"]');
-      })()`,
-      fileInputSelector: 'input[jsname="wcaWdc"][type="file"], input[type="file"][name="encoded_image"]',
-      postSetup: `(() => {
-        const input = document.querySelector('input[jsname="wcaWdc"][type="file"], input[type="file"][name="encoded_image"]');
-        if (!input?.files?.length) throw new Error('Google Lens did not receive the image');
-        input.dispatchEvent(new Event('input', { bubbles: true }));
-        input.dispatchEvent(new Event('change', { bubbles: true }));
-      })()`,
-      isResultUrl: (href) => /lens\.google\.com\/(search|upload)/.test(href)
-        || /google\.[^/]+\/search/.test(href) && /(?:[?&](?:udm=26|ep=|vsrid=))/.test(href),
-    },
     tineye: {
       url: 'https://tineye.com/',
       preSetup: `(async () => { ${waitForHelper} await __waitFor('#upload-box'); })()`,
@@ -147,12 +131,46 @@ function waitForReverseSearchResult(searchWin, cfg, engine, timeoutMs = 30_000) 
   });
 }
 
+async function uploadToGoogleLens(filePath, fetchImpl) {
+  const mimeTypes = {
+    '.bmp': 'image/bmp',
+    '.gif': 'image/gif',
+    '.jpeg': 'image/jpeg',
+    '.jpg': 'image/jpeg',
+    '.png': 'image/png',
+    '.webp': 'image/webp',
+  };
+  const body = new FormData();
+  body.append('encoded_image', new Blob([readFileSync(filePath)], {
+    type: mimeTypes[extname(filePath).toLowerCase()] ?? 'application/octet-stream',
+  }), basename(filePath));
+
+  const response = await fetchImpl(`https://lens.google.com/v3/upload?ep=ccm&s=&st=${Date.now()}`, {
+    method: 'POST',
+    body,
+    headers: { 'User-Agent': 'curl/8.7.1' },
+    redirect: 'follow',
+  });
+  if (!response.ok) throw new Error(`Google Lens upload failed (${response.status})`);
+  if (!/google\.[^/]+\/search/.test(response.url)) {
+    throw new Error(`Google Lens did not return a search result: ${response.url}`);
+  }
+  return response.url;
+}
+
 export async function runReverseImageSearch({
   BrowserWindow,
   filePath,
   engine,
   openExternal = (url) => shell.openExternal(url),
+  fetchImpl = globalThis.fetch,
 }) {
+  if (engine === 'google') {
+    const resultUrl = await uploadToGoogleLens(filePath, fetchImpl);
+    await openExternal(resultUrl);
+    return resultUrl;
+  }
+
   const configs = createReverseSearchConfigs();
   const cfg = configs[engine];
   if (!cfg) throw new Error(`Unknown search engine: ${engine}`);
