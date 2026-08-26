@@ -11,6 +11,7 @@ import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
 import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import * as entityMutations from '../../controllers/entityMutations';
+import { filesController } from '../../controllers/filesController';
 import { useImageZoom, type ImageSize } from './hooks/useImageZoom';
 import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { useRecordMediaView } from './hooks/useRecordMediaView';
@@ -138,11 +139,17 @@ export function QuickLookContent({
     const zoomInDef = getShortcut('view.zoomIn')!;
     const zoomOutDef = getShortcut('view.zoomOut')!;
     const actualDef = getShortcut('view.actualSize')!;
+    const copyDef = getShortcut('edit.copy')!;
 
       // Escape, Space (quicklook toggle), or Enter (detail toggle) all close
       if (matchesShortcutDef(e, closeDef) || matchesShortcutDef(e, quicklookDef) || matchesShortcutDef(e, detailDef)) { e.preventDefault(); onClose(currentItemId); return; }
       if (matchesShortcutDef(e, prevDef)) { e.preventDefault(); navigate(-1); return; }
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
+      if (matchesShortcutDef(e, copyDef)) {
+        e.preventDefault();
+        void filesController.copyTarget({ kind: 'explicit', item_ids: [currentItemId] });
+        return;
+      }
       if (isImage && matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }
       if (isImage && matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale * 1.25); return; }
       if (isImage && matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale / 1.25); return; }

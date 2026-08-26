@@ -146,6 +146,30 @@ describe('buildTileContextMenu', () => {
     expect(labels).not.toContain('Paste Import');
   });
 
+  it('copies multi-item and collection selections through the selection target', () => {
+    for (const context of [
+      { selectionCount: 2, singleSelected: false, singleKind: null },
+      { selectionCount: 1, singleSelected: true, singleKind: 'collection' as const },
+    ]) {
+      const onCopySelection = vi.fn();
+      const entries = buildTileContextMenu({
+        ...context,
+        querySelectionActive: false,
+        singleHash: context.singleSelected ? 'cover-hash' : null,
+        scopeKind: null,
+        statusFilter: null,
+        loadedCount: context.selectionCount,
+        onSelectAll: vi.fn(),
+        onDeselectAll: vi.fn(),
+        onCopySelection,
+      });
+      const copy = entries.find((entry) => 'label' in entry && entry.label === 'Copy');
+      expect(copy).toBeDefined();
+      if (copy && 'action' in copy) copy.action();
+      expect(onCopySelection).toHaveBeenCalledOnce();
+    }
+  });
+
   it('shows macOS Open With Other as an associated-application submenu', () => {
     const onOpenWithApplication = vi.fn();
     const entries = buildEntityOpenContextEntries({

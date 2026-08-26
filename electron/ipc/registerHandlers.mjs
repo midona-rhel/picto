@@ -4,7 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { clipboardFilePaths, clipboardHasImport } from './clipboardImport.mjs';
+import { clipboardFilePaths, clipboardHasImport, writeClipboardFilePaths } from './clipboardImport.mjs';
 import { createTrustedIpcHandle } from './trustedIpc.mjs';
 
 function createReverseSearchConfigs() {
@@ -226,6 +226,7 @@ export function registerIpcHandlers({
   updaterService,
   siteIconService,
   startNativeDrag,
+  copyFiles,
   getAssociatedApplications,
   openWithApplication,
   isDev,
@@ -422,12 +423,16 @@ export function registerIpcHandlers({
     return null;
   });
 
+  handle('picto:clipboard:copyFiles', async (_event, { filePaths }) => {
+    const paths = [...new Set((filePaths ?? []).filter((path) => typeof path === 'string' && path))];
+    if (paths.length === 0) throw new Error('No files were selected.');
+    writeClipboardFilePaths(clipboard, paths, { copyFiles });
+    return null;
+  });
+
   handle('picto:clipboard:copyFile', async (_event, { filePath }) => {
-    if (process.platform === 'darwin') {
-      clipboard.writeBookmark(filePath.split('/').pop(), `file://${filePath}`);
-    } else {
-      clipboard.writeText(filePath);
-    }
+    if (!filePath) throw new Error('No file was selected.');
+    writeClipboardFilePaths(clipboard, [filePath], { copyFiles });
     return null;
   });
 

@@ -76,6 +76,24 @@ pub fn resolve_file_paths(
         .collect()
 }
 
+/// Resolve every physical file represented by a logical item target.
+/// Collections expand in their stored member order.
+pub fn resolve_target_file_paths(
+    store: &Store,
+    blobs: &BlobStore,
+    target: &ItemTarget,
+) -> Result<Vec<ResolvedFilePath>, String> {
+    let item_ids = store.read_result(|connection| {
+        crate::query_v2::resolve_target_ids(connection, target)
+            .map_err(|error| error.to_string())
+    })?;
+    let hashes = ordered_media(store, &item_ids)?
+        .into_iter()
+        .map(|media| media.file_hash)
+        .collect::<Vec<_>>();
+    resolve_file_paths(store, blobs, &hashes)
+}
+
 /// Request one missing thumbnail without decoding media on the caller's thread.
 /// Visible requests replace a deferred per-item row with one immediately
 /// eligible file-level row; retries retain their backoff.
@@ -690,6 +708,26 @@ mod tests {
                 ))
                 .unwrap(),
             0
+        );
+    }
+
+    #[test]
+    fn target_path_resolution_expands_a_collection_in_member_order() {
+        let fixture = fixture();
+        let resolved = resolve_target_file_paths(
+            fixture.application.store(),
+            fixture.application.blobs(),
+            &ItemTarget::Explicit {
+                item_ids: vec![ItemId(10)],
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            resolved
+                .iter()
+                .map(|item| &item.file_hash)
+                .collect::<Vec<_>>(),
+            vec![&fixture.hashes[1], &fixture.hashes[0]],
         );
     }
 

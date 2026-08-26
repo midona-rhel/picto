@@ -15,6 +15,7 @@ import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { viewerDisplayStateAtom, viewerDisplayControlsAtom, type ViewerZoomControls } from '../../state/viewer';
 import * as entityMutations from '../../controllers/entityMutations';
+import { filesController } from '../../controllers/filesController';
 import { useImageZoom, type ImageSize } from './hooks/useImageZoom';
 import { useMediaImagePipeline } from '../../shared/hooks/useMediaImagePipeline';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
@@ -206,10 +207,16 @@ export function MediaView({
     const zoomInDef = getShortcut('view.zoomIn')!;
     const zoomOutDef = getShortcut('view.zoomOut')!;
     const actualDef = getShortcut('view.actualSize')!;
+    const copyDef = getShortcut('edit.copy')!;
 
       if (matchesShortcutDef(e, closeDef) || matchesShortcutDef(e, detailDef) || matchesShortcutDef(e, quicklookDef)) { e.preventDefault(); onClose(currentItemId); return; }
       if (matchesShortcutDef(e, prevDef)) { e.preventDefault(); navigate(-1); return; }
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
+      if (matchesShortcutDef(e, copyDef)) {
+        e.preventDefault();
+        void filesController.copyTarget({ kind: 'explicit', item_ids: [currentItemId] });
+        return;
+      }
       const activeZoom = usesRendererZoom ? pdfZoomControls : isImage ? {
         fitToWindow: zoom.fitToWindow,
         fitActual: zoom.fitActual,

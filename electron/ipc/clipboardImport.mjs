@@ -1,6 +1,35 @@
 import { existsSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+function escapeXml(value) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;');
+}
+
+export function writeClipboardFilePaths(
+  clipboard,
+  paths,
+  { platform = process.platform, copyFiles } = {},
+) {
+  if (platform === 'darwin') {
+    const entries = paths.map((path) => `<string>${escapeXml(path)}</string>`).join('');
+    const plist = `<?xml version="1.0" encoding="UTF-8"?><plist version="1.0"><array>${entries}</array></plist>`;
+    clipboard.writeBuffer('NSFilenamesPboardType', Buffer.from(plist, 'utf8'));
+    return;
+  }
+  if (copyFiles?.(paths)) return;
+  if (platform === 'linux') {
+    const uriList = `${paths.map((path) => pathToFileURL(path).href).join('\r\n')}\r\n`;
+    clipboard.writeBuffer('text/uri-list', Buffer.from(uriList, 'utf8'));
+    return;
+  }
+  throw new Error('Native file copying is unavailable on this platform.');
+}
 
 function decodeXml(value) {
   return value

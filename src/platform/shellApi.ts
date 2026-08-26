@@ -1,6 +1,7 @@
 import { invoke } from './ipc';
 import type { ResolvedFilePath } from '../shared/types/generated/application/ResolvedFilePath';
 import type { ThumbnailQueueResult } from '../shared/types/generated/application/ThumbnailQueueResult';
+import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 
 export interface AssociatedApplication {
   name: string;
@@ -92,8 +93,16 @@ export function clipboardWriteText(text: string): void {
   (window as any).picto?.clipboard?.writeText(text);
 }
 
-export function clipboardCopyFile(path: string): void {
-  (window as any).picto?.clipboard?.copyFile(path);
+export function clipboardCopyFile(path: string): Promise<void> {
+  return (window as any).picto?.clipboard?.copyFile(path) ?? Promise.resolve();
+}
+
+export function clipboardCopyFiles(paths: string[]): Promise<void> {
+  return (window as any).picto?.clipboard?.copyFiles(paths) ?? Promise.resolve();
+}
+
+export function resolveTargetFilePaths(target: ItemTarget): Promise<ResolvedFilePath[]> {
+  return invoke<ResolvedFilePath[]>('media.resolve_target_paths', { target });
 }
 
 export function hasClipboardImport(): Promise<boolean> {

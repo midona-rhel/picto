@@ -4,12 +4,14 @@ import {
 } from '../platform/folderApi';
 import {
   clipboardCopyFile,
+  clipboardCopyFiles,
   clipboardWriteText,
   hasClipboardImport,
   readClipboardImport,
   regenerateThumbnailsBatch,
   setThumbnail,
   resolveFilePath,
+  resolveTargetFilePaths,
   getOpenWithOptions,
   shellOpenPath,
   shellOpenWithApplication,
@@ -193,8 +195,8 @@ export const filesController = {
     clipboardWriteText(text);
   },
 
-  copyFile(path: string): void {
-    clipboardCopyFile(path);
+  copyFile(path: string): Promise<void> {
+    return clipboardCopyFile(path);
   },
 
   async openDefaultAppForHash(hash: string): Promise<void> {
@@ -229,7 +231,13 @@ export const filesController = {
 
   async copyFileForHash(hash: string): Promise<void> {
     const path = await resolveFilePath(hash);
-    if (path) clipboardCopyFile(path);
+    if (path) await clipboardCopyFile(path);
+  },
+
+  async copyTarget(target: EntityTarget): Promise<void> {
+    const resolved = await resolveTargetFilePaths(target);
+    if (resolved.length === 0) throw new Error('The selection has no physical files to copy.');
+    await clipboardCopyFiles(resolved.map((entry) => entry.path));
   },
 
   regenerateThumbnailsBatch(hashes: string[]) {

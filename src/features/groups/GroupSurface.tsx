@@ -338,6 +338,7 @@ export function GroupSurface({
       const detailDef = getShortcut('view.detailView')!;
       const quickLookDef = getShortcut('view.quicklook')!;
       const selectAllDef = getShortcut('edit.selectAll')!;
+      const copyDef = getShortcut('edit.copy')!;
       const removeMembersDef = getShortcut('group.removeMembers')!;
       const previousDef = getShortcut('view.prevImage')!;
       const nextDef = getShortcut('view.nextImage')!;
@@ -359,6 +360,19 @@ export function GroupSurface({
         event.preventDefault();
         setSelectedItemIds(new Set(members.map((item) => item.item_id)));
         setSelectionAnchorId(members[0]?.item_id ?? null);
+        return true;
+      }
+      if (mode === 'editor' && matchesShortcutDef(event, copyDef) && selectedItems.length > 0) {
+        event.preventDefault();
+        void filesController.copyTarget({
+          kind: 'explicit',
+          item_ids: selectedItems.map((item) => item.item_id),
+        });
+        return true;
+      }
+      if (mode === 'reader' && matchesShortcutDef(event, copyDef)) {
+        event.preventDefault();
+        void filesController.copyTarget({ kind: 'explicit', item_ids: [groupId] });
         return true;
       }
       if (mode === 'editor' && selectedItems.length > 0 && matchesShortcutDef(event, removeMembersDef)) {
@@ -472,6 +486,7 @@ export function GroupSurface({
         height: single.pixel_height,
       }); } : undefined,
       onCopyFile: (hash) => { void filesController.copyFileForHash(hash); },
+      onCopySelection: () => { void filesController.copyTarget(target); },
       onCopyFilePath: (hash) => { void filesController.copyFilePath(hash); },
       onCopyName: (name) => filesController.copyText(name),
       onCopyLink: (link) => filesController.copyText(link),

@@ -537,6 +537,7 @@ export function GridScreen({
       autoTag:         getShortcut('organize.autoTag')!,
       grayscale:       getShortcut('view.grayscale')!,
       pasteImport:     getShortcut('edit.pasteImport')!,
+      copy:           getShortcut('edit.copy')!,
     };
 
       // Don't handle grid shortcuts while a viewer is open — the viewer handles its own keys.
@@ -575,6 +576,16 @@ export function GridScreen({
           title: 'Could not paste import',
           message: reason instanceof Error ? reason.message : String(reason),
         }));
+        return;
+      }
+
+      if (matchesShortcutDef(e, defs.copy) && count > 0 && !querySelectionActiveRef.current) {
+        e.preventDefault();
+        void filesController.copyTarget({ kind: 'explicit', item_ids: [...itemIds] })
+          .catch((reason) => showErrorNotification({
+            title: 'Could not copy selection',
+            message: reason instanceof Error ? reason.message : String(reason),
+          }));
         return;
       }
 
@@ -1325,6 +1336,9 @@ export function GridScreen({
             onRevealInFolder: (hash) => { void filesController.revealHashInFolder(hash); },
             onCopyFilePath: (hash) => { void filesController.copyFilePath(hash); },
             onCopyFile: (hash) => { void filesController.copyFileForHash(hash); },
+            onCopySelection: effectiveSelectionMode === 'explicit' && effectiveTarget
+              ? () => { void filesController.copyTarget(effectiveTarget); }
+              : undefined,
             onCopyName: (name) => { filesController.copyText(name); },
             singleName: singleItem?.name ?? null,
             singleMime: singleItem?.display_mime_type ?? null,

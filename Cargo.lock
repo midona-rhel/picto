@@ -2733,6 +2733,7 @@ dependencies = [
  "napi-derive",
  "picto_core",
  "serde_json",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]

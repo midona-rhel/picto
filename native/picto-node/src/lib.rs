@@ -31,6 +31,81 @@ extern "C" {
     ) -> bool;
 }
 
+/// Put physical files on the operating-system clipboard.
+#[napi]
+pub fn copy_files(file_paths: Vec<String>) -> Result<bool> {
+    if file_paths.is_empty() {
+        return Ok(false);
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::mem::size_of;
+        use std::ptr::{copy_nonoverlapping, null_mut};
+        use windows_sys::Win32::System::DataExchange::{
+            CloseClipboard, EmptyClipboard, OpenClipboard, SetClipboardData, CF_HDROP,
+        };
+        use windows_sys::Win32::System::Memory::{
+            GlobalAlloc, GlobalFree, GlobalLock, GlobalUnlock, GHND,
+        };
+        use windows_sys::Win32::UI::Shell::DROPFILES;
+
+        let mut names = Vec::<u16>::new();
+        for path in &file_paths {
+            names.extend(path.encode_utf16());
+            names.push(0);
+        }
+        names.push(0);
+        let allocation_size = size_of::<DROPFILES>() + names.len() * size_of::<u16>();
+
+        unsafe {
+            if OpenClipboard(null_mut()) == 0 {
+                return Err(Error::from_reason("Could not open the system clipboard"));
+            }
+            EmptyClipboard();
+            let memory = GlobalAlloc(GHND, allocation_size);
+            if memory.is_null() {
+                CloseClipboard();
+                return Err(Error::from_reason(
+                    "Could not allocate a file clipboard payload",
+                ));
+            }
+            let locked = GlobalLock(memory) as *mut u8;
+            if locked.is_null() {
+                GlobalFree(memory);
+                CloseClipboard();
+                return Err(Error::from_reason(
+                    "Could not prepare a file clipboard payload",
+                ));
+            }
+            let header = locked as *mut DROPFILES;
+            (*header).pFiles = size_of::<DROPFILES>() as u32;
+            (*header).fWide = 1;
+            copy_nonoverlapping(
+                names.as_ptr() as *const u8,
+                locked.add(size_of::<DROPFILES>()),
+                names.len() * size_of::<u16>(),
+            );
+            GlobalUnlock(memory);
+            if SetClipboardData(CF_HDROP as u32, memory).is_null() {
+                GlobalFree(memory);
+                CloseClipboard();
+                return Err(Error::from_reason(
+                    "Could not write files to the system clipboard",
+                ));
+            }
+            CloseClipboard();
+        }
+        return Ok(true);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = file_paths;
+        Ok(false)
+    }
+}
+
 #[napi]
 pub async fn get_associated_applications(file_path: String) -> Result<String> {
     #[cfg(target_os = "macos")]

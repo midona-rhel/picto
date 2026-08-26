@@ -42,6 +42,10 @@ export function startNativeDrag(windowHandle, filePaths, iconRgba, iconWidth, ic
   return binding.startNativeDrag(windowHandle, filePaths, iconRgba, iconWidth, iconHeight);
 }
 
+export function copyFiles(filePaths) {
+  return binding.copyFiles(filePaths);
+}
+
 export async function getAssociatedApplications(filePath) {
   const result = await binding.getAssociatedApplications(filePath);
   return JSON.parse(result || '[]');

@@ -318,6 +318,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     const actualDef = getShortcut('view.actualSize');
     const closeDef = getShortcut('view.closeDetail');
     const copyPathDef = getShortcut('edit.copyFilePath');
+    const copyDef = getShortcut('edit.copy');
 
       // Close window
       if (closeDef && matchesShortcutDef(e, closeDef)) {
@@ -356,6 +357,11 @@ export function DetailWindow({ hash }: DetailWindowProps) {
       if (copyPathDef && matchesShortcutDef(e, copyPathDef)) {
         e.preventDefault();
         handleCopyPath();
+        return;
+      }
+      if (copyDef && matchesShortcutDef(e, copyDef) && currentImage) {
+        e.preventDefault();
+        void filesController.copyFileForHash(currentImage.hash);
       }
   }, { priority: 60 });
 

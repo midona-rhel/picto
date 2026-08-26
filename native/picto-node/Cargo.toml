@@ -13,6 +13,9 @@ napi-derive = "2.16"
 serde_json = "1.0"
 picto_core = { path = "../../core" }
 
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_System_DataExchange", "Win32_System_Memory", "Win32_UI_Shell"] }
+
 [build-dependencies]
 napi-build = "2.1"
 cc = "1"

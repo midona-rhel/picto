@@ -170,6 +170,14 @@ pub fn dispatch(
                 &input.file_hashes,
             )?)
         }
+        "media.resolve_target_paths" => {
+            let input: TargetInput = parse(args_json)?;
+            read(crate::media_io_v2::resolve_target_file_paths(
+                application.store(),
+                application.blobs(),
+                &input.target,
+            )?)
+        }
         "media.regenerate_thumbnails" => {
             let input: FileHashesInput = parse(args_json)?;
             let output = crate::media_io_v2::enqueue_thumbnail_regeneration(
