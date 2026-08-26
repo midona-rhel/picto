@@ -581,7 +581,11 @@ fn compare_quality_with_recency(
 
 const HASH_COMPONENT_BYTES: usize = 32;
 const SUPPORTED_PHASH_BYTES: usize = HASH_COMPONENT_BYTES * 2;
-const DETAIL_DISTANCE_THRESHOLD: u32 = 32;
+pub(crate) const DEFAULT_GLOBAL_DISTANCE_THRESHOLD: u32 = 16;
+const DETAIL_DISTANCE_THRESHOLD: u32 = 48;
+const MAX_NEAR_SIGNATURE_GROUPS: usize = 512;
+const MAX_SIGNATURE_REPRESENTATIVES: usize = 32;
+const MAX_SPATIAL_COMPARISONS: usize = 1_000_000;
 const COMPARISON_SIDE: u32 = 96;
 const DISTINCT_COLOR_DELTA: f32 = 8.0;
 const STRONG_COLOR_DELTA: f32 = 16.0;
@@ -684,44 +688,78 @@ fn bits_as_key(bytes: &[u8], start: usize, length: usize) -> u64 {
     key
 }
 
-fn find_candidate_pairs(
+struct SignatureGroup {
+    file_ids: Vec<i64>,
+    global: ImageHash<Vec<u8>>,
+    detail: ImageHash<Vec<u8>>,
+}
+
+struct CandidatePlan {
+    groups: Vec<SignatureGroup>,
+    neighboring_groups: Vec<(usize, usize, u32)>,
+}
+
+fn candidate_plan(
     parsed: &[(i64, ImageHash<Vec<u8>>)],
     threshold: u32,
-) -> Vec<(i64, i64, u32)> {
-    let signatures = parsed
+) -> rusqlite::Result<CandidatePlan> {
+    let mut group_by_signature = HashMap::<Vec<u8>, usize>::new();
+    let mut groups = Vec::<SignatureGroup>::new();
+    for (file_id, hash) in parsed
         .iter()
         .filter(|(_, hash)| hash.as_bytes().len() == SUPPORTED_PHASH_BYTES)
-        .filter_map(|(file_id, hash)| {
-            Some((
-                *file_id,
-                ImageHash::<Vec<u8>>::from_bytes(&hash.as_bytes()[..HASH_COMPONENT_BYTES]).ok()?,
-                ImageHash::<Vec<u8>>::from_bytes(&hash.as_bytes()[HASH_COMPONENT_BYTES..]).ok()?,
-            ))
-        })
-        .collect::<Vec<_>>();
-    let globals = signatures
-        .iter()
-        .map(|(file_id, global, _)| (*file_id, global.clone()))
-        .collect::<Vec<_>>();
-    let details = signatures
-        .iter()
-        .map(|(file_id, _, detail)| (*file_id, detail))
-        .collect::<HashMap<_, _>>();
-    let mut index = CandidateIndex::new(threshold);
-    let mut pairs = Vec::new();
-    for (entry_index, (file_id, hash)) in globals.iter().enumerate() {
-        pairs.extend(
-            index
-                .find_within(&globals, hash)
-                .into_iter()
-                .filter(|(other_file_id, _)| {
-                    details[other_file_id].dist(details[file_id]) <= DETAIL_DISTANCE_THRESHOLD
-                })
-                .map(|(other_file_id, distance)| (other_file_id, *file_id, distance)),
-        );
-        index.insert(entry_index, hash);
+    {
+        let signature = hash.as_bytes().to_vec();
+        if let Some(group_index) = group_by_signature.get(&signature) {
+            groups[*group_index].file_ids.push(*file_id);
+            continue;
+        }
+        let Ok(global) = ImageHash::<Vec<u8>>::from_bytes(&signature[..HASH_COMPONENT_BYTES])
+        else {
+            continue;
+        };
+        let Ok(detail) = ImageHash::<Vec<u8>>::from_bytes(&signature[HASH_COMPONENT_BYTES..])
+        else {
+            continue;
+        };
+        group_by_signature.insert(signature, groups.len());
+        groups.push(SignatureGroup {
+            file_ids: vec![*file_id],
+            global,
+            detail,
+        });
     }
-    pairs
+
+    let globals = groups
+        .iter()
+        .enumerate()
+        .map(|(group_index, group)| (group_index as i64, group.global.clone()))
+        .collect::<Vec<_>>();
+    let mut index = CandidateIndex::new(threshold);
+    let mut neighboring_groups = Vec::new();
+    for (group_index, group) in groups.iter().enumerate() {
+        let neighbors = index.find_within(&globals, &group.global);
+        if neighbors.len() > MAX_NEAR_SIGNATURE_GROUPS {
+            return Err(invalid(format!(
+                "duplicate scan paused: one perceptual-hash neighborhood contains more than {MAX_NEAR_SIGNATURE_GROUPS} distinct signatures"
+            )));
+        }
+        neighboring_groups.extend(neighbors.into_iter().filter_map(
+            |(other_group_index, distance)| {
+                let other_group = &groups[other_group_index as usize];
+                (other_group.detail.dist(&group.detail) <= DETAIL_DISTANCE_THRESHOLD).then_some((
+                    other_group_index as usize,
+                    group_index,
+                    distance,
+                ))
+            },
+        ));
+        index.insert(group_index, &group.global);
+    }
+    Ok(CandidatePlan {
+        groups,
+        neighboring_groups,
+    })
 }
 
 #[derive(Clone)]
@@ -997,18 +1035,75 @@ pub fn scan(app: &Application, distance_threshold: u32) -> Result<DuplicateScanR
                         .map(|hash| (file.file_id, hash))
                 })
                 .collect::<Vec<_>>();
-            let pairs = find_candidate_pairs(&parsed, distance_threshold);
-
-            transaction.execute("DELETE FROM duplicate WHERE status = 'detected'", [])?;
+            let plan = candidate_plan(&parsed, distance_threshold)?;
             let by_id = files
                 .into_iter()
                 .map(|file| (file.file_id, file))
                 .collect::<HashMap<_, _>>();
             let mut spatial_cache = HashMap::new();
+            let mut spatial_comparisons = 0usize;
+            let mut verified_pairs = Vec::new();
+            let mut representatives = Vec::<Vec<i64>>::with_capacity(plan.groups.len());
+            for group in &plan.groups {
+                let mut group_representatives = Vec::new();
+                for file_id in &group.file_ids {
+                    let Some(file) = by_id.get(file_id) else {
+                        continue;
+                    };
+                    let mut matched = false;
+                    for representative_id in &group_representatives {
+                        spatial_comparisons += 1;
+                        if spatial_comparisons > MAX_SPATIAL_COMPARISONS {
+                            return Err(invalid("duplicate scan paused: spatial verification budget exceeded"));
+                        }
+                        let Some(representative) = by_id.get(representative_id) else {
+                            continue;
+                        };
+                        if let Some(distance) =
+                            spatially_verify_pair(app, representative, file, &mut spatial_cache)
+                        {
+                            verified_pairs.push((*representative_id, *file_id, distance));
+                            matched = true;
+                            break;
+                        }
+                    }
+                    if !matched {
+                        if group_representatives.len() >= MAX_SIGNATURE_REPRESENTATIVES {
+                            return Err(invalid(format!(
+                                "duplicate scan paused: one exact hash signature contains more than {MAX_SIGNATURE_REPRESENTATIVES} visually distinct representatives"
+                            )));
+                        }
+                        group_representatives.push(*file_id);
+                    }
+                }
+                representatives.push(group_representatives);
+            }
+
+            for (left_group, right_group, _global_distance) in plan.neighboring_groups {
+                for left_id in &representatives[left_group] {
+                    for right_id in &representatives[right_group] {
+                        spatial_comparisons += 1;
+                        if spatial_comparisons > MAX_SPATIAL_COMPARISONS {
+                            return Err(invalid("duplicate scan paused: spatial verification budget exceeded"));
+                        }
+                        let (Some(left), Some(right)) = (by_id.get(left_id), by_id.get(right_id))
+                        else {
+                            continue;
+                        };
+                        if let Some(distance) =
+                            spatially_verify_pair(app, left, right, &mut spatial_cache)
+                        {
+                            verified_pairs.push((*left_id, *right_id, distance));
+                        }
+                    }
+                }
+            }
+
+            transaction.execute("DELETE FROM duplicate WHERE status = 'detected'", [])?;
             let mut candidates = Vec::new();
             let mut affected_item_ids: BTreeSet<i64> = BTreeSet::new();
 
-            for (first, second, _global_distance) in pairs {
+            for (first, second, distance) in verified_pairs {
                 let (file_id_a, file_id_b) = if first < second {
                     (first, second)
                 } else {
@@ -1018,11 +1113,6 @@ pub fn scan(app: &Application, distance_threshold: u32) -> Result<DuplicateScanR
                     continue;
                 };
                 let Some(right_file) = by_id.get(&file_id_b) else {
-                    continue;
-                };
-                let Some(distance) =
-                    spatially_verify_pair(app, left_file, right_file, &mut spatial_cache)
-                else {
                     continue;
                 };
                 let inserted = transaction.execute(
@@ -1710,7 +1800,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        compare_quality, compare_quality_with_encoding, count_candidates, find_candidate_pairs,
+        candidate_plan, compare_quality, compare_quality_with_encoding, count_candidates,
         jpeg_encoding_class, list_candidates, parse_jpeg_quantization, parse_supported_hash,
         resolve, scan, spatial_comparison, spatial_descriptor, spatially_consistent,
         tiff_encoding_class, webp_encoding_class, EncodingClass, FileQuality, QualityDecision,
@@ -1733,10 +1823,14 @@ mod tests {
     }
 
     fn write_test_thumbnail(app: &Application, hash: &str) {
+        write_test_thumbnail_color(app, hash, [80, 120, 160]);
+    }
+
+    fn write_test_thumbnail_color(app: &Application, hash: &str, color: [u8; 3]) {
         let image = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(
             64,
             64,
-            image::Rgb([80, 120, 160]),
+            image::Rgb(color),
         ));
         app.blobs()
             .write_thumbnail(hash, &encoded_png(&image), "png")
@@ -2169,7 +2263,7 @@ mod tests {
         assert!(parse_supported_hash(&short.to_base64()).is_none());
         assert!(parse_supported_hash("not-a-base64-hash").is_none());
 
-        let pairs = find_candidate_pairs(
+        let plan = candidate_plan(
             &[
                 (10, base),
                 (11, ImageHash::<Vec<u8>>::from_bytes(&one_bit).unwrap()),
@@ -2177,8 +2271,101 @@ mod tests {
                 (13, short),
             ],
             1,
-        );
-        assert_eq!(pairs, vec![(10, 11, 1)]);
+        )
+        .unwrap();
+        assert_eq!(plan.groups.len(), 3);
+        assert_eq!(plan.neighboring_groups, vec![(0, 1, 1)]);
+    }
+
+    #[test]
+    fn identical_signature_groups_use_linear_star_edges() {
+        let signature = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 64]).unwrap();
+        let files = (1..=10_000)
+            .map(|file_id| (file_id, signature.clone()))
+            .collect::<Vec<_>>();
+
+        let plan = candidate_plan(&files, 16).unwrap();
+
+        assert_eq!(plan.groups.len(), 1);
+        assert_eq!(plan.groups[0].file_ids.len(), files.len());
+        assert!(plan.neighboring_groups.is_empty());
+    }
+
+    #[test]
+    fn exact_hash_collisions_form_additional_visual_representatives() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        let perceptual_hash = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 64])
+            .unwrap()
+            .to_base64();
+        let hashes = [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        ];
+        app.store()
+            .transaction(|transaction| {
+                for (index, hash) in hashes.iter().enumerate() {
+                    let item_id = index as i64 + 1;
+                    let file_id = index as i64 + 10;
+                    transaction.execute(
+                        "INSERT INTO library_item
+                             (item_id, item_key, kind, created_at, updated_at)
+                         VALUES (?1, ?2, 'media', 'now', 'now')",
+                        params![item_id, format!("item-{item_id}")],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
+                        [item_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_file
+                             (file_id, file_hash, mime_type, size_bytes, pixel_width,
+                              pixel_height, perceptual_hash, created_at)
+                         VALUES (?1, ?2, 'image/png', 100, 64, 64, ?3, 'now')",
+                        params![file_id, hash, perceptual_hash],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
+                         VALUES (?1, ?2, 'now', 'now')",
+                        params![item_id, file_id],
+                    )?;
+                }
+                Ok(())
+            })
+            .unwrap();
+        write_test_thumbnail_color(&app, hashes[0], [220, 20, 20]);
+        write_test_thumbnail_color(&app, hashes[1], [20, 20, 220]);
+        write_test_thumbnail_color(&app, hashes[2], [20, 20, 220]);
+
+        let result = scan(&app, 16).unwrap();
+        let candidates = list_candidates(&app, 10).unwrap();
+
+        assert_eq!(result.candidate_count, 1);
+        assert_eq!((candidates[0].file_id_a, candidates[0].file_id_b), (11, 12));
+    }
+
+    #[test]
+    fn dense_unique_signature_neighborhoods_stop_before_quadratic_expansion() {
+        let mut files = Vec::new();
+        let mut file_id = 1_i64;
+        'outer: for first in 0..33 {
+            for second in (first + 1)..33 {
+                let mut bytes = [0_u8; 64];
+                bytes[first / 8] |= 1 << (7 - first % 8);
+                bytes[second / 8] |= 1 << (7 - second % 8);
+                files.push((file_id, ImageHash::<Vec<u8>>::from_bytes(&bytes).unwrap()));
+                file_id += 1;
+                if files.len() == super::MAX_NEAR_SIGNATURE_GROUPS + 2 {
+                    break 'outer;
+                }
+            }
+        }
+
+        let error = candidate_plan(&files, 4).err().unwrap();
+
+        assert!(error.to_string().contains("duplicate scan paused"));
+        assert!(error.to_string().contains("distinct signatures"));
     }
 
     #[test]

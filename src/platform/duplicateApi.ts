@@ -36,7 +36,7 @@ function toPair(candidate: DuplicateCandidate): DuplicatePair {
   };
 }
 
-export function scanDuplicates(distanceThreshold = 10): Promise<DuplicateScanSummary> {
+export function scanDuplicates(distanceThreshold = 16): Promise<DuplicateScanSummary> {
   return invoke<DuplicateScanResult>('duplicates.scan', {
     distance_threshold: distanceThreshold,
   });

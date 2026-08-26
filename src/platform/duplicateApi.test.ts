@@ -66,6 +66,18 @@ describe('duplicateApi', () => {
     expect(page.total).toBe(1);
   });
 
+  it('uses the broadened global candidate threshold by default', async () => {
+    vi.mocked(invoke).mockResolvedValue({
+      candidate_count: 0,
+      affected_item_ids: [],
+      receipt: { revision: 3, resources: ['duplicates'], item_ids: [] },
+    });
+
+    await scanDuplicates();
+
+    expect(invoke).toHaveBeenCalledWith('duplicates.scan', { distance_threshold: 16 });
+  });
+
   it('resolves explicit choices using physical file IDs', async () => {
     vi.mocked(invoke).mockResolvedValue({
       choice: { KeepFile: { winner_file_id: 4 } },

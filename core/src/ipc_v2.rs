@@ -1283,7 +1283,7 @@ fn default_page_limit() -> usize {
     100
 }
 fn default_distance_threshold() -> u32 {
-    10
+    crate::duplicates_v2::DEFAULT_GLOBAL_DISTANCE_THRESHOLD
 }
 fn default_provenance_mask() -> i64 {
     1
