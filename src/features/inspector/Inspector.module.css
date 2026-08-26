@@ -212,8 +212,14 @@
   justify-content: center;
   transform-origin: center;
   transition:
+    opacity 200ms var(--ease-default),
     transform 200ms var(--ease-default),
     filter 200ms var(--ease-default);
+}
+
+.stackItemExit {
+  opacity: 0;
+  pointer-events: none;
 }
 
 .stackItemBase {

@@ -290,6 +290,7 @@ export function CanvasGrid({
     startX: 0, startY: 0, active: false, shiftKey: false, lastClientX: 0, lastClientY: 0,
   });
   const marqueeRectRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
+  const marqueeSelectionRef = useRef<{ itemIds: Set<number>; folderNodeIds: Set<string> } | null>(null);
   const marqueeBaseSelectionRef = useRef<Set<number>>(new Set());
   const marqueeBaseFolderSelectionRef = useRef<Set<string>>(new Set());
   const dragJustEndedRef = useRef(false);
@@ -594,11 +595,12 @@ export function CanvasGrid({
     const scrollTop = renderWindow.scrollTop - GRID_RESIZE_RENDER_MARGIN;
 
     // Selection follows the rendered thumbnail, not the empty tile cell.
-    if (selectedItemIds.size > 0) {
+    const paintedSelection = marqueeSelectionRef.current?.itemIds ?? selectedItemIdsRef.current;
+    if (paintedSelection.size > 0) {
       const visible = activeTilesRef.current;
       for (let k = 0; k < visible.length; k++) {
         const i = visible[k];
-        if (!selectedItemIds.has(layoutModel.items[i]?.itemId)) continue;
+        if (!paintedSelection.has(layoutModel.items[i]?.itemId)) continue;
         const pos = layoutModel.positions[i];
         const item = layoutModel.items[i];
         if (!pos || !item) continue;
@@ -1237,6 +1239,7 @@ export function CanvasGrid({
       ? new Set(selectedFolderNodeIds)
       : new Set();
     marqueeRectRef.current = null;
+    marqueeSelectionRef.current = null;
     autoScrollSpeedRef.current = 0;
     container.setPointerCapture(e.pointerId);
 
@@ -1258,7 +1261,7 @@ export function CanvasGrid({
           if (w >= 5 || h >= 5) {
             marqueeRectRef.current = { left: l, top: t, width: w, height: h };
             setMarqueeVisual({ left: l, top: t + headerHeight, width: w, height: h });
-            onMarqueeSelectionChange?.(collectMarqueeHits(l, t, w, h));
+            marqueeSelectionRef.current = collectMarqueeHits(l, t, w, h);
           }
           markDirty('both');
         }
@@ -1340,7 +1343,7 @@ export function CanvasGrid({
     setMarqueeVisual({ left, top: top + headerHeight, width, height });
 
     // Compute intersecting tiles (canvas + folder DOM)
-    onMarqueeSelectionChange?.(collectMarqueeHits(left, top, width, height));
+    marqueeSelectionRef.current = collectMarqueeHits(left, top, width, height);
     markDirty('overlay');
   }, [items, onMarqueeSelectionChange, markDirty, collectMarqueeHits, headerHeight]);
 
@@ -1350,8 +1353,10 @@ export function CanvasGrid({
     if (isDragActive()) return;
     if (!marqueeRef.current.active) return;
     const hadVisibleMarquee = marqueeRectRef.current != null;
+    const committedSelection = marqueeSelectionRef.current;
     marqueeRef.current.active = false;
     marqueeRectRef.current = null;
+    marqueeSelectionRef.current = null;
     setMarqueeVisual(null);
     autoScrollSpeedRef.current = 0;
     if (autoScrollRef.current != null) {
@@ -1360,9 +1365,12 @@ export function CanvasGrid({
     }
     const container = containerRef.current;
     if (container) container.releasePointerCapture(e.pointerId);
-    if (hadVisibleMarquee) dragJustEndedRef.current = true;
+    if (hadVisibleMarquee) {
+      dragJustEndedRef.current = true;
+      if (committedSelection) onMarqueeSelectionChange?.(committedSelection);
+    }
     markDirty('overlay');
-  }, [markDirty]);
+  }, [markDirty, onMarqueeSelectionChange]);
 
   // ── Render ──
   return (

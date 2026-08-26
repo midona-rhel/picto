@@ -6,7 +6,7 @@
  * - Multiple items selected → shared tags/folders from backend
  */
 
-import { forwardRef, useEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useAtomValue, getDefaultStore } from 'jotai';
 import { IconAlertCircle, IconFolder } from '@tabler/icons-react';
@@ -256,43 +256,107 @@ function StackedPreview({
   backgrounds: readonly (string | null)[];
   fontHashes: ReadonlySet<string>;
 }) {
-  const previousHashes = useRef<ReadonlySet<string>>(new Set());
   const previews = hashes.slice(-5);
-  const enteringHashes = new Set(previews.filter((hash) => !previousHashes.current.has(hash)));
+  const previewOffset = hashes.length - previews.length;
+  type StackPose = 'base' | 'left' | 'right';
+  type StackEntry = {
+    hash: string;
+    background: string | null;
+    font: boolean;
+    pose: StackPose;
+    z: number;
+    entering: boolean;
+    exiting: boolean;
+  };
+  const poses = useRef(new Map<string, StackPose>());
+  const nextPose = useRef(0);
+  const nextZ = useRef(0);
+  const makeEntry = (hash: string, index: number, entering: boolean): StackEntry => {
+    let pose = poses.current.get(hash);
+    if (!pose) {
+      const sequence = nextPose.current++;
+      pose = sequence === 0 ? 'base' : sequence % 2 === 0 ? 'left' : 'right';
+      poses.current.set(hash, pose);
+    }
+    return {
+      hash,
+      background: backgrounds[previewOffset + index] ?? null,
+      font: fontHashes.has(hash),
+      pose,
+      z: nextZ.current++,
+      entering,
+      exiting: false,
+    };
+  };
+  const [displayed, setDisplayed] = useState<StackEntry[]>(() => (
+    previews.map((hash, index) => makeEntry(hash, index, false))
+  ));
+  const previewKey = previews.join('\u0000');
+  const metadataKey = previews.map((hash, index) => (
+    `${backgrounds[previewOffset + index] ?? ''}:${fontHashes.has(hash) ? 1 : 0}`
+  )).join('\u0000');
+
+  useLayoutEffect(() => {
+    setDisplayed((current) => {
+      const byHash = new Map(current.map((entry) => [entry.hash, entry]));
+      const next = previews.map((hash, index) => {
+        const existing = byHash.get(hash);
+        if (!existing) return makeEntry(hash, index, true);
+        return {
+          ...existing,
+          background: backgrounds[previewOffset + index] ?? null,
+          font: fontHashes.has(hash),
+          entering: false,
+          exiting: false,
+        };
+      });
+      const availableExitSlots = Math.max(0, 5 - next.length);
+      const exiting = current
+        .filter((entry) => !previews.includes(entry.hash) && !entry.exiting)
+        .slice(-availableExitSlots)
+        .map((entry) => ({ ...entry, entering: false, exiting: true }));
+      return [...next, ...exiting];
+    });
+  }, [previewKey, metadataKey]);
 
   useEffect(() => {
-    previousHashes.current = new Set(previews);
-  }, [previews]);
+    if (!displayed.some((entry) => entry.exiting)) return;
+    const timeout = window.setTimeout(() => {
+      setDisplayed((current) => current.filter((entry) => !entry.exiting));
+    }, 220);
+    return () => window.clearTimeout(timeout);
+  }, [displayed]);
 
-  if (previews.length === 0) return null;
+  if (displayed.length === 0) return null;
+  const topHash = previews[previews.length - 1];
   return (
     <div className={styles.preview}>
       <div className={styles.stackContainer}>
-        {previews.map((hash, i) => {
-          const top = i === previews.length - 1;
-          const motionClass = i === 0
+        {displayed.map((entry) => {
+          const top = entry.hash === topHash;
+          const motionClass = entry.pose === 'base'
             ? styles.stackItemBase
-            : i % 2 === 0 ? styles.stackItemLeft : styles.stackItemRight;
-          const enterClass = enteringHashes.has(hash) && i > 0
-            ? i % 2 === 0 ? styles.stackItemEnterLeft : styles.stackItemEnterRight
+            : entry.pose === 'left' ? styles.stackItemLeft : styles.stackItemRight;
+          const enterClass = entry.entering && entry.pose !== 'base'
+            ? entry.pose === 'left' ? styles.stackItemEnterLeft : styles.stackItemEnterRight
             : '';
           return (
             <div
-              key={hash}
-              className={`${styles.stackItem} ${motionClass} ${enterClass}`}
-              data-inspector-preview-hash={hash}
-              data-inspector-stack-position={top ? 'top' : 'behind'}
+              key={entry.hash}
+              className={`${styles.stackItem} ${motionClass} ${enterClass} ${entry.exiting ? styles.stackItemExit : ''}`}
+              data-inspector-preview-hash={entry.hash}
+              data-inspector-stack-position={entry.exiting ? 'exiting' : top ? 'top' : 'behind'}
               style={{
-              zIndex: i, filter: top ? undefined : 'brightness(0.7)',
+              zIndex: entry.z, filter: top ? undefined : 'brightness(0.7)',
               }}
             >
-              <div className={styles.previewFrame} style={{ background: backgrounds[i] ?? undefined }}>
+              <div className={styles.previewFrame} style={{ background: entry.background ?? undefined }}>
                 <ThumbnailImage
-                  src={`media://localhost/thumb/${hash}.jpg`}
+                  src={`media://localhost/thumb/${entry.hash}.jpg`}
                   alt=""
                   className={styles.previewImage}
                   draggable={false}
-                  fallback={fontHashes.has(hash) ? 'font' : 'broken'}
+                  fallback={entry.font ? 'font' : 'broken'}
                 />
                 <div className={styles.previewGlass} />
               </div>
