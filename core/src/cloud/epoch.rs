@@ -74,7 +74,7 @@ pub async fn flush(
     let checksum = hex::encode(Sha256::digest(&encoded));
     let seal = force_seal || encoded.len() as i64 >= SEALED_PACK_MAX_BYTES;
     let root = format!("picto/{}/", pack.library_id);
-    ensure_manifest(provider, &pack.library_id).await?;
+    ensure_manifest(store, provider, &pack.library_id).await?;
     let epoch_path = if seal {
         let last = pack
             .mutations
@@ -247,18 +247,36 @@ pub(crate) fn sealed_pack_end(path: &str) -> Option<HybridTimestamp> {
     })
 }
 
-async fn ensure_manifest(provider: &dyn CloudProvider, library_id: &str) -> Result<(), String> {
+pub async fn ensure_manifest(
+    store: &Store,
+    provider: &dyn CloudProvider,
+    library_id: &str,
+) -> Result<(), String> {
     let path = format!("picto/{library_id}/library.json");
-    if provider
-        .list(&format!("picto/{library_id}"))
-        .await?
-        .iter()
-        .any(|object| object.path == path)
-    {
+    let name = library_name(store);
+    if provider.exists(&path).await? {
+        let bytes = provider.download(&path).await?;
+        let mut manifest: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|error| format!("Invalid Picto cloud library manifest: {error}"))?;
+        if manifest
+            .get("name")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Ok(());
+        }
+        manifest["name"] = serde_json::Value::String(name);
+        let updated = serde_json::to_vec(&manifest).map_err(|error| error.to_string())?;
+        let previous_checksum = hex::encode(Sha256::digest(&bytes));
+        let checksum = hex::encode(Sha256::digest(&updated));
+        provider
+            .upload_if_revision(&path, updated, &checksum, Some(&previous_checksum))
+            .await?;
         return Ok(());
     }
     let manifest = serde_json::to_vec(&serde_json::json!({
         "library_id": library_id,
+        "name": name,
         "schema_generation": super::CLOUD_SCHEMA_GENERATION,
         "created_at": Utc::now().to_rfc3339(),
     }))
@@ -266,6 +284,17 @@ async fn ensure_manifest(provider: &dyn CloudProvider, library_id: &str) -> Resu
     let checksum = hex::encode(Sha256::digest(&manifest));
     provider.upload(&path, manifest, &checksum).await?;
     Ok(())
+}
+
+fn library_name(store: &Store) -> String {
+    store
+        .library_root()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(|name| name.strip_suffix(".library").unwrap_or(name))
+        .filter(|name| !name.trim().is_empty())
+        .unwrap_or("Picto Library")
+        .to_string()
 }
 
 fn json_sql_error(error: serde_json::Error) -> rusqlite::Error {
@@ -277,6 +306,67 @@ mod tests {
     use super::*;
     use crate::cloud::provider::DirectoryProvider;
     use crate::cloud::{record_local, CloudOperation};
+
+    fn cloud_library_id(store: &Store) -> String {
+        store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT library_id FROM cloud_state WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn manifest_uses_the_library_name_instead_of_presenting_only_its_id() {
+        let temporary = tempfile::tempdir().unwrap();
+        let library = temporary.path().join("Reference Art.library");
+        std::fs::create_dir(&library).unwrap();
+        let remote = tempfile::tempdir().unwrap();
+        let store = Store::open(&library).unwrap();
+        let provider = DirectoryProvider::open(remote.path()).unwrap();
+        let library_id = cloud_library_id(&store);
+
+        ensure_manifest(&store, &provider, &library_id)
+            .await
+            .unwrap();
+
+        let bytes = provider
+            .download(&format!("picto/{library_id}/library.json"))
+            .await
+            .unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(manifest["name"], "Reference Art");
+    }
+
+    #[tokio::test]
+    async fn manifest_enriches_an_existing_hash_only_cloud_library() {
+        let temporary = tempfile::tempdir().unwrap();
+        let library = temporary.path().join("Reference Art.library");
+        std::fs::create_dir(&library).unwrap();
+        let remote = tempfile::tempdir().unwrap();
+        let store = Store::open(&library).unwrap();
+        let provider = DirectoryProvider::open(remote.path()).unwrap();
+        let library_id = cloud_library_id(&store);
+        let path = format!("picto/{library_id}/library.json");
+        let original = serde_json::to_vec(&serde_json::json!({
+            "library_id": library_id,
+            "schema_generation": super::super::CLOUD_SCHEMA_GENERATION,
+        }))
+        .unwrap();
+        let checksum = hex::encode(Sha256::digest(&original));
+        provider.upload(&path, original, &checksum).await.unwrap();
+
+        ensure_manifest(&store, &provider, &library_id)
+            .await
+            .unwrap();
+
+        let bytes = provider.download(&path).await.unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(manifest["name"], "Reference Art");
+    }
 
     #[tokio::test]
     async fn publishes_epoch_before_frontier_and_marks_outbox_after_confirmation() {

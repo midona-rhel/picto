@@ -24,6 +24,7 @@ pub struct RemoteObject {
 
 pub trait CloudProvider: Send + Sync {
     fn connectivity(&self) -> ProviderFuture<'_, bool>;
+    fn exists(&self, path: &str) -> ProviderFuture<'_, bool>;
     fn list(&self, prefix: &str) -> ProviderFuture<'_, Vec<RemoteObject>>;
     fn download(&self, path: &str) -> ProviderFuture<'_, Vec<u8>>;
     fn upload(
@@ -279,6 +280,11 @@ impl CloudProvider for DirectoryProvider {
     fn connectivity(&self) -> ProviderFuture<'_, bool> {
         let root = self.root.clone();
         Box::pin(async move { Ok(root.is_dir()) })
+    }
+
+    fn exists(&self, path: &str) -> ProviderFuture<'_, bool> {
+        let resolved = self.resolve(path);
+        Box::pin(async move { Ok(resolved?.is_file()) })
     }
 
     fn list(&self, prefix: &str) -> ProviderFuture<'_, Vec<RemoteObject>> {

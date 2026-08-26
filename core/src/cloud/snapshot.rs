@@ -161,6 +161,7 @@ pub async fn publish(
     epoch::flush(store, provider, true).await?;
     let artifact = create_verified(store)?;
     let (library_id, frontier) = identity_and_frontier(store)?;
+    epoch::ensure_manifest(store, provider, &library_id).await?;
     let root = format!("picto/{library_id}/snapshots/{}", artifact.snapshot_id);
     let artifact_path = format!("{root}.sqlite.zst");
     let manifest_path = format!("{root}.json");

@@ -61,6 +61,7 @@ interface DetectedCloudRoot {
 interface CloudLibraryChoice {
   root: DetectedCloudRoot;
   library_id: string;
+  name: string;
   schema_generation: number;
   created_at: string;
 }
@@ -557,11 +558,11 @@ export function LibraryManager() {
                         className={selectedCloudLibrary === library ? styles.cloudLibrarySelected : styles.cloudLibraryRow}
                         onClick={() => {
                           setSelectedCloudLibrary(library);
-                          if (!cloudName) setCloudName(`Picto ${library.library_id.slice(0, 8)}`);
+                          if (!cloudName) setCloudName(library.name);
                         }}
                       >
-                        <span>{library.root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'} · {library.root.account_label}</span>
-                        <span className={styles.rowPath}>{library.library_id}</span>
+                        <span>{library.name}</span>
+                        <span className={styles.rowPath}>{library.root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'} · {library.root.account_label}</span>
                       </button>
                     ))}
                   </div>

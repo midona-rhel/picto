@@ -432,6 +432,7 @@ pub struct ConfigureCloudInput {
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct CloudLibraryOption {
     pub library_id: String,
+    pub name: String,
     pub schema_generation: i64,
     pub created_at: String,
 }
@@ -566,6 +567,12 @@ pub async fn discover_libraries(root_path: &str) -> Result<Vec<CloudLibraryOptio
         };
         libraries.push(CloudLibraryOption {
             library_id: library_id.to_string(),
+            name: value
+                .get("name")
+                .and_then(|value| value.as_str())
+                .filter(|value| !value.trim().is_empty())
+                .map(str::to_string)
+                .unwrap_or_else(|| format!("Picto {}", &library_id[..library_id.len().min(8)])),
             schema_generation: value
                 .get("schema_generation")
                 .and_then(|value| value.as_i64())
