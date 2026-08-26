@@ -445,6 +445,14 @@ describe('DuplicatesScreen', () => {
     fireEvent.transitionEnd(oldFull, { propertyName: 'opacity' });
 
     await user.click(screen.getByRole('button', { name: 'Next pair' }));
+    expect(screen.getByTestId('left-preview-layers').querySelector('img[src="media://localhost/file/left.png"]')).not.toBeNull();
+    expect(screen.getByTestId('right-preview-layers').querySelector('img[src="media://localhost/thumb/right.jpg"]')).not.toBeNull();
+    const pendingLeft = screen.getByTestId('pending-left-thumbnail');
+    const pendingRight = screen.getByTestId('pending-right-thumbnail');
+    fireEvent.load(pendingLeft);
+    expect(screen.getByTestId('left-preview-layers').querySelector('img[src="media://localhost/file/left.png"]')).not.toBeNull();
+    fireEvent.load(pendingRight);
+
     const leftLayers = screen.getByTestId('left-preview-layers');
     const rightLayers = screen.getByTestId('right-preview-layers');
     await waitFor(() => {

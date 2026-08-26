@@ -471,6 +471,9 @@ export function DuplicatesScreen() {
   const activePairKeyRef = useRef(pairKey);
   activePairKeyRef.current = pairKey;
   const [thumbnailGate, setThumbnailGate] = useState({ pairKey: '', left: false, right: false });
+  const [pendingIndex, setPendingIndex] = useState<number | null>(null);
+  const [pendingThumbnailGate, setPendingThumbnailGate] = useState({ left: false, right: false });
+  const pendingPair = pendingIndex == null ? null : pairs[pendingIndex] ?? null;
   const markThumbnailReady = useCallback((side: ComparisonSide, readyPairKey: string) => {
     if (readyPairKey !== activePairKeyRef.current) return;
     setThumbnailGate((current) => {
@@ -484,6 +487,18 @@ export function DuplicatesScreen() {
   const pairThumbnailsReady = thumbnailGate.pairKey === pairKey
     && thumbnailGate.left
     && thumbnailGate.right;
+  const navigating = pendingIndex != null;
+  const markPendingThumbnailReady = useCallback((side: ComparisonSide) => {
+    setPendingThumbnailGate((current) => (
+      current[side] ? current : { ...current, [side]: true }
+    ));
+  }, []);
+  useLayoutEffect(() => {
+    if (pendingIndex == null || !pendingThumbnailGate.left || !pendingThumbnailGate.right) return;
+    setIndex(pendingIndex);
+    setPendingIndex(null);
+    setPendingThumbnailGate({ left: false, right: false });
+  }, [pendingIndex, pendingThumbnailGate.left, pendingThumbnailGate.right]);
   const resolvedCount = Math.max(0, initialTotal - total);
   const zoom = useLinkedComparisonZoom({
     leftContainerRef: leftPreviewRef,
@@ -519,6 +534,8 @@ export function DuplicatesScreen() {
     resetProgress = true,
   }: LoadPairsOptions = {}) => {
     if (showLoading) setLoading(true);
+    setPendingIndex(null);
+    setPendingThumbnailGate({ left: false, right: false });
     setError(null);
     try {
       const page = await getDuplicatePairs();
@@ -615,10 +632,14 @@ export function DuplicatesScreen() {
     }
   }, [loadPairs, reportFailure]);
 
-  const goPrevious = useCallback(() => setIndex((current) => Math.max(0, current - 1)), []);
-  const goNext = useCallback(() => {
-    setIndex((current) => Math.min(Math.max(0, pairs.length - 1), current + 1));
-  }, [pairs.length]);
+  const requestIndex = useCallback((nextIndex: number) => {
+    const boundedIndex = Math.max(0, Math.min(Math.max(0, pairs.length - 1), nextIndex));
+    if (boundedIndex === index || pendingIndex != null) return;
+    setPendingThumbnailGate({ left: false, right: false });
+    setPendingIndex(boundedIndex);
+  }, [index, pairs.length, pendingIndex]);
+  const goPrevious = useCallback(() => requestIndex(index - 1), [index, requestIndex]);
+  const goNext = useCallback(() => requestIndex(index + 1), [index, requestIndex]);
 
   useEffect(() => () => setDuplicateToolbar(null), [setDuplicateToolbar]);
 
@@ -632,7 +653,7 @@ export function DuplicatesScreen() {
       total,
       canPrevious: index > 0,
       canNext: index < pairs.length - 1,
-      disabled: resolving || metadataLoading,
+      disabled: resolving || metadataLoading || navigating,
       zoomPercent: zoom.zoomPercent,
       isFit: zoom.isFit,
       isActual: zoom.isActual,
@@ -651,6 +672,7 @@ export function DuplicatesScreen() {
     index,
     loading,
     metadataLoading,
+    navigating,
     pairs.length,
     resolving,
     setDuplicateToolbar,
@@ -670,7 +692,7 @@ export function DuplicatesScreen() {
       if (matchesShortcutDef(event, getShortcut('dup.nextPair')!)) { goNext(); return true; }
       if (matchesShortcutDef(event, getShortcut('dup.fitToWindow')!)) { zoom.fit(); return true; }
       if (matchesShortcutDef(event, getShortcut('view.actualSize')!)) { zoom.actual(); return true; }
-      if (!currentPair || resolving || metadataLoading) return;
+      if (!currentPair || resolving || metadataLoading || navigating) return;
       const shortcuts: Array<[string, DuplicateAction]> = [
         ['dup.keepLeft', 'keep_left'],
         ['dup.keepRight', 'keep_right'],
@@ -719,22 +741,42 @@ export function DuplicatesScreen() {
 
   return (
     <section className={styles.root} aria-label="Duplicate review">
+      {pendingPair && (
+        <div className={styles.pairPreload} aria-hidden="true">
+          {(['left', 'right'] as const).map((side) => (
+            <img
+              key={`${pendingIndex}:${side}`}
+              data-testid={`pending-${side}-thumbnail`}
+              src={mediaThumbnailUrl(pendingPair[side].file.file_hash)}
+              alt=""
+              decoding="async"
+              loading="eager"
+              onLoad={(event) => {
+                const image = event.currentTarget;
+                void (image.decode?.() ?? Promise.resolve())
+                  .catch(() => undefined)
+                  .then(() => markPendingThumbnailReady(side));
+              }}
+            />
+          ))}
+        </div>
+      )}
       {showScanProgress && (
         <div className={styles.scanProgress} role="status" aria-label="Scanning duplicate pairs"><ProgressBar indeterminate height={2} /></div>
       )}
 
       <div className={styles.comparison}>
-        <MediaCard side="left" file={currentPair.left.file} occurrenceCount={currentPair.left.occurrences.length} previewRef={leftPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'left'} details={left} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_left')} pairKey={pairKey} pairThumbnailsReady={pairThumbnailsReady} onThumbnailReady={markThumbnailReady} />
-        <MediaCard side="right" file={currentPair.right.file} occurrenceCount={currentPair.right.occurrences.length} previewRef={rightPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'right'} details={right} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_right')} pairKey={pairKey} pairThumbnailsReady={pairThumbnailsReady} onThumbnailReady={markThumbnailReady} />
+        <MediaCard side="left" file={currentPair.left.file} occurrenceCount={currentPair.left.occurrences.length} previewRef={leftPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'left'} details={left} loading={metadataLoading} disabled={resolving || metadataLoading || navigating} onKeep={() => void finishResolution(currentPair, 'keep_left')} pairKey={pairKey} pairThumbnailsReady={pairThumbnailsReady} onThumbnailReady={markThumbnailReady} />
+        <MediaCard side="right" file={currentPair.right.file} occurrenceCount={currentPair.right.occurrences.length} previewRef={rightPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'right'} details={right} loading={metadataLoading} disabled={resolving || metadataLoading || navigating} onKeep={() => void finishResolution(currentPair, 'keep_right')} pairKey={pairKey} pairThumbnailsReady={pairThumbnailsReady} onThumbnailReady={markThumbnailReady} />
       </div>
 
       <footer className={styles.footer}>
         <div className={styles.footerActions}>
           <KbdTooltip label="These are different media" shortcutId="dup.notDuplicate">
-            <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'not_duplicate')} disabled={resolving || metadataLoading}><IconX size={15} /> Not duplicates</button>
+            <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'not_duplicate')} disabled={resolving || metadataLoading || navigating}><IconX size={15} /> Not duplicates</button>
           </KbdTooltip>
           <KbdTooltip label="Keep both files" shortcutId="dup.keepBoth">
-            <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'keep_both')} disabled={resolving || metadataLoading}><IconCopy size={15} /> Keep both</button>
+            <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'keep_both')} disabled={resolving || metadataLoading || navigating}><IconCopy size={15} /> Keep both</button>
           </KbdTooltip>
           <KbdTooltip label="Show differences while held">
             <button
@@ -743,7 +785,7 @@ export function DuplicatesScreen() {
               onMouseLeave={() => setDifferenceHovered(false)}
               onFocus={() => setDifferenceFocused(true)}
               onBlur={() => setDifferenceFocused(false)}
-              disabled={resolving || metadataLoading || !differenceFiles}
+              disabled={resolving || metadataLoading || navigating || !differenceFiles}
               aria-label="Show Difference"
               aria-pressed={differenceActive}
             >
@@ -762,7 +804,7 @@ export function DuplicatesScreen() {
               onMouseLeave={() => setSmartMergeHovered(false)}
               onFocus={() => setSmartMergeFocused(true)}
               onBlur={() => setSmartMergeFocused(false)}
-              disabled={resolving || metadataLoading}
+              disabled={resolving || metadataLoading || navigating}
             >
               <IconArrowsJoin size={16} /> Smart merge
             </button>

@@ -100,6 +100,15 @@
 .fullImage { z-index: 2; opacity: 0; transition: opacity 130ms ease-out; }
 .fullImageVisible { opacity: 1; }
 .previewState { color: var(--duplicate-text-secondary); font-size: var(--font-size-sm); }
+.pairPreload {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+}
+.pairPreload img { width: 1px; height: 1px; }
 .metadata {
   height: 222px;
   box-sizing: border-box;
