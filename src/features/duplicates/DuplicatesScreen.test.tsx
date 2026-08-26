@@ -50,7 +50,7 @@ function pair(decision: DuplicatePair['decision'] = 'NeedsChoice'): DuplicatePai
   return {
     file_id_a: 1,
     file_id_b: 2,
-    distance: 5,
+    distance: 2_000,
     left: {
       file: file(1, 'left'),
       occurrences: [{ media_item_id: 11, root_item_id: 11, collection_id: null }],
@@ -156,7 +156,7 @@ describe('DuplicatesScreen', () => {
     expect(screen.getByText('Right image')).toBeInTheDocument();
     expect(getDuplicateItemDetails).toHaveBeenCalledWith(11);
     expect(getDuplicateItemDetails).toHaveBeenCalledWith(22);
-    expect(screen.getByText('80% similar')).toBeInTheDocument();
+    expect(screen.getByText('80.0% similar')).toBeInTheDocument();
     expect(screen.getAllByText('Created')).toHaveLength(2);
     expect(screen.getAllByText('Added')).toHaveLength(2);
     expect(screen.getByTestId('left-preview-layers').querySelector('img')).toHaveAttribute(
@@ -165,7 +165,7 @@ describe('DuplicatesScreen', () => {
     );
   });
 
-  it('presents similarity as an understandable whole percent', async () => {
+  it('presents an exact residual match as 100 percent', async () => {
     const equalHashPair = pair();
     equalHashPair.distance = 0;
     vi.mocked(getDuplicatePairs).mockResolvedValueOnce({
@@ -174,12 +174,12 @@ describe('DuplicatesScreen', () => {
 
     await renderScreen();
 
-    expect(await screen.findByText('99% similar')).toBeInTheDocument();
+    expect(await screen.findByText('100% similar')).toBeInTheDocument();
   });
 
-  it('shows a one-bit pair as 96% even if hot reload retained the old raw score', async () => {
+  it('preserves a nonzero measured residual instead of rounding it to 100 percent', async () => {
     vi.mocked(getDuplicatePairs).mockResolvedValueOnce({
-      items: [{ ...pair(), distance: 1, similarity_pct: 99.6 } as DuplicatePair],
+      items: [{ ...pair(), distance: 1 }],
       next_cursor: null,
       has_more: false,
       total: 1,
@@ -187,7 +187,7 @@ describe('DuplicatesScreen', () => {
 
     await renderScreen();
 
-    expect(await screen.findByText('96% similar')).toBeInTheDocument();
+    expect(await screen.findByText('99.99% similar')).toBeInTheDocument();
     expect(screen.queryByText('100% similar')).not.toBeInTheDocument();
   });
 

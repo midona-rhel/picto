@@ -186,9 +186,9 @@ function dimensions(file: FileQuality): string {
 }
 
 function similarityLabel(pair: DuplicatePair): string {
-  // Raw bit agreement misleadingly clusters accepted pairs around 96–100%.
-  const confidence = pair.distance === 0 ? 99 : Math.max(0, 100 - pair.distance * 4);
-  return `${confidence}% similar`;
+  const similarity = Math.max(0, 100 - pair.distance / 100);
+  if (pair.distance === 0) return '100% similar';
+  return `${similarity.toFixed(pair.distance < 10 ? 2 : 1)}% similar`;
 }
 
 function mediaForFile(details: ItemDetails, fileHash: string): MediaDetails | null {

@@ -3,7 +3,7 @@
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 128;
-pub const CURRENT_PHASH_ANALYSIS_VERSION: i64 = 3;
+pub const CURRENT_PHASH_ANALYSIS_VERSION: i64 = 5;
 pub const PHASH_VERSION_SETTING: &str = "media.perceptual_hash_version";
 
 pub const SUBSCRIPTION_READ_INDEXES: &str = r#"

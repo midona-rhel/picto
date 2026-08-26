@@ -9,7 +9,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Read;
 
 use chrono::Utc;
+use fast_image_resize as fr;
 use img_hash::ImageHash;
+use palette::{IntoColor, Lab, Srgb};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -577,7 +579,13 @@ fn compare_quality_with_recency(
     })
 }
 
-const SUPPORTED_PHASH_BYTES: usize = 32;
+const HASH_COMPONENT_BYTES: usize = 32;
+const SUPPORTED_PHASH_BYTES: usize = HASH_COMPONENT_BYTES * 2;
+const DETAIL_DISTANCE_THRESHOLD: u32 = 32;
+const COMPARISON_SIDE: u32 = 96;
+const DISTINCT_COLOR_DELTA: f32 = 8.0;
+const STRONG_COLOR_DELTA: f32 = 16.0;
+
 fn parse_supported_hash(raw: &str) -> Option<ImageHash<Vec<u8>>> {
     let hash = ImageHash::<Vec<u8>>::from_base64(raw).ok()?;
     (hash.as_bytes().len() == SUPPORTED_PHASH_BYTES).then_some(hash)
@@ -604,7 +612,7 @@ impl CandidateIndex {
 
         for (partition, key) in partition_keys(hash.as_bytes(), self.threshold) {
             self.buckets
-                .entry((SUPPORTED_PHASH_BYTES * 8, partition, key))
+                .entry((HASH_COMPONENT_BYTES * 8, partition, key))
                 .or_default()
                 .push(entry_index);
         }
@@ -620,11 +628,11 @@ impl CandidateIndex {
         }
 
         let mut candidate_indices = Vec::new();
-        if self.threshold < (SUPPORTED_PHASH_BYTES * 8) as u32 {
+        if self.threshold < (HASH_COMPONENT_BYTES * 8) as u32 {
             for (partition, key) in partition_keys(hash.as_bytes(), self.threshold) {
-                if let Some(entries) =
-                    self.buckets
-                        .get(&(SUPPORTED_PHASH_BYTES * 8, partition, key))
+                if let Some(entries) = self
+                    .buckets
+                    .get(&(HASH_COMPONENT_BYTES * 8, partition, key))
                 {
                     candidate_indices.extend(entries);
                 }
@@ -677,23 +685,180 @@ fn find_candidate_pairs(
     parsed: &[(i64, ImageHash<Vec<u8>>)],
     threshold: u32,
 ) -> Vec<(i64, i64, u32)> {
-    let parsed = parsed
+    let signatures = parsed
         .iter()
         .filter(|(_, hash)| hash.as_bytes().len() == SUPPORTED_PHASH_BYTES)
-        .cloned()
+        .filter_map(|(file_id, hash)| {
+            Some((
+                *file_id,
+                ImageHash::<Vec<u8>>::from_bytes(&hash.as_bytes()[..HASH_COMPONENT_BYTES]).ok()?,
+                ImageHash::<Vec<u8>>::from_bytes(&hash.as_bytes()[HASH_COMPONENT_BYTES..]).ok()?,
+            ))
+        })
         .collect::<Vec<_>>();
+    let globals = signatures
+        .iter()
+        .map(|(file_id, global, _)| (*file_id, global.clone()))
+        .collect::<Vec<_>>();
+    let details = signatures
+        .iter()
+        .map(|(file_id, _, detail)| (*file_id, detail))
+        .collect::<HashMap<_, _>>();
     let mut index = CandidateIndex::new(threshold);
     let mut pairs = Vec::new();
-    for (entry_index, (file_id, hash)) in parsed.iter().enumerate() {
+    for (entry_index, (file_id, hash)) in globals.iter().enumerate() {
         pairs.extend(
             index
-                .find_within(&parsed, hash)
+                .find_within(&globals, hash)
                 .into_iter()
+                .filter(|(other_file_id, _)| {
+                    details[other_file_id].dist(details[file_id]) <= DETAIL_DISTANCE_THRESHOLD
+                })
                 .map(|(other_file_id, distance)| (other_file_id, *file_id, distance)),
         );
         index.insert(entry_index, hash);
     }
     pairs
+}
+
+#[derive(Clone)]
+struct SpatialDescriptor {
+    pixels: Vec<Lab>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct SpatialComparison {
+    difference_basis_points: u32,
+    distinct_fraction: f32,
+    coherent_fraction: f32,
+}
+
+fn spatial_descriptor(bytes: &[u8]) -> Option<SpatialDescriptor> {
+    spatial_descriptor_at_side(bytes, COMPARISON_SIDE)
+}
+
+fn spatial_descriptor_at_side(bytes: &[u8], side: u32) -> Option<SpatialDescriptor> {
+    let decoded = image::load_from_memory(bytes).ok()?.to_rgb8();
+    let source = fr::images::Image::from_vec_u8(
+        decoded.width(),
+        decoded.height(),
+        decoded.into_raw(),
+        fr::PixelType::U8x3,
+    )
+    .ok()?;
+    let mut resized = fr::images::Image::new(side, side, fr::PixelType::U8x3);
+    fr::Resizer::new()
+        .resize(&source, &mut resized, None)
+        .ok()?;
+    let pixels = resized
+        .buffer()
+        .chunks_exact(3)
+        .map(|rgb| {
+            Srgb::new(
+                rgb[0] as f32 / 255.0,
+                rgb[1] as f32 / 255.0,
+                rgb[2] as f32 / 255.0,
+            )
+            .into_linear::<f32>()
+            .into_color()
+        })
+        .collect();
+    Some(SpatialDescriptor { pixels })
+}
+
+fn spatial_comparison_at_side(
+    left: &SpatialDescriptor,
+    right: &SpatialDescriptor,
+    side: usize,
+) -> SpatialComparison {
+    let mut deltas = Vec::with_capacity(left.pixels.len());
+    let mut normalized_difference = 0.0_f32;
+    for (left, right) in left.pixels.iter().zip(&right.pixels) {
+        let delta =
+            ((left.l - right.l).powi(2) + (left.a - right.a).powi(2) + (left.b - right.b).powi(2))
+                .sqrt();
+        // Ignore sub-visible encoder noise, preserve the magnitude up to a
+        // clearly distinct color, then count that pixel as fully different.
+        normalized_difference += ((delta - 1.0) / (DISTINCT_COLOR_DELTA - 1.0)).clamp(0.0, 1.0);
+        deltas.push(delta);
+    }
+
+    let total = deltas.len().max(1);
+    let distinct = deltas
+        .iter()
+        .filter(|delta| **delta >= DISTINCT_COLOR_DELTA)
+        .count();
+    debug_assert_eq!(deltas.len(), side * side);
+    let mut visited = vec![false; deltas.len()];
+    let mut largest_region = 0usize;
+    for start in 0..deltas.len() {
+        if visited[start] || deltas[start] < STRONG_COLOR_DELTA {
+            continue;
+        }
+        visited[start] = true;
+        let mut stack = vec![start];
+        let mut region = 0usize;
+        while let Some(pixel) = stack.pop() {
+            region += 1;
+            let x = pixel % side;
+            let y = pixel / side;
+            for neighbor in [
+                (x > 0).then(|| pixel - 1),
+                (x + 1 < side).then(|| pixel + 1),
+                (y > 0).then(|| pixel - side),
+                (y + 1 < side).then(|| pixel + side),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !visited[neighbor] && deltas[neighbor] >= STRONG_COLOR_DELTA {
+                    visited[neighbor] = true;
+                    stack.push(neighbor);
+                }
+            }
+        }
+        largest_region = largest_region.max(region);
+    }
+
+    SpatialComparison {
+        // Preserve hundredths of a percentage point. Rounding this residual
+        // made visibly edited pairs incorrectly read as 100%.
+        difference_basis_points: ((normalized_difference / total as f32) * 10_000.0)
+            .round()
+            .clamp(0.0, 10_000.0) as u32,
+        distinct_fraction: distinct as f32 / total as f32,
+        coherent_fraction: largest_region as f32 / total as f32,
+    }
+}
+
+fn spatial_comparison(left: &SpatialDescriptor, right: &SpatialDescriptor) -> SpatialComparison {
+    spatial_comparison_at_side(left, right, COMPARISON_SIDE as usize)
+}
+
+fn spatially_consistent(comparison: SpatialComparison) -> bool {
+    comparison.distinct_fraction <= 0.03 && comparison.coherent_fraction <= 0.0015
+}
+
+fn spatially_verify_pair(
+    app: &Application,
+    left: &StoredFile,
+    right: &StoredFile,
+    cache: &mut HashMap<i64, Option<SpatialDescriptor>>,
+) -> Option<u32> {
+    let descriptor = |file: &StoredFile, cache: &mut HashMap<i64, Option<SpatialDescriptor>>| {
+        cache
+            .entry(file.file_id)
+            .or_insert_with(|| {
+                app.blobs()
+                    .read_thumbnail(&file.file_hash.0)
+                    .ok()
+                    .flatten()
+                    .and_then(|bytes| spatial_descriptor(&bytes))
+            })
+            .clone()
+    };
+    let comparison = spatial_comparison(&descriptor(left, cache)?, &descriptor(right, cache)?);
+    spatially_consistent(comparison).then_some(comparison.difference_basis_points)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -773,14 +938,26 @@ pub fn scan(app: &Application, distance_threshold: u32) -> Result<DuplicateScanR
                 .into_iter()
                 .map(|file| (file.file_id, file))
                 .collect::<HashMap<_, _>>();
+            let mut spatial_cache = HashMap::new();
             let mut candidates = Vec::new();
             let mut affected_item_ids: BTreeSet<i64> = BTreeSet::new();
 
-            for (first, second, distance) in pairs {
+            for (first, second, _global_distance) in pairs {
                 let (file_id_a, file_id_b) = if first < second {
                     (first, second)
                 } else {
                     (second, first)
+                };
+                let Some(left_file) = by_id.get(&file_id_a) else {
+                    continue;
+                };
+                let Some(right_file) = by_id.get(&file_id_b) else {
+                    continue;
+                };
+                let Some(distance) =
+                    spatially_verify_pair(app, left_file, right_file, &mut spatial_cache)
+                else {
+                    continue;
                 };
                 let inserted = transaction.execute(
                     "INSERT INTO duplicate (file_id_a, file_id_b, distance, status)
@@ -798,12 +975,6 @@ pub fn scan(app: &Application, distance_threshold: u32) -> Result<DuplicateScanR
                 if left_occurrences.is_empty() || right_occurrences.is_empty() {
                     continue;
                 }
-                let left_file = by_id
-                    .get(&file_id_a)
-                    .ok_or_else(|| invalid(format!("Duplicate file {file_id_a} disappeared")))?;
-                let right_file = by_id
-                    .get(&file_id_b)
-                    .ok_or_else(|| invalid(format!("Duplicate file {file_id_b} disappeared")))?;
                 affected_item_ids.extend(
                     left_occurrences
                         .iter()
@@ -1475,13 +1646,182 @@ mod tests {
     use super::{
         compare_quality, compare_quality_with_encoding, count_candidates, find_candidate_pairs,
         jpeg_encoding_class, list_candidates, parse_jpeg_quantization, parse_supported_hash,
-        resolve, scan, tiff_encoding_class, webp_encoding_class, EncodingClass, FileQuality,
-        QualityDecision, ResolutionChoice,
+        resolve, scan, spatial_comparison, spatial_descriptor, spatially_consistent,
+        tiff_encoding_class, webp_encoding_class, EncodingClass, FileQuality, QualityDecision,
+        ResolutionChoice,
     };
     use crate::app::{Application, FileHash};
     use crate::store::Store;
     use img_hash::ImageHash;
     use rusqlite::params;
+
+    fn encoded_png(image: &image::DynamicImage) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+
+    fn write_test_thumbnail(app: &Application, hash: &str) {
+        let image = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(
+            64,
+            64,
+            image::Rgb([80, 120, 160]),
+        ));
+        app.blobs()
+            .write_thumbnail(hash, &encoded_png(&image), "png")
+            .unwrap();
+    }
+
+    #[test]
+    fn spatial_verification_ignores_compression_but_rejects_local_structure_changes() {
+        use image::{codecs::jpeg::JpegEncoder, DynamicImage, ImageBuffer, Rgb};
+
+        let base = DynamicImage::ImageRgb8(ImageBuffer::from_fn(512, 384, |x, y| {
+            Rgb([
+                ((x * 7 + y * 3) % 256) as u8,
+                ((x * 2 + y * 11) % 256) as u8,
+                ((x * 13 + y * 5) % 256) as u8,
+            ])
+        }));
+        let base_descriptor = spatial_descriptor(&encoded_png(&base)).unwrap();
+
+        let mut jpeg = Vec::new();
+        JpegEncoder::new_with_quality(&mut jpeg, 65)
+            .encode_image(&base)
+            .unwrap();
+        let jpeg_descriptor = spatial_descriptor(&jpeg).unwrap();
+        assert!(spatially_consistent(spatial_comparison(
+            &base_descriptor,
+            &jpeg_descriptor
+        )));
+
+        let mut edited = base.to_rgb8();
+        for y in 120..264 {
+            for x in 180..332 {
+                edited.put_pixel(x, y, Rgb([250, 20, 180]));
+            }
+        }
+        let edited_descriptor =
+            spatial_descriptor(&encoded_png(&DynamicImage::ImageRgb8(edited))).unwrap();
+        assert!(!spatially_consistent(spatial_comparison(
+            &base_descriptor,
+            &edited_descriptor
+        )));
+    }
+
+    #[test]
+    fn spatial_verification_rejects_different_marks_on_white_fields() {
+        use image::{DynamicImage, ImageBuffer, Rgb};
+
+        let left = DynamicImage::ImageRgb8(ImageBuffer::from_fn(512, 384, |x, y| {
+            if (40..280).contains(&x) && (50..330).contains(&y) {
+                Rgb([30, 30, 30])
+            } else {
+                Rgb([255, 255, 255])
+            }
+        }));
+        let right = DynamicImage::ImageRgb8(ImageBuffer::from_fn(512, 384, |x, y| {
+            if (300..470).contains(&x) && (140..250).contains(&y) {
+                Rgb([30, 30, 30])
+            } else {
+                Rgb([255, 255, 255])
+            }
+        }));
+        let left = spatial_descriptor(&encoded_png(&left)).unwrap();
+        let right = spatial_descriptor(&encoded_png(&right)).unwrap();
+        assert!(!spatially_consistent(spatial_comparison(&left, &right)));
+    }
+
+    #[test]
+    fn spatial_verification_rejects_a_local_color_edit() {
+        use image::{DynamicImage, ImageBuffer, Rgb};
+
+        let red_hat = DynamicImage::ImageRgb8(ImageBuffer::from_fn(512, 384, |x, y| {
+            if (180..332).contains(&x) && (40..140).contains(&y) {
+                Rgb([220, 35, 25])
+            } else {
+                Rgb([160, 160, 160])
+            }
+        }));
+        let orange_hat = DynamicImage::ImageRgb8(ImageBuffer::from_fn(512, 384, |x, y| {
+            if (180..332).contains(&x) && (40..140).contains(&y) {
+                Rgb([220, 125, 25])
+            } else {
+                Rgb([160, 160, 160])
+            }
+        }));
+        let red = spatial_descriptor(&encoded_png(&red_hat)).unwrap();
+        let orange = spatial_descriptor(&encoded_png(&orange_hat)).unwrap();
+        assert!(!spatially_consistent(spatial_comparison(&red, &orange)));
+    }
+
+    #[test]
+    fn fast_spatial_score_tracks_the_reference_resolution() {
+        use image::{codecs::jpeg::JpegEncoder, DynamicImage, ImageBuffer, Rgb};
+
+        fn thumbnail(image: &DynamicImage) -> Vec<u8> {
+            let resized = image.resize(512, 512, image::imageops::FilterType::Lanczos3);
+            let mut bytes = Vec::new();
+            JpegEncoder::new_with_quality(&mut bytes, 82)
+                .encode_image(&resized)
+                .unwrap();
+            bytes
+        }
+
+        let base = DynamicImage::ImageRgb8(ImageBuffer::from_fn(768, 768, |x, y| {
+            let band = ((x / 48 + y / 64) % 5) as u8;
+            Rgb([
+                35 + band * 31,
+                70 + ((x * 3 + y) % 130) as u8,
+                45 + ((x + y * 2) % 150) as u8,
+            ])
+        }));
+        let mut edited = base.to_rgb8();
+        for y in 280..390 {
+            for x in 330..460 {
+                edited.put_pixel(x, y, Rgb([218, 92, 35]));
+            }
+        }
+        let edited = DynamicImage::ImageRgb8(edited);
+
+        let candidates = [
+            {
+                let mut jpeg = Vec::new();
+                JpegEncoder::new_with_quality(&mut jpeg, 72)
+                    .encode_image(&base)
+                    .unwrap();
+                jpeg
+            },
+            encoded_png(&edited),
+        ];
+        let base_bytes = encoded_png(&base);
+        let base_thumbnail = thumbnail(&base);
+        for candidate in candidates {
+            let decoded_candidate = image::load_from_memory(&candidate).unwrap();
+            let candidate_thumbnail = thumbnail(&decoded_candidate);
+
+            let reference_left = spatial_descriptor(&base_bytes).unwrap();
+            let reference_right = spatial_descriptor(&candidate).unwrap();
+            let fast_left = spatial_descriptor(&base_thumbnail).unwrap();
+            let fast_right = spatial_descriptor(&candidate_thumbnail).unwrap();
+            let reference = spatial_comparison(&reference_left, &reference_right);
+            let fast = spatial_comparison(&fast_left, &fast_right);
+
+            assert!(
+                fast.difference_basis_points
+                    .abs_diff(reference.difference_basis_points)
+                    <= 100,
+                "fast score {} bps diverged from reference {} bps",
+                fast.difference_basis_points,
+                reference.difference_basis_points
+            );
+        }
+    }
 
     fn quality(
         file_id: i64,
@@ -1642,7 +1982,7 @@ mod tests {
     }
 
     #[test]
-    fn information_preserving_quality_wins_only_for_negligible_hash_distance() {
+    fn verified_same_dimension_lossless_quality_is_decisive() {
         let left = quality(1, 600_000, 1200, 800, "image/png");
         let right = quality(2, 550_000, 1200, 800, "image/jpeg");
         assert_eq!(
@@ -1651,7 +1991,7 @@ mod tests {
         );
         assert_eq!(
             compare_quality(&left, &right, Some(10)),
-            QualityDecision::NeedsChoice
+            QualityDecision::LeftBetter
         );
 
         let mut richer = quality(3, 500_000, 1200, 800, "image/jpeg");
@@ -1670,10 +2010,12 @@ mod tests {
 
     #[test]
     fn replacement_parser_and_pairing_accept_only_supported_hashes() {
-        let base = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 32]).unwrap();
-        let mut one_bit = [0_u8; 32];
+        let base = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 64]).unwrap();
+        let mut one_bit = [0_u8; 64];
         one_bit[0] = 1;
-        let far = ImageHash::<Vec<u8>>::from_bytes(&[0xff_u8; 32]).unwrap();
+        let mut far_bytes = [0_u8; 64];
+        far_bytes[..32].fill(0xff);
+        let far = ImageHash::<Vec<u8>>::from_bytes(&far_bytes).unwrap();
         let short = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 31]).unwrap();
 
         assert!(parse_supported_hash(&base.to_base64()).is_some());
@@ -1745,7 +2087,9 @@ mod tests {
     fn scan_is_file_level_but_exposes_all_logical_occurrences() {
         let directory = tempfile::tempdir().unwrap();
         let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
-        let perceptual_hash = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 32])
+        let hash_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let hash_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+        let perceptual_hash = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 64])
             .unwrap()
             .to_base64();
         app.store()
@@ -1766,9 +2110,9 @@ mod tests {
                     "INSERT INTO media_file
                          (file_id, file_hash, mime_type, size_bytes, pixel_width,
                           pixel_height, perceptual_hash, created_at)
-                     VALUES (10, 'a', 'image/jpeg', 1000, 2000, 2000, ?1, 'now'),
-                            (11, 'b', 'image/jpeg', 1000, 2000, 2000, ?1, 'now')",
-                    [&perceptual_hash],
+                     VALUES (10, ?1, 'image/jpeg', 1000, 2000, 2000, ?3, 'now'),
+                            (11, ?2, 'image/jpeg', 1000, 2000, 2000, ?3, 'now')",
+                    params![hash_a, hash_b, perceptual_hash],
                 )?;
                 tx.execute(
                     "INSERT INTO media_asset
@@ -1781,6 +2125,8 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        write_test_thumbnail(&app, hash_a);
+        write_test_thumbnail(&app, hash_b);
 
         let result = scan(&app, 0).unwrap();
         assert_eq!(result.candidate_count, 1);
@@ -1819,7 +2165,9 @@ mod tests {
     fn incomplete_subscription_collections_are_not_duplicate_candidates() {
         let directory = tempfile::tempdir().unwrap();
         let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
-        let perceptual_hash = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 32])
+        let pending_hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
+        let visible_hash = "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+        let perceptual_hash = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 64])
             .unwrap()
             .to_base64();
         app.store()
@@ -1840,9 +2188,9 @@ mod tests {
                     "INSERT INTO media_file
                          (file_id, file_hash, mime_type, size_bytes, pixel_width,
                           pixel_height, perceptual_hash, created_at)
-                     VALUES (10, 'pending', 'image/jpeg', 1000, 1000, 1000, ?1, 'now'),
-                            (11, 'visible', 'image/jpeg', 1000, 1000, 1000, ?1, 'now')",
-                    [&perceptual_hash],
+                     VALUES (10, ?1, 'image/jpeg', 1000, 1000, 1000, ?3, 'now'),
+                            (11, ?2, 'image/jpeg', 1000, 1000, 1000, ?3, 'now')",
+                    params![pending_hash, visible_hash, perceptual_hash],
                 )?;
                 tx.execute(
                     "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
@@ -1857,6 +2205,8 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        write_test_thumbnail(&app, pending_hash);
+        write_test_thumbnail(&app, visible_hash);
 
         assert_eq!(scan(&app, 0).unwrap().candidate_count, 0);
         assert!(list_candidates(&app, 10).unwrap().is_empty());
