@@ -429,6 +429,9 @@ describe('Inspector presentation branches', () => {
   it('renders a group from ordered replacement media details', () => {
     renderInspector({ target: { kind: 'item', itemId: 10 }, data: group });
     expect(screen.getByText('Album')).toBeInTheDocument();
+    expect(document.querySelector('[data-inspector-format-label]')).toHaveAttribute('aria-label', 'Group');
+    expect(document.querySelector('[data-inspector-format-label] [data-picto-icon="group"]')).toBeInTheDocument();
+    expect(document.querySelector('[data-inspector-format-label]')).not.toHaveTextContent('JPG');
     expect(document.querySelector('[data-inspector-core-property="Items"]')).toHaveTextContent('2');
     expect(document.querySelector('[data-inspector-core-property="Type"]')).toHaveTextContent('Mixed');
     expect(screen.getByText('member-tag')).toBeInTheDocument();

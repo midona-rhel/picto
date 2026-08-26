@@ -6,7 +6,7 @@
  * - Multiple items selected → shared tags/folders from backend
  */
 
-import { forwardRef, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { forwardRef, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { useAtomValue, getDefaultStore } from 'jotai';
 import { IconAlertCircle, IconFolder } from '@tabler/icons-react';
@@ -61,6 +61,7 @@ import { IconAutoTag } from '../../shared/ui/icons/sidebar-menu-icons';
 import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { formatLabelForMime } from '../grid/canvas/primitives';
+import { GroupIcon } from '../../shared/ui/icons/group-icons';
 
 const store = getDefaultStore();
 
@@ -171,7 +172,7 @@ function Preview({
   hashes: string[];
   backgrounds?: readonly (string | null)[];
   type: 'single' | 'collage' | 'stacked';
-  formatLabel?: string;
+  formatLabel?: ReactNode;
   fontHashes?: ReadonlySet<string>;
 }) {
   const contextMenu = useContextMenu();
@@ -208,7 +209,15 @@ function Preview({
             fallback={fontHashes.has(hash) ? 'font' : 'broken'}
           />
           <div className={styles.previewGlass} />
-          {formatLabel && <span className={styles.previewTypeLabel} data-inspector-format-label>{formatLabel}</span>}
+          {formatLabel && (
+            <span
+              className={`${styles.previewTypeLabel} ${typeof formatLabel === 'string' ? '' : styles.previewTypeIcon}`}
+              data-inspector-format-label
+              aria-label={typeof formatLabel === 'string' ? formatLabel : 'Group'}
+            >
+              {formatLabel}
+            </span>
+          )}
         </div>
         {contextMenu.state && <ContextMenu entries={contextMenu.state.entries} position={contextMenu.state.position} onClose={contextMenu.close} />}
       </div>
@@ -738,7 +747,9 @@ export function Inspector() {
         hashes={primary ? [primary.file_hash] : []}
         backgrounds={primary ? [primary.dominant_color_hex] : []}
         type="single"
-        formatLabel={primary ? formatLabelForMime(primary.mime_type) : undefined}
+        formatLabel={d.kind === 'collection'
+          ? <GroupIcon size={14} />
+          : primary ? formatLabelForMime(primary.mime_type) : undefined}
         fontHashes={primary?.mime_type.startsWith('font/') ? new Set([primary.file_hash]) : undefined}
       />}
       palette={palette}

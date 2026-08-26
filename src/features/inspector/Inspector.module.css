@@ -411,6 +411,14 @@
   backdrop-filter: blur(5px);
 }
 
+.previewTypeIcon {
+  display: grid;
+  width: 18px;
+  height: 18px;
+  padding: 1px;
+  place-items: center;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .stackItemLeft,
   .stackItemRight {
