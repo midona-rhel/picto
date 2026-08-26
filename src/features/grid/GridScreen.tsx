@@ -1339,6 +1339,15 @@ export function GridScreen({
             onCopySelection: effectiveSelectionMode === 'explicit' && effectiveTarget
               ? () => { void filesController.copyTarget(effectiveTarget); }
               : undefined,
+            onCopySelectionPaths: effectiveSelectionMode === 'explicit' && effectiveTarget
+              ? () => { void filesController.copyTargetPaths(effectiveTarget); }
+              : undefined,
+            onCopySelectionNames: effectiveSelectionMode === 'explicit' && selectedItems.length > 0
+              ? () => filesController.copyText(selectedItems.map((selected) => selected.name ?? 'Untitled').join('\n'))
+              : undefined,
+            onCopySelectionLinks: effectiveSelectionMode === 'explicit' && effectiveTarget
+              ? () => { void filesController.copyTargetLinks(effectiveTarget); }
+              : undefined,
             onCopyName: (name) => { filesController.copyText(name); },
             singleName: singleItem?.name ?? null,
             singleMime: singleItem?.display_mime_type ?? null,

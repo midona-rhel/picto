@@ -487,6 +487,11 @@ export function GroupSurface({
       }); } : undefined,
       onCopyFile: (hash) => { void filesController.copyFileForHash(hash); },
       onCopySelection: () => { void filesController.copyTarget(target); },
+      onCopySelectionPaths: () => { void filesController.copyTargetPaths(target); },
+      onCopySelectionNames: () => filesController.copyText(
+        selected.map((entry) => entry.name ?? 'Untitled').join('\n'),
+      ),
+      onCopySelectionLinks: () => { void filesController.copyTargetLinks(target); },
       onCopyFilePath: (hash) => { void filesController.copyFilePath(hash); },
       onCopyName: (name) => filesController.copyText(name),
       onCopyLink: (link) => filesController.copyText(link),

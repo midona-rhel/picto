@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import type { BaseScope } from '../shared/types/canonical';
-import { chooseAndExportOriginals, manualImportParamsForScope, requestMediaImport } from './filesController';
+import { chooseAndExportOriginals, filesController, manualImportParamsForScope, requestMediaImport } from './filesController';
 import * as folderApi from '../platform/folderApi';
 import * as settingsApi from '../platform/settingsApi';
 import { multiFileImportModalAtom } from '../state/modals';
@@ -113,5 +113,29 @@ describe('original export picker', () => {
       output_dir: '/tmp/export',
       format: 'original',
     });
+  });
+});
+
+describe('multi-file clipboard text', () => {
+  it('copies resolved collection paths and links in member order', async () => {
+    const writeText = vi.fn();
+    (window as any).picto = {
+      api: {
+        invoke: vi.fn().mockResolvedValue([
+          { file_hash: 'first', path: '/library/first.jpg' },
+          { file_hash: 'second', path: '/library/second.png' },
+        ]),
+      },
+      clipboard: { writeText },
+    };
+    const target = { kind: 'explicit' as const, item_ids: [7] };
+
+    await filesController.copyTargetPaths(target);
+    expect(writeText).toHaveBeenLastCalledWith('/library/first.jpg\n/library/second.png');
+
+    await filesController.copyTargetLinks(target);
+    expect(writeText).toHaveBeenLastCalledWith(
+      'media://localhost/file/first.jpg\nmedia://localhost/file/second.png',
+    );
   });
 });

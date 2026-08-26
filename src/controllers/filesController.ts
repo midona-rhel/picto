@@ -240,6 +240,24 @@ export const filesController = {
     await clipboardCopyFiles(resolved.map((entry) => entry.path));
   },
 
+  async copyTargetPaths(target: EntityTarget): Promise<void> {
+    const resolved = await resolveTargetFilePaths(target);
+    if (resolved.length === 0) throw new Error('The selection has no physical file paths to copy.');
+    clipboardWriteText(resolved.map((entry) => entry.path).join('\n'));
+  },
+
+  async copyTargetLinks(target: EntityTarget): Promise<void> {
+    const resolved = await resolveTargetFilePaths(target);
+    if (resolved.length === 0) throw new Error('The selection has no physical files to link.');
+    clipboardWriteText(resolved.map((entry) => {
+      const pathParts = entry.path.split(/[\\/]/);
+      const filename = pathParts[pathParts.length - 1] ?? '';
+      const nameParts = filename.split('.');
+      const extension = nameParts.length > 1 ? nameParts[nameParts.length - 1] : 'bin';
+      return `media://localhost/file/${entry.file_hash}.${extension}`;
+    }).join('\n'));
+  },
+
   regenerateThumbnailsBatch(hashes: string[]) {
     return regenerateThumbnailsBatch(hashes);
   },

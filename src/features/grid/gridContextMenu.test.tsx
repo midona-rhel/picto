@@ -152,6 +152,9 @@ describe('buildTileContextMenu', () => {
       { selectionCount: 1, singleSelected: true, singleKind: 'collection' as const },
     ]) {
       const onCopySelection = vi.fn();
+      const onCopySelectionPaths = vi.fn();
+      const onCopySelectionNames = vi.fn();
+      const onCopySelectionLinks = vi.fn();
       const entries = buildTileContextMenu({
         ...context,
         querySelectionActive: false,
@@ -162,11 +165,21 @@ describe('buildTileContextMenu', () => {
         onSelectAll: vi.fn(),
         onDeselectAll: vi.fn(),
         onCopySelection,
+        onCopySelectionPaths,
+        onCopySelectionNames,
+        onCopySelectionLinks,
       });
-      const copy = entries.find((entry) => 'label' in entry && entry.label === 'Copy');
-      expect(copy).toBeDefined();
-      if (copy && 'action' in copy) copy.action();
+      const actions = new Map(entries.flatMap((entry) => (
+        'label' in entry && 'action' in entry ? [[entry.label, entry.action] as const] : []
+      )));
+      actions.get('Copy')?.();
+      actions.get('Copy File Paths')?.();
+      actions.get(context.selectionCount === 1 ? 'Copy Name' : 'Copy Names')?.();
+      actions.get('Copy as Links')?.();
       expect(onCopySelection).toHaveBeenCalledOnce();
+      expect(onCopySelectionPaths).toHaveBeenCalledOnce();
+      expect(onCopySelectionNames).toHaveBeenCalledOnce();
+      expect(onCopySelectionLinks).toHaveBeenCalledOnce();
     }
   });
 

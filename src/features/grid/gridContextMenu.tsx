@@ -65,6 +65,9 @@ export interface GridMenuContext {
   onCopyFilePath?: (hash: string) => void;
   onCopyFile?: (hash: string) => void;
   onCopySelection?: () => void;
+  onCopySelectionPaths?: () => void;
+  onCopySelectionNames?: () => void;
+  onCopySelectionLinks?: () => void;
   onCopyName?: (name: string) => void;
   onMoveToTrash?: () => void;
   onRestore?: () => void;
@@ -458,6 +461,25 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       shortcut: kbd('edit.copy'),
       action: ctx.onCopySelection,
     }));
+    if (ctx.onCopySelectionPaths) {
+      entries.push(item('Copy File Paths', {
+        icon: <IconClipboardCopy size={15} />,
+        shortcut: kbd('edit.copyFilePath'),
+        action: ctx.onCopySelectionPaths,
+      }));
+    }
+    if (ctx.onCopySelectionNames) {
+      entries.push(item(selectionCount === 1 ? 'Copy Name' : 'Copy Names', {
+        icon: <IconClipboardCopy size={15} />,
+        action: ctx.onCopySelectionNames,
+      }));
+    }
+    if (ctx.onCopySelectionLinks) {
+      entries.push(item('Copy as Links', {
+        icon: <IconLink size={15} />,
+        action: ctx.onCopySelectionLinks,
+      }));
+    }
     entries.push(sep());
   }
 
