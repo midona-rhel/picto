@@ -101,6 +101,7 @@ export function SubscriptionCoverImage({
   onDimensionsChange,
   onError,
   preferThumbnail = false,
+  progressive = false,
 }: {
   fileHash: string;
   crop: SubscriptionCoverCrop;
@@ -112,17 +113,34 @@ export function SubscriptionCoverImage({
   onDimensionsChange?: (dimensions: SubscriptionCoverDimensions) => void;
   onError?: () => void;
   preferThumbnail?: boolean;
+  progressive?: boolean;
 }) {
   const [dimensions, setDimensions] = useState(fallbackDimensions ?? { width: 1, height: 1 });
   const [useThumbnail, setUseThumbnail] = useState(preferThumbnail);
+  const [originalReady, setOriginalReady] = useState(false);
 
   useEffect(() => {
     setUseThumbnail(preferThumbnail);
+    setOriginalReady(false);
     setDimensions(fallbackDimensions ?? { width: 1, height: 1 });
   }, [fallbackDimensions?.height, fallbackDimensions?.width, fileHash, preferThumbnail]);
 
   const geometry = subscriptionCoverGeometry(dimensions, crop);
-  return (
+  const imageStyle = {
+    position: 'absolute' as const,
+    display: 'block',
+    maxWidth: 'none',
+    width: `${geometry.widthRatio * 100}%`,
+    height: `${geometry.heightRatio * 100}%`,
+    left: `${geometry.leftPercent}%`,
+    top: `${geometry.topPercent}%`,
+    objectFit: 'fill' as const,
+    transform: 'translate(-50%, -50%)',
+    userSelect: 'none' as const,
+    pointerEvents: 'none' as const,
+  };
+
+  const original = (
     <ThumbnailImage
       src={useThumbnail
         ? mediaThumbnailUrl(fileHash)
@@ -138,25 +156,34 @@ export function SubscriptionCoverImage({
           height: event.currentTarget.naturalHeight,
         };
         setDimensions(next);
+        setOriginalReady(true);
         onDimensionsChange?.(next);
       }}
       onThumbnailError={() => {
         if (!useThumbnail) setUseThumbnail(true);
         else onError?.();
       }}
-      style={{
-        position: 'absolute',
-        display: 'block',
-        maxWidth: 'none',
-        width: `${geometry.widthRatio * 100}%`,
-        height: `${geometry.heightRatio * 100}%`,
-        left: `${geometry.leftPercent}%`,
-        top: `${geometry.topPercent}%`,
-        objectFit: 'fill',
-        transform: 'translate(-50%, -50%)',
-        userSelect: 'none',
-        pointerEvents: 'none',
-      }}
+      style={progressive && !useThumbnail ? {
+        ...imageStyle,
+        opacity: originalReady ? 1 : 0,
+        transition: 'opacity 160ms ease-out',
+      } : imageStyle}
     />
+  );
+
+  if (!progressive || useThumbnail) return original;
+
+  return (
+    <>
+      <ThumbnailImage
+        src={mediaThumbnailUrl(fileHash)}
+        fallback="empty"
+        alt=""
+        draggable={draggable}
+        className={className}
+        style={imageStyle}
+      />
+      {original}
+    </>
   );
 }

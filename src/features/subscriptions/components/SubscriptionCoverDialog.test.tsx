@@ -30,10 +30,13 @@ describe('SubscriptionCoverDialog', () => {
       'media://localhost/thumb/cover-hash.jpg',
     );
     fireEvent.click(candidateButton);
-    expect(screen.getByLabelText('Cover crop preview').querySelector('img')).toHaveAttribute(
-      'src',
-      'media://localhost/file/cover-hash.bin',
-    );
+    const cropImages = screen.getByLabelText('Cover crop preview').querySelectorAll('img');
+    expect(cropImages).toHaveLength(2);
+    expect(cropImages[0]).toHaveAttribute('src', 'media://localhost/thumb/cover-hash.jpg');
+    expect(cropImages[1]).toHaveAttribute('src', 'media://localhost/file/cover-hash.bin');
+    expect(cropImages[1]).toHaveStyle({ opacity: '0' });
+    fireEvent.load(cropImages[1]);
+    expect(cropImages[1]).toHaveStyle({ opacity: '1' });
   });
 
   it('keeps large candidate pages virtualized instead of mounting every image', async () => {
@@ -107,7 +110,11 @@ describe('SubscriptionCoverDialog', () => {
     fireEvent.click(await screen.findByTitle('Cover candidate'));
     const preview = screen.getByLabelText('Cover crop preview');
     const zoom = screen.getByLabelText('Cover zoom');
-    expect(preview.querySelector('img')).toHaveAttribute(
+    expect(preview.querySelectorAll('img')[0]).toHaveAttribute(
+      'src',
+      'media://localhost/thumb/cover-hash.jpg',
+    );
+    expect(preview.querySelectorAll('img')[1]).toHaveAttribute(
       'src',
       'media://localhost/file/cover-hash.bin',
     );

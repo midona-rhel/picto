@@ -239,6 +239,7 @@ export function MediaCoverDialog<TCursor>({
             <SubscriptionCoverImage
               fileHash={selected.file_hash}
               preferThumbnail={selected.mime_type != null && !selected.mime_type.startsWith('image/')}
+              progressive={selected.mime_type == null || selected.mime_type.startsWith('image/')}
               crop={crop}
               fallbackDimensions={{
                 width: selected.pixel_width ?? 1,
