@@ -14,6 +14,9 @@
     </linearGradient>
   </defs>
 
+  <!-- Match the visual footprint of native macOS library/package icons. -->
+  <g transform="translate(-71.68 -71.68) scale(1.14)">
+
   <!-- Raised tab extends behind the body's rounded top-left corner. -->
   <path d="M104 366V280Q104 231 153 231H371Q400 231 421 252L487 318H152Q104 318 104 366Z" fill="url(#tab-shading)"/>
 
@@ -32,5 +35,6 @@
       <path d="M289 693L295 666"/>
       <path d="M735 693L729 666"/>
     </g>
+  </g>
   </g>
 </svg>
