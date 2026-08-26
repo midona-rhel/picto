@@ -42,7 +42,6 @@ import {
   TitlebarControlGroup,
   TitlebarControls,
   TitlebarCounter,
-  TitlebarZoomSlider,
 } from '../../shared/ui/TitlebarControls';
 import { useLinkedComparisonZoom } from './useLinkedComparisonZoom';
 import { filesController } from '../../controllers/filesController';
@@ -65,14 +64,10 @@ interface DuplicateToolbarModel {
   canPrevious: boolean;
   canNext: boolean;
   disabled: boolean;
-  zoomPercent: number;
   isFit: boolean;
   isActual: boolean;
   previous: () => void;
   next: () => void;
-  zoomOut: () => void;
-  zoomIn: () => void;
-  setZoomPercent: (value: number) => void;
   fit: () => void;
   actual: () => void;
 }
@@ -86,17 +81,7 @@ export function DuplicatesToolbar() {
   return (
     <TitlebarControls
       label="Duplicate review controls"
-      left={<TitlebarCounter current={model.index + 1} total={model.total} />}
-      center={(
-        <TitlebarZoomSlider
-          min={10}
-          max={800}
-          value={model.zoomPercent}
-          onChange={model.setZoomPercent}
-          onZoomOut={model.zoomOut}
-          onZoomIn={model.zoomIn}
-        />
-      )}
+      center={<TitlebarCounter current={model.index + 1} total={model.total} />}
       right={(
         <>
           <KbdTooltip label="Zoom to fit" shortcutId="view.fitWindow">
@@ -662,14 +647,10 @@ export function DuplicatesScreen() {
       canPrevious: index > 0,
       canNext: index < pairs.length - 1,
       disabled: resolving,
-      zoomPercent: zoom.zoomPercent,
       isFit: zoom.isFit,
       isActual: zoom.isActual,
       previous: goPrevious,
       next: goNext,
-      zoomOut: zoom.zoomOut,
-      zoomIn: zoom.zoomIn,
-      setZoomPercent: zoom.setZoomPercent,
       fit: zoom.fit,
       actual: zoom.actual,
     });
@@ -687,10 +668,6 @@ export function DuplicatesScreen() {
     zoom.actual,
     zoom.isActual,
     zoom.isFit,
-    zoom.setZoomPercent,
-    zoom.zoomIn,
-    zoom.zoomOut,
-    zoom.zoomPercent,
   ]);
 
   useShortcutScope((event) => {

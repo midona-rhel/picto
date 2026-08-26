@@ -285,22 +285,22 @@ describe('DuplicatesScreen', () => {
   });
 
   it('uses one linked zoom level for both comparison panes', async () => {
-    const user = setupUser();
     await renderScreen();
     await screen.findByText('Left image');
+    const leftLayers = screen.getByTestId('left-preview-layers');
+    const rightLayers = screen.getByTestId('right-preview-layers');
+    const initialLeftTransform = leftLayers.style.transform;
 
-    await user.click(screen.getByRole('button', { name: 'Zoom out' }));
+    fireEvent.wheel(screen.getByTestId('left-preview'), { deltaY: 100, clientX: 0, clientY: 0 });
 
-    expect(screen.getByRole('slider', { name: 'Zoom' })).toHaveValue('80');
-    expect(screen.getByTestId('left-preview-layers').style.transform).toContain('scale(0.8)');
-    expect(screen.getByTestId('right-preview-layers').style.transform).toContain('scale(0.8)');
+    expect(leftLayers.style.transform).not.toBe(initialLeftTransform);
+    expect(rightLayers.style.transform).toBe(leftLayers.style.transform);
   });
 
   it('shows the aligned difference composite only while the control is held', async () => {
     const user = setupUser();
     await renderScreen();
     await screen.findByText('Left image');
-    await user.click(screen.getByRole('button', { name: 'Zoom out' }));
     const leftTransform = screen.getByTestId('left-preview-layers').style.transform;
     const rightTransform = screen.getByTestId('right-preview-layers').style.transform;
     fireEvent.load(screen.getByTestId('left-preview-layers').querySelector('img[src*="/thumb/"]')!);
@@ -515,6 +515,10 @@ describe('DuplicatesScreen', () => {
     expect(actual.compareDocumentPosition(previous) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(previous.parentElement).toBe(next.parentElement);
     expect(toolbar.textContent).toContain('1 / 1');
+    expect(toolbar.firstElementChild).toHaveTextContent('1 / 1');
+    expect(screen.queryByRole('slider', { name: 'Zoom' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Zoom out' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Zoom in' })).not.toBeInTheDocument();
   });
 
   it('switches the linked pair between actual pixels and zoom to fit', async () => {
