@@ -120,8 +120,6 @@ export function useViewerEntityContextMenu({
       scopeKind: null,
       statusFilter: lifecycle ?? null,
       loadedCount: 1,
-      onSelectAll: () => {},
-      onDeselectAll: () => {},
       onOpenDefault: (fileHash) => { void filesController.openDefaultAppForHash(fileHash); },
       onRevealInFolder: (fileHash) => { void filesController.revealHashInFolder(fileHash); },
       onOpenNewWindow: () => {

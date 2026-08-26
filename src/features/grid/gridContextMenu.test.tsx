@@ -1,7 +1,15 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it, vi } from 'vitest';
-import type { MenuItem } from '../../shared/ui/ContextMenu/ContextMenu';
+import type { MenuEntry, MenuItem } from '../../shared/ui/ContextMenu/ContextMenu';
 import { buildEmptyContextMenu, buildEntityOpenContextEntries, buildExportContextEntry, buildTileContextMenu } from './gridContextMenu';
+
+function submenuChildren(entries: MenuEntry[], label: string): MenuEntry[] {
+  const entry = entries.find(
+    (candidate) => 'submenu' in candidate && candidate.submenu && candidate.label === label,
+  );
+  if (!entry || !('children' in entry)) throw new Error(`missing ${label} submenu`);
+  return entry.children;
+}
 
 describe('buildTileContextMenu', () => {
   it('offers every reverse-image provider for images and none for non-image media', () => {
@@ -15,8 +23,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system' as const,
       statusFilter: null,
       loadedCount: 1,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onSearchByImage,
     };
     const imageEntries = buildTileContextMenu({ ...base, singleMime: 'image/png' });
@@ -74,8 +80,6 @@ describe('buildTileContextMenu', () => {
       loadedCount: 1,
       grayscale: true,
       onToggleGrayscale,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
     });
     const entry = entries.find(
       (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Grayscale',
@@ -103,8 +107,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: null,
       statusFilter: null,
       loadedCount: 0,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       ...actions,
     });
     const byLabel = new Map(entries.flatMap((entry) => (
@@ -137,8 +139,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: null,
       statusFilter: null,
       loadedCount: 0,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onImportFiles: vi.fn(),
       onImportFolder: vi.fn(),
     });
@@ -162,8 +162,6 @@ describe('buildTileContextMenu', () => {
         scopeKind: null,
         statusFilter: null,
         loadedCount: context.selectionCount,
-        onSelectAll: vi.fn(),
-        onDeselectAll: vi.fn(),
         onCopySelection,
         onCopySelectionPaths,
         onCopySelectionNames,
@@ -252,8 +250,6 @@ describe('buildTileContextMenu', () => {
       statusFilter: null,
       loadedCount: 2,
       isMixed: true,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onMoveToTrash,
     });
     const trashEntry = entries.find(
@@ -277,8 +273,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system',
       statusFilter: 'inbox',
       loadedCount: 3,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onAccept,
       onReject,
     });
@@ -304,8 +298,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system',
       statusFilter: null,
       loadedCount: 1,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onExport,
       onExportOriginals,
     });
@@ -337,11 +329,9 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system',
       statusFilter: null,
       loadedCount: 1,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onSetLibraryCover,
     });
-    const entry = entries.find(
+    const entry = submenuChildren(entries, 'More').find(
       (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Set as Library Cover',
     );
 
@@ -360,11 +350,12 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system' as const,
       statusFilter: null,
       loadedCount: 1,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onSetLibraryCover: vi.fn(),
     };
-    const videoLabels = buildTileContextMenu({ ...base, singleKind: 'media', singleMime: 'video/mp4' })
+    const videoLabels = submenuChildren(
+      buildTileContextMenu({ ...base, singleKind: 'media', singleMime: 'video/mp4' }),
+      'More',
+    )
       .flatMap((entry) => ('label' in entry ? [entry.label] : []));
     const groupLabels = buildTileContextMenu({ ...base, singleKind: 'collection', singleMime: 'image/jpeg', containsGroup: true })
       .flatMap((entry) => ('label' in entry ? [entry.label] : []));
@@ -383,8 +374,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system',
       statusFilter: null,
       loadedCount: 50,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onOpenAiTagger: vi.fn(),
     });
     const autoTagEntry = entries.find(
@@ -405,8 +394,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system',
       statusFilter: null,
       loadedCount: 1,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onOpenTagSelect: vi.fn(),
       onOpenAiTagger: vi.fn(),
       onCopyTags: vi.fn(),
@@ -432,8 +419,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system',
       statusFilter: null,
       loadedCount: 3,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       lastUsedFolderName: 'References',
       onAddToLastUsedFolder,
     });
@@ -458,8 +443,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system',
       statusFilter: null,
       loadedCount: 2,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onCopyTags,
       onPasteTags: vi.fn(),
     });
@@ -485,8 +468,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system',
       statusFilter: null,
       loadedCount: 3,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onBatchRename,
     });
     const entry = entries.find(
@@ -507,11 +488,9 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'folder',
       statusFilter: null,
       loadedCount: 1,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onSetFolderCover,
     });
-    const entry = entries.find(
+    const entry = submenuChildren(entries, 'More').find(
       (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Set as Folder Cover',
     );
     expect(entry).toBeDefined();
@@ -529,8 +508,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system',
       statusFilter: 'active',
       loadedCount: 3,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onOrganizeGroup,
     });
     const entry = entries.find(
@@ -556,8 +533,6 @@ describe('buildTileContextMenu', () => {
       scopeKind: 'system',
       statusFilter: 'active',
       loadedCount: 1,
-      onSelectAll: vi.fn(),
-      onDeselectAll: vi.fn(),
       onOpen: vi.fn(),
       onOpenNewWindow,
       onEditGroup: vi.fn(),
@@ -568,12 +543,14 @@ describe('buildTileContextMenu', () => {
     });
     const labels = entries.flatMap((entry) => ('label' in entry ? [entry.label] : []));
 
-    expect(labels).toContain('Open');
+    expect(labels).not.toContain('Open');
     expect(labels).toContain('Open in New Window');
     expect(labels).toContain('Edit Group');
     expect(labels).toContain('Ungroup...');
     expect(labels).not.toContain('Open with Default App');
     expect(labels).not.toContain('Regenerate Thumbnail');
+    expect(labels).not.toContain('Select All');
+    expect(labels).not.toContain('Deselect All');
 
     const openWindow = entries.find(
       (entry): entry is MenuItem => 'label' in entry && entry.label === 'Open in New Window',

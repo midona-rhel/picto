@@ -844,8 +844,6 @@ export function GridScreen({
       scopeKind: null,
       statusFilter: null,
       loadedCount: items.length,
-      onSelectAll: () => selectAllResults(),
-      onDeselectAll: () => clearSelection(),
       onNewFolder: () => {
         const parentId = gridScope.kind === 'folder' ? gridScope.folder_id : null;
         void foldersController.create('New Folder', parentId)
@@ -1339,8 +1337,6 @@ export function GridScreen({
             loadedCount: items.length,
             grayscale,
             onToggleGrayscale: () => store.set(gridGrayscaleAtom, !store.get(gridGrayscaleAtom)),
-            onSelectAll: () => selectAllResults(),
-            onDeselectAll: () => clearSelection(),
             onOpen: singleItem ? () => openGridItem(singleItem, items) : undefined,
             onOpenNewWindow: singleItem
               ? () => openGridItemInWindow(singleItem, [...effectiveItemIds])

@@ -107,29 +107,54 @@ vi.mock('../grid/canvas/CanvasGrid', () => ({
     </div>
   ),
 }));
-vi.mock('../../shared/ui/ContextMenu', () => ({
-  ContextMenu: ({ entries }: { entries: Array<{ label?: string; action?: () => void; separator?: true }> }) => (
-    <div data-testid="context-menu">
-      {entries.map((entry, index) => entry.separator
-        ? <hr key={`separator-${index}`} />
-        : <button key={`${entry.label}-${index}`} type="button" onClick={entry.action}>{entry.label}</button>)}
-    </div>
-  ),
+vi.mock('../../shared/ui/ContextMenu', () => {
+  type TestMenuEntry = {
+    label?: string;
+    action?: () => void;
+    separator?: true;
+    submenu?: true;
+    children?: TestMenuEntry[];
+  };
+  const TestContextMenu = ({ entries }: { entries: TestMenuEntry[] }) => {
+    const [openSubmenu, setOpenSubmenu] = useState<string | null>(null);
+    const children = entries.find((entry) => entry.label === openSubmenu)?.children ?? [];
+    const renderEntry = (entry: TestMenuEntry, index: number, prefix: string) => entry.separator
+      ? <hr key={`${prefix}-separator-${index}`} />
+      : (
+        <button
+          key={`${prefix}-${entry.label}-${index}`}
+          type="button"
+          onClick={entry.submenu ? () => setOpenSubmenu(entry.label ?? null) : entry.action}
+        >
+          {entry.label}
+        </button>
+      );
+    return (
+      <div data-testid="context-menu">
+        {entries.map((entry, index) => renderEntry(entry, index, 'root'))}
+        {children.map((entry, index) => renderEntry(entry, index, 'submenu'))}
+      </div>
+    );
+  };
+
+  return {
+  ContextMenu: TestContextMenu,
   useContextMenu: () => {
     const [state, setState] = useState<{
-      entries: Array<{ label?: string; action?: () => void; separator?: true }>;
+      entries: TestMenuEntry[];
       position: { x: number; y: number };
     } | null>(null);
     return {
       state,
       openAt: (
         position: { x: number; y: number },
-        entries: Array<{ label?: string; action?: () => void; separator?: true }>,
+        entries: TestMenuEntry[],
       ) => setState({ position, entries }),
       close: () => setState(null),
     };
   },
-}));
+  };
+});
 
 function details(): ItemDetails {
   return {
@@ -258,6 +283,7 @@ describe('GroupSurface', () => {
 
     fireEvent.contextMenu(document.querySelector('[data-group-member="1"]')!);
 
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     expect(await screen.findByRole('button', { name: 'Set as Library Cover' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add Tags' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Select All' })).not.toBeInTheDocument();
@@ -386,6 +412,7 @@ describe('GroupSurface', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Marquee first two' }));
     fireEvent.contextMenu(screen.getByTestId('grid-item-2'));
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Regenerate 2 Thumbnails' }));
     expect(mocks.regenerateThumbnailsBatch).toHaveBeenCalledWith(['one', 'two']);
   });
@@ -494,6 +521,7 @@ describe('GroupSurface', () => {
     expect(mocks.copyFilePath).toHaveBeenCalledWith('two');
 
     fireEvent.contextMenu(await screen.findByTestId('grid-item-2'));
+    fireEvent.click(await screen.findByRole('button', { name: 'More' }));
     fireEvent.click(await screen.findByRole('button', { name: 'Regenerate Thumbnail' }));
     expect(mocks.regenerateThumbnailsBatch).toHaveBeenCalledWith(['two']);
   });

@@ -24,7 +24,7 @@ import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { buildTileContextMenu } from '../grid/gridContextMenu';
 import styles from './GroupSurface.module.css';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
-import { GroupRemoveIcon, SelectAllIcon } from '../../shared/ui/icons/group-icons';
+import { GroupRemoveIcon } from '../../shared/ui/icons/group-icons';
 import * as entityMutations from '../../controllers/entityMutations';
 import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import { showErrorNotification } from '../../shared/lib/notifications';
@@ -475,8 +475,6 @@ export function GroupSurface({
       scopeKind: null,
       statusFilter: null,
       loadedCount: members.length,
-      onSelectAll: selectAll,
-      onDeselectAll: deselectAll,
       onOpen: single ? () => setViewerIndex(openIndex) : undefined,
       onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
       onRevealInFolder: (hash) => { void filesController.revealHashInFolder(hash); },
@@ -576,19 +574,12 @@ export function GroupSurface({
   const openEmptyMenu = useCallback((position: { x: number; y: number }) => {
     contextMenu.openAt(position, [
       {
-        label: 'Select All',
-        icon: <SelectAllIcon size={15} />,
-        action: selectAll,
-        disabled: members.length === 0,
-      },
-      { separator: true },
-      {
         label: 'Ungroup...',
         icon: <GroupRemoveIcon size={15} />,
         action: confirmUngroup,
       },
     ]);
-  }, [confirmUngroup, contextMenu, members.length, selectAll]);
+  }, [confirmUngroup, contextMenu]);
 
   const saveOrder = useCallback(async (orderedItemIds: number[]) => {
     try {

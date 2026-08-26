@@ -106,6 +106,7 @@ describe('QuickLook', () => {
     );
 
     fireEvent.contextMenu(document.body.querySelector('[data-image-crossfade-frame]')!.parentElement!);
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'More' }));
     expect(await screen.findByRole('menuitem', { name: 'Set as Library Cover' })).toBeInTheDocument();
   });
 

@@ -98,6 +98,7 @@ describe('Image viewer context menu', () => {
     expect(screen.getByRole('menuitem', { name: /^Add Tags/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /^Auto Tag/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /^Export/ })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('menuitem', { name: 'More' }));
     expect(screen.getByRole('menuitem', { name: /^Regenerate Thumbnail/ })).toBeInTheDocument();
     expect(screen.getByRole('menuitem', { name: /^Move to Trash/ })).toBeInTheDocument();
     expect(screen.queryByRole('menuitem', { name: 'Select All' })).not.toBeInTheDocument();
@@ -107,6 +108,7 @@ describe('Image viewer context menu', () => {
   it('offers the same library cover action for video media', async () => {
     render(<LibraryVideoMenuHarness />);
     fireEvent.contextMenu(screen.getByRole('button', { name: 'Open video' }), { clientX: 20, clientY: 20 });
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'More' }));
     expect(await screen.findByRole('menuitem', { name: 'Set as Library Cover' })).toBeInTheDocument();
   });
 });

@@ -8,11 +8,11 @@
  */
 
 import {
-  IconApps, IconArrowsMaximize, IconExternalLink, IconFolderSearch, IconBrandFinder, IconAppWindow,
+  IconApps, IconExternalLink, IconFolderSearch, IconBrandFinder, IconAppWindow,
   IconFolderMinus, IconFolderPlus,
   IconCopy, IconClipboardCopy, IconLink, IconBookmark, IconBookmarks,
   IconRefresh, IconTrash, IconArrowBackUp, IconClipboard, IconFilterPlus, IconFileImport,
-  IconSearch,
+  IconDots, IconSearch,
   IconContrast, IconFileExport, IconFolder, IconPhoto, IconStar,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
@@ -21,11 +21,9 @@ import { IconFolderNewSelection } from '../../shared/ui/IconPicker/customIcons';
 import { buildContextMenuViewEntries } from './GridViewMenu';
 import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
 import {
-  DeselectAllIcon,
   GroupCreateIcon,
   GroupEditIcon,
   GroupRemoveIcon,
-  SelectAllIcon,
 } from '../../shared/ui/icons/group-icons';
 import {
   REVERSE_IMAGE_SEARCH_ENGINES,
@@ -53,8 +51,6 @@ export interface GridMenuContext {
   scopeKind: 'system' | 'folder' | 'smart_folder' | null;
   statusFilter: string | null;
   loadedCount: number;
-  onSelectAll: () => void;
-  onDeselectAll: () => void;
   onOpen?: () => void;
   onOpenDefault?: (hash: string) => void;
   openWithOptions?: OpenWithOptions | null;
@@ -308,13 +304,11 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     && ctx.singleKind === 'media'
     && Boolean(ctx.onSetLibraryCover);
   const entries: MenuEntry[] = [];
+  const moreEntries: MenuEntry[] = [];
 
   // ── Mixed selection (folders + entities) or folders-only: limited menu ──
   if (ctx.isMixed) {
-    entries.push(item('Select All', { icon: <SelectAllIcon size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
-    entries.push(item('Deselect All', { icon: <DeselectAllIcon size={15} />, action: ctx.onDeselectAll }));
     if (ctx.onMoveToTrash) {
-      entries.push(sep());
       entries.push(item('Move to Trash', { icon: <IconTrash size={15} />, action: ctx.onMoveToTrash }));
     }
     return entries;
@@ -324,8 +318,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       entries.push(item('Open Folder', { icon: <IconFolder size={15} />, action: ctx.onOpen }));
       entries.push(sep());
     }
-    entries.push(item('Select All', { icon: <SelectAllIcon size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
-    entries.push(item('Deselect All', { icon: <DeselectAllIcon size={15} />, action: ctx.onDeselectAll }));
     return entries;
   }
 
@@ -340,19 +332,17 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 
   // ── Open actions ──
   if (singleSelected) {
-    if (!viewerSurface) {
-      entries.push(item('Open', { icon: <IconArrowsMaximize size={15} />, shortcut: kbd('view.detailView'), action: ctx.onOpen }));
-    }
+    const openEntries: MenuEntry[] = [];
     if (ctx.singleKind === 'collection') {
       if (ctx.onOpenNewWindow) {
-        entries.push(item('Open in New Window', {
+        openEntries.push(item('Open in New Window', {
           icon: <IconAppWindow size={15} />,
           shortcut: kbd('file.openNewWindow'),
           action: ctx.onOpenNewWindow,
         }));
       }
     } else if (singleHash) {
-      entries.push(...buildEntityOpenContextEntries({
+      openEntries.push(...buildEntityOpenContextEntries({
         hash: singleHash,
         onOpenDefault: ctx.onOpenDefault,
         openWithOptions: ctx.openWithOptions,
@@ -363,12 +353,12 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
         onOpenNewWindow: ctx.onOpenNewWindow,
       }));
     }
-    if (entries.length > 0) entries.push(sep());
+    entries.push(...openEntries);
+    if (openEntries.length > 0) entries.push(sep());
   }
 
   if (canSetLibraryCover) {
-    entries.push(buildLibraryCoverContextEntry(singleHash!, ctx.onSetLibraryCover!));
-    entries.push(sep());
+    moreEntries.push(buildLibraryCoverContextEntry(singleHash!, ctx.onSetLibraryCover!));
   }
 
   // ── View options ──
@@ -430,11 +420,10 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
   if (singleSelected && ctx.scopeKind === 'folder' && ctx.onSetFolderCover) {
-    entries.push(item('Set as Folder Cover', {
+    moreEntries.push(item('Set as Folder Cover', {
       icon: <IconPhoto size={15} />,
       action: ctx.onSetFolderCover,
     }));
-    entries.push(sep());
   }
   if (selectionCount > 1 && !ctx.querySelectionActive && ctx.onBatchRename) {
     entries.push(item(`Batch Rename ${selectionCount} Items...`, {
@@ -535,19 +524,18 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── Thumbnails ──
+  // ── Less frequent library maintenance ──
   if (hasSelection && !ctx.containsGroup) {
     const thumbLabel = selectionCount > 1 ? `Regenerate ${selectionCount} Thumbnails` : 'Regenerate Thumbnail';
-    entries.push(item(thumbLabel, { icon: <IconRefresh size={15} />, shortcut: kbd('file.regenerateThumbnail'), action: ctx.onRegenerateThumbnails }));
-    entries.push(sep());
+    moreEntries.push(item(thumbLabel, { icon: <IconRefresh size={15} />, shortcut: kbd('file.regenerateThumbnail'), action: ctx.onRegenerateThumbnails }));
   }
-
-  // ── Selection ──
-  if (!viewerSurface) {
-    entries.push(item('Select All', { icon: <SelectAllIcon size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
-    if (hasSelection) {
-      entries.push(item('Deselect All', { icon: <DeselectAllIcon size={15} />, shortcut: kbd('edit.deselectAll'), action: ctx.onDeselectAll }));
-    }
+  if (moreEntries.length > 0) {
+    entries.push({
+      submenu: true,
+      label: 'More',
+      icon: <IconDots size={15} />,
+      children: moreEntries,
+    });
     entries.push(sep());
   }
 
@@ -622,8 +610,6 @@ export function buildEmptyContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const viewEntries = buildContextMenuViewEntries();
   for (const entry of viewEntries) entries.push(entry);
   entries.push(sep());
-
-  entries.push(item('Select All', { icon: <SelectAllIcon size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
 
   return entries;
 }
