@@ -4,9 +4,9 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  width: calc(100% - var(--sidebar-list-anchor) - var(--sidebar-content-inset) + 4px);
+  width: auto;
   min-height: 48px;
-  margin: 4px calc(var(--sidebar-content-inset) - 4px) 8px var(--sidebar-list-anchor);
+  margin: 4px calc(var(--sidebar-content-inset) + var(--sidebar-list-highlight-right-inset)) 8px var(--sidebar-list-anchor);
   padding: 4px 9px 4px 0;
   border: none;
   background: transparent;
