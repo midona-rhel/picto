@@ -25,7 +25,7 @@
   min-width: 0; min-height: 0;
   display: grid;
   grid-template-rows: 42px minmax(180px, 1fr) 222px;
-  overflow: hidden;
+  overflow: visible;
   border-radius: var(--radius-md);
   background: transparent;
 }
@@ -34,9 +34,9 @@
   content: '';
   position: absolute;
   z-index: 4;
-  inset: 5px;
+  inset: -5px;
   pointer-events: none;
-  border-radius: calc(var(--radius-md) - 1px);
+  border-radius: calc(var(--radius-md) + 5px);
   background: rgba(72, 199, 116, 0.08);
   box-shadow: 0 0 0 1px rgba(72, 199, 116, 0.5);
   opacity: 0;

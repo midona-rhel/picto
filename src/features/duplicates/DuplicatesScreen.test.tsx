@@ -339,6 +339,15 @@ describe('DuplicatesScreen', () => {
     expect(rightCard).not.toHaveAttribute('data-smart-merge-survivor');
   });
 
+  it('places Show Difference immediately after Smart merge in the footer', async () => {
+    await renderScreen();
+    await screen.findByText('Left image');
+    const smartMerge = screen.getByRole('button', { name: 'Smart merge' });
+    const showDifference = screen.getByRole('button', { name: 'Show Difference' });
+
+    expect(smartMerge.compareDocumentPosition(showDifference) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it('clears the Smart Merge preview when the action is pressed', async () => {
     vi.mocked(getDuplicatePairs).mockResolvedValue({
       items: [pair('RightBetter')],

@@ -783,20 +783,6 @@ export function DuplicatesScreen() {
           <KbdTooltip label="Keep both files" shortcutId="dup.keepBoth">
             <button className={btnStyles.btn} onClick={() => resolveCurrent('keep_both')} disabled={resolving}><IconCopy size={15} /> Keep both</button>
           </KbdTooltip>
-          <KbdTooltip label="Show differences while held">
-            <button
-              className={`${btnStyles.btn} ${styles.differenceButton}`}
-              onMouseEnter={() => setDifferenceHovered(true)}
-              onMouseLeave={() => setDifferenceHovered(false)}
-              onFocus={() => setDifferenceFocused(true)}
-              onBlur={() => setDifferenceFocused(false)}
-              disabled={resolving || !differenceFiles}
-              aria-label="Show Difference"
-              aria-pressed={differenceActive}
-            >
-              <ToolbarDifferenceIcon /> Show Difference
-            </button>
-          </KbdTooltip>
           <KbdTooltip label="Keep the stronger file and preserve item metadata" shortcutId="dup.smartMerge">
             <button
               className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
@@ -812,6 +798,20 @@ export function DuplicatesScreen() {
               disabled={resolving}
             >
               <IconArrowsJoin size={16} /> Smart merge
+            </button>
+          </KbdTooltip>
+          <KbdTooltip label="Show differences while held">
+            <button
+              className={`${btnStyles.btn} ${styles.differenceButton}`}
+              onMouseEnter={() => setDifferenceHovered(true)}
+              onMouseLeave={() => setDifferenceHovered(false)}
+              onFocus={() => setDifferenceFocused(true)}
+              onBlur={() => setDifferenceFocused(false)}
+              disabled={resolving || !differenceFiles}
+              aria-label="Show Difference"
+              aria-pressed={differenceActive}
+            >
+              <ToolbarDifferenceIcon /> Show Difference
             </button>
           </KbdTooltip>
           <KbdTooltip label="Perceptual similarity is not pixel equality"><span className={styles.similarity}>
