@@ -73,7 +73,6 @@ pub async fn upload_pending(
     provider: &dyn CloudProvider,
     limit: usize,
 ) -> Result<BlobSyncResult, String> {
-    seed_local_originals(application)?;
     let (library_id, candidates) = candidates(
         application,
         "b.state = 'available' AND b.remote_present = 0",
@@ -365,6 +364,7 @@ mod tests {
             .blobs()
             .write_original(&hash, bytes, Some("bin"))
             .unwrap();
+        seed_local_originals(&first).unwrap();
         second
             .store()
             .transaction(|transaction| {

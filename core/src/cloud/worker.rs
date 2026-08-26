@@ -117,7 +117,7 @@ async fn tick_inner(
 }
 
 fn configuration(application: &Application) -> Result<Option<Configuration>, String> {
-    application.store().read(|connection| {
+    application.store().read_snapshot(|connection| {
         connection
             .query_row(
                 "SELECT provider, remote_root, paused, last_snapshot_at
