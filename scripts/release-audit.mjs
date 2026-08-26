@@ -44,6 +44,7 @@ for (const file of tracked) {
   const extension = path.extname(file).toLowerCase();
   if (trackedMediaExtensions.has(extension)) {
     const approvedAsset = file.startsWith('src/shared/assets/')
+      || file.startsWith('resources/tutorial/')
       || file.startsWith('tests/fixtures/')
       || file.startsWith('core/tests/fixtures/')
       || approvedReleaseIcons.has(file);
