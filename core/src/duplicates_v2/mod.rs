@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::app::{resources, Application, FileHash, ItemId, MutationReceipt};
+use crate::blob_store::mime_to_extension;
 use crate::projection_v2::{
     FolderProjectionChange, ItemProjectionChange, RootProjectionChange, StructureProjectionDelta,
     TagProjectionChange,
@@ -50,15 +51,29 @@ impl FileQuality {
         )
     }
 
-    fn is_lossless(&self) -> bool {
-        matches!(
-            self.mime_type.as_str(),
-            "image/png" | "image/tiff" | "image/bmp" | "image/x-icon" | "image/qoi"
-        )
-    }
-
     fn is_image(&self) -> bool {
         self.mime_type.starts_with("image/")
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EncodingClass {
+    Lossless,
+    Lossy,
+    /// The format supports both modes, or its stored pixels cannot be
+    /// classified reliably from the metadata currently available.
+    Unknown,
+}
+
+fn default_encoding_class(mime_type: &str) -> EncodingClass {
+    match mime_type {
+        "image/jpeg" | "image/vnd.djvu" => EncodingClass::Lossy,
+        "image/png" | "image/apng" | "image/gif" | "image/bmp" | "image/svg+xml"
+        | "image/x-icon" | "image/qoi" | "image/x-tga" | "image/x-ilbm" => EncodingClass::Lossless,
+        // TIFF, WebP, HEIF/AVIF, JPEG XL, DDS and EXR may each contain either
+        // lossless or lossy image data. Their individual bitstreams are
+        // inspected when Smart Merge has access to the stored original.
+        _ => EncodingClass::Unknown,
     }
 }
 
@@ -66,12 +81,6 @@ fn ratio_at_least(value: i64, reference: i64, numerator: u64, denominator: u64) 
     value > 0
         && reference > 0
         && (value as u128) * u128::from(denominator) >= (reference as u128) * u128::from(numerator)
-}
-
-fn ratio_at_most(value: i64, reference: i64, numerator: u64, denominator: u64) -> bool {
-    value > 0
-        && reference > 0
-        && (value as u128) * u128::from(denominator) <= (reference as u128) * u128::from(numerator)
 }
 
 fn materially_greater(value: f64, reference: f64) -> bool {
@@ -99,6 +108,18 @@ fn dimension_order(left: &FileQuality, right: &FileQuality) -> Option<Ordering> 
     } else {
         None
     }
+}
+
+fn has_objective_encoding_advantage(
+    candidate: &FileQuality,
+    reference: &FileQuality,
+    candidate_encoding: EncodingClass,
+    reference_encoding: EncodingClass,
+) -> bool {
+    candidate.is_image()
+        && reference.is_image()
+        && candidate_encoding == EncodingClass::Lossless
+        && reference_encoding == EncodingClass::Lossy
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -136,13 +157,23 @@ pub fn compare_quality(
     right: &FileQuality,
     distance: Option<u32>,
 ) -> QualityDecision {
-    compare_quality_with_encoding(left, right, distance, None, None)
+    compare_quality_with_encoding(
+        left,
+        right,
+        distance,
+        default_encoding_class(&left.mime_type),
+        default_encoding_class(&right.mime_type),
+        None,
+        None,
+    )
 }
 
 fn compare_quality_with_encoding(
     left: &FileQuality,
     right: &FileQuality,
     distance: Option<u32>,
+    left_encoding: EncodingClass,
+    right_encoding: EncodingClass,
     left_jpeg: Option<&JpegQuantization>,
     right_jpeg: Option<&JpegQuantization>,
 ) -> QualityDecision {
@@ -152,38 +183,32 @@ fn compare_quality_with_encoding(
 
     let left_pixels = left.pixel_count();
     let right_pixels = right.pixel_count();
+    let negligible_hash = distance.is_some_and(|value| value <= 1);
 
-    // Prefer strict Pareto dominance over an arbitrary resolution ratio. A
-    // candidate that is at least as large in both dimensions and encoded with
-    // at least as much data is not trading one measurable quality axis for
-    // another.
-    if left.mime_type == right.mime_type {
-        match dimension_order(left, right) {
-            Some(Ordering::Greater) if left.size_bytes >= right.size_bytes => {
-                return QualityDecision::LeftBetter;
-            }
-            Some(Ordering::Less) if right.size_bytes >= left.size_bytes => {
-                return QualityDecision::RightBetter;
-            }
-            _ => {}
-        }
-    }
-
-    // A real two-times pixel-count advantage is decisive. This is intentionally
-    // checked before byte density: a larger source is not discarded just
-    // because it compresses better.
-    if let (Some(left_pixels), Some(right_pixels)) = (left_pixels, right_pixels) {
-        if ratio_at_least(left_pixels, right_pixels, 2, 1) {
+    // Auto-select only when one image wins on two independent, objective axes:
+    // it is at least as large in both dimensions and changes from a lossy to a
+    // lossless representation. File size is deliberately absent: container
+    // overhead, metadata and encoder efficiency make byte count unsuitable as
+    // image-quality evidence. The candidates must also be an exact/negligible
+    // perceptual match so a related-but-different crop cannot be discarded.
+    match dimension_order(left, right) {
+        Some(Ordering::Greater)
+            if negligible_hash
+                && has_objective_encoding_advantage(left, right, left_encoding, right_encoding) =>
+        {
             return QualityDecision::LeftBetter;
         }
-        if ratio_at_least(right_pixels, left_pixels, 2, 1) {
+        Some(Ordering::Less)
+            if negligible_hash
+                && has_objective_encoding_advantage(right, left, right_encoding, left_encoding) =>
+        {
             return QualityDecision::RightBetter;
         }
+        _ => {}
     }
 
     // Encoded quality is only evidence for an exact/negligible match. A
     // perceptually distant pair at the same dimensions still needs review.
-    let negligible_hash = distance.is_some_and(|value| value <= 1);
     if negligible_hash {
         // When decoded information is available, prefer the materially richer
         // decoded result before considering encoded size.
@@ -218,18 +243,6 @@ fn compare_quality_with_encoding(
                 Some(Ordering::Less) => return QualityDecision::RightBetter,
                 _ => {}
             }
-            // Equal dimensions, format, and a negligible perceptual distance
-            // leave no competing visual evidence. Keep the representation
-            // carrying more encoded image data when quantization cannot break
-            // the tie. Distance one is displayed as a 100% match by the UI and
-            // must not behave differently from distance zero.
-            if left.size_bytes != right.size_bytes {
-                return if left.size_bytes > right.size_bytes {
-                    QualityDecision::LeftBetter
-                } else {
-                    QualityDecision::RightBetter
-                };
-            }
         }
 
         // Lossless encoding wins only when the decoded dimensions are
@@ -237,20 +250,34 @@ fn compare_quality_with_encoding(
         if let (Some(left_pixels), Some(right_pixels)) = (left_pixels, right_pixels) {
             let comparable_dimensions = ratio_at_least(left_pixels, right_pixels, 9, 10)
                 && ratio_at_least(right_pixels, left_pixels, 9, 10);
-            if comparable_dimensions && left.is_lossless() != right.is_lossless() {
-                return if left.is_lossless() {
+            if comparable_dimensions && left_encoding != right_encoding {
+                return if left_encoding == EncodingClass::Lossless
+                    && right_encoding == EncodingClass::Lossy
+                {
                     QualityDecision::LeftBetter
-                } else {
+                } else if right_encoding == EncodingClass::Lossless
+                    && left_encoding == EncodingClass::Lossy
+                {
                     QualityDecision::RightBetter
+                } else {
+                    QualityDecision::NeedsChoice
                 };
             }
         }
 
-        let sizes_are_negligible =
-            ratio_at_most(left.size_bytes.max(1), right.size_bytes.max(1), 105, 100)
-                && ratio_at_most(right.size_bytes.max(1), left.size_bytes.max(1), 105, 100);
-        if same_dimensions && sizes_are_negligible {
-            return stable_tie(left, right);
+        // Byte size is a final tie-breaker only for effectively identical
+        // images using the same codec and encoding class. It is never compared
+        // across formats, dimensions, frame counts or known encoding modes.
+        let equivalent_encoding = same_dimensions
+            && left.frame_count == right.frame_count
+            && left.mime_type == right.mime_type
+            && left_encoding == right_encoding;
+        if equivalent_encoding {
+            return match left.size_bytes.cmp(&right.size_bytes) {
+                Ordering::Greater => QualityDecision::LeftBetter,
+                Ordering::Less => QualityDecision::RightBetter,
+                Ordering::Equal => stable_tie(left, right),
+            };
         }
     }
 
@@ -352,6 +379,118 @@ fn parse_jpeg_quantization(bytes: &[u8]) -> Option<JpegQuantization> {
     (!tables.is_empty()).then_some(JpegQuantization { tables })
 }
 
+fn jpeg_encoding_class(bytes: &[u8]) -> EncodingClass {
+    if !bytes.starts_with(&[0xff, 0xd8]) {
+        return EncodingClass::Unknown;
+    }
+    // SOF3/7/11/15 are the lossless JPEG processes. SOF55 is JPEG-LS.
+    for marker in bytes.windows(2) {
+        if marker[0] == 0xff && matches!(marker[1], 0xc3 | 0xc7 | 0xcb | 0xcf | 0xf7) {
+            return EncodingClass::Lossless;
+        }
+    }
+    EncodingClass::Lossy
+}
+
+fn webp_encoding_class(bytes: &[u8]) -> EncodingClass {
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WEBP" {
+        return EncodingClass::Unknown;
+    }
+    let has_lossless = bytes.windows(4).any(|chunk| chunk == b"VP8L");
+    let has_lossy = bytes.windows(4).any(|chunk| chunk == b"VP8 ");
+    match (has_lossless, has_lossy) {
+        (true, false) => EncodingClass::Lossless,
+        (false, true) => EncodingClass::Lossy,
+        // Mixed-mode animations and malformed/unsupported containers are not
+        // safe automatic winners.
+        _ => EncodingClass::Unknown,
+    }
+}
+
+fn tiff_encoding_class(bytes: &[u8]) -> EncodingClass {
+    (|| -> Option<EncodingClass> {
+        let little_endian = match bytes.get(..4) {
+            Some(b"II\x2a\x00") => true,
+            Some(b"MM\x00\x2a") => false,
+            _ => return None,
+        };
+        let read_u16 = |offset: usize| -> Option<u16> {
+            let value = [*bytes.get(offset)?, *bytes.get(offset + 1)?];
+            Some(if little_endian {
+                u16::from_le_bytes(value)
+            } else {
+                u16::from_be_bytes(value)
+            })
+        };
+        let read_u32 = |offset: usize| -> Option<u32> {
+            let value = [
+                *bytes.get(offset)?,
+                *bytes.get(offset + 1)?,
+                *bytes.get(offset + 2)?,
+                *bytes.get(offset + 3)?,
+            ];
+            Some(if little_endian {
+                u32::from_le_bytes(value)
+            } else {
+                u32::from_be_bytes(value)
+            })
+        };
+        let ifd = usize::try_from(read_u32(4)?).ok()?;
+        let entries = usize::from(read_u16(ifd)?);
+        for index in 0..entries {
+            let entry = ifd.checked_add(2 + index * 12)?;
+            if read_u16(entry)? != 259 {
+                continue;
+            }
+            let compression = read_u16(entry + 8)?;
+            return Some(match compression {
+                // None, CCITT, LZW, Deflate, PackBits, Zstd and LZMA preserve
+                // stored samples. JPEG-in-TIFF is lossy. Less common hybrid
+                // codecs remain unknown rather than being guessed.
+                1 | 2 | 3 | 4 | 5 | 8 | 32_773 | 32_946 | 34_925 | 50_000 => {
+                    EncodingClass::Lossless
+                }
+                6 | 7 => EncodingClass::Lossy,
+                _ => EncodingClass::Unknown,
+            });
+        }
+        None
+    })()
+    .unwrap_or(EncodingClass::Unknown)
+}
+
+fn encoding_class_for_file(app: &Application, file: &FileQuality) -> EncodingClass {
+    let fallback = default_encoding_class(&file.mime_type);
+    if !matches!(
+        file.mime_type.as_str(),
+        "image/jpeg" | "image/webp" | "image/tiff"
+    ) {
+        return fallback;
+    }
+    let extension = mime_to_extension(&file.mime_type);
+    let Some((path, _)) = app
+        .blobs()
+        .find_original(&file.file_hash.0, Some(extension))
+        .ok()
+        .flatten()
+    else {
+        return fallback;
+    };
+    let mut bytes = Vec::with_capacity(512 * 1024);
+    if std::fs::File::open(path)
+        .and_then(|file| file.take(512 * 1024).read_to_end(&mut bytes))
+        .is_err()
+    {
+        return fallback;
+    }
+    match file.mime_type.as_str() {
+        "image/jpeg" => jpeg_encoding_class(&bytes),
+        "image/webp" => webp_encoding_class(&bytes),
+        "image/tiff" => tiff_encoding_class(&bytes),
+        _ => fallback,
+    }
+}
+
 fn jpeg_quantization_for_file(app: &Application, file: &FileQuality) -> Option<JpegQuantization> {
     if file.mime_type != "image/jpeg" {
         return None;
@@ -390,6 +529,8 @@ fn compare_quality_with_recency(
         left,
         right,
         distance,
+        encoding_class_for_file(app, left),
+        encoding_class_for_file(app, right),
         left_jpeg.as_ref(),
         right_jpeg.as_ref(),
     );
@@ -1318,7 +1459,8 @@ mod tests {
 
     use super::{
         compare_quality, compare_quality_with_encoding, count_candidates, find_candidate_pairs,
-        list_candidates, parse_jpeg_quantization, parse_supported_hash, resolve, scan, FileQuality,
+        jpeg_encoding_class, list_candidates, parse_jpeg_quantization, parse_supported_hash,
+        resolve, scan, tiff_encoding_class, webp_encoding_class, EncodingClass, FileQuality,
         QualityDecision, ResolutionChoice,
     };
     use crate::app::{Application, FileHash};
@@ -1347,17 +1489,17 @@ mod tests {
     }
 
     #[test]
-    fn obvious_resolution_upgrade_wins() {
+    fn resolution_alone_does_not_prove_a_quality_upgrade() {
         let left = quality(1, 1_000_000, 4000, 4000, "image/jpeg");
         let right = quality(2, 800_000, 2000, 2000, "image/jpeg");
         assert_eq!(
             compare_quality(&left, &right, Some(8)),
-            QualityDecision::LeftBetter
+            QualityDecision::NeedsChoice
         );
     }
 
     #[test]
-    fn exact_same_dimension_match_uses_encoded_information_without_ratio_gate() {
+    fn byte_size_breaks_an_otherwise_equivalent_encoding_tie() {
         let left = quality(11, 100_000, 1200, 800, "image/jpeg");
         let right = quality(12, 104_000, 1200, 800, "image/jpeg");
         assert_eq!(
@@ -1367,7 +1509,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_same_dimension_match_with_more_encoded_information_wins() {
+    fn byte_size_breaks_an_exact_same_dimension_jpeg_tie() {
         let left = quality(1, 1_007_459, 1637, 2315, "image/jpeg");
         let right = quality(2, 818_954, 1637, 2315, "image/jpeg");
         assert_eq!(
@@ -1377,12 +1519,32 @@ mod tests {
     }
 
     #[test]
-    fn resolution_and_size_dominance_has_no_arbitrary_ratio_gate() {
+    fn resolution_and_size_together_still_do_not_prove_quality() {
         let left = quality(1, 379_479, 1214, 1720, "image/jpeg");
         let right = quality(2, 533_336, 1518, 2150, "image/jpeg");
         assert_eq!(
             compare_quality(&left, &right, Some(3)),
+            QualityDecision::NeedsChoice
+        );
+    }
+
+    #[test]
+    fn larger_lossless_image_beats_smaller_lossy_image() {
+        let left = quality(1, 213_700, 4096, 1067, "image/jpeg");
+        let right = quality(2, 1_200_000, 4570, 1191, "image/png");
+        assert_eq!(
+            compare_quality(&left, &right, Some(1)),
             QualityDecision::RightBetter
+        );
+    }
+
+    #[test]
+    fn larger_lossy_image_does_not_displace_smaller_lossless_image_without_more_evidence() {
+        let left = quality(1, 1_200_000, 4570, 1191, "image/jpeg");
+        let right = quality(2, 213_700, 4096, 1067, "image/png");
+        assert_eq!(
+            compare_quality(&left, &right, Some(1)),
+            QualityDecision::NeedsChoice
         );
     }
 
@@ -1399,9 +1561,49 @@ mod tests {
         let left = quality(1, 500_000, 1200, 800, "image/jpeg");
         let right = quality(2, 500_000, 1200, 800, "image/jpeg");
         assert_eq!(
-            compare_quality_with_encoding(&left, &right, Some(1), Some(&finer), Some(&coarser),),
+            compare_quality_with_encoding(
+                &left,
+                &right,
+                Some(1),
+                EncodingClass::Lossy,
+                EncodingClass::Lossy,
+                Some(&finer),
+                Some(&coarser),
+            ),
             QualityDecision::LeftBetter
         );
+    }
+
+    #[test]
+    fn encoded_mode_sniffers_distinguish_lossless_and_lossy_payloads() {
+        assert_eq!(
+            jpeg_encoding_class(&[0xff, 0xd8, 0xff, 0xc3, 0x00, 0x02]),
+            EncodingClass::Lossless
+        );
+        assert_eq!(
+            jpeg_encoding_class(&[0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02]),
+            EncodingClass::Lossy
+        );
+
+        let mut webp_lossless = b"RIFF\0\0\0\0WEBPVP8L".to_vec();
+        webp_lossless.extend([0; 8]);
+        assert_eq!(webp_encoding_class(&webp_lossless), EncodingClass::Lossless);
+        let mut webp_lossy = b"RIFF\0\0\0\0WEBPVP8 ".to_vec();
+        webp_lossy.extend([0; 8]);
+        assert_eq!(webp_encoding_class(&webp_lossy), EncodingClass::Lossy);
+
+        let tiff = |compression: u16| {
+            let mut bytes = b"II\x2a\x00\x08\x00\x00\x00".to_vec();
+            bytes.extend(1_u16.to_le_bytes());
+            bytes.extend(259_u16.to_le_bytes());
+            bytes.extend(3_u16.to_le_bytes());
+            bytes.extend(1_u32.to_le_bytes());
+            bytes.extend(compression.to_le_bytes());
+            bytes.extend([0, 0]);
+            bytes
+        };
+        assert_eq!(tiff_encoding_class(&tiff(5)), EncodingClass::Lossless);
+        assert_eq!(tiff_encoding_class(&tiff(7)), EncodingClass::Lossy);
     }
 
     #[test]
