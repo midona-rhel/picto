@@ -585,6 +585,8 @@ const DETAIL_DISTANCE_THRESHOLD: u32 = 32;
 const COMPARISON_SIDE: u32 = 96;
 const DISTINCT_COLOR_DELTA: f32 = 8.0;
 const STRONG_COLOR_DELTA: f32 = 16.0;
+const MAX_ALIGNMENT_SHIFT: isize = 3;
+const ALIGNMENT_SAMPLE_STEP: usize = 3;
 
 fn parse_supported_hash(raw: &str) -> Option<ImageHash<Vec<u8>>> {
     let hash = ImageHash::<Vec<u8>>::from_base64(raw).ok()?;
@@ -771,12 +773,61 @@ fn spatial_comparison_at_side(
     right: &SpatialDescriptor,
     side: usize,
 ) -> SpatialComparison {
-    let mut deltas = Vec::with_capacity(left.pixels.len());
-    for (left, right) in left.pixels.iter().zip(&right.pixels) {
-        let delta =
-            ((left.l - right.l).powi(2) + (left.a - right.a).powi(2) + (left.b - right.b).powi(2))
-                .sqrt();
-        deltas.push(delta);
+    let delta = |left: Lab, right: Lab| {
+        ((left.l - right.l).powi(2) + (left.a - right.a).powi(2) + (left.b - right.b).powi(2))
+            .sqrt()
+    };
+    let overlap = |shift: isize| {
+        let left_start = (-shift).max(0) as usize;
+        let left_end = (side as isize - shift.max(0)) as usize;
+        (left_start, left_end)
+    };
+    let mut best_shift = (0_isize, 0_isize);
+    let mut best_cost = f32::INFINITY;
+    for shift_y in -MAX_ALIGNMENT_SHIFT..=MAX_ALIGNMENT_SHIFT {
+        let (start_y, end_y) = overlap(shift_y);
+        for shift_x in -MAX_ALIGNMENT_SHIFT..=MAX_ALIGNMENT_SHIFT {
+            let (start_x, end_x) = overlap(shift_x);
+            let mut cost = 0.0_f32;
+            let mut count = 0usize;
+            for y in (start_y..end_y).step_by(ALIGNMENT_SAMPLE_STEP) {
+                for x in (start_x..end_x).step_by(ALIGNMENT_SAMPLE_STEP) {
+                    let right_x = (x as isize + shift_x) as usize;
+                    let right_y = (y as isize + shift_y) as usize;
+                    cost += delta(
+                        left.pixels[y * side + x],
+                        right.pixels[right_y * side + right_x],
+                    )
+                    .min(DISTINCT_COLOR_DELTA);
+                    count += 1;
+                }
+            }
+            let cost = cost / count.max(1) as f32;
+            let displacement = shift_x.abs() + shift_y.abs();
+            let best_displacement = best_shift.0.abs() + best_shift.1.abs();
+            if cost < best_cost - f32::EPSILON
+                || ((cost - best_cost).abs() <= f32::EPSILON && displacement < best_displacement)
+            {
+                best_cost = cost;
+                best_shift = (shift_x, shift_y);
+            }
+        }
+    }
+
+    let (start_x, end_x) = overlap(best_shift.0);
+    let (start_y, end_y) = overlap(best_shift.1);
+    let width = end_x - start_x;
+    let height = end_y - start_y;
+    let mut deltas = Vec::with_capacity(width * height);
+    for y in start_y..end_y {
+        for x in start_x..end_x {
+            let right_x = (x as isize + best_shift.0) as usize;
+            let right_y = (y as isize + best_shift.1) as usize;
+            deltas.push(delta(
+                left.pixels[y * side + x],
+                right.pixels[right_y * side + right_x],
+            ));
+        }
     }
 
     let total = deltas.len().max(1);
@@ -784,7 +835,7 @@ fn spatial_comparison_at_side(
         .iter()
         .filter(|delta| **delta >= DISTINCT_COLOR_DELTA)
         .count();
-    debug_assert_eq!(deltas.len(), side * side);
+    debug_assert_eq!(deltas.len(), width * height);
     let mut visited = vec![false; deltas.len()];
     let mut largest_region = 0usize;
     for start in 0..deltas.len() {
@@ -796,13 +847,13 @@ fn spatial_comparison_at_side(
         let mut region = 0usize;
         while let Some(pixel) = stack.pop() {
             region += 1;
-            let x = pixel % side;
-            let y = pixel / side;
+            let x = pixel % width;
+            let y = pixel / width;
             for neighbor in [
                 (x > 0).then(|| pixel - 1),
-                (x + 1 < side).then(|| pixel + 1),
-                (y > 0).then(|| pixel - side),
-                (y + 1 < side).then(|| pixel + side),
+                (x + 1 < width).then(|| pixel + 1),
+                (y > 0).then(|| pixel - width),
+                (y + 1 < height).then(|| pixel + width),
             ]
             .into_iter()
             .flatten()
@@ -1738,6 +1789,55 @@ mod tests {
         assert!(comparison.distinct_fraction < 0.01);
         assert!(comparison.coherent_fraction > 0.0005);
         assert!(comparison.difference_basis_points > 0);
+    }
+
+    #[test]
+    fn spatial_verification_aligns_small_translations_before_scoring() {
+        use image::{DynamicImage, ImageBuffer, Rgb, RgbImage};
+
+        fn shifted(source: &RgbImage, shift_x: i32, shift_y: i32) -> RgbImage {
+            ImageBuffer::from_fn(source.width(), source.height(), |x, y| {
+                let source_x = x as i32 - shift_x;
+                let source_y = y as i32 - shift_y;
+                if source_x >= 0
+                    && source_y >= 0
+                    && source_x < source.width() as i32
+                    && source_y < source.height() as i32
+                {
+                    *source.get_pixel(source_x as u32, source_y as u32)
+                } else {
+                    Rgb([12, 12, 12])
+                }
+            })
+        }
+
+        let base = ImageBuffer::from_fn(96, 96, |x, y| {
+            Rgb([
+                ((x * 3 + y * 5) % 220 + 20) as u8,
+                ((x * 7 + y * 2) % 210 + 25) as u8,
+                ((x * 2 + y * 11) % 200 + 30) as u8,
+            ])
+        });
+        let translated = shifted(&base, 2, -3);
+        let left =
+            spatial_descriptor(&encoded_png(&DynamicImage::ImageRgb8(base.clone()))).unwrap();
+        let right =
+            spatial_descriptor(&encoded_png(&DynamicImage::ImageRgb8(translated.clone()))).unwrap();
+        let aligned = spatial_comparison(&left, &right);
+
+        assert_eq!(aligned.difference_basis_points, 0);
+        assert_eq!(aligned.coherent_fraction, 0.0);
+
+        let mut edited = translated;
+        for y in 40..48 {
+            for x in 44..52 {
+                edited.put_pixel(x, y, Rgb([245, 24, 180]));
+            }
+        }
+        let edited = spatial_descriptor(&encoded_png(&DynamicImage::ImageRgb8(edited))).unwrap();
+        let edited = spatial_comparison(&left, &edited);
+        assert!(edited.difference_basis_points > 0);
+        assert!(edited.coherent_fraction > 0.0);
     }
 
     #[test]
