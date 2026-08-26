@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconDownload, IconPlus, IconShieldLock } from '@tabler/icons-react';
+import { IconDownload, IconLibraryPlus, IconPlus, IconShieldLock } from '@tabler/icons-react';
 import type {
   SubscriptionCover,
   SubscriptionInfo,
@@ -116,6 +116,7 @@ export function SubscriptionsGrid({
   runningSubscriptionIds,
   onSelect,
   onAdd,
+  onAddGallery,
   onOpenAccounts,
   onSubscriptionMenu,
   onMultiMenu,
@@ -127,6 +128,7 @@ export function SubscriptionsGrid({
   runningSubscriptionIds: string[];
   onSelect: (selection: SubscriptionsSelection) => void;
   onAdd: () => void;
+  onAddGallery: () => void;
   onOpenAccounts: () => void;
   onSubscriptionMenu: (position: { x: number; y: number }, id: string) => void;
   onMultiMenu: (position: { x: number; y: number }, subscriptionIds: string[]) => void;
@@ -227,6 +229,9 @@ export function SubscriptionsGrid({
         <div className={styles.heroActions}>
           <ActionButton variant="primary" onClick={onAdd}>
             <IconPlus size={14} /> Add
+          </ActionButton>
+          <ActionButton variant="secondary" onClick={onAddGallery}>
+            <IconLibraryPlus size={14} /> Add Gallery
           </ActionButton>
           <ActionButton variant="ghost" onClick={onOpenAccounts}>
             <IconShieldLock size={14} /> Accounts

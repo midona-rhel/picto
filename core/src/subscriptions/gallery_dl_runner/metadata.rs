@@ -313,6 +313,18 @@ fn generic_creator_identifier(json: &serde_json::Value) -> Option<String> {
     None
 }
 
+fn creator_identifier(json: &serde_json::Value) -> Option<String> {
+    let adapter_creator =
+        adapter_for_json(json).and_then(|adapter| adapter.extract_creator_identifier(json));
+    if adapter_creator.is_some()
+        || field_text(json, "category")
+            .is_some_and(|category| canonical_metadata_category(&category) == "exhentai")
+    {
+        return adapter_creator;
+    }
+    generic_creator_identifier(json)
+}
+
 fn webtoons_identity(json: &serde_json::Value) -> Option<(String, String)> {
     let title_no = field_text(json, "title_no")?;
     let episode_no = field_text(json, "episode_no")?;
@@ -819,10 +831,7 @@ pub(super) fn parse_metadata_with_url(
         .unwrap_or_default();
     let mut seen_tags = HashSet::with_capacity(tags.len());
     tags.retain(|tag| seen_tags.insert(tag.clone()));
-    if let Some(creator) = adapter
-        .and_then(|adapter| adapter.extract_creator_identifier(json))
-        .or_else(|| generic_creator_identifier(json))
-    {
+    if let Some(creator) = creator_identifier(json) {
         if !tags
             .iter()
             .any(|(namespace, subtag)| namespace == "creator" && subtag == &creator)
@@ -932,9 +941,7 @@ pub fn parse_tags(json: &serde_json::Value) -> Vec<(String, String)> {
 }
 
 pub fn extract_creator_identifier(json: &serde_json::Value) -> Option<String> {
-    adapter_for_json(json)
-        .and_then(|adapter| adapter.extract_creator_identifier(json))
-        .or_else(|| generic_creator_identifier(json))
+    creator_identifier(json)
 }
 
 #[cfg(test)]
@@ -978,6 +985,37 @@ mod tests {
         assert!(parsed
             .tags
             .contains(&("character".to_string(), "princess_peach".to_string())));
+    }
+
+    #[test]
+    fn exhentai_never_promotes_uploader_metadata_to_creator() {
+        let parsed = parse_metadata(&json!({
+            "category": "exhentai",
+            "gallery_id": 12345,
+            "gallery_token": "67890abcde",
+            "username": "gallery-uploader",
+            "tags_artist": [],
+            "tags_parody": ["a series"],
+            "tags_language": ["english"],
+            "tags_female": ["discarded"]
+        }));
+
+        assert_eq!(
+            super::extract_creator_identifier(&json!({
+                "category": "exhentai",
+                "username": "gallery-uploader",
+                "tags_artist": []
+            })),
+            None
+        );
+        assert!(!parsed
+            .tags
+            .iter()
+            .any(|(namespace, _)| namespace == "creator"));
+        assert_eq!(
+            parsed.tags,
+            vec![("series".to_string(), "a series".to_string())]
+        );
     }
 
     #[test]

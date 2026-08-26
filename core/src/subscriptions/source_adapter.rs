@@ -5,10 +5,10 @@ use serde::Serialize;
 use url::Url;
 
 use crate::subscriptions::gallery_dl_runner::{
-    build_url, normalize_baraag_username, normalize_fanbox_creator, normalize_furaffinity_username,
-    normalize_newgrounds_username, normalize_onlyfans_creator, normalize_patreon_creator,
-    normalize_subscribestar_creator, normalize_tumblr_blog, normalize_twitter_username,
-    normalize_webtoons_url, site_by_id, SiteEntry,
+    build_url, normalize_baraag_username, normalize_ehentai_gallery_url, normalize_fanbox_creator,
+    normalize_furaffinity_username, normalize_newgrounds_username, normalize_onlyfans_creator,
+    normalize_patreon_creator, normalize_subscribestar_creator, normalize_tumblr_blog,
+    normalize_twitter_username, normalize_webtoons_url, site_by_id, SiteEntry,
 };
 
 pub use gallery_dl::{GalleryDlSourceAdapter, SubscriptionSourceAdapter};
@@ -41,6 +41,9 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
     let trimmed = raw.trim();
     if site_id == "webtoons" && query_kind == "user" {
         return normalize_webtoons_url(trimmed).unwrap_or_else(|_| trimmed.to_string());
+    }
+    if site_id == "ehentai" && query_kind == "user" {
+        return normalize_ehentai_gallery_url(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
     if site_id == "hentaifoundry" && query_kind == "user" {
         return build_url("hentaifoundry", trimmed)
@@ -126,6 +129,9 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
     }
     if site_id == "webtoons" {
         normalize_webtoons_url(query_text)?;
+    }
+    if site_id == "ehentai" {
+        normalize_ehentai_gallery_url(query_text)?;
     }
     if site_id == "pixivuser"
         && !query_text

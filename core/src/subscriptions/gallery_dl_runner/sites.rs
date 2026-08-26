@@ -334,6 +334,19 @@ pub static SITES: &[SiteEntry] = &[
         credential_types: COOKIE_CREDENTIAL_TYPES,
         oauth_provider: None,
     },
+    SiteEntry {
+        id: "ehentai",
+        domain: "e-hentai.org",
+        credential_owner_site_id: "ehentai",
+        name: "E-Hentai",
+        example_query: "https://e-hentai.org/g/12345/67890abcde/",
+        supports_query: false,
+        supports_account: true,
+        auth_required_for_full_access: false,
+        auth_strictly_required: false,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
+        oauth_provider: None,
+    },
 ];
 
 /// Look up a supported site by its exact ID.
@@ -389,8 +402,52 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "konachan" => build_booru_url("https://konachan.com/post", query),
         "safebooru" => build_booru_url("https://safebooru.org/index.php?page=post&s=list", query),
         "e621" => build_booru_url("https://e621.net/posts", query),
+        "ehentai" => normalize_ehentai_gallery_url(query).ok(),
         _ => None,
     }
+}
+
+/// Accept one concrete public E-Hentai gallery, never a search or favorite list.
+pub fn normalize_ehentai_gallery_url(raw: &str) -> Result<String, String> {
+    let mut url = Url::parse(raw.trim())
+        .map_err(|_| "E-Hentai galleries require a gallery URL".to_string())?;
+    if !matches!(url.scheme(), "http" | "https")
+        || !matches!(url.host_str(), Some("e-hentai.org" | "www.e-hentai.org"))
+        || url.username() != ""
+        || url.password().is_some()
+        || url.port().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err("E-Hentai galleries require a public e-hentai.org gallery URL".to_string());
+    }
+    let segments: Vec<_> = url
+        .path_segments()
+        .into_iter()
+        .flatten()
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let ["g", gallery_id, token] = segments.as_slice() else {
+        return Err("E-Hentai galleries require a /g/<id>/<token>/ URL".to_string());
+    };
+    if gallery_id
+        .parse::<u64>()
+        .ok()
+        .filter(|id| *id > 0)
+        .is_none()
+        || token.len() != 10
+        || !token.bytes().all(|byte| byte.is_ascii_hexdigit())
+    {
+        return Err("E-Hentai galleries require a valid gallery ID and token".to_string());
+    }
+    let gallery_id = (*gallery_id).to_string();
+    let token = token.to_ascii_lowercase();
+    url.set_scheme("https")
+        .map_err(|_| "Invalid E-Hentai URL".to_string())?;
+    url.set_host(Some("e-hentai.org"))
+        .map_err(|_| "Invalid E-Hentai URL".to_string())?;
+    url.set_path(&format!("/g/{gallery_id}/{token}/"));
+    Ok(url.to_string())
 }
 
 pub fn normalize_twitter_username(raw: &str) -> Result<String, String> {
@@ -1124,9 +1181,20 @@ mod tests {
                 "konachan",
                 "safebooru",
                 "e621",
+                "ehentai",
             ])
         );
-        assert_eq!(SITES.len(), 23);
+        assert_eq!(SITES.len(), 24);
+    }
+
+    #[test]
+    fn ehentai_accepts_only_concrete_public_gallery_urls() {
+        assert_eq!(
+            normalize_ehentai_gallery_url("http://www.e-hentai.org/g/12345/67890ABCDE/").as_deref(),
+            Ok("https://e-hentai.org/g/12345/67890abcde/")
+        );
+        assert!(normalize_ehentai_gallery_url("https://e-hentai.org/?f_search=test").is_err());
+        assert!(normalize_ehentai_gallery_url("https://exhentai.org/g/12345/67890abcde/").is_err());
     }
 
     #[test]

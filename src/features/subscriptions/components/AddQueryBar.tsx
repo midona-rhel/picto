@@ -15,7 +15,9 @@ export function AddQueryBar({
   onAdd: (siteId: string, queryText: string) => Promise<void>;
 }) {
   const sortedSites = useMemo(
-    () => [...sites].sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })),
+    () => sites
+      .filter((site) => site.id !== 'ehentai')
+      .sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' })),
     [sites],
   );
   const [siteId, setSiteId] = useState(sortedSites[0]?.id ?? '');

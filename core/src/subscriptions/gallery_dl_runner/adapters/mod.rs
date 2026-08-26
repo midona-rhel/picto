@@ -3,6 +3,7 @@ mod baraag;
 mod danbooru;
 mod deviantart;
 mod e621;
+mod exhentai;
 mod fanbox;
 mod furaffinity;
 mod hentaifoundry;
@@ -65,6 +66,7 @@ pub(super) fn adapter_for_json(json: &Value) -> Option<&'static dyn SiteAdapter>
         }
         "deviantart" => Some(&deviantart::ADAPTER),
         "e621" => Some(&e621::ADAPTER),
+        "exhentai" => Some(&exhentai::ADAPTER),
         "fanbox" => Some(&fanbox::ADAPTER),
         "furaffinity" => Some(&furaffinity::ADAPTER),
         "hentaifoundry" => Some(&hentaifoundry::ADAPTER),

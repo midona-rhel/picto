@@ -22,6 +22,7 @@ import { SubscriptionDetail } from './components/SubscriptionDetail';
 import { SubscriptionCoverDialog } from './components/SubscriptionCoverDialog';
 import { EmptyState } from './components/EmptyState';
 import { NewSubscriptionDialog, type CreateSubscriptionInput } from './components/NewSubscriptionDialog';
+import { AddGalleryDialog, type AddGalleryInput } from './components/AddGalleryDialog';
 import {
   EMPTY_SUBSCRIPTION_DETAIL_STATE,
   subscriptionsAccountsModalAtom,
@@ -52,6 +53,7 @@ export function SubscriptionsScreen() {
   const setConfirmModal = useSetAtom(confirmModalAtom);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [coverTarget, setCoverTarget] = useState<{ id: string; name: string } | null>(null);
+  const [galleryDialogOpen, setGalleryDialogOpen] = useState(false);
 
   const confirm = useCallback(
     (opts: { title: string; message: string; confirmLabel?: string; danger?: boolean }, action: () => void) => {
@@ -156,6 +158,27 @@ export function SubscriptionsScreen() {
       setWizard({ open: false });
     });
   }, [act, navigateTo, setWizard]);
+
+  const addGallery = useCallback(async (result: AddGalleryInput) => {
+    const galleryId = result.url.match(/\/g\/(\d+)\//)?.[1];
+    let createdId: string | null = null;
+    const succeeded = await act('gallery', async () => {
+      const subscription = await subscriptionsController.create({
+        name: galleryId ? `E-Hentai Gallery ${galleryId}` : 'E-Hentai Gallery',
+      });
+      createdId = subscription.id;
+      try {
+        await subscriptionsController.addQuery(subscription.id, result.serviceId, result.url);
+      } catch (error) {
+        await subscriptionsController.delete(subscription.id).catch(() => undefined);
+        throw error;
+      }
+      navigateTo({ kind: 'subscription', id: subscription.id });
+      markSubscriptionRunTriggered();
+      await subscriptionsController.run(subscription.id);
+    });
+    if (succeeded || createdId != null) setGalleryDialogOpen(false);
+  }, [act, navigateTo]);
 
   const busy = busyKey != null;
   const detailController = {
@@ -297,6 +320,7 @@ export function SubscriptionsScreen() {
             runningSubscriptionIds={snapshot.runningSubscriptionIds}
             onSelect={navigateTo}
             onAdd={() => setWizard({ open: true })}
+            onAddGallery={() => setGalleryDialogOpen(true)}
             onOpenAccounts={() => setAccountsModal({ open: true, focusSiteId: null })}
             onSubscriptionMenu={(position, id) => {
               const subscription = snapshot.subscriptions.find((sub) => sub.id === id);
@@ -335,6 +359,13 @@ export function SubscriptionsScreen() {
         busy={busy}
         onCreate={(result) => void createFromWizard(result)}
         onClose={() => setWizard({ open: false })}
+      />
+
+      <AddGalleryDialog
+        open={galleryDialogOpen}
+        busy={busy}
+        onAdd={(result) => void addGallery(result)}
+        onClose={() => setGalleryDialogOpen(false)}
       />
 
       <AccountsModal
