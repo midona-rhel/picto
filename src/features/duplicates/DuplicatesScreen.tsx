@@ -67,8 +67,6 @@ interface DuplicateToolbarModel {
   zoomPercent: number;
   isFit: boolean;
   isActual: boolean;
-  differenceAvailable: boolean;
-  differenceActive: boolean;
   previous: () => void;
   next: () => void;
   zoomOut: () => void;
@@ -76,8 +74,6 @@ interface DuplicateToolbarModel {
   setZoomPercent: (value: number) => void;
   fit: () => void;
   actual: () => void;
-  setDifferenceHovered: (active: boolean) => void;
-  setDifferenceFocused: (active: boolean) => void;
 }
 
 const duplicateToolbarAtom = atom<DuplicateToolbarModel | null>(null);
@@ -120,21 +116,6 @@ export function DuplicatesToolbar() {
           <KbdTooltip label="Zoom to fit" shortcutId="view.fitWindow">
             <TitlebarControlButton active={model.isFit} onClick={model.fit} aria-label="Zoom to fit" aria-pressed={model.isFit}>
               <ToolbarFitIcon />
-            </TitlebarControlButton>
-          </KbdTooltip>
-          <KbdTooltip label="Show differences while held">
-            <TitlebarControlButton
-              className={styles.differenceButton}
-              active={model.differenceActive}
-              onMouseEnter={() => model.setDifferenceHovered(true)}
-              onMouseLeave={() => model.setDifferenceHovered(false)}
-              onFocus={() => model.setDifferenceFocused(true)}
-              onBlur={() => model.setDifferenceFocused(false)}
-              disabled={model.disabled || !model.differenceAvailable}
-              aria-label="Show Difference"
-              aria-pressed={model.differenceActive}
-            >
-              <ToolbarDifferenceIcon /> <span>Show Difference</span>
             </TitlebarControlButton>
           </KbdTooltip>
         </>
@@ -655,8 +636,6 @@ export function DuplicatesScreen() {
       zoomPercent: zoom.zoomPercent,
       isFit: zoom.isFit,
       isActual: zoom.isActual,
-      differenceAvailable: differenceFiles != null,
-      differenceActive,
       previous: goPrevious,
       next: goNext,
       zoomOut: zoom.zoomOut,
@@ -664,13 +643,9 @@ export function DuplicatesScreen() {
       setZoomPercent: zoom.setZoomPercent,
       fit: zoom.fit,
       actual: zoom.actual,
-      setDifferenceHovered,
-      setDifferenceFocused,
     });
   }, [
     currentPair,
-    differenceActive,
-    differenceFiles,
     goNext,
     goPrevious,
     index,
@@ -760,6 +735,20 @@ export function DuplicatesScreen() {
           </KbdTooltip>
           <KbdTooltip label="Keep both files" shortcutId="dup.keepBoth">
             <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'keep_both')} disabled={resolving || metadataLoading}><IconCopy size={15} /> Keep both</button>
+          </KbdTooltip>
+          <KbdTooltip label="Show differences while held">
+            <button
+              className={`${btnStyles.btn} ${styles.differenceButton}`}
+              onMouseEnter={() => setDifferenceHovered(true)}
+              onMouseLeave={() => setDifferenceHovered(false)}
+              onFocus={() => setDifferenceFocused(true)}
+              onBlur={() => setDifferenceFocused(false)}
+              disabled={resolving || metadataLoading || !differenceFiles}
+              aria-label="Show Difference"
+              aria-pressed={differenceActive}
+            >
+              <ToolbarDifferenceIcon /> Show Difference
+            </button>
           </KbdTooltip>
           <KbdTooltip label="Keep the stronger file and preserve item metadata" shortcutId="dup.smartMerge">
             <button

@@ -476,7 +476,9 @@ describe('DuplicatesScreen', () => {
 
     expect(screen.getByRole('button', { name: 'Actual pixels' }).querySelector('[data-toolbar-glyph]')).not.toBeNull();
     expect(screen.getByRole('button', { name: 'Zoom to fit' }).querySelector('[data-toolbar-glyph]')).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'Show Difference' })).toHaveTextContent('Show Difference');
+    const difference = screen.getByRole('button', { name: 'Show Difference' });
+    expect(difference).toHaveTextContent('Show Difference');
+    expect(difference.closest('footer')).not.toBeNull();
   });
 
   it('switches the linked pair between actual pixels and zoom to fit', async () => {
