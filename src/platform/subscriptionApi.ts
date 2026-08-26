@@ -305,8 +305,11 @@ export function runSubscription(id: string): Promise<void> {
   return invoke<CreatedSubscriptionRun>('subscriptions.run', { subscription_id: Number(id) }).then(() => undefined);
 }
 
-export function startGalleryImport(url: string): Promise<void> {
-  return invoke<CreatedSubscriptionRun>('subscriptions.gallery.start', { url }).then(() => undefined);
+export function startGalleryImport(url: string, serviceId: 'ehentai' | 'exhentai' = 'ehentai'): Promise<void> {
+  return invoke<CreatedSubscriptionRun>('subscriptions.gallery.start', {
+    service_id: serviceId,
+    url,
+  }).then(() => undefined);
 }
 
 export function cleanupGalleryImport(id: string): Promise<void> {

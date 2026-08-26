@@ -626,12 +626,26 @@ pub async fn dispatch_async(
         "subscriptions.gallery.start" => {
             let input: GalleryImportInput = parse(args_json)?;
             let url = normalize_ehentai_gallery_url(&input.url)?;
+            let is_exhentai = url.starts_with("https://exhentai.org/");
+            if input.service_id.as_deref().is_some_and(|service| {
+                !matches!((service, is_exhentai), ("ehentai", false) | ("exhentai", true))
+            }) {
+                return Err("The selected gallery service does not match the URL".to_string());
+            }
+            // A previous transient run may have disappeared while its source
+            // rows were still provisional. Remove that abandoned staging
+            // before retrying so the new complete gallery owns one clean set
+            // of source items and ingest jobs.
+            crate::ingest_queue_v2::discard_abandoned_gallery_sources(application)?;
             let gallery_id = url
                 .split('/')
                 .nth(4)
                 .ok_or_else(|| "E-Hentai gallery URL has no gallery ID".to_string())?;
             let definition = NewSubscription {
-                name: format!("E-Hentai Gallery {gallery_id}"),
+                name: format!(
+                    "{} Gallery {gallery_id}",
+                    if is_exhentai { "ExHentai" } else { "E-Hentai" }
+                ),
                 schedule: "manual".to_string(),
                 initial_post_limit: None,
                 periodic_post_limit: None,
@@ -1208,6 +1222,7 @@ pub struct AddSubscriptionQueryInput {
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct GalleryImportInput {
+    service_id: Option<String>,
     url: String,
 }
 #[derive(Deserialize, TS)]

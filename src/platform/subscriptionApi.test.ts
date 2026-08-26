@@ -103,7 +103,10 @@ describe('replacement subscription API', () => {
     await cleanupGalleryImport('7');
 
     expect(invoke.mock.calls).toEqual([
-      ['subscriptions.gallery.start', { url: 'https://e-hentai.org/g/2771523/3fc69c861a/' }],
+      ['subscriptions.gallery.start', {
+        service_id: 'ehentai',
+        url: 'https://e-hentai.org/g/2771523/3fc69c861a/',
+      }],
       ['subscriptions.gallery.cleanup', { subscription_id: 7 }],
     ]);
   });

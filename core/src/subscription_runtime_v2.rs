@@ -490,6 +490,29 @@ fn validate_complete_gallery(items: &[DownloadedItem]) -> Result<(), String> {
     }) {
         return Err("Gallery download ended before the complete post was available".to_string());
     }
+    let expected = items.iter().find_map(|item| {
+        item.post
+            .metadata_json
+            .as_deref()
+            .and_then(|metadata| serde_json::from_str::<serde_json::Value>(metadata).ok())
+            .and_then(|metadata| {
+                metadata
+                    .get("filecount")
+                    .or_else(|| metadata.get("count"))
+                    .and_then(|value| {
+                        value
+                            .as_u64()
+                            .or_else(|| value.as_str()?.parse::<u64>().ok())
+                    })
+            })
+    });
+    if let Some(expected) = expected.filter(|expected| *expected != items.len() as u64) {
+        return Err(format!(
+            "Gallery download was incomplete: received {} of {} media files",
+            items.len(),
+            expected
+        ));
+    }
     Ok(())
 }
 

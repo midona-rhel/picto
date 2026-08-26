@@ -407,19 +407,26 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
     }
 }
 
-/// Accept one concrete public E-Hentai gallery, never a search or favorite list.
+/// Accept one concrete E-Hentai or ExHentai gallery, never a search or favorite list.
 pub fn normalize_ehentai_gallery_url(raw: &str) -> Result<String, String> {
     let mut url = Url::parse(raw.trim())
         .map_err(|_| "E-Hentai galleries require a gallery URL".to_string())?;
+    let host = match url.host_str() {
+        Some("e-hentai.org" | "www.e-hentai.org") => "e-hentai.org",
+        Some("exhentai.org" | "www.exhentai.org") => "exhentai.org",
+        _ => "",
+    };
     if !matches!(url.scheme(), "http" | "https")
-        || !matches!(url.host_str(), Some("e-hentai.org" | "www.e-hentai.org"))
+        || host.is_empty()
         || url.username() != ""
         || url.password().is_some()
         || url.port().is_some()
         || url.query().is_some()
         || url.fragment().is_some()
     {
-        return Err("E-Hentai galleries require a public e-hentai.org gallery URL".to_string());
+        return Err(
+            "Gallery imports require an e-hentai.org or exhentai.org gallery URL".to_string(),
+        );
     }
     let segments: Vec<_> = url
         .path_segments()
@@ -444,7 +451,7 @@ pub fn normalize_ehentai_gallery_url(raw: &str) -> Result<String, String> {
     let token = token.to_ascii_lowercase();
     url.set_scheme("https")
         .map_err(|_| "Invalid E-Hentai URL".to_string())?;
-    url.set_host(Some("e-hentai.org"))
+    url.set_host(Some(host))
         .map_err(|_| "Invalid E-Hentai URL".to_string())?;
     url.set_path(&format!("/g/{gallery_id}/{token}/"));
     Ok(url.to_string())
@@ -1188,13 +1195,17 @@ mod tests {
     }
 
     #[test]
-    fn ehentai_accepts_only_concrete_public_gallery_urls() {
+    fn ehentai_accepts_only_concrete_gallery_urls_on_the_two_supported_hosts() {
         assert_eq!(
             normalize_ehentai_gallery_url("http://www.e-hentai.org/g/12345/67890ABCDE/").as_deref(),
             Ok("https://e-hentai.org/g/12345/67890abcde/")
         );
         assert!(normalize_ehentai_gallery_url("https://e-hentai.org/?f_search=test").is_err());
-        assert!(normalize_ehentai_gallery_url("https://exhentai.org/g/12345/67890abcde/").is_err());
+        assert_eq!(
+            normalize_ehentai_gallery_url("https://www.exhentai.org/g/12345/67890ABCDE/")
+                .as_deref(),
+            Ok("https://exhentai.org/g/12345/67890abcde/")
+        );
     }
 
     #[test]

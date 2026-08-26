@@ -164,8 +164,8 @@ export const subscriptionsController = {
     return runSubscription(id);
   },
 
-  startGalleryImport(url: string): Promise<void> {
-    return startGalleryImport(url);
+  startGalleryImport(url: string, serviceId: 'ehentai' | 'exhentai'): Promise<void> {
+    return startGalleryImport(url, serviceId);
   },
 
   cleanupGalleryImport(id: string): Promise<void> {

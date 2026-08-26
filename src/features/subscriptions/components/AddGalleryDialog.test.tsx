@@ -4,7 +4,7 @@ import { renderWithProviders } from '../../../test/render';
 import { AddGalleryDialog } from './AddGalleryDialog';
 
 describe('AddGalleryDialog', () => {
-  it('submits one E-Hentai gallery URL without exposing other providers', () => {
+  it('submits a concrete gallery for the selected supported provider', () => {
     const onAdd = vi.fn();
     renderWithProviders(
       <AddGalleryDialog open busy={false} onAdd={onAdd} onClose={vi.fn()} />,
@@ -20,5 +20,12 @@ describe('AddGalleryDialog', () => {
       serviceId: 'ehentai',
       url: 'https://e-hentai.org/g/12345/67890abcde/',
     });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Gallery service' }));
+    fireEvent.click(screen.getByRole('option', { name: 'ExHentai' }));
+    expect(screen.getByLabelText('Gallery URL')).toHaveAttribute(
+      'placeholder',
+      'https://exhentai.org/g/12345/67890abcde/',
+    );
   });
 });

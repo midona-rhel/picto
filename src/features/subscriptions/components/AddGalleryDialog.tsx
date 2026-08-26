@@ -5,11 +5,14 @@ import { ActionButton } from './ActionButton';
 import styles from './NewSubscriptionDialog.module.css';
 
 export interface AddGalleryInput {
-  serviceId: 'ehentai';
+  serviceId: 'ehentai' | 'exhentai';
   url: string;
 }
 
-const SERVICES = [{ value: 'ehentai', label: 'E-Hentai' }];
+const SERVICES = [
+  { value: 'ehentai', label: 'E-Hentai' },
+  { value: 'exhentai', label: 'ExHentai' },
+];
 
 export function AddGalleryDialog({
   open,
@@ -70,7 +73,9 @@ export function AddGalleryDialog({
               id="gallery-url"
               className={styles.textInput}
               value={url}
-              placeholder="https://e-hentai.org/g/12345/67890abcde/"
+              placeholder={serviceId === 'exhentai'
+                ? 'https://exhentai.org/g/12345/67890abcde/'
+                : 'https://e-hentai.org/g/12345/67890abcde/'}
               autoFocus
               onChange={(event) => setUrl(event.target.value)}
               onKeyDown={(event) => {

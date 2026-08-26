@@ -94,6 +94,12 @@ impl GalleryDlSourceRunner {
             .map_err(|error| RunnerFailure::terminal(RunnerFailureKind::Runtime, error))?;
         let batch_size = effective_batch_size(query, self.source_post_batch_size);
         let batch = BatchPosition::for_query(query, batch_size);
+        // A concrete E-Hentai gallery is an explicit, transient import. Its
+        // durable identity and deduplication belong to Picto after the whole
+        // gallery has downloaded. A gallery-dl archive can only make retries
+        // incomplete (for example, seven archived pages plus one new page),
+        // which must never be published as a gallery.
+        let use_download_archive = query.site_id != "ehentai";
         let options = RunOptions {
             subscription_id: Some(query.subscription_id),
             query_id: Some(query.query_id),
@@ -104,13 +110,15 @@ impl GalleryDlSourceRunner {
             source_cursor: batch.source_cursor.clone(),
             abort_threshold: batch.history_complete.then_some(PERIODIC_ABORT_THRESHOLD),
             auth,
-            archive_path: self.library_root.join("gdl-archive.sqlite3"),
-            archive_prefix: Some(
+            archive_path: use_download_archive
+                .then(|| self.library_root.join("gdl-archive.sqlite3"))
+                .unwrap_or_default(),
+            archive_prefix: use_download_archive.then(|| {
                 crate::subscriptions::archive::subscription_query_archive_prefix(
                     query.subscription_id,
                     query.query_id,
-                ),
-            ),
+                )
+            }),
             cancel,
         };
 

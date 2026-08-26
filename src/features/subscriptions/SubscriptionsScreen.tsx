@@ -163,7 +163,7 @@ export function SubscriptionsScreen() {
   const addGallery = useCallback(async (result: AddGalleryInput) => {
     const succeeded = await act('gallery', async () => {
       markSubscriptionRunTriggered();
-      await subscriptionsController.startGalleryImport(result.url);
+      await subscriptionsController.startGalleryImport(result.url, result.serviceId);
     });
     if (succeeded) setGalleryDialogOpen(false);
   }, [act]);
