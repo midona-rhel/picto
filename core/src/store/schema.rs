@@ -671,6 +671,71 @@ CREATE TRIGGER search_folder_delete AFTER DELETE ON folder BEGIN
 END;
 "#;
 
+// Derived search triggers are safe to replace in place. During alpha schema
+// development their conflict handling changed without changing canonical
+// library data, so existing development libraries may still carry the older
+// `INSERT OR IGNORE` form. An outer UPSERT overrides that conflict policy and
+// can otherwise abort media ingestion.
+const SEARCH_MEDIA_TRIGGER_DDL: &str = r#"
+DROP TRIGGER IF EXISTS search_media_asset_insert;
+DROP TRIGGER IF EXISTS search_media_asset_update;
+DROP TRIGGER IF EXISTS search_media_asset_delete;
+DROP TRIGGER IF EXISTS search_media_file_update;
+DROP TRIGGER IF EXISTS search_source_item_insert;
+DROP TRIGGER IF EXISTS search_source_item_update;
+DROP TRIGGER IF EXISTS search_source_item_delete;
+DROP TRIGGER IF EXISTS search_source_post_update;
+
+CREATE TRIGGER search_media_asset_insert AFTER INSERT ON media_asset BEGIN
+    INSERT INTO search_dirty_media(media_item_id) VALUES (NEW.item_id)
+    ON CONFLICT(media_item_id) DO NOTHING;
+END;
+CREATE TRIGGER search_media_asset_update
+AFTER UPDATE OF name, notes, source_urls_json ON media_asset BEGIN
+    INSERT INTO search_dirty_media(media_item_id) VALUES (NEW.item_id)
+    ON CONFLICT(media_item_id) DO NOTHING;
+END;
+CREATE TRIGGER search_media_asset_delete AFTER DELETE ON media_asset BEGIN
+    INSERT INTO search_dirty_media(media_item_id) VALUES (OLD.item_id)
+    ON CONFLICT(media_item_id) DO NOTHING;
+END;
+CREATE TRIGGER search_media_file_update AFTER UPDATE OF mime_type ON media_file BEGIN
+    INSERT INTO search_dirty_media(media_item_id)
+    SELECT item_id FROM media_asset WHERE file_id = NEW.file_id
+    ON CONFLICT(media_item_id) DO NOTHING;
+END;
+CREATE TRIGGER search_source_item_insert AFTER INSERT ON source_item WHEN NEW.media_item_id IS NOT NULL BEGIN
+    INSERT INTO search_dirty_media(media_item_id) VALUES (NEW.media_item_id)
+    ON CONFLICT(media_item_id) DO NOTHING;
+END;
+CREATE TRIGGER search_source_item_update
+AFTER UPDATE OF source_post_id, media_url, canonical_url, media_item_id ON source_item BEGIN
+    INSERT INTO search_dirty_media(media_item_id)
+    SELECT OLD.media_item_id WHERE OLD.media_item_id IS NOT NULL
+    ON CONFLICT(media_item_id) DO NOTHING;
+    INSERT INTO search_dirty_media(media_item_id)
+    SELECT NEW.media_item_id WHERE NEW.media_item_id IS NOT NULL
+    ON CONFLICT(media_item_id) DO NOTHING;
+END;
+CREATE TRIGGER search_source_item_delete AFTER DELETE ON source_item WHEN OLD.media_item_id IS NOT NULL BEGIN
+    INSERT INTO search_dirty_media(media_item_id) VALUES (OLD.media_item_id)
+    ON CONFLICT(media_item_id) DO NOTHING;
+END;
+CREATE TRIGGER search_source_post_update
+AFTER UPDATE OF site_id, post_key, canonical_url, creator_name, title, description ON source_post BEGIN
+    INSERT INTO search_dirty_media(media_item_id)
+    SELECT media_item_id FROM source_item
+    WHERE source_post_id = NEW.source_post_id AND media_item_id IS NOT NULL
+    ON CONFLICT(media_item_id) DO NOTHING;
+END;
+"#;
+
+pub fn ensure_search_media_triggers(connection: &Connection) -> Result<(), String> {
+    connection
+        .execute_batch(SEARCH_MEDIA_TRIGGER_DDL)
+        .map_err(|error| format!("Failed to refresh search triggers: {error}"))
+}
+
 /// Refresh compact FTS rows dirtied by canonical writes in this transaction.
 pub fn refresh_search_indexes(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
     let dirty: bool = transaction.query_row(
@@ -859,7 +924,7 @@ pub fn increment_revision(transaction: &Transaction<'_>) -> rusqlite::Result<u64
 
 #[cfg(test)]
 mod tests {
-    use super::{create, validate, CURRENT_SCHEMA_VERSION};
+    use super::{create, ensure_search_media_triggers, validate, CURRENT_SCHEMA_VERSION};
     use rusqlite::Connection;
 
     #[test]
@@ -956,6 +1021,20 @@ mod tests {
     fn search_dirty_triggers_remain_idempotent_under_outer_conflict_policy() {
         let mut connection = Connection::open_in_memory().unwrap();
         create(&mut connection).unwrap();
+
+        // Reproduce the trigger form present in development libraries created
+        // before explicit trigger-local conflict handling was introduced.
+        connection
+            .execute_batch(
+                "DROP TRIGGER search_media_asset_update;
+                 CREATE TRIGGER search_media_asset_update
+                 AFTER UPDATE OF name, notes, source_urls_json ON media_asset BEGIN
+                     INSERT OR IGNORE INTO search_dirty_media(media_item_id)
+                     VALUES (NEW.item_id);
+                 END;",
+            )
+            .unwrap();
+        ensure_search_media_triggers(&connection).unwrap();
 
         connection
             .execute_batch(

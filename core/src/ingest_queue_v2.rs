@@ -101,6 +101,7 @@ pub struct IngestQueue<'a> {
 
 impl<'a> IngestQueue<'a> {
     pub fn start(application: &'a Application) -> Result<Self, String> {
+        discard_abandoned_gallery_sources(application)?;
         reset_running(application)?;
         recover_settled_provisional_collections(application)?;
         cleanup_orphaned_staging(application)?;
@@ -114,6 +115,60 @@ impl<'a> IngestQueue<'a> {
     pub fn run_batch(&self, limit: usize) -> Result<IngestRunReport, String> {
         run_batch(self.application, limit)
     }
+}
+
+/// Removes transient gallery work whose owning job was deleted before the
+/// media materialized. Materialized history and active run items are untouched.
+fn discard_abandoned_gallery_sources(application: &Application) -> Result<usize, String> {
+    let (discarded, _, _) = application.store().transaction_if_changed(|transaction| {
+        let discarded = transaction.execute(
+            "DELETE FROM ingest_job
+             WHERE source_item_id IN (
+                 SELECT si.source_item_id
+                 FROM source_item si
+                 JOIN source_post sp ON sp.source_post_id = si.source_post_id
+                 WHERE si.media_item_id IS NULL
+                   AND sp.site_id = 'ehentai'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM subscription_run_source_item rsi
+                       WHERE rsi.source_item_id = si.source_item_id
+                   )
+             )",
+            [],
+        )?;
+        let source_items = transaction.execute(
+            "DELETE FROM source_item
+             WHERE media_item_id IS NULL
+               AND source_post_id IN (
+                   SELECT source_post_id FROM source_post WHERE site_id = 'ehentai'
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM subscription_run_source_item rsi
+                   WHERE rsi.source_item_id = source_item.source_item_id
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM ingest_job ij
+                   WHERE ij.source_item_id = source_item.source_item_id
+               )",
+            [],
+        )?;
+        let source_posts = transaction.execute(
+            "DELETE FROM source_post
+             WHERE root_item_id IS NULL
+               AND site_id = 'ehentai'
+               AND NOT EXISTS (
+                   SELECT 1 FROM source_item si
+                   WHERE si.source_post_id = source_post.source_post_id
+               )",
+            [],
+        )?;
+        let changed = discarded + source_items + source_posts;
+        Ok((discarded, changed != 0))
+    })?;
+    if discarded != 0 {
+        tracing::warn!(discarded, "Discarded abandoned gallery ingest jobs");
+    }
+    Ok(discarded)
 }
 
 /// Makes successfully ingested partial source posts visible after a restart.
@@ -846,8 +901,8 @@ mod tests {
     use rusqlite::params;
 
     use super::{
-        claim_at, enqueue_at, recover_settled_provisional_collections, reset_running_at,
-        IngestJobSpec, IngestQueue,
+        claim_at, discard_abandoned_gallery_sources, enqueue_at,
+        recover_settled_provisional_collections, reset_running_at, IngestJobSpec, IngestQueue,
     };
     use crate::app::{Application, Lifecycle};
     use crate::ingest_v2::{PreparedMediaInput, SourcePostInput};
@@ -929,6 +984,58 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(reset_running_at(&app, "2026-01-01T00:01:00Z").unwrap(), 1);
         assert_eq!(claim_at(&app, 8, "2026-01-01T00:01:00Z").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn abandoned_unmaterialized_gallery_jobs_are_removed() {
+        let (directory, app) = application();
+        let source_path = directory.path().join("item.png");
+        fs::write(&source_path, MEDIA_BYTES).unwrap();
+        app.store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO source_post (
+                         site_id, post_key, created_at, updated_at
+                     ) VALUES ('ehentai', 'post', ?1, ?1)",
+                    ["2026-01-01T00:00:00Z"],
+                )?;
+                transaction.execute(
+                    "INSERT INTO source_item (
+                         source_post_id, item_key, position, state, created_at, updated_at
+                     ) VALUES (?1, 'item', 0, 'downloaded', ?2, ?2)",
+                    params![transaction.last_insert_rowid(), "2026-01-01T00:00:00Z"],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let mut job = spec(source_path.to_str().unwrap());
+        job.input.source.as_mut().unwrap().site_id = "ehentai".to_string();
+        enqueue_at(&app, &job, "2026-01-01T00:00:00Z").unwrap();
+
+        assert_eq!(discard_abandoned_gallery_sources(&app).unwrap(), 1);
+        app.store()
+            .read(|connection| {
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM ingest_job", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    0
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM source_item", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    0
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM source_post", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    0
+                );
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]

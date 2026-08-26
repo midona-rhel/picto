@@ -499,6 +499,9 @@ fn post_id(json: &serde_json::Value) -> Option<String> {
             .or_else(|| artstation_project_field_text(json, "project_hash_id"))
             .or_else(|| artstation_project_field_text(json, "project_id")),
         "deviantart" => field_text(json, "deviationid"),
+        "exhentai" | "ehentai" => {
+            field_text(json, "gid").or_else(|| field_text(json, "gallery_id"))
+        }
         "hentaifoundry" => field_text(json, "index").filter(|index| index.parse::<u64>().is_ok()),
         "newgrounds" => field_text(json, "index").filter(|index| index.parse::<u64>().is_ok()),
         "twitter" => field_text(json, "tweet_id").or_else(|| field_text(json, "id")),
@@ -643,6 +646,11 @@ fn canonical_post_url(
         Some("patreon") => return canonical_patreon_url(json),
         Some("fanbox") => return canonical_fanbox_url(json, post_id),
         Some("subscribestar") => return canonical_subscribestar_url(json, post_id),
+        Some("exhentai" | "ehentai") => {
+            let post_id = post_id?;
+            let token = field_text(json, "token").or_else(|| field_text(json, "gallery_token"))?;
+            return Some(format!("https://e-hentai.org/g/{post_id}/{token}/"));
+        }
         Some("furaffinity") => {
             let post_id = post_id?;
             return Some(format!("https://www.furaffinity.net/view/{post_id}/"));
@@ -1016,6 +1024,39 @@ mod tests {
             parsed.tags,
             vec![("series".to_string(), "a series".to_string())]
         );
+        assert_eq!(parsed.post_id.as_deref(), Some("12345"));
+        assert_eq!(
+            parsed.canonical_post_url.as_deref(),
+            Some("https://e-hentai.org/g/12345/67890abcde/")
+        );
+    }
+
+    #[test]
+    fn exhentai_gallerydl_gid_is_one_stable_multi_page_post() {
+        let first = parse_metadata(&json!({
+            "category": "exhentai",
+            "gid": 2771523,
+            "token": "3fc69c861a",
+            "num": 1,
+            "filecount": 8,
+            "_url": "https://images.example/temporary-1.webp"
+        }));
+        let last = parse_metadata(&json!({
+            "category": "exhentai",
+            "gid": 2771523,
+            "token": "3fc69c861a",
+            "num": 8,
+            "filecount": 8,
+            "_url": "https://images.example/temporary-8.webp"
+        }));
+
+        assert_eq!(first.post_id, last.post_id);
+        assert_eq!(first.post_id.as_deref(), Some("2771523"));
+        assert_eq!(
+            first.canonical_post_url.as_deref(),
+            Some("https://e-hentai.org/g/2771523/3fc69c861a/")
+        );
+        assert_ne!(first.item_key, last.item_key);
     }
 
     #[test]

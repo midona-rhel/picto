@@ -32,6 +32,7 @@ impl Store {
 
         if existed {
             schema::validate(&writer)?;
+            schema::ensure_search_media_triggers(&writer)?;
             // Let SQLite choose join order from the actual library rather than
             // generic estimates. This is planner metadata, not an application
             // schema migration, and turns source-backed cover lookups from a
