@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useState, type MouseEvent, type ReactNode } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { ThumbnailImage } from '../../../shared/ui/ThumbnailImage/ThumbnailImage';
 import { VideoPlayer } from '../video/VideoPlayer';
@@ -8,6 +8,7 @@ import type { CurrentFrameCapture } from '../currentFrameCapture';
 import type { ViewerZoomControls } from '../../../state/viewer';
 import { UnsupportedDocumentViewer } from './UnsupportedDocumentViewer';
 import { ProgressiveMediaFrame } from '../ProgressiveMediaFrame';
+import { boundDocumentPageWidth, fitDocumentPage, type DocumentPageSize } from './documentPageGeometry';
 import styles from './DetailMediaRenderer.module.css';
 
 const FlashPlayer = lazy(() => import('./FlashPlayer').then((module) => ({ default: module.FlashPlayer })));
@@ -34,6 +35,59 @@ interface Props {
   mediaLoop?: boolean;
   mediaMuted?: boolean;
   onReady?: () => void;
+}
+
+type DocumentPreviewKind = 'pdf' | 'text-document' | 'docx' | 'pptx' | 'epub' | 'cbz' | 'djvu';
+
+const SCROLLABLE_DOCUMENT_KINDS = new Set<DocumentPreviewKind>(['text-document', 'docx', 'pptx', 'epub']);
+
+function DocumentPagePreview({ hash, kind, rendererSnapshot = false }: { hash: string; kind: DocumentPreviewKind; rendererSnapshot?: boolean }) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const [available, setAvailable] = useState<DocumentPageSize>({ width: 0, height: 0 });
+  const [natural, setNatural] = useState<DocumentPageSize>({ width: 0, height: 0 });
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(([entry]) => {
+      setAvailable({ width: entry.contentRect.width, height: entry.contentRect.height });
+    });
+    observer.observe(viewport);
+    return () => observer.disconnect();
+  }, []);
+
+  const size = useMemo(() => {
+    return SCROLLABLE_DOCUMENT_KINDS.has(kind)
+      ? boundDocumentPageWidth(available.width, natural, natural.width)
+      : fitDocumentPage(available, natural);
+  }, [available, kind, natural]);
+
+  return (
+    <div
+      className={styles.documentPreview}
+      data-document-page-preview
+      data-document-renderer-snapshot={rendererSnapshot ? 'true' : undefined}
+      data-document-kind={kind}
+    >
+      <div ref={viewportRef} className={styles.documentPreviewViewport}>
+        <ThumbnailImage
+          className={styles.documentPreviewImage}
+          src={mediaThumbnailUrl(hash)}
+          fallback="broken"
+          alt=""
+          draggable={false}
+          onLoad={(event) => setNatural({
+            width: event.currentTarget.naturalWidth,
+            height: event.currentTarget.naturalHeight,
+          })}
+          style={size
+            ? { width: size.width, height: size.height, visibility: 'visible' }
+            : { visibility: 'hidden' }}
+        />
+      </div>
+      <div className={styles.documentPreviewFooter} />
+    </div>
+  );
 }
 
 export function DetailMediaRenderer({ hash, mimeType, displayName, onFlashPlaybackChange, onFlashContextMenu, onFrameCaptureChange, onPdfZoomControlsChange, onPdfZoomPercentChange, mediaKeyboardShortcutsEnabled = true, mediaAutoPlay, mediaLoop, mediaMuted, onReady }: Props) {
@@ -107,31 +161,9 @@ export function DetailMediaRenderer({ hash, mimeType, displayName, onFlashPlayba
       />
     </div>
   ) : kind === 'pdf' ? (
-    <div className={styles.documentPreview} data-document-page-preview>
-      <div className={styles.documentPreviewViewport}>
-        <ThumbnailImage
-          className={styles.documentPreviewImage}
-          src={mediaThumbnailUrl(hash)}
-          fallback="broken"
-          alt=""
-          draggable={false}
-        />
-      </div>
-      <div className={styles.documentPreviewFooter} />
-    </div>
+    <DocumentPagePreview hash={hash} kind="pdf" />
   ) : usesRendererSnapshot ? (
-    <div className={styles.documentPreview} data-document-renderer-snapshot data-document-kind={kind}>
-      <div className={`${styles.documentPreviewViewport} ${styles.rendererSnapshotViewport}`}>
-        <ThumbnailImage
-          className={styles.rendererSnapshotImage}
-          src={mediaThumbnailUrl(hash)}
-          fallback="broken"
-          alt=""
-          draggable={false}
-        />
-      </div>
-      <div className={styles.documentPreviewFooter} />
-    </div>
+    <DocumentPagePreview hash={hash} kind={kind as DocumentPreviewKind} rendererSnapshot />
   ) : kind === 'flash' ? (
     <div className={styles.flashPreview} data-flash-stage-preview>
       <ThumbnailImage

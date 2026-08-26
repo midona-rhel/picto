@@ -35,8 +35,14 @@ export function createPdfThumbnailService({ BrowserWindow, app, path, isDev, dev
       if (isDev) await window.loadURL(`${devUrl}/pdf-thumbnail.html?${new URLSearchParams(query)}`);
       else await window.loadFile(path.join(app.getAppPath(), 'dist', 'pdf-thumbnail.html'), { query });
       const state = await waitForReady(window.webContents);
-      window.setContentSize(state.width, state.height, false);
-      const png = (await window.webContents.capturePage({ x: 0, y: 0, width: state.width, height: state.height })).toPNG();
+      const dataUrl = await window.webContents.executeJavaScript(
+        `document.querySelector('#page')?.toDataURL('image/png') ?? ''`,
+        true,
+      );
+      if (!dataUrl.startsWith('data:image/png;base64,')) {
+        throw new Error('PDF thumbnail canvas did not produce PNG data.');
+      }
+      const png = Buffer.from(dataUrl.slice('data:image/png;base64,'.length), 'base64');
       if (png.length === 0) throw new Error('PDF thumbnail capture was empty.');
       await fs.mkdir(path.dirname(outputPath), { recursive: true });
       await fs.writeFile(outputPath, png);

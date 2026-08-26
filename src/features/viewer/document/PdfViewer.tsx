@@ -3,6 +3,7 @@ import { GlobalWorkerOptions, getDocument, TextLayer, type PDFDocumentLoadingTas
 import workerUrl from 'pdfjs-dist/legacy/build/pdf.worker.min.mjs?url';
 import type { ViewerZoomControls } from '../../../state/viewer';
 import { DocumentViewerShell } from './DocumentViewerShell';
+import { documentCanvasGeometry, fitDocumentPage } from './documentPageGeometry';
 import styles from './PdfViewer.module.css';
 
 GlobalWorkerOptions.workerSrc = workerUrl;
@@ -81,18 +82,28 @@ export function PdfViewer({ src, onReady, onZoomControlsChange, onZoomPercentCha
       // ResizeObserver's contentRect already excludes the viewport's 24px padding.
       const availableWidth = Math.max(1, size.width);
       const availableHeight = Math.max(1, size.height);
-      const fit = Math.min(availableWidth / natural.width, availableHeight / natural.height);
+      const fitted = fitDocumentPage(
+        { width: availableWidth, height: availableHeight },
+        { width: natural.width, height: natural.height },
+      );
+      const fit = fitted ? fitted.width / natural.width : 1;
       const width = availableWidth / natural.width;
       const scale = Math.max(0.1, scaleMode === 'page-fit' ? fit : scaleMode === 'page-width' ? width : scaleMode === 'actual' ? 1 : customScale);
-      const cssViewport = page.getViewport({ scale });
       const pixelRatio = window.devicePixelRatio || 1;
-      const renderViewport = page.getViewport({ scale: scale * pixelRatio });
+      const geometry = documentCanvasGeometry(
+        { width: natural.width, height: natural.height },
+        scale,
+        pixelRatio,
+      );
+      if (!geometry) return;
+      const cssViewport = page.getViewport({ scale });
+      const renderViewport = page.getViewport({ scale: geometry.renderScale });
       const context = canvas.getContext('2d');
       if (!context) return;
-      canvas.width = Math.ceil(renderViewport.width);
-      canvas.height = Math.ceil(renderViewport.height);
-      canvas.style.width = `${cssViewport.width}px`;
-      canvas.style.height = `${cssViewport.height}px`;
+      canvas.width = geometry.pixels.width;
+      canvas.height = geometry.pixels.height;
+      canvas.style.width = `${geometry.css.width}px`;
+      canvas.style.height = `${geometry.css.height}px`;
       const textContainer = textLayerRef.current;
       if (textContainer) {
         textContainer.replaceChildren();

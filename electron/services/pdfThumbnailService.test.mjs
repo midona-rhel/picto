@@ -21,17 +21,18 @@ describe('pdf thumbnail service', () => {
       constructor(options) {
         this.options = options;
         this.destroyed = false;
+        let evaluations = 0;
         this.webContents = {
-          executeJavaScript: async () => ({ ready: true, width: 400, height: 600 }),
-          capturePage: async (rect) => {
-            this.captureRect = rect;
-            return { toPNG: () => Buffer.from('pdf-page') };
+          executeJavaScript: async () => {
+            evaluations += 1;
+            return evaluations === 1
+              ? { ready: true, width: 800, height: 1200 }
+              : `data:image/png;base64,${Buffer.from('pdf-page').toString('base64')}`;
           },
         };
         windows.push(this);
       }
       async loadURL(url) { this.url = url; }
-      setContentSize(width, height) { this.size = { width, height }; }
       isDestroyed() { return this.destroyed; }
       destroy() { this.destroyed = true; }
     }
@@ -50,8 +51,6 @@ describe('pdf thumbnail service', () => {
 
     expect(windows[0].options.show).toBe(false);
     expect(windows[0].url).toContain('pdf-thumbnail.html?src=media%3A%2F%2Flocalhost%2Ffile%2Fexample.pdf');
-    expect(windows[0].size).toEqual({ width: 400, height: 600 });
-    expect(windows[0].captureRect).toEqual({ x: 0, y: 0, width: 400, height: 600 });
     expect(windows[0].destroyed).toBe(true);
     expect(await fs.readFile(outputPath, 'utf8')).toBe('pdf-page');
   });
