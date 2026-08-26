@@ -6,6 +6,7 @@ class FakeWebContents extends EventEmitter {
   constructor() {
     super();
     this.url = '';
+    this.loadedUrls = [];
     this.executedScripts = [];
     this.debugger = {
       attach: vi.fn(),
@@ -19,7 +20,10 @@ class FakeWebContents extends EventEmitter {
   }
 
   setWindowOpenHandler(handler) { this.windowOpenHandler = handler; }
-  async loadURL(url) { this.url = url; }
+  async loadURL(url) {
+    this.loadedUrls.push(url);
+    this.url = url;
+  }
   async executeJavaScript(script) {
     this.executedScripts.push(script);
     if (script.includes('Google Lens did not receive the image')) {
@@ -57,8 +61,10 @@ describe('runReverseImageSearch', () => {
     })).resolves.toBe('https://lens.google.com/search?p=fixture');
 
     expect(FakeBrowserWindow.instance.options.show).toBe(false);
+    expect(FakeBrowserWindow.instance.webContents.loadedUrls)
+      .toEqual(['https://lens.google.com/']);
     expect(FakeBrowserWindow.instance.webContents.executedScripts[0])
-      .toContain('[jsname="R5mgy"][role="button"]');
+      .toContain('input[jsname="wcaWdc"][type="file"]');
     expect(openExternal).toHaveBeenCalledWith('https://lens.google.com/search?p=fixture');
     expect(FakeBrowserWindow.instance.destroyed).toBe(true);
   });
