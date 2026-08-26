@@ -17,7 +17,6 @@ export interface OpenWithOptions {
 }
 
 export const REVERSE_IMAGE_SEARCH_ENGINES = [
-  { key: 'google', label: 'Google Lens' },
   { key: 'tineye', label: 'TinEye' },
   { key: 'saucenao', label: 'SauceNAO' },
   { key: 'yandex', label: 'Yandex Images' },

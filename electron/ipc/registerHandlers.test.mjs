@@ -15,6 +15,9 @@ class FakeWebContents extends EventEmitter {
       sendCommand: vi.fn(async (command) => {
         if (command === 'DOM.getDocument') return { root: { nodeId: 1 } };
         if (command === 'DOM.querySelector') return { nodeId: 2 };
+        if (command === 'DOM.setFileInputFiles' && this.url.includes('bing.com/images')) {
+          this.url = 'https://www.bing.com/search?q=fixture&bcid=fixture&FORM=SBIIRP';
+        }
         return {};
       }),
     };
@@ -27,11 +30,11 @@ class FakeWebContents extends EventEmitter {
   }
   async executeJavaScript(script) {
     this.executedScripts.push(script);
-    if (script.includes('Google Lens did not receive the image')) {
-      this.url = 'https://lens.google.com/search?p=fixture';
+    if (script.includes("document.querySelector('#searchForm')?.submit()")) {
+      this.url = 'https://saucenao.com/search.php?db=999';
     }
-    if (script.includes('Bing did not receive the image')) {
-      this.url = 'https://www.bing.com/images/searchbyimage/upload';
+    if (script.includes("const thumbnail = await __waitFor('#yourimage a img')")) {
+      return 'https://saucenao.com/search.php?db=999&url=https%3A%2F%2Fsaucenao.com%2Ffixture.png';
     }
   }
   getURL() { return this.url; }
@@ -51,28 +54,22 @@ class FakeBrowserWindow extends EventEmitter {
 }
 
 describe('runReverseImageSearch', () => {
-  it('uploads to Google Lens invisibly and opens the result externally', async () => {
+  it('submits SauceNAO through its native form and opens the result externally', async () => {
     const openExternal = vi.fn(async () => {});
-    const resultUrl = 'https://www.google.com/search?vsrid=fixture';
-    const fetchImpl = vi.fn(async () => ({ ok: true, status: 200, url: resultUrl }));
 
     await expect(runReverseImageSearch({
       BrowserWindow: FakeBrowserWindow,
       filePath: fileURLToPath(import.meta.url),
-      engine: 'google',
+      engine: 'saucenao',
       openExternal,
-      fetchImpl,
-    })).resolves.toBe(resultUrl);
+    })).resolves.toBe('https://saucenao.com/search.php?db=999&url=https%3A%2F%2Fsaucenao.com%2Ffixture.png');
 
-    expect(fetchImpl).toHaveBeenCalledWith(
-      expect.stringMatching(/^https:\/\/lens\.google\.com\/v3\/upload\?/),
-      expect.objectContaining({
-        method: 'POST',
-        body: expect.any(FormData),
-        headers: { 'User-Agent': 'curl/8.7.1' },
-      }),
+    expect(FakeBrowserWindow.instance.webContents.executedScripts.some(
+      (script) => script.includes("document.querySelector('#searchForm')?.submit()"),
+    )).toBe(true);
+    expect(openExternal).toHaveBeenCalledWith(
+      'https://saucenao.com/search.php?db=999&url=https%3A%2F%2Fsaucenao.com%2Ffixture.png',
     );
-    expect(openExternal).toHaveBeenCalledWith(resultUrl);
   });
 
   it('keeps the upload surface hidden and opens Bing results externally', async () => {
@@ -83,10 +80,10 @@ describe('runReverseImageSearch', () => {
       filePath: '/tmp/image.jpg',
       engine: 'bing',
       openExternal,
-    })).resolves.toBe('https://www.bing.com/images/searchbyimage/upload');
+    })).resolves.toBe('https://www.bing.com/search?q=fixture&bcid=fixture&FORM=SBIIRP');
 
     expect(FakeBrowserWindow.instance.options.show).toBe(false);
-    expect(openExternal).toHaveBeenCalledWith('https://www.bing.com/images/searchbyimage/upload');
+    expect(openExternal).toHaveBeenCalledWith('https://www.bing.com/search?q=fixture&bcid=fixture&FORM=SBIIRP');
     expect(FakeBrowserWindow.instance.destroyed).toBe(true);
   });
 });
