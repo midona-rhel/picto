@@ -72,7 +72,7 @@ export async function findExternalChromium() {
       return candidate;
     } catch {}
   }
-  throw new Error('OnlyFans Google login requires Chrome, Edge, Brave, or Chromium.');
+  throw new Error('Browser login requires Chrome, Edge, Brave, or Chromium.');
 }
 
 async function availablePort() {
@@ -240,6 +240,152 @@ export async function launchExternalOnlyFansAuth({ onStatus = () => {} } = {}) {
   }, AUTH_TIMEOUT_MS);
   pollTimer = setInterval(() => { void poll(); }, TARGET_POLL_MS);
   onStatus('Complete the OnlyFans login in the external browser.');
+  void poll();
+  return { completion, close };
+}
+
+export async function launchExternalCookieAuth({
+  siteCategory,
+  label,
+  loginUrl,
+  verificationUrl = null,
+  cookieDomains,
+  cookieNames,
+  authenticatedCookieNames,
+  onStatus = () => {},
+} = {}) {
+  const executable = await findExternalChromium();
+  const port = await availablePort();
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), `picto-${siteCategory}-auth-`));
+  const child = spawn(executable, [
+    `--remote-debugging-port=${port}`,
+    '--remote-debugging-address=127.0.0.1',
+    `--user-data-dir=${profile}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--disable-sync',
+    loginUrl,
+  ], { stdio: 'ignore' });
+  const childExited = new Promise((resolve) => child.once('exit', resolve));
+
+  let closed = false;
+  let pollTimer = null;
+  let timeout = null;
+  let verificationStarted = false;
+  let recovering = false;
+  let completed = false;
+  const clients = new Map();
+  let resolveCompletion;
+  let rejectCompletion;
+  const completion = new Promise((resolve, reject) => {
+    resolveCompletion = resolve;
+    rejectCompletion = reject;
+  });
+
+  async function close() {
+    if (closed) return;
+    closed = true;
+    if (pollTimer != null) clearInterval(pollTimer);
+    if (timeout != null) clearTimeout(timeout);
+    for (const client of clients.values()) client.close();
+    clients.clear();
+    if (child.exitCode == null) {
+      child.kill();
+      await Promise.race([childExited, new Promise((resolve) => setTimeout(resolve, 2000))]);
+    }
+    await fs.rm(profile, { recursive: true, force: true }).catch(() => {});
+  }
+
+  async function inspect(client) {
+    if (completed) return;
+    const result = await client.send('Network.getAllCookies');
+    const matching = (result.cookies ?? []).filter((cookie) =>
+      cookieDomains.some((domain) => cookie.domain === domain || cookie.domain === `.${domain}`)
+    );
+    const values = new Map(matching.filter((cookie) => cookie.value).map((cookie) => [cookie.name, cookie.value]));
+    if (!authenticatedCookieNames.every((name) => values.has(name))) return;
+
+    if (verificationUrl && !verificationStarted) {
+      verificationStarted = true;
+      onStatus(`Login accepted. Verifying ${label} access…`);
+      await client.send('Page.navigate', { url: verificationUrl });
+      return;
+    }
+
+    if (verificationUrl) {
+      const page = await client.send('Runtime.evaluate', {
+        expression: `(() => {
+          const text = [document.title, document.body?.innerText || '', ...Array.from(document.images).flatMap((image) => [image.src, image.alt, image.title])].join(' ');
+          return {
+            href: location.href,
+            challenge: /just a moment|verify (?:that )?you are human|checking your browser|cloudflare/i.test(text),
+            denied: /sad\\s*panda|sadpanda|kokomade/i.test(text),
+            blank: (document.body?.innerText || '').trim().length === 0 && document.links.length === 0,
+          };
+        })()`,
+        returnByValue: true,
+      });
+      const state = page.result?.value;
+      if (!state?.href?.startsWith(verificationUrl)) return;
+      if (state.challenge) {
+        onStatus(`Complete the ${label} browser check; Picto will continue automatically.`);
+        return;
+      }
+      if (state.denied || state.blank) {
+        if (recovering) return;
+        recovering = true;
+        onStatus(`${label} rejected this session. Sign in again to refresh it.`);
+        for (const name of cookieNames) {
+          for (const domain of cookieDomains) {
+            await client.send('Network.deleteCookies', { name, domain }).catch(() => {});
+            await client.send('Network.deleteCookies', { name, domain: `.${domain}` }).catch(() => {});
+          }
+        }
+        verificationStarted = false;
+        await client.send('Page.navigate', { url: loginUrl });
+        recovering = false;
+        return;
+      }
+    }
+
+    const cookies = Object.fromEntries(cookieNames
+      .map((name) => [name, values.get(name)])
+      .filter(([, value]) => value));
+    completed = true;
+    resolveCompletion({ site_category: siteCategory, credential_type: 'cookies', cookies });
+  }
+
+  async function attach(target) {
+    if (clients.has(target.id) || !target.webSocketDebuggerUrl) return;
+    const client = openCdp(target.webSocketDebuggerUrl, () => {});
+    clients.set(target.id, client);
+    await client.send('Network.enable');
+    await client.send('Page.enable');
+  }
+
+  async function poll() {
+    if (closed) return;
+    const targets = await readTargets(port);
+    for (const target of targets) {
+      if (target.type === 'page') await attach(target).catch(() => {});
+    }
+    for (const client of clients.values()) await inspect(client).catch(() => {});
+  }
+
+  child.once('error', (error) => {
+    rejectCompletion(new Error(`Could not open the external login browser: ${error.message}`));
+    void close();
+  });
+  child.once('exit', () => {
+    if (!closed) rejectCompletion(new Error(`${label} login was closed before authentication completed.`));
+    void close();
+  });
+  timeout = setTimeout(() => {
+    rejectCompletion(new Error(`${label} login timed out.`));
+    void close();
+  }, AUTH_TIMEOUT_MS);
+  pollTimer = setInterval(() => { void poll(); }, TARGET_POLL_MS);
+  onStatus(`Complete the ${label} login in the browser.`);
   void poll();
   return { completion, close };
 }

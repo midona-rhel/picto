@@ -77,6 +77,7 @@ function createHarness(browser, overrides = {}) {
     persistCredential,
     beginPixivOAuth,
     completePixivOAuth,
+    launchCookieAuth: null,
     launchOnlyFansAuth: null,
     ...overrides,
   });
@@ -114,38 +115,49 @@ describe('direct-site authentication', () => {
       id: 'ehentai',
       loginUrl: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
       verificationUrl: 'https://exhentai.org/',
+      strategy: 'external-cookie',
+      cookieUrls: [
+        'https://forums.e-hentai.org',
+        'https://e-hentai.org',
+        'https://exhentai.org',
+      ],
       cookieNames: ['ipb_member_id', 'ipb_pass_hash', 'igneous'],
       authenticatedCookieNames: ['ipb_member_id', 'ipb_pass_hash'],
-      allowStorageAccess: true,
-      sessionPartition: 'persist:picto-auth-v2-ehentai',
     });
     expect(resolveAuthSite('exhentai')).toBe(resolveAuthSite('ehentai'));
   });
 
-  it('verifies ExHentai access before persisting its gallery-dl cookies', async () => {
-    const browser = createBrowserWindowMock({
-      pageResult: (url) => url.includes('exhentai.org')
-        ? { href: url, host: 'exhentai.org', hasLoginForm: false, accessDenied: false, blank: false }
-        : { href: url, host: 'forums.e-hentai.org', hasLoginForm: false, accessDenied: false, blank: false },
-      cookies: [
-        { name: 'ipb_member_id', value: 'member' },
-        { name: 'ipb_pass_hash', value: 'hash' },
-        { name: 'igneous', value: 'igneous' },
-        { name: 'analytics', value: 'ignored' },
-      ],
-    });
-    const { sessions, persistCredential } = createHarness(browser);
+  it('verifies ExHentai in managed Chromium before persisting its gallery-dl cookies', async () => {
+    let completeLogin;
+    const completion = new Promise((resolve) => { completeLogin = resolve; });
+    const close = vi.fn(async () => {});
+    const launchCookieAuth = vi.fn(async () => ({ completion, close }));
+    const browser = createBrowserWindowMock();
+    const { sessions, persistCredential } = createHarness(browser, { launchCookieAuth });
 
     await sessions.startAuthSession('ehentai');
-    expect(browser.instances[0].options.webPreferences.partition).toBe('persist:picto-auth-v2-ehentai');
-    expect(browser.instances[0].userAgent).toBe('Mozilla/5.0');
-    await browser.instances[0].webContents.listeners.get('did-finish-load')();
-    await settle();
-    expect(browser.instances[0].loadedUrl).toBe('https://exhentai.org/');
-    expect(browser.instances[0].hideCalls).toBe(1);
+    expect(browser.instances).toHaveLength(0);
+    expect(launchCookieAuth).toHaveBeenCalledWith(expect.objectContaining({
+      siteCategory: 'ehentai',
+      label: 'ExHentai',
+      loginUrl: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
+      verificationUrl: 'https://exhentai.org/',
+      cookieDomains: ['forums.e-hentai.org', 'e-hentai.org', 'exhentai.org'],
+      cookieNames: ['ipb_member_id', 'ipb_pass_hash', 'igneous'],
+      authenticatedCookieNames: ['ipb_member_id', 'ipb_pass_hash'],
+    }));
 
-    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    completeLogin({
+      site_category: 'ehentai',
+      credential_type: 'cookies',
+      cookies: {
+        ipb_member_id: 'member',
+        ipb_pass_hash: 'hash',
+        igneous: 'igneous',
+      },
+    });
     await settle();
+
     expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
       site_id: 'ehentai',
       credential_type: 'cookies',
@@ -155,82 +167,11 @@ describe('direct-site authentication', () => {
         igneous: 'igneous',
       },
     }));
-    expect(sessions.getAuthSessionState().status).toBe('completed');
-  });
-
-  it('rejects an expired ExHentai session when verification returns Sad Panda', async () => {
-    const browser = createBrowserWindowMock({
-      pageResult: (url) => url.includes('exhentai.org')
-        ? { href: url, host: 'exhentai.org', hasLoginForm: false, accessDenied: true, blank: false }
-        : { href: url, host: 'forums.e-hentai.org', hasLoginForm: false, accessDenied: false, blank: false },
-      cookies: [
-        { name: 'ipb_member_id', value: 'expired-member' },
-        { name: 'ipb_pass_hash', value: 'expired-hash' },
-      ],
-    });
-    const { sessions, persistCredential } = createHarness(browser);
-
-    await sessions.startAuthSession('ehentai');
-    await browser.instances[0].webContents.listeners.get('did-finish-load')();
-    await settle();
-    await browser.instances[0].webContents.listeners.get('did-finish-load')();
-    await settle();
-
-    expect(persistCredential).not.toHaveBeenCalled();
-    expect(browser.instances[0].loadedUrl).toBe('https://forums.e-hentai.org/index.php?act=Login&CODE=00');
-    expect(browser.instances[0].webContents.session.clearStorageData).not.toHaveBeenCalled();
-    expect(browser.instances[0].webContents.session.cookies.remove).toHaveBeenCalledTimes(9);
-    expect(browser.instances[0].webContents.session.cookies.remove).not.toHaveBeenCalledWith(
-      expect.any(String),
-      'cf_clearance',
-    );
-    expect(browser.instances[0].showCalls).toBeGreaterThan(0);
+    expect(close).toHaveBeenCalledOnce();
     expect(sessions.getAuthSessionState()).toMatchObject({
-      status: 'active',
-      message: expect.stringContaining('Sad Panda'),
-    });
-  });
-
-  it('lets ExHentai finish a Cloudflare challenge without clearing its progress', async () => {
-    const browser = createBrowserWindowMock({
-      pageResult: (url) => url.includes('exhentai.org')
-        ? {
-            href: url,
-            host: 'exhentai.org',
-            hasChallenge: true,
-            hasLoginForm: false,
-            accessDenied: false,
-            blank: false,
-          }
-        : {
-            href: url,
-            host: 'forums.e-hentai.org',
-            hasChallenge: false,
-            hasLoginForm: false,
-            accessDenied: false,
-            blank: false,
-          },
-      cookies: [
-        { name: 'ipb_member_id', value: 'member' },
-        { name: 'ipb_pass_hash', value: 'hash' },
-      ],
-    });
-    const { sessions, persistCredential } = createHarness(browser);
-
-    await sessions.startAuthSession('ehentai');
-    await browser.instances[0].webContents.listeners.get('did-finish-load')();
-    await settle();
-    await browser.instances[0].webContents.listeners.get('did-finish-load')();
-    await settle();
-
-    expect(persistCredential).not.toHaveBeenCalled();
-    expect(browser.instances[0].loadedUrl).toBe('https://exhentai.org/');
-    expect(browser.instances[0].webContents.session.clearStorageData).not.toHaveBeenCalled();
-    expect(browser.instances[0].webContents.session.cookies.remove).not.toHaveBeenCalled();
-    expect(browser.instances[0].showCalls).toBeGreaterThan(0);
-    expect(sessions.getAuthSessionState()).toMatchObject({
-      status: 'active',
-      message: expect.stringContaining('browser check'),
+      site_category: 'ehentai',
+      status: 'completed',
+      message: 'ExHentai session captured and verified.',
     });
   });
 

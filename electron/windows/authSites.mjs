@@ -169,7 +169,7 @@ export const AUTH_SITES = Object.freeze({
   ehentai: Object.freeze({
     id: 'ehentai',
     label: 'ExHentai',
-    strategy: 'exhentai',
+    strategy: 'external-cookie',
     loginUrl: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
     verificationUrl: 'https://exhentai.org/',
     cookieUrls: Object.freeze([
@@ -179,8 +179,6 @@ export const AUTH_SITES = Object.freeze({
     ]),
     cookieNames: Object.freeze(['ipb_member_id', 'ipb_pass_hash', 'igneous']),
     authenticatedCookieNames: Object.freeze(['ipb_member_id', 'ipb_pass_hash']),
-    allowStorageAccess: true,
-    sessionPartition: 'persist:picto-auth-v2-ehentai',
   }),
 });
 
