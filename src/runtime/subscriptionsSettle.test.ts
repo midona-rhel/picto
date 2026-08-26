@@ -236,14 +236,14 @@ describe('subscription settlement', () => {
       media_added: 24,
       error_message: null,
     }]);
-    cleanupGalleryImport.mockResolvedValue(undefined);
+    cleanupGalleryImport.mockResolvedValue({ title: 'Example Gallery' });
 
     await refreshSubscriptionsRuntimeState();
     await vi.waitFor(() => expect(cleanupGalleryImport).toHaveBeenCalledWith('9'));
 
     expect(showSuccessNotification).toHaveBeenCalledWith({
-      title: 'Gallery imported',
-      message: '24 media added',
+      title: 'Gallery downloaded',
+      message: 'Example Gallery has been downloaded.',
     });
     expect(store.get(subscriptionsWorkspaceSnapshotAtom)?.subscriptions).toEqual([]);
     expect(getRunActivity).not.toHaveBeenCalled();

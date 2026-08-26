@@ -168,7 +168,7 @@ export const subscriptionsController = {
     return startGalleryImport(url, serviceId);
   },
 
-  cleanupGalleryImport(id: string): Promise<void> {
+  cleanupGalleryImport(id: string) {
     return cleanupGalleryImport(id);
   },
 

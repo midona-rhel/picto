@@ -5,6 +5,7 @@
 //! mutation receipt.
 
 use chrono::Utc;
+use rusqlite::OptionalExtension;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -628,7 +629,10 @@ pub async fn dispatch_async(
             let url = normalize_ehentai_gallery_url(&input.url)?;
             let is_exhentai = url.starts_with("https://exhentai.org/");
             if input.service_id.as_deref().is_some_and(|service| {
-                !matches!((service, is_exhentai), ("ehentai", false) | ("exhentai", true))
+                !matches!(
+                    (service, is_exhentai),
+                    ("ehentai", false) | ("exhentai", true)
+                )
             }) {
                 return Err("The selected gallery service does not match the URL".to_string());
             }
@@ -695,7 +699,7 @@ pub async fn dispatch_async(
                 .iter()
                 .find(|entry| entry.subscription_id == input.subscription_id)
             else {
-                return read(false);
+                return read(Option::<GalleryImportCleanupResult>::None);
             };
             if subscription.queries.len() != 1 || subscription.queries[0].site_id != "ehentai" {
                 return Err(
@@ -707,9 +711,26 @@ pub async fn dispatch_async(
                 input.subscription_id,
             )
             .await?;
+            let title = application.store().read(|connection| {
+                connection
+                    .query_row(
+                        "SELECT NULLIF(TRIM(sp.title), '')
+                         FROM subscription_source_post ssp
+                         JOIN source_post sp ON sp.source_post_id = ssp.source_post_id
+                         WHERE ssp.subscription_id = ?1 AND sp.root_item_id IS NOT NULL
+                         ORDER BY sp.updated_at DESC, sp.source_post_id DESC
+                         LIMIT 1",
+                        [input.subscription_id],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .optional()
+                    .map(Option::flatten)
+            })?;
             return match application.delete_subscription(input.subscription_id) {
-                Ok(receipt) => publish(application, receipt),
-                Err(error) if error.contains("subscription does not exist") => read(false),
+                Ok(receipt) => publish(application, GalleryImportCleanupResult { title, receipt }),
+                Err(error) if error.contains("subscription does not exist") => {
+                    read(Option::<GalleryImportCleanupResult>::None)
+                }
                 Err(error) => Err(error),
             };
         }
@@ -1006,9 +1027,15 @@ pub struct CreatedSubscriptionRun {
     created: bool,
     receipt: MutationReceipt,
 }
+#[derive(Serialize)]
+pub struct GalleryImportCleanupResult {
+    title: Option<String>,
+    receipt: MutationReceipt,
+}
 receipt_field!(CreatedSubscription);
 receipt_field!(CreatedSubscriptionQuery);
 receipt_field!(CreatedSubscriptionRun);
+receipt_field!(GalleryImportCleanupResult);
 
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -1536,6 +1563,65 @@ mod tests {
         .unwrap();
         let tags: Vec<String> = serde_json::from_str(&output).unwrap();
         assert_eq!(tags, vec!["creator:alice", "rating:safe"]);
+    }
+
+    #[tokio::test]
+    async fn gallery_cleanup_returns_the_downloaded_title_without_creating_history() {
+        let (_directory, application, item_id) = fixture();
+        let definition = NewSubscription {
+            name: "E-Hentai Gallery 12345".to_string(),
+            schedule: "manual".to_string(),
+            initial_post_limit: None,
+            periodic_post_limit: None,
+            queries: vec![NewSubscriptionQuery {
+                site_id: "ehentai".to_string(),
+                query_text: "https://e-hentai.org/g/12345/0123456789/".to_string(),
+                display_name: Some("Gallery import".to_string()),
+                notes: None,
+                group_posts: true,
+            }],
+        };
+        let (subscription_id, _) = application
+            .create_subscription_definition(&definition, "2026-08-26T00:00:00Z")
+            .unwrap();
+        application
+            .store()
+            .transaction(|transaction| {
+                let query_id: i64 = transaction.query_row(
+                    "SELECT query_id FROM subscription_query WHERE subscription_id = ?1",
+                    [subscription_id],
+                    |row| row.get(0),
+                )?;
+                transaction.execute(
+                    "INSERT INTO source_post
+                     (site_id, post_key, title, root_item_id, created_at, updated_at)
+                 VALUES ('ehentai', '12345', 'Example Gallery', ?1, 'now', 'now')",
+                    [item_id.0],
+                )?;
+                let source_post_id = transaction.last_insert_rowid();
+                transaction.execute(
+                    "INSERT INTO subscription_source_post
+                     (subscription_id, query_id, source_post_id)
+                 VALUES (?1, ?2, ?3)",
+                    params![subscription_id, query_id, source_post_id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let output: serde_json::Value = serde_json::from_str(
+            &dispatch_async(
+                &application,
+                "subscriptions.gallery.cleanup",
+                &format!(r#"{{"subscription_id":{subscription_id}}}"#),
+            )
+            .await
+            .unwrap(),
+        )
+        .unwrap();
+
+        assert_eq!(output["title"], "Example Gallery");
+        assert!(application.history_state().unwrap().undo.is_none());
     }
 
     #[test]

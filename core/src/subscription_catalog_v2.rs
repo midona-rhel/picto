@@ -1720,6 +1720,7 @@ mod tests {
             .unwrap();
 
         application.delete_subscription(subscription_id).unwrap();
+        assert!(application.history_state().unwrap().undo.is_none());
         let source_posts: i64 = application
             .store()
             .read(|connection| {

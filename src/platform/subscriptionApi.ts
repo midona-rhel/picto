@@ -312,8 +312,14 @@ export function startGalleryImport(url: string, serviceId: 'ehentai' | 'exhentai
   }).then(() => undefined);
 }
 
-export function cleanupGalleryImport(id: string): Promise<void> {
-  return invoke('subscriptions.gallery.cleanup', { subscription_id: Number(id) }).then(() => undefined);
+export interface GalleryImportCleanupResult {
+  title: string | null;
+}
+
+export function cleanupGalleryImport(id: string): Promise<GalleryImportCleanupResult | null> {
+  return invoke<GalleryImportCleanupResult | null>('subscriptions.gallery.cleanup', {
+    subscription_id: Number(id),
+  });
 }
 
 export function stopSubscription(id: string): Promise<void> {

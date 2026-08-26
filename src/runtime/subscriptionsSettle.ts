@@ -103,17 +103,20 @@ function settleFinishedGalleryImports(snapshot: SubscriptionWorkspaceSnapshot): 
     void subscriptionsController.listRuns(job.id).then(async (runs) => {
       const latest = runs[0];
       if (latest?.status === 'succeeded') {
+        const cleanup = await subscriptionsController.cleanupGalleryImport(job.id);
         showSuccessNotification({
-          title: 'Gallery imported',
-          message: `${latest.media_added} media added`,
+          title: 'Gallery downloaded',
+          message: `${cleanup?.title ?? job.name} has been downloaded.`,
         });
       } else if (latest) {
         showErrorNotification({
           title: 'Gallery import failed',
           message: latest.error_message ?? 'GalleryDL could not import this gallery.',
         });
+        await subscriptionsController.cleanupGalleryImport(job.id);
+      } else {
+        await subscriptionsController.cleanupGalleryImport(job.id);
       }
-      await subscriptionsController.cleanupGalleryImport(job.id);
       store.set(subscriptionsWorkspaceSnapshotAtom, (current) => current ? {
         ...current,
         subscriptions: current.subscriptions.filter((subscription) => subscription.id !== job.id),
