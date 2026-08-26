@@ -25,6 +25,22 @@
   object-fit: contain;
 }
 
+.videoPreview {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: #000;
+}
+
+.videoPreviewImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
 .flashPreview {
   position: absolute;
   inset: 0;
@@ -85,5 +101,5 @@
   display: block;
   width: 100%;
   height: 100%;
-  object-fit: fill;
+  object-fit: contain;
 }

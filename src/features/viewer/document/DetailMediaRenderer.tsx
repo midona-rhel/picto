@@ -96,7 +96,17 @@ export function DetailMediaRenderer({ hash, mimeType, displayName, onFlashPlayba
     return null;
   }
 
-  const preview = kind === 'pdf' ? (
+  const preview = kind === 'video' ? (
+    <div className={styles.videoPreview} data-video-frame-preview>
+      <ThumbnailImage
+        className={styles.videoPreviewImage}
+        src={mediaThumbnailUrl(hash)}
+        fallback="broken"
+        alt=""
+        draggable={false}
+      />
+    </div>
+  ) : kind === 'pdf' ? (
     <div className={styles.documentPreview} data-document-page-preview>
       <div className={styles.documentPreviewViewport}>
         <ThumbnailImage

@@ -57,6 +57,15 @@ describe('DetailMediaRenderer', () => {
     expect(await screen.findByTestId('pdf-renderer')).toBeInTheDocument();
   });
 
+  it('uses the eventual full video frame for its thumbnail preview', () => {
+    const { container } = render(
+      <DetailMediaRenderer hash="video-hash" mimeType="video/mp4" displayName="Movie" />,
+    );
+
+    expect(container.querySelector('[data-video-frame-preview]')).toBeInTheDocument();
+    expect(container.querySelector('[data-document-page-preview]')).toBeNull();
+  });
+
   it('uses a generated full-renderer document thumbnail without nesting another shell', async () => {
     const { container } = render(
       <DetailMediaRenderer hash="text-hash" mimeType="text/plain" displayName="Notes" />,
