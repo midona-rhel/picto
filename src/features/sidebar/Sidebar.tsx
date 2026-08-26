@@ -67,7 +67,7 @@ import {
   useQuickAccess,
 } from './quickAccessPreferences';
 import styles from './Sidebar.module.css';
-import { filesController } from '../../controllers/filesController';
+import { chooseAndImportFolder, filesController } from '../../controllers/filesController';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { subscriptionsWorkspaceSnapshotAtom } from '../../state/subscriptionsWorkspace';
 import { openFolderAutoTagsEditor } from '../folders/folderAutoTagsWorkflow';
@@ -611,19 +611,7 @@ export function Sidebar() {
       } },
       { separator: true },
       { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => {
-        void (async () => {
-          try {
-            const result = await (window as any).picto.dialog.open({
-              properties: ['openDirectory'], multiple: false, title: 'Import folder into ' + node.name,
-            });
-            if (result) {
-              const folderPath = typeof result === 'string' ? result : result[0];
-              await foldersController.addMedia(folderPath, folderId);
-            }
-          } catch (err) {
-            console.error('[sidebar] import folder failed:', err);
-          }
-        })();
+        void chooseAndImportFolder({ kind: 'folder', folder_id: folderId });
       } },
       { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: () => {
         store.set(folderWatchModalAtom, { open: true, folderId, initial: {} });
@@ -1219,6 +1207,18 @@ export function Sidebar() {
           expanded={treeFilterActive || !collapsed.has('folders')}
           onToggle={() => { if (!treeFilterActive) toggleCollapse('folders'); }}
           onAdd={() => { void createFolderAndRename(); }}
+          onContextMenu={(event) => {
+            contextMenu.open(event, [
+              {
+                label: 'New Folder', icon: <IconFolderPlus size={14} />, shortcut: kbd('file.newFolder'),
+                action: () => { void createFolderAndRename(); },
+              },
+              {
+                label: 'Import Folder...', icon: <IconDownload size={14} />,
+                action: () => { void chooseAndImportFolder({ kind: 'all' }); },
+              },
+            ]);
+          }}
           addTooltip="New Folder" addShortcutId="file.newFolder"
           dataHelpId="sidebar-folders"
         />}
@@ -1288,6 +1288,18 @@ export function Sidebar() {
             ], { showSearch: false });
           }}
           addTooltip="New Smart Folder or Group"
+          onContextMenu={(event) => {
+            contextMenu.open(event, [
+              {
+                label: 'New Smart Folder', icon: <IconFolderPlus size={14} />,
+                action: () => openSmartFolderModal('create', { name: 'New Smart Folder', predicate: { groups: [] } }),
+              },
+              {
+                label: 'New Smart Folder Group', icon: <IconLayoutGrid size={14} />,
+                action: () => { void createSmartFolderGroupAndRename(); },
+              },
+            ]);
+          }}
           dataHelpId="sidebar-smart-folders"
         />}
         {sidebarPreferences.showSmartFolders && (treeFilterActive || !collapsed.has('smart_folders')) && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (

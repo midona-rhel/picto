@@ -9,6 +9,11 @@
   cursor: pointer;
 }
 
+.disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
 .track {
   position: absolute;
   inset: 0;

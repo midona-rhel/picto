@@ -3,7 +3,6 @@
  */
 
 import { useAtomValue, useSetAtom } from 'jotai';
-import { modalStyles } from '../../shared/ui/GlassModal';
 import {
   confirmModalAtom,
   smartFolderModalAtom,
@@ -30,6 +29,7 @@ import { BatchRenameModal } from './BatchRenameModal';
 import { setItemNames } from '../../controllers/entityMutations';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { LibraryCoverDialogHost } from '../library/LibraryCoverDialogHost';
+import { FolderImportModal } from './FolderImportModal';
 
 export function ModalLayer() {
   const confirm = useAtomValue(confirmModalAtom);
@@ -173,27 +173,27 @@ export function ModalLayer() {
 
       <LibraryCoverDialogHost />
 
-      <ConfirmModal
+      <FolderImportModal
         open={folderImport.open}
         onClose={() => setFolderImport({ ...folderImport, open: false })}
-        onConfirm={() => {
+        path={folderImport.path}
+        onImport={(options) => {
           void filesController.addMedia([folderImport.path], {
-            preserve_structure: true,
+            preserve_structure: options.preserveStructure,
+            include_subfolders: options.includeSubfolders,
+            expand_archives: options.expandArchives,
+            include_folders_without_media: options.includeFoldersWithoutMedia,
             parent_folder_id: folderImport.targetFolderId,
             lifecycle: folderImport.lifecycle,
+          }).catch((reason) => {
+            showErrorNotification({
+              title: 'Could not import folder',
+              message: reason instanceof Error ? reason.message : String(reason),
+            });
           });
           setFolderImport({ ...folderImport, open: false });
         }}
-        title="Import Folder"
-        confirmLabel="Import"
-        message=""
-      >
-        <div className={modalStyles.stackSm}>
-          <p className={modalStyles.helpText} style={{ fontSize: 13 }}>
-            Import <strong>{folderImport.path.split(/[\\/]/).filter(Boolean).pop() ?? 'folder'}</strong>
-          </p>
-        </div>
-      </ConfirmModal>
+      />
 
       <ConfirmModal
         open={multiFileImport.open}

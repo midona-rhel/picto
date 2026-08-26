@@ -28,10 +28,20 @@ pub struct ManualImportInput {
     pub parent_folder_id: Option<FolderId>,
     #[serde(default)]
     pub preserve_structure: bool,
+    #[serde(default = "default_true")]
+    pub include_subfolders: bool,
+    #[serde(default = "default_true")]
+    pub expand_archives: bool,
+    #[serde(default)]
+    pub include_folders_without_media: bool,
     #[serde(default)]
     pub delete_after_ingest: bool,
     #[serde(default)]
     pub group_files: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -67,6 +77,24 @@ impl Application {
             discovered: candidates.len(),
             ..ImportEnqueueReport::default()
         };
+
+        if input.preserve_structure && input.include_folders_without_media {
+            for value in &input.paths {
+                let path = fs::canonicalize(value)
+                    .map_err(|error| format!("Failed to resolve import path '{value}': {error}"))?;
+                if path.is_dir() {
+                    for relative in collect_structure_directories(&path, input.include_subfolders)?
+                    {
+                        ensure_relative_folder(
+                            self,
+                            input.parent_folder_id,
+                            Some(&relative),
+                            &mut folders,
+                        )?;
+                    }
+                }
+            }
+        }
 
         for (index, candidate) in candidates.into_iter().enumerate() {
             let folder_id = if input.preserve_structure {
@@ -106,6 +134,7 @@ impl Application {
                 &input.tags,
                 &input.source_urls,
                 input.delete_after_ingest,
+                input.expand_archives,
                 source,
             )
             .await
@@ -190,6 +219,7 @@ pub async fn scan_watched_folders(
             &[],
             &[],
             false,
+            true,
             None,
         )
         .await
@@ -228,12 +258,14 @@ async fn prepare_and_enqueue(
     tags: &[String],
     source_urls: &[String],
     delete_after_ingest: bool,
+    expand_archives: bool,
     source: Option<SourcePostInput>,
 ) -> Result<bool, String> {
     if path
         .extension()
         .and_then(|extension| extension.to_str())
         .is_some_and(|extension| extension.eq_ignore_ascii_case("zip"))
+        && expand_archives
     {
         return prepare_archive_and_enqueue(
             application,
@@ -430,7 +462,7 @@ fn collect_manual_candidates(
             let root_name = path.file_name().map(PathBuf::from);
             candidates.extend(collect_directory(
                 &path,
-                true,
+                input.include_subfolders,
                 input.preserve_structure.then_some(root_name).flatten(),
             )?);
         }
@@ -438,6 +470,39 @@ fn collect_manual_candidates(
     candidates.sort_by(|left, right| left.path.cmp(&right.path));
     candidates.dedup_by(|left, right| left.path == right.path);
     Ok(candidates)
+}
+
+fn collect_structure_directories(root: &Path, recursive: bool) -> Result<Vec<PathBuf>, String> {
+    let root_name = root.file_name().map(PathBuf::from).unwrap_or_default();
+    let mut directories = vec![root_name.clone()];
+    if !recursive {
+        return Ok(directories);
+    }
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(directory) = stack.pop() {
+        let entries = fs::read_dir(&directory)
+            .map_err(|error| format!("Failed to read {}: {error}", directory.display()))?;
+        for entry in entries {
+            let entry = entry
+                .map_err(|error| format!("Failed to read {}: {error}", directory.display()))?;
+            let path = entry.path();
+            if should_ignore(&path) {
+                continue;
+            }
+            let file_type = entry
+                .file_type()
+                .map_err(|error| format!("Failed to inspect {}: {error}", path.display()))?;
+            if file_type.is_dir() && !file_type.is_symlink() {
+                if let Ok(relative) = path.strip_prefix(root) {
+                    directories.push(root_name.join(relative));
+                }
+                stack.push(path);
+            }
+        }
+    }
+    directories.sort();
+    directories.dedup();
+    Ok(directories)
 }
 
 fn collect_directory(
@@ -620,9 +685,11 @@ mod tests {
         let library = tempfile::tempdir().unwrap();
         let source = tempfile::tempdir().unwrap();
         fs::create_dir(source.path().join("child")).unwrap();
+        fs::create_dir(source.path().join("without-media")).unwrap();
         png(&source.path().join("one.png"));
         png(&source.path().join("child/two.png"));
         fs::write(source.path().join("child/ignored.exe"), b"ignored").unwrap();
+        fs::write(source.path().join("without-media/ignored.exe"), b"ignored").unwrap();
         let application = Application::new(Arc::new(Store::open(library.path()).unwrap()));
 
         let report = application
@@ -633,6 +700,9 @@ mod tests {
                 lifecycle: Lifecycle::Inbox,
                 parent_folder_id: None,
                 preserve_structure: true,
+                include_subfolders: true,
+                expand_archives: true,
+                include_folders_without_media: false,
                 delete_after_ingest: false,
                 group_files: false,
             })
@@ -649,16 +719,83 @@ mod tests {
         application
             .store()
             .read(|connection| {
-                let folders: i64 =
-                    connection.query_row("SELECT COUNT(*) FROM folder", [], |row| row.get(0))?;
+                let folders = connection
+                    .prepare("SELECT name FROM folder ORDER BY folder_id")?
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
                 let memberships: i64 =
                     connection
                         .query_row("SELECT COUNT(*) FROM folder_item", [], |row| row.get(0))?;
-                assert_eq!(folders, 2);
+                assert_eq!(folders.len(), 2, "folders: {folders:?}");
                 assert_eq!(memberships, 2);
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn manual_directory_can_include_folders_without_supported_media() {
+        let library = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        fs::create_dir(source.path().join("without-media")).unwrap();
+        fs::write(source.path().join("without-media/ignored.exe"), b"ignored").unwrap();
+        png(&source.path().join("one.png"));
+        let application = Application::new(Arc::new(Store::open(library.path()).unwrap()));
+
+        application
+            .enqueue_manual_import(&ManualImportInput {
+                paths: vec![source.path().display().to_string()],
+                tags: Vec::new(),
+                source_urls: Vec::new(),
+                lifecycle: Lifecycle::Inbox,
+                parent_folder_id: None,
+                preserve_structure: true,
+                include_subfolders: true,
+                expand_archives: true,
+                include_folders_without_media: true,
+                delete_after_ingest: false,
+                group_files: false,
+            })
+            .await
+            .unwrap();
+
+        let folder_count: i64 = application
+            .store()
+            .read(|connection| {
+                connection.query_row("SELECT COUNT(*) FROM folder", [], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(folder_count, 2);
+    }
+
+    #[tokio::test]
+    async fn manual_directory_can_skip_subfolders() {
+        let library = tempfile::tempdir().unwrap();
+        let source = tempfile::tempdir().unwrap();
+        fs::create_dir(source.path().join("child")).unwrap();
+        png(&source.path().join("one.png"));
+        png(&source.path().join("child/two.png"));
+        let application = Application::new(Arc::new(Store::open(library.path()).unwrap()));
+
+        let report = application
+            .enqueue_manual_import(&ManualImportInput {
+                paths: vec![source.path().display().to_string()],
+                tags: Vec::new(),
+                source_urls: Vec::new(),
+                lifecycle: Lifecycle::Inbox,
+                parent_folder_id: None,
+                preserve_structure: true,
+                include_subfolders: false,
+                expand_archives: true,
+                include_folders_without_media: false,
+                delete_after_ingest: false,
+                group_files: false,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(report.discovered, 1);
+        assert_eq!(report.queued, 1);
     }
 
     #[tokio::test]
@@ -682,6 +819,9 @@ mod tests {
                 lifecycle: Lifecycle::Inbox,
                 parent_folder_id: None,
                 preserve_structure: false,
+                include_subfolders: true,
+                expand_archives: true,
+                include_folders_without_media: false,
                 delete_after_ingest: false,
                 group_files: true,
             })
@@ -741,6 +881,9 @@ mod tests {
                 lifecycle: Lifecycle::Inbox,
                 parent_folder_id: None,
                 preserve_structure: false,
+                include_subfolders: true,
+                expand_archives: true,
+                include_folders_without_media: false,
                 delete_after_ingest: true,
                 group_files: false,
             })
@@ -877,6 +1020,9 @@ mod tests {
                 lifecycle: Lifecycle::Inbox,
                 parent_folder_id: None,
                 preserve_structure: false,
+                include_subfolders: true,
+                expand_archives: true,
+                include_folders_without_media: false,
                 delete_after_ingest: false,
                 group_files: false,
             })

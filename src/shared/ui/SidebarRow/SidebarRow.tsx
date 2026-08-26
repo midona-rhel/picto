@@ -22,6 +22,7 @@ interface SectionProps {
   expanded: boolean;
   onToggle: () => void;
   onAdd?: (event: MouseEvent<HTMLButtonElement>) => void;
+  onContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
   addTooltip?: string;
   addShortcutId?: string;
   collapsible?: boolean;
@@ -35,6 +36,7 @@ function SectionRow({
   expanded,
   onToggle,
   onAdd,
+  onContextMenu,
   addTooltip,
   addShortcutId,
   collapsible = true,
@@ -45,6 +47,7 @@ function SectionRow({
     <div
       className={styles.section}
       onClick={onToggle}
+      onContextMenu={onContextMenu}
       role="button"
       tabIndex={0}
       aria-expanded={expanded}

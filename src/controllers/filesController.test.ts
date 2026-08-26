@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import type { BaseScope } from '../shared/types/canonical';
-import { chooseAndExportOriginals, filesController, manualImportParamsForScope, requestMediaImport } from './filesController';
+import { chooseAndExportOriginals, chooseAndImportFolder, filesController, manualImportParamsForScope, requestMediaImport } from './filesController';
 import * as folderApi from '../platform/folderApi';
 import * as settingsApi from '../platform/settingsApi';
-import { multiFileImportModalAtom } from '../state/modals';
+import { folderImportModalAtom, multiFileImportModalAtom } from '../state/modals';
 
 const closedMultiFileImport = {
   open: false,
@@ -19,7 +19,27 @@ const closedMultiFileImport = {
 
 afterEach(() => {
   getDefaultStore().set(multiFileImportModalAtom, closedMultiFileImport);
+  getDefaultStore().set(folderImportModalAtom, {
+    open: false, path: '', targetFolderId: null, lifecycle: 'active',
+  });
   vi.restoreAllMocks();
+});
+
+describe('folder import choice', () => {
+  it('opens the options dialog for a selected folder destination', async () => {
+    (window as any).picto = {
+      dialog: { open: vi.fn().mockResolvedValue('/tmp/Photos') },
+    };
+
+    await chooseAndImportFolder({ kind: 'folder', folder_id: 7 });
+
+    expect(getDefaultStore().get(folderImportModalAtom)).toEqual({
+      open: true,
+      path: '/tmp/Photos',
+      targetFolderId: 7,
+      lifecycle: 'active',
+    });
+  });
 });
 
 describe('manual import destination', () => {

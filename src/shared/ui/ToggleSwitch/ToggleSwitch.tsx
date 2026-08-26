@@ -8,20 +8,24 @@ import styles from './ToggleSwitch.module.css';
 interface Props {
   on: boolean;
   onChange: () => void;
+  disabled?: boolean;
 }
 
-export function ToggleSwitch({ on, onChange }: Props) {
+export function ToggleSwitch({ on, onChange, disabled = false }: Props) {
   return (
     <label
-      className={styles.toggle}
+      className={`${styles.toggle} ${disabled ? styles.disabled : ''}`}
       role="switch"
       aria-checked={on}
-      tabIndex={0}
+      aria-disabled={disabled}
+      tabIndex={disabled ? -1 : 0}
       onClick={(event) => {
         event.stopPropagation();
+        if (disabled) return;
         onChange();
       }}
       onKeyDown={(event) => {
+        if (disabled) return;
         if (event.key !== 'Enter' && event.key !== ' ') return;
         event.preventDefault();
         event.stopPropagation();

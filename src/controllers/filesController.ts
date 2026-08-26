@@ -23,7 +23,7 @@ import type { ExportFormat } from '../shared/types/generated/application/ExportF
 import type { ImportEnqueueReport } from '../shared/types/generated/application/ImportEnqueueReport';
 import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
 import { getDefaultStore } from 'jotai';
-import { multiFileImportModalAtom } from '../state/modals';
+import { folderImportModalAtom, multiFileImportModalAtom } from '../state/modals';
 import { showErrorNotification } from '../shared/lib/notifications';
 import { getSettings, type AppSettings } from '../platform/settingsApi';
 
@@ -33,6 +33,9 @@ export interface MediaImportParams {
   lifecycle: Lifecycle;
   parent_folder_id?: number | null;
   preserve_structure?: boolean;
+  include_subfolders?: boolean;
+  expand_archives?: boolean;
+  include_folders_without_media?: boolean;
   delete_after_ingest?: boolean;
   group_files?: boolean;
 }
@@ -117,10 +120,12 @@ export async function chooseAndImportFolder(scope: BaseScope): Promise<void> {
   if (!result) return;
   const folderPath = typeof result === 'string' ? result : result[0];
   if (!folderPath) return;
-  await addMedia([folderPath], manualImportParamsForScope(scope, {
-    preserve_structure: true,
-    parent_folder_id: scope.kind === 'folder' ? scope.folder_id : null,
-  }));
+  store.set(folderImportModalAtom, {
+    open: true,
+    path: folderPath,
+    targetFolderId: scope.kind === 'folder' ? scope.folder_id : null,
+    lifecycle: manualImportParamsForScope(scope).lifecycle,
+  });
 }
 
 /** Import copied files or a copied bitmap through the durable ingest queue. */
