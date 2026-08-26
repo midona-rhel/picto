@@ -127,6 +127,8 @@
    * 14px glyph optically equidistant from the 40px panel top and left edge. */
   padding: 0 0 0 3px;
   gap: 6px;
+  cursor: text;
+  -webkit-app-region: no-drag;
 }
 
 .searchIcon {
@@ -152,6 +154,9 @@
   padding: 0;
   min-width: 0;
   caret-color: var(--color-text-primary);
+  cursor: text;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 .searchInput::placeholder {

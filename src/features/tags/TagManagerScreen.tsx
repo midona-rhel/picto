@@ -901,7 +901,12 @@ export function TagsToolbar() {
 
   return (
     <div className={styles.titlebarToolbar} data-window-drag-region="">
-      <div className={styles.titlebarSearch}>
+      <div
+        className={styles.titlebarSearch}
+        onMouseDown={(event) => {
+          if (!(event.target as Element).closest('button')) inputRef.current?.focus();
+        }}
+      >
         <IconSearch size={13} className={styles.titlebarSearchIcon} />
         <input
           ref={inputRef}

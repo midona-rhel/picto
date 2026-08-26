@@ -330,7 +330,14 @@ export function TagSelectPanel() {
       onPinnedChange={setPinned}
       header={
         <>
-          <div className={shellStyles.searchRow} style={{ flex: 1 }}>
+          <div
+            className={shellStyles.searchRow}
+            style={{ flex: 1 }}
+            onMouseDown={(event) => {
+              event.stopPropagation();
+              searchRef.current?.focus();
+            }}
+          >
             <IconSearch size={14} className={shellStyles.searchIcon} />
             <input
               ref={searchRef}

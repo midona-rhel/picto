@@ -42,6 +42,21 @@ describe('TagSelectPanel assignment', () => {
     mocks.getNamespaceSummary.mockResolvedValue([{ namespace: 'creator', count: 2 }]);
   });
 
+  it('focuses search from the full visible header row', async () => {
+    const store = createStore();
+    store.set(tagSelectPortalAtom, { open: true, selectedTags: [] });
+
+    await act(async () => {
+      render(<MantineProvider><Provider store={store}><TagSelectPanel /></Provider></MantineProvider>);
+      await Promise.resolve();
+    });
+    const search = screen.getByPlaceholderText('Search tags...');
+
+    fireEvent.mouseDown(search.parentElement!);
+
+    expect(search).toHaveFocus();
+  });
+
   it('updates multi-tag assignment on each click without an Apply step', async () => {
     const store = createStore();
     const onApplyTags = vi.fn();

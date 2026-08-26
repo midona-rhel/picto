@@ -133,6 +133,15 @@ function setupUser() {
 }
 
 describe('TagManagerScreen', () => {
+  it('focuses the titlebar search from anywhere in its visible capsule', async () => {
+    await renderScreen();
+    const search = screen.getByRole('textbox', { name: 'Search tags' });
+
+    fireEvent.mouseDown(search.parentElement!);
+
+    expect(search).toHaveFocus();
+  });
+
   it('browses zero-count tags and follows the opaque cursor', async () => {
     await renderScreen();
 
