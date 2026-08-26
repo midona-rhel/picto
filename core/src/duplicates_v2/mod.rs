@@ -18,6 +18,7 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, FileHash, ItemId, MutationReceipt};
 use crate::blob_store::mime_to_extension;
+use crate::media_processing::{PreparedMediaSource, DEFAULT_THUMBNAIL_DIMENSIONS};
 use crate::projection_v2::{
     FolderProjectionChange, ItemProjectionChange, RootProjectionChange, StructureProjectionDelta,
     TagProjectionChange,
@@ -952,17 +953,32 @@ fn spatially_verify_pair(
     let descriptor = |file: &StoredFile, cache: &mut HashMap<i64, Option<SpatialDescriptor>>| {
         cache
             .entry(file.file_id)
-            .or_insert_with(|| {
-                app.blobs()
-                    .read_thumbnail(&file.file_hash.0)
-                    .ok()
-                    .flatten()
-                    .and_then(|bytes| spatial_descriptor(&bytes))
-            })
+            .or_insert_with(|| spatial_descriptor_for_file(app, file))
             .clone()
     };
     let comparison = spatial_comparison(&descriptor(left, cache)?, &descriptor(right, cache)?);
     spatially_consistent(comparison).then_some(comparison.difference_basis_points)
+}
+
+fn spatial_descriptor_for_file(app: &Application, file: &StoredFile) -> Option<SpatialDescriptor> {
+    if let Some(bytes) = app.blobs().read_thumbnail(&file.file_hash.0).ok().flatten() {
+        return spatial_descriptor(&bytes);
+    }
+
+    // Collection members intentionally keep only the cover thumbnail. Decode
+    // an original only after pHash has qualified the file for spatial
+    // verification, and cache this reduced descriptor for the rest of a scan.
+    let extension = mime_to_extension(&file.mime_type);
+    let path = app
+        .blobs()
+        .original_path_with_ext(&file.file_hash.0, Some(extension))
+        .ok()?;
+    let mut source =
+        PreparedMediaSource::from_stored_metadata(path, &file.mime_type, None, file.frame_count);
+    let (bytes, _) = source
+        .render_inline_thumbnail_bytes(DEFAULT_THUMBNAIL_DIMENSIONS)
+        .ok()?;
+    spatial_descriptor(&bytes)
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -2343,6 +2359,68 @@ mod tests {
 
         assert_eq!(result.candidate_count, 1);
         assert_eq!((candidates[0].file_id_a, candidates[0].file_id_b), (11, 12));
+    }
+
+    #[test]
+    fn scan_verifies_collection_members_from_originals_without_thumbnails() {
+        let directory = tempfile::tempdir().unwrap();
+        let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
+        let perceptual_hash = ImageHash::<Vec<u8>>::from_bytes(&[0_u8; 64])
+            .unwrap()
+            .to_base64();
+        let hashes = [
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        ];
+        let original = encoded_png(&image::DynamicImage::ImageRgb8(
+            image::ImageBuffer::from_pixel(64, 64, image::Rgb([80, 120, 160])),
+        ));
+        for hash in hashes {
+            app.blobs()
+                .write_original(hash, &original, Some("png"))
+                .unwrap();
+        }
+        app.store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO library_item
+                         (item_id, item_key, kind, cover_media_item_id, created_at, updated_at)
+                     VALUES (1, 'member-a', 'media', NULL, 'now', 'now'),
+                            (2, 'member-b', 'media', NULL, 'now', 'now'),
+                            (101, 'collection-a', 'collection', 1, 'now', 'now'),
+                            (102, 'collection-b', 'collection', 2, 'now', 'now')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle)
+                     VALUES (101, 'active'), (102, 'active')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO media_file
+                         (file_id, file_hash, mime_type, size_bytes, pixel_width,
+                          pixel_height, perceptual_hash, created_at)
+                     VALUES (11, ?1, 'image/png', ?3, 64, 64, ?4, 'now'),
+                            (12, ?2, 'image/png', ?3, 64, 64, ?4, 'now')",
+                    params![hashes[0], hashes[1], original.len() as i64, perceptual_hash],
+                )?;
+                transaction.execute(
+                    "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
+                     VALUES (1, 11, 'now', 'now'), (2, 12, 'now', 'now')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
+                     VALUES (101, 1, 1024), (102, 2, 1024)",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(app.blobs().read_thumbnail(hashes[0]).unwrap().is_none());
+        assert!(app.blobs().read_thumbnail(hashes[1]).unwrap().is_none());
+        assert_eq!(scan(&app, 0).unwrap().candidate_count, 1);
     }
 
     #[test]
