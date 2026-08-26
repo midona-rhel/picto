@@ -42,11 +42,24 @@
   color: var(--color-text-primary);
   cursor: pointer;
   transition:
-    background 110ms ease,
-    box-shadow 110ms ease,
     color 110ms ease,
-    filter 110ms ease,
     transform 90ms ease;
+}
+
+.action::before {
+  content: '';
+  position: absolute;
+  z-index: -1;
+  top: -10px;
+  bottom: -10px;
+  width: 96px;
+  pointer-events: none;
+  opacity: 0;
+  filter: blur(9px);
+  transform: scale(0.88);
+  transition:
+    opacity 130ms ease,
+    transform 150ms var(--ease-default);
 }
 
 .action:disabled {
@@ -62,35 +75,54 @@
 .accept:hover:not(:disabled),
 .accept:focus-visible,
 .accept.chosen {
-  background: linear-gradient(180deg, rgba(66, 218, 124, 0.27), rgba(40, 174, 92, 0.14));
-  box-shadow: inset 0 1px 0 rgba(196, 255, 218, 0.14);
+  color: rgba(226, 255, 237, 0.98);
 }
 
 .accept {
   border-radius: 999px 0 0 999px;
 }
 
+.accept::before {
+  left: -12px;
+  background: radial-gradient(
+    ellipse at 38% 50%,
+    rgba(54, 220, 119, 0.68) 0%,
+    rgba(40, 190, 100, 0.30) 42%,
+    rgba(32, 164, 84, 0.11) 63%,
+    transparent 79%
+  );
+}
+
 .reject {
   border-radius: 0 999px 999px 0;
+}
+
+.reject::before {
+  right: -12px;
+  background: radial-gradient(
+    ellipse at 62% 50%,
+    rgba(255, 75, 84, 0.66) 0%,
+    rgba(226, 56, 67, 0.30) 42%,
+    rgba(190, 42, 53, 0.11) 63%,
+    transparent 79%
+  );
 }
 
 .reject:hover:not(:disabled),
 .reject:focus-visible,
 .reject.chosen {
-  background: linear-gradient(180deg, rgba(255, 91, 98, 0.27), rgba(200, 52, 60, 0.14));
-  box-shadow: inset 0 1px 0 rgba(255, 205, 207, 0.13);
+  color: rgba(255, 230, 231, 0.98);
 }
 
-.accept.chosen {
-  background: linear-gradient(180deg, rgba(68, 222, 128, 0.46), rgba(40, 174, 92, 0.30));
-  box-shadow: inset 0 1px 0 rgba(196, 255, 218, 0.25);
-  filter: drop-shadow(0 0 13px rgba(53, 201, 111, 0.48));
+.action:hover:not(:disabled)::before,
+.action:focus-visible::before {
+  opacity: 0.64;
+  transform: scale(1);
 }
 
-.reject.chosen {
-  background: linear-gradient(180deg, rgba(255, 91, 98, 0.46), rgba(200, 52, 60, 0.30));
-  box-shadow: inset 0 1px 0 rgba(255, 205, 207, 0.24);
-  filter: drop-shadow(0 0 13px rgba(237, 79, 85, 0.48));
+.action.chosen::before {
+  opacity: 1;
+  transform: scale(1.08);
 }
 
 .action:active:not(:disabled) {
@@ -131,6 +163,10 @@
 @media (prefers-reduced-motion: reduce) {
   .pill {
     animation: none;
+    transition-duration: 1ms;
+  }
+
+  .action::before {
     transition-duration: 1ms;
   }
 }

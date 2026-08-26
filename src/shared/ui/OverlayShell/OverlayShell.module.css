@@ -135,6 +135,12 @@
   opacity: 0.6;
 }
 
+.searchIcon:global(.tabler-icon) :is(path, rect, circle, line, polyline),
+.pinBtn > svg:global(.tabler-icon) :is(path, rect, circle, line, polyline),
+.viewTab > svg:global(.tabler-icon) :is(path, rect, circle, line, polyline) {
+  stroke-width: 1.25;
+}
+
 .searchInput {
   flex: 1;
   background: none;
