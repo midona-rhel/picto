@@ -120,4 +120,18 @@ describe('SidebarRow', () => {
     fireEvent.keyDown(screen.getByRole('button', { name: 'Subscriptions' }), { key: 'Enter' });
     expect(onClick).toHaveBeenCalledOnce();
   });
+
+  it('replaces the count with an accessible activity indicator', () => {
+    render(
+      <SidebarRow
+        label="Subscriptions"
+        count={12}
+        activityLabel="Subscription running"
+        onClick={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByLabelText('Subscription running')).toBeInTheDocument();
+    expect(screen.queryByText('12')).not.toBeInTheDocument();
+  });
 });

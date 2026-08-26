@@ -14,7 +14,7 @@ import {
   IconPhoto, IconInbox, IconTrash,
   IconClock, IconBookmark,
   IconArrowsShuffle,
-  IconFilter, IconLayoutGrid, IconRefresh, IconX,
+  IconLayoutGrid, IconRefresh, IconX,
   IconStar, IconStarOff,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
@@ -45,6 +45,7 @@ import { buildExportContextEntry } from '../grid/gridContextMenu';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
 import { IconPicker } from '../../shared/ui/IconPicker';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
+import { ToolbarFilterIcon } from '../../shared/ui/icons/toolbar-icons';
 import { useInlineRename } from '../../shared/hooks/useInlineRename';
 import { usePersistedSet } from '../../shared/hooks/usePersistedSet';
 import type { SidebarNodeDto, SmartFolderCommandPayload, SmartFolderPredicate } from '../../shared/types/canonical';
@@ -67,6 +68,7 @@ import {
 import styles from './Sidebar.module.css';
 import { filesController } from '../../controllers/filesController';
 import { showErrorNotification } from '../../shared/lib/notifications';
+import { subscriptionsWorkspaceSnapshotAtom } from '../../state/subscriptionsWorkspace';
 
 const IC = 19;
 const FILL = { stroke: 1.2, fill: 'currentColor', fillOpacity: 0.15 } as const;
@@ -231,6 +233,8 @@ export function Sidebar() {
   const setSmartFolderModal = useSetAtom(smartFolderModalAtom);
   const setFolderPortal = useSetAtom(folderPickerPortalAtom);
   const setTagPortal = useSetAtom(tagSelectPortalAtom);
+  const subscriptionsSnapshot = useAtomValue(subscriptionsWorkspaceSnapshotAtom);
+  const subscriptionsRunning = (subscriptionsSnapshot?.runningSubscriptionIds.length ?? 0) > 0;
 
   const [collapsed, toggleCollapse] = usePersistedSet('picto-sidebar-collapsed');
   const [treeFilter, setTreeFilter] = useState('');
@@ -673,7 +677,7 @@ export function Sidebar() {
       { separator: true },
       { submenu: true, label: 'Change Icon', icon: <IconChangeIcon size={14} />, children: [
         { custom: true, key: 'folder-icon', render: () => (
-          <IconPicker value={node.icon ?? null} onChange={(icon) => { void foldersController.applyIcon(folderId, icon); }} />
+          <IconPicker compact value={node.icon ?? null} onChange={(icon) => { void foldersController.applyIcon(folderId, icon); }} />
         ) },
       ] },
       { custom: true, key: 'folder-color', render: () => (
@@ -787,7 +791,7 @@ export function Sidebar() {
       { separator: true },
       { submenu: true, label: 'Change Icon', icon: <IconChangeIcon size={14} />, children: [
         { custom: true, key: 'sf-icon', render: () => (
-          <IconPicker value={node.icon ?? null} onChange={(icon) => {
+          <IconPicker compact value={node.icon ?? null} onChange={(icon) => {
             if (sfIdNum != null) {
               void smartFoldersController.update(sfIdNum, { ...currentPayload, icon });
             }
@@ -1180,6 +1184,9 @@ export function Sidebar() {
               icon={ScopeIcon ? <ScopeIcon size={IC} {...FILL} /> : undefined}
               label={LABEL_OVERRIDES[node.id] ?? node.name}
               count={sidebarPreferences.showCounts ? node.count : undefined}
+              activityLabel={node.id === 'system:subscriptions' && subscriptionsRunning
+                ? 'Subscription running'
+                : undefined}
               active={activeNodeId === node.id}
               onClick={() => { if (node.selectable) { setSidebarSelection(new Set()); navigate(node.id); } }}
               onContextMenu={(event) => openSystemMenu(event, node)}
@@ -1356,7 +1363,7 @@ export function Sidebar() {
 
       {(sidebarPreferences.showFolders || sidebarPreferences.showSmartFolders) && <div className={styles.treeFilter} data-help-id="sidebar-filter">
         <div className={styles.treeFilterField}>
-          <IconFilter className={styles.treeFilterIcon} size={16} aria-hidden="true" />
+          <ToolbarFilterIcon className={styles.treeFilterIcon} size={16} />
           <input
             className={`${styles.treeFilterInput}${treeFilter ? ` ${styles.treeFilterInputWithClear}` : ''}`}
             value={treeFilter}

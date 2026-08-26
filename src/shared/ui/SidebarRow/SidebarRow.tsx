@@ -92,6 +92,7 @@ interface RowProps {
   icon?: ReactNode;
   label?: string;
   count?: number | null;
+  activityLabel?: string;
   active?: boolean;
   selected?: boolean;
   dropTarget?: boolean;
@@ -125,6 +126,7 @@ function StandardRow({
   icon,
   label,
   count,
+  activityLabel,
   active,
   selected,
   dropTarget,
@@ -161,6 +163,7 @@ function StandardRow({
 
   const showGuides = useAtomValue(showTreeGuidesAtom);
   const hasVisibleCount = count != null && count > 0;
+  const hasTrailingStatus = hasVisibleCount || activityLabel != null;
 
   const rowIndent = indent * INDENT_PX;
   const rowStyle = {
@@ -254,10 +257,14 @@ function StandardRow({
           <span className={`${styles.triangle} ${expanded ? styles.expanded : styles.collapsed}`} />
         </div>
       )}
-      <div className={`${styles.rowContent} ${hasVisibleCount ? styles.rowContentWithCount : ''}`}>
+      <div className={`${styles.rowContent} ${hasTrailingStatus ? styles.rowContentWithCount : ''}`}>
         {icon && <span className={styles.icon}>{icon}</span>}
         {children ?? (label != null && <span className={styles.label}>{label}</span>)}
-        {hasVisibleCount && (
+        {activityLabel ? (
+          <span className={styles.activitySlot} aria-label={activityLabel}>
+            <span className={styles.activityDot} aria-hidden="true" />
+          </span>
+        ) : hasVisibleCount && (
           <span className={styles.count}>
             {count.toLocaleString()}
           </span>

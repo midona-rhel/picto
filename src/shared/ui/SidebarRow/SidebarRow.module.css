@@ -196,6 +196,45 @@
   justify-content: flex-end;
 }
 
+.activitySlot {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: flex-end;
+  min-width: 36px;
+  height: var(--sidebar-row-height);
+  padding: 0 7px;
+}
+
+.activityDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  box-shadow: 0 0 3px var(--color-primary-30);
+  animation: subscriptionActivityPulse 2.4s ease-in-out infinite;
+}
+
+@keyframes subscriptionActivityPulse {
+  0%, 100% {
+    opacity: 0.65;
+    box-shadow: 0 0 3px var(--color-primary-30);
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 9px var(--color-primary-60);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activityDot {
+    animation: none;
+    opacity: 0.85;
+  }
+}
+
 
 /* Section header */
 .section {
