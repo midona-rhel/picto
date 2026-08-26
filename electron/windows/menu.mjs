@@ -114,7 +114,8 @@ export function createMenuManager({
             click: async () => {
               const result = await dialog.showOpenDialog({
                 title: 'Open Library',
-                properties: ['openDirectory'],
+                // macOS exposes package directories such as .library as files.
+                properties: ['openFile', 'openDirectory'],
                 message: 'Select a .library folder',
               });
               if (!result.canceled && result.filePaths.length > 0) {

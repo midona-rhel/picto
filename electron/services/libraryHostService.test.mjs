@@ -30,6 +30,7 @@ test('library image metadata is persisted and broadcast to every window', async 
     imageFocusX: 320,
     imageFocusY: 610,
     imageZoomPercent: 145,
+    cloudLibraryId: 'cloud-library-id',
     icon: null,
   });
 
@@ -37,11 +38,44 @@ test('library image metadata is persisted and broadcast to every window', async 
   expect(saved.libraryMeta['/Pictures/Test.library'].imageFocusX).toBe(320);
   expect(saved.libraryMeta['/Pictures/Test.library'].imageFocusY).toBe(610);
   expect(saved.libraryMeta['/Pictures/Test.library'].imageZoomPercent).toBe(145);
+  expect(saved.libraryMeta['/Pictures/Test.library'].cloudLibraryId).toBe('cloud-library-id');
   expect(saved.libraryMeta['/Pictures/Test.library'].icon).toBeNull();
   expect(events).toEqual([[
     'library-meta-changed',
     { path: '/Pictures/Test.library' },
   ]]);
+});
+
+test('open dialog accepts a macOS library package as well as a directory', async () => {
+  const openDialogCalls = [];
+  const opened = [];
+  const service = createLibraryHostService({
+    fs: {},
+    path,
+    dialog: {
+      showOpenDialog: async (options) => {
+        openDialogCalls.push(options);
+        return { canceled: false, filePaths: ['/Pictures/Main.library'] };
+      },
+    },
+    openLibrary: async (libraryPath) => opened.push(libraryPath),
+    closeLibrary: async () => {},
+    addLibraryToHistory: async () => {},
+    removeLibraryFromHistory: async () => {},
+    togglePinned: async () => {},
+    getCachedConfig: () => ({}),
+    saveGlobalConfig: async () => {},
+    updateLibraryPath: async () => {},
+    getCurrentLibraryRoot: () => null,
+    setCurrentLibraryRoot: () => {},
+    createMainWindow: () => {},
+    sendToAllWindows: () => {},
+    buildAppMenu: () => {},
+  });
+
+  await expect(service.openLibraryDialog()).resolves.toBe('/Pictures/Main.library');
+  expect(openDialogCalls[0].properties).toEqual(['openFile', 'openDirectory']);
+  expect(opened).toEqual(['/Pictures/Main.library']);
 });
 
 test('opening a library installs standard Windows folder icon metadata', async () => {

@@ -47,6 +47,7 @@ interface LibraryConfigResult {
     imageFocusX?: number | null;
     imageFocusY?: number | null;
     imageZoomPercent?: number | null;
+    cloudLibraryId?: string | null;
   }>;
   currentPath: string | null;
   existsMap: Record<string, boolean>;
@@ -252,8 +253,21 @@ export function LibraryManager() {
       imageFocusX: config.libraryMeta?.[path]?.imageFocusX ?? null,
       imageFocusY: config.libraryMeta?.[path]?.imageFocusY ?? null,
       imageZoomPercent: config.libraryMeta?.[path]?.imageZoomPercent ?? null,
+      cloudLibraryId: config.libraryMeta?.[path]?.cloudLibraryId ?? null,
     }));
   }, [config]);
+
+  const addedCloudLibraries = useMemo(() => {
+    const added = new Map<string, string>();
+    for (const entry of localEntries) {
+      if (entry.cloudLibraryId) added.set(entry.cloudLibraryId, entry.name);
+    }
+    const current = localEntries.find((entry) => entry.current);
+    if (current && cloudConfiguration?.library_id) {
+      added.set(cloudConfiguration.library_id, current.name);
+    }
+    return added;
+  }, [cloudConfiguration?.library_id, localEntries]);
 
   const selectedEntry = useMemo(
     () => localEntries.find((entry) => entry.path === selectedPath) ?? null,
@@ -546,25 +560,36 @@ export function LibraryManager() {
           <main className={styles.detailPane}>
             {showCloudOpen ? (
               <div className={styles.createPane}>
-                <span className={styles.heroIcon}><IconFolderOpen size={26} /></span>
+                <span className={styles.heroIcon}><IconCloud size={26} /></span>
                 <div className={styles.heroTitle}>Open a cloud library</div>
                 <p className={styles.heroDescription}>Choose a verified Picto library found in an installed desktop sync folder.</p>
                 {cloudLibraries.length > 0 ? (
                   <div className={styles.cloudLibraryList}>
-                    {cloudLibraries.map((library) => (
-                      <button
-                        key={`${library.root.path}:${library.library_id}`}
-                        type="button"
-                        className={selectedCloudLibrary === library ? styles.cloudLibrarySelected : styles.cloudLibraryRow}
-                        onClick={() => {
-                          setSelectedCloudLibrary(library);
-                          if (!cloudName) setCloudName(library.name);
-                        }}
-                      >
-                        <span>{library.name}</span>
-                        <span className={styles.rowPath}>{library.root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'} · {library.root.account_label}</span>
-                      </button>
-                    ))}
+                    {cloudLibraries.map((library) => {
+                      const addedTo = addedCloudLibraries.get(library.library_id);
+                      const unavailable = Boolean(addedTo);
+                      return (
+                        <button
+                          key={`${library.root.path}:${library.library_id}`}
+                          type="button"
+                          className={selectedCloudLibrary === library ? styles.cloudLibrarySelected : styles.cloudLibraryRow}
+                          onClick={() => {
+                            if (unavailable) return;
+                            setSelectedCloudLibrary(library);
+                            setCloudName(library.name);
+                          }}
+                          aria-disabled={unavailable}
+                          title={unavailable ? `Already added · synced to ${addedTo}` : `Open ${library.name}`}
+                        >
+                          <span>{library.name}</span>
+                          <span className={styles.rowPath}>
+                            {unavailable
+                              ? `Already added · synced to ${addedTo}`
+                              : `${library.root.provider === 'google_drive' ? 'Google Drive' : 'Dropbox'} · ${library.root.account_label}`}
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 ) : (
                   <p className={styles.cardDescription}>No Picto recovery snapshots were found in the installed cloud folders.</p>

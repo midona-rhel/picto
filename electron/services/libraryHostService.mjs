@@ -389,6 +389,7 @@ export function createLibraryHostService({
       setCurrentLibraryRoot(targetRoot);
       openingLibraryPath = null;
       await addLibraryToHistory(targetRoot);
+      await setLibraryMeta(targetRoot, { cloudLibraryId: libraryId });
       buildAppMenu();
       sendToAllWindows('library-switched', { path: targetRoot });
       return result;
@@ -406,7 +407,8 @@ export function createLibraryHostService({
   async function openLibraryDialog() {
     const result = await dialog.showOpenDialog({
       title: 'Open Library',
-      properties: ['openDirectory'],
+      // macOS exposes package directories such as .library as files.
+      properties: ['openFile', 'openDirectory'],
       message: 'Select a .library folder',
     });
     if (result.canceled || result.filePaths.length === 0) return null;
@@ -591,6 +593,7 @@ export function createLibraryHostService({
     if ('imageFocusX' in meta) existing.imageFocusX = meta.imageFocusX;
     if ('imageFocusY' in meta) existing.imageFocusY = meta.imageFocusY;
     if ('imageZoomPercent' in meta) existing.imageZoomPercent = meta.imageZoomPercent;
+    if ('cloudLibraryId' in meta) existing.cloudLibraryId = meta.cloudLibraryId;
     config.libraryMeta[libraryPath] = existing;
     await saveGlobalConfig(config);
     sendToAllWindows('library-meta-changed', { path: libraryPath });

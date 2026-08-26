@@ -256,6 +256,11 @@
 }
 
 .cloudLibraryRow:hover { background: var(--color-surface-hover); }
+.cloudLibraryRow[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+.cloudLibraryRow[aria-disabled='true']:hover { background: var(--color-control-surface); }
 .cloudLibrarySelected { composes: cloudLibraryRow; border-color: var(--color-primary-60); background: var(--color-surface-active); }
 
 .cardTitle { margin-bottom: 12px; color: var(--color-text-primary); font-size: var(--font-size-md); font-weight: var(--font-weight-bold); }

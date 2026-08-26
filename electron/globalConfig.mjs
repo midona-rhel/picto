@@ -76,6 +76,10 @@ export async function updateLibraryPath(oldPath, newPath) {
   if (config.lastLibrary === oldPath) config.lastLibrary = newPath;
   const pinIdx = config.pinnedLibraries.indexOf(oldPath);
   if (pinIdx >= 0) config.pinnedLibraries[pinIdx] = newPath;
+  if (config.libraryMeta?.[oldPath]) {
+    config.libraryMeta[newPath] = config.libraryMeta[oldPath];
+    delete config.libraryMeta[oldPath];
+  }
   await saveGlobalConfig(config);
 }
 
