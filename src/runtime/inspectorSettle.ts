@@ -9,6 +9,7 @@ import {
   liveInspectorTargetAtom,
 } from '../state/inspector';
 import { libraryInvalidation } from './libraryInvalidation';
+import { permanentDeletesInFlightAtom } from '../state/mutationActivity';
 
 const store = getDefaultStore();
 
@@ -18,6 +19,9 @@ export function startInspectorSettle(): () => void {
 
   const unregisterInvalidation = libraryInvalidation.register('library', (payload) => {
     if (cancelled) return;
+    // The delete command settles viewer/selection state after IPC success. Its
+    // invalidation can arrive first, while the deleted item is still displayed.
+    if (store.get(permanentDeletesInFlightAtom) > 0) return;
     const itemId = store.get(displayedInspectorItemDetailsAtom)?.item_id ?? lastItemId;
     if (payload?.item_ids.length && !payload.item_ids.includes(itemId ?? -1)) return;
     if (itemId != null) void loadInspectorData(itemId);

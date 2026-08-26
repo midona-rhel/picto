@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getDefaultStore } from 'jotai';
 import { gridSelectionAtom } from '../state/selection';
+import { permanentDeletesInFlightAtom } from '../state/mutationActivity';
+import { quickLookSessionAtom, viewerSessionAtom } from '../state/viewer';
 
 const { loadInspectorDataMock, setItemLifecycleMock } = vi.hoisted(() => ({
   loadInspectorDataMock: vi.fn(),
@@ -43,6 +45,9 @@ describe('setTargetLifecycle', () => {
       folderNodeIds: new Set<string>(),
       anchor: { kind: 'item', id: 4 },
     });
+    store.set(permanentDeletesInFlightAtom, 0);
+    store.set(viewerSessionAtom, null);
+    store.set(quickLookSessionAtom, null);
   });
 
   it('clears selection after moving the selected target to Trash', async () => {
@@ -80,6 +85,27 @@ describe('setTargetLifecycle', () => {
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set());
   });
 
+  it('suppresses stale detail refreshes and closes viewers for the deleted root', async () => {
+    const { deleteItems } = await import('../platform/entityApi');
+    let finishDelete!: () => void;
+    vi.mocked(deleteItems).mockReturnValueOnce(new Promise<void>((resolve) => {
+      finishDelete = resolve;
+    }) as never);
+    store.set(viewerSessionAtom, { currentIndex: 0, currentItemId: 4 });
+    store.set(quickLookSessionAtom, { currentIndex: 0, currentItemId: 4 });
+
+    const deletion = permanentlyDeleteTarget({ kind: 'explicit', item_ids: [4] });
+    expect(store.get(permanentDeletesInFlightAtom)).toBe(1);
+    expect(store.get(viewerSessionAtom)?.currentItemId).toBe(4);
+
+    finishDelete();
+    await deletion;
+
+    expect(store.get(permanentDeletesInFlightAtom)).toBe(0);
+    expect(store.get(viewerSessionAtom)).toBeNull();
+    expect(store.get(quickLookSessionAtom)).toBeNull();
+  });
+
   it('preserves selection when permanent deletion fails', async () => {
     const { deleteItems } = await import('../platform/entityApi');
     vi.mocked(deleteItems).mockRejectedValueOnce(new Error('delete failed'));
@@ -88,6 +114,7 @@ describe('setTargetLifecycle', () => {
       { kind: 'explicit', item_ids: [4, 7] },
     )).rejects.toThrow('delete failed');
     expect(store.get(gridSelectionAtom).itemIds).toEqual(new Set([4, 7]));
+    expect(store.get(permanentDeletesInFlightAtom)).toBe(0);
   });
 
   it('exposes one settlement owner for successful relocation mutations', () => {

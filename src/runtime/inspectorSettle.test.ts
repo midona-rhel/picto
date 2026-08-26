@@ -9,6 +9,7 @@ import { gridSessionAtom } from '../state/grid';
 import { activeNodeIdAtom, displayedSurfaceNodeIdAtom } from '../state/navigation';
 import { emptyGridSelection, gridSelectionAtom } from '../state/selection';
 import { viewerSessionAtom } from '../state/viewer';
+import { permanentDeletesInFlightAtom } from '../state/mutationActivity';
 
 const { callbacks } = vi.hoisted(() => ({ callbacks: new Map<string, () => void>() }));
 vi.mock('./libraryInvalidation', () => ({
@@ -36,6 +37,7 @@ describe('inspector invalidation', () => {
     store.set(inspectorPinnedAtom, false);
     store.set(gridSelectionAtom, emptyGridSelection());
     store.set(viewerSessionAtom, null);
+    store.set(permanentDeletesInFlightAtom, 0);
     store.set(gridSessionAtom, { ...store.get(gridSessionAtom), active: false });
   });
 
@@ -46,6 +48,17 @@ describe('inspector invalidation', () => {
     callbacks.get('library')?.();
 
     expect(loadInspectorData).toHaveBeenCalledWith(17);
+    stop();
+  });
+
+  it('does not reload an item while its permanent deletion is settling', () => {
+    store.set(displayedInspectorItemDetailsAtom, { item_id: 17 } as never);
+    store.set(permanentDeletesInFlightAtom, 1);
+    const stop = startInspectorSettle();
+
+    callbacks.get('library')?.();
+
+    expect(loadInspectorData).not.toHaveBeenCalled();
     stop();
   });
 

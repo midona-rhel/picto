@@ -22,6 +22,8 @@ import type { ItemTarget } from '../shared/types/generated/application/ItemTarge
 import type { Lifecycle } from '../shared/types/generated/application/Lifecycle';
 import type { SelectionSummary } from '../shared/types/generated/application/SelectionSummary';
 import { clearSelectionAtom } from '../state/selection';
+import { permanentDeletesInFlightAtom } from '../state/mutationActivity';
+import { quickLookSessionAtom, viewerSessionAtom } from '../state/viewer';
 import { announceUndoableMutation } from '../runtime/historyRuntime';
 
 const store = getDefaultStore();
@@ -93,8 +95,21 @@ export async function setTargetLifecycle(target: ItemTarget, lifecycle: Lifecycl
 }
 
 export async function permanentlyDeleteTarget(target: ItemTarget): Promise<void> {
-  await deleteItems(target);
-  settleSelectionAfterMutation();
+  store.set(permanentDeletesInFlightAtom, (count) => count + 1);
+  try {
+    await deleteItems(target);
+
+    if (target.kind === 'explicit') {
+      const deletedIds = new Set(target.item_ids);
+      const viewer = store.get(viewerSessionAtom);
+      const quickLook = store.get(quickLookSessionAtom);
+      if (viewer && deletedIds.has(viewer.currentItemId)) store.set(viewerSessionAtom, null);
+      if (quickLook && deletedIds.has(quickLook.currentItemId)) store.set(quickLookSessionAtom, null);
+    }
+    settleSelectionAfterMutation();
+  } finally {
+    store.set(permanentDeletesInFlightAtom, (count) => Math.max(0, count - 1));
+  }
 }
 
 export async function updateTargetFolderMembership(
