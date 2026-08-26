@@ -123,42 +123,45 @@
   padding: 12px 0;
 }
 
-/* Keep the context picker compact for Picto's 115 curated icons plus the
- * default tile. Cancel the menu wrapper's horizontal inset so the 6px inner
- * padding produces the same visual edge inset on every side. */
-:global([aria-label="Context submenu"]) .root {
+/* Shared compact picker: Picto's 115 curated icons plus the default tile. */
+.compact {
   box-sizing: border-box;
   width: 252px;
   height: 300px;
-  margin-inline: -6px;
   overflow: hidden;
   padding: 6px;
 }
 
-:global([aria-label="Context submenu"]) .searchRow {
+.compact .searchRow {
   display: none;
 }
 
-:global([aria-label="Context submenu"]) .grid {
+.compact .grid {
   grid-template-columns: repeat(10, 24px);
   gap: 0;
   max-height: none;
   overflow: visible;
 }
 
-:global([aria-label="Context submenu"]) .iconBtn,
-:global([aria-label="Context submenu"]) .defaultIconBtn {
+.compact .iconBtn,
+.compact .defaultIconBtn {
   width: 24px;
   height: 24px;
   border-radius: var(--radius-md);
 }
 
-:global([aria-label="Context submenu"]) .defaultIconBtn {
+.compact .defaultIconBtn {
   display: flex;
 }
 
-:global([aria-label="Context submenu"]) .iconBtn svg,
-:global([aria-label="Context submenu"]) .defaultIconBtn svg {
+.compact .iconBtn svg,
+.compact .defaultIconBtn svg {
   width: 20px;
   height: 20px;
+}
+
+/* Context-menu items already provide 6px horizontal inset. Cancel it so the
+ * picker's own 6px inset stays visually equal on all four sides. */
+:global([aria-label="Context submenu"]) .compact {
+  margin-inline: -6px;
 }

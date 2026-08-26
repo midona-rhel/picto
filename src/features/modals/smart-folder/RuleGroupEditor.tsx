@@ -4,10 +4,8 @@
  */
 
 import { useCallback } from 'react';
-import { IconTrash } from '@tabler/icons-react';
 import { modalStyles } from '../../../shared/ui/GlassModal';
 import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
-import { ToggleSwitch } from '../../../shared/ui/ToggleSwitch/ToggleSwitch';
 import type {
   SmartFolderPredicateGroup,
   SmartFolderPredicateRule,
@@ -15,11 +13,13 @@ import type {
 import { RuleEditor } from './RuleEditor';
 import { defaultOperator } from './fieldConfig';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
+import styles from '../SmartFolderModal.module.css';
 
 export interface RuleGroupEditorProps {
   group: SmartFolderPredicateGroup;
   onChange: (group: SmartFolderPredicateGroup) => void;
   onRemove: () => void;
+  onAdd: () => void;
   canRemove: boolean;
 }
 
@@ -32,14 +32,14 @@ function makeDefaultRule(): SmartFolderPredicateRule {
   return { field: 'tags', op: defaultOperator('tags'), values: [] };
 }
 
-export function RuleGroupEditor({ group, onChange, onRemove, canRemove }: RuleGroupEditorProps) {
+export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove }: RuleGroupEditorProps) {
   const handleMatchModeChange = useCallback(
     (value: string) => onChange({ ...group, match_mode: value as 'all' | 'any' }),
     [group, onChange],
   );
 
-  const handleNegateToggle = useCallback(
-    () => onChange({ ...group, negate: !group.negate }),
+  const handleNegateChange = useCallback(
+    (value: string) => onChange({ ...group, negate: value === 'exclude' }),
     [group, onChange],
   );
 
@@ -68,14 +68,10 @@ export function RuleGroupEditor({ group, onChange, onRemove, canRemove }: RuleGr
     [group, onChange],
   );
 
-  const containerClass = group.negate
-    ? `${modalStyles.group} ${modalStyles.groupNegated}`
-    : modalStyles.group;
-
   return (
-    <div className={containerClass}>
+    <div className={styles.condition}>
       {/* Header row: sentence-style match mode + negate + remove */}
-      <div className={modalStyles.row}>
+      <div className={styles.conditionHeader}>
         <span className={modalStyles.inlineLabel}>Match</span>
         <CmSelect
           value={group.match_mode}
@@ -84,23 +80,35 @@ export function RuleGroupEditor({ group, onChange, onRemove, canRemove }: RuleGr
           width={72}
         />
         <span className={modalStyles.inlineLabel}>of the following</span>
-        <div style={{ flex: 1 }} />
-        <span className={modalStyles.inlineLabel}>Negate</span>
-        <ToggleSwitch on={!!group.negate} onChange={handleNegateToggle} />
-        {canRemove && (
+        <CmSelect
+          value={group.negate ? 'exclude' : 'include'}
+          options={[{ value: 'include', label: 'included' }, { value: 'exclude', label: 'excluded' }]}
+          onChange={handleNegateChange}
+          width={92}
+        />
+        <div className={styles.conditionActions}>
           <KbdTooltip label="Remove group"><button
-            className={`${modalStyles.actionBtn} ${modalStyles.actionBtnDanger}`}
+            className={styles.conditionButton}
             onClick={onRemove}
             type="button"
             aria-label="Remove group"
+            disabled={!canRemove}
           >
-            <IconTrash size={14} />
+            <span className={styles.conditionGlyph} aria-hidden="true" />
           </button></KbdTooltip>
-        )}
+          <KbdTooltip label="Add group"><button
+            className={styles.conditionButton}
+            onClick={onAdd}
+            type="button"
+            aria-label="Add group"
+          >
+            <span className={`${styles.conditionGlyph} ${styles.conditionGlyphPlus}`} aria-hidden="true" />
+          </button></KbdTooltip>
+        </div>
       </div>
 
       {/* Rule list */}
-      <div className={modalStyles.stackSm}>
+      <div className={styles.rules}>
         {group.rules.map((rule, index) => (
           <RuleEditor
             key={index}

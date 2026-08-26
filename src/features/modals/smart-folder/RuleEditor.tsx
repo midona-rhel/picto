@@ -5,7 +5,6 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
-import { IconPlus, IconMinus } from '@tabler/icons-react';
 import { modalStyles } from '../../../shared/ui/GlassModal';
 import { GlassInput } from '../../../shared/ui/GlassInput';
 import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
@@ -22,6 +21,7 @@ import {
   isListField,
   FILESIZE_UNITS,
 } from './fieldConfig';
+import styles from '../SmartFolderModal.module.css';
 
 // ── Tag input with chips + autocomplete ──
 
@@ -323,7 +323,7 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove }: RuleE
   const showValue = !['is_empty', 'is_not_empty'].includes(rule.op);
 
   return (
-    <div className={modalStyles.row} style={{ flexWrap: 'wrap', gap: 4 }}>
+    <div className={styles.rule}>
       <CmSelect
         value={rule.field}
         options={getFieldOptions()}
@@ -337,28 +337,27 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove }: RuleE
         width={120}
       />
       {showValue && (
-        <div style={{ flex: 1, minWidth: 100 }}>
+        <div className={styles.ruleValue}>
           {renderValueInput()}
         </div>
       )}
+      <KbdTooltip label="Remove rule"><button
+        className={styles.conditionButton}
+        onClick={onRemove}
+        type="button"
+        aria-label="Remove rule"
+        disabled={!canRemove}
+      >
+        <span className={styles.conditionGlyph} aria-hidden="true" />
+      </button></KbdTooltip>
       <KbdTooltip label="Add rule"><button
-        className={modalStyles.actionBtn}
+        className={styles.conditionButton}
         onClick={onAdd}
         type="button"
         aria-label="Add rule"
       >
-        <IconPlus size={14} />
+        <span className={`${styles.conditionGlyph} ${styles.conditionGlyphPlus}`} aria-hidden="true" />
       </button></KbdTooltip>
-      {canRemove && (
-        <KbdTooltip label="Remove rule"><button
-          className={`${modalStyles.actionBtn} ${modalStyles.actionBtnDanger}`}
-          onClick={onRemove}
-          type="button"
-          aria-label="Remove rule"
-        >
-          <IconMinus size={14} />
-        </button></KbdTooltip>
-      )}
     </div>
   );
 }

@@ -22,11 +22,12 @@ export interface GlassModalProps {
   flush?: boolean;
   footer?: ReactNode;
   children: ReactNode;
+  panelClassName?: string;
 }
 
 const EXIT_MS = 120;
 
-export function GlassModal({ open, onClose, title, size = 'md', flush = false, footer, children }: GlassModalProps) {
+export function GlassModal({ open, onClose, title, size = 'md', flush = false, footer, children, panelClassName }: GlassModalProps) {
   const titleId = useId();
   const [visible, setVisible] = useState(false);
   const [closing, setClosing] = useState(false);
@@ -81,7 +82,7 @@ export function GlassModal({ open, onClose, title, size = 'md', flush = false, f
     >
       <div
         ref={panelRef}
-        className={`${styles.panel} ${sizeClass} ${closing ? styles.panelClosing : ''}`}
+        className={`${styles.panel} ${sizeClass} ${panelClassName ?? ''} ${closing ? styles.panelClosing : ''}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}

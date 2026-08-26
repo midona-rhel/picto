@@ -85,7 +85,7 @@ IconPersonFemale.displayName = 'IconPersonFemale';
 /** Folder with a + badge in the bottom-right corner (rounded square around the +).
  *  Folder's bottom and right strokes are shortened to avoid intersecting the badge. */
 export const IconFolderNewSelection = forwardRef<IconRef, IconExtraProps>(
-  ({ size = 24, stroke: strokeWidth = 2, color = 'currentColor', className, ...rest }, ref) => (
+  ({ size = 24, stroke: strokeWidth = 1.5, color = 'currentColor', className, ...rest }, ref) => (
     <svg ref={ref} xmlns="http://www.w3.org/2000/svg" width={size} height={size}
       viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth}
       strokeLinecap="round" strokeLinejoin="round" className={className} {...rest}>

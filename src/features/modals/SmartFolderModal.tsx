@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { IconPlus, IconFolder } from '@tabler/icons-react';
+import { IconChevronDown, IconFolder } from '@tabler/icons-react';
 import { GlassModal, modalStyles } from '../../shared/ui/GlassModal';
 import { GlassInput, GlassTextarea } from '../../shared/ui/GlassInput';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
@@ -22,18 +22,22 @@ import type {
 } from '../../shared/types/canonical';
 import { RuleGroupEditor } from './smart-folder/RuleGroupEditor';
 import { getFieldDef, defaultOperator, defaultValue, isListField, FIELD_DEFS } from './smart-folder/fieldConfig';
+import styles from './SmartFolderModal.module.css';
 
 // ── Icon picker popover — compact button that opens a floating dropdown ──
 
 function IconPickerPopover({ value, onChange }: { value: string | null; onChange: (v: string | null) => void }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
-  const [pos, setPos] = useState({ top: 0, left: 0, width: 280 });
+  const [pos, setPos] = useState({ top: 0, left: 0 });
 
   const handleOpen = () => {
     if (btnRef.current) {
       const rect = btnRef.current.getBoundingClientRect();
-      setPos({ top: rect.bottom + 4, left: rect.left, width: Math.max(280, rect.width) });
+      setPos({
+        top: Math.max(4, Math.min(rect.bottom + 4, window.innerHeight - 312)),
+        left: Math.max(4, Math.min(rect.left, window.innerWidth - 264)),
+      });
     }
     setOpen(!open);
   };
@@ -43,35 +47,19 @@ function IconPickerPopover({ value, onChange }: { value: string | null; onChange
       <button
         ref={btnRef}
         type="button"
+        aria-label="Change icon"
         onClick={handleOpen}
-        style={{
-          display: 'flex', alignItems: 'center', gap: 6,
-          height: 32, padding: '0 10px',
-          border: '1px solid var(--color-border-primary)',
-          borderRadius: 'var(--radius-sm)',
-          background: 'var(--color-control-surface)',
-          color: 'var(--color-text-primary)',
-          fontSize: 'var(--font-size-md)',
-          cursor: 'pointer', width: '100%',
-        }}
+        className={styles.iconTrigger}
       >
         {value ? <DynamicIcon name={value} size={16} /> : <IconFolder size={16} stroke={1.2} />}
-        <span style={{ flex: 1, textAlign: 'left' }}>{value ?? 'Default'}</span>
+        <span className={styles.iconTriggerLabel}>{value ?? 'Default'}</span>
+        <IconChevronDown className={styles.iconTriggerChevron} size={14} />
       </button>
       {open && createPortal(
         <>
-          <div style={{ position: 'fixed', inset: 0, zIndex: 9998 }} onClick={() => setOpen(false)} />
-          <div style={{
-            position: 'fixed', top: pos.top, left: pos.left,
-            width: pos.width, maxHeight: 300, overflowY: 'auto', scrollbarGutter: 'stable',
-            zIndex: 9999,
-            background: 'var(--glass-bg)', backdropFilter: 'var(--glass-blur)',
-            border: '1px solid var(--color-border-secondary)',
-            borderRadius: 'var(--radius-md)',
-            boxShadow: 'var(--shadow-panel)',
-            padding: 8,
-          }}>
-            <IconPicker value={value} onChange={(v) => { onChange(v); setOpen(false); }} />
+          <div className={styles.pickerBackdrop} onPointerDown={() => setOpen(false)} />
+          <div className={styles.pickerPopover} style={{ top: pos.top, left: pos.left }}>
+            <IconPicker compact value={value} onChange={(v) => { onChange(v); setOpen(false); }} />
           </div>
         </>,
         document.body,
@@ -270,9 +258,9 @@ export function SmartFolderModal({
       onClose={handleClose}
       title={mode === 'create' ? 'New Smart Folder' : 'Edit Smart Folder'}
       size="lg"
+      panelClassName={styles.modal}
       footer={(
         <>
-          <button className={modalStyles.btn} onClick={handleClose} type="button">Cancel</button>
           <button
             data-modal-primary="true"
             className={`${modalStyles.btn} ${modalStyles.btnPrimary}`}
@@ -280,15 +268,16 @@ export function SmartFolderModal({
             disabled={!name.trim()}
             type="button"
           >
-            {mode === 'create' ? 'Create' : 'Save'}
+            {mode === 'create' ? 'Create' : 'Save Changes'}
           </button>
+          <button className={modalStyles.btn} onClick={handleClose} type="button">Cancel</button>
         </>
       )}
     >
-      <div className={modalStyles.stack}>
+      <div className={styles.form}>
         {/* Name */}
-        <div className={modalStyles.field}>
-          <label className={modalStyles.fieldLabel}>Name</label>
+        <div className={styles.section}>
+          <label className={styles.label}>Name</label>
           <GlassInput
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -297,21 +286,22 @@ export function SmartFolderModal({
           />
         </div>
 
-        {/* Icon + Color */}
-        <div className={modalStyles.grid2}>
-          <div className={modalStyles.field}>
-            <label className={modalStyles.fieldLabel}>Icon</label>
-            <IconPickerPopover value={icon} onChange={setIcon} />
-          </div>
-          <div className={modalStyles.field}>
-            <label className={modalStyles.fieldLabel}>Color</label>
-            <ColorPicker value={color} onChange={setColor} />
+        <div className={styles.section}>
+          <div className={styles.appearanceGrid}>
+            <div className={styles.compactField}>
+              <label className={styles.label}>Icon</label>
+              <IconPickerPopover value={icon} onChange={setIcon} />
+            </div>
+            <div className={styles.compactField}>
+              <label className={styles.label}>Color</label>
+              <ColorPicker value={color} onChange={setColor} />
+            </div>
           </div>
         </div>
 
         {/* Notes */}
-        <div className={modalStyles.field}>
-          <label className={modalStyles.fieldLabel}>Notes</label>
+        <div className={styles.section}>
+          <label className={styles.label}>Notes</label>
           <GlassTextarea
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
@@ -320,29 +310,16 @@ export function SmartFolderModal({
           />
         </div>
 
-        <div className={modalStyles.separator} />
-
         {/* Rules */}
-        <div className={modalStyles.section}>
-          <div className={modalStyles.rowSpread}>
-            <span className={modalStyles.sectionLabel}>Rules</span>
-            <button
-              className={modalStyles.btn}
-              onClick={handleGroupAdd}
-              type="button"
-              style={{ gap: 4 }}
-            >
-              <IconPlus size={14} />
-              Add Group
-            </button>
-          </div>
-          <div className={modalStyles.stackSm}>
+        <div className={styles.section}>
+          <div className={styles.conditions}>
             {predicate.groups.map((group, index) => (
               <RuleGroupEditor
                 key={index}
                 group={group}
                 onChange={(next) => handleGroupChange(index, next)}
                 onRemove={() => handleGroupRemove(index)}
+                onAdd={handleGroupAdd}
                 canRemove={predicate.groups.length > 1}
               />
             ))}

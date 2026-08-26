@@ -14,9 +14,17 @@ const ICON_SIZE = 19;
 interface IconPickerProps {
   value: string | null;
   onChange: (icon: string | null) => void;
+  /** Compact 10-column presentation used by Picto's icon-selection surfaces. */
+  compact?: boolean;
+  defaultLabel?: string;
 }
 
-export function IconPicker({ value, onChange }: IconPickerProps) {
+export function IconPicker({
+  value,
+  onChange,
+  compact = false,
+  defaultLabel = 'Use default folder icon',
+}: IconPickerProps) {
   const [local, setLocal] = useState(value);
   const [search, setSearch] = useState('');
 
@@ -34,7 +42,11 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
   };
 
   return (
-    <div className={styles.root} onClick={(e) => e.stopPropagation()}>
+    <div
+      className={`${styles.root} ${compact ? styles.compact : ''}`}
+      data-icon-picker-presentation={compact ? 'compact' : 'searchable'}
+      onClick={(e) => e.stopPropagation()}
+    >
       <div className={styles.searchRow}>
         <input
           type="text"
@@ -57,9 +69,9 @@ export function IconPicker({ value, onChange }: IconPickerProps) {
       </div>
 
       <div className={styles.grid}>
-        <KbdTooltip label="Use default folder icon">
+        <KbdTooltip label={defaultLabel}>
           <button
-            aria-label="Use default folder icon"
+            aria-label={defaultLabel}
             onClick={() => handleSelect(null)}
             className={`${styles.defaultIconBtn} ${!local ? styles.iconSelected : ''}`}
           >

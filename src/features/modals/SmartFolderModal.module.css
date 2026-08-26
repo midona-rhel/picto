@@ -1,0 +1,228 @@
+.modal {
+  width: 600px;
+  max-height: 80vh;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+}
+
+.section {
+  padding-bottom: 16px;
+}
+
+.section + .section {
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.label {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  font-weight: var(--font-weight-regular);
+  line-height: 20px;
+}
+
+.appearanceGrid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.compactField {
+  min-width: 0;
+}
+
+.iconTrigger {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  gap: 8px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-control-surface);
+  color: var(--color-text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.iconTrigger:hover {
+  background: var(--color-surface-hover);
+}
+
+.iconTriggerLabel {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.iconTriggerChevron {
+  flex: none;
+  color: var(--color-text-tertiary);
+}
+
+.pickerBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+}
+
+.pickerPopover {
+  position: fixed;
+  z-index: 9999;
+  box-sizing: border-box;
+  width: 260px;
+  height: 308px;
+  padding: 4px;
+  overflow: hidden;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-top: var(--glass-border-top);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+}
+
+.conditions {
+  display: flex;
+  flex-direction: column;
+}
+
+.condition {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  margin-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--color-bg-app) 70%, black 30%);
+}
+
+.condition:first-child {
+  padding-top: 0;
+  margin-top: 0;
+  border-top: 0;
+}
+
+.conditionHeader {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+}
+
+.conditionActions {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  padding-right: 7px;
+}
+
+.rules {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-left: 24px;
+}
+
+.rule {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+}
+
+.ruleValue {
+  min-width: 100px;
+  flex: 1;
+}
+
+.rule input {
+  height: 26px;
+  min-height: 26px;
+}
+
+.rule :global(.smartfolder-tag-input) {
+  min-height: 26px !important;
+  padding-block: 0 !important;
+}
+
+.conditionButton {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--color-text-primary) 15%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: background-color 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.conditionButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-text-primary) 10%, transparent);
+  border-color: color-mix(in srgb, var(--color-text-primary) 20%, transparent);
+}
+
+.conditionButton:active:not(:disabled) {
+  background: color-mix(in srgb, var(--color-text-primary) 15%, transparent);
+}
+
+.conditionButton:focus-visible {
+  outline: 1px solid var(--color-text-primary);
+  outline-offset: 1px;
+}
+
+.conditionButton:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.conditionGlyph {
+  position: relative;
+  display: block;
+  width: 9px;
+  height: 1px;
+  border-radius: 1px;
+  background: currentColor;
+}
+
+.conditionGlyphPlus::after {
+  position: absolute;
+  top: -4px;
+  left: 4px;
+  width: 1px;
+  height: 9px;
+  border-radius: 1px;
+  background: currentColor;
+  content: '';
+}
+
+@media (max-width: 680px) {
+  .modal {
+    width: calc(100vw - 32px);
+  }
+
+  .appearanceGrid {
+    grid-template-columns: 1fr;
+  }
+}
