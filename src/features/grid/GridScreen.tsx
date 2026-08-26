@@ -93,6 +93,7 @@ import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
 import { addQuickAccess, removeQuickAccess, reorderQuickAccess, useQuickAccess } from '../sidebar/quickAccessPreferences';
 import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
+import { reverseImageSearch } from '../../platform/shellApi';
 import {
   availableBulkFolderMoveTargets,
   availableFolderMoveTargets,
@@ -400,6 +401,7 @@ export function GridScreen({
         .map((itemId: number) => curItems.find((i: any) => i.item_id === itemId))
         .filter(Boolean)
         .map((i: any) => ({
+          item_id: i.item_id,
           hash: i.display_file_hash,
           name: i.name,
           mime: i.display_mime_type,
@@ -440,20 +442,48 @@ export function GridScreen({
   const setAiTaggerPortalRef = useRef(setAiTaggerPortal);
   setAiTaggerPortalRef.current = setAiTaggerPortal;
 
+  const afterViewerItemReady = useCallback((
+    item: CanonicalEntityGridItem,
+    open: () => void,
+  ) => {
+    if (item.kind !== 'collection') {
+      open();
+      return;
+    }
+    void viewerController.prefetchItemDetails(item.item_id)
+      .then((details) => {
+        if (details.kind !== 'collection') throw new Error('The selected item is no longer a group.');
+        open();
+      })
+      .catch((reason) => showErrorNotification({
+        title: 'Could not open group',
+        message: reason instanceof Error ? reason.message : String(reason),
+      }));
+  }, []);
+
   const openGridItem = useCallback((
     item: CanonicalEntityGridItem,
     sourceItems: CanonicalEntityGridItem[],
     mode: 'reader' | 'editor' = 'reader',
   ) => {
-    setGroupInitialMode(item.kind === 'collection' ? mode : 'reader');
-    setQuickLookSession(null);
-    setViewerSession(createViewerSession(sourceItems, item.item_id));
-  }, [setQuickLookSession, setViewerSession]);
+    afterViewerItemReady(item, () => {
+      setGroupInitialMode(item.kind === 'collection' ? mode : 'reader');
+      setQuickLookSession(null);
+      setViewerSession(createViewerSession(sourceItems, item.item_id));
+    });
+  }, [afterViewerItemReady, setQuickLookSession, setViewerSession]);
 
-  const openGridItemInWindow = useCallback((item: CanonicalEntityGridItem) => {
-    if (item.kind === 'collection' || !item.display_file_hash) return;
+  const openGridItemInWindow = useCallback((
+    item: CanonicalEntityGridItem,
+    selectedItemIds: number[] = [item.item_id],
+  ) => {
+    if (item.kind === 'collection') {
+      void windowController.openDetailWindow({ item_id: item.item_id });
+      return;
+    }
+    if (!item.display_file_hash) return;
     const label = `detail-${item.display_file_hash.slice(0, 12)}`;
-    detailWindowSelectionRef.current.set(label, [item.item_id]);
+    detailWindowSelectionRef.current.set(label, selectedItemIds);
     void windowController.openDetailWindow({
       hash: item.display_file_hash,
       width: item.pixel_width ?? null,
@@ -567,7 +597,11 @@ export function GridScreen({
         }
         e.preventDefault();
         if (quickLookSessionRef.current) setQuickLookSession(null);
-        else if (singleItemId != null) setQuickLookSession(createViewerSession(curItems, singleItemId));
+        else if (singleItemId != null && singleItem) {
+          afterViewerItemReady(singleItem, () => {
+            setQuickLookSession(createViewerSession(curItems, singleItemId));
+          });
+        }
         return;
       }
 
@@ -577,20 +611,12 @@ export function GridScreen({
       if (matchesShortcutDef(e, defs.revealInFolder) && singleFileHash && singleItem?.kind !== 'collection') {
         e.preventDefault(); void filesController.revealHashInFolder(singleFileHash); return;
       }
-      if (matchesShortcutDef(e, defs.openNewWindow) && count > 0 && singleItem?.kind !== 'collection') {
+      if (matchesShortcutDef(e, defs.openNewWindow) && count > 0) {
         e.preventDefault();
-        // Use first selected hash as the window identity
         const selectedArr = [...itemIds];
         const item = singleItem ?? curItems.find((candidate) => candidate.item_id === selectedArr[0]);
         if (!item) return;
-        const primaryHash = item.display_file_hash;
-        const label = `detail-${primaryHash.slice(0, 12)}`;
-        detailWindowSelectionRef.current.set(label, selectedArr);
-        void windowController.openDetailWindow({
-          hash: primaryHash,
-          width: item?.pixel_width ?? null,
-          height: item?.pixel_height ?? null,
-        });
+        openGridItemInWindow(item, selectedArr);
         return;
       }
 
@@ -672,11 +698,15 @@ export function GridScreen({
     if (!quickLookSession) return;
     const next = navigateViewerSession(quickLookSession, items, delta);
     if (!next) return;
-    setQuickLookSession(next);
-    dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
-    const index = items.findIndex((item) => item.item_id === next.currentItemId);
-    if (index >= 0) scrollToItem(index, 'center');
-  }, [dispatchSelection, items, quickLookSession, scrollToItem, setQuickLookSession]);
+    const nextItem = items.find((item) => item.item_id === next.currentItemId);
+    if (!nextItem) return;
+    afterViewerItemReady(nextItem, () => {
+      setQuickLookSession(next);
+      dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
+      const index = items.findIndex((item) => item.item_id === next.currentItemId);
+      if (index >= 0) scrollToItem(index, 'center');
+    });
+  }, [afterViewerItemReady, dispatchSelection, items, quickLookSession, scrollToItem, setQuickLookSession]);
 
   const closeQuickLook = useCallback((exitItemId?: number) => {
     setQuickLookSession(null);
@@ -698,11 +728,15 @@ export function GridScreen({
       }
       return;
     }
-    pendingDetailNavigationRef.current = null;
-    setGroupInitialMode('reader');
-    setViewerSession(next);
-    dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
-  }, [cursor, dispatchSelection, items, setViewerSession, viewerSession]);
+    const nextItem = items.find((item) => item.item_id === next.currentItemId);
+    if (!nextItem) return;
+    afterViewerItemReady(nextItem, () => {
+      pendingDetailNavigationRef.current = null;
+      setGroupInitialMode('reader');
+      setViewerSession(next);
+      dispatchSelection({ type: 'replace_items', itemIds: new Set([next.currentItemId]), anchor: next.currentItemId });
+    });
+  }, [afterViewerItemReady, cursor, dispatchSelection, items, setViewerSession, viewerSession]);
 
   useEffect(() => {
     const anchorItemId = pendingDetailNavigationRef.current;
@@ -712,15 +746,19 @@ export function GridScreen({
       if (!cursor) pendingDetailNavigationRef.current = null;
       return;
     }
-    pendingDetailNavigationRef.current = null;
-    setGroupInitialMode('reader');
-    setViewerSession(loadedNext);
-    dispatchSelection({
-      type: 'replace_items',
-      itemIds: new Set([loadedNext.currentItemId]),
-      anchor: loadedNext.currentItemId,
+    const nextItem = items.find((item) => item.item_id === loadedNext.currentItemId);
+    if (!nextItem) return;
+    afterViewerItemReady(nextItem, () => {
+      pendingDetailNavigationRef.current = null;
+      setGroupInitialMode('reader');
+      setViewerSession(loadedNext);
+      dispatchSelection({
+        type: 'replace_items',
+        itemIds: new Set([loadedNext.currentItemId]),
+        anchor: loadedNext.currentItemId,
+      });
     });
-  }, [cursor, dispatchSelection, items, setViewerSession, viewerSession]);
+  }, [afterViewerItemReady, cursor, dispatchSelection, items, setViewerSession, viewerSession]);
 
   const closeRootDetail = useCallback((exitItemId?: number) => {
     pendingDetailNavigationRef.current = null;
@@ -747,17 +785,21 @@ export function GridScreen({
       return;
     }
 
-    if (inboxReviewModeRef.current === 'quicklook') setQuickLookSession(next);
-    else {
-      setGroupInitialMode('reader');
-      setViewerSession(next);
-    }
-    dispatchSelection({
-      type: 'replace_items',
-      itemIds: new Set([next.currentItemId]),
-      anchor: next.currentItemId,
+    const nextItem = itemsRef.current.find((item) => item.item_id === next.currentItemId);
+    if (!nextItem) return;
+    afterViewerItemReady(nextItem, () => {
+      if (inboxReviewModeRef.current === 'quicklook') setQuickLookSession(next);
+      else {
+        setGroupInitialMode('reader');
+        setViewerSession(next);
+      }
+      dispatchSelection({
+        type: 'replace_items',
+        itemIds: new Set([next.currentItemId]),
+        anchor: next.currentItemId,
+      });
     });
-  }, [closeQuickLook, closeRootDetail, dispatchSelection, setQuickLookSession, setViewerSession]);
+  }, [afterViewerItemReady, closeQuickLook, closeRootDetail, dispatchSelection, setQuickLookSession, setViewerSession]);
 
   const openEmptyGridContextMenu = useCallback(async (pos: { x: number; y: number }) => {
     const canImport = gridScope.kind !== 'trash'
@@ -1072,6 +1114,7 @@ export function GridScreen({
               key: 'folder-icon',
               render: () => (
                 <IconPicker
+                  compact
                   value={folder.icon ?? null}
                   onChange={(icon) => { void foldersController.applyIcon(folderId, icon); }}
                 />
@@ -1291,17 +1334,9 @@ export function GridScreen({
             onSelectAll: () => selectAllResults(),
             onDeselectAll: () => clearSelection(),
             onOpen: singleItem ? () => openGridItem(singleItem, items) : undefined,
-            onOpenNewWindow: (hash) => {
-              const it = items.find((i) => i.display_file_hash === hash);
-              const selectedArr = [...effectiveItemIds];
-              const label = `detail-${hash.slice(0, 12)}`;
-              detailWindowSelectionRef.current.set(label, selectedArr);
-              void windowController.openDetailWindow({
-                hash,
-                width: it?.pixel_width ?? null,
-                height: it?.pixel_height ?? null,
-              });
-            },
+            onOpenNewWindow: singleItem
+              ? () => openGridItemInWindow(singleItem, [...effectiveItemIds])
+              : undefined,
             onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
             openWithOptions,
             openWithPending,
@@ -1393,6 +1428,7 @@ export function GridScreen({
             },
             hasClipboardTags: !!((window as any).__pictoClipboardTags as string[] | undefined)?.length,
             onAddToFolder: () => { setFolderPickerModal({ open: true }); },
+            lastUsedFolderName: lastUsedFolder?.name ?? null,
             onAddToLastUsedFolder: effectiveTarget && lastUsedFolder ? () => {
               const folderId = Number.parseInt(lastUsedFolder.id.slice('folder:'.length), 10);
               if (Number.isNaN(folderId)) return;
@@ -1408,6 +1444,7 @@ export function GridScreen({
                 const name = 'New Folder';
                 const nodeId = await foldersController.create(name);
                 if (!nodeId) return;
+                setPendingSidebarRenameNodeId(nodeId);
                 const folderId = parseInt(nodeId.replace('folder:', ''), 10);
                 if (isNaN(folderId)) return;
                 await entityMutations.updateTargetFolderMembership(effectiveTarget, folderId, 'add');
@@ -1415,16 +1452,10 @@ export function GridScreen({
               })();
             } : undefined,
             onSearchByImage: (engine, hash) => {
-              const urls: Record<string, string> = {
-                tineye: `https://tineye.com/search/?url=`,
-                saucenao: `https://saucenao.com/search.php?url=`,
-                yandex: `https://yandex.com/images/search?rpt=imageview&url=`,
-                bing: `https://www.bing.com/images/search?view=detailv2&iss=sbi&form=SBIVSP&sbisrc=UrlPaste&q=imgurl:`,
-              };
-              // Use the thumbnail URL as the search source
-              const thumbUrl = `media://localhost/thumb/${hash}.jpg`;
-              const url = urls[engine];
-              if (url) void (window as any).picto?.shell?.openExternal(url + encodeURIComponent(thumbUrl));
+              void reverseImageSearch(hash, engine).catch((reason) => showErrorNotification({
+                title: 'Reverse image search failed',
+                message: reason instanceof Error ? reason.message : String(reason),
+              }));
             },
             onSetRating: (rating) => {
               if (effectiveTarget) void entityMutations.setTargetRating(effectiveTarget, rating);
