@@ -133,4 +133,31 @@ describe('media protocol helpers', () => {
     }
   });
 
+  it('does not serve a stale thumbnail when the original blob is missing', async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), 'picto-stale-thumb-'));
+    const hash = 'd'.repeat(64);
+    let handler;
+    const commands = [];
+    try {
+      const thumbnailDirectory = path.join(root, 'blobs', 't', 'dd', 'dd');
+      await fs.mkdir(thumbnailDirectory, { recursive: true });
+      await fs.writeFile(path.join(thumbnailDirectory, `${hash}.jpg`), 'stale thumbnail');
+      const service = createMediaProtocolService({
+        protocol: { handle(_scheme, next) { handler = next; } },
+        path,
+        invoke: async (command) => { commands.push(command); },
+        isDev: true,
+        getCurrentLibraryRoot: () => root,
+      });
+      await service.registerMediaProtocol();
+
+      const response = await handler(new Request(`media://localhost/thumb/${hash}.jpg`));
+
+      expect(response.status).toBe(404);
+      expect(commands).toEqual([]);
+    } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
 });

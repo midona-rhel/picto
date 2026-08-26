@@ -302,11 +302,14 @@ export function createMediaProtocolService({
         });
       }
 
-      let meta = parsed.kind === 'thumb'
-        ? await resolveThumbMeta(parsed.hash)
+      const original = parsed.kind === 'thumb'
+        ? await resolveOriginalMeta(parsed.hash, 'bin')
+        : null;
+      const meta = parsed.kind === 'thumb'
+        ? (original ? await resolveThumbMeta(parsed.hash) : null)
         : await resolveOriginalMeta(parsed.hash, parsed.ext);
 
-      if (!meta && parsed.kind === 'thumb') {
+      if (!meta && parsed.kind === 'thumb' && original) {
         scheduleThumbnailAfterMiss(parsed.hash);
       }
 
