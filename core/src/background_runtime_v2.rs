@@ -158,7 +158,7 @@ async fn drain_claimed_batch<B: BlobSource>(
                             _ => false,
                         });
                     if publishes_derivative {
-                        let (_, file_hash) = if let Some(file_id) = item.file_id {
+                        let (item_ids, file_hash) = if let Some(file_id) = item.file_id {
                             if let Some(affected) = affected_files.get(&file_id) {
                                 affected.clone()
                             } else {
@@ -169,6 +169,7 @@ async fn drain_claimed_batch<B: BlobSource>(
                         } else {
                             affected_targets(store, &item)?
                         };
+                        affected_item_ids.extend(item_ids);
                         if let Some(file_hash) = file_hash {
                             match item.kind {
                                 WorkKind::Thumbnail => {
@@ -414,7 +415,7 @@ mod tests {
                 transaction.execute(
                     "INSERT INTO media_file
                      (file_id, file_hash, mime_type, size_bytes, created_at)
-                     VALUES (7, 'hash-7', 'image/png', 1, ?1)",
+                     VALUES (7, '7777777777777777777777777777777777777777777777777777777777777777', 'image/png', 1, ?1)",
                     [NOW],
                 )?;
                 transaction.execute(
@@ -490,6 +491,23 @@ mod tests {
         let image =
             DynamicImage::ImageRgb8(RgbImage::from_pixel(128, 128, image::Rgb([24, 96, 180])));
         image.save(&original).unwrap();
+        let thumbnail = std::fs::read(&original).unwrap();
+        application
+            .blobs()
+            .write_thumbnail(
+                "7777777777777777777777777777777777777777777777777777777777777777",
+                &thumbnail,
+                "png",
+            )
+            .unwrap();
+        application
+            .blobs()
+            .write_thumbnail(
+                "8888888888888888888888888888888888888888888888888888888888888888",
+                &thumbnail,
+                "png",
+            )
+            .unwrap();
         let existing_hash =
             crate::media_processing::compute_phash_base64_from_image(&image).unwrap();
         application
@@ -498,7 +516,7 @@ mod tests {
                 transaction.execute(
                     "INSERT INTO media_file
                          (file_id, file_hash, mime_type, size_bytes, perceptual_hash, created_at)
-                     VALUES (8, 'hash-8', 'image/png', 1, ?1, ?2)",
+                     VALUES (8, '8888888888888888888888888888888888888888888888888888888888888888', 'image/png', 1, ?1, ?2)",
                     rusqlite::params![existing_hash, NOW],
                 )?;
                 transaction.execute(
@@ -541,9 +559,15 @@ mod tests {
         assert_eq!(result.claimed, 3);
         assert_eq!(result.succeeded, 3);
         assert_eq!(result.retried, 0);
-        assert_eq!(result.thumbnail_file_hashes, ["hash-7"]);
+        assert_eq!(
+            result.thumbnail_file_hashes,
+            ["7777777777777777777777777777777777777777777777777777777777777777"]
+        );
         assert_eq!(result.dominant_color_changes.len(), 1);
-        assert_eq!(result.dominant_color_changes[0].file_hash, "hash-7");
+        assert_eq!(
+            result.dominant_color_changes[0].file_hash,
+            "7777777777777777777777777777777777777777777777777777777777777777"
+        );
         assert!(result.dominant_color_changes[0]
             .dominant_color_hex
             .is_some());
@@ -620,7 +644,10 @@ mod tests {
     #[tokio::test]
     async fn stale_blob_delete_cannot_remove_a_referenced_file() {
         let (_directory, application, blobs) = fixture();
-        enqueue(application.store(), WorkSpec::blob("hash-7"));
+        enqueue(
+            application.store(),
+            WorkSpec::blob("7777777777777777777777777777777777777777777777777777777777777777"),
+        );
         let deleted = blobs.deleted.clone();
 
         let result = drain_claimed_batch(&application, &blobs, 1).await.unwrap();
