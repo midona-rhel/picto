@@ -587,6 +587,7 @@ const DISTINCT_COLOR_DELTA: f32 = 8.0;
 const STRONG_COLOR_DELTA: f32 = 16.0;
 const MAX_ALIGNMENT_SHIFT: isize = 3;
 const ALIGNMENT_SAMPLE_STEP: usize = 3;
+const DIFFERENCE_TILE_SIDE: usize = 8;
 
 fn parse_supported_hash(raw: &str) -> Option<ImageHash<Vec<u8>>> {
     let hash = ImageHash::<Vec<u8>>::from_base64(raw).ok()?;
@@ -831,10 +832,30 @@ fn spatial_comparison_at_side(
     }
 
     let total = deltas.len().max(1);
-    let distinct = deltas
+    let distinct_mask = deltas
         .iter()
-        .filter(|delta| **delta >= DISTINCT_COLOR_DELTA)
-        .count();
+        .map(|delta| *delta >= DISTINCT_COLOR_DELTA)
+        .collect::<Vec<_>>();
+    let distinct = distinct_mask.iter().filter(|changed| **changed).count();
+    let mut pooled_difference = 0.0_f32;
+    let mut tile_count = 0usize;
+    for tile_y in (0..height).step_by(DIFFERENCE_TILE_SIDE) {
+        for tile_x in (0..width).step_by(DIFFERENCE_TILE_SIDE) {
+            let end_y = (tile_y + DIFFERENCE_TILE_SIDE).min(height);
+            let end_x = (tile_x + DIFFERENCE_TILE_SIDE).min(width);
+            let mut changed = 0usize;
+            let mut pixels = 0usize;
+            for y in tile_y..end_y {
+                for x in tile_x..end_x {
+                    changed += usize::from(distinct_mask[y * width + x]);
+                    pixels += 1;
+                }
+            }
+            pooled_difference += (changed as f32 / pixels as f32).powi(3);
+            tile_count += 1;
+        }
+    }
+    let pooled_difference = (pooled_difference / tile_count.max(1) as f32).cbrt();
     debug_assert_eq!(deltas.len(), width * height);
     let mut visited = vec![false; deltas.len()];
     let mut largest_region = 0usize;
@@ -868,9 +889,9 @@ fn spatial_comparison_at_side(
     }
 
     SpatialComparison {
-        // The displayed difference is the area of the perceptually distinct
-        // mask, not accumulated sub-visible encoder noise.
-        difference_basis_points: ((distinct as f32 / total as f32) * 10_000.0).round() as u32,
+        // Cubic spatial pooling keeps a localized edit visible without giving
+        // sub-threshold encoder noise any weight.
+        difference_basis_points: (pooled_difference * 10_000.0).round() as u32,
         distinct_fraction: distinct as f32 / total as f32,
         coherent_fraction: largest_region as f32 / total as f32,
     }
