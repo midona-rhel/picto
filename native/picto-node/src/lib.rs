@@ -29,6 +29,10 @@ extern "C" {
         application_path: *const std::ffi::c_char,
         file_path: *const std::ffi::c_char,
     ) -> bool;
+    fn picto_set_file_icon(
+        icon_path: *const std::ffi::c_char,
+        file_path: *const std::ffi::c_char,
+    ) -> bool;
 }
 
 /// Put physical files on the operating-system clipboard.
@@ -152,6 +156,23 @@ pub fn open_with_application(application_path: String, file_path: String) -> Res
         Err(Error::from_reason(
             "Application selection is not supported on this platform yet",
         ))
+    }
+}
+
+/// Apply a persistent custom Finder icon to a file or package on macOS.
+#[napi]
+pub fn set_file_icon(icon_path: String, file_path: String) -> Result<bool> {
+    #[cfg(target_os = "macos")]
+    {
+        let icon = CString::new(icon_path).map_err(|_| Error::from_reason("Invalid icon path"))?;
+        let file = CString::new(file_path).map_err(|_| Error::from_reason("Invalid file path"))?;
+        return Ok(unsafe { picto_set_file_icon(icon.as_ptr(), file.as_ptr()) });
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (icon_path, file_path);
+        Ok(false)
     }
 }
 

@@ -1,6 +1,9 @@
 fn main() {
     napi_build::setup();
 
+    println!("cargo:rerun-if-changed=src/drag_mac.m");
+    println!("cargo:rerun-if-changed=src/open_with_mac.m");
+
     #[cfg(target_os = "macos")]
     {
         cc::Build::new()

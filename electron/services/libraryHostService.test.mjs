@@ -127,6 +127,43 @@ test('opening a library installs standard Windows folder icon metadata', async (
   ]);
 });
 
+test('opening a library applies the persistent macOS package icon', async () => {
+  const icons = [];
+  const libraryPath = '/Pictures/Main.library';
+  const service = createLibraryHostService({
+    fs: {},
+    path,
+    dialog: {},
+    openLibrary: async () => {},
+    closeLibrary: async () => {},
+    addLibraryToHistory: async () => {},
+    removeLibraryFromHistory: async () => {},
+    togglePinned: async () => {},
+    getCachedConfig: () => ({}),
+    saveGlobalConfig: async () => {},
+    updateLibraryPath: async () => {},
+    getCurrentLibraryRoot: () => null,
+    setCurrentLibraryRoot: () => {},
+    createMainWindow: () => {},
+    sendToAllWindows: () => {},
+    buildAppMenu: () => {},
+    platform: 'darwin',
+    resourcesPath: '/Applications/Picto.app/Contents/Resources',
+    isDefaultApp: false,
+    setFileIcon: async (...args) => {
+      icons.push(args);
+      return true;
+    },
+  });
+
+  await service.switchLibrary(libraryPath);
+
+  expect(icons).toEqual([[
+    '/Applications/Picto.app/Contents/Resources/library-icons/library.icns',
+    libraryPath,
+  ]]);
+});
+
 test('guided tour opens an unpersisted isolated library and restores the original', async () => {
   const events = [];
   const calls = [];

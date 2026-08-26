@@ -117,6 +117,10 @@
       {
         "from": "build/library.ico",
         "to": "library-icons/library.ico"
+      },
+      {
+        "from": "build/library.icns",
+        "to": "library-icons/library.icns"
       }
     ],
     "publish": {

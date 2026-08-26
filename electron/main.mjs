@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import fsModule from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { copyFiles, getAssociatedApplications, initRuntime, invoke, invokeSerialized, onNativeEvent, openLibrary, openTutorialLibrary, closeLibrary, openWithApplication, startNativeDrag } from './nativeClient.mjs';
+import { copyFiles, getAssociatedApplications, initRuntime, invoke, invokeSerialized, onNativeEvent, openLibrary, openTutorialLibrary, closeLibrary, openWithApplication, setFileIcon, startNativeDrag } from './nativeClient.mjs';
 import {
   addLibraryToHistory,
   getCachedConfig,
@@ -266,6 +266,7 @@ const libraryHost = createLibraryHostService({
   tutorialFixtureRoot: app.isPackaged
     ? path.join(process.resourcesPath, 'tutorial')
     : path.join(__dirname, '..', 'resources', 'tutorial'),
+  setFileIcon,
 });
 
 const menuManager = createMenuManager({

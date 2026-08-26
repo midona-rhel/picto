@@ -7,6 +7,8 @@
 export declare function copyFiles(filePaths: Array<string>): boolean
 export declare function getAssociatedApplications(filePath: string): Promise<string>
 export declare function openWithApplication(applicationPath: string, filePath: string): void
+/** Apply a persistent custom Finder icon to a file or package on macOS. */
+export declare function setFileIcon(iconPath: string, filePath: string): boolean
 /**
  * Start a native file drag on macOS with a single composite icon.
  * On non-macOS platforms this is a no-op (use Electron's startDrag instead).

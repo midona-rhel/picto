@@ -55,6 +55,10 @@ export function openWithApplication(applicationPath, filePath) {
   return binding.openWithApplication(applicationPath, filePath);
 }
 
+export function setFileIcon(iconPath, filePath) {
+  return binding.setFileIcon(iconPath, filePath);
+}
+
 export function onNativeEvent(handler) {
   if (typeof binding.registerEventCallback !== 'function') {
     throw new Error('Native addon missing registerEventCallback');

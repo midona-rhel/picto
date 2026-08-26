@@ -71,6 +71,8 @@ assert(libraryAssociation?.icon === 'library.icns', 'Picto library packages must
 assert(libraryAssociation?.isPackage === true && libraryAssociation?.rank === 'Owner', 'Picto libraries must register as owned macOS document packages');
 const windowsLibraryIcon = packageManifest.build.extraResources.find((resource) => resource.to === 'library-icons/library.ico');
 assert(windowsLibraryIcon?.from === 'build/library.ico', 'Windows packages must include the custom library folder icon');
+const macLibraryIcon = packageManifest.build.extraResources.find((resource) => resource.to === 'library-icons/library.icns');
+assert(macLibraryIcon?.from === 'build/library.icns', 'macOS packages must include the custom library package icon');
 assert(packageManifest.build.win.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Windows packages must target x64 only');
 assert(packageManifest.build.linux.target.every((target) => target.arch?.length === 1 && target.arch[0] === 'x64'), 'Linux packages must target x64 only');
 assert(packageManifest.build.files.includes('dist/licenses/**/*'), 'packaged files must include generated license notices');

@@ -83,3 +83,16 @@ bool picto_open_with_application(const char *application_path, const char *file_
         return true;
     }
 }
+
+bool picto_set_file_icon(const char *icon_path, const char *file_path) {
+    @autoreleasepool {
+        if (icon_path == NULL || file_path == NULL) return false;
+        NSString *iconPath = [NSString stringWithUTF8String:icon_path];
+        NSString *filePath = [NSString stringWithUTF8String:file_path];
+        NSImage *icon = [[NSImage alloc] initWithContentsOfFile:iconPath];
+        if (icon == nil) return false;
+        return [NSWorkspace.sharedWorkspace setIcon:icon
+                                            forFile:filePath
+                                            options:0];
+    }
+}

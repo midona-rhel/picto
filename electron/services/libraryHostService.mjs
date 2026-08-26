@@ -25,9 +25,10 @@ export function createLibraryHostService({
   tutorialRoot,
   tutorialFixtureRoot,
   platform = process.platform,
-  resourcesPath = process.resourcesPath,
-  isDefaultApp = process.defaultApp === true,
+  resourcesPath = process.resourcesPath ?? process.cwd(),
+  isDefaultApp = process.defaultApp === true || !process.resourcesPath,
   runFileAttributeCommand = execFileAsync,
+  setFileIcon = null,
 }) {
   let openingLibraryPath = null;
   let tutorialSession = null;
@@ -56,6 +57,23 @@ export function createLibraryHostService({
   }
 
   async function applyPlatformLibraryIcon(libraryPath) {
+    if (platform === 'darwin') {
+      if (typeof setFileIcon !== 'function') return;
+      const sourceIcon = isDefaultApp
+        ? path.join(process.cwd(), 'build', 'library.icns')
+        : path.join(resourcesPath, 'library-icons', 'library.icns');
+      try {
+        if (!await setFileIcon(sourceIcon, libraryPath)) {
+          throw new Error('Finder rejected the custom library icon');
+        }
+      } catch (error) {
+        console.warn('[library] unable to apply macOS package icon', {
+          libraryPath,
+          message: error?.message ?? String(error),
+        });
+      }
+      return;
+    }
     if (platform !== 'win32') return;
     const sourceIcon = isDefaultApp
       ? path.join(process.cwd(), 'build', 'library.ico')
