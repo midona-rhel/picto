@@ -24,6 +24,7 @@ import {
   startThemeRuntime,
   themeNeedsNativeWindowRestart,
 } from './themeRuntime';
+import { publishPlatform } from '../shared/lib/platform';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -51,7 +52,7 @@ describe('themeRuntime', () => {
   });
 
   it.each(['mac', 'windows', 'linux'] as const)('publishes the %s font platform for CSS resolution', (platform) => {
-    applyTheme('dark', true, platform);
+    publishPlatform(platform);
     expect(document.documentElement.dataset.platform).toBe(platform);
   });
 

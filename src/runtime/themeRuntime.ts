@@ -1,6 +1,9 @@
 import { appController } from '../controllers/appController';
 import { settingsController } from '../controllers/settingsController';
+import { platformFamily, publishPlatform, type PlatformFamily } from '../shared/lib/platform';
 import { registerAppSettingsReload } from './appSettingsSettle';
+
+export type { PlatformFamily } from '../shared/lib/platform';
 
 export type PictoTheme =
   | 'auto'
@@ -14,8 +17,6 @@ export type PictoTheme =
   | 'liquidglass'
   | 'mica'
   | 'acrylic';
-
-export type PlatformFamily = 'mac' | 'windows' | 'linux';
 
 const THEMES = new Set<PictoTheme>([
   'auto', 'light', 'lightgray', 'gray', 'dark', 'blue', 'purple',
@@ -31,13 +32,6 @@ export interface ResolvedTheme {
   colorScheme: 'light' | 'dark';
 }
 
-function currentPlatform(): PlatformFamily {
-  const platform = navigator.platform.toLowerCase();
-  if (platform.includes('mac')) return 'mac';
-  if (platform.includes('win')) return 'windows';
-  return 'linux';
-}
-
 export function normalizeTheme(value: unknown): PictoTheme {
   return typeof value === 'string' && THEMES.has(value as PictoTheme)
     ? value as PictoTheme
@@ -47,7 +41,7 @@ export function normalizeTheme(value: unknown): PictoTheme {
 export function resolveTheme(
   value: unknown,
   osDark: boolean,
-  platform: PlatformFamily = currentPlatform(),
+  platform: PlatformFamily = platformFamily(),
 ): ResolvedTheme {
   const requested = normalizeTheme(value);
   let applied: Exclude<PictoTheme, 'auto'> = requested === 'auto'
@@ -69,11 +63,11 @@ export function resolveTheme(
 export function applyTheme(
   value: unknown,
   osDark = matchMedia('(prefers-color-scheme: dark)').matches,
-  platform: PlatformFamily = currentPlatform(),
+  platform: PlatformFamily = platformFamily(),
 ): ResolvedTheme {
   const resolved = resolveTheme(value, osDark, platform);
   const root = document.documentElement;
-  root.dataset.platform = platform;
+  publishPlatform(platform);
   root.dataset.theme = resolved.applied;
   root.dataset.mantineColorScheme = resolved.colorScheme;
   root.style.colorScheme = resolved.colorScheme;
@@ -100,6 +94,7 @@ export function getRequestedTheme(): PictoTheme {
 
 /** One renderer-local owner; repeated starts replace the previous subscriptions. */
 export function startThemeRuntime(): () => void {
+  publishPlatform();
   stopRuntime?.();
   let disposed = false;
   const cleanups: Array<() => void> = [];

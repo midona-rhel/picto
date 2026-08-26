@@ -16,6 +16,7 @@ import {
   GRID_UI_FONT,
   gridGapForSpacing,
 } from './gridAppearance';
+import { uiFontStack } from '../../shared/lib/platform';
 
 describe('grid spacing', () => {
   it('preserves wide spacing and uses compact spacing in tight mode', () => {
@@ -34,7 +35,7 @@ describe('grid spacing', () => {
   });
 
   it('uses canonical grid typography and vertical metrics', () => {
-    expect(GRID_UI_FONT.startsWith('"SF Pro Text", -apple-system, "Roboto"')).toBe(true);
+    expect(GRID_UI_FONT).toBe(uiFontStack());
     expect(GRID_NAME_FONT).toBe(`400 13px ${GRID_UI_FONT}`);
     expect(GRID_INFO_FONT).toBe(`400 11px ${GRID_UI_FONT}`);
     expect(GRID_BADGE_FONT).toBe(`600 10px ${GRID_UI_FONT}`);

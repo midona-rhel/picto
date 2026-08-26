@@ -1,7 +1,10 @@
 import { createRoot } from 'react-dom/client';
 import { MantineProvider } from '@mantine/core';
 import { DetailMediaRenderer } from '../features/viewer/document/DetailMediaRenderer';
+import { publishPlatform } from '../shared/lib/platform';
 import '../app/globals.css';
+
+publishPlatform();
 
 declare global {
   interface Window {

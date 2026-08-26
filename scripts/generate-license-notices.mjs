@@ -96,7 +96,7 @@ await Promise.all([
   writeFile(path.join(output, 'RUST_THIRD_PARTY_NOTICES.txt'), await cargoNotices()),
   copyFile(path.join(root, 'LICENSE'), path.join(output, 'PICTO_LICENSE.txt')),
   copyFile(path.join(root, 'THIRD_PARTY_LICENSES'), path.join(output, 'THIRD_PARTY_LICENSES.txt')),
-  copyFile(path.join(root, 'src/shared/assets/fonts/LICENSE-Roboto.txt'), path.join(output, 'ROBOTO_LICENSE.txt')),
+  copyFile(path.join(root, 'src/shared/assets/fonts/LICENSE-Geist.txt'), path.join(output, 'GEIST_LICENSE.txt')),
   copyFile(path.join(root, 'resources/tutorial/TUTORIAL_ASSETS.json'), path.join(output, 'TUTORIAL_ASSETS.json')),
 ]);
 

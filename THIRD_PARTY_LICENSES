@@ -55,13 +55,14 @@ and Apache-2.0 license files are copied with the runtime and are also included i
 notices.
 
 
-Roboto
-------
-License: Apache-2.0
-Source: https://fonts.google.com/specimen/Roboto
+Geist
+-----
+Version: 1.7.2
+License: SIL Open Font License 1.1
+Source: https://github.com/vercel/geist-font
 
-Picto bundles Roboto Regular, Medium, and Bold. The published license is included at
-`src/shared/assets/fonts/LICENSE-Roboto.txt` and copied into release notices.
+Picto bundles the Geist Sans variable webfont for Windows and Linux. The published license is
+included at `src/shared/assets/fonts/LICENSE-Geist.txt` and copied into release notices.
 
 
 Generated dependency notices

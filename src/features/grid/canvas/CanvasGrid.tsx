@@ -12,7 +12,16 @@ import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { GridViewMode, LayoutResult } from '../layout/types';
 import { HoverPreviewPortal } from './HoverPreviewPortal';
 import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
-import { getContainRect, mimeToExt, NAME_BASELINE, NAME_FONT, truncateText } from './primitives';
+import {
+  BADGE_FONT,
+  getContainRect,
+  INFO_FONT,
+  mimeToExt,
+  NAME_BASELINE,
+  NAME_FONT,
+  RATING_FONT,
+  truncateText,
+} from './primitives';
 
 import { ThumbnailPipeline, type PlanTile } from './thumbnailPipeline';
 import { ThumbnailRevealTracker } from './thumbnailRevealTracker';
@@ -780,11 +789,9 @@ export function CanvasGrid({
   useEffect(() => {
     if (!document.fonts) return;
     let active = true;
-    void Promise.all([
-      document.fonts.load('400 13px "SF Pro Text"'),
-      document.fonts.load('500 10px "SF Pro Text"'),
-      document.fonts.load('600 10px "SF Pro Text"'),
-    ]).then(() => { if (active) markDirty('both'); });
+    void Promise.all([NAME_FONT, INFO_FONT, BADGE_FONT, RATING_FONT].map(
+      (font) => document.fonts.load(font),
+    )).then(() => { if (active) markDirty('both'); });
     return () => { active = false; };
   }, [markDirty]);
 

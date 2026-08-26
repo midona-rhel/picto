@@ -3,40 +3,13 @@
  * Canonical Picto design tokens, consolidated from the legacy globals.
  */
 
-/* Eagle uses the platform UI face first and bundled Roboto as its portable
- * fallback. Register the local files under the same family name so the
- * declared stack and the rendered fallback are identical. */
+/* macOS uses its native UI face. Windows and Linux use the bundled OFL font. */
 @font-face {
-  font-family: 'Roboto';
+  font-family: 'Geist';
   font-style: normal;
-  font-weight: 400;
+  font-weight: 100 900;
   font-display: swap;
-  src: url('../assets/fonts/Roboto-Regular.ttf') format('truetype');
-}
-
-@font-face {
-  font-family: 'Roboto';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url('../assets/fonts/Roboto-Medium.ttf') format('truetype');
-}
-
-/* Keep the 600 alias on Roboto Medium to avoid an abrupt weight jump. */
-@font-face {
-  font-family: 'Roboto';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url('../assets/fonts/Roboto-Medium.ttf') format('truetype');
-}
-
-@font-face {
-  font-family: 'Roboto';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url('../assets/fonts/Roboto-Bold.ttf') format('truetype');
+  src: url('../assets/fonts/Geist-Variable.woff2') format('woff2-variations');
 }
 
 :root {
@@ -95,8 +68,10 @@
   --color-contrast-50: color-mix(in srgb, var(--theme-contrast) 50%, transparent);
 
   /* ── Typography ──────────────────────────────────────────── */
-  --font-family-ui: 'SF Pro Text', -apple-system, 'Roboto', system-ui, 'Segoe UI', 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
+  --font-family-ui: 'Geist', system-ui, 'Segoe UI', 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
   --font-family: var(--font-family-ui);
+  --mantine-font-family: var(--font-family-ui);
+  --mantine-font-family-headings: var(--font-family-ui);
   --font-family-mono: 'SF Mono', 'Fira Mono', 'Roboto Mono', Monaco, Consolas, 'Cascadia Code', ui-monospace, monospace;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
@@ -233,6 +208,10 @@
 
   --scrollbar-thumb-background: var(--color-contrast-25);
   --scrollbar-thumb-hover-background: var(--color-contrast-50);
+}
+
+:root[data-platform='mac'] {
+  --font-family-ui: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
 }
 
 /* ── Blue theme ──────────────────────────────────────────────── */
