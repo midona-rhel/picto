@@ -772,14 +772,10 @@ fn spatial_comparison_at_side(
     side: usize,
 ) -> SpatialComparison {
     let mut deltas = Vec::with_capacity(left.pixels.len());
-    let mut normalized_difference = 0.0_f32;
     for (left, right) in left.pixels.iter().zip(&right.pixels) {
         let delta =
             ((left.l - right.l).powi(2) + (left.a - right.a).powi(2) + (left.b - right.b).powi(2))
                 .sqrt();
-        // Ignore sub-visible encoder noise, preserve the magnitude up to a
-        // clearly distinct color, then count that pixel as fully different.
-        normalized_difference += ((delta - 1.0) / (DISTINCT_COLOR_DELTA - 1.0)).clamp(0.0, 1.0);
         deltas.push(delta);
     }
 
@@ -821,11 +817,9 @@ fn spatial_comparison_at_side(
     }
 
     SpatialComparison {
-        // Preserve hundredths of a percentage point. Rounding this residual
-        // made visibly edited pairs incorrectly read as 100%.
-        difference_basis_points: ((normalized_difference / total as f32) * 10_000.0)
-            .round()
-            .clamp(0.0, 10_000.0) as u32,
+        // The displayed difference is the area of the perceptually distinct
+        // mask, not accumulated sub-visible encoder noise.
+        difference_basis_points: ((distinct as f32 / total as f32) * 10_000.0).round() as u32,
         distinct_fraction: distinct as f32 / total as f32,
         coherent_fraction: largest_region as f32 / total as f32,
     }
@@ -1695,10 +1689,8 @@ mod tests {
             .encode_image(&base)
             .unwrap();
         let jpeg_descriptor = spatial_descriptor(&jpeg).unwrap();
-        assert!(spatially_consistent(spatial_comparison(
-            &base_descriptor,
-            &jpeg_descriptor
-        )));
+        let compression = spatial_comparison(&base_descriptor, &jpeg_descriptor);
+        assert!(spatially_consistent(compression));
 
         let mut edited = base.to_rgb8();
         for y in 120..264 {
@@ -1708,10 +1700,44 @@ mod tests {
         }
         let edited_descriptor =
             spatial_descriptor(&encoded_png(&DynamicImage::ImageRgb8(edited))).unwrap();
-        assert!(!spatially_consistent(spatial_comparison(
-            &base_descriptor,
-            &edited_descriptor
-        )));
+        let edit = spatial_comparison(&base_descriptor, &edited_descriptor);
+        assert!(!spatially_consistent(edit));
+        assert!(edit.difference_basis_points > compression.difference_basis_points);
+    }
+
+    #[test]
+    fn sub_visible_pixel_noise_does_not_reduce_similarity() {
+        use image::{DynamicImage, ImageBuffer, Rgb};
+
+        let left = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(96, 96, Rgb([96, 96, 96])));
+        let right = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(96, 96, Rgb([98, 98, 98])));
+        let left = spatial_descriptor(&encoded_png(&left)).unwrap();
+        let right = spatial_descriptor(&encoded_png(&right)).unwrap();
+        let comparison = spatial_comparison(&left, &right);
+
+        assert_eq!(comparison.difference_basis_points, 0);
+        assert_eq!(comparison.distinct_fraction, 0.0);
+        assert_eq!(comparison.coherent_fraction, 0.0);
+    }
+
+    #[test]
+    fn a_small_coherent_edit_remains_visible_to_review() {
+        use image::{DynamicImage, ImageBuffer, Rgb};
+
+        let base = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(512, 512, Rgb([72, 72, 72])));
+        let mut edited = base.to_rgb8();
+        for y in 240..264 {
+            for x in 240..264 {
+                edited.put_pixel(x, y, Rgb([230, 40, 40]));
+            }
+        }
+        let base = spatial_descriptor(&encoded_png(&base)).unwrap();
+        let edited = spatial_descriptor(&encoded_png(&DynamicImage::ImageRgb8(edited))).unwrap();
+        let comparison = spatial_comparison(&base, &edited);
+
+        assert!(comparison.distinct_fraction < 0.01);
+        assert!(comparison.coherent_fraction > 0.0005);
+        assert!(comparison.difference_basis_points > 0);
     }
 
     #[test]
