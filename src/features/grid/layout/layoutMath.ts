@@ -219,6 +219,16 @@ function layoutJustified(
       if (rowWidth >= containerWidth) break;
     }
 
+    // An incomplete final row keeps the target height. If its final tile is
+    // also the tile that crosses the available width, that rule would make it
+    // paint beyond the canvas. Finish the preceding row and let the tile begin
+    // a new final row instead.
+    const targetWidth = totalAspect * targetRowHeight + (rowEnd - rowStart - 1) * gap;
+    if (rowEnd === aspectRatios.length && rowEnd - rowStart > 1 && targetWidth > containerWidth) {
+      rowEnd--;
+      totalAspect -= safeAspectRatio(aspectRatios[rowEnd]);
+    }
+
     const isLastRow = rowEnd === aspectRatios.length;
     const count = rowEnd - rowStart;
     const gapSpace = (count - 1) * gap;
