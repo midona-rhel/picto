@@ -88,6 +88,23 @@ describe('theme surface ownership', () => {
     expect(tooltip).toContain('font-size: var(--font-size-xs);');
   });
 
+  it('uses Eagle action and icon button geometry', () => {
+    const tokens = readFileSync(resolve(process.cwd(), 'src/shared/styles/tokens.css'), 'utf8');
+    const actions = readFileSync(resolve(process.cwd(), 'src/shared/styles/actionButton.module.css'), 'utf8');
+    const icons = readFileSync(resolve(process.cwd(), 'src/shared/styles/iconButton.module.css'), 'utf8');
+    const subscriptions = readFileSync(resolve(process.cwd(), 'src/features/subscriptions/SubscriptionsScreen.module.css'), 'utf8');
+    const libraries = readFileSync(resolve(process.cwd(), 'src/features/library/LibraryManager.module.css'), 'utf8');
+
+    expect(tokens).toContain('--action-button-height: 30px;');
+    expect(tokens).toContain('--icon-button-size: 24px;');
+    expect(actions).toContain('font-size: var(--font-size-md);');
+    expect(actions).toContain('font-weight: var(--font-weight-medium);');
+    expect(actions).toContain('padding: 0 20px;');
+    expect(icons).toContain('max-width: 18px;');
+    expect(subscriptions).toContain("composes: btn btnPrimary from '../../shared/styles/actionButton.module.css';");
+    expect(libraries).toContain("composes: btn btnPrimary from '../../shared/styles/actionButton.module.css';");
+  });
+
   it('keeps feature surfaces on the shared Eagle role hierarchy', () => {
     const select = readFileSync(resolve(process.cwd(), 'src/shared/ui/CmSelect/CmSelect.module.css'), 'utf8');
     const inspectorSection = readFileSync(resolve(process.cwd(), 'src/shared/ui/InspectorSection/InspectorSection.module.css'), 'utf8');

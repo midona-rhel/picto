@@ -117,67 +117,14 @@
   font-weight: var(--font-weight-regular);
 }
 
-/* Buttons — matches settings footerBtn / legacy textBtn exactly */
-.button,
-.buttonSecondary,
-.buttonDanger,
-.buttonGhost {
-  height: 32px;
-  display: inline-flex;
-  justify-content: center;
-  align-items: center;
-  gap: 6px;
-  padding: 0 16px;
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-regular);
-  font-family: inherit;
-  color: var(--color-text-primary);
-  border: 1px solid var(--color-border-primary);
-  background: var(--color-surface-hover);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: background 150ms ease;
-  outline: none;
-  appearance: none;
-}
-
-.button:hover,
-.buttonSecondary:hover,
-.buttonGhost:hover {
-  background: var(--color-surface-active);
-}
-
-.button:focus-visible,
-.buttonSecondary:focus-visible,
-.buttonDanger:focus-visible,
-.buttonGhost:focus-visible {
-  outline: 2px solid var(--color-primary-60);
-  outline-offset: 1px;
-}
-
-.button:disabled,
-.buttonSecondary:disabled,
-.buttonDanger:disabled,
-.buttonGhost:disabled {
-  opacity: 0.35;
-  cursor: default;
-  pointer-events: none;
-}
-
-.buttonDanger {
-  color: #ff9aa4;
-  border-color: rgba(255, 71, 87, 0.35);
-  background: rgba(255, 71, 87, 0.08);
-}
-
-.buttonDanger:hover {
-  background: rgba(255, 71, 87, 0.15);
-}
+.button { composes: btn btnPrimary from '../../shared/styles/actionButton.module.css'; }
+.buttonSecondary { composes: btn from '../../shared/styles/actionButton.module.css'; }
+.buttonGhost { composes: btn from '../../shared/styles/actionButton.module.css'; }
+.buttonDanger { composes: btn btnDanger from '../../shared/styles/actionButton.module.css'; }
 
 .buttonCompact {
-  height: 28px;
-  padding: 0 10px;
-  font-size: var(--font-size-sm);
+  height: var(--control-height-sm);
+  padding: 0 16px;
 }
 
 

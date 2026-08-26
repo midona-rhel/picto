@@ -126,7 +126,8 @@
   --control-height-sm: 26px;
   --control-height-md: 28px;
   --control-height-lg: 32px;
-  --icon-button-size: var(--control-height-md);
+  --action-button-height: 30px;
+  --icon-button-size: 24px;
 
   /* ── Radius ──────────────────────────────────────────────── */
   --radius-sm: 4px;

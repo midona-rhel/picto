@@ -1,4 +1,4 @@
-/* Shared icon button — 28px, transparent, opacity hover.
+/* Shared icon button — 24px, transparent, opacity hover.
  * Used in titlebar, detail window toolbar, grid toolbar, etc. */
 
 .iconBtn {
@@ -8,7 +8,7 @@
   justify-content: center;
   padding: 0;
   border: none;
-  border-radius: 5px;
+  border-radius: 4px;
   background: transparent;
   color: var(--color-text-primary);
   opacity: 0.94;
@@ -26,8 +26,8 @@
   display: block;
   flex: none;
   shape-rendering: geometricPrecision;
-  transform: scale(1.08);
-  transform-origin: center;
+  max-width: 18px;
+  max-height: 18px;
 }
 
 /* Tabler defaults to a 2px stroke, which is heavier than Picto's one-pixel

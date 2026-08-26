@@ -179,40 +179,13 @@
 
 .statusLine span { display: inline-flex; align-items: center; gap: 4px; }
 .missing { color: var(--color-negative); }
-.btn, .btnPrimary, .btnDanger {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid var(--color-border-primary);
-  border-radius: 6px;
-  background: var(--color-surface-hover);
-  color: var(--color-text-primary);
-  font: var(--font-weight-regular) var(--font-size-sm) var(--font-family-ui);
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.btn:hover, .btnPrimary:hover, .btnDanger:hover { background: var(--color-surface-active); }
-.btn:disabled, .btnPrimary:disabled, .btnDanger:disabled { opacity: 0.35; cursor: default; }
-.btnPrimary { border-color: var(--color-primary-60); background: var(--color-primary); color: var(--color-on-primary); }
-.btnPrimary:hover { background: var(--color-primary-60); }
-.btnDanger { color: var(--color-negative); }
+.btn { composes: btn from '../../shared/styles/actionButton.module.css'; }
+.btnPrimary { composes: btn btnPrimary from '../../shared/styles/actionButton.module.css'; }
+.btnDanger { composes: btn btnDanger from '../../shared/styles/actionButton.module.css'; }
 
 .iconButton {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
+  composes: iconBtn from '../../shared/styles/iconButton.module.css';
   color: var(--color-text-secondary);
-  cursor: pointer;
 }
 
 .iconButton:hover, .iconButton[aria-expanded='true'] { background: var(--color-surface-hover); color: var(--color-text-primary); }
