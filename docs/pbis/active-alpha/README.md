@@ -12,13 +12,6 @@ passes its automated and packaged application smokes.
 2. [PBI-606-backend-replacement.md](PBI-606-backend-replacement.md)
    - close the replacement only after the packaged fresh-library smoke passes
 
-## Deferred optional work
-
-This section does not block the current release.
-
-1. [PBI-616-complete-product-actions.md](PBI-616-complete-product-actions.md)
-   - implement or explicitly drop the remaining optional deep-link, bulk, and library actions
-
 ## Backlog policy
 
 - A PBI must describe an observed product gap and a finite acceptance test.
