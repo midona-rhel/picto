@@ -39,6 +39,10 @@ const dialog = {
   save: (options = {}) => ipcRenderer.invoke('picto:dialog:save', options),
 };
 
+const diagnostics = {
+  save: (content) => ipcRenderer.invoke('picto:diagnostics:save', { content }),
+};
+
 const clipboard = {
   writeText: (text) => ipcRenderer.invoke('picto:clipboard:writeText', { text }),
   copyFile: (filePath) => ipcRenderer.invoke('picto:clipboard:copyFile', { filePath }),
@@ -147,6 +151,7 @@ contextBridge.exposeInMainWorld('picto', {
   api,
   events,
   dialog,
+  diagnostics,
   clipboard,
   shell: shellOps,
   monitor,

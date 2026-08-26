@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { IconCopy, IconTrash, IconX } from '@tabler/icons-react';
+import { IconCopy, IconDownload, IconTrash, IconX } from '@tabler/icons-react';
 import {
   clearDiagnostics,
   useDiagnostics,
@@ -8,6 +8,7 @@ import {
 } from './diagnosticsStore';
 import { invoke } from '../../platform/ipc';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
+import { buildSupportReport, formatDiagnosticEntry } from './supportReport';
 import styles from './DiagnosticsPanel.module.css';
 
 const LEVELS: DiagnosticLevel[] = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'];
@@ -85,8 +86,15 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
   }, []);
 
   const copy = () => navigator.clipboard.writeText(filtered.map((entry) =>
-    `${entry.timestamp} ${entry.level} ${entry.source} ${entry.target}${entry.durationMs == null ? '' : entry.nativeDurationMs == null ? ` ${entry.durationMs.toFixed(1)}ms` : ` native=${entry.nativeDurationMs.toFixed(1)}ms total=${entry.durationMs.toFixed(1)}ms`} ${entry.message}`,
+    formatDiagnosticEntry(entry),
   ).join('\n'));
+
+  const saveSupportReport = async () => {
+    await (window as any).picto.diagnostics.save(buildSupportReport(entries, workers, {
+      userAgent: navigator.userAgent,
+      language: navigator.language,
+    }));
+  };
 
   const resizeTo = useCallback((nextHeight: number) => {
     setHeight(Math.max(260, Math.min(window.innerHeight - 80, nextHeight)));
@@ -147,9 +155,10 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
           ))}
         </div>
         <input className={styles.search} value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Filter logs" />
-        <button className={styles.iconButton} onClick={() => { void copy(); }} aria-label="Copy visible logs"><IconCopy size={14} /></button>
-        <button className={styles.iconButton} onClick={clearDiagnostics} aria-label="Clear logs"><IconTrash size={14} /></button>
-        <button className={styles.iconButton} onClick={onClose} aria-label="Close diagnostics"><IconX size={15} /></button>
+        <button className={styles.iconButton} onClick={() => { void copy(); }} aria-label="Copy visible logs" title="Copy visible logs"><IconCopy size={14} /></button>
+        <button className={styles.iconButton} onClick={() => { void saveSupportReport(); }} aria-label="Save support report" title="Save support report"><IconDownload size={14} /></button>
+        <button className={styles.iconButton} onClick={clearDiagnostics} aria-label="Clear logs" title="Clear logs"><IconTrash size={14} /></button>
+        <button className={styles.iconButton} onClick={onClose} aria-label="Close diagnostics" title="Close diagnostics"><IconX size={15} /></button>
       </header>
       <div className={styles.content}>
         <div
@@ -162,17 +171,7 @@ export function DiagnosticsPanel({ onClose }: { onClose: () => void }) {
         >
           {filtered.map((entry) => (
             <div className={styles.logRow} key={entry.id} data-level={entry.level}>
-              <span className={styles.time}>{formatTime(entry.timestamp)}</span>
-              <span className={styles.level}>{entry.level}</span>
-              <span className={styles.source}>{entry.source}</span>
-              <span className={styles.target}>{entry.target}</span>
-              {entry.durationMs == null ? null : (
-                <span className={styles.duration}>
-                  {(entry.nativeDurationMs ?? entry.durationMs).toFixed(1)} ms
-                  {entry.nativeDurationMs == null ? '' : ' native'}
-                </span>
-              )}
-              <span className={styles.message}>{entry.message}</span>
+              {[formatTime(entry.timestamp), ...formatDiagnosticEntry(entry).split('\t').slice(1)].join('\t')}
             </div>
           ))}
         </div>

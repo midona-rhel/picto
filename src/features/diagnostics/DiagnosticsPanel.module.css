@@ -88,15 +88,17 @@
   font: var(--font-size-caption)/19px var(--font-family-mono);
   user-select: text;
 }
-.logRow { display: grid; grid-template-columns: 92px 46px 56px minmax(110px, 210px) auto minmax(240px, 1fr); gap: 8px; padding: 0 12px; white-space: nowrap; }
+.logRow {
+  width: max-content;
+  min-width: 100%;
+  padding: 0 12px;
+  color: var(--color-text-primary);
+  tab-size: 16;
+  white-space: pre;
+}
 .logRow:hover { background: var(--color-surface-hover); }
-.time, .source, .target { color: var(--color-text-tertiary); }
-.level { color: var(--color-text-secondary); }
-.logRow[data-level='ERROR'] .level { color: var(--color-negative); }
-.logRow[data-level='WARN'] .level { color: var(--color-warning, #e8a838); }
-.target, .message { overflow: hidden; text-overflow: ellipsis; }
-.duration { color: var(--color-text-secondary); text-align: right; font-variant-numeric: tabular-nums; }
-.message { color: var(--color-text-primary); }
+.logRow[data-level='ERROR'] { color: var(--color-negative); }
+.logRow[data-level='WARN'] { color: var(--color-warning, #e8a838); }
 .workers { overflow: auto; scrollbar-gutter: stable; border-left: 1px solid var(--color-border-secondary); padding: 10px; }
 .workersTitle { padding: 0 4px 8px; color: var(--color-text-secondary); font-size: var(--font-size-caption); font-weight: var(--font-weight-bold); text-transform: uppercase; letter-spacing: .04em; }
 .worker { min-height: 48px; display: flex; align-items: flex-start; gap: 9px; padding: 8px; border-radius: 6px; }

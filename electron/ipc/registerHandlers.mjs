@@ -2,7 +2,7 @@ import { shell } from 'electron';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { arch, platform, release, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { clipboardFilePaths, clipboardHasImport, writeClipboardFilePaths } from './clipboardImport.mjs';
 import { createTrustedIpcHandle } from './trustedIpc.mjs';
@@ -416,6 +416,24 @@ export function registerIpcHandlers({
   handle('picto:dialog:save', async (_event, options = {}) => {
     const result = await dialog.showSaveDialog(options);
     return result.canceled ? null : result.filePath ?? null;
+  });
+
+  handle('picto:diagnostics:save', async (_event, { content } = {}) => {
+    const report = String(content ?? '');
+    if (!report || Buffer.byteLength(report, 'utf8') > 10 * 1024 * 1024) {
+      throw new Error('The support report is empty or too large.');
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const result = await dialog.showSaveDialog({
+      title: 'Save Picto Support Report',
+      defaultPath: `picto-support-${stamp}.txt`,
+      filters: [{ name: 'Text', extensions: ['txt'] }],
+    });
+    if (result.canceled || !result.filePath) return null;
+    const host = `Version\t${app.getVersion()}\nHost\t${platform()} ${release()} ${arch()}\n`;
+    const completeReport = report.replace('Picto support report\n', `Picto support report\n${host}`);
+    writeFileSync(result.filePath, completeReport, { encoding: 'utf8', mode: 0o600 });
+    return result.filePath;
   });
 
   handle('picto:clipboard:writeText', (_event, { text }) => {
