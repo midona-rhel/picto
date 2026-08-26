@@ -8,9 +8,9 @@ use rusqlite::{params, OptionalExtension, Transaction};
 use serde_json::Value;
 
 use super::{
-    record_local, source_item_sync_key, source_post_sync_key, CloudFolder, CloudOperation,
-    CloudSmartFolder, CloudSourceItem, CloudSourcePost, CloudSubscription, CloudSubscriptionQuery,
-    RestoredItem, RestoredMedia,
+    json_sql_error, record_local, source_item_sync_key, source_post_sync_key, CloudFolder,
+    CloudOperation, CloudSmartFolder, CloudSourceItem, CloudSourcePost, CloudSubscription,
+    CloudSubscriptionQuery, RestoredItem, RestoredMedia,
 };
 
 const CAPTURED_TABLES: &[&str] = &[
@@ -282,65 +282,66 @@ fn finish_captured(
             operations.extend(operation);
         }
     }
-    for ((media_id, tag_id), present) in tag_changes {
-        let identity: Option<(String, String, String)> = transaction
-            .query_row(
-                "SELECT li.item_key, t.namespace, t.subtag
-                     FROM library_item li CROSS JOIN tag t
-                     WHERE li.item_id = ?1 AND t.tag_id = ?2",
-                params![media_id, tag_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
-        if let Some((item_key, namespace, subtag)) = identity {
-            operations.push(CloudOperation::TagMembership {
-                item_key,
-                namespace,
-                subtag,
-                present,
-            });
-        }
+    if !tag_changes.is_empty() {
+        let changes = serde_json::to_string(
+            &tag_changes
+                .into_iter()
+                .map(|((media_id, tag_id), present)| (media_id, tag_id, present))
+                .collect::<Vec<_>>(),
+        )
+        .map_err(json_sql_error)?;
+        let memberships = transaction
+            .prepare(
+                "SELECT li.item_key, t.namespace, t.subtag,
+                        CAST(json_extract(change.value, '$[2]') AS INTEGER)
+                 FROM json_each(?1) change
+                 JOIN library_item li
+                   ON li.item_id = CAST(json_extract(change.value, '$[0]') AS INTEGER)
+                 JOIN tag t
+                   ON t.tag_id = CAST(json_extract(change.value, '$[1]') AS INTEGER)",
+            )?
+            .query_map([changes], |row| {
+                Ok(CloudOperation::TagMembership {
+                    item_key: row.get(0)?,
+                    namespace: row.get(1)?,
+                    subtag: row.get(2)?,
+                    present: row.get::<_, i64>(3)? != 0,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        operations.extend(memberships);
     }
-    for ((folder_id, item_id), present) in folder_changes {
-        let identity: Option<(String, String, Option<i64>)> = transaction
-            .query_row(
-                "SELECT f.folder_key, li.item_key, fi.position_rank
-                     FROM folder_item fi
-                     JOIN folder f ON f.folder_id = fi.folder_id
-                     JOIN library_item li ON li.item_id = fi.item_id
-                     WHERE fi.folder_id = ?1 AND fi.item_id = ?2",
-                params![folder_id, item_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .optional()?;
-        let deleted_identity: Option<(String, String)> = if identity.is_none() && !present {
-            transaction
-                .query_row(
-                    "SELECT f.folder_key, li.item_key
-                         FROM folder f CROSS JOIN library_item li
-                         WHERE f.folder_id = ?1 AND li.item_id = ?2",
-                    params![folder_id, item_id],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .optional()?
-        } else {
-            None
-        };
-        if let Some((folder_key, item_key, position_rank)) = identity {
-            operations.push(CloudOperation::FolderMembership {
-                item_key,
-                folder_key,
-                present,
-                position_rank,
-            });
-        } else if let Some((folder_key, item_key)) = deleted_identity {
-            operations.push(CloudOperation::FolderMembership {
-                item_key,
-                folder_key,
-                present: false,
-                position_rank: None,
-            });
-        }
+    if !folder_changes.is_empty() {
+        let changes = serde_json::to_string(
+            &folder_changes
+                .into_iter()
+                .map(|((folder_id, item_id), present)| (folder_id, item_id, present))
+                .collect::<Vec<_>>(),
+        )
+        .map_err(json_sql_error)?;
+        let memberships = transaction
+            .prepare(
+                "SELECT li.item_key, f.folder_key,
+                        CAST(json_extract(change.value, '$[2]') AS INTEGER),
+                        fi.position_rank
+                 FROM json_each(?1) change
+                 JOIN folder f
+                   ON f.folder_id = CAST(json_extract(change.value, '$[0]') AS INTEGER)
+                 JOIN library_item li
+                   ON li.item_id = CAST(json_extract(change.value, '$[1]') AS INTEGER)
+                 LEFT JOIN folder_item fi
+                   ON fi.folder_id = f.folder_id AND fi.item_id = li.item_id",
+            )?
+            .query_map([changes], |row| {
+                Ok(CloudOperation::FolderMembership {
+                    item_key: row.get(0)?,
+                    folder_key: row.get(1)?,
+                    present: row.get::<_, i64>(2)? != 0,
+                    position_rank: row.get(3)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        operations.extend(memberships);
     }
     for media_id in group_changes {
         if let Some(operation) = group_state(transaction, media_id)? {
