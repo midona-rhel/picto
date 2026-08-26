@@ -1107,4 +1107,5 @@
 .followMeta {
   font-size: var(--font-size-caption);
   color: var(--color-text-tertiary);
+  text-align: center;
 }
