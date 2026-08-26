@@ -143,7 +143,6 @@
   flex: 1;
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-bold);
-  -webkit-app-region: no-drag;
 }
 
 .closeBtn {
