@@ -179,6 +179,19 @@ pub static SITES: &[SiteEntry] = &[
         oauth_provider: None,
     },
     SiteEntry {
+        id: "newgrounds",
+        domain: "newgrounds.com",
+        credential_owner_site_id: "newgrounds",
+        name: "Newgrounds",
+        example_query: "username",
+        supports_query: false,
+        supports_account: true,
+        auth_required_for_full_access: true,
+        auth_strictly_required: false,
+        credential_types: COOKIE_CREDENTIAL_TYPES,
+        oauth_provider: None,
+    },
+    SiteEntry {
         id: "furaffinity",
         domain: "furaffinity.net",
         credential_owner_site_id: "furaffinity",
@@ -352,6 +365,9 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
         "twitter" => normalize_twitter_username(query)
             .ok()
             .and_then(|username| build_twitter_media_url(&username)),
+        "newgrounds" => normalize_newgrounds_username(query)
+            .ok()
+            .and_then(|username| build_newgrounds_profile_url(&username)),
         "furaffinity" => normalize_furaffinity_username(query)
             .ok()
             .and_then(|username| build_furaffinity_gallery_url(&username)),
@@ -423,6 +439,53 @@ pub fn normalize_twitter_username(raw: &str) -> Result<String, String> {
 fn build_twitter_media_url(username: &str) -> Option<String> {
     let mut url = Url::parse("https://x.com").ok()?;
     url.path_segments_mut().ok()?.push(username).push("media");
+    Some(url.to_string())
+}
+
+pub fn normalize_newgrounds_username(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Newgrounds subscriptions require a username".to_string());
+    }
+
+    let username = if let Ok(url) = Url::parse(trimmed) {
+        let host = url.host_str().unwrap_or_default();
+        let Some(username) = host.strip_suffix(".newgrounds.com") else {
+            return Err("Newgrounds subscriptions require a canonical profile URL".to_string());
+        };
+        if !matches!(url.scheme(), "http" | "https")
+            || username.is_empty()
+            || username == "www"
+            || url.username() != ""
+            || url.password().is_some()
+            || url.port().is_some()
+            || url.query().is_some()
+            || url.fragment().is_some()
+            || url.path() != "/"
+        {
+            return Err("Newgrounds subscriptions require a canonical profile URL".to_string());
+        }
+        username.to_string()
+    } else {
+        trimmed.trim_start_matches('@').to_string()
+    };
+
+    if username.is_empty()
+        || username.len() > 64
+        || !username
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+    {
+        return Err("Newgrounds subscriptions require a safe username".to_string());
+    }
+    Ok(username.to_ascii_lowercase())
+}
+
+fn build_newgrounds_profile_url(username: &str) -> Option<String> {
+    let mut url = Url::parse("https://newgrounds.com").ok()?;
+    url.set_host(Some(&format!("{username}.newgrounds.com")))
+        .ok()?;
+    url.set_path("/");
     Some(url.to_string())
 }
 
@@ -1049,6 +1112,7 @@ mod tests {
                 "deviantart",
                 "tumblr",
                 "twitter",
+                "newgrounds",
                 "furaffinity",
                 "patreon",
                 "fanbox",
@@ -1062,7 +1126,7 @@ mod tests {
                 "e621",
             ])
         );
-        assert_eq!(SITES.len(), 22);
+        assert_eq!(SITES.len(), 23);
     }
 
     #[test]
@@ -1227,6 +1291,35 @@ mod tests {
             "https://example.com/OpenAI",
         ] {
             assert!(normalize_twitter_username(input).is_err(), "{input}");
+        }
+    }
+
+    #[test]
+    fn newgrounds_subscriptions_accept_only_usernames_and_profile_urls() {
+        for input in [
+            "Artist_Name",
+            "@Artist_Name",
+            "https://Artist_Name.newgrounds.com/",
+        ] {
+            assert_eq!(
+                normalize_newgrounds_username(input).as_deref(),
+                Ok("artist_name"),
+                "{input}"
+            );
+            assert_eq!(
+                build_url("newgrounds", input).as_deref(),
+                Some("https://artist_name.newgrounds.com/")
+            );
+        }
+        for input in [
+            "",
+            "artist/name",
+            "https://www.newgrounds.com/",
+            "https://artist.newgrounds.com/art",
+            "https://artist.newgrounds.com/?page=2",
+            "https://newgrounds.com.evil.example/",
+        ] {
+            assert!(normalize_newgrounds_username(input).is_err(), "{input}");
         }
     }
 

@@ -4,6 +4,7 @@ import type { FailedPostGroup, SubscriptionIssueRecord } from '../../../shared/t
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip/KbdTooltip';
 import { ActionButton } from './ActionButton';
 import { EmptyState } from './EmptyState';
+import { StatusBadge } from './StatusBadge';
 import { formatRelativeTime } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
 
@@ -65,7 +66,7 @@ export function HealthTab({
         const first = posts[0];
         return (
           <div key={reason} className={`${styles.subscriptionTableRow} ${styles.problemRow}`.trim()}>
-            <span className={styles.qCellStatus}><span className={`${styles.qDot} ${styles.qDotAttention}`} />{posts.length} failed</span>
+            <span className={styles.qCellStatus}><StatusBadge tone="attention" label={`${posts.length} failed`} /></span>
             <span className={styles.problemMessage} title={reason}>{reason}</span>
             <span className={styles.qCellTime}>{first.nextRetryAt ? formatRelativeTime(first.nextRetryAt) : '—'}</span>
             <span className={styles.qCellActions}>
@@ -78,7 +79,7 @@ export function HealthTab({
 
       {openIssues.map((issue) => (
         <div key={issue.issue_id} className={`${styles.subscriptionTableRow} ${styles.problemRow}`.trim()}>
-          <span className={styles.qCellStatus}><span className={`${styles.qDot} ${styles.qDotAttention}`} />{issue.issue_kind.split('_').join(' ')}</span>
+          <span className={styles.qCellStatus}><StatusBadge tone="attention" label={issue.issue_kind.split('_').join(' ')} /></span>
           <span className={styles.problemMessage} title={[issue.message, issue.detail].filter(Boolean).join('\n')}>{issue.message}</span>
           <span className={styles.qCellTime}>{formatRelativeTime(issue.last_seen_at)}</span>
           <span className={styles.qCellActions}>

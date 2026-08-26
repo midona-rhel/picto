@@ -2,7 +2,8 @@ import { useEffect, useState, type FormEvent } from 'react';
 import type { AuthSessionState, OnlyFansManualAuthInput } from '../../../shared/types/subscriptions';
 import type { AuthSiteSnapshot } from '../../../shared/types/subscriptionsWorkspace';
 import { GlassInput } from '../../../shared/ui/GlassInput/GlassInput';
-import { formatRelativeTime } from '../authUtils';
+import { formatRelativeTime, getAuthAccountStatus } from '../authUtils';
+import { SiteIcon } from './SiteIcon';
 import styles from '../AuthWorkspace.module.css';
 
 export function AuthSiteDetail({
@@ -55,7 +56,8 @@ export function AuthSiteDetail({
   );
   const concreteIssue = entry.health?.last_error ?? entry.issues[0]?.message ?? '';
   const notice = concreteIssue || message || '';
-  const accountState = entry.credential ? 'Signed in' : 'Not signed in';
+  const accountStatus = getAuthAccountStatus(entry);
+  const accountState = accountStatus.label;
   const usageLabel = entry.queryCount === 0
     ? 'Not used by a subscription'
     : `${entry.queryCount} ${entry.queryCount === 1 ? 'query' : 'queries'}`;
@@ -78,12 +80,12 @@ export function AuthSiteDetail({
   return (
     <main className={styles.detail}>
       <header className={styles.detailHeader}>
-          <span className={styles.detailMark} aria-hidden="true">{entry.site.name.slice(0, 1)}</span>
+          <span className={styles.detailMark} aria-hidden="true"><SiteIcon domain={entry.site.domain} size={22} /></span>
           <div className={styles.titleWrap}>
             <div className={styles.heroTitle}>{entry.site.name}</div>
             <div className={styles.subtitle}>{entry.site.domain}</div>
           </div>
-          <span className={styles.detailStatus}>{accountState}</span>
+          <span className={`${styles.detailStatus} ${styles[`detailStatus${accountStatus.tone === 'success' ? 'Success' : accountStatus.tone === 'attention' ? 'Attention' : 'Idle'}`]}`.trim()}>{accountState}</span>
       </header>
 
       <div className={styles.detailBody}>

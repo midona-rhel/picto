@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { SubscriptionRunRecord } from '../../../shared/types/subscriptions';
 import { formatDateTime } from '../subscriptionUtils';
+import { StatusBadge } from './StatusBadge';
 import styles from '../SubscriptionsScreen.module.css';
 
 const INITIAL_ROWS = 20;
@@ -25,15 +26,33 @@ export function HistoryTab({ runs }: { runs: SubscriptionRunRecord[] }) {
         <span>Notes</span>
       </div>
       {visible.map((run) => {
-        const tone = run.status === 'failed' ? 'attention' : run.status === 'running' ? 'running' : 'idle';
-        const dotClass =
-          tone === 'running' ? styles.qDotRunning : tone === 'attention' ? styles.qDotAttention : styles.qDotIdle;
+        const waiting = run.status === 'pending' && run.failure_kind === 'inbox_full';
+        const paused = run.status === 'pending' && run.failure_kind === 'paused';
+        const tone = waiting || paused
+          ? 'paused' as const
+          : run.status === 'failed'
+          ? 'attention' as const
+          : run.status === 'running'
+            ? 'running' as const
+            : run.status === 'paused'
+              ? 'paused' as const
+              : run.status === 'completed' || run.status === 'succeeded'
+                ? 'success' as const
+                : 'idle' as const;
+        const label = run.status === 'completed' || run.status === 'succeeded'
+            ? 'Complete'
+            : waiting
+              ? 'Inbox full'
+              : paused
+                ? 'Paused'
+                : run.failure_kind
+                  ? run.failure_kind.split('_').join(' ')
+                  : run.status;
         return (
           <div key={run.run_id} className={`${styles.subscriptionTableRow} ${styles.historyRow}`.trim()}>
             <span className={styles.qCellTime}>{formatDateTime(run.started_at)}</span>
             <span className={styles.qCellStatus}>
-              <span className={`${styles.qDot} ${dotClass}`.trim()} />
-              {run.failure_kind ? run.failure_kind.split('_').join(' ') : run.status}
+              <StatusBadge tone={tone} label={label} title={run.error_message ?? undefined} />
             </span>
             <span className={styles.qCellNum}>{run.files_downloaded}</span>
             <span className={styles.qCellNum}>{run.files_skipped}</span>

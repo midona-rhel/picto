@@ -1,11 +1,16 @@
 //! Product-facing subscription definitions and persisted status reads.
 
+use std::collections::HashMap;
+use std::io::Cursor;
+
 use rand::RngCore;
 use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
 use crate::app::{resources, Application, MutationReceipt};
+use crate::blob_store::{mime_to_extension, BlobStore};
 use crate::subscriptions::gallery_dl_runner::{build_url, site_by_id};
 use crate::subscriptions::source_adapter::{
     infer_query_kind, normalize_query_text, validate_query_text,
@@ -164,6 +169,33 @@ pub struct SubscriptionCoverSelection {
     pub zoom_percent: i64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct StoredSubscriptionCover {
+    media_item_id: i64,
+    focus_x: i64,
+    focus_y: i64,
+    zoom_percent: i64,
+    #[serde(default)]
+    rendered_hash: Option<String>,
+}
+
+impl StoredSubscriptionCover {
+    fn selection(&self) -> SubscriptionCoverSelection {
+        SubscriptionCoverSelection {
+            media_item_id: self.media_item_id,
+            focus_x: self.focus_x,
+            focus_y: self.focus_y,
+            zoom_percent: self.zoom_percent,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct SubscriptionCoverSource {
+    file_hash: String,
+    mime_type: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct SubscriptionList {
@@ -174,47 +206,91 @@ pub struct SubscriptionList {
 
 pub fn list(application: &Application) -> Result<SubscriptionList, String> {
     application.store().read_snapshot(|connection| {
-        let rows = connection
+        let mut subscriptions = connection
             .prepare(
-                "SELECT s.subscription_id, s.name, s.schedule, s.paused,
-                        s.initial_post_limit, s.periodic_post_limit, s.next_run_at,
-                        active.run_id, COALESCE(active.status, latest.status),
-                        COUNT(DISTINCT CASE WHEN si.state = 'ingested' THEN si.media_item_id END),
-                        (SELECT COUNT(*) FROM subscription_issue issue
-                         WHERE issue.subscription_id = s.subscription_id
-                           AND issue.status = 'open'),
-                        (
-                            SELECT mf.file_hash
-                            FROM subscription_source_post cover_ssp
-                            JOIN source_item cover_si
-                              ON cover_si.source_post_id = cover_ssp.source_post_id
-                            JOIN media_asset cover_ma
-                              ON cover_ma.item_id = cover_si.media_item_id
-                            JOIN media_file mf ON mf.file_id = cover_ma.file_id
-                            LEFT JOIN collection_member cover_cm
-                              ON cover_cm.media_item_id = cover_ma.item_id
-                            JOIN library_root cover_root
-                              ON cover_root.item_id = COALESCE(cover_cm.collection_id, cover_ma.item_id)
-                            WHERE cover_ssp.subscription_id = s.subscription_id
-                              AND cover_si.state = 'ingested'
-                              AND cover_root.lifecycle = 'active'
-                              AND mf.mime_type LIKE 'image/%'
-                            ORDER BY cover_ma.imported_at DESC, cover_ma.item_id DESC
-                            LIMIT 1
-                        )
-                 FROM subscription s
-                 LEFT JOIN subscription_source_post ssp
-                   ON ssp.subscription_id = s.subscription_id
-                 LEFT JOIN source_item si ON si.source_post_id = ssp.source_post_id
-                 LEFT JOIN subscription_run active
-                   ON active.subscription_id = s.subscription_id
-                  AND active.status IN ('pending', 'running')
-                 LEFT JOIN subscription_run latest ON latest.run_id = (
-                     SELECT sr.run_id FROM subscription_run sr
-                     WHERE sr.subscription_id = s.subscription_id
-                     ORDER BY sr.run_id DESC LIMIT 1
+                "WITH active_runs AS (
+                     SELECT *
+                     FROM subscription_run
+                     WHERE status IN ('pending', 'running')
+                 ),
+                 latest_run_ids AS (
+                     SELECT subscription_id, MAX(run_id) AS run_id
+                     FROM subscription_run
+                     GROUP BY subscription_id
+                 ),
+                 media_totals AS (
+                     SELECT ssp.subscription_id,
+                            COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                                THEN si.media_item_id END) AS media_count
+                     FROM subscription_source_post ssp
+                     JOIN source_item si ON si.source_post_id = ssp.source_post_id
+                     GROUP BY ssp.subscription_id
+                 ),
+                 issue_totals AS (
+                     SELECT subscription_id, COUNT(*) AS issue_count
+                     FROM subscription_issue
+                     WHERE status = 'open'
+                     GROUP BY subscription_id
+                 ),
+                 traversed_posts AS (
+                     SELECT srq.run_id,
+                            COUNT(DISTINCT ssp.source_post_id) AS posts_traversed
+                     FROM active_runs active
+                     JOIN subscription_run_query srq ON srq.run_id = active.run_id
+                     JOIN subscription_source_post ssp
+                       ON ssp.query_id = srq.query_id
+                      AND ssp.last_seen_run_id = srq.run_id
+                     GROUP BY srq.run_id
+                 ),
+                 item_progress AS (
+                     SELECT srq.run_id,
+                            COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                                THEN si.source_post_id END) AS posts_added,
+                            COUNT(DISTINCT rsi.source_item_id) AS discovered,
+                            COUNT(DISTINCT CASE WHEN si.state IN ('downloaded', 'ingested')
+                                                THEN rsi.source_item_id END) AS downloaded,
+                            COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                                THEN rsi.source_item_id END) AS ingested,
+                            COUNT(DISTINCT CASE WHEN si.state = 'failed'
+                                                THEN rsi.source_item_id END) AS failed,
+                            COUNT(DISTINCT CASE WHEN si.state = 'deleted'
+                                                THEN rsi.source_item_id END) AS deleted
+                     FROM active_runs active
+                     JOIN subscription_run_query srq ON srq.run_id = active.run_id
+                     LEFT JOIN subscription_run_source_item rsi
+                       ON rsi.run_query_id = srq.run_query_id
+                     LEFT JOIN source_item si ON si.source_item_id = rsi.source_item_id
+                     GROUP BY srq.run_id
                  )
-                 GROUP BY s.subscription_id, active.run_id, active.status, latest.status
+                 SELECT s.subscription_id, s.name, s.schedule, s.paused,
+                        s.initial_post_limit, s.periodic_post_limit, s.next_run_at,
+                        active.run_id,
+                        CASE
+                            WHEN active.status = 'pending'
+                             AND active.failure_kind IN ('paused', 'inbox_full')
+                            THEN active.failure_kind
+                            ELSE COALESCE(active.status, latest.status)
+                        END,
+                        COALESCE(media_totals.media_count, 0),
+                        COALESCE(issue_totals.issue_count, 0),
+                        NULL,
+                        COALESCE(traversed_posts.posts_traversed, 0),
+                        COALESCE(item_progress.posts_added, 0),
+                        COALESCE(item_progress.discovered, 0),
+                        COALESCE(item_progress.downloaded, 0),
+                        COALESCE(item_progress.ingested, 0),
+                        COALESCE(item_progress.failed, 0),
+                        COALESCE(item_progress.deleted, 0)
+                 FROM subscription s
+                 LEFT JOIN active_runs active
+                   ON active.subscription_id = s.subscription_id
+                 LEFT JOIN latest_run_ids latest_id
+                   ON latest_id.subscription_id = s.subscription_id
+                 LEFT JOIN subscription_run latest ON latest.run_id = latest_id.run_id
+                 LEFT JOIN media_totals USING (subscription_id)
+                 LEFT JOIN issue_totals USING (subscription_id)
+                 LEFT JOIN traversed_posts ON traversed_posts.run_id = active.run_id
+                 LEFT JOIN item_progress ON item_progress.run_id = active.run_id
                  ORDER BY s.name, s.subscription_id",
             )?
             .query_map([], |row| {
@@ -234,62 +310,40 @@ pub fn list(application: &Application) -> Result<SubscriptionList, String> {
                     cover_focus_x: 500,
                     cover_focus_y: 500,
                     cover_zoom_percent: 100,
-                    progress: SubscriptionProgress::default(),
+                    progress: SubscriptionProgress {
+                        posts_traversed: row.get(12)?,
+                        posts_added: row.get(13)?,
+                        discovered: row.get(14)?,
+                        downloaded: row.get(15)?,
+                        ingested: row.get(16)?,
+                        failed: row.get(17)?,
+                        deleted: row.get(18)?,
+                    },
                     destination: SubscriptionDestinationPolicy::default(),
                     queries: Vec::new(),
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut subscriptions = Vec::with_capacity(rows.len());
-        for mut subscription in rows {
-            if let Some((selection, file_hash)) = subscription_cover_from_connection(
-                connection,
-                subscription.subscription_id,
-            )? {
-                subscription.cover_file_hash = Some(file_hash);
-                subscription.cover_focus_x = selection.focus_x;
-                subscription.cover_focus_y = selection.focus_y;
-                subscription.cover_zoom_percent = selection.zoom_percent;
+        let mut queries = query_views_by_subscription(connection)?;
+        let (mut destinations, mut covers) =
+            subscription_settings_by_id(connection, application.blobs())?;
+        for subscription in &mut subscriptions {
+            subscription.queries = queries
+                .remove(&subscription.subscription_id)
+                .unwrap_or_default();
+            subscription.destination = destinations
+                .remove(&subscription.subscription_id)
+                .unwrap_or_default();
+            if let Some(cover) = covers.remove(&subscription.subscription_id) {
+                if let Some((selection, file_hash)) = cover {
+                    subscription.cover_file_hash = Some(file_hash);
+                    subscription.cover_focus_x = selection.focus_x;
+                    subscription.cover_focus_y = selection.focus_y;
+                    subscription.cover_zoom_percent = selection.zoom_percent;
+                } else {
+                    subscription.cover_file_hash = None;
+                }
             }
-            subscription.destination =
-                subscription_destination_from_connection(connection, subscription.subscription_id)?;
-            subscription.queries = query_views(connection, subscription.subscription_id)?;
-            if let Some(run_id) = subscription.active_run_id {
-                subscription.progress = connection.query_row(
-                    "SELECT
-                         (SELECT COUNT(DISTINCT seen.source_post_id)
-                          FROM subscription_source_post seen
-                          JOIN subscription_run_query seen_query
-                            ON seen_query.query_id = seen.query_id
-                          WHERE seen_query.run_id = ?1
-                            AND seen.last_seen_run_id = ?1),
-                         COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                                             THEN si.source_post_id END),
-                         COUNT(DISTINCT rsi.source_item_id),
-                         COALESCE(SUM(CASE WHEN si.state IN ('downloaded', 'ingested') THEN 1 ELSE 0 END), 0),
-                         COALESCE(SUM(CASE WHEN si.state = 'ingested' THEN 1 ELSE 0 END), 0),
-                         COALESCE(SUM(CASE WHEN si.state = 'failed' THEN 1 ELSE 0 END), 0),
-                         COALESCE(SUM(CASE WHEN si.state = 'deleted' THEN 1 ELSE 0 END), 0)
-                     FROM subscription_run_query srq
-                     LEFT JOIN subscription_run_source_item rsi
-                       ON rsi.run_query_id = srq.run_query_id
-                     LEFT JOIN source_item si ON si.source_item_id = rsi.source_item_id
-                     WHERE srq.run_id = ?1",
-                    [run_id],
-                    |row| {
-                        Ok(SubscriptionProgress {
-                            posts_traversed: row.get(0)?,
-                            posts_added: row.get(1)?,
-                            discovered: row.get(2)?,
-                            downloaded: row.get(3)?,
-                            ingested: row.get(4)?,
-                            failed: row.get(5)?,
-                            deleted: row.get(6)?,
-                        })
-                    },
-                )?;
-            }
-            subscriptions.push(subscription);
         }
         Ok(SubscriptionList {
             subscriptions,
@@ -305,32 +359,60 @@ impl Application {
         selection: &SubscriptionCoverSelection,
     ) -> Result<MutationReceipt, String> {
         validate_cover_selection(selection)?;
-        let value = serde_json::to_string(selection).map_err(|error| error.to_string())?;
-        let key = cover_setting_key(subscription_id);
-        let (_, revision, _) = self.store().transaction_if_changed(|transaction| {
-            require_subscription(transaction, subscription_id)?;
+        let source = self.store().read_result(|connection| {
+            require_subscription(connection, subscription_id).map_err(|error| error.to_string())?;
             require_subscription_cover_candidate(
-                transaction,
+                connection,
                 subscription_id,
                 selection.media_item_id,
-            )?;
-            let previous: Option<String> = transaction
-                .query_row(
-                    "SELECT value_json FROM setting WHERE key = ?1",
-                    [&key],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            if previous.as_deref() == Some(value.as_str()) {
-                return Ok(((), false));
-            }
-            transaction.execute(
-                "INSERT INTO setting (key, value_json) VALUES (?1, ?2)
-                 ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
-                params![key, value],
-            )?;
-            Ok(((), true))
+            )
+            .map_err(|error| error.to_string())
         })?;
+        let rendered_hash =
+            render_subscription_cover(self.blobs(), subscription_id, &source, selection)?;
+        let stored = StoredSubscriptionCover {
+            media_item_id: selection.media_item_id,
+            focus_x: selection.focus_x,
+            focus_y: selection.focus_y,
+            zoom_percent: selection.zoom_percent,
+            rendered_hash: Some(rendered_hash.clone()),
+        };
+        let value = serde_json::to_string(&stored).map_err(|error| error.to_string())?;
+        let key = cover_setting_key(subscription_id);
+        let (previous_rendered_hash, revision, changed) =
+            self.store().transaction_if_changed(|transaction| {
+                require_subscription(transaction, subscription_id)?;
+                let current_source = require_subscription_cover_candidate(
+                    transaction,
+                    subscription_id,
+                    selection.media_item_id,
+                )?;
+                if current_source.file_hash != source.file_hash {
+                    return Err(invalid("cover media changed while rendering"));
+                }
+                let previous: Option<String> = transaction
+                    .query_row(
+                        "SELECT value_json FROM setting WHERE key = ?1",
+                        [&key],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                if previous.as_deref() == Some(value.as_str()) {
+                    return Ok((stored_rendered_hash(previous.as_deref()), false));
+                }
+                let previous_rendered_hash = stored_rendered_hash(previous.as_deref());
+                transaction.execute(
+                    "INSERT INTO setting (key, value_json) VALUES (?1, ?2)
+                 ON CONFLICT(key) DO UPDATE SET value_json = excluded.value_json",
+                    params![key, value],
+                )?;
+                Ok((previous_rendered_hash, true))
+            })?;
+        if changed && previous_rendered_hash.as_deref() != Some(rendered_hash.as_str()) {
+            if let Some(previous_rendered_hash) = previous_rendered_hash {
+                let _ = self.blobs().delete_thumbnail(&previous_rendered_hash);
+            }
+        }
         Ok(subscription_receipt(revision))
     }
 
@@ -505,6 +587,7 @@ impl Application {
             if changed == 0 {
                 require_query(transaction, query_id)?;
             } else {
+                set_active_query_pause_state(transaction, query_id, paused)?;
                 crate::cloud::capture::record_subscription_query_upsert(
                     transaction,
                     query_id,
@@ -611,6 +694,7 @@ impl Application {
                 params![paused, subscription_id],
             )?;
             if changed != 0 {
+                set_active_subscription_pause_state(transaction, subscription_id, paused)?;
                 crate::cloud::capture::record_subscription_upsert(
                     transaction,
                     subscription_id,
@@ -839,6 +923,106 @@ impl Application {
     }
 }
 
+fn set_active_subscription_pause_state(
+    transaction: &rusqlite::Transaction<'_>,
+    subscription_id: i64,
+    paused: bool,
+) -> rusqlite::Result<()> {
+    if paused {
+        transaction.execute(
+            "UPDATE subscription_run_query
+             SET status = 'pending', started_at = NULL, finished_at = NULL,
+                 attempt_count = CASE WHEN status = 'running'
+                                      THEN MAX(attempt_count - 1, 0)
+                                      ELSE attempt_count END,
+                 failure_kind = 'paused', error_message = 'Paused by user.'
+             WHERE status IN ('pending', 'running')
+               AND run_id IN (
+                   SELECT run_id FROM subscription_run
+                   WHERE subscription_id = ?1 AND status IN ('pending', 'running')
+               )",
+            [subscription_id],
+        )?;
+        transaction.execute(
+            "UPDATE subscription_run
+             SET status = 'pending', finished_at = NULL,
+                 failure_kind = 'paused', error_message = 'Paused by user.'
+             WHERE subscription_id = ?1 AND status IN ('pending', 'running')",
+            [subscription_id],
+        )?;
+    } else {
+        transaction.execute(
+            "UPDATE subscription_run_query
+             SET failure_kind = NULL, error_message = NULL
+             WHERE status = 'pending' AND failure_kind = 'paused'
+               AND run_id IN (
+                   SELECT run_id FROM subscription_run
+                   WHERE subscription_id = ?1 AND status = 'pending'
+               )",
+            [subscription_id],
+        )?;
+        transaction.execute(
+            "UPDATE subscription_run
+             SET failure_kind = NULL
+             WHERE subscription_id = ?1 AND status = 'pending'
+               AND failure_kind = 'paused'",
+            [subscription_id],
+        )?;
+    }
+    Ok(())
+}
+
+fn set_active_query_pause_state(
+    transaction: &rusqlite::Transaction<'_>,
+    query_id: i64,
+    paused: bool,
+) -> rusqlite::Result<()> {
+    if paused {
+        transaction.execute(
+            "UPDATE subscription_run_query
+             SET status = 'pending', started_at = NULL, finished_at = NULL,
+                 attempt_count = CASE WHEN status = 'running'
+                                      THEN MAX(attempt_count - 1, 0)
+                                      ELSE attempt_count END,
+                 failure_kind = 'paused', error_message = 'Paused by user.'
+             WHERE query_id = ?1 AND status IN ('pending', 'running')",
+            [query_id],
+        )?;
+        transaction.execute(
+            "UPDATE subscription_run
+             SET failure_kind = 'paused', error_message = 'Paused by user.'
+             WHERE run_id IN (
+                 SELECT run_id FROM subscription_run_query
+                 WHERE query_id = ?1 AND status = 'pending'
+             ) AND status IN ('pending', 'running')",
+            [query_id],
+        )?;
+    } else {
+        transaction.execute(
+            "UPDATE subscription_run_query
+             SET failure_kind = NULL, error_message = NULL
+             WHERE query_id = ?1 AND status = 'pending' AND failure_kind = 'paused'",
+            [query_id],
+        )?;
+        transaction.execute(
+            "UPDATE subscription_run
+             SET failure_kind = NULL
+             WHERE status = 'pending' AND failure_kind = 'paused'
+               AND run_id IN (
+                   SELECT run_id FROM subscription_run_query WHERE query_id = ?1
+               )
+               AND NOT EXISTS (
+                   SELECT 1 FROM subscription_run_query pending
+                   WHERE pending.run_id = subscription_run.run_id
+                     AND pending.status = 'pending'
+                     AND pending.failure_kind = 'paused'
+               )",
+            [query_id],
+        )?;
+    }
+    Ok(())
+}
+
 fn destination_setting_key(subscription_id: i64) -> String {
     format!("subscription.{subscription_id}.destination")
 }
@@ -939,7 +1123,7 @@ fn require_subscription_cover_candidate(
     connection: &rusqlite::Connection,
     subscription_id: i64,
     media_item_id: i64,
-) -> rusqlite::Result<String> {
+) -> rusqlite::Result<SubscriptionCoverSource> {
     find_subscription_cover_candidate(connection, subscription_id, media_item_id)?
         .ok_or_else(|| invalid("cover media is not active in this subscription"))
 }
@@ -948,10 +1132,10 @@ fn find_subscription_cover_candidate(
     connection: &rusqlite::Connection,
     subscription_id: i64,
     media_item_id: i64,
-) -> rusqlite::Result<Option<String>> {
+) -> rusqlite::Result<Option<SubscriptionCoverSource>> {
     connection
         .query_row(
-            "SELECT mf.file_hash
+            "SELECT mf.file_hash, mf.mime_type
              FROM subscription_source_post ssp
              JOIN source_item si ON si.source_post_id = ssp.source_post_id
              JOIN media_asset ma ON ma.item_id = si.media_item_id
@@ -965,31 +1149,111 @@ fn find_subscription_cover_candidate(
                AND root.lifecycle = 'active'
              LIMIT 1",
             params![subscription_id, media_item_id],
-            |row| row.get(0),
+            |row| {
+                Ok(SubscriptionCoverSource {
+                    file_hash: row.get(0)?,
+                    mime_type: row.get(1)?,
+                })
+            },
         )
         .optional()
 }
 
-fn subscription_cover_from_connection(
-    connection: &rusqlite::Connection,
-    subscription_id: i64,
+fn resolve_stored_cover(
+    blobs: &BlobStore,
+    stored: StoredSubscriptionCover,
+    source_file_hash: Option<String>,
 ) -> rusqlite::Result<Option<(SubscriptionCoverSelection, String)>> {
-    let value: Option<String> = connection
-        .query_row(
-            "SELECT value_json FROM setting WHERE key = ?1",
-            [cover_setting_key(subscription_id)],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(value) = value else {
+    let selection = stored.selection();
+    validate_cover_selection(&selection).map_err(invalid)?;
+    let Some(source_file_hash) = source_file_hash else {
         return Ok(None);
     };
-    let selection: SubscriptionCoverSelection = serde_json::from_str(&value)
-        .map_err(|error| invalid(format!("invalid subscription cover: {error}")))?;
-    validate_cover_selection(&selection).map_err(invalid)?;
-    let file_hash =
-        find_subscription_cover_candidate(connection, subscription_id, selection.media_item_id)?;
-    Ok(file_hash.map(|file_hash| (selection, file_hash)))
+    let rendered_hash = stored.rendered_hash.filter(|hash| {
+        blobs
+            .find_thumbnail_path(hash)
+            .map(|path| path.is_some())
+            .unwrap_or(false)
+    });
+    if let Some(rendered_hash) = rendered_hash {
+        return Ok(Some((
+            SubscriptionCoverSelection {
+                media_item_id: selection.media_item_id,
+                focus_x: 500,
+                focus_y: 500,
+                zoom_percent: 100,
+            },
+            rendered_hash,
+        )));
+    }
+    Ok(Some((selection, source_file_hash)))
+}
+
+fn stored_rendered_hash(value: Option<&str>) -> Option<String> {
+    value
+        .and_then(|value| serde_json::from_str::<StoredSubscriptionCover>(value).ok())
+        .and_then(|cover| cover.rendered_hash)
+}
+
+fn render_subscription_cover(
+    blobs: &BlobStore,
+    subscription_id: i64,
+    source: &SubscriptionCoverSource,
+    selection: &SubscriptionCoverSelection,
+) -> Result<String, String> {
+    let identity = format!(
+        "subscription-cover:v1:{subscription_id}:{}:{}:{}:{}",
+        source.file_hash, selection.focus_x, selection.focus_y, selection.zoom_percent
+    );
+    let rendered_hash = hex::encode(Sha256::digest(identity.as_bytes()));
+    if blobs
+        .find_thumbnail_path(&rendered_hash)
+        .map_err(|error| format!("Subscription cover lookup failed: {error}"))?
+        .is_some()
+    {
+        return Ok(rendered_hash);
+    }
+
+    let original = blobs
+        .read_original(
+            &source.file_hash,
+            Some(mime_to_extension(&source.mime_type)),
+        )
+        .ok();
+    let thumbnail = || {
+        blobs
+            .read_thumbnail(&source.file_hash)
+            .map_err(|error| format!("Subscription cover thumbnail read failed: {error}"))?
+            .ok_or_else(|| "Subscription cover source is unavailable".to_string())
+    };
+    let image = original
+        .as_deref()
+        .and_then(|bytes| image::load_from_memory(bytes).ok())
+        .map(Ok)
+        .unwrap_or_else(|| {
+            thumbnail().and_then(|bytes| {
+                image::load_from_memory(&bytes)
+                    .map_err(|error| format!("Subscription cover decode failed: {error}"))
+            })
+        })?;
+    let zoom = selection.zoom_percent as f64 / 100.0;
+    let crop_size = ((image.width().min(image.height()) as f64 / zoom).round() as u32)
+        .clamp(1, image.width().min(image.height()));
+    let max_x = image.width().saturating_sub(crop_size);
+    let max_y = image.height().saturating_sub(crop_size);
+    let crop_x = ((max_x as f64 * selection.focus_x as f64 / 1000.0).round() as u32).min(max_x);
+    let crop_y = ((max_y as f64 * selection.focus_y as f64 / 1000.0).round() as u32).min(max_y);
+    let rendered = image
+        .crop_imm(crop_x, crop_y, crop_size, crop_size)
+        .resize_exact(384, 384, image::imageops::FilterType::Lanczos3);
+    let mut bytes = Cursor::new(Vec::new());
+    rendered
+        .write_to(&mut bytes, image::ImageFormat::Png)
+        .map_err(|error| format!("Subscription cover encode failed: {error}"))?;
+    blobs
+        .write_thumbnail(&rendered_hash, bytes.get_ref(), "png")
+        .map_err(|error| format!("Subscription cover write failed: {error}"))?;
+    Ok(rendered_hash)
 }
 
 pub fn subscription_destination(
@@ -1023,6 +1287,76 @@ fn subscription_destination_from_connection(
         .map(|policy| policy.unwrap_or_default())
 }
 
+type SubscriptionCoverOverride = Option<(SubscriptionCoverSelection, String)>;
+
+fn subscription_settings_by_id(
+    connection: &rusqlite::Connection,
+    blobs: &BlobStore,
+) -> rusqlite::Result<(
+    HashMap<i64, SubscriptionDestinationPolicy>,
+    HashMap<i64, SubscriptionCoverOverride>,
+)> {
+    let mut statement = connection.prepare(
+        "SELECT s.subscription_id, destination.value_json, cover.value_json,
+                (
+                    SELECT mf.file_hash
+                    FROM subscription_source_post ssp
+                    JOIN source_item si ON si.source_post_id = ssp.source_post_id
+                    JOIN media_asset ma ON ma.item_id = si.media_item_id
+                    JOIN media_file mf ON mf.file_id = ma.file_id
+                    LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
+                    JOIN library_root root
+                      ON root.item_id = COALESCE(cm.collection_id, ma.item_id)
+                    WHERE ssp.subscription_id = s.subscription_id
+                      AND si.media_item_id = CASE
+                          WHEN json_valid(cover.value_json)
+                          THEN CAST(json_extract(cover.value_json, '$.media_item_id') AS INTEGER)
+                      END
+                      AND si.state = 'ingested'
+                      AND root.lifecycle = 'active'
+                    LIMIT 1
+                )
+         FROM subscription s
+         LEFT JOIN setting destination
+           ON destination.key = 'subscription.' || s.subscription_id || '.destination'
+         LEFT JOIN setting cover
+           ON cover.key = 'subscription.' || s.subscription_id || '.cover'
+         ORDER BY s.subscription_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+            row.get::<_, Option<String>>(3)?,
+        ))
+    })?;
+    let mut destinations = HashMap::new();
+    let mut covers = HashMap::new();
+    for row in rows {
+        let (subscription_id, destination_json, cover_json, source_file_hash) = row?;
+        let destination = destination_json
+            .map(|json| {
+                let policy = serde_json::from_str(&json).map_err(|error| {
+                    invalid(format!("invalid subscription destination: {error}"))
+                })?;
+                normalize_destination_policy(&policy).map_err(invalid)
+            })
+            .transpose()?
+            .unwrap_or_default();
+        destinations.insert(subscription_id, destination);
+        if let Some(json) = cover_json {
+            let stored: StoredSubscriptionCover = serde_json::from_str(&json)
+                .map_err(|error| invalid(format!("invalid subscription cover: {error}")))?;
+            covers.insert(
+                subscription_id,
+                resolve_stored_cover(blobs, stored, source_file_hash)?,
+            );
+        }
+    }
+    Ok((destinations, covers))
+}
+
 fn normalize_destination_policy(
     policy: &SubscriptionDestinationPolicy,
 ) -> Result<SubscriptionDestinationPolicy, String> {
@@ -1051,51 +1385,72 @@ fn normalize_destination_policy(
     })
 }
 
-fn query_views(
+fn query_views_by_subscription(
     connection: &rusqlite::Connection,
-    subscription_id: i64,
-) -> rusqlite::Result<Vec<SubscriptionQueryView>> {
-    connection
-        .prepare(
-            "SELECT q.query_id, q.site_id, q.query_kind, q.query_text,
+) -> rusqlite::Result<HashMap<i64, Vec<SubscriptionQueryView>>> {
+    let mut statement = connection.prepare(
+        "WITH source_counts AS (
+             SELECT ssp.query_id,
+                    COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                        THEN ssp.source_post_id END) AS post_count,
+                    COUNT(DISTINCT CASE WHEN si.state = 'ingested'
+                                        THEN si.media_item_id END) AS media_count
+             FROM subscription_source_post ssp
+             LEFT JOIN source_item si ON si.source_post_id = ssp.source_post_id
+             GROUP BY ssp.query_id
+         ),
+         successful_runs AS (
+             SELECT query_id, COUNT(*) AS run_count
+             FROM subscription_run_query
+             WHERE status = 'succeeded'
+             GROUP BY query_id
+         )
+         SELECT q.subscription_id, q.query_id, q.site_id, q.query_kind, q.query_text,
                     q.display_name, q.notes, q.group_posts, q.paused, q.initial_run_complete,
                     COALESCE(q.resume_cursor = '', 0),
                     q.last_success_at, q.last_failure_at, q.last_failure_kind,
                     q.last_failure_message,
-                    COUNT(DISTINCT CASE WHEN si.state = 'ingested'
-                                        THEN ssp.source_post_id END),
-                    COUNT(DISTINCT CASE WHEN si.state = 'ingested' THEN si.media_item_id END),
-                    (SELECT COUNT(*) FROM subscription_run_query completed
-                     WHERE completed.query_id = q.query_id
-                       AND completed.status = 'succeeded')
+                    COALESCE(source_counts.post_count, 0),
+                    COALESCE(source_counts.media_count, 0),
+                    COALESCE(successful_runs.run_count, 0)
              FROM subscription_query q
-             LEFT JOIN subscription_source_post ssp ON ssp.query_id = q.query_id
-             LEFT JOIN source_item si ON si.source_post_id = ssp.source_post_id
-             WHERE q.subscription_id = ?1
-             GROUP BY q.query_id ORDER BY q.query_id",
-        )?
-        .query_map([subscription_id], |row| {
-            Ok(SubscriptionQueryView {
-                query_id: row.get(0)?,
-                site_id: row.get(1)?,
-                query_kind: row.get(2)?,
-                query_text: row.get(3)?,
-                display_name: row.get(4)?,
-                notes: row.get(5)?,
-                group_posts: row.get(6)?,
-                paused: row.get(7)?,
-                initial_run_complete: row.get(8)?,
-                source_history_complete: row.get(9)?,
-                last_success_at: row.get(10)?,
-                last_failure_at: row.get(11)?,
-                last_failure_kind: row.get(12)?,
-                last_failure_message: row.get(13)?,
-                post_count: row.get(14)?,
-                media_count: row.get(15)?,
-                successful_run_count: row.get(16)?,
-            })
-        })?
-        .collect()
+             LEFT JOIN source_counts ON source_counts.query_id = q.query_id
+             LEFT JOIN successful_runs ON successful_runs.query_id = q.query_id
+             ORDER BY q.subscription_id, q.query_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            SubscriptionQueryView {
+                query_id: row.get(1)?,
+                site_id: row.get(2)?,
+                query_kind: row.get(3)?,
+                query_text: row.get(4)?,
+                display_name: row.get(5)?,
+                notes: row.get(6)?,
+                group_posts: row.get(7)?,
+                paused: row.get(8)?,
+                initial_run_complete: row.get(9)?,
+                source_history_complete: row.get(10)?,
+                last_success_at: row.get(11)?,
+                last_failure_at: row.get(12)?,
+                last_failure_kind: row.get(13)?,
+                last_failure_message: row.get(14)?,
+                post_count: row.get(15)?,
+                media_count: row.get(16)?,
+                successful_run_count: row.get(17)?,
+            },
+        ))
+    })?;
+    let mut by_subscription: HashMap<i64, Vec<SubscriptionQueryView>> = HashMap::new();
+    for row in rows {
+        let (subscription_id, query) = row?;
+        by_subscription
+            .entry(subscription_id)
+            .or_default()
+            .push(query);
+    }
+    Ok(by_subscription)
 }
 
 struct PreparedQuery {
@@ -1381,6 +1736,19 @@ mod tests {
             .create_subscription_definition(&input(), "2026-01-01T00:00:00Z")
             .unwrap();
         let query_id = list(&application).unwrap().subscriptions[0].queries[0].query_id;
+        let source_image =
+            image::DynamicImage::ImageRgb8(image::ImageBuffer::from_fn(800, 600, |x, y| {
+                image::Rgb([(x % 255) as u8, (y % 255) as u8, 80])
+            }));
+        let mut source_bytes = Cursor::new(Vec::new());
+        source_image
+            .write_to(&mut source_bytes, image::ImageFormat::Png)
+            .unwrap();
+        let source_hash = hex::encode(Sha256::digest(source_bytes.get_ref()));
+        application
+            .blobs()
+            .write_original(&source_hash, source_bytes.get_ref(), Some("png"))
+            .unwrap();
         application
             .store()
             .transaction(|transaction| {
@@ -1388,8 +1756,8 @@ mod tests {
                     "INSERT INTO media_file (
                          file_id, file_hash, mime_type, size_bytes,
                          pixel_width, pixel_height, created_at
-                     ) VALUES (1, 'cover-hash', 'image/jpeg', 10, 800, 600, 'now')",
-                    [],
+                     ) VALUES (1, ?1, 'image/png', ?2, 800, 600, 'now')",
+                    params![source_hash, source_bytes.get_ref().len() as i64],
                 )?;
                 transaction.execute(
                     "INSERT INTO library_item (
@@ -1432,7 +1800,7 @@ mod tests {
 
         let page = subscription_cover_candidates(&application, subscription_id, None, 200).unwrap();
         assert_eq!(page.candidates.len(), 1);
-        assert_eq!(page.candidates[0].file_hash, "cover-hash");
+        assert_eq!(page.candidates[0].file_hash, source_hash);
         assert!(page.next_cursor.is_none());
 
         application
@@ -1447,10 +1815,22 @@ mod tests {
             )
             .unwrap();
         let subscription = &list(&application).unwrap().subscriptions[0];
-        assert_eq!(subscription.cover_file_hash.as_deref(), Some("cover-hash"));
-        assert_eq!(subscription.cover_focus_x, 250);
-        assert_eq!(subscription.cover_focus_y, 750);
-        assert_eq!(subscription.cover_zoom_percent, 160);
+        let rendered_hash = subscription
+            .cover_file_hash
+            .as_deref()
+            .expect("rendered cover hash");
+        assert_ne!(rendered_hash, source_hash);
+        assert_eq!(rendered_hash.len(), 64);
+        let rendered = application
+            .blobs()
+            .read_thumbnail(rendered_hash)
+            .unwrap()
+            .expect("rendered cover thumbnail");
+        let rendered = image::load_from_memory(&rendered).unwrap();
+        assert_eq!((rendered.width(), rendered.height()), (384, 384));
+        assert_eq!(subscription.cover_focus_x, 500);
+        assert_eq!(subscription.cover_focus_y, 500);
+        assert_eq!(subscription.cover_zoom_percent, 100);
 
         application
             .store()
@@ -1474,7 +1854,7 @@ mod tests {
     }
 
     #[test]
-    fn automatic_cover_uses_latest_image_import_without_bookkeeping_churn() {
+    fn cover_candidates_are_loaded_only_when_requested() {
         let (_directory, application) = fixture();
         let (subscription_id, _) = application
             .create_subscription_definition(&input(), "2026-01-01T00:00:00Z")
@@ -1542,12 +1922,9 @@ mod tests {
             })
             .unwrap();
 
-        assert_eq!(
-            list(&application).unwrap().subscriptions[0]
-                .cover_file_hash
-                .as_deref(),
-            Some("hash-3")
-        );
+        assert!(list(&application).unwrap().subscriptions[0]
+            .cover_file_hash
+            .is_none());
         let first = subscription_cover_candidates(&application, subscription_id, None, 2).unwrap();
         assert_eq!(
             first
@@ -1752,6 +2129,79 @@ mod tests {
                 .as_deref(),
             Some("cancelled")
         );
+    }
+
+    #[test]
+    fn pausing_an_active_subscription_persists_a_resumable_run() {
+        let (_directory, application) = fixture();
+        let (subscription_id, _) = application
+            .create_subscription_definition(&input(), "2026-01-01T00:00:00Z")
+            .unwrap();
+        let (run, _) = application
+            .request_subscription_run(subscription_id, "2026-01-01T00:00:01Z")
+            .unwrap();
+        let query_id = list(&application).unwrap().subscriptions[0].queries[0].query_id;
+
+        application
+            .pause_subscription(subscription_id, true)
+            .unwrap();
+
+        let paused = list(&application).unwrap().subscriptions.remove(0);
+        assert!(paused.paused);
+        assert_eq!(paused.status.as_deref(), Some("paused"));
+        let state: (String, Option<String>, String, Option<String>) = application
+            .store()
+            .read(|connection| {
+                let run_state = connection.query_row(
+                    "SELECT status, failure_kind FROM subscription_run WHERE run_id = ?1",
+                    [run.run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                let query = connection.query_row(
+                    "SELECT status, failure_kind FROM subscription_run_query
+                     WHERE run_id = ?1 AND query_id = ?2",
+                    params![run.run_id, query_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                Ok((run_state.0, run_state.1, query.0, query.1))
+            })
+            .unwrap();
+        assert_eq!(
+            state,
+            (
+                "pending".into(),
+                Some("paused".into()),
+                "pending".into(),
+                Some("paused".into()),
+            )
+        );
+
+        application
+            .pause_subscription(subscription_id, false)
+            .unwrap();
+
+        let resumed = list(&application).unwrap().subscriptions.remove(0);
+        assert!(!resumed.paused);
+        assert_eq!(resumed.status.as_deref(), Some("pending"));
+        let reasons: (Option<String>, Option<String>) = application
+            .store()
+            .read(|connection| {
+                Ok((
+                    connection.query_row(
+                        "SELECT failure_kind FROM subscription_run WHERE run_id = ?1",
+                        [run.run_id],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT failure_kind FROM subscription_run_query
+                         WHERE run_id = ?1 AND query_id = ?2",
+                        params![run.run_id, query_id],
+                        |row| row.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(reasons, (None, None));
     }
 
     #[test]

@@ -6,9 +6,9 @@ use url::Url;
 
 use crate::subscriptions::gallery_dl_runner::{
     build_url, normalize_baraag_username, normalize_fanbox_creator, normalize_furaffinity_username,
-    normalize_onlyfans_creator, normalize_patreon_creator, normalize_subscribestar_creator,
-    normalize_tumblr_blog, normalize_twitter_username, normalize_webtoons_url, site_by_id,
-    SiteEntry,
+    normalize_newgrounds_username, normalize_onlyfans_creator, normalize_patreon_creator,
+    normalize_subscribestar_creator, normalize_tumblr_blog, normalize_twitter_username,
+    normalize_webtoons_url, site_by_id, SiteEntry,
 };
 
 pub use gallery_dl::{GalleryDlSourceAdapter, SubscriptionSourceAdapter};
@@ -74,6 +74,9 @@ pub fn normalize_query_text(site_id: &str, query_kind: &str, raw: &str) -> Strin
     }
     if site_id == "twitter" && query_kind == "user" {
         return normalize_twitter_username(trimmed).unwrap_or_else(|_| trimmed.to_string());
+    }
+    if site_id == "newgrounds" && query_kind == "user" {
+        return normalize_newgrounds_username(trimmed).unwrap_or_else(|_| trimmed.to_string());
     }
     if site_id == "furaffinity" && query_kind == "user" {
         return normalize_furaffinity_username(trimmed).unwrap_or_else(|_| trimmed.to_string());
@@ -153,6 +156,9 @@ pub fn validate_query_text(site_id: &str, query_text: &str) -> Result<(), String
     }
     if site_id == "twitter" {
         normalize_twitter_username(query_text)?;
+    }
+    if site_id == "newgrounds" {
+        normalize_newgrounds_username(query_text)?;
     }
     if site_id == "furaffinity" {
         normalize_furaffinity_username(query_text)?;
@@ -392,6 +398,11 @@ mod tests {
                 "accepted {value}"
             );
         }
+        assert!(validate_query_text("newgrounds", "artist-name").is_ok());
+        assert!(validate_query_text("newgrounds", "https://artist-name.newgrounds.com/").is_ok());
+        assert!(
+            validate_query_text("newgrounds", "https://artist-name.newgrounds.com/art").is_err()
+        );
         assert!(validate_query_text("patreon", "creator-name").is_ok());
         assert!(validate_query_text("patreon", "https://www.patreon.com/c/creator-name").is_ok());
         assert!(validate_query_text("patreon", "https://www.patreon.com/posts/123").is_err());

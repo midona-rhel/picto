@@ -53,6 +53,17 @@ export const AUTH_SITES = Object.freeze({
     'https://x.com',
     { authenticatedCookieNames: Object.freeze(['auth_token', 'ct0']) },
   ),
+  newgrounds: cookieSite(
+    'newgrounds',
+    'Newgrounds',
+    'https://www.newgrounds.com/login',
+    'https://www.newgrounds.com',
+    {
+      cookieNames: Object.freeze(['ng_session']),
+      authenticatedCookieNames: Object.freeze(['ng_session']),
+      authWindowSize: Object.freeze({ width: 1000, height: 760, minWidth: 760, minHeight: 640 }),
+    },
+  ),
   hentaifoundry: cookieSite(
     'hentaifoundry',
     'Hentai Foundry',
@@ -65,7 +76,13 @@ export const AUTH_SITES = Object.freeze({
     'Fur Affinity',
     'https://www.furaffinity.net/login/',
     'https://www.furaffinity.net',
-    { cookieNames: Object.freeze(['a', 'b']), authenticatedCookieNames: Object.freeze(['a', 'b']) },
+    {
+      cookieNames: Object.freeze(['a', 'b']),
+      authenticatedCookieNames: Object.freeze(['a', 'b']),
+      allowStorageAccess: true,
+      preserveUserAgent: true,
+      resetSessionOnStart: true,
+    },
   ),
   danbooru: cookieSite('danbooru', 'Danbooru', 'https://danbooru.donmai.us/session/new', 'https://danbooru.donmai.us'),
   webtoons: cookieSite(

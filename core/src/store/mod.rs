@@ -37,6 +37,9 @@ impl Store {
             // schema migration, and turns source-backed cover lookups from a
             // full source-item scan into indexed post lookups.
             writer
+                .execute_batch(crate::store::schema::SUBSCRIPTION_READ_INDEXES)
+                .map_err(|error| format!("Failed to ensure subscription read indexes: {error}"))?;
+            writer
                 .execute_batch(
                     "PRAGMA analysis_limit=1000;
                      ANALYZE;

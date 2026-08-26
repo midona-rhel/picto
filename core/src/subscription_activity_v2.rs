@@ -251,7 +251,13 @@ pub fn current_progress(
     store.read_snapshot(|connection| {
         let active_run = connection
             .query_row(
-                "SELECT run_id, status
+                "SELECT run_id,
+                        CASE
+                            WHEN status = 'pending'
+                             AND failure_kind IN ('paused', 'inbox_full')
+                            THEN failure_kind
+                            ELSE status
+                        END
                  FROM subscription_run
                  WHERE subscription_id = ?1 AND status IN ('pending', 'running')
                  ORDER BY run_id DESC

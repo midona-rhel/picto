@@ -32,49 +32,55 @@
 }
 
 .statusBadge {
+  --subscription-status-color: var(--color-text-tertiary);
   display: inline-flex;
   align-items: center;
-  height: 24px;
-  padding: 0 8px;
-  border-radius: 6px;
-  border: 1px solid var(--color-border-secondary);
-  font-size: 12px;
+  justify-content: center;
+  height: 18px;
+  box-sizing: border-box;
+  padding: 0 5px;
+  border: 1px solid color-mix(in srgb, var(--subscription-status-color) 25%, transparent);
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--subscription-status-color) 10%, transparent);
+  color: color-mix(in srgb, var(--subscription-status-color) 45%, var(--color-text-primary));
+  font-family: var(--font-family-ui);
+  font-size: 10px;
+  font-weight: var(--font-weight-regular);
+  letter-spacing: 0.04em;
   line-height: 1;
+  text-transform: uppercase;
   white-space: nowrap;
-}
-
-.statusBadge {
-  text-transform: capitalize;
+  flex-shrink: 0;
 }
 
 .statusRunning {
-  color: #8bd8ff;
-  border-color: rgba(139, 216, 255, 0.3);
-  background: rgba(139, 216, 255, 0.08);
+  --subscription-status-color: var(--color-primary);
+  animation: subscriptionStatusPulse 2.4s ease-in-out infinite;
 }
 
 .statusPaused {
-  color: #ffd36b;
-  border-color: rgba(255, 211, 107, 0.3);
-  background: rgba(255, 211, 107, 0.08);
+  --subscription-status-color: var(--color-warning, #e8a33d); /* guard:allow — warning fallback */
 }
 
 .statusAttention {
-  color: #ff9a66;
-  border-color: rgba(255, 154, 102, 0.3);
-  background: rgba(255, 154, 102, 0.08);
+  --subscription-status-color: var(--color-danger, #ef8b8b); /* guard:allow — danger fallback */
 }
 
 .statusSuccess {
-  color: var(--color-success, #5fb56b); /* guard:allow — success fallback */
-  border-color: color-mix(in srgb, var(--color-success, #5fb56b) 32%, transparent);
-  background: color-mix(in srgb, var(--color-success, #5fb56b) 9%, transparent);
+  --subscription-status-color: var(--color-success, #5fb56b); /* guard:allow — success fallback */
 }
 
 .statusIdle {
-  color: var(--color-text-secondary);
-  border-color: var(--color-border-secondary);
-  background: var(--color-contrast-05);
+  --subscription-status-color: var(--color-text-tertiary);
+}
+
+@keyframes subscriptionStatusPulse {
+  0%, 100% { opacity: 0.58; }
+  50% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statusRunning { animation: none; }
 }
 
 .heroTitle {
@@ -373,7 +379,7 @@
 }
 
 .subscriptionStatus {
-  min-height: 22px;
+  min-height: 18px;
   max-width: calc(100% - 24px);
   display: flex;
   align-items: center;
@@ -475,70 +481,6 @@
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.subscriptionPostsPerRunInput {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  width: 100px;
-}
-
-.subscriptionPostsPerRunInput input {
-  height: 26px;
-  padding: 0 26px 0 8px;
-  font-size: 12px;
-  text-align: right;
-  appearance: textfield;
-  -moz-appearance: textfield;
-}
-
-.subscriptionPostsPerRunInput input::-webkit-inner-spin-button,
-.subscriptionPostsPerRunInput input::-webkit-outer-spin-button {
-  appearance: none;
-  margin: 0;
-}
-
-.subscriptionPostsPerRunStepper {
-  position: absolute;
-  top: 3px;
-  right: 4px;
-  bottom: 3px;
-  width: 16px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 2px;
-}
-
-.subscriptionPostsPerRunStepper button {
-  flex: 1;
-  min-height: 0;
-  padding: 0;
-  display: grid;
-  place-items: center;
-  border: 0;
-  border-radius: 2px;
-  background: transparent;
-  color: var(--color-text-primary);
-  opacity: 0.5;
-  cursor: pointer;
-  transition: opacity 120ms ease;
-}
-
-.subscriptionPostsPerRunStepper button:hover,
-.subscriptionPostsPerRunStepper button:focus-visible {
-  opacity: 1;
-}
-
-.subscriptionPostsPerRunStepper button:focus-visible {
-  outline: 1px solid var(--color-border-primary);
-  outline-offset: 0;
-}
-
-.subscriptionPostsPerRunStepper button:disabled {
-  opacity: 0.2;
-  cursor: default;
 }
 
 .subscriptionDestination {
@@ -904,41 +846,6 @@
   white-space: nowrap;
 }
 
-.qDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-}
-
-@keyframes subscriptionPulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.35; }
-}
-
-.qDotIdle {
-  background: var(--color-text-tertiary);
-  opacity: 0.5;
-}
-
-.qDotRunning {
-  background: var(--color-accent, #3297ff); /* guard:allow — accent fallback */
-  animation: subscriptionPulse 1.4s ease-in-out infinite;
-}
-
-.qDotPaused {
-  background: var(--color-text-tertiary);
-  opacity: 0.25;
-}
-
-.qDotAttention {
-  background: var(--color-warning, #e8a33d); /* guard:allow — warning fallback */
-}
-
-.qDotSuccess {
-  background: var(--color-success, #5fb56b); /* guard:allow — success fallback */
-}
-
 .qCellActions {
   display: flex;
   justify-content: flex-end;
@@ -1187,22 +1094,12 @@
 }
 
 .followNameText {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 13px;
   font-weight: 400;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.upToDateChip {
-  flex-shrink: 0;
-  padding: 2px 5px;
-  border-radius: 4px;
-  color: var(--color-success, #5fb56b); /* guard:allow — success fallback */
-  background: color-mix(in srgb, var(--color-success, #5fb56b) 10%, transparent);
-  font-size: 9.5px;
-  font-weight: 600;
-  line-height: 1.2;
   white-space: nowrap;
 }
 

@@ -10,6 +10,66 @@ export type SubscriptionCoverCrop = {
 
 export type SubscriptionCoverDimensions = { width: number; height: number };
 
+export function SubscriptionCoverThumbnail({
+  fileHash,
+  className,
+  alt = '',
+  loading,
+  draggable = false,
+  onError,
+}: {
+  fileHash: string;
+  className?: string;
+  alt?: string;
+  loading?: 'eager' | 'lazy';
+  draggable?: boolean;
+  onError?: () => void;
+}) {
+  return (
+    <ThumbnailImage
+      src={mediaThumbnailUrl(fileHash)}
+      fallback="empty"
+      alt={alt}
+      loading={loading}
+      draggable={draggable}
+      className={className}
+      onThumbnailError={onError}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        display: 'block',
+        width: '100%',
+        height: '100%',
+        objectFit: 'cover',
+        userSelect: 'none',
+        pointerEvents: 'none',
+      }}
+    />
+  );
+}
+
+export function SubscriptionCoverDisplay({
+  fileHash,
+  crop,
+  ...props
+}: {
+  fileHash: string;
+  crop: SubscriptionCoverCrop;
+  className?: string;
+  alt?: string;
+  loading?: 'eager' | 'lazy';
+  draggable?: boolean;
+  onError?: () => void;
+}) {
+  const fixedThumbnail = crop.focusX === 500
+    && crop.focusY === 500
+    && crop.zoomPercent === 100;
+  if (fixedThumbnail) {
+    return <SubscriptionCoverThumbnail fileHash={fileHash} {...props} />;
+  }
+  return <SubscriptionCoverImage fileHash={fileHash} crop={crop} {...props} />;
+}
+
 export function subscriptionCoverGeometry(
   dimensions: SubscriptionCoverDimensions,
   crop: SubscriptionCoverCrop,

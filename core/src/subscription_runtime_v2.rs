@@ -61,6 +61,7 @@ pub struct RunnerFailure {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RunnerFailureKind {
     Interrupted,
+    InboxFull,
     Network,
     RateLimited,
     Authentication,
@@ -100,6 +101,7 @@ impl Display for RunnerFailureKind {
     fn fmt(&self, formatter: &mut Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
             Self::Interrupted => "interrupted",
+            Self::InboxFull => "inbox_full",
             Self::Network => "network",
             Self::RateLimited => "rate_limited",
             Self::Authentication => "auth",
@@ -162,6 +164,18 @@ impl<'a, R: SourceRunner> SubscriptionWorker<'a, R> {
     }
 
     pub async fn tick(&self, now: &str) -> Result<Option<MutationReceipt>, String> {
+        let inbox_limit = crate::settings_v2::subscription_inbox_item_limit(self.application)?;
+        let inbox_full = crate::settings_v2::subscription_inbox_is_full(self.application)?;
+        if subscriptions_v2::set_pending_runs_waiting_for_inbox(
+            self.application.store(),
+            inbox_full,
+            inbox_limit,
+        )? {
+            publish_subscription_receipt(self.application)?;
+        }
+        if inbox_full {
+            return Ok(None);
+        }
         let query = {
             let mut schedule = self
                 .schedule
@@ -190,6 +204,18 @@ pub async fn tick<R: SourceRunner>(
     runner: &R,
     now: &str,
 ) -> Result<Option<MutationReceipt>, String> {
+    let inbox_limit = crate::settings_v2::subscription_inbox_item_limit(application)?;
+    let inbox_full = crate::settings_v2::subscription_inbox_is_full(application)?;
+    if subscriptions_v2::set_pending_runs_waiting_for_inbox(
+        application.store(),
+        inbox_full,
+        inbox_limit,
+    )? {
+        publish_subscription_receipt(application)?;
+    }
+    if inbox_full {
+        return Ok(None);
+    }
     let Some(query) = subscriptions_v2::claim_next_query_run(application.store(), schedule, now)?
     else {
         return Ok(None);
@@ -292,6 +318,13 @@ async fn run_stream<R: SourceRunner>(
                 )));
             }
             _ = state_poll.tick() => {
+                if crate::settings_v2::subscription_inbox_is_full(application)? {
+                    runner_cancel.cancel();
+                    return Ok(Err(RunnerFailure::retryable(
+                        RunnerFailureKind::InboxFull,
+                        "Inbox reached its configured subscription limit",
+                    )));
+                }
                 let running = subscriptions_v2::get_query_run(
                     application.store(),
                     query.run_query_id,
@@ -487,6 +520,15 @@ fn settle_runner_failure(
 ) -> Result<(), String> {
     if failure.kind == RunnerFailureKind::Interrupted {
         return subscriptions_v2::interrupt_query_run(application.store(), query.run_query_id, now);
+    }
+    if failure.kind == RunnerFailureKind::InboxFull {
+        let limit = crate::settings_v2::subscription_inbox_item_limit(application)?;
+        return subscriptions_v2::wait_query_run_for_inbox(
+            application.store(),
+            query.run_query_id,
+            limit,
+            now,
+        );
     }
     let authentication_failed = failure.kind == RunnerFailureKind::Authentication;
     let failure_message = failure.message.clone();
@@ -808,6 +850,60 @@ mod tests {
         assert_eq!(
             (posts, jobs, state, cursor),
             (2, 2, "succeeded".to_string(), "cursor-2".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn leaves_subscription_work_pending_while_inbox_is_full() {
+        let (_directory, application, _subscription) = fixture();
+        application
+            .patch_application_settings(&serde_json::json!({
+                "subscriptionInboxItemLimit": 1
+            }))
+            .unwrap();
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO library_item (
+                         item_id, item_key, kind, created_at, updated_at
+                     ) VALUES (1, 'inbox-item', 'collection', 'now', 'now')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (1, 'inbox')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let worker = SubscriptionWorker::new(&application, FakeRunner::default());
+
+        assert!(worker.tick(FIRST_NOW).await.unwrap().is_none());
+        let state: (String, Option<String>, String, Option<String>) = application
+            .store()
+            .read(|connection| {
+                let run = connection.query_row(
+                    "SELECT status, failure_kind FROM subscription_run",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                let query = connection.query_row(
+                    "SELECT status, failure_kind FROM subscription_run_query",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                Ok((run.0, run.1, query.0, query.1))
+            })
+            .unwrap();
+        assert_eq!(
+            state,
+            (
+                "pending".into(),
+                Some("inbox_full".into()),
+                "pending".into(),
+                Some("inbox_full".into()),
+            )
         );
     }
 

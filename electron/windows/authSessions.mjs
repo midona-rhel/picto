@@ -4,6 +4,7 @@ import { createManualOnlyFansCredential, launchExternalOnlyFansAuth } from './ex
 
 const OAUTH_CALLBACK_URL = 'https://picto.app/oauth/callback';
 const POLL_INTERVAL_MS = 750;
+const STORAGE_ACCESS_PERMISSIONS = new Set(['storage-access', 'top-level-storage-access']);
 
 export { getStaticAuthLoginRoutes };
 
@@ -17,6 +18,16 @@ function sanitizeUserAgent(userAgent) {
     .replace(/\s+Picto\/[^\s]+/gi, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+function configureAuthPermissions(session, site) {
+  const permissionAllowed = (permission) => Boolean(
+    site.allowStorageAccess && STORAGE_ACCESS_PERMISSIONS.has(permission)
+  );
+  session?.setPermissionCheckHandler?.((_contents, permission) => permissionAllowed(permission));
+  session?.setPermissionRequestHandler?.((_contents, permission, callback) => {
+    callback(permissionAllowed(permission));
+  });
 }
 
 function oauthEncode(value) {
@@ -555,11 +566,9 @@ export function createAuthSessions({
 
   function createPopup(site) {
     const parent = getMainWindow();
+    const size = site.authWindowSize ?? { width: 520, height: 760, minWidth: 420, minHeight: 640 };
     const authWindow = new BrowserWindow({
-      width: 520,
-      height: 760,
-      minWidth: 420,
-      minHeight: 640,
+      ...size,
       title: `Login: ${site.label}`,
       backgroundColor: '#ffffff',
       autoHideMenuBar: true,
@@ -573,8 +582,8 @@ export function createAuthSessions({
       },
     });
     const userAgent = sanitizeUserAgent(authWindow.webContents.getUserAgent?.());
-    if (userAgent) authWindow.webContents.setUserAgent(userAgent);
-    authWindow.webContents.session?.setPermissionRequestHandler?.((_contents, _permission, callback) => callback(false));
+    if (!site.preserveUserAgent && userAgent) authWindow.webContents.setUserAgent(userAgent);
+    configureAuthPermissions(authWindow.webContents.session, site);
     authWindow.webContents.setWindowOpenHandler(({ url }) => {
       if (/^https:\/\//i.test(url)) queueMicrotask(() => {
         if (!authWindow.isDestroyed()) void authWindow.webContents.loadURL(url);
@@ -685,6 +694,10 @@ export function createAuthSessions({
       message: 'Preparing login…',
     });
     try {
+      if (site.resetSessionOnStart) {
+        await authWindow.webContents.session?.clearCache?.();
+        await authWindow.webContents.session?.clearStorageData?.();
+      }
       const prepared = await adapter.prepare();
       await authWindow.webContents.loadURL(prepared.url);
       emit({ status: 'active', current_url: prepared.url, message: prepared.message });

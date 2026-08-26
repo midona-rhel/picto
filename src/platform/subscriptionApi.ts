@@ -85,6 +85,7 @@ function mapSubscription(subscription: SubscriptionView): SubscriptionInfo {
     name: subscription.name,
     schedule: subscription.schedule,
     paused: subscription.paused,
+    run_status: subscription.status,
     created_at: '',
     total_files: subscription.media_count,
     posts_per_run: subscription.periodic_post_limit ?? subscription.initial_post_limit ?? 100,

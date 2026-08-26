@@ -8,6 +8,9 @@ use crate::app::{resources, Application, MutationReceipt};
 use crate::store::history::HistoryDescriptor;
 
 const APPLICATION_SETTINGS_KEY: &str = "application";
+const GRID_DEFAULTS_SCOPE: &str = "grid:defaults";
+pub const DEFAULT_SUBSCRIPTION_INBOX_ITEM_LIMIT: u64 = 1_000;
+const MAX_SUBSCRIPTION_INBOX_ITEM_LIMIT: u64 = 1_000_000;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -20,6 +23,38 @@ pub struct SettingsSnapshot {
 
 pub fn application_settings(application: &Application) -> Result<SettingsSnapshot, String> {
     read_value(application, "setting", "key", APPLICATION_SETTINGS_KEY)
+}
+
+pub fn subscription_inbox_item_limit(application: &Application) -> Result<u64, String> {
+    let settings = application_settings(application)?;
+    let Some(value) = settings.value.get("subscriptionInboxItemLimit") else {
+        return Ok(DEFAULT_SUBSCRIPTION_INBOX_ITEM_LIMIT);
+    };
+    let limit = value.as_u64().ok_or_else(|| {
+        "Application setting subscriptionInboxItemLimit must be a positive integer".to_string()
+    })?;
+    if !(1..=MAX_SUBSCRIPTION_INBOX_ITEM_LIMIT).contains(&limit) {
+        return Err(format!(
+            "Application setting subscriptionInboxItemLimit must be between 1 and {MAX_SUBSCRIPTION_INBOX_ITEM_LIMIT}"
+        ));
+    }
+    Ok(limit)
+}
+
+pub fn subscription_inbox_is_full(application: &Application) -> Result<bool, String> {
+    let limit = subscription_inbox_item_limit(application)?;
+    application.store().read(|connection| {
+        let count: u64 = connection.query_row(
+            "SELECT COUNT(*) FROM (
+                 SELECT 1 FROM library_root
+                 WHERE lifecycle = 'inbox'
+                 LIMIT ?1
+             )",
+            [limit],
+            |row| row.get(0),
+        )?;
+        Ok(count >= limit)
+    })
 }
 
 pub fn view_preferences(
@@ -69,6 +104,17 @@ impl Application {
     ) -> Result<MutationReceipt, String> {
         let scope = required("View preference scope", scope)?;
         patch_untracked_value(self, "view_pref", "scope", &scope, patch)
+    }
+
+    pub fn reset_view_preferences(&self) -> Result<MutationReceipt, String> {
+        let (_, revision, _) = self.store().transaction_if_changed(|transaction| {
+            let removed = transaction.execute(
+                "DELETE FROM view_pref WHERE scope <> ?1",
+                [GRID_DEFAULTS_SCOPE],
+            )?;
+            Ok(((), removed > 0))
+        })?;
+        Ok(settings_receipt(revision))
     }
 }
 
@@ -329,6 +375,40 @@ mod tests {
     }
 
     #[test]
+    fn subscription_inbox_limit_defaults_and_counts_top_level_items() {
+        let (_directory, application) = fixture();
+        assert_eq!(
+            subscription_inbox_item_limit(&application).unwrap(),
+            DEFAULT_SUBSCRIPTION_INBOX_ITEM_LIMIT
+        );
+        assert!(!subscription_inbox_is_full(&application).unwrap());
+
+        application
+            .patch_application_settings(&serde_json::json!({
+                "subscriptionInboxItemLimit": 1
+            }))
+            .unwrap();
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO library_item (
+                         item_id, item_key, kind, created_at, updated_at
+                     ) VALUES (1, 'inbox-item', 'collection', 'now', 'now')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (1, 'inbox')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert!(subscription_inbox_is_full(&application).unwrap());
+    }
+
+    #[test]
     fn view_preferences_do_not_replace_real_undo_history() {
         let (_directory, application) = fixture();
         application
@@ -346,6 +426,42 @@ mod tests {
         assert_eq!(
             view_preferences(&application, "system:all").unwrap().value,
             serde_json::json!({"size": 180})
+        );
+    }
+
+    #[test]
+    fn resetting_view_preferences_preserves_only_grid_defaults() {
+        let (_directory, application) = fixture();
+        application
+            .patch_view_preferences(
+                GRID_DEFAULTS_SCOPE,
+                &serde_json::json!({"view_mode": "grid"}),
+            )
+            .unwrap();
+        application
+            .patch_view_preferences("system:active", &serde_json::json!({"show_name": false}))
+            .unwrap();
+        application
+            .patch_view_preferences("folder:9", &serde_json::json!({"sort_field": "name"}))
+            .unwrap();
+
+        application.reset_view_preferences().unwrap();
+
+        assert_eq!(
+            view_preferences(&application, GRID_DEFAULTS_SCOPE)
+                .unwrap()
+                .value,
+            serde_json::json!({"view_mode": "grid"})
+        );
+        assert_eq!(
+            view_preferences(&application, "system:active")
+                .unwrap()
+                .value,
+            serde_json::json!({})
+        );
+        assert_eq!(
+            view_preferences(&application, "folder:9").unwrap().value,
+            serde_json::json!({})
         );
     }
 }

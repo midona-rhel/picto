@@ -2,6 +2,7 @@ import { render, screen } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 import {
   SubscriptionCoverImage,
+  SubscriptionCoverThumbnail,
   subscriptionCoverGeometry,
 } from './SubscriptionCoverImage';
 
@@ -25,6 +26,19 @@ describe('SubscriptionCoverImage', () => {
       height: `${geometry.heightRatio * 100}%`,
       left: `${geometry.leftPercent}%`,
       top: `${geometry.topPercent}%`,
+    });
+  });
+
+  it('renders saved covers from one fixed thumbnail without runtime crop geometry', () => {
+    render(<SubscriptionCoverThumbnail fileHash={'a'.repeat(64)} alt="Subscription cover" />);
+
+    const image = screen.getByRole('img', { name: 'Subscription cover' });
+    expect(image).toHaveAttribute('src', `media://localhost/thumb/${'a'.repeat(64)}.jpg`);
+    expect(image).toHaveStyle({
+      inset: '0',
+      width: '100%',
+      height: '100%',
+      objectFit: 'cover',
     });
   });
 });

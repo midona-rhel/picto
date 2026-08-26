@@ -5,12 +5,11 @@ import type {
   SubscriptionSiteInfo,
 } from '../../shared/types/subscriptions';
 import {
+  describeSubscriptionState,
   getQueryAuthState,
   getSubscriptionRunTarget,
   isQueryCompleted,
-  isQueryUpToDate,
   isSubscriptionCompleted,
-  isSubscriptionUpToDate,
 } from './subscriptionUtils';
 import { getCredentialOwnerSiteId } from '../../shared/lib/subscriptionHelpers';
 
@@ -46,6 +45,7 @@ function subscription(queries: SubscriptionQueryInfo[]): SubscriptionInfo {
     name: 'Huffslove',
     schedule: 'daily',
     paused: false,
+    run_status: null,
     created_at: '2026-08-05T19:08:25Z',
     total_files: 198,
     posts_per_run: 100,
@@ -55,39 +55,40 @@ function subscription(queries: SubscriptionQueryInfo[]): SubscriptionInfo {
   };
 }
 
-describe('subscription freshness', () => {
-  it('marks the first successful run completed but not up to date', () => {
+describe('subscription completion', () => {
+  it('marks the first successful run complete', () => {
     const firstRun = query({ successful_run_count: 1 });
     expect(isQueryCompleted(firstRun)).toBe(true);
-    expect(isQueryUpToDate(firstRun)).toBe(false);
-  });
-
-  it('marks a later successful check up to date', () => {
-    expect(isQueryUpToDate(query())).toBe(true);
-    expect(isQueryUpToDate(query({ source_history_complete: false }))).toBe(false);
   });
 
   it('rejects incomplete, failed, paused, and unhealthy queries', () => {
-    expect(isQueryUpToDate(query({ completed_initial_run: false }))).toBe(false);
-    expect(isQueryUpToDate(query({ last_failure_kind: 'network' }))).toBe(false);
-    expect(isQueryUpToDate(query({ paused: true }))).toBe(false);
-    expect(isQueryUpToDate(query(), 1)).toBe(false);
+    expect(isQueryCompleted(query({ completed_initial_run: false }))).toBe(false);
+    expect(isQueryCompleted(query({ last_failure_kind: 'network' }))).toBe(false);
+    expect(isQueryCompleted(query({ paused: true }))).toBe(false);
+    expect(isQueryCompleted(query(), 1)).toBe(false);
   });
 
-  it('requires every query and the subscription health to be current', () => {
+  it('requires every query and the subscription health to be complete', () => {
     const current = subscription([query(), query({ id: '2' })]);
-    expect(isSubscriptionUpToDate(current)).toBe(true);
     expect(isSubscriptionCompleted(current)).toBe(true);
     expect(isSubscriptionCompleted(subscription([
       query({ successful_run_count: 1 }),
     ]))).toBe(true);
-    expect(isSubscriptionUpToDate(subscription([
-      query({ successful_run_count: 1 }),
-    ]))).toBe(false);
-    expect(isSubscriptionUpToDate(current, 1, 0)).toBe(false);
-    expect(isSubscriptionUpToDate(current, 0, 1)).toBe(false);
-    expect(isSubscriptionUpToDate(subscription([]))).toBe(false);
-    expect(isSubscriptionUpToDate(subscription([query({ completed_initial_run: false })]))).toBe(false);
+    expect(isSubscriptionCompleted(current, 1, 0)).toBe(false);
+    expect(isSubscriptionCompleted(current, 0, 1)).toBe(false);
+    expect(isSubscriptionCompleted(subscription([]))).toBe(false);
+    expect(isSubscriptionCompleted(subscription([query({ completed_initial_run: false })]))).toBe(false);
+  });
+});
+
+describe('subscription state', () => {
+  it('keeps an explicitly paused subscription paused while stale progress is present', () => {
+    expect(describeSubscriptionState({
+      paused: true,
+      progress: {} as never,
+      failedPostCount: 0,
+      openIssueCount: 0,
+    })).toBe('paused');
   });
 });
 

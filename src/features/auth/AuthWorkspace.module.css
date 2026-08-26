@@ -80,8 +80,14 @@
   justify-content: center;
   border: 1px solid var(--color-border-primary);
   background: var(--color-control-surface);
-  color: var(--color-text-secondary);
-  font-weight: 500;
+  color: var(--color-text-tertiary);
+}
+
+.siteMark img,
+.detailMark img {
+  display: block;
+  object-fit: contain;
+  border-radius: 3px;
 }
 
 .siteMark {
@@ -99,17 +105,51 @@
 }
 
 .detailStatus {
+  --account-status-color: var(--color-text-tertiary);
+  justify-self: end;
+  width: auto;
+  max-width: 112px;
+  height: var(--control-height-sm);
+  box-sizing: border-box;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid color-mix(in srgb, var(--account-status-color) 25%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--account-status-color) 10%, transparent);
+  color: color-mix(in srgb, var(--account-status-color) 45%, var(--color-text-primary));
+  font-family: var(--font-family-ui);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-regular);
+  letter-spacing: 0.035em;
+  line-height: 1;
+  text-transform: uppercase;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--color-text-tertiary);
 }
+
+.detailStatusSuccess { --account-status-color: var(--color-success, #5fb56b); /* guard:allow — success fallback */ }
+.detailStatusAttention { --account-status-color: var(--color-danger, #ef8b8b); /* guard:allow — danger fallback */ }
+.detailStatusIdle { --account-status-color: var(--color-text-tertiary); }
 
 .accountDot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
-  background: #83d4a4;
+}
+
+.accountDotSuccess {
+  background: var(--color-success, #5fb56b); /* guard:allow — success fallback */
+}
+
+.accountDotAttention {
+  background: var(--color-danger, #ef8b8b); /* guard:allow — danger fallback */
+}
+
+.accountDotIdle {
+  background: var(--color-text-disabled);
 }
 
 .detail {
@@ -160,12 +200,6 @@
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.detailStatus {
-  width: 96px;
-  text-align: right;
-  font-size: 12px;
 }
 
 .detailBody {

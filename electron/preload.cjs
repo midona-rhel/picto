@@ -59,6 +59,10 @@ const search = {
   reverseImage: (filePath, engine) => ipcRenderer.invoke('picto:reverseImageSearch', { filePath, engine }),
 };
 
+const siteIcons = {
+  get: (domain) => ipcRenderer.invoke('picto:siteIcon:get', { domain }),
+};
+
 const library = {
   create: (name, savePath) => ipcRenderer.invoke('picto:library:create', { name, savePath }),
   joinCloud: (input) => ipcRenderer.invoke('picto:library:joinCloud', input),
@@ -147,6 +151,7 @@ contextBridge.exposeInMainWorld('picto', {
   monitor,
   webview,
   search,
+  siteIcons,
   library,
   tutorial,
   updater,

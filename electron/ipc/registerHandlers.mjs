@@ -33,9 +33,20 @@ function createReverseSearchConfigs() {
     saucenao: {
       url: 'https://saucenao.com/',
       preSetup: `(async () => { ${waitForHelper} await __waitFor('#searchForm'); })()`,
-      fileInputSelector: "input[type='file']",
-      postSetup: `document.querySelector('#searchForm')?.submit()`,
+      fileInputSelector: '#fileInput',
+      postSetup: `(async () => {
+        const input = document.querySelector('#fileInput');
+        if (!input?.files?.length) throw new Error('SauceNAO did not receive the image');
+        checkImageFile(input);
+        const started = Date.now();
+        while (!searchReady && Date.now() - started < 5000) {
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+        if (!searchReady) throw new Error('SauceNAO rejected the image');
+        document.querySelector('#searchForm')?.requestSubmit();
+      })()`,
       isResultUrl: (href) => href.includes('saucenao.com/search.php'),
+      keepResultWindow: true,
     },
     yandex: {
       url: 'https://yandex.com/images/',
@@ -70,19 +81,63 @@ function createReverseSearchConfigs() {
       url: 'https://www.bing.com/images',
       preSetup: `(async () => {
         ${waitForHelper}
-        await __waitFor('#sb_sbip, #sb_sbi, [id*="sbi"], input[type="file"]');
-        const btn = document.querySelector('#sb_sbip') || document.querySelector('#sb_sbi') || document.querySelector('[id*="sbi"]');
-        if (btn) { btn.click(); await new Promise(r => setTimeout(r, 1000)); }
-        await __waitFor("input[type='file']", 8000);
+        const btn = await __waitFor('#sb_sbi, #sb_sbip');
+        btn.click();
+        await __waitFor('#sb_fileinput', 8000);
       })()`,
-      fileInputSelector: "input[type='file']",
-      postSetup: null,
-      isResultUrl: (href) => href.includes('bing.com/images/search'),
+      fileInputSelector: '#sb_fileinput',
+      postSetup: `(() => {
+        const input = document.querySelector('#sb_fileinput');
+        if (!input?.files?.length) throw new Error('Bing did not receive the image');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`,
+      isResultUrl: (href) => /bing\.com\/images\/(search|searchbyimage)/.test(href),
     },
   };
 }
 
-async function runReverseImageSearch({ BrowserWindow, filePath, engine }) {
+function waitForReverseSearchResult(searchWin, cfg, engine, timeoutMs = 30_000) {
+  return new Promise((resolve, reject) => {
+    let interval;
+    let timeout;
+    const cleanup = () => {
+      clearInterval(interval);
+      clearTimeout(timeout);
+      searchWin.webContents.removeListener('did-navigate', checkUrl);
+      searchWin.webContents.removeListener('did-navigate-in-page', checkUrl);
+      searchWin.removeListener('closed', onClosed);
+    };
+    const finish = (callback, value) => {
+      cleanup();
+      callback(value);
+    };
+    const checkUrl = (_event, navigatedUrl) => {
+      const href = typeof navigatedUrl === 'string'
+        ? navigatedUrl
+        : searchWin.webContents.getURL();
+      if (cfg.isResultUrl(href)) finish(resolve, href);
+    };
+    const onClosed = () => finish(reject, new Error('Search window was closed'));
+
+    searchWin.webContents.on('did-navigate', checkUrl);
+    searchWin.webContents.on('did-navigate-in-page', checkUrl);
+    searchWin.on('closed', onClosed);
+    interval = setInterval(checkUrl, 100);
+    timeout = setTimeout(() => {
+      const href = searchWin.isDestroyed() ? '(closed)' : searchWin.webContents.getURL();
+      finish(reject, new Error(`${engine}: timed out. Last URL: ${href}`));
+    }, timeoutMs);
+    checkUrl();
+  });
+}
+
+export async function runReverseImageSearch({
+  BrowserWindow,
+  filePath,
+  engine,
+  openExternal = (url) => shell.openExternal(url),
+}) {
   const configs = createReverseSearchConfigs();
   const cfg = configs[engine];
   if (!cfg) throw new Error(`Unknown search engine: ${engine}`);
@@ -93,7 +148,11 @@ async function runReverseImageSearch({ BrowserWindow, filePath, engine }) {
     height: 800,
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
-  searchWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  searchWin.webContents.setWindowOpenHandler(({ url }) => {
+    void openExternal(url);
+    return { action: 'deny' };
+  });
+  let keepResultWindow = false;
 
   try {
     console.log(`[reverse-search] ${engine}: loading ${cfg.url}`);
@@ -131,33 +190,18 @@ async function runReverseImageSearch({ BrowserWindow, filePath, engine }) {
       await searchWin.webContents.executeJavaScript(cfg.postSetup, true);
     }
 
-    const resultUrl = await new Promise((resolve, reject) => {
-      let attempts = 0;
-      const interval = setInterval(async () => {
-        attempts++;
-        if (searchWin.isDestroyed()) {
-          clearInterval(interval);
-          reject(new Error('Search window was closed'));
-          return;
-        }
-        try {
-          const href = await searchWin.webContents.executeJavaScript('location.href', true);
-          if (cfg.isResultUrl(href)) {
-            clearInterval(interval);
-            resolve(href);
-          }
-          if (attempts > 300) {
-            clearInterval(interval);
-            reject(new Error(`${engine}: timed out. Last URL: ${href}`));
-          }
-        } catch {}
-      }, 100);
-    });
+    const resultUrl = await waitForReverseSearchResult(searchWin, cfg, engine);
 
-    await shell.openExternal(resultUrl);
+    if (cfg.keepResultWindow) {
+      keepResultWindow = true;
+      searchWin.show();
+      return resultUrl;
+    }
+
+    await openExternal(resultUrl);
     return resultUrl;
   } finally {
-    if (!searchWin.isDestroyed()) searchWin.destroy();
+    if (!keepResultWindow && !searchWin.isDestroyed()) searchWin.destroy();
   }
 }
 
@@ -180,6 +224,7 @@ export function registerIpcHandlers({
   windowManager,
   libraryService,
   updaterService,
+  siteIconService,
   startNativeDrag,
   getAssociatedApplications,
   openWithApplication,
@@ -220,15 +265,18 @@ export function registerIpcHandlers({
     }
     if (command === 'open_in_new_window') {
       const hash = args?.hash;
-      if (!isValidHash(hash)) throw new Error('Invalid hash for detail window');
-      const label = `detail-${hash.slice(0, 12)}`;
+      const itemId = Number(args?.item_id);
+      const hasHash = isValidHash(hash);
+      const hasItemId = Number.isSafeInteger(itemId) && itemId > 0;
+      if (hasHash === hasItemId) throw new Error('Detail window requires exactly one media hash or group item ID');
+      const label = hasHash ? `detail-${hash.slice(0, 12)}` : `detail-group-${itemId}`;
       const existing = windowManager.getWindow(label);
       if (existing && !existing.isDestroyed()) {
         existing.focus();
         return null;
       }
       const { width, height } = windowManager.calcDetailWindowSize(args?.width, args?.height);
-      windowManager.createWindow(label, hash, width, height);
+      windowManager.createWindow(label, hasHash ? hash : null, width, height, hasItemId ? itemId : null);
       return null;
     }
     if (command === 'media.set_thumbnail') {
@@ -411,6 +459,8 @@ export function registerIpcHandlers({
   handle('picto:reverseImageSearch', async (_event, { filePath, engine }) => {
     return runReverseImageSearch({ BrowserWindow, filePath, engine });
   });
+
+  handle('picto:siteIcon:get', async (_event, { domain }) => siteIconService.get(domain));
 
   ipcMain.on('ondragstart', async (event, { hashes, iconDataUrl }) => {
     if (!windowManager.ownsWebContents(event.sender)) return;

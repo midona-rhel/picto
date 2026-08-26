@@ -552,7 +552,8 @@ pub fn claim_next_query_run(
 
         let changed = tx.execute(
             "UPDATE subscription_run_query
-             SET status = 'running', started_at = ?1, attempt_count = attempt_count + 1
+             SET status = 'running', started_at = ?1, attempt_count = attempt_count + 1,
+                 failure_kind = NULL, error_message = NULL
              WHERE run_query_id = ?2 AND status = 'pending' AND available_at <= ?1",
             params![now, candidate.run_query_id],
         )?;
@@ -577,6 +578,103 @@ pub fn claim_next_query_run(
         schedule.mark_started(claim.domain_key.clone(), now_ms);
     }
     Ok(claim)
+}
+
+pub fn set_pending_runs_waiting_for_inbox(
+    store: &Store,
+    inbox_full: bool,
+    limit: u64,
+) -> Result<bool, String> {
+    let (_, _, changed) = store.transaction_if_changed(|tx| {
+        let changed = if inbox_full {
+            let message = format!("Stopped because Inbox reached its limit of {limit} items.");
+            let queries = tx.execute(
+                "UPDATE subscription_run_query
+                 SET failure_kind = 'inbox_full', error_message = ?1
+                 WHERE status = 'pending'
+                   AND COALESCE(failure_kind, '') != 'inbox_full'
+                   AND run_id IN (
+                       SELECT run.run_id
+                       FROM subscription_run run
+                       JOIN subscription subscription
+                         ON subscription.subscription_id = run.subscription_id
+                       WHERE run.status IN ('pending', 'running')
+                         AND subscription.paused = 0
+                   )",
+                [&message],
+            )?;
+            let runs = tx.execute(
+                "UPDATE subscription_run
+                 SET failure_kind = 'inbox_full', error_message = ?1
+                 WHERE status = 'pending' AND COALESCE(failure_kind, '') != 'inbox_full'
+                   AND subscription_id IN (
+                       SELECT subscription_id FROM subscription WHERE paused = 0
+                   )",
+                [&message],
+            )?;
+            queries != 0 || runs != 0
+        } else {
+            let queries = tx.execute(
+                "UPDATE subscription_run_query
+                 SET failure_kind = NULL, error_message = NULL
+                 WHERE status = 'pending' AND failure_kind = 'inbox_full'",
+                [],
+            )?;
+            let runs = tx.execute(
+                "UPDATE subscription_run
+                 SET failure_kind = NULL
+                 WHERE status = 'pending' AND failure_kind = 'inbox_full'",
+                [],
+            )?;
+            queries != 0 || runs != 0
+        };
+        Ok(((), changed))
+    })?;
+    Ok(changed)
+}
+
+pub fn wait_query_run_for_inbox(
+    store: &Store,
+    run_query_id: i64,
+    limit: u64,
+    now: &str,
+) -> Result<(), String> {
+    let message = format!("Stopped because Inbox reached its limit of {limit} items.");
+    store.transaction(|tx| {
+        let run_id: Option<i64> = tx
+            .query_row(
+                "SELECT run_id FROM subscription_run_query
+                 WHERE run_query_id = ?1 AND status = 'running'",
+                [run_query_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(run_id) = run_id else {
+            return Ok(());
+        };
+        tx.execute(
+            "UPDATE subscription_run_query
+             SET status = 'pending', available_at = ?1, finished_at = NULL,
+                 attempt_count = MAX(attempt_count - 1, 0),
+                 failure_kind = 'inbox_full', error_message = ?2
+             WHERE run_query_id = ?3 AND status = 'running'",
+            params![now, message, run_query_id],
+        )?;
+        tx.execute(
+            "UPDATE subscription_run
+             SET status = 'pending', finished_at = NULL,
+                 failure_kind = 'inbox_full', error_message = ?2
+             WHERE run_id = ?1
+               AND status IN ('pending', 'running')
+               AND NOT EXISTS (
+                   SELECT 1 FROM subscription_run_query active
+                   WHERE active.run_id = ?1 AND active.status = 'running'
+               )",
+            params![run_id, message],
+        )?;
+        Ok(())
+    })?;
+    Ok(())
 }
 
 pub fn record_post(
@@ -1158,6 +1256,13 @@ fn settle_run(tx: &Transaction<'_>, run_id: i64, now: &str) -> rusqlite::Result<
         },
     )?;
     if pending > 0 || running > 0 {
+        if pending > 0 && running == 0 {
+            tx.execute(
+                "UPDATE subscription_run SET status = 'pending'
+                 WHERE run_id = ?1 AND status = 'running'",
+                [run_id],
+            )?;
+        }
         return Ok(None);
     }
     let state = if failed > 0 {
@@ -1467,6 +1572,90 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn inbox_capacity_wait_is_persisted_and_resumes_the_same_run() {
+        let (_directory, store) = store();
+        let sub = subscription(&store);
+        query(&store, sub, "q", "example.test");
+        let run = create_run(&store, sub, "manual", "2026-01-01T00:00:00Z").unwrap();
+
+        assert!(set_pending_runs_waiting_for_inbox(&store, true, 1_000).unwrap());
+        let waiting: (String, Option<String>, String, Option<String>) = store
+            .read(|connection| {
+                let run_state = connection.query_row(
+                    "SELECT status, failure_kind FROM subscription_run WHERE run_id = ?1",
+                    [run.run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                let query = connection.query_row(
+                    "SELECT status, failure_kind FROM subscription_run_query WHERE run_id = ?1",
+                    [run.run_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                Ok((run_state.0, run_state.1, query.0, query.1))
+            })
+            .unwrap();
+        assert_eq!(
+            waiting,
+            (
+                "pending".into(),
+                Some("inbox_full".into()),
+                "pending".into(),
+                Some("inbox_full".into()),
+            )
+        );
+
+        assert!(set_pending_runs_waiting_for_inbox(&store, false, 1_000).unwrap());
+        let claim =
+            claim_next_query_run(&store, &mut DomainSchedule::new(), "2026-01-01T00:00:01Z")
+                .unwrap()
+                .unwrap();
+        assert_eq!(claim.run_id, run.run_id);
+        let reason: Option<String> = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT failure_kind FROM subscription_run_query WHERE run_query_id = ?1",
+                    [claim.run_query_id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn a_running_query_waits_without_consuming_an_attempt_when_inbox_fills() {
+        let (_directory, store) = store();
+        let sub = subscription(&store);
+        query(&store, sub, "q", "example.test");
+        let run = create_run(&store, sub, "manual", "2026-01-01T00:00:00Z").unwrap();
+        let claim =
+            claim_next_query_run(&store, &mut DomainSchedule::new(), "2026-01-01T00:00:01Z")
+                .unwrap()
+                .unwrap();
+
+        wait_query_run_for_inbox(&store, claim.run_query_id, 1_000, "2026-01-01T00:00:02Z")
+            .unwrap();
+
+        let waiting = get_query_run(&store, claim.run_query_id).unwrap().unwrap();
+        assert_eq!(waiting.state, RunState::Pending);
+        assert_eq!(waiting.attempt_count, 0);
+        assert_eq!(
+            get_run(&store, run.run_id).unwrap().unwrap().state,
+            RunState::Pending
+        );
+        let reason: Option<String> = store
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT failure_kind FROM subscription_run_query WHERE run_query_id = ?1",
+                    [claim.run_query_id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(reason.as_deref(), Some("inbox_full"));
     }
 
     #[test]

@@ -33,7 +33,10 @@ function createBrowserWindowMock({ pageResult = false, cookies = [] } = {}) {
           return typeof pageResult === 'function' ? pageResult(this.loadedUrl, script) : pageResult;
         }),
         session: {
+          clearCache: vi.fn(async () => {}),
           clearStorageData: vi.fn(async () => {}),
+          setPermissionCheckHandler: vi.fn((handler) => { this.permissionCheckHandler = handler; }),
+          setPermissionRequestHandler: vi.fn((handler) => { this.permissionRequestHandler = handler; }),
           webRequest: {
             onBeforeSendHeaders: vi.fn((filter, handler) => {
               this.beforeSendHeaders = filter ? handler : null;
@@ -93,6 +96,40 @@ describe('direct-site authentication', () => {
       loginUrl: 'https://subscribestar.art/login',
       cookieUrl: 'https://subscribestar.art',
     });
+  });
+
+  it('captures the Newgrounds session used by gallery-dl', () => {
+    expect(resolveAuthSite('newgrounds')).toMatchObject({
+      loginUrl: 'https://www.newgrounds.com/login',
+      cookieUrl: 'https://www.newgrounds.com',
+      cookieNames: ['ng_session'],
+      authenticatedCookieNames: ['ng_session'],
+      authWindowSize: { width: 1000, height: 760, minWidth: 760, minHeight: 640 },
+    });
+  });
+
+  it('opens Newgrounds at desktop width without changing other login windows', async () => {
+    const newgroundsBrowser = createBrowserWindowMock();
+    const { sessions: newgroundsSessions } = createHarness(newgroundsBrowser);
+    await newgroundsSessions.startAuthSession('newgrounds');
+    expect(newgroundsBrowser.instances[0].options).toMatchObject({
+      width: 1000,
+      height: 760,
+      minWidth: 760,
+      minHeight: 640,
+    });
+    await newgroundsSessions.cancelAuthSession();
+
+    const patreonBrowser = createBrowserWindowMock();
+    const { sessions: patreonSessions } = createHarness(patreonBrowser);
+    await patreonSessions.startAuthSession('patreon');
+    expect(patreonBrowser.instances[0].options).toMatchObject({
+      width: 520,
+      height: 760,
+      minWidth: 420,
+      minHeight: 640,
+    });
+    await patreonSessions.cancelAuthSession();
   });
 
   it('rejects unsupported sites without creating a browser window', async () => {
@@ -158,6 +195,28 @@ describe('direct-site authentication', () => {
     await settle();
 
     expect(persistCredential.mock.calls[0][0].cookies).toEqual({ a: 'required-a', b: 'required-b' });
+  });
+
+  it('opens Fur Affinity with a fresh unspoofed session and only storage access enabled', async () => {
+    const browser = createBrowserWindowMock();
+    const { sessions } = createHarness(browser);
+
+    await sessions.startAuthSession('furaffinity');
+
+    const popup = browser.instances[0];
+    expect(popup.userAgent).toBeUndefined();
+    expect(popup.webContents.session.clearCache).toHaveBeenCalledOnce();
+    expect(popup.webContents.session.clearStorageData).toHaveBeenCalledOnce();
+    expect(popup.permissionCheckHandler(null, 'storage-access')).toBe(true);
+    expect(popup.permissionCheckHandler(null, 'top-level-storage-access')).toBe(true);
+    expect(popup.permissionCheckHandler(null, 'media')).toBe(false);
+
+    const storageCallback = vi.fn();
+    popup.permissionRequestHandler(null, 'storage-access', storageCallback);
+    expect(storageCallback).toHaveBeenCalledWith(true);
+    const notificationCallback = vi.fn();
+    popup.permissionRequestHandler(null, 'notifications', notificationCallback);
+    expect(notificationCallback).toHaveBeenCalledWith(false);
   });
 
   it('captures the complete OnlyFans browser session from an authenticated API request', async () => {

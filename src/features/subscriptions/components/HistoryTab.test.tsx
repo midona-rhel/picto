@@ -34,4 +34,19 @@ describe('HistoryTab', () => {
     expect(screen.getByText('Reused')).toBeInTheDocument();
     expect(screen.queryByText('Reused duplicate')).not.toBeInTheDocument();
   });
+
+  it('shows an inbox-cap wait as a paused history state with its persisted reason', () => {
+    render(<HistoryTab runs={[{
+      ...run,
+      status: 'pending',
+      finished_at: null,
+      failure_kind: 'inbox_full',
+      error_message: 'Stopped because Inbox reached its limit of 1,000 items.',
+    }]} />);
+
+    expect(screen.getByText('Inbox full')).toHaveAttribute(
+      'title',
+      'Stopped because Inbox reached its limit of 1,000 items.',
+    );
+  });
 });

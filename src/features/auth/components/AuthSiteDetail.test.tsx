@@ -52,6 +52,7 @@ describe('AuthSiteDetail', () => {
     expect(screen.getByRole('main')).toHaveTextContent('Credential');
     expect(screen.getByRole('main')).toHaveTextContent('Subscriptions');
     expect(screen.getByRole('main')).toHaveTextContent('Last checked');
+    expect(screen.getAllByText('Not signed in')).toHaveLength(2);
     expect(screen.queryByText('No login in progress')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Log In' }));
@@ -74,9 +75,31 @@ describe('AuthSiteDetail', () => {
     );
 
     expect(screen.getByText('cookies')).toBeInTheDocument();
+    expect(screen.getAllByText('Signed in')).toHaveLength(2);
     fireEvent.click(screen.getByRole('button', { name: 'Remove' }));
     expect(onRemoveCredential).toHaveBeenCalledOnce();
     expect(screen.getByText('Last checked')).toBeInTheDocument();
+  });
+
+  it('distinguishes a rejected stored login from a healthy account', () => {
+    render(
+      <AuthSiteDetail
+        entry={{
+          ...entry,
+          credential: { site_category: 'fanbox', credential_type: 'cookies', display_name: null, created_at: '2026-08-24' },
+          health: { site_category: 'fanbox', health_status: 'unauthorized', last_checked_at: '2026-08-26', last_error: 'Rejected' },
+        }}
+        session={idleSession}
+        busy={false}
+        message={null}
+        onStartLogin={vi.fn(async () => undefined)}
+        onSaveManualOnlyFans={vi.fn(async () => undefined)}
+        onCancelLogin={vi.fn(async () => undefined)}
+        onRemoveCredential={vi.fn(async () => undefined)}
+      />,
+    );
+
+    expect(screen.getAllByText('Needs attention')).toHaveLength(2);
   });
 
   it('offers the complete manual fallback only for OnlyFans', async () => {

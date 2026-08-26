@@ -3,9 +3,11 @@ import styles from '../SubscriptionsScreen.module.css';
 export function StatusBadge({
   tone,
   label,
+  title,
 }: {
   tone: 'running' | 'paused' | 'attention' | 'success' | 'idle';
   label: string;
+  title?: string;
 }) {
   const toneClass = tone === 'running'
     ? styles.statusRunning
@@ -18,7 +20,7 @@ export function StatusBadge({
           : styles.statusIdle;
 
   return (
-    <span className={`${styles.statusBadge} ${toneClass}`.trim()}>
+    <span className={`${styles.statusBadge} ${toneClass}`.trim()} title={title}>
       {label}
     </span>
   );

@@ -6,6 +6,14 @@ pub const CURRENT_SCHEMA_VERSION: i64 = 127;
 pub const CURRENT_PHASH_ANALYSIS_VERSION: i64 = 3;
 pub const PHASH_VERSION_SETTING: &str = "media.perceptual_hash_version";
 
+pub const SUBSCRIPTION_READ_INDEXES: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_subscription_source_post_query
+    ON subscription_source_post(query_id, source_post_id);
+CREATE INDEX IF NOT EXISTS idx_subscription_run_query_success
+    ON subscription_run_query(query_id)
+    WHERE status = 'succeeded';
+"#;
+
 pub const LIBRARY_DDL: &str = r#"
 CREATE TABLE library_meta (
     singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
@@ -524,6 +532,9 @@ pub fn create(connection: &mut Connection) -> Result<(), String> {
     transaction
         .execute_batch(LIBRARY_DDL)
         .map_err(|error| format!("Failed to create schema: {error}"))?;
+    transaction
+        .execute_batch(SUBSCRIPTION_READ_INDEXES)
+        .map_err(|error| format!("Failed to create subscription read indexes: {error}"))?;
     transaction
         .execute(
             "INSERT INTO library_meta (singleton, schema_version, revision) VALUES (1, ?1, 0)",

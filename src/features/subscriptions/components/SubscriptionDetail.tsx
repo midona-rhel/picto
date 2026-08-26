@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { IconChevronDown, IconChevronUp, IconDotsVertical, IconPlayerPause, IconPlayerPlay, IconPlayerStop, IconPlus } from '@tabler/icons-react';
+import { IconDotsVertical, IconDownload, IconPlayerPause, IconPlayerPlay, IconPlayerStop, IconPlus } from '@tabler/icons-react';
 import type { SubscriptionCover, SubscriptionInfo, SubscriptionProgressEvent, SubscriptionQueryInfo } from '../../../shared/types/subscriptions';
 import type { SubscriptionDetailState } from '../../../state/subscriptionsWorkspace';
 import type { SubscriptionWorkspaceSnapshot } from '../../../shared/types/subscriptionsWorkspace';
@@ -10,14 +10,15 @@ import { folderNodesAtom } from '../../../state/sidebar';
 import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../../state/portals';
 import { TagChip } from '../../../shared/ui/TagChip/TagChip';
 import { GlassModal } from '../../../shared/ui/GlassModal/GlassModal';
-import { GlassInput } from '../../../shared/ui/GlassInput/GlassInput';
+import { CompactNumberInput } from '../../../shared/ui/CompactNumberInput/CompactNumberInput';
 import { ActionButton } from './ActionButton';
 import { AddQueryBar } from './AddQueryBar';
 import { HealthTab } from './HealthTab';
 import { HistoryTab } from './HistoryTab';
 import { QueryEditModal } from './QueryEditModal';
 import { QueryRow } from './QueryRow';
-import { SubscriptionCoverImage } from './SubscriptionCoverImage';
+import { SubscriptionCoverDisplay } from './SubscriptionCoverImage';
+import { StatusBadge } from './StatusBadge';
 import {
   describeSubscriptionState,
   describeFailure,
@@ -26,7 +27,6 @@ import {
   getSiteLabel,
   getSubscriptionRunTarget,
   isSubscriptionCompleted,
-  isSubscriptionUpToDate,
 } from '../subscriptionUtils';
 import styles from '../SubscriptionsScreen.module.css';
 
@@ -85,67 +85,9 @@ function PostsPerRunInput({
   disabled: boolean;
   onCommit: (value: number) => void;
 }) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => setDraft(String(value)), [value]);
-
-  const commit = () => {
-    const parsed = Number.parseInt(draft, 10);
-    if (!Number.isInteger(parsed) || parsed < 1 || parsed > 10_000) {
-      setDraft(String(value));
-      return;
-    }
-    if (parsed !== value) onCommit(parsed);
-  };
-
-  const step = (delta: number) => {
-    const parsed = Number.parseInt(draft, 10);
-    const current = Number.isInteger(parsed) ? parsed : value;
-    const next = Math.min(10_000, Math.max(1, current + delta));
-    setDraft(String(next));
-    if (next !== value) onCommit(next);
-  };
-
   return (
-    <span className={styles.subscriptionPostsPerRunInput}>
-      <GlassInput
-        type="number"
-        min={1}
-        max={10_000}
-        step={1}
-        value={draft}
-        disabled={disabled}
-        aria-label="Posts per run"
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={commit}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') event.currentTarget.blur();
-          if (event.key === 'Escape') {
-            setDraft(String(value));
-            event.currentTarget.blur();
-          }
-        }}
-      />
-      <span className={styles.subscriptionPostsPerRunStepper}>
-        <button
-          type="button"
-          aria-label="Increase posts per run"
-          disabled={disabled}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => step(1)}
-        >
-          <IconChevronUp size={11} stroke={2} />
-        </button>
-        <button
-          type="button"
-          aria-label="Decrease posts per run"
-          disabled={disabled}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={() => step(-1)}
-        >
-          <IconChevronDown size={11} stroke={2} />
-        </button>
-      </span>
-    </span>
+    <CompactNumberInput value={value} min={1} max={10_000} label="Posts per run"
+      disabled={disabled} onCommit={onCommit} />
   );
 }
 
@@ -195,15 +137,15 @@ export function SubscriptionDetail({
   const openFolderPicker = useSetAtom(folderPickerPortalAtom);
 
   const metrics = snapshot.listMetrics[subscription.id];
+  const waitingForInbox = subscription.run_status === 'inbox_full';
   const running = progress != null || snapshot.runningSubscriptionIds.includes(subscription.id);
-  const state = running ? 'running' : describeSubscriptionState({
+  const state = waitingForInbox || subscription.paused ? 'paused' : running ? 'running' : describeSubscriptionState({
     paused: subscription.paused,
     progress,
     failedPostCount: metrics?.failedPostCount ?? 0,
     openIssueCount: metrics?.openIssueCount ?? 0,
   });
   const problemCount = detail.issueTotalCount + detail.failedPostTotalCount;
-  const upToDate = !running && isSubscriptionUpToDate(subscription, detail.failedPostTotalCount, detail.issueTotalCount);
   const completed = !running && isSubscriptionCompleted(subscription, detail.failedPostTotalCount, detail.issueTotalCount);
   const lastCheck = useMemo(() => subscription.queries.reduce<string | null>(
     (latest, query) => query.last_check_time && (!latest || query.last_check_time > latest) ? query.last_check_time : latest,
@@ -224,26 +166,26 @@ export function SubscriptionDetail({
   const concreteProblem = detail.issues.find((issue) => issue.status !== 'resolved')?.message
     ?? describeFailure(failedQuery?.last_failure_kind ?? null, failedQuery?.last_failure_message ?? null)
     ?? (detail.failedPostTotalCount > 0 ? `${detail.failedPostTotalCount} downloads failed` : null);
-  const statusLabel = upToDate
-    ? 'Up to date'
+  const statusLabel = waitingForInbox
+    ? 'Inbox full'
     : completed
-      ? 'Completed'
+      ? 'Complete'
     : state === 'running'
       ? 'Syncing'
       : state === 'paused'
         ? 'Paused'
         : state === 'attention'
-          ? concreteProblem ?? 'Run interrupted'
+          ? 'Needs attention'
           : 'Idle';
-  const statusDot = state === 'running'
-    ? styles.qDotRunning
+  const statusTone = state === 'running'
+    ? 'running' as const
     : state === 'paused'
-      ? styles.qDotPaused
+      ? 'paused' as const
       : state === 'attention'
-        ? styles.qDotAttention
+        ? 'attention' as const
         : completed
-          ? styles.qDotSuccess
-          : styles.qDotIdle;
+          ? 'success' as const
+          : 'idle' as const;
 
   const selectedFolders = useMemo(() => {
     const selected = new Set(subscription.target_folder_ids);
@@ -262,7 +204,7 @@ export function SubscriptionDetail({
         <div className={styles.subscriptionIdentity}>
           <span className={styles.subscriptionCover}>
             {cover ? (
-              <SubscriptionCoverImage
+              <SubscriptionCoverDisplay
                 fileHash={cover.file_hash}
                 crop={{
                   focusX: cover.focus_x,
@@ -274,7 +216,7 @@ export function SubscriptionDetail({
               />
             ) : (
               <span className={styles.subscriptionCoverFallback} aria-hidden>
-                {subscription.name.slice(0, 1).toUpperCase()}
+                <IconDownload size={30} stroke={1.35} />
               </span>
             )}
           </span>
@@ -283,9 +225,12 @@ export function SubscriptionDetail({
               {subscription.name}
             </span>
           </KbdTooltip>
-          <span className={styles.subscriptionStatus} title={state === 'attention' ? statusLabel : undefined}>
-            <span className={`${styles.qDot} ${statusDot}`.trim()} />
-            {statusLabel}
+          <span className={styles.subscriptionStatus}>
+            <StatusBadge
+              tone={statusTone}
+              label={statusLabel}
+              title={state === 'attention' ? concreteProblem ?? 'Run interrupted' : undefined}
+            />
           </span>
         </div>
 
@@ -299,8 +244,8 @@ export function SubscriptionDetail({
               <IconPlayerPlay size={14} /> Run now
             </ActionButton>
           )}
-          <ActionButton variant="secondary" disabled={busy || running} onClick={() => controller.pause(subscription.id, !subscription.paused)}>
-            <IconPlayerPause size={14} /> {subscription.paused ? 'Resume' : 'Pause'}
+          <ActionButton variant="secondary" disabled={busy} onClick={() => controller.pause(subscription.id, !subscription.paused)}>
+            {subscription.paused ? <IconPlayerPlay size={14} /> : <IconPlayerPause size={14} />} {subscription.paused ? 'Resume' : 'Pause'}
           </ActionButton>
           <OverflowMenuButton onOpen={onOpenMenu} />
         </div>

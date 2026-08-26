@@ -38,9 +38,9 @@ pub use filesystem::cleanup_temp_dir;
 pub use metadata::{extract_creator_identifier, parse_metadata, parse_tags};
 pub use sites::{
     build_url, extract_domain, normalize_baraag_username, normalize_fanbox_creator,
-    normalize_furaffinity_username, normalize_onlyfans_creator, normalize_patreon_creator,
-    normalize_subscribestar_creator, normalize_tumblr_blog, normalize_twitter_username,
-    normalize_webtoons_url, site_by_id, SiteEntry, SITES,
+    normalize_furaffinity_username, normalize_newgrounds_username, normalize_onlyfans_creator,
+    normalize_patreon_creator, normalize_subscribestar_creator, normalize_tumblr_blog,
+    normalize_twitter_username, normalize_webtoons_url, site_by_id, SiteEntry, SITES,
 };
 
 #[derive(Debug, Clone, PartialEq)]

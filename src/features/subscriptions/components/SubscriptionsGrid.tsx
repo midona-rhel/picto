@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { IconPlus, IconShieldLock } from '@tabler/icons-react';
+import { IconDownload, IconPlus, IconShieldLock } from '@tabler/icons-react';
 import type {
   SubscriptionCover,
   SubscriptionInfo,
@@ -7,9 +7,10 @@ import type {
 } from '../../../shared/types/subscriptions';
 import type { SubscriptionListMetrics } from '../../../shared/types/subscriptionsWorkspace';
 import type { SubscriptionsSelection } from '../../../state/subscriptionsWorkspace';
-import { SubscriptionCoverImage } from './SubscriptionCoverImage';
-import { isSubscriptionCompleted, isSubscriptionUpToDate } from '../subscriptionUtils';
+import { SubscriptionCoverDisplay } from './SubscriptionCoverImage';
+import { isSubscriptionCompleted } from '../subscriptionUtils';
 import { ActionButton } from './ActionButton';
+import { StatusBadge } from './StatusBadge';
 import { useShortcutScope } from '../../../shared/hooks/useShortcutScope';
 import styles from '../SubscriptionsScreen.module.css';
 
@@ -24,7 +25,7 @@ interface CardModel {
   paused: boolean;
   attention: boolean;
   completed: boolean;
-  upToDate: boolean;
+  waitingForInbox: boolean;
 }
 
 function FollowCard({
@@ -44,15 +45,17 @@ function FollowCard({
   const showCover = card.cover != null && !coverFailed;
 
   useEffect(() => setCoverFailed(false), [card.cover?.file_hash]);
-  const dotClass = card.running
-    ? styles.qDotRunning
-    : card.attention
-      ? styles.qDotAttention
-      : card.paused
-        ? styles.qDotPaused
+  const status = card.waitingForInbox
+    ? { tone: 'paused' as const, label: 'Inbox full' }
+    : card.paused
+      ? { tone: 'paused' as const, label: 'Paused' }
+      : card.running
+        ? { tone: 'running' as const, label: 'Syncing' }
+        : card.attention
+          ? { tone: 'attention' as const, label: 'Needs attention' }
         : card.completed
-          ? styles.qDotSuccess
-        : styles.qDotIdle;
+          ? { tone: 'success' as const, label: 'Complete' }
+          : { tone: 'idle' as const, label: 'Idle' };
 
   return (
     <button
@@ -67,7 +70,7 @@ function FollowCard({
     >
       <span className={styles.followCover}>
         {showCover ? (
-          <SubscriptionCoverImage
+          <SubscriptionCoverDisplay
             fileHash={card.cover?.file_hash as string}
             crop={{
               focusX: card.cover?.focus_x ?? 500,
@@ -81,14 +84,13 @@ function FollowCard({
           />
         ) : (
           <span className={styles.followCoverFallback} aria-hidden>
-            {card.name.slice(0, 1).toUpperCase()}
+            <IconDownload size={28} stroke={1.35} />
           </span>
         )}
       </span>
       <span className={styles.followName}>
-        <span className={`${styles.qDot} ${dotClass}`.trim()} />
         <span className={styles.followNameText}>{card.name}</span>
-        {card.completed && <span className={styles.upToDateChip}>{card.upToDate ? 'Up to date' : 'Completed'}</span>}
+        <StatusBadge tone={status.tone} label={status.label} />
       </span>
       <span className={styles.followMeta}>
         {card.files.toLocaleString()} files
@@ -152,13 +154,7 @@ export function SubscriptionsGrid({
             listMetrics[sub.id]?.failedPostCount ?? 0,
             listMetrics[sub.id]?.openIssueCount ?? 0,
           ),
-        upToDate: !running.has(sub.id)
-          && !progressBySubscriptionId.has(sub.id)
-          && isSubscriptionUpToDate(
-            sub,
-            listMetrics[sub.id]?.failedPostCount ?? 0,
-            listMetrics[sub.id]?.openIssueCount ?? 0,
-          ),
+        waitingForInbox: sub.run_status === 'inbox_full',
       })),
   ].sort((a, b) => b.files - a.files || a.name.localeCompare(b.name));
 

@@ -82,7 +82,7 @@ export function QueryRow({
             type="button"
             className={styles.querySmallBtn}
             onClick={() => onPause(!paused)}
-            disabled={busy || running}
+            disabled={busy}
           >
             {paused ? <IconPlayerPlay size={14} /> : <IconPlayerPause size={14} />}
           </button>

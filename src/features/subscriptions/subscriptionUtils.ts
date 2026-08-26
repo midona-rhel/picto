@@ -69,8 +69,8 @@ export function describeSubscriptionState(input: {
   failedPostCount: number;
   openIssueCount: number;
 }): 'running' | 'paused' | 'attention' | 'idle' {
-  if (input.progress) return 'running';
   if (input.paused) return 'paused';
+  if (input.progress) return 'running';
   if (input.failedPostCount > 0 || input.openIssueCount > 0) return 'attention';
   return 'idle';
 }
@@ -84,12 +84,6 @@ export function isQueryCompleted(query: SubscriptionQueryInfo, failedPostCount =
     && failedPostCount === 0;
 }
 
-export function isQueryUpToDate(query: SubscriptionQueryInfo, failedPostCount = 0): boolean {
-  return query.successful_run_count >= 2
-    && query.source_history_complete
-    && isQueryCompleted(query, failedPostCount);
-}
-
 export function isSubscriptionCompleted(
   subscription: SubscriptionInfo,
   failedPostCount = 0,
@@ -100,18 +94,6 @@ export function isSubscriptionCompleted(
     && failedPostCount === 0
     && openIssueCount === 0
     && subscription.queries.every((query) => isQueryCompleted(query));
-}
-
-export function isSubscriptionUpToDate(
-  subscription: SubscriptionInfo,
-  failedPostCount = 0,
-  openIssueCount = 0,
-): boolean {
-  return !subscription.paused
-    && subscription.queries.length > 0
-    && failedPostCount === 0
-    && openIssueCount === 0
-    && subscription.queries.every((query) => isQueryUpToDate(query));
 }
 
 export function getQueryFailedCount(queryId: string, failedPosts: FailedPostGroup[]): number {

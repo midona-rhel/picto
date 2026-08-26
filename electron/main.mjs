@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen } from 'electron';
+import { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, net, protocol, screen } from 'electron';
 import fs from 'node:fs/promises';
 import fsModule from 'node:fs';
 import path from 'node:path';
@@ -23,6 +23,7 @@ import { createAutoUpdaterService } from './services/autoUpdater.mjs';
 import { createFlashThumbnailService } from './services/flashThumbnailService.mjs';
 import { createPdfThumbnailService } from './services/pdfThumbnailService.mjs';
 import { createDocumentThumbnailService } from './services/documentThumbnailService.mjs';
+import { createSiteIconService } from './services/siteIconService.mjs';
 
 installConsoleForwarding();
 
@@ -182,6 +183,10 @@ const documentThumbnail = createDocumentThumbnailService({
   isDev,
   devUrl: DEV_URL,
 });
+const siteIconService = createSiteIconService({
+  cacheDirectory: path.join(app.getPath('userData'), 'site-icons'),
+  fetchImpl: (...args) => net.fetch(...args),
+});
 
 const mediaProtocol = createMediaProtocolService({
   protocol,
@@ -307,6 +312,7 @@ registerIpcHandlers({
   windowManager,
   libraryService: libraryHost,
   updaterService,
+  siteIconService,
   startNativeDrag,
   getAssociatedApplications,
   openWithApplication,

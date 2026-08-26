@@ -488,6 +488,7 @@ fn post_id(json: &serde_json::Value) -> Option<String> {
             .or_else(|| artstation_project_field_text(json, "project_id")),
         "deviantart" => field_text(json, "deviationid"),
         "hentaifoundry" => field_text(json, "index").filter(|index| index.parse::<u64>().is_ok()),
+        "newgrounds" => field_text(json, "index").filter(|index| index.parse::<u64>().is_ok()),
         "twitter" => field_text(json, "tweet_id").or_else(|| field_text(json, "id")),
         "subscribestar" => field_text(json, "post_id").or_else(|| field_text(json, "id")),
         _ => field_text(json, "id").or_else(|| field_text(json, "post_id")),
@@ -574,6 +575,26 @@ fn canonical_tumblr_url(json: &serde_json::Value, post_id: Option<&str>) -> Opti
     Some(url.to_string())
 }
 
+fn canonical_newgrounds_url(json: &serde_json::Value) -> Option<String> {
+    let raw = field_text(json, "post_url")?;
+    let mut url = url::Url::parse(raw.trim()).ok()?;
+    let host = url.host_str().unwrap_or_default();
+    if !matches!(url.scheme(), "http" | "https")
+        || !(host == "newgrounds.com"
+            || host == "www.newgrounds.com"
+            || host.ends_with(".newgrounds.com"))
+        || url.username() != ""
+        || url.password().is_some()
+        || url.port().is_some()
+    {
+        return None;
+    }
+    url.set_scheme("https").ok()?;
+    url.set_query(None);
+    url.set_fragment(None);
+    Some(url.to_string())
+}
+
 fn canonical_post_url(
     json: &serde_json::Value,
     category: Option<&str>,
@@ -606,6 +627,7 @@ fn canonical_post_url(
         }
         Some("deviantart") => return canonical_deviantart_url(json, post_id, item_url),
         Some("tumblr") => return canonical_tumblr_url(json, post_id),
+        Some("newgrounds") => return canonical_newgrounds_url(json),
         Some("patreon") => return canonical_patreon_url(json),
         Some("fanbox") => return canonical_fanbox_url(json, post_id),
         Some("subscribestar") => return canonical_subscribestar_url(json, post_id),
@@ -1787,6 +1809,41 @@ mod tests {
         assert!(parsed
             .tags
             .contains(&("creator".to_string(), "OpenAI".to_string())));
+    }
+
+    #[test]
+    fn newgrounds_metadata_preserves_post_artist_tags_and_source() {
+        let parsed = parse_metadata(&json!({
+            "category": "newgrounds",
+            "index": 123456,
+            "user": "artist-name",
+            "artist": ["artist-name", "collaborator"],
+            "title": "Submission title",
+            "description": "<p>Submission <strong>description</strong>.</p>",
+            "post_url": "https://www.newgrounds.com/art/view/artist-name/submission-title?ref=profile",
+            "url": "https://art.ngfiles.com/images/example.png",
+            "date": "2026-08-25T12:00:00+00:00",
+            "rating": "m",
+            "tags": ["digital-art", "character"]
+        }));
+
+        assert_eq!(parsed.post_id.as_deref(), Some("123456"));
+        assert_eq!(parsed.title.as_deref(), Some("Submission title"));
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("Submission description.")
+        );
+        assert_eq!(parsed.rating.as_deref(), Some("m"));
+        assert_eq!(
+            parsed.canonical_post_url.as_deref(),
+            Some("https://www.newgrounds.com/art/view/artist-name/submission-title")
+        );
+        assert!(parsed
+            .tags
+            .contains(&("creator".to_string(), "artist-name".to_string())));
+        assert!(parsed
+            .tags
+            .contains(&(String::new(), "digital-art".to_string())));
     }
 
     #[test]

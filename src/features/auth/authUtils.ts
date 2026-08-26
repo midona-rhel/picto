@@ -1,3 +1,5 @@
+import type { AuthSiteSnapshot } from '../../shared/types/subscriptionsWorkspace';
+
 export function formatRelativeTime(value: string | null | undefined): string {
   if (!value) return 'Never';
   const parsed = Date.parse(value);
@@ -9,4 +11,20 @@ export function formatRelativeTime(value: string | null | undefined): string {
   if (Math.abs(deltaHours) < 48) return formatter.format(deltaHours, 'hour');
   const deltaDays = Math.round(deltaHours / 24);
   return formatter.format(deltaDays, 'day');
+}
+
+export function getAuthAccountStatus(entry: AuthSiteSnapshot): {
+  label: 'Signed in' | 'Needs attention' | 'Not signed in';
+  tone: 'success' | 'attention' | 'idle';
+} {
+  const health = entry.health?.health_status.toLowerCase() ?? '';
+  const unhealthy = health === 'unauthorized'
+    || health === 'expired'
+    || health === 'error'
+    || health === 'missing'
+    || entry.issues.length > 0;
+
+  if (entry.credential && unhealthy) return { label: 'Needs attention', tone: 'attention' };
+  if (entry.credential) return { label: 'Signed in', tone: 'success' };
+  return { label: 'Not signed in', tone: 'idle' };
 }

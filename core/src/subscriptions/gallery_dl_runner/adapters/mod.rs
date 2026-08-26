@@ -6,6 +6,7 @@ mod e621;
 mod fanbox;
 mod furaffinity;
 mod hentaifoundry;
+mod newgrounds;
 mod patreon;
 mod pixiv;
 mod sankaku;
@@ -67,6 +68,7 @@ pub(super) fn adapter_for_json(json: &Value) -> Option<&'static dyn SiteAdapter>
         "fanbox" => Some(&fanbox::ADAPTER),
         "furaffinity" => Some(&furaffinity::ADAPTER),
         "hentaifoundry" => Some(&hentaifoundry::ADAPTER),
+        "newgrounds" => Some(&newgrounds::ADAPTER),
         "idolcomplex" | "sankaku" => Some(&sankaku::ADAPTER),
         "patreon" => Some(&patreon::ADAPTER),
         "pixiv" => Some(&pixiv::ADAPTER),
