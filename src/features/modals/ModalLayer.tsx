@@ -8,6 +8,7 @@ import {
   confirmModalAtom,
   smartFolderModalAtom,
   folderWatchModalAtom,
+  folderAutoTagsModalAtom,
   exportModalAtom,
   batchRenameModalAtom,
   folderImportModalAtom,
@@ -17,6 +18,7 @@ import {
 import { ConfirmModal } from './ConfirmModal';
 import { SmartFolderModal } from './SmartFolderModal';
 import { FolderWatchModal } from './FolderWatchModal';
+import { FolderAutoTagsModal } from './FolderAutoTagsModal';
 import { ExportModal } from './ExportModal';
 import { TagSelectModal } from './TagSelectModal';
 import { FolderPickerModal } from './FolderPickerModal';
@@ -38,6 +40,8 @@ export function ModalLayer() {
 
   const folderWatch = useAtomValue(folderWatchModalAtom);
   const setFolderWatch = useSetAtom(folderWatchModalAtom);
+  const folderAutoTags = useAtomValue(folderAutoTagsModalAtom);
+  const setFolderAutoTags = useSetAtom(folderAutoTagsModalAtom);
 
   const exportState = useAtomValue(exportModalAtom);
   const setExport = useSetAtom(exportModalAtom);
@@ -124,6 +128,19 @@ export function ModalLayer() {
           setFolderWatch({ ...folderWatch, open: false });
         } : undefined}
         initial={folderWatch.initial}
+      />
+
+      <FolderAutoTagsModal
+        open={folderAutoTags.open}
+        folderIds={folderAutoTags.folderIds}
+        folderName={folderAutoTags.folderName}
+        initialTags={folderAutoTags.initialTags}
+        onClose={() => setFolderAutoTags({
+          open: false,
+          folderIds: [],
+          folderName: null,
+          initialTags: [],
+        })}
       />
 
       <ExportModal

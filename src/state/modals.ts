@@ -56,6 +56,21 @@ export interface FolderWatchModalState {
 
 export const folderWatchModalAtom = atom<FolderWatchModalState>({ open: false });
 
+// ── Folder auto tags modal ──
+export interface FolderAutoTagsModalState {
+  open: boolean;
+  folderIds: number[];
+  folderName: string | null;
+  initialTags: string[];
+}
+
+export const folderAutoTagsModalAtom = atom<FolderAutoTagsModalState>({
+  open: false,
+  folderIds: [],
+  folderName: null,
+  initialTags: [],
+});
+
 // ── Export modal ──
 export interface ExportModalState {
   open: boolean;

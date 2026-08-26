@@ -64,7 +64,7 @@ import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu, buildEntityOpenContextEntries } from './gridContextMenu';
 import { navigateToNode } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession, resolveViewerIndex } from '../../state/viewer';
-import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor, tagSelectPortalAtom } from '../../state/portals';
+import { aiTaggerPortalAtom, folderPickerPortalAtom, inspectorAnchor } from '../../state/portals';
 import { groupOrganizerModalAtom, confirmModalAtom, folderImportModalAtom, exportModalAtom, batchRenameModalAtom, folderWatchModalAtom, tagSelectModalAtom, folderPickerModalAtom, smartFolderModalAtom } from '../../state/modals';
 import { organizeIntoGroup, ungroup } from '../../platform/entityApi';
 import { GroupSurface } from '../groups/GroupSurface';
@@ -107,6 +107,7 @@ import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
 import { readRecentItems } from '../../shared/hooks/useRecentItems';
 import type { GridScrollPosition } from '../../shared/types/gridScroll';
 import { pendingSidebarRenameNodeIdAtom } from '../../state/sidebar';
+import { openFolderAutoTagsEditor } from '../folders/folderAutoTagsWorkflow';
 
 const store = getDefaultStore();
 function supportsExplicitImageAutoTagging(
@@ -181,7 +182,6 @@ export function GridScreen({
   viewerOpenRef.current = Boolean(viewerSession || quickLookSession);
   const setAiTaggerPortal = useSetAtom(aiTaggerPortalAtom);
   const setFolderPortal = useSetAtom(folderPickerPortalAtom);
-  const setTagPortal = useSetAtom(tagSelectPortalAtom);
 
   const setTagSelectModal = useSetAtom(tagSelectModalAtom);
   const setFolderPickerModal = useSetAtom(folderPickerModalAtom);
@@ -1006,20 +1006,7 @@ export function GridScreen({
                 });
               },
               onSetAutoTags: () => {
-                void Promise.all(selectedFolderIds.map((id) => foldersController.getAutoTags(id))).then((sets) => {
-                  const common = sets.slice(1).reduce(
-                    (tags, current) => tags.filter((tag) => current.includes(tag)),
-                    sets[0] ?? [],
-                  );
-                  setTagPortal({
-                    open: true,
-                    anchor: pos,
-                    selectedTags: common,
-                    onApplyTags: (tags) => {
-                      void Promise.all(selectedFolderIds.map((id) => foldersController.setAutoTags(id, tags)));
-                    },
-                  });
-                });
+                void openFolderAutoTagsEditor(selectedFolderIds, null);
               },
               onSortContents: () => {
                 void Promise.all(selectedFolderIds.map((id) => foldersController.sortByName(id)));
@@ -1068,14 +1055,7 @@ export function GridScreen({
               void foldersController.duplicate(folderId).then(setRenamingSubfolderId);
             },
             onSetAutoTags: () => {
-              void foldersController.getAutoTags(folderId).then((selectedTags) => {
-                setTagPortal({
-                  open: true,
-                  anchor: pos,
-                  selectedTags,
-                  onApplyTags: (tags) => { void foldersController.setAutoTags(folderId, tags); },
-                });
-              });
+              void openFolderAutoTagsEditor([folderId], folder.name);
             },
             onImport: () => {
               void (async () => {

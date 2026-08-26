@@ -1,0 +1,77 @@
+.wrapper {
+  position: relative;
+  width: 100%;
+}
+
+.inputSurface {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  align-content: flex-start;
+  gap: 4px;
+  min-height: 56px;
+  padding: 5px 6px;
+  box-sizing: border-box;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-control-surface);
+  cursor: text;
+}
+
+.inputSurface:focus-within {
+  border-color: var(--color-primary-50);
+}
+
+.compact .inputSurface {
+  min-height: 32px;
+  padding: 3px 6px;
+}
+
+.input {
+  flex: 1;
+  min-width: 90px;
+  height: var(--control-height-sm);
+  padding: 0 2px;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font: inherit;
+}
+
+.input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.results {
+  position: fixed;
+  z-index: calc(var(--layer-modal) + 1);
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 4px;
+  box-sizing: border-box;
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-panel);
+}
+
+.result {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 28px;
+  padding: 2px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.result:hover,
+.resultSelected {
+  background: var(--color-surface-hover);
+}

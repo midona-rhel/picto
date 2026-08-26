@@ -21,7 +21,7 @@ import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
   IconNewSubfolder, IconRename, IconSort, IconExpand, IconCollapse,
   IconExpandAll, IconCollapseAll, IconChangeIcon, IconWatchFolder,
-  IconFolderQuestionCustom, IconBookmarkQuestionCustom,
+  IconFolderQuestionCustom, IconBookmarkQuestionCustom, IconAutoTags,
 } from '../../shared/ui/icons/sidebar-menu-icons';
 import {
   sidebarNodesAtom, systemNodesAtom, folderNodesAtom,
@@ -55,7 +55,7 @@ import { filterSidebarTree } from './treeFilter';
 import * as entityMutations from '../../controllers/entityMutations';
 import { clearRecentViews } from '../../platform/entityApi';
 import { createEmptyItemFilters } from '../../shared/lib/itemFilters';
-import { folderPickerPortalAtom, tagSelectPortalAtom } from '../../state/portals';
+import { folderPickerPortalAtom } from '../../state/portals';
 import { announceUndoableMutation } from '../../runtime/historyRuntime';
 import { formatKeysDisplay, getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { useShortcutScope } from '../../shared/hooks/useShortcutScope';
@@ -69,6 +69,7 @@ import styles from './Sidebar.module.css';
 import { filesController } from '../../controllers/filesController';
 import { showErrorNotification } from '../../shared/lib/notifications';
 import { subscriptionsWorkspaceSnapshotAtom } from '../../state/subscriptionsWorkspace';
+import { openFolderAutoTagsEditor } from '../folders/folderAutoTagsWorkflow';
 
 const IC = 19;
 const FILL = { stroke: 1.2, fill: 'currentColor', fillOpacity: 0.15 } as const;
@@ -232,7 +233,6 @@ export function Sidebar() {
   const quickAccessIds = useQuickAccess();
   const setSmartFolderModal = useSetAtom(smartFolderModalAtom);
   const setFolderPortal = useSetAtom(folderPickerPortalAtom);
-  const setTagPortal = useSetAtom(tagSelectPortalAtom);
   const subscriptionsSnapshot = useAtomValue(subscriptionsWorkspaceSnapshotAtom);
   const subscriptionsRunning = (subscriptionsSnapshot?.runningSubscriptionIds.length ?? 0) > 0;
 
@@ -444,26 +444,6 @@ export function Sidebar() {
     setPendingRenameNodeId(nodeId);
   }, [setPendingRenameNodeId]);
 
-  const openFolderAutoTags = useCallback(async (
-    folderIds: number[],
-    anchor: { x: number; y: number } | null,
-  ) => {
-    if (folderIds.length === 0) return;
-    const configured = await Promise.all(folderIds.map((folderId) => foldersController.getAutoTags(folderId)));
-    const common = configured.slice(1).reduce(
-      (tags, current) => tags.filter((tag) => current.includes(tag)),
-      configured[0] ?? [],
-    );
-    setTagPortal({
-      open: true,
-      anchor,
-      selectedTags: common,
-      onApplyTags: (nextTags) => {
-        void Promise.all(folderIds.map((folderId) => foldersController.setAutoTags(folderId, nextTags)));
-      },
-    });
-  }, [setTagPortal]);
-
   useShortcutScope((event) => {
     const newFolder = getShortcut('file.newFolder');
     const newSubfolder = getShortcut('file.newSubfolder');
@@ -487,7 +467,10 @@ export function Sidebar() {
     }
     if (autoTags && matchesShortcutDef(event, autoTags) && targetFolderIds.length > 0) {
       event.preventDefault();
-      void openFolderAutoTags(targetFolderIds, null);
+      const folderName = targetFolderIds.length === 1
+        ? folderNodes.find((node) => parseFolderId(node.id) === targetFolderIds[0])?.name ?? null
+        : null;
+      void openFolderAutoTagsEditor(targetFolderIds, folderName);
     }
   }, { priority: 20 });
 
@@ -625,8 +608,8 @@ export function Sidebar() {
           folderRename.startRename(duplicateNodeId, duplicateName);
         });
       } },
-      { label: 'Set Auto Tags...', icon: <IconBookmark size={14} />, shortcut: kbd('folder.autoTags'), action: () => {
-        void openFolderAutoTags([folderId], { x: e.clientX, y: e.clientY });
+      { label: 'Set Auto Tags...', icon: <IconAutoTags size={14} />, shortcut: kbd('folder.autoTags'), action: () => {
+        void openFolderAutoTagsEditor([folderId], node.name);
       } },
       { separator: true },
       { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => {
@@ -695,7 +678,7 @@ export function Sidebar() {
       } },
     ];
     contextMenu.open(e, entries);
-  }, [contextMenu, folderRename, collapsed, toggleCollapse, folderNodes, setFolderPortal, expandableNodeIds, setNodesExpanded, quickAccessIds, openFolderAutoTags]);
+  }, [contextMenu, folderRename, collapsed, toggleCollapse, folderNodes, setFolderPortal, expandableNodeIds, setNodesExpanded, quickAccessIds]);
 
   const openSmartFolderMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
     setContextMenuNodeId(node.id);
@@ -1000,8 +983,8 @@ export function Sidebar() {
     if (allFolders) {
       const autoTagFolderIds = folderIds.map(parseFolderId).filter((id): id is number => id != null);
       entries.push({
-        label: 'Set Auto Tags...', icon: <IconBookmark size={14} />, shortcut: kbd('folder.autoTags'),
-        action: () => { void openFolderAutoTags(autoTagFolderIds, { x: e.clientX, y: e.clientY }); },
+        label: 'Set Auto Tags...', icon: <IconAutoTags size={14} />, shortcut: kbd('folder.autoTags'),
+        action: () => { void openFolderAutoTagsEditor(autoTagFolderIds, null); },
       });
     }
     entries.push({ separator: true });
@@ -1139,7 +1122,7 @@ export function Sidebar() {
 
     setContextMenuNodeId(null);
     contextMenu.open(e, entries);
-  }, [collapsed, contextMenu, expandableNodeIds, folderNodes, setFolderPortal, setNodesExpanded, sidebarSelection, smartFolderNodes, quickAccessIds, openFolderAutoTags]);
+  }, [collapsed, contextMenu, expandableNodeIds, folderNodes, setFolderPortal, setNodesExpanded, sidebarSelection, smartFolderNodes, quickAccessIds]);
 
   /** Unified context menu handler — dispatches to bulk or single. */
   const handleFolderContextMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {

@@ -3,16 +3,13 @@
  * Layout: [Field CmSelect] [Op CmSelect] [Value input(s)] [-] [+]
  */
 
-import { useState, useRef, useEffect } from 'react';
-import { createPortal } from 'react-dom';
 import { modalStyles } from '../../../shared/ui/GlassModal';
 import { GlassInput } from '../../../shared/ui/GlassInput';
 import { CmSelect } from '../../../shared/ui/CmSelect/CmSelect';
 import { ToggleSwitch } from '../../../shared/ui/ToggleSwitch/ToggleSwitch';
-import { TagChip } from '../../../shared/ui/TagChip/TagChip';
-import { tagsController } from '../../../controllers/tagsController';
+import { TagTokenInput } from '../../../shared/ui/TagTokenInput';
 import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
-import type { SmartFolderPredicateRule, CanonicalTagRecord } from '../../../shared/types/canonical';
+import type { SmartFolderPredicateRule } from '../../../shared/types/canonical';
 import {
   getFieldDef,
   getFieldOptions,
@@ -22,131 +19,6 @@ import {
   FILESIZE_UNITS,
 } from './fieldConfig';
 import styles from '../SmartFolderModal.module.css';
-
-// ── Tag input with chips + autocomplete ──
-
-function parseTag(full: string): { namespace: string; subtag: string } {
-  const idx = full.indexOf(':');
-  if (idx < 0) return { namespace: 'general', subtag: full };
-  return { namespace: full.slice(0, idx), subtag: full.slice(idx + 1) };
-}
-
-function formatTag(r: CanonicalTagRecord): string {
-  if (!r.namespace || r.namespace === 'general' || r.namespace === '') return r.subtag;
-  return `${r.namespace}:${r.subtag}`;
-}
-
-function TagAutoInput({ values, onChange }: { values: string[]; onChange: (v: string[]) => void }) {
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<CanonicalTagRecord[]>([]);
-  const [showDrop, setShowDrop] = useState(false);
-  const [selIdx, setSelIdx] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const doSearch = (q: string) => {
-    if (timerRef.current) clearTimeout(timerRef.current);
-    if (q.length < 1) { setResults([]); setShowDrop(false); return; }
-    timerRef.current = setTimeout(() => {
-      void tagsController.getPaginated({ search: q, limit: 12 }).then(({ items }) => {
-        const existing = new Set(values);
-        const filtered = items.filter((r) => !existing.has(formatTag(r)));
-        setResults(filtered.slice(0, 8));
-        setShowDrop(filtered.length > 0);
-        setSelIdx(0);
-      }).catch(() => {});
-    }, 120);
-  };
-
-  const addTag = (tag: string) => {
-    if (!values.includes(tag)) onChange([...values, tag]);
-    setQuery('');
-    setResults([]);
-    setShowDrop(false);
-    inputRef.current?.focus();
-  };
-
-  const removeTag = (tag: string) => {
-    onChange(values.filter((v) => v !== tag));
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Backspace' && query === '' && values.length > 0) {
-      removeTag(values[values.length - 1]);
-      return;
-    }
-    if (showDrop && results.length > 0) {
-      if (e.key === 'ArrowDown') { e.preventDefault(); setSelIdx((i) => Math.min(i + 1, results.length - 1)); }
-      else if (e.key === 'ArrowUp') { e.preventDefault(); setSelIdx((i) => Math.max(i - 1, 0)); }
-      else if (e.key === 'Enter' || e.key === 'Tab') { e.preventDefault(); addTag(formatTag(results[selIdx])); }
-      else if (e.key === 'Escape') { setShowDrop(false); }
-    } else if (e.key === 'Enter' && query.trim()) {
-      e.preventDefault();
-      addTag(query.trim());
-    }
-  };
-
-  useEffect(() => () => { if (timerRef.current) clearTimeout(timerRef.current); }, []);
-
-  const rect = wrapRef.current?.getBoundingClientRect();
-
-  return (
-    <div ref={wrapRef} style={{ position: 'relative', flex: 1 }}>
-      <div className="smartfolder-tag-input" style={{
-        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4,
-        padding: '3px 6px', minHeight: 32,
-        border: '1px solid var(--color-border-primary)',
-        borderRadius: 'var(--radius-sm)',
-        background: 'var(--color-control-surface)',
-      }}>
-        {values.map((tag) => {
-          const { namespace, subtag } = parseTag(tag);
-          return <TagChip key={tag} namespace={namespace} subtag={subtag} onRemove={() => removeTag(tag)} />;
-        })}
-        <input
-          ref={inputRef}
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); doSearch(e.target.value); }}
-          onFocus={() => { if (results.length > 0) setShowDrop(true); }}
-          onBlur={() => setTimeout(() => setShowDrop(false), 150)}
-          onKeyDown={handleKeyDown}
-          placeholder={values.length === 0 ? 'Search tags...' : ''}
-          style={{
-            flex: 1, minWidth: 60, border: 'none', outline: 'none',
-            background: 'transparent', color: 'var(--color-text-primary)',
-            fontSize: 'var(--font-size-md)', fontFamily: 'var(--font-family)',
-            height: 24, padding: 0,
-          }}
-        />
-      </div>
-      {showDrop && rect && createPortal(
-        <div style={{
-          position: 'fixed', top: rect.bottom + 2, left: rect.left, width: rect.width,
-          maxHeight: 200, overflowY: 'auto', scrollbarGutter: 'stable', zIndex: 10001,
-          background: 'var(--glass-bg)', backdropFilter: 'var(--glass-blur)',
-          border: '1px solid var(--color-border-secondary)',
-          borderRadius: 'var(--radius-sm)', boxShadow: 'var(--shadow-panel)',
-          padding: '4px 0',
-        }}>
-          {results.map((r, i) => (
-            <div
-              key={`${r.namespace}:${r.subtag}`}
-              onMouseDown={(e) => { e.preventDefault(); addTag(formatTag(r)); }}
-              style={{
-                padding: '4px 8px', cursor: 'pointer',
-                background: i === selIdx ? 'var(--color-surface-hover)' : 'transparent',
-              }}
-            >
-              <TagChip namespace={r.namespace} subtag={r.subtag} />
-            </div>
-          ))}
-        </div>,
-        document.body,
-      )}
-    </div>
-  );
-}
 
 export interface RuleEditorProps {
   rule: SmartFolderPredicateRule;
@@ -190,9 +62,10 @@ export function RuleEditor({ rule, onChange, onRemove, onAdd, canRemove }: RuleE
     switch (fieldDef.valueType) {
       case 'tags':
         return (
-          <TagAutoInput
+          <TagTokenInput
             values={rule.values ?? []}
             onChange={(values) => onChange({ ...rule, values })}
+            compact
           />
         );
 
