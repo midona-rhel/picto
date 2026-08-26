@@ -15,6 +15,16 @@ export interface OpenWithOptions {
   applications: AssociatedApplication[];
 }
 
+export const REVERSE_IMAGE_SEARCH_ENGINES = [
+  { key: 'tineye', label: 'TinEye' },
+  { key: 'saucenao', label: 'SauceNAO' },
+  { key: 'yandex', label: 'Yandex Images' },
+  { key: 'sogou', label: 'Sogou' },
+  { key: 'bing', label: 'Bing Visual Search' },
+] as const;
+
+export type ReverseImageSearchEngine = typeof REVERSE_IMAGE_SEARCH_ENGINES[number]['key'];
+
 export function openExternalUrl(url: string): Promise<void> {
   return invoke<void>('open_external_url', { url });
 }
@@ -31,11 +41,30 @@ export async function resolveFilePath(fileHash: string): Promise<string> {
   return resolved[0].path;
 }
 
-export function openDetailWindow(input: {
+export async function reverseImageSearch(
+  fileHash: string,
+  engine: ReverseImageSearchEngine,
+): Promise<void> {
+  const filePath = await resolveFilePath(fileHash);
+  const search = (window as any).picto?.search?.reverseImage;
+  if (typeof search !== 'function') {
+    throw new Error('Reverse image search is unavailable.');
+  }
+  await search(filePath, engine);
+}
+
+export type DetailWindowTarget = ({
   hash: string;
+  item_id?: never;
+} | {
+  item_id: number;
+  hash?: never;
+}) & {
   width?: number | null;
   height?: number | null;
-}): Promise<void> {
+};
+
+export function openDetailWindow(input: DetailWindowTarget): Promise<void> {
   return invoke<void>('open_in_new_window', input as unknown as Record<string, unknown>);
 }
 

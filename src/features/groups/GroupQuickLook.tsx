@@ -19,6 +19,7 @@ export function GroupQuickLookContent({
   return (
     <div className={styles.frame} data-group-quick-look>
       <GroupSurface
+        key={groupId}
         groupId={groupId}
         presentation="quicklook"
         rootCurrentIndex={currentIndex}

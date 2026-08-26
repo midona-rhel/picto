@@ -1,11 +1,7 @@
-import { openDetailWindow } from '../platform/shellApi';
+import { openDetailWindow, type DetailWindowTarget } from '../platform/shellApi';
 
 export const windowController = {
-  openDetailWindow(input: {
-    hash: string;
-    width?: number | null;
-    height?: number | null;
-  }): Promise<void> {
+  openDetailWindow(input: DetailWindowTarget): Promise<void> {
     return openDetailWindow(input);
   },
 

@@ -4,6 +4,44 @@ import type { MenuItem } from '../../shared/ui/ContextMenu/ContextMenu';
 import { buildEmptyContextMenu, buildEntityOpenContextEntries, buildExportContextEntry, buildTileContextMenu } from './gridContextMenu';
 
 describe('buildTileContextMenu', () => {
+  it('offers every reverse-image provider for images and none for non-image media', () => {
+    const onSearchByImage = vi.fn();
+    const base = {
+      selectionCount: 1,
+      querySelectionActive: false,
+      singleSelected: true,
+      singleHash: 'image-hash',
+      singleKind: 'media' as const,
+      scopeKind: 'system' as const,
+      statusFilter: null,
+      loadedCount: 1,
+      onSelectAll: vi.fn(),
+      onDeselectAll: vi.fn(),
+      onSearchByImage,
+    };
+    const imageEntries = buildTileContextMenu({ ...base, singleMime: 'image/png' });
+    const search = imageEntries.find(
+      (entry) => 'submenu' in entry && entry.submenu && entry.label === 'Search by Image',
+    );
+    if (!search || !('children' in search)) throw new Error('missing reverse-image submenu');
+
+    expect(search.children.map((entry) => 'label' in entry ? entry.label : '')).toEqual([
+      'TinEye',
+      'SauceNAO',
+      'Yandex Images',
+      'Sogou',
+      'Bing Visual Search',
+    ]);
+    const sogou = search.children.find((entry) => 'label' in entry && entry.label === 'Sogou');
+    if (!sogou || !('action' in sogou)) throw new Error('missing Sogou action');
+    sogou.action();
+    expect(onSearchByImage).toHaveBeenCalledWith('sogou', 'image-hash');
+
+    const videoLabels = buildTileContextMenu({ ...base, singleMime: 'video/mp4' })
+      .flatMap((entry) => ('label' in entry ? [entry.label] : []));
+    expect(videoLabels).not.toContain('Search by Image');
+  });
+
   it('shares one explicit export submenu across item and scope menus', () => {
     const originals = vi.fn();
     const converted = vi.fn();
@@ -44,7 +82,7 @@ describe('buildTileContextMenu', () => {
     );
 
     expect(entry).toMatchObject({ checked: true, keepOpen: true, disabled: false });
-    expect(renderToStaticMarkup(entry!.icon)).toContain('tabler-icon-contrast-filled');
+    expect(renderToStaticMarkup(entry!.icon)).toContain('tabler-icon-contrast');
     entry!.action();
     expect(onToggleGrayscale).toHaveBeenCalledOnce();
   });
@@ -332,10 +370,11 @@ describe('buildTileContextMenu', () => {
       loadedCount: 3,
       onSelectAll: vi.fn(),
       onDeselectAll: vi.fn(),
+      lastUsedFolderName: 'References',
       onAddToLastUsedFolder,
     });
     const entry = entries.find(
-      (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Add to Last Used Folder',
+      (candidate): candidate is MenuItem => 'label' in candidate && candidate.label === 'Add to “References”',
     );
 
     expect(entry).toBeDefined();
@@ -442,6 +481,7 @@ describe('buildTileContextMenu', () => {
 
   it('treats a group as a library item rather than its cover file', () => {
     const onUngroup = vi.fn();
+    const onOpenNewWindow = vi.fn();
     const entries = buildTileContextMenu({
       selectionCount: 1,
       querySelectionActive: false,
@@ -455,6 +495,7 @@ describe('buildTileContextMenu', () => {
       onSelectAll: vi.fn(),
       onDeselectAll: vi.fn(),
       onOpen: vi.fn(),
+      onOpenNewWindow,
       onEditGroup: vi.fn(),
       onUngroup,
       onOpenDefault: vi.fn(),
@@ -464,10 +505,17 @@ describe('buildTileContextMenu', () => {
     const labels = entries.flatMap((entry) => ('label' in entry ? [entry.label] : []));
 
     expect(labels).toContain('Open');
+    expect(labels).toContain('Open in New Window');
     expect(labels).toContain('Edit Group');
     expect(labels).toContain('Ungroup...');
     expect(labels).not.toContain('Open with Default App');
     expect(labels).not.toContain('Regenerate Thumbnail');
+
+    const openWindow = entries.find(
+      (entry): entry is MenuItem => 'label' in entry && entry.label === 'Open in New Window',
+    );
+    openWindow!.action();
+    expect(onOpenNewWindow).toHaveBeenCalledOnce();
 
     const edit = entries.find(
       (entry): entry is MenuItem => 'label' in entry && entry.label === 'Edit Group',

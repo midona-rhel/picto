@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { getDefaultStore } from 'jotai';
 import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { GroupSurface } from './GroupSurface';
+import { GroupSurface, retainWarmGroupMedia } from './GroupSurface';
 import { viewerDisplayControlsAtom, viewerDisplayStateAtom } from '../../state/viewer';
 import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
 
@@ -189,6 +189,24 @@ async function enterEditor() {
 }
 
 describe('GroupSurface', () => {
+  it('does not expose a loading screen while group details are fetched', () => {
+    mocks.getItemDetails.mockReturnValue(new Promise(() => {}));
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+
+    expect(screen.queryByText(/loading group/i)).not.toBeInTheDocument();
+  });
+
+  it('keeps at most 100 full-media members using least-recently-viewed eviction', () => {
+    let order = Array.from({ length: 100 }, (_, index) => index + 1);
+    order = retainWarmGroupMedia(order, 1);
+    order = retainWarmGroupMedia(order, 101);
+
+    expect(order).toHaveLength(100);
+    expect(order).not.toContain(2);
+    expect(order).toContain(1);
+    expect(order[order.length - 1]).toBe(101);
+  });
+
   it('renders members in persisted order as a document reader', async () => {
     render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
     await screen.findByLabelText('Ordered set');
@@ -256,8 +274,11 @@ describe('GroupSurface', () => {
 
     const memberImages = [...document.querySelectorAll('[data-group-member] img')];
     const thumbnails = memberImages.filter((image) => image.getAttribute('src')?.includes('/thumb/'));
-    const fullImages = memberImages.filter((image) => image.getAttribute('src')?.includes('/file/'));
-    expect(thumbnails).toHaveLength(2);
+    expect(thumbnails).toHaveLength(3);
+    expect(memberImages.filter((image) => image.getAttribute('src')?.includes('/file/'))).toHaveLength(0);
+
+    await waitFor(() => expect(document.querySelectorAll('[data-group-member] img[src*="/file/"]')).toHaveLength(2));
+    const fullImages = [...document.querySelectorAll<HTMLImageElement>('[data-group-member] img[src*="/file/"]')];
     expect(fullImages).toHaveLength(2);
     expect(fullImages[0].className).not.toContain('fullImageVisible');
     fireEvent.load(fullImages[0]);
@@ -267,6 +288,37 @@ describe('GroupSurface', () => {
     expect(getComputedStyle(fullImages[0]).objectFit).toBe('fill');
     expect(getComputedStyle(thumbnails[0]).objectFit).toBe('fill');
     expect(fullImages[0].parentElement).toBe(thumbnails[0].parentElement);
+  });
+
+  it('requests full group media only after 200ms of continuous visibility', async () => {
+    const observed = new Map<Element, IntersectionObserverCallback>();
+    class TestIntersectionObserver {
+      readonly root = null;
+      readonly rootMargin = '';
+      readonly thresholds = [0.01];
+      constructor(private readonly callback: IntersectionObserverCallback) {}
+      observe = (target: Element) => { observed.set(target, this.callback); };
+      unobserve = (target: Element) => { observed.delete(target); };
+      disconnect = () => {};
+      takeRecords = () => [];
+    }
+    vi.stubGlobal('IntersectionObserver', TestIntersectionObserver);
+
+    render(<GroupSurface groupId={7} rootCurrentIndex={0} rootTotal={1} onNavigateRoot={vi.fn()} onClose={vi.fn()} />);
+    await screen.findByLabelText('Ordered set');
+    const frame = document.querySelector('[data-group-member="1"] > div')!;
+    const callback = observed.get(frame)!;
+    const entry = (isIntersecting: boolean) => ({ isIntersecting, target: frame } as IntersectionObserverEntry);
+
+    act(() => callback([entry(true)], {} as IntersectionObserver));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    act(() => callback([entry(false)], {} as IntersectionObserver));
+    await new Promise((resolve) => setTimeout(resolve, 130));
+    expect(frame.querySelector('img[src*="/file/"]')).toBeNull();
+
+    act(() => callback([entry(true)], {} as IntersectionObserver));
+    await waitFor(() => expect(frame.querySelector('img[src*="/file/"]')).not.toBeNull());
+    vi.unstubAllGlobals();
   });
 
   it.each([' ', 'Enter'])('closes the group reader with the shared viewer toggle %p', async (key) => {

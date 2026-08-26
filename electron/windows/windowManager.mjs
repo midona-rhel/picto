@@ -185,10 +185,16 @@ export function createWindowManager({
     }, WINDOW_STATE_SAVE_DEBOUNCE_MS);
   }
 
-  function createWindow(label = 'main', hash = null, width = MAIN_WINDOW_DEFAULT_WIDTH, height = MAIN_WINDOW_DEFAULT_HEIGHT) {
+  function createWindow(
+    label = 'main',
+    hash = null,
+    width = MAIN_WINDOW_DEFAULT_WIDTH,
+    height = MAIN_WINDOW_DEFAULT_HEIGHT,
+    detailItemId = null,
+  ) {
     const isSettings = label === 'settings';
     const isSubscriptions = label === 'subscriptions';
-    const isDetail = hash != null && !isSettings && !isSubscriptions;
+    const isDetail = (hash != null || detailItemId != null) && !isSettings && !isSubscriptions;
     const isMain = !isSettings && !isSubscriptions && !isDetail;
     const savedMainState = isMain ? getSavedMainWindowState() : null;
     const initialWidth = savedMainState?.width ?? width;
@@ -400,7 +406,7 @@ export function createWindowManager({
       ? 'settings'
       : label === 'subscriptions'
         ? 'subscriptions'
-        : hash
+        : isDetail
           ? 'detail'
           : 'main';
     if (isDev) {
@@ -409,7 +415,9 @@ export function createWindowManager({
         : page === 'subscriptions'
           ? `${DEV_URL}/subscriptions.html`
           : page === 'detail'
-            ? `${DEV_URL}/detail.html?hash=${encodeURIComponent(hash)}`
+            ? hash != null
+              ? `${DEV_URL}/detail.html?hash=${encodeURIComponent(hash)}`
+              : `${DEV_URL}/detail.html?item_id=${encodeURIComponent(detailItemId)}`
             : DEV_URL;
       void win.loadURL(url).catch((err) => {
         console.error(`[main] window '${label}' loadURL failed`, err);
@@ -425,7 +433,11 @@ export function createWindowManager({
         main: 'index.html',
       };
       void win.loadFile(path.join(__dirname, '..', 'dist', htmlMap[page]), {
-        query: hash ? { hash } : undefined,
+        query: hash != null
+          ? { hash }
+          : detailItemId != null
+            ? { item_id: String(detailItemId) }
+            : undefined,
       }).catch((err) => {
         console.error(`[main] window '${label}' loadFile failed`, err);
       });

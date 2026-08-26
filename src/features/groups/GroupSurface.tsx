@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type SyntheticEvent } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type SyntheticEvent } from 'react';
 import { useSetAtom } from 'jotai';
 import { viewerController } from '../../controllers/viewerController';
 import { MediaView } from '../viewer/MediaView';
@@ -28,6 +28,7 @@ import { GroupRemoveIcon, SelectAllIcon } from '../../shared/ui/icons/group-icon
 import * as entityMutations from '../../controllers/entityMutations';
 import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import { showErrorNotification } from '../../shared/lib/notifications';
+import { reverseImageSearch } from '../../platform/shellApi';
 
 export interface GroupSurfaceProps {
   groupId: number;
@@ -82,33 +83,162 @@ export function groupSelectionForClick(
   return { selected: new Set([itemId]), anchorId: itemId };
 }
 
-function GroupImage({ item }: { item: CanonicalEntityGridItem }) {
+const FULL_MEDIA_VISIBILITY_DELAY_MS = 200;
+const MAX_WARM_GROUP_MEDIA = 100;
+
+export function retainWarmGroupMedia(
+  current: readonly number[],
+  itemId: number,
+  limit = MAX_WARM_GROUP_MEDIA,
+): number[] {
+  return [...current.filter((currentId) => currentId !== itemId), itemId].slice(-limit);
+}
+
+function useWarmGroupMediaBudget(groupId: number) {
+  const orderRef = useRef<number[]>([]);
+  const loadedRef = useRef<Set<number>>(new Set());
+  const [loadedItemIds, setLoadedItemIds] = useState<Set<number>>(new Set());
+
+  useEffect(() => {
+    orderRef.current = [];
+    loadedRef.current = new Set();
+    setLoadedItemIds(new Set());
+  }, [groupId]);
+
+  const touch = useCallback((itemId: number) => {
+    if (!loadedRef.current.has(itemId)) return;
+    orderRef.current = retainWarmGroupMedia(orderRef.current, itemId);
+  }, []);
+
+  const request = useCallback((itemId: number) => {
+    const nextOrder = retainWarmGroupMedia(orderRef.current, itemId);
+    orderRef.current = nextOrder;
+    const nextLoaded = new Set(nextOrder);
+    loadedRef.current = nextLoaded;
+    setLoadedItemIds(nextLoaded);
+  }, []);
+
+  return { loadedItemIds, request, touch };
+}
+
+function useDeferredVisibleMedia(
+  itemId: number,
+  loadFullMedia: boolean,
+  onRequest: (itemId: number) => void,
+  onVisible: (itemId: number) => void,
+) {
+  const frameRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const frame = frameRef.current;
+    if (!frame) return;
+
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let observer: IntersectionObserver | null = null;
+    const cancel = () => {
+      if (timer !== null) clearTimeout(timer);
+      timer = null;
+    };
+    const schedule = () => {
+      if (timer !== null) return;
+      timer = setTimeout(() => {
+        timer = null;
+        onRequest(itemId);
+      }, FULL_MEDIA_VISIBILITY_DELAY_MS);
+    };
+
+    if (typeof IntersectionObserver === 'undefined') {
+      onVisible(itemId);
+      if (!loadFullMedia) schedule();
+    } else {
+      observer = new IntersectionObserver(([entry]) => {
+        if (entry?.isIntersecting) {
+          onVisible(itemId);
+          if (!loadFullMedia) schedule();
+        } else cancel();
+      }, { threshold: 0.01 });
+      observer.observe(frame);
+    }
+
+    return () => {
+      cancel();
+      observer?.disconnect();
+    };
+  }, [itemId, loadFullMedia, onRequest, onVisible]);
+
+  return frameRef;
+}
+
+interface GroupDeferredMediaProps {
+  item: CanonicalEntityGridItem;
+  loadFullMedia: boolean;
+  onRequest: (itemId: number) => void;
+  onVisible: (itemId: number) => void;
+}
+
+function GroupImage({ item, loadFullMedia, onRequest, onVisible }: GroupDeferredMediaProps) {
   const [fullVisible, setFullVisible] = useState(false);
+  const frameRef = useDeferredVisibleMedia(item.item_id, loadFullMedia, onRequest, onVisible);
+  useEffect(() => {
+    if (!loadFullMedia) setFullVisible(false);
+  }, [loadFullMedia]);
   const aspectRatio = item.pixel_width && item.pixel_height
     ? `${item.pixel_width} / ${item.pixel_height}`
     : undefined;
 
   return (
-    <div className={styles.imageFrame} style={{ aspectRatio }}>
+    <div ref={frameRef} className={styles.imageFrame} style={{ aspectRatio }}>
       <ThumbnailImage
         className={styles.thumbnailImage}
         src={mediaThumbnailUrl(item.display_file_hash)}
         alt=""
         draggable={false}
       />
-      <img
-        className={`${styles.fullImage} ${fullVisible ? styles.fullImageVisible : ''}`}
-        src={mediaFileUrl(item.display_file_hash, item.display_mime_type)}
-        alt={item.name ?? ''}
-        loading="lazy"
-        decoding="async"
-        onLoad={(event: SyntheticEvent<HTMLImageElement>) => {
-          const reveal = () => setFullVisible(true);
-          if (typeof event.currentTarget.decode === 'function') {
-            event.currentTarget.decode().then(reveal).catch(reveal);
-          } else reveal();
-        }}
-      />
+      {loadFullMedia && (
+        <img
+          className={`${styles.fullImage} ${fullVisible ? styles.fullImageVisible : ''}`}
+          src={mediaFileUrl(item.display_file_hash, item.display_mime_type)}
+          alt={item.name ?? ''}
+          decoding="async"
+          onLoad={(event: SyntheticEvent<HTMLImageElement>) => {
+            const reveal = () => setFullVisible(true);
+            if (typeof event.currentTarget.decode === 'function') {
+              event.currentTarget.decode().then(reveal).catch(reveal);
+            } else reveal();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function GroupDeferredRenderer({ item, loadFullMedia, onRequest, onVisible }: GroupDeferredMediaProps) {
+  const frameRef = useDeferredVisibleMedia(item.item_id, loadFullMedia, onRequest, onVisible);
+  const aspectRatio = item.pixel_width && item.pixel_height
+    ? `${item.pixel_width} / ${item.pixel_height}`
+    : undefined;
+
+  return (
+    <div ref={frameRef} className={styles.mediaFrame} style={{ aspectRatio }}>
+      {!loadFullMedia && (
+        <ThumbnailImage
+          className={styles.deferredThumbnail}
+          src={mediaThumbnailUrl(item.display_file_hash)}
+          alt=""
+          draggable={false}
+        />
+      )}
+      {loadFullMedia && (
+        <DetailMediaRenderer
+          hash={item.display_file_hash}
+          mimeType={item.display_mime_type}
+          displayName={item.name}
+          mediaKeyboardShortcutsEnabled={false}
+          mediaAutoPlay={false}
+          mediaLoop={false}
+          mediaMuted={false}
+        />
+      )}
     </div>
   );
 }
@@ -122,14 +252,17 @@ export function GroupSurface({
   onNavigateRoot,
   onClose,
 }: GroupSurfaceProps) {
-  const [details, setDetails] = useState<ItemDetails | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [details, setDetails] = useState<ItemDetails | null>(
+    () => viewerController.takePrefetchedItemDetails?.(groupId) ?? null,
+  );
+  const skipInitialRefreshRef = useRef(details !== null);
   const [error, setError] = useState<string | null>(null);
   const [mode, setMode] = useState(initialMode);
   const [selectedItemIds, setSelectedItemIds] = useState<Set<number>>(new Set());
   const [selectionAnchorId, setSelectionAnchorId] = useState<number | null>(null);
   const [viewerIndex, setViewerIndex] = useState<number | null>(null);
   const [quickLookIndex, setQuickLookIndex] = useState<number | null>(null);
+  const warmMedia = useWarmGroupMediaBudget(groupId);
   const contextMenu = useContextMenu();
   const setDisplayState = useSetAtom(viewerDisplayStateAtom);
   const setDisplayControls = useSetAtom(viewerDisplayControlsAtom);
@@ -163,12 +296,16 @@ export function GroupSurface({
       setError(null);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setLoading(false);
     }
   }, [groupId, onClose]);
 
-  useEffect(() => { void refresh(); }, [refresh]);
+  useEffect(() => {
+    if (skipInitialRefreshRef.current) {
+      skipInitialRefreshRef.current = false;
+      return;
+    }
+    void refresh();
+  }, [refresh]);
   useEffect(
     () => libraryInvalidation.register(`item:${groupId}`, () => { void refresh(); }),
     [groupId, refresh],
@@ -329,8 +466,8 @@ export function GroupSurface({
       onOpen: single ? () => setViewerIndex(openIndex) : undefined,
       onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
       onRevealInFolder: (hash) => { void filesController.revealHashInFolder(hash); },
-      onOpenNewWindow: single ? (hash) => { void windowController.openDetailWindow({
-        hash,
+      onOpenNewWindow: single ? () => { void windowController.openDetailWindow({
+        hash: single.display_file_hash,
         width: single.pixel_width,
         height: single.pixel_height,
       }); } : undefined,
@@ -367,13 +504,10 @@ export function GroupSurface({
         items: selected.map((entry) => ({ item_id: entry.item_id, name: entry.name ?? 'Untitled' })),
       }) : undefined,
       onSearchByImage: (engine, hash) => {
-        const bases: Record<string, string> = {
-          tineye: 'https://tineye.com/search/?url=',
-          saucenao: 'https://saucenao.com/search.php?url=',
-          yandex: 'https://yandex.com/images/search?rpt=imageview&url=',
-          bing: 'https://www.bing.com/images/search?view=detailv2&iss=sbi&form=SBIVSP&sbisrc=UrlPaste&q=imgurl:',
-        };
-        if (bases[engine]) void (window as any).picto?.shell?.openExternal(`${bases[engine]}${encodeURIComponent(mediaThumbnailUrl(hash))}`);
+        void reverseImageSearch(hash, engine).catch((reason) => showErrorNotification({
+          title: 'Reverse image search failed',
+          message: reason instanceof Error ? reason.message : String(reason),
+        }));
       },
       onRegenerateThumbnails: () => { void filesController.regenerateThumbnailsBatch(selected.map((entry) => entry.display_file_hash)); },
       onSetLibraryCover: single ? (hash) => {
@@ -446,9 +580,6 @@ export function GroupSurface({
     }
   }, [groupId, refresh]);
 
-  if (loading && !details) {
-    return <div className={styles.surface}><div className={styles.status}>Loading group...</div></div>;
-  }
   if (error && !details) {
     return <div className={styles.surface}><div className={`${styles.status} ${styles.error}`}>{error}</div></div>;
   }
@@ -513,24 +644,19 @@ export function GroupSurface({
                   onDoubleClick={() => setViewerIndex(index)}
                 >
                   {detailRendererKind(item.display_mime_type) !== 'image' ? (
-                    <div
-                      className={styles.mediaFrame}
-                      style={{ aspectRatio: item.pixel_width && item.pixel_height
-                        ? `${item.pixel_width} / ${item.pixel_height}`
-                        : undefined }}
-                    >
-                      <DetailMediaRenderer
-                        hash={item.display_file_hash}
-                        mimeType={item.display_mime_type}
-                        displayName={item.name}
-                        mediaKeyboardShortcutsEnabled={false}
-                        mediaAutoPlay={false}
-                        mediaLoop={false}
-                        mediaMuted={false}
-                      />
-                    </div>
+                    <GroupDeferredRenderer
+                      item={item}
+                      loadFullMedia={warmMedia.loadedItemIds.has(item.item_id)}
+                      onRequest={warmMedia.request}
+                      onVisible={warmMedia.touch}
+                    />
                   ) : (
-                    <GroupImage item={item} />
+                    <GroupImage
+                      item={item}
+                      loadFullMedia={warmMedia.loadedItemIds.has(item.item_id)}
+                      onRequest={warmMedia.request}
+                      onVisible={warmMedia.touch}
+                    />
                   )}
                 </figure>
               ))}

@@ -13,7 +13,7 @@ import {
   IconCopy, IconClipboardCopy, IconLink, IconBookmark, IconBookmarks,
   IconRefresh, IconTrash, IconArrowBackUp, IconClipboard, IconFilterPlus, IconFileImport,
   IconSearch,
-  IconContrastFilled, IconFileExport, IconFolder, IconPhoto, IconStar,
+  IconContrast, IconFileExport, IconFolder, IconPhoto, IconStar,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconAutoTag, IconPasteTags, IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
@@ -27,7 +27,11 @@ import {
   GroupRemoveIcon,
   SelectAllIcon,
 } from '../../shared/ui/icons/group-icons';
-import type { OpenWithOptions } from '../../platform/shellApi';
+import {
+  REVERSE_IMAGE_SEARCH_ENGINES,
+  type OpenWithOptions,
+  type ReverseImageSearchEngine,
+} from '../../platform/shellApi';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
@@ -64,7 +68,8 @@ export interface GridMenuContext {
   onMoveToTrash?: () => void;
   onRestore?: () => void;
   onPermanentDelete?: () => void;
-  onOpenNewWindow?: (hash: string) => void;
+  onOpenNewWindow?: () => void;
+  lastUsedFolderName?: string | null;
   onAddToFolder?: () => void;
   onAddToLastUsedFolder?: () => void;
   onRemoveFromFolder?: () => void;
@@ -86,7 +91,7 @@ export interface GridMenuContext {
   containsGroup?: boolean;
   onCopyLink?: (link: string) => void;
   onNewFolderWithSelection?: () => void;
-  onSearchByImage?: (engine: string, hash: string) => void;
+  onSearchByImage?: (engine: ReverseImageSearchEngine, hash: string) => void;
   onSetRating?: (rating: number) => void;
   onExport?: () => void;
   onExportOriginals?: () => void;
@@ -175,7 +180,7 @@ export function buildEntityOpenContextEntries({
   onOpenWithApplication?: (hash: string, applicationPath: string) => void;
   onOpenWithChooser?: (hash: string) => void;
   onRevealInFolder?: (hash: string) => void;
-  onOpenNewWindow?: (hash: string) => void;
+  onOpenNewWindow?: () => void;
 }): MenuEntry[] {
   const entries: MenuEntry[] = [];
   if (onOpenDefault) {
@@ -223,7 +228,7 @@ export function buildEntityOpenContextEntries({
     entries.push(item('Open in New Window', {
       icon: <IconAppWindow size={15} />,
       shortcut: kbd('file.openNewWindow'),
-      action: () => onOpenNewWindow(hash),
+      action: onOpenNewWindow,
     }));
   }
   return entries;
@@ -334,7 +339,15 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     if (!viewerSurface) {
       entries.push(item('Open', { icon: <IconArrowsMaximize size={15} />, shortcut: kbd('view.detailView'), action: ctx.onOpen }));
     }
-    if (ctx.singleKind !== 'collection' && singleHash) {
+    if (ctx.singleKind === 'collection') {
+      if (ctx.onOpenNewWindow) {
+        entries.push(item('Open in New Window', {
+          icon: <IconAppWindow size={15} />,
+          shortcut: kbd('file.openNewWindow'),
+          action: ctx.onOpenNewWindow,
+        }));
+      }
+    } else if (singleHash) {
       entries.push(...buildEntityOpenContextEntries({
         hash: singleHash,
         onOpenDefault: ctx.onOpenDefault,
@@ -359,7 +372,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     const viewEntries = buildContextMenuViewEntries();
     for (const entry of viewEntries) entries.push(entry);
     entries.push(item('Grayscale', {
-      icon: <IconContrastFilled size={15} />,
+      icon: <IconContrast size={15} />,
       shortcut: kbd('view.grayscale'),
       action: ctx.onToggleGrayscale,
       checked: ctx.grayscale ?? false,
@@ -371,7 +384,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   // ── Organization ──
   if (hasSelection) {
     if (ctx.onAddToLastUsedFolder) {
-      entries.push(item('Add to Last Used Folder', {
+      entries.push(item(ctx.lastUsedFolderName ? `Add to “${ctx.lastUsedFolderName}”` : 'Add to Last Used Folder', {
         icon: <IconFolderPlus size={15} />,
         shortcut: kbd('file.addToLastFolder'),
         action: ctx.onAddToLastUsedFolder,
@@ -479,18 +492,12 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   }
 
   // ── Search by Image ──
-  if (singleSelected && singleHash && ctx.singleKind !== 'collection' && ctx.onSearchByImage) {
-    const engines = [
-      { key: 'tineye', label: 'TinEye' },
-      { key: 'saucenao', label: 'SauceNAO' },
-      { key: 'yandex', label: 'Yandex Images' },
-      { key: 'bing', label: 'Bing Visual Search' },
-    ];
+  if (singleSelected && singleHash && ctx.singleMime?.startsWith('image/') && ctx.onSearchByImage) {
     entries.push({
       submenu: true,
       label: 'Search by Image',
       icon: <IconSearch size={15} />,
-      children: engines.map((eng) => ({
+      children: REVERSE_IMAGE_SEARCH_ENGINES.map((eng) => ({
         label: eng.label,
         action: () => ctx.onSearchByImage!(eng.key, singleHash!),
       })),

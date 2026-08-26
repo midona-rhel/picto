@@ -16,6 +16,7 @@ import type { FlashPlaybackController } from './document/FlashPlayer';
 import type { CurrentFrameCapture } from './currentFrameCapture';
 import { openCurrentLibraryCoverPicker } from '../library/libraryAppearance';
 import { showErrorNotification } from '../../shared/lib/notifications';
+import { reverseImageSearch } from '../../platform/shellApi';
 
 interface ViewerEntityContextMenuOptions {
   hash: string | null;
@@ -123,7 +124,13 @@ export function useViewerEntityContextMenu({
       onDeselectAll: () => {},
       onOpenDefault: (fileHash) => { void filesController.openDefaultAppForHash(fileHash); },
       onRevealInFolder: (fileHash) => { void filesController.revealHashInFolder(fileHash); },
-      onOpenNewWindow: (fileHash) => { void windowController.openDetailWindow({ hash: fileHash, width, height }); },
+      onOpenNewWindow: () => {
+        if (menuKind === 'collection' && itemId != null) {
+          void windowController.openDetailWindow({ item_id: itemId });
+        } else {
+          void windowController.openDetailWindow({ hash, width, height });
+        }
+      },
       onCopyFile: (fileHash) => { void filesController.copyFileForHash(fileHash); },
       onCopyFilePath: (fileHash) => { void filesController.copyFilePath(fileHash); },
       onCopyName: (value) => filesController.copyText(value),
@@ -149,14 +156,10 @@ export function useViewerEntityContextMenu({
       onSetRating: target ? (rating) => { void entityMutations.setTargetRating(target, rating); } : undefined,
       onExport: target ? () => setExportModal({ open: true, fileCount: 1, target }) : undefined,
       onSearchByImage: menuKind === 'media' ? (engine, fileHash) => {
-        const bases: Record<string, string> = {
-          tineye: 'https://tineye.com/search/?url=',
-          saucenao: 'https://saucenao.com/search.php?url=',
-          yandex: 'https://yandex.com/images/search?rpt=imageview&url=',
-          bing: 'https://www.bing.com/images/search?view=detailv2&iss=sbi&form=SBIVSP&sbisrc=UrlPaste&q=imgurl:',
-        };
-        const base = bases[engine];
-        if (base) void (window as any).picto?.shell?.openExternal(`${base}${encodeURIComponent(`media://localhost/thumb/${fileHash}.jpg`)}`);
+        void reverseImageSearch(fileHash, engine).catch((reason) => showErrorNotification({
+          title: 'Reverse image search failed',
+          message: reason instanceof Error ? reason.message : String(reason),
+        }));
       } : undefined,
       onRegenerateThumbnails: menuKind === 'media'
         ? () => { void filesController.regenerateThumbnailsBatch([hash]); }
