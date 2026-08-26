@@ -248,6 +248,56 @@ describe('subscription settlement', () => {
     expect(store.get(subscriptionsWorkspaceSnapshotAtom)?.subscriptions).toEqual([]);
     expect(getRunActivity).not.toHaveBeenCalled();
   });
+
+  it('keeps a queued gallery import until its run record exists', async () => {
+    const galleryJob = {
+      id: '9',
+      name: 'ExHentai Gallery 1169267',
+      queries: [{ site_id: 'ehentai' }],
+    };
+    store.set(subscriptionsWorkspaceSnapshotAtom, {
+      subscriptions: [galleryJob],
+      runningSubscriptionIds: [],
+      runningProgress: [],
+    } as never);
+    refreshRuntimeState.mockResolvedValue({ runningSubscriptionIds: [], runningProgress: [] });
+    listRuns.mockResolvedValue([]);
+
+    await refreshSubscriptionsRuntimeState();
+    await vi.waitFor(() => expect(listRuns).toHaveBeenCalledWith('9'));
+
+    expect(cleanupGalleryImport).not.toHaveBeenCalled();
+    expect(showErrorNotification).not.toHaveBeenCalled();
+    expect(store.get(subscriptionsWorkspaceSnapshotAtom)?.subscriptions).toEqual([galleryJob]);
+  });
+
+  it('shows the gallery sidecar failure before cleaning up the transient job', async () => {
+    const galleryJob = {
+      id: '9',
+      name: 'ExHentai Gallery 1169267',
+      queries: [{ site_id: 'ehentai' }],
+    };
+    store.set(subscriptionsWorkspaceSnapshotAtom, {
+      subscriptions: [galleryJob],
+      runningSubscriptionIds: [],
+      runningProgress: [],
+    } as never);
+    refreshRuntimeState.mockResolvedValue({ runningSubscriptionIds: [], runningProgress: [] });
+    listRuns.mockResolvedValue([{
+      status: 'failed',
+      failure_kind: 'authentication',
+      error_message: 'AuthorizationError: ExHentai rejected the saved cookies',
+    }]);
+    cleanupGalleryImport.mockResolvedValue(null);
+
+    await refreshSubscriptionsRuntimeState();
+    await vi.waitFor(() => expect(cleanupGalleryImport).toHaveBeenCalledWith('9'));
+
+    expect(showErrorNotification).toHaveBeenCalledWith({
+      title: 'Gallery import failed',
+      message: 'AuthorizationError: ExHentai rejected the saved cookies',
+    });
+  });
 });
 
 function runActivity(runStatus: string, queryStatus: string) {

@@ -102,19 +102,20 @@ function settleFinishedGalleryImports(snapshot: SubscriptionWorkspaceSnapshot): 
     settlingGalleryIds.add(job.id);
     void subscriptionsController.listRuns(job.id).then(async (runs) => {
       const latest = runs[0];
-      if (latest?.status === 'succeeded') {
+      // Creation and run startup are separate native operations. An invalidation can
+      // expose the queued job before its run record exists; leave it alone and retry.
+      if (!latest) return;
+      if (latest.status === 'succeeded') {
         const cleanup = await subscriptionsController.cleanupGalleryImport(job.id);
         showSuccessNotification({
           title: 'Gallery downloaded',
           message: `${cleanup?.title ?? job.name} has been downloaded.`,
         });
-      } else if (latest) {
+      } else {
         showErrorNotification({
           title: 'Gallery import failed',
-          message: latest.error_message ?? 'GalleryDL could not import this gallery.',
+          message: latest.error_message ?? `Gallery worker failed (${latest.failure_kind ?? latest.status}).`,
         });
-        await subscriptionsController.cleanupGalleryImport(job.id);
-      } else {
         await subscriptionsController.cleanupGalleryImport(job.id);
       }
       store.set(subscriptionsWorkspaceSnapshotAtom, (current) => current ? {

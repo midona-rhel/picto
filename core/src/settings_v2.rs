@@ -124,7 +124,9 @@ fn read_value(
     key_column: &str,
     key: &str,
 ) -> Result<SettingsSnapshot, String> {
-    application.store().read(|connection| {
+    // Settings are wholly SQLite-backed. They do not depend on an in-memory
+    // projection, so WAL snapshots must not queue behind ingest settlement.
+    application.store().read_snapshot(|connection| {
         let sql = format!("SELECT value_json FROM {table} WHERE {key_column} = ?1");
         let value_json = connection
             .query_row(&sql, [key], |row| row.get::<_, String>(0))

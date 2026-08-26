@@ -8,6 +8,7 @@ pub mod schema;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, RwLock};
+use std::time::Instant;
 
 use rusqlite::{Connection, OpenFlags, Transaction};
 
@@ -112,11 +113,24 @@ impl Store {
         &self,
         operation: impl FnOnce(&Connection) -> Result<T, String>,
     ) -> Result<T, String> {
+        let wait_started = Instant::now();
         let _guard = self
             .consistency
             .read()
             .map_err(|_| "Store consistency lock poisoned".to_string())?;
-        self.with_reader_unlocked(operation)
+        let consistency_wait = wait_started.elapsed();
+        let operation_started = Instant::now();
+        let result = self.with_reader_unlocked(operation);
+        let operation_duration = operation_started.elapsed();
+        if consistency_wait.as_millis() >= 100 || operation_duration.as_millis() >= 100 {
+            tracing::warn!(
+                target: "picto::store",
+                consistency_wait_ms = consistency_wait.as_secs_f64() * 1_000.0,
+                read_ms = operation_duration.as_secs_f64() * 1_000.0,
+                "Slow settled store read"
+            );
+        }
+        result
     }
 
     fn with_reader_unlocked<T>(

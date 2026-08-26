@@ -180,8 +180,13 @@ fn apply_credential_auth(
     extractor: &mut serde_json::Map<String, serde_json::Value>,
     auth: &GalleryDlAuthConfig,
 ) {
+    // E-Hentai and ExHentai share gallery-dl's `exhentai` extractor.
+    let extractor_category = match auth.site_category.as_str() {
+        "ehentai" => "exhentai",
+        category => category,
+    };
     let site_obj = extractor
-        .entry(auth.site_category.clone())
+        .entry(extractor_category.to_string())
         .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
     match (site_obj, auth.fragment.clone()) {
         (serde_json::Value::Object(site_map), serde_json::Value::Object(auth_map)) => {
@@ -254,6 +259,44 @@ mod tests {
         assert_eq!(
             gelbooru.get("user-id").and_then(|value| value.as_str()),
             Some("277923")
+        );
+    }
+
+    #[test]
+    fn ehentai_credentials_target_gallery_dls_shared_exhentai_extractor() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "ehentai".to_string(),
+            url: "https://exhentai.org/g/1169267/1d91fd6979/".to_string(),
+            post_limit: None,
+            range_start: 1,
+            source_cursor: None,
+            abort_threshold: None,
+            auth: Some(GalleryDlAuthConfig {
+                site_category: "ehentai".to_string(),
+                fragment: serde_json::json!({
+                    "cookies": { "ipb_member_id": "member" },
+                }),
+            }),
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        let extractor = config
+            .get("extractor")
+            .and_then(|value| value.as_object())
+            .expect("extractor config");
+        assert!(extractor.get("ehentai").is_none());
+        assert_eq!(
+            extractor
+                .get("exhentai")
+                .and_then(|value| value.get("cookies"))
+                .and_then(|value| value.get("ipb_member_id"))
+                .and_then(|value| value.as_str()),
+            Some("member")
         );
     }
 

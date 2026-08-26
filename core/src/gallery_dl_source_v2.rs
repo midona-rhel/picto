@@ -652,10 +652,9 @@ fn settle_summary(
         return Err(map_failure(kind, message));
     }
     if summary.exit_code != 0 && summary.source_page_items == 0 && summary.discovered_items == 0 {
-        return Err(RunnerFailure::terminal(
-            RunnerFailureKind::Runtime,
-            format!("gallery-dl exited with code {}", summary.exit_code),
-        ));
+        let message = gallery_dl_runner::final_error_line(&summary.stderr_output)
+            .unwrap_or_else(|| format!("gallery-dl exited with code {}", summary.exit_code));
+        return Err(RunnerFailure::terminal(RunnerFailureKind::Runtime, message));
     }
     if downloaded == 0
         && summary.discovered_items
@@ -920,6 +919,21 @@ mod tests {
         assert!(empty_gallery
             .message
             .contains("without discovering any media"));
+    }
+
+    #[test]
+    fn empty_failed_bridge_preserves_its_actionable_stderr_tail() {
+        let complete = BatchPosition {
+            range_start: 1,
+            source_cursor: None,
+            history_complete: true,
+            batch_size: crate::subscriptions_v2::DEFAULT_SOURCE_POST_BATCH_SIZE,
+        };
+        let mut failed = summary(4, 0, 0);
+        failed.stderr_output = "bridge startup\nExHentai rejected the saved cookies\n".to_string();
+
+        let failure = settle_summary(failed, 0, 0, &complete, true).unwrap_err();
+        assert_eq!(failure.message, "ExHentai rejected the saved cookies");
     }
 
     #[test]
