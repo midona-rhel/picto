@@ -11,7 +11,7 @@
   border-radius: 5px;
   background: transparent;
   color: var(--color-text-primary);
-  opacity: 0.8;
+  opacity: 0.94;
   cursor: pointer;
   outline: none;
   flex-shrink: 0;
@@ -26,6 +26,15 @@
   display: block;
   flex: none;
   shape-rendering: geometricPrecision;
+  transform: scale(1.08);
+  transform-origin: center;
+}
+
+/* Tabler defaults to a 2px stroke, which is heavier than Picto's one-pixel
+ * toolbar artwork. Keep each caller's intentional glyph size, but normalize
+ * outlined toolbar icons without affecting filled/custom SVGs. */
+.iconBtn > svg:global(.tabler-icon) :is(path, rect, circle, line, polyline) {
+  stroke-width: 1.25;
 }
 
 .iconBtn:hover {
