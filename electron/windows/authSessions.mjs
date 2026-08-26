@@ -688,7 +688,7 @@ export function createAuthSessions({
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
-        partition: `persist:picto-auth-v1-${site.id}`,
+        partition: site.sessionPartition ?? `persist:picto-auth-v1-${site.id}`,
       },
     });
     const userAgent = sanitizeUserAgent(authWindow.webContents.getUserAgent?.());

@@ -117,7 +117,7 @@ describe('direct-site authentication', () => {
       cookieNames: ['ipb_member_id', 'ipb_pass_hash', 'igneous'],
       authenticatedCookieNames: ['ipb_member_id', 'ipb_pass_hash'],
       allowStorageAccess: true,
-      preserveUserAgent: true,
+      sessionPartition: 'persist:picto-auth-v2-ehentai',
     });
     expect(resolveAuthSite('exhentai')).toBe(resolveAuthSite('ehentai'));
   });
@@ -137,6 +137,8 @@ describe('direct-site authentication', () => {
     const { sessions, persistCredential } = createHarness(browser);
 
     await sessions.startAuthSession('ehentai');
+    expect(browser.instances[0].options.webPreferences.partition).toBe('persist:picto-auth-v2-ehentai');
+    expect(browser.instances[0].userAgent).toBe('Mozilla/5.0');
     await browser.instances[0].webContents.listeners.get('did-finish-load')();
     await settle();
     expect(browser.instances[0].loadedUrl).toBe('https://exhentai.org/');

@@ -180,7 +180,7 @@ export const AUTH_SITES = Object.freeze({
     cookieNames: Object.freeze(['ipb_member_id', 'ipb_pass_hash', 'igneous']),
     authenticatedCookieNames: Object.freeze(['ipb_member_id', 'ipb_pass_hash']),
     allowStorageAccess: true,
-    preserveUserAgent: true,
+    sessionPartition: 'persist:picto-auth-v2-ehentai',
   }),
 });
 
