@@ -11,6 +11,9 @@ impl SiteAdapter for ExhentaiAdapter {
         let mut tags = Vec::new();
         append_tag_values(&mut tags, "creator", &json["tags_artist"]);
         append_tag_values(&mut tags, "series", &json["tags_parody"]);
+        tags.retain(|(namespace, tag)| {
+            namespace != "series" || !tag.trim().eq_ignore_ascii_case("original")
+        });
         append_tag_values(&mut tags, "character", &json["tags_character"]);
         tags
     }
@@ -35,7 +38,7 @@ mod tests {
     fn keeps_only_picto_gallery_namespaces() {
         let metadata = json!({
             "tags_artist": ["leonardo"],
-            "tags_parody": ["renaissance"],
+            "tags_parody": ["renaissance", "original", " Original "],
             "tags_character": ["mona lisa"],
             "tags_language": ["english"],
             "tags_female": ["female tag"],
