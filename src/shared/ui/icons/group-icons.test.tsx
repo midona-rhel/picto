@@ -20,8 +20,20 @@ describe('Picto group icon family', () => {
     expect(renderToStaticMarkup(<GroupCreateIcon />)).toContain('data-picto-icon="group-create"');
     expect(renderToStaticMarkup(<GroupRemoveIcon />)).toContain('data-picto-icon="group-remove"');
     expect(renderToStaticMarkup(<GroupEditIcon />)).toContain('data-picto-icon="group-edit"');
-    expect(renderToStaticMarkup(<GroupCreateIcon />)).toContain('M10.25 17.5H6.5');
-    expect(renderToStaticMarkup(<GroupRemoveIcon />)).toContain('M10.25 17.5H6.5');
+    for (const [name, icon] of [
+      ['create', <GroupCreateIcon />],
+      ['remove', <GroupRemoveIcon />],
+      ['edit', <GroupEditIcon />],
+    ] as const) {
+      const markup = renderToStaticMarkup(icon);
+      expect(markup).toContain(`data-picto-sub-icon="${name}"`);
+      expect(markup).toContain('M8.75 15.5H4.5');
+      expect(markup).toContain('M15.5 4v3.5M8.75 17.5H6.5');
+      expect(markup.match(/stroke-width="1.25"/g)?.length).toBeGreaterThanOrEqual(3);
+    }
+    expect(renderToStaticMarkup(<GroupCreateIcon />)).toContain('M11 14.75h7.5');
+    expect(renderToStaticMarkup(<GroupRemoveIcon />)).toContain('m11.5 11.5 6.5 6.5');
+    expect(renderToStaticMarkup(<GroupEditIcon />)).toContain('m11.25 18.75 1.15-4.05');
   });
 
   it('uses four rounded tiles and reserves the strike for deselect all', () => {

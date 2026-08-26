@@ -58,28 +58,28 @@ export function GroupIcon(props: GroupIconProps) {
   );
 }
 
-function GroupActionLayers() {
-  return (
-    <path
-      d="M15.5 4v6.25M10.25 17.5H6.5"
-      {...strokeProps}
-    />
-  );
-}
+type GroupActionMark = 'create' | 'edit' | 'remove';
 
-function GroupCutout({ mark }: { mark: 'plus' | 'remove' }) {
+/**
+ * Reserve the complete bottom-right quadrant for the action mark. The 1.25
+ * unit clearance between these terminated strokes and every mark is the same
+ * as the icon stroke itself, so composites stay legible at 15–16 CSS pixels.
+ */
+function GroupActionIcon({ mark }: { mark: GroupActionMark }) {
   return (
     <>
       <path
-        d="M10.25 15.5H4.5A1.5 1.5 0 0 1 3 14V3a1.5 1.5 0 0 1 1.5-1.5H12A1.5 1.5 0 0 1 13.5 3v7.25"
+        d="M8.75 15.5H4.5A1.5 1.5 0 0 1 3 14V3a1.5 1.5 0 0 1 1.5-1.5H12A1.5 1.5 0 0 1 13.5 3v4.5"
         {...strokeProps}
       />
-      <GroupActionLayers />
-      {mark === 'plus' ? (
-        <path d="M12.5 13.5h5M15 11v5" {...strokeProps} />
-      ) : (
-        <path d="m13.25 11.75 3.5 3.5m0-3.5-3.5 3.5" {...strokeProps} />
-      )}
+      <path d="M15.5 4v3.5M8.75 17.5H6.5" {...strokeProps} />
+      <g data-picto-sub-icon={mark}>
+        {mark === 'create' ? <path d="M11 14.75h7.5M14.75 11v7.5" {...strokeProps} /> : null}
+        {mark === 'remove' ? <path d="m11.5 11.5 6.5 6.5m0-6.5-6.5 6.5" {...strokeProps} /> : null}
+        {mark === 'edit' ? (
+          <path d="m11.25 18.75 1.15-4.05 4.65-4.65 1.9 1.9-4.65 4.65-3.05 2.15Z" {...strokeProps} />
+        ) : null}
+      </g>
     </>
   );
 }
@@ -116,7 +116,7 @@ export function drawGroupIcon(
 export function GroupCreateIcon(props: GroupIconProps) {
   return (
     <IconFrame {...props} name="group-create">
-      <GroupCutout mark="plus" />
+      <GroupActionIcon mark="create" />
     </IconFrame>
   );
 }
@@ -124,7 +124,7 @@ export function GroupCreateIcon(props: GroupIconProps) {
 export function GroupRemoveIcon(props: GroupIconProps) {
   return (
     <IconFrame {...props} name="group-remove">
-      <GroupCutout mark="remove" />
+      <GroupActionIcon mark="remove" />
     </IconFrame>
   );
 }
@@ -132,9 +132,7 @@ export function GroupRemoveIcon(props: GroupIconProps) {
 export function GroupEditIcon(props: GroupIconProps) {
   return (
     <IconFrame {...props} name="group-edit">
-      <path d="M10.25 15.5H4.5A1.5 1.5 0 0 1 3 14V3a1.5 1.5 0 0 1 1.5-1.5H12A1.5 1.5 0 0 1 13.5 3v6.25" {...strokeProps} />
-      <GroupActionLayers />
-      <path d="m10.75 15.25 1.15-2.3 3.6-3.6L17.15 11l-3.6 3.6-2.8.65Z" {...strokeProps} />
+      <GroupActionIcon mark="edit" />
     </IconFrame>
   );
 }
