@@ -249,6 +249,42 @@ describe('DuplicatesScreen', () => {
     })));
   });
 
+  it('keeps the resolved pair visible until the replacement names are ready', async () => {
+    const nextPair = pair('RightBetter');
+    nextPair.file_id_a = 3;
+    nextPair.file_id_b = 4;
+    nextPair.left.file = file(3, 'next-left');
+    nextPair.left.occurrences = [{ media_item_id: 33, root_item_id: 33, collection_id: null }];
+    nextPair.right.file = file(4, 'next-right');
+    nextPair.right.occurrences = [{ media_item_id: 44, root_item_id: 44, collection_id: null }];
+    vi.mocked(getDuplicatePairs)
+      .mockResolvedValueOnce({ items: [pair()], next_cursor: null, has_more: false, total: 2 })
+      .mockResolvedValueOnce({ items: [nextPair], next_cursor: null, has_more: false, total: 1 });
+
+    let releaseNextDetails!: () => void;
+    const nextDetailsReady = new Promise<void>((resolve) => { releaseNextDetails = resolve; });
+    vi.mocked(getDuplicateItemDetails).mockImplementation(async (itemId) => {
+      if (itemId === 33 || itemId === 44) await nextDetailsReady;
+      if (itemId === 11) return details(itemId, 'left', 'Left image');
+      if (itemId === 22) return details(itemId, 'right', 'Right image');
+      if (itemId === 33) return details(itemId, 'next-left', 'Next left image');
+      return details(itemId, 'next-right', 'Next right image');
+    });
+
+    const user = setupUser();
+    await renderScreen();
+    await screen.findByText('Left image');
+    await user.click(screen.getByRole('button', { name: 'Smart merge' }));
+    await waitFor(() => expect(getDuplicatePairs).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByText('Left image')).toBeInTheDocument();
+    expect(screen.queryByText('next-left')).not.toBeInTheDocument();
+
+    await act(async () => releaseNextDetails());
+    expect(await screen.findByText('Next left image')).toBeInTheDocument();
+    expect(screen.getByText('Next right image')).toBeInTheDocument();
+  });
+
   it.each([
     ['z', 'keep_left'],
     ['x', 'keep_right'],

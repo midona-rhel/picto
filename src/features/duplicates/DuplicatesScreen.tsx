@@ -122,6 +122,12 @@ interface SideState {
   media: MediaDetails | null;
 }
 
+interface PairDetails {
+  pairKey: string;
+  left: SideState;
+  right: SideState;
+}
+
 type ComparisonSide = 'left' | 'right';
 
 function smartMergeWinner(decision: DuplicatePair['decision']): ComparisonSide | null {
@@ -166,6 +172,21 @@ function mediaForFile(details: ItemDetails, fileHash: string): MediaDetails | nu
 
 function sideIdentity(side: CandidateSide): number | null {
   return side.occurrences[0]?.root_item_id ?? null;
+}
+
+async function loadPairDetails(pair: DuplicatePair): Promise<PairDetails> {
+  const loadSide = async (side: CandidateSide): Promise<SideState> => {
+    const itemId = sideIdentity(side);
+    if (itemId == null) return { item: null, media: null };
+    const item = await getDuplicateItemDetails(itemId);
+    return { item, media: mediaForFile(item, side.file.file_hash) };
+  };
+  const [left, right] = await Promise.all([loadSide(pair.left), loadSide(pair.right)]);
+  return {
+    pairKey: `${pair.file_id_a}:${pair.file_id_b}`,
+    left,
+    right,
+  };
 }
 
 interface MediaCardProps {
@@ -450,6 +471,7 @@ export function DuplicatesScreen() {
   const [smartMergeHovered, setSmartMergeHovered] = useState(false);
   const [smartMergeFocused, setSmartMergeFocused] = useState(false);
   const requestIdRef = useRef(0);
+  const preparedDetailsRef = useRef<PairDetails | null>(null);
   const scanningRef = useRef(false);
   const leftPreviewRef = useRef<HTMLDivElement>(null);
   const rightPreviewRef = useRef<HTMLDivElement>(null);
@@ -553,21 +575,24 @@ export function DuplicatesScreen() {
       setRight({ item: null, media: null });
       return;
     }
+    const prepared = preparedDetailsRef.current;
+    if (prepared?.pairKey === pairKey) {
+      requestIdRef.current += 1;
+      preparedDetailsRef.current = null;
+      setLeft(prepared.left);
+      setRight(prepared.right);
+      setMetadataLoading(false);
+      return;
+    }
     const requestId = ++requestIdRef.current;
     setMetadataLoading(true);
     setLeft({ item: null, media: null });
     setRight({ item: null, media: null });
-    const loadSide = async (side: CandidateSide): Promise<SideState> => {
-      const itemId = sideIdentity(side);
-      if (itemId == null) return { item: null, media: null };
-      const item = await getDuplicateItemDetails(itemId);
-      return { item, media: mediaForFile(item, side.file.file_hash) };
-    };
-    Promise.all([loadSide(currentPair.left), loadSide(currentPair.right)])
-      .then(([nextLeft, nextRight]) => {
+    loadPairDetails(currentPair)
+      .then((details) => {
         if (requestId !== requestIdRef.current) return;
-        setLeft(nextLeft);
-        setRight(nextRight);
+        setLeft(details.left);
+        setRight(details.right);
       })
       .catch((cause) => {
         if (requestId !== requestIdRef.current) return;
@@ -576,7 +601,7 @@ export function DuplicatesScreen() {
       .finally(() => {
         if (requestId === requestIdRef.current) setMetadataLoading(false);
       });
-  }, [currentPair, reportFailure]);
+  }, [currentPair, pairKey, reportFailure]);
 
   const finishResolution = useCallback(async (pair: DuplicatePair, action: DuplicateAction) => {
     setResolving(true);
@@ -590,13 +615,26 @@ export function DuplicatesScreen() {
         });
         return;
       }
-      await loadPairs({ showLoading: false, resetProgress: false });
+      const page = await getDuplicatePairs();
+      const nextIndex = Math.min(index, Math.max(0, page.items.length - 1));
+      const nextPair = page.items[nextIndex] ?? null;
+      const prepared = nextPair ? await loadPairDetails(nextPair) : null;
+      preparedDetailsRef.current = prepared;
+      setPendingIndex(null);
+      setPendingThumbnailGate({ left: false, right: false });
+      setPairs(page.items);
+      setTotal(page.total);
+      setIndex(nextIndex);
+      if (prepared) {
+        setLeft(prepared.left);
+        setRight(prepared.right);
+      }
     } catch (cause) {
       reportFailure(cause, 'Unable to resolve duplicate pair');
     } finally {
       setResolving(false);
     }
-  }, [loadPairs, reportFailure]);
+  }, [index, reportFailure]);
 
   const resolveCurrent = useCallback((action: DuplicateAction) => {
     if (!currentPair || resolving || navigating) return;
