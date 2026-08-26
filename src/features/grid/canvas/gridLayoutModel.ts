@@ -1,5 +1,5 @@
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
-import { computeLayout, safeAspectRatio } from '../layout/layoutMath';
+import { computeLayout, GRID_LAYOUT_VERTICAL_PADDING, safeAspectRatio } from '../layout/layoutMath';
 import { buildTileSpatialIndex, type TileSpatialIndex } from '../layout/spatialIndex';
 import { adaptGridItem, type CanvasRenderItem } from './renderItemAdapter';
 import type { PlanTile } from './thumbnailPlan';
@@ -12,7 +12,11 @@ export interface GridLayoutModel {
   spatialIndex: TileSpatialIndex;
   itemIdToIndex: Map<number, number>;
   totalHeight: number;
+  scrollEstimateSampleCount: number;
+  scrollEstimateSampleHeight: number;
 }
+
+export const GRID_SCROLL_ESTIMATE_SAMPLE_LIMIT = 500;
 
 export interface ThumbnailActivationBuffers {
   activeTiles: number[];
@@ -63,9 +67,15 @@ export function estimateGridScrollHeight(
   loadedHeight: number,
   loadedCount: number,
   totalCount: number | null | undefined,
+  sampleHeight = loadedHeight,
+  sampleCount = loadedCount,
 ): number {
   if (loadedCount === 0 || totalCount == null || totalCount <= loadedCount) return loadedHeight;
-  return Math.max(loadedHeight, Math.round((loadedHeight / loadedCount) * totalCount));
+  if (sampleCount === 0) return loadedHeight;
+  const sampleContentHeight = Math.max(0, sampleHeight - GRID_LAYOUT_VERTICAL_PADDING);
+  const estimatedHeight = GRID_LAYOUT_VERTICAL_PADDING
+    + Math.round((sampleContentHeight / sampleCount) * totalCount);
+  return Math.max(loadedHeight, estimatedHeight);
 }
 
 export function captureGridScrollPosition(
@@ -119,12 +129,26 @@ function createModel(
     config.textHeight,
     config.scrollbarWidth,
   );
+  const scrollEstimateSampleCount = Math.min(ratios.length, GRID_SCROLL_ESTIMATE_SAMPLE_LIMIT);
+  const scrollEstimateSampleHeight = scrollEstimateSampleCount === ratios.length
+    ? layout.totalHeight
+    : computeLayout(
+      ratios.slice(0, scrollEstimateSampleCount),
+      config.width,
+      config.targetSize,
+      config.gap,
+      config.viewMode,
+      config.textHeight,
+      config.scrollbarWidth,
+    ).totalHeight;
   return { ratios, model: {
     items,
     positions: layout.positions,
     spatialIndex: buildTileSpatialIndex(layout.positions),
     itemIdToIndex,
     totalHeight: layout.totalHeight,
+    scrollEstimateSampleCount,
+    scrollEstimateSampleHeight,
   } };
 }
 

@@ -2,6 +2,7 @@ import type { LayoutItem, LayoutResult, GridViewMode } from './types';
 
 const LAYOUT_PADDING_TOP = 16;
 const LAYOUT_PADDING_BOTTOM = 16;
+export const GRID_LAYOUT_VERTICAL_PADDING = LAYOUT_PADDING_TOP + LAYOUT_PADDING_BOTTOM;
 
 export type LayoutContinuation =
   | { mode: 'grid' }
@@ -120,7 +121,7 @@ function finalize(result: StatefulLayoutResult, offsetX: number, start: number):
     result.positions[index].x += offsetX;
     result.positions[index].y += LAYOUT_PADDING_TOP;
   }
-  result.totalHeight += LAYOUT_PADDING_TOP + LAYOUT_PADDING_BOTTOM;
+  result.totalHeight += GRID_LAYOUT_VERTICAL_PADDING;
   return result;
 }
 

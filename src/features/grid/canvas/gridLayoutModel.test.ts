@@ -3,6 +3,7 @@ import {
   captureGridScrollPosition,
   collectThumbnailActivation,
   estimateGridScrollHeight,
+  GRID_SCROLL_ESTIMATE_SAMPLE_LIMIT,
   GridLayoutRuntime,
   restoreGridScrollTop,
   type ThumbnailActivationBuffers,
@@ -36,6 +37,8 @@ describe('buildGridLayoutModel', () => {
     expect(model.positions).toHaveLength(2);
     expect(model.itemIdToIndex).toEqual(new Map([[10, 0], [11, 1]]));
     expect(model.totalHeight).toBeGreaterThan(0);
+    expect(model.scrollEstimateSampleCount).toBe(2);
+    expect(model.scrollEstimateSampleHeight).toBe(model.totalHeight);
     expect(model.spatialIndex.queryYRange(0, model.totalHeight, [])).toEqual([0, 1]);
   });
 
@@ -56,12 +59,39 @@ describe('buildGridLayoutModel', () => {
 
 describe('estimateGridScrollHeight', () => {
   it('preserves the full result scroll range from loaded layout density', () => {
-    expect(estimateGridScrollHeight(2_000, 500, 10_000)).toBe(40_000);
+    expect(estimateGridScrollHeight(2_032, 500, 10_000)).toBe(40_032);
   });
 
   it('never shrinks below real loaded content', () => {
     expect(estimateGridScrollHeight(2_000, 500, 400)).toBe(2_000);
     expect(estimateGridScrollHeight(2_000, 500, null)).toBe(2_000);
+  });
+
+  it('bounds projection input to the first 500 real items', () => {
+    const runtime = new GridLayoutRuntime();
+    const source = Array.from({ length: GRID_SCROLL_ESTIMATE_SAMPLE_LIMIT + 1 }, (_, index) =>
+      item(index + 1, `file-${index + 1}`, index === GRID_SCROLL_ESTIMATE_SAMPLE_LIMIT ? 1 : 100, 100),
+    );
+    const model = runtime.update(source, {
+      width: 500, targetSize: 180, gap: 16, viewMode: 'waterfall', textHeight: 20, scrollbarWidth: 8,
+    });
+    const firstPage = new GridLayoutRuntime().update(source.slice(0, GRID_SCROLL_ESTIMATE_SAMPLE_LIMIT), {
+      width: 500, targetSize: 180, gap: 16, viewMode: 'waterfall', textHeight: 20, scrollbarWidth: 8,
+    });
+
+    expect(model.scrollEstimateSampleCount).toBe(GRID_SCROLL_ESTIMATE_SAMPLE_LIMIT);
+    expect(model.scrollEstimateSampleHeight).toBe(firstPage.totalHeight);
+    expect(estimateGridScrollHeight(
+      model.totalHeight,
+      source.length,
+      10_000,
+      model.scrollEstimateSampleHeight,
+      model.scrollEstimateSampleCount,
+    )).toBe(estimateGridScrollHeight(
+      firstPage.totalHeight,
+      GRID_SCROLL_ESTIMATE_SAMPLE_LIMIT,
+      10_000,
+    ));
   });
 });
 

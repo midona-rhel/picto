@@ -350,8 +350,14 @@ export function CanvasGrid({
   const renderItemsRef = useRef(layoutModel.items);
   renderItemsRef.current = layoutModel.items;
   const estimatedScrollHeight = useMemo(
-    () => estimateGridScrollHeight(layoutModel.totalHeight, items.length, totalCount),
-    [items.length, layoutModel.totalHeight, totalCount],
+    () => estimateGridScrollHeight(
+      layoutModel.totalHeight,
+      items.length,
+      totalCount,
+      layoutModel.scrollEstimateSampleHeight,
+      layoutModel.scrollEstimateSampleCount,
+    ),
+    [items.length, layoutModel, totalCount],
   );
 
   const onLayoutChangeRef = useRef(onLayoutChange);
