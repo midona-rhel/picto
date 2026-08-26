@@ -54,9 +54,10 @@ describe('theme surface ownership', () => {
     const folders = readFileSync(resolve(process.cwd(), 'src/shared/ui/FolderTree/FolderTree.module.css'), 'utf8');
 
     expect(overlay).toContain('font-family: var(--font-family-ui);');
-    expect(tokens).toContain("--font-family-ui: 'Geist', system-ui");
+    expect(tokens).toContain("--font-family-ui: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Geist'");
     expect(tokens).toContain(":root[data-platform='mac']");
-    expect(tokens).toContain("--font-family-ui: 'SF Pro Text', -apple-system, BlinkMacSystemFont");
+    expect(tokens).toContain(":root[data-platform='windows'],");
+    expect(tokens).toContain("--font-family-ui: 'Geist', system-ui");
     expect(tokens).toContain('--mantine-font-family: var(--font-family-ui);');
     expect(overlay).toContain('.checkBoxChecked {\n  background: var(--color-text-primary);');
     expect(tags).toContain('.tagRowSelected {\n  background: var(--color-surface-active);');

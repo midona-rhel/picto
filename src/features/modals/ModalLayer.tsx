@@ -107,6 +107,7 @@ export function ModalLayer() {
         }}
         initial={smartFolder.initial}
         mode={smartFolder.mode}
+        editor={smartFolder.editor}
       />
 
       <FolderWatchModal

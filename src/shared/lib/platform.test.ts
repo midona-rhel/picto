@@ -6,6 +6,7 @@ describe('platform UI font policy', () => {
     expect(platformFamily('MacIntel')).toBe('mac');
     expect(platformFamily('Win32')).toBe('windows');
     expect(platformFamily('Linux x86_64')).toBe('linux');
+    expect(platformFamily('', 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)')).toBe('mac');
   });
 
   it('uses the native Apple UI face only on macOS', () => {

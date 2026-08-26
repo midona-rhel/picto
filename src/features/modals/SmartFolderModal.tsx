@@ -153,12 +153,13 @@ export interface SmartFolderModalProps {
     display_order?: number | null;
   };
   mode?: 'create' | 'edit';
+  editor?: 'all' | 'details' | 'rules';
 }
 
 // ── Component ────────────────────────────────────────────────────
 
 export function SmartFolderModal({
-  open, onClose, onSave, initial, mode = 'create',
+  open, onClose, onSave, initial, mode = 'create', editor = mode === 'create' ? 'all' : 'details',
 }: SmartFolderModalProps) {
   const [name, setName] = useState('');
   const [icon, setIcon] = useState<string | null>(null);
@@ -169,6 +170,11 @@ export function SmartFolderModal({
   // Snapshot of original predicate for revert on cancel
   const originalPredicateRef = useRef<string>('');
   const livePreviewTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showDetails = editor !== 'rules';
+  const showRules = editor !== 'details';
+  const title = mode === 'create'
+    ? 'New Smart Folder'
+    : editor === 'rules' ? 'Edit Rules' : 'Edit Smart Folder';
 
   useEffect(() => {
     if (!open) return;
@@ -183,7 +189,7 @@ export function SmartFolderModal({
 
   // Live preview: debounce-save predicate changes in edit mode so grid updates
   useEffect(() => {
-    if (!open || mode !== 'edit' || !initial?.id) return;
+    if (!open || mode !== 'edit' || !initial?.id || !showRules) return;
     if (livePreviewTimerRef.current) clearTimeout(livePreviewTimerRef.current);
     livePreviewTimerRef.current = setTimeout(() => {
       const payload = buildPayload({
@@ -198,11 +204,11 @@ export function SmartFolderModal({
       void smartFoldersController.update(initial.id!, payload);
     }, 500);
     return () => { if (livePreviewTimerRef.current) clearTimeout(livePreviewTimerRef.current); };
-  }, [predicate, open, mode, initial, name, icon, color, notes]);
+  }, [predicate, open, mode, initial, name, icon, color, notes, showRules]);
 
   // Revert predicate on close without save (cancel)
   const handleClose = useCallback(() => {
-    if (mode === 'edit' && initial?.id && originalPredicateRef.current) {
+    if (mode === 'edit' && showRules && initial?.id && originalPredicateRef.current) {
       // Revert to original
       const origPred = normalizePredicate(JSON.parse(originalPredicateRef.current));
       const revertPayload = buildPayload({
@@ -218,7 +224,7 @@ export function SmartFolderModal({
       void smartFoldersController.update(initial.id, revertPayload);
     }
     onClose();
-  }, [mode, initial, onClose]);
+  }, [mode, showRules, initial, onClose]);
 
   const handleSave = useCallback(() => {
     if (!name.trim()) return;
@@ -256,9 +262,9 @@ export function SmartFolderModal({
     <GlassModal
       open={open}
       onClose={handleClose}
-      title={mode === 'create' ? 'New Smart Folder' : 'Edit Smart Folder'}
-      size="lg"
-      panelClassName={styles.modal}
+      title={title}
+      size={showRules ? 'lg' : 'md'}
+      panelClassName={`${styles.modal} ${showRules && !showDetails ? styles.rulesModal : ''}`}
       footer={(
         <>
           <button
@@ -275,56 +281,59 @@ export function SmartFolderModal({
       )}
     >
       <div className={styles.form}>
-        {/* Name */}
-        <div className={styles.section}>
-          <label className={styles.label}>Name</label>
-          <GlassInput
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Smart Folder Name"
-            autoFocus
-          />
-        </div>
-
-        <div className={styles.section}>
-          <div className={styles.appearanceGrid}>
-            <div className={styles.compactField}>
-              <label className={styles.label}>Icon</label>
-              <IconPickerPopover value={icon} onChange={setIcon} />
-            </div>
-            <div className={styles.compactField}>
-              <label className={styles.label}>Color</label>
-              <ColorPicker value={color} onChange={setColor} />
-            </div>
-          </div>
-        </div>
-
-        {/* Notes */}
-        <div className={styles.section}>
-          <label className={styles.label}>Notes</label>
-          <GlassTextarea
-            value={notes}
-            onChange={(e) => setNotes(e.target.value)}
-            placeholder="Notes..."
-            rows={3}
-          />
-        </div>
-
-        {/* Rules */}
-        <div className={styles.section}>
-          <div className={styles.conditions}>
-            {predicate.groups.map((group, index) => (
-              <RuleGroupEditor
-                key={index}
-                group={group}
-                onChange={(next) => handleGroupChange(index, next)}
-                onRemove={() => handleGroupRemove(index)}
-                onAdd={handleGroupAdd}
-                canRemove={predicate.groups.length > 1}
+        {showDetails && (
+          <>
+            <div className={styles.section}>
+              <label className={styles.label}>Name</label>
+              <GlassInput
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Smart Folder Name"
+                autoFocus
               />
-            ))}
+            </div>
+
+            <div className={styles.section}>
+              <div className={styles.appearanceGrid}>
+                <div className={styles.compactField}>
+                  <label className={styles.label}>Icon</label>
+                  <IconPickerPopover value={icon} onChange={setIcon} />
+                </div>
+                <div className={styles.compactField}>
+                  <label className={styles.label}>Color</label>
+                  <ColorPicker value={color} onChange={setColor} />
+                </div>
+              </div>
+            </div>
+
+            <div className={styles.section}>
+              <label className={styles.label}>Notes</label>
+              <GlassTextarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                placeholder="Notes..."
+                rows={3}
+              />
+            </div>
+          </>
+        )}
+
+        {showRules && (
+          <div className={styles.section}>
+            <div className={styles.conditions}>
+              {predicate.groups.map((group, index) => (
+                <RuleGroupEditor
+                  key={index}
+                  group={group}
+                  onChange={(next) => handleGroupChange(index, next)}
+                  onRemove={() => handleGroupRemove(index)}
+                  onAdd={handleGroupAdd}
+                  canRemove={predicate.groups.length > 1}
+                />
+              ))}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </GlassModal>
   );

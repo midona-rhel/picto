@@ -70,7 +70,7 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove }:
 
   return (
     <div className={styles.condition}>
-      {/* Header row: sentence-style match mode + negate + remove */}
+      {/* Header row: sentence-style group logic. */}
       <div className={styles.conditionHeader}>
         <span className={modalStyles.inlineLabel}>Match</span>
         <CmSelect
@@ -86,6 +86,22 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove }:
           onChange={handleNegateChange}
           width={92}
         />
+      </div>
+
+      <div className={styles.ruleGroupBody}>
+        <div className={styles.rules}>
+          {group.rules.map((rule, index) => (
+            <RuleEditor
+              key={index}
+              rule={rule}
+              onChange={(next) => handleRuleChange(index, next)}
+              onRemove={() => handleRuleRemove(index)}
+              onAdd={() => handleRuleAdd(index)}
+              canRemove={group.rules.length > 1}
+            />
+          ))}
+        </div>
+
         <div className={styles.conditionActions}>
           <KbdTooltip label="Remove group"><button
             className={styles.conditionButton}
@@ -105,20 +121,6 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAdd, canRemove }:
             <span className={`${styles.conditionGlyph} ${styles.conditionGlyphPlus}`} aria-hidden="true" />
           </button></KbdTooltip>
         </div>
-      </div>
-
-      {/* Rule list */}
-      <div className={styles.rules}>
-        {group.rules.map((rule, index) => (
-          <RuleEditor
-            key={index}
-            rule={rule}
-            onChange={(next) => handleRuleChange(index, next)}
-            onRemove={() => handleRuleRemove(index)}
-            onAdd={() => handleRuleAdd(index)}
-            canRemove={group.rules.length > 1}
-          />
-        ))}
       </div>
     </div>
   );

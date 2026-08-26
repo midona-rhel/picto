@@ -28,4 +28,46 @@ describe('SmartFolderModal', () => {
       expect(document.querySelector('[data-icon-picker-presentation="compact"]')).not.toBeNull();
     });
   });
+
+  it('separates smart-folder metadata from predicate editing', async () => {
+    const initial = {
+      id: 7,
+      name: 'Reference',
+      icon: null,
+      color: null,
+      notes: 'Useful images',
+      predicate: { groups: [{ match_mode: 'all' as const, negate: false, rules: [{ field: 'tags', op: 'include_any', values: ['artist:test'] }] }] },
+    };
+
+    const { unmount } = renderWithProviders(
+      <SmartFolderModal
+        open
+        mode="edit"
+        editor="details"
+        initial={initial}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole('dialog', { name: 'Edit Smart Folder' });
+    expect(screen.getByDisplayValue('Reference')).toBeVisible();
+    expect(screen.queryByText('Match')).not.toBeInTheDocument();
+    unmount();
+
+    renderWithProviders(
+      <SmartFolderModal
+        open
+        mode="edit"
+        editor="rules"
+        initial={initial}
+        onClose={vi.fn()}
+        onSave={vi.fn()}
+      />,
+    );
+
+    await screen.findByRole('dialog', { name: 'Edit Rules' });
+    expect(screen.getByText('Match')).toBeVisible();
+    expect(screen.queryByDisplayValue('Reference')).not.toBeInTheDocument();
+  });
 });

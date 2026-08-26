@@ -68,7 +68,9 @@
   --color-contrast-50: color-mix(in srgb, var(--theme-contrast) 50%, transparent);
 
   /* ── Typography ──────────────────────────────────────────── */
-  --font-family-ui: 'Geist', system-ui, 'Segoe UI', 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
+  /* Preserve the canonical Apple-first stack. Geist replaces only the old
+   * portable Roboto fallback and becomes primary on confirmed non-Mac hosts. */
+  --font-family-ui: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Geist', system-ui, 'Segoe UI', 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
   --font-family: var(--font-family-ui);
   --mantine-font-family: var(--font-family-ui);
   --mantine-font-family-headings: var(--font-family-ui);
@@ -211,7 +213,12 @@
 }
 
 :root[data-platform='mac'] {
-  --font-family-ui: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Helvetica Neue', sans-serif;
+  --font-family-ui: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Geist', system-ui, 'Helvetica Neue', sans-serif;
+}
+
+:root[data-platform='windows'],
+:root[data-platform='linux'] {
+  --font-family-ui: 'Geist', system-ui, 'Segoe UI', 'Helvetica Neue', 'Noto Sans', 'Liberation Sans', Arial, 'PingFang SC', 'PingFang TC', 'Hiragino Sans GB', 'Microsoft Yahei', sans-serif;
 }
 
 /* ── Blue theme ──────────────────────────────────────────────── */

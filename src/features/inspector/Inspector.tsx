@@ -901,7 +901,6 @@ function TagsSection({ tags, onRemove, editable = true, pending = false, showLoa
   return (
     <InspectorSection
       title="Tags"
-      count={pending ? undefined : tags.length}
       onContextMenu={editable ? (event) => {
         event.preventDefault();
         event.stopPropagation();
@@ -966,7 +965,6 @@ function FoldersSection({ folders, onRemove, onNavigate, editable = true, pendin
   return (
     <InspectorSection
       title="Folders"
-      count={pending ? undefined : folders.length}
       onContextMenu={editable ? (event) => {
         event.preventDefault();
         event.stopPropagation();

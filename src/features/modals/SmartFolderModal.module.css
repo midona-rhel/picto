@@ -1,6 +1,9 @@
 .modal {
-  width: 600px;
   max-height: 80vh;
+}
+
+.rulesModal {
+  max-height: 85vh;
 }
 
 .form {
@@ -100,21 +103,13 @@
 .conditions {
   display: flex;
   flex-direction: column;
+  gap: 12px;
 }
 
 .condition {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding-top: 12px;
-  margin-top: 12px;
-  border-top: 1px solid color-mix(in srgb, var(--color-bg-app) 70%, black 30%);
-}
-
-.condition:first-child {
-  padding-top: 0;
-  margin-top: 0;
-  border-top: 0;
 }
 
 .conditionHeader {
@@ -122,20 +117,29 @@
   align-items: center;
   gap: 6px;
   min-height: 26px;
+  padding-inline: 2px;
+}
+
+.ruleGroupBody {
+  padding: 8px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-text-primary) 2%, transparent);
 }
 
 .conditionActions {
   display: flex;
-  gap: 2px;
-  margin-left: auto;
-  padding-right: 7px;
+  justify-content: flex-end;
+  gap: 4px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--color-border-secondary);
 }
 
 .rules {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-left: 24px;
 }
 
 .rule {

@@ -15,6 +15,7 @@ import {
   IconClock, IconBookmark,
   IconArrowsShuffle,
   IconLayoutGrid, IconRefresh, IconX,
+  IconAdjustments,
   IconStar, IconStarOff,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
@@ -480,8 +481,8 @@ export function Sidebar() {
     notes?: string | null;
     predicate?: SmartFolderPredicate;
     display_order?: number | null;
-  }) => {
-    setSmartFolderModal({ open: true, mode, initial });
+  }, editor: 'all' | 'details' | 'rules' = mode === 'create' ? 'all' : 'details') => {
+    setSmartFolderModal({ open: true, mode, editor, initial });
   }, [setSmartFolderModal]);
 
   const navigate = useCallback((id: string) => {
@@ -693,7 +694,11 @@ export function Sidebar() {
       ...(!isGroup ? [{
         label: 'Edit Smart Folder...',
         icon: <IconFolderOpen size={14} />,
-        action: () => openSmartFolderModal('edit', smartFolderInitialFromNode(node)),
+        action: () => openSmartFolderModal('edit', smartFolderInitialFromNode(node), 'details'),
+      } satisfies MenuEntry, {
+        label: 'Edit Rules...',
+        icon: <IconAdjustments size={14} />,
+        action: () => openSmartFolderModal('edit', smartFolderInitialFromNode(node), 'rules'),
       } satisfies MenuEntry] : []),
       {
         label: 'New Child Smart Folder',

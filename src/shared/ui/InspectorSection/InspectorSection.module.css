@@ -20,6 +20,7 @@
 }
 
 .title {
+  font-family: var(--inspector-font-family, var(--font-family-ui));
   font-weight: var(--font-weight-bold);
   font-size: var(--font-size-sm);
 }

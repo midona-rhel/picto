@@ -33,6 +33,8 @@ export function openConfirm(
 export interface SmartFolderModalState {
   open: boolean;
   mode: 'create' | 'edit';
+  /** Creation shows the complete form; existing folders edit metadata and rules separately. */
+  editor?: 'all' | 'details' | 'rules';
   initial?: {
     id?: number;
     name?: string;
@@ -45,7 +47,7 @@ export interface SmartFolderModalState {
   };
 }
 
-export const smartFolderModalAtom = atom<SmartFolderModalState>({ open: false, mode: 'create' });
+export const smartFolderModalAtom = atom<SmartFolderModalState>({ open: false, mode: 'create', editor: 'all' });
 
 // ── Folder watch modal ──
 export interface FolderWatchModalState {
