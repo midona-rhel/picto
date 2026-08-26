@@ -119,7 +119,9 @@ impl<'a> IngestQueue<'a> {
 
 /// Removes transient gallery work whose owning job was deleted before the
 /// media materialized. Materialized history and active run items are untouched.
-fn discard_abandoned_gallery_sources(application: &Application) -> Result<usize, String> {
+pub(crate) fn discard_abandoned_gallery_sources(
+    application: &Application,
+) -> Result<usize, String> {
     let (discarded, _, _) = application.store().transaction_if_changed(|transaction| {
         let discarded = transaction.execute(
             "DELETE FROM ingest_job

@@ -4,6 +4,7 @@
 //! boundary: every downloaded item is recorded and queued before the source
 //! query can be marked successful.
 
+use std::collections::BTreeSet;
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -307,6 +308,9 @@ async fn run_stream<R: SourceRunner>(
     let mut state_poll = tokio::time::interval(RUN_STATE_POLL);
     state_poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut input_open = true;
+    let atomic_gallery = query.site_id == "ehentai";
+    let mut gallery_posts = Vec::new();
+    let mut gallery_items = Vec::new();
 
     let runner_result = loop {
         tokio::select! {
@@ -341,30 +345,15 @@ async fn run_stream<R: SourceRunner>(
                 break result;
             }
             event = input.recv(), if input_open => match event {
-                Some(SourceEvent::PostTraversed(post)) => {
-                    subscriptions_v2::record_post(
-                        application.store(),
-                        query.run_query_id,
-                        &post,
-                        &Utc::now().to_rfc3339(),
-                    ).map_err(|error| format!("recording traversed source post failed: {error}"))?;
-                    publish_source_progress(application)?;
-                }
-                Some(SourceEvent::MediaDownloaded(item)) => {
-                    let post_complete = item
-                        .input
-                        .source
-                        .as_ref()
-                        .is_some_and(|source| source.post_complete);
-                    if let Err(error) = process_item(application, query, &item, &destination) {
-                        release_post_archive(application, query, &item.post.post_key).await;
-                        return Err(error);
-                    }
-                    if post_complete {
-                        drain_available_ingest(application)?;
-                    }
-                    publish_source_progress(application)?;
-                }
+                Some(event) => handle_source_event(
+                    application,
+                    query,
+                    &destination,
+                    event,
+                    atomic_gallery,
+                    &mut gallery_posts,
+                    &mut gallery_items,
+                ).await?,
                 None => {
                     input_open = false;
                 }
@@ -373,31 +362,56 @@ async fn run_stream<R: SourceRunner>(
     };
 
     while let Some(event) = input.recv().await {
-        match event {
-            SourceEvent::PostTraversed(post) => {
-                subscriptions_v2::record_post(
-                    application.store(),
-                    query.run_query_id,
-                    &post,
-                    &Utc::now().to_rfc3339(),
-                )
-                .map_err(|error| format!("recording traversed source post failed: {error}"))?;
-                publish_source_progress(application)?;
-            }
-            SourceEvent::MediaDownloaded(item) => {
-                let post_complete = item
-                    .input
-                    .source
-                    .as_ref()
-                    .is_some_and(|source| source.post_complete);
-                if let Err(error) = process_item(application, query, &item, &destination) {
+        handle_source_event(
+            application,
+            query,
+            &destination,
+            event,
+            atomic_gallery,
+            &mut gallery_posts,
+            &mut gallery_items,
+        )
+        .await?;
+    }
+
+    if atomic_gallery {
+        if runner_result.is_ok() {
+            validate_complete_gallery(&gallery_items)?;
+            let mut gallery_post = gallery_posts
+                .pop()
+                .unwrap_or_else(|| gallery_items[0].post.clone());
+            gallery_post.items = gallery_items
+                .iter()
+                .flat_map(|item| item.post.items.iter().cloned())
+                .collect();
+            subscriptions_v2::record_post(
+                application.store(),
+                query.run_query_id,
+                &gallery_post,
+                &Utc::now().to_rfc3339(),
+            )
+            .map_err(|error| format!("recording complete gallery failed: {error}"))?;
+            for item in &gallery_items {
+                if let Err(error) = process_item_after_post(application, query, item, &destination)
+                {
                     release_post_archive(application, query, &item.post.post_key).await;
                     return Err(error);
                 }
-                if post_complete {
-                    drain_available_ingest(application)?;
+            }
+            drain_available_ingest(application)?;
+            publish_source_progress(application)?;
+        } else {
+            let post_keys = gallery_items
+                .iter()
+                .map(|item| item.post.post_key.as_str())
+                .collect::<BTreeSet<_>>();
+            for post_key in post_keys {
+                release_post_archive(application, query, post_key).await;
+            }
+            for item in gallery_items {
+                if item.delete_after_ingest {
+                    let _ = std::fs::remove_file(item.source_path);
                 }
-                publish_source_progress(application)?;
             }
         }
     }
@@ -417,6 +431,66 @@ async fn run_stream<R: SourceRunner>(
         }
     }
     Ok(runner_result)
+}
+
+async fn handle_source_event(
+    application: &Application,
+    query: &ClaimedQueryRun,
+    destination: &crate::subscription_catalog_v2::SubscriptionDestinationPolicy,
+    event: SourceEvent,
+    atomic_gallery: bool,
+    gallery_posts: &mut Vec<NormalizedPost>,
+    gallery_items: &mut Vec<DownloadedItem>,
+) -> Result<(), String> {
+    match event {
+        SourceEvent::PostTraversed(post) if atomic_gallery => gallery_posts.push(post),
+        SourceEvent::MediaDownloaded(item) if atomic_gallery => gallery_items.push(item),
+        SourceEvent::PostTraversed(post) => {
+            subscriptions_v2::record_post(
+                application.store(),
+                query.run_query_id,
+                &post,
+                &Utc::now().to_rfc3339(),
+            )
+            .map_err(|error| format!("recording traversed source post failed: {error}"))?;
+        }
+        SourceEvent::MediaDownloaded(item) => {
+            let post_complete = item
+                .input
+                .source
+                .as_ref()
+                .is_some_and(|source| source.post_complete);
+            if let Err(error) = process_item(application, query, &item, destination) {
+                release_post_archive(application, query, &item.post.post_key).await;
+                return Err(error);
+            }
+            if post_complete {
+                drain_available_ingest(application)?;
+            }
+        }
+    }
+    publish_source_progress(application)
+}
+
+fn validate_complete_gallery(items: &[DownloadedItem]) -> Result<(), String> {
+    let first = items
+        .first()
+        .ok_or_else(|| "Gallery download completed without media".to_string())?;
+    if items
+        .iter()
+        .any(|item| item.post.post_key != first.post.post_key)
+    {
+        return Err("A gallery import produced more than one source post".to_string());
+    }
+    if !items.last().is_some_and(|item| {
+        item.input
+            .source
+            .as_ref()
+            .is_some_and(|source| source.post_complete)
+    }) {
+        return Err("Gallery download ended before the complete post was available".to_string());
+    }
+    Ok(())
 }
 
 fn publish_source_progress(application: &Application) -> Result<(), String> {
@@ -460,6 +534,31 @@ fn process_item(
     item: &DownloadedItem,
     destination: &crate::subscription_catalog_v2::SubscriptionDestinationPolicy,
 ) -> Result<(), String> {
+    record_downloaded_post(application, query, item)?;
+    process_item_after_post(application, query, item, destination)
+}
+
+fn record_downloaded_post(
+    application: &Application,
+    query: &ClaimedQueryRun,
+    item: &DownloadedItem,
+) -> Result<(), String> {
+    subscriptions_v2::record_post(
+        application.store(),
+        query.run_query_id,
+        &item.post,
+        &Utc::now().to_rfc3339(),
+    )
+    .map(|_| ())
+    .map_err(|error| format!("recording subscription post failed: {error}"))
+}
+
+fn process_item_after_post(
+    application: &Application,
+    query: &ClaimedQueryRun,
+    item: &DownloadedItem,
+    destination: &crate::subscription_catalog_v2::SubscriptionDestinationPolicy,
+) -> Result<(), String> {
     let source = item
         .input
         .source
@@ -476,13 +575,6 @@ fn process_item(
         return Err("Downloaded item identity does not match its normalized post".to_string());
     }
 
-    subscriptions_v2::record_post(
-        application.store(),
-        query.run_query_id,
-        &item.post,
-        &Utc::now().to_rfc3339(),
-    )
-    .map_err(|error| format!("recording subscription post failed: {error}"))?;
     let mut input = item.input.clone();
     if let Some(source) = input.source.as_mut() {
         source.group_post = query.group_posts;
@@ -675,6 +767,14 @@ mod tests {
     }
 
     fn fixture() -> (tempfile::TempDir, Application, i64) {
+        fixture_for_site("example", "example.test", "https://example.test")
+    }
+
+    fn fixture_for_site(
+        site_id: &str,
+        domain_key: &str,
+        query_text: &str,
+    ) -> (tempfile::TempDir, Application, i64) {
         let directory = tempfile::tempdir().unwrap();
         let application = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
         let subscription = create_subscription(
@@ -695,10 +795,10 @@ mod tests {
             subscription,
             &QueryInput {
                 query_key: "query".to_string(),
-                site_id: "example".to_string(),
-                domain_key: "example.test".to_string(),
+                site_id: site_id.to_string(),
+                domain_key: domain_key.to_string(),
                 query_kind: "url".to_string(),
-                query_text: "https://example.test".to_string(),
+                query_text: query_text.to_string(),
                 display_name: None,
                 notes: None,
             },
@@ -851,6 +951,74 @@ mod tests {
             (posts, jobs, state, cursor),
             (2, 2, "succeeded".to_string(), "cursor-2".to_string())
         );
+    }
+
+    #[tokio::test]
+    async fn gallery_waits_for_the_complete_download_before_ingest() {
+        let (directory, application, _subscription) =
+            fixture_for_site("ehentai", "e-hentai.org", "https://e-hentai.org/g/1/token/");
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute("UPDATE subscription_query SET group_posts = 1", [])?;
+                Ok(())
+            })
+            .unwrap();
+        let mut first = item_at(directory.path(), "gallery", "page-1", 1);
+        first.post.site_id = "ehentai".to_string();
+        first.input.source.as_mut().unwrap().site_id = "ehentai".to_string();
+        first.input.source.as_mut().unwrap().post_complete = false;
+        let mut second = item_at(directory.path(), "gallery", "page-2", 2);
+        second.post.site_id = "ehentai".to_string();
+        second.input.source.as_mut().unwrap().site_id = "ehentai".to_string();
+        let runner = FakeRunner {
+            runs: Mutex::new(VecDeque::from([FakeRun {
+                posts: Vec::new(),
+                items: vec![first, second],
+                result: Ok(RunnerSuccess::default()),
+            }])),
+        };
+
+        SubscriptionWorker::new(&application, runner)
+            .tick(FIRST_NOW)
+            .await
+            .unwrap()
+            .unwrap();
+
+        application
+            .store()
+            .read(|connection| {
+                let roots = connection.query_row(
+                    "SELECT COUNT(*) FROM library_root WHERE lifecycle = 'inbox'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                let members =
+                    connection.query_row("SELECT COUNT(*) FROM collection_member", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?;
+                let succeeded = connection.query_row(
+                    "SELECT COUNT(*) FROM ingest_job WHERE status = 'succeeded'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                let failed = connection.query_row(
+                    "SELECT COUNT(*) FROM ingest_job WHERE status = 'failed'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )?;
+                let (status, error): (String, Option<String>) = connection.query_row(
+                    "SELECT status, error_message FROM subscription_run_query",
+                    [],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                assert_eq!(
+                    (roots, members, succeeded, failed, status, error),
+                    (1, 2, 2, 0, "succeeded".to_string(), None)
+                );
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[tokio::test]

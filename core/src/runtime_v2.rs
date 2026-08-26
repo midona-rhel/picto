@@ -65,6 +65,7 @@ pub struct MaintenanceTickResult {
 pub fn recover(application: &Application, now: &str) -> Result<StartupRecovery, String> {
     let RecoveryCounts { runs, query_runs } =
         subscriptions_v2::recover_startup(application.store(), now)?;
+    ingest_queue_v2::discard_abandoned_gallery_sources(application)?;
     let ingest_jobs = ingest_queue_v2::reset_running(application)?;
     ingest_queue_v2::recover_settled_provisional_collections(application)?;
     let work_items = crate::workers_v2::reset_running(application.store())?;
