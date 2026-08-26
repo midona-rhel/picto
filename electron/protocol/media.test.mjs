@@ -128,6 +128,9 @@ describe('media protocol helpers', () => {
       expect(response.status).toBe(404);
       expect(commands).toEqual(['media.request_thumbnail']);
       releaseRequest();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect((await handler(new Request(`media://localhost/thumb/${hash}.jpg`))).status).toBe(404);
+      expect(commands).toEqual(['media.request_thumbnail']);
     } finally {
       await fs.rm(root, { recursive: true, force: true });
     }

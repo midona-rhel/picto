@@ -81,6 +81,7 @@ export function createMediaProtocolService({
   onThumbnailReady = () => {},
 }) {
   const thumbRequestInFlight = new Map();
+  const thumbRequestsQueued = new Set();
   const thumbMetaCache = new Map();
   const fileMetaCache = new Map();
   let cachedRoot = null;
@@ -92,6 +93,7 @@ export function createMediaProtocolService({
     thumbMetaCache.clear();
     fileMetaCache.clear();
     thumbRequestInFlight.clear();
+    thumbRequestsQueued.clear();
     return root;
   }
 
@@ -168,6 +170,7 @@ export function createMediaProtocolService({
     if (jpgStat) {
       const meta = buildMeta(jpg, jpgStat, 'jpg');
       thumbMetaCache.set(hash, meta);
+      thumbRequestsQueued.delete(hash);
       return meta;
     }
     const png = path.join(dir, `${hash}.png`);
@@ -175,6 +178,7 @@ export function createMediaProtocolService({
     if (pngStat) {
       const meta = buildMeta(png, pngStat, 'png');
       thumbMetaCache.set(hash, meta);
+      thumbRequestsQueued.delete(hash);
       return meta;
     }
     return null;
@@ -183,6 +187,7 @@ export function createMediaProtocolService({
   function invalidateThumbnail(hash) {
     thumbMetaCache.delete(hash);
     thumbRequestInFlight.delete(hash);
+    thumbRequestsQueued.delete(hash);
   }
 
   async function setThumbnail(hash, pngBase64) {
@@ -225,7 +230,7 @@ export function createMediaProtocolService({
   }
 
   function scheduleThumbnailAfterMiss(hash) {
-    if (thumbRequestInFlight.has(hash)) return;
+    if (thumbRequestInFlight.has(hash) || thumbRequestsQueued.has(hash)) return;
     const task = (async () => {
       try {
         const requested = await invoke('media.request_thumbnail', { file_hash: hash });
@@ -233,7 +238,13 @@ export function createMediaProtocolService({
           onThumbnailReady(hash);
           return;
         }
-        if (requested?.supported) return;
+        if (requested?.supported) {
+          thumbRequestsQueued.add(hash);
+          if (requested.queued) {
+            forwardLog('DEBUG', 'media', `Thumbnail queued: ${hash.slice(0, 12)}`);
+          }
+          return;
+        }
       } catch {}
 
       // Browser-backed formats are also generated off the request path. The
@@ -320,9 +331,7 @@ export function createMediaProtocolService({
         const missingPath = parsed.kind === 'thumb'
           ? buildBlobPath(parsed.kind, parsed.hash, 'jpg')
           : buildBlobPath(parsed.kind, parsed.hash, parsed.ext);
-        if (parsed.kind === 'thumb') {
-          forwardLog('DEBUG', 'media', `Thumbnail queued: ${parsed.hash.slice(0, 12)} ${missingPath}`);
-        } else {
+        if (parsed.kind !== 'thumb') {
           forwardWarn('media', `404: ${parsed.kind} ${parsed.hash.slice(0, 12)} ${missingPath}`);
         }
         return new Response('Not found', {
