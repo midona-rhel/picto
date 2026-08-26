@@ -279,7 +279,7 @@ pub fn dispatch(
         ),
         "folders.auto_tags.get" => {
             let input: FolderInput = parse(args_json)?;
-            read(application.folder_auto_tags(input.folder_id))
+            read(application.folder_auto_tags(input.folder_id)?)
         }
         "folders.auto_tags.set" => publish_folder(
             application,
@@ -1395,6 +1395,42 @@ mod tests {
         assert_eq!(page(&application, "untagged").visible_item_count, Some(1));
         dispatch(&application, "history.redo", "{}").unwrap();
         assert_eq!(page(&application, "untagged").visible_item_count, Some(0));
+    }
+
+    #[test]
+    fn folder_auto_tags_get_returns_the_tag_array_without_a_result_wrapper() {
+        let (_directory, application, _) = fixture();
+        let created: serde_json::Value = serde_json::from_str(
+            &dispatch(
+                &application,
+                "folders.create",
+                r#"{"name":"References","parent_id":null}"#,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+        dispatch(
+            &application,
+            "folders.auto_tags.set",
+            &format!(
+                r#"{{"folder_id":{},"tags":["creator:alice","rating:safe"]}}"#,
+                created["folder_id"].as_i64().unwrap()
+            ),
+        )
+        .unwrap();
+
+        let output = dispatch(
+            &application,
+            "folders.auto_tags.get",
+            &format!(
+                r#"{{"folder_id":{}}}"#,
+                created["folder_id"].as_i64().unwrap()
+            ),
+        )
+        .unwrap();
+        let tags: Vec<String> = serde_json::from_str(&output).unwrap();
+        assert_eq!(tags, vec!["creator:alice", "rating:safe"]);
     }
 
     #[test]
