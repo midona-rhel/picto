@@ -184,6 +184,23 @@ fn compare_quality_with_encoding(
     let left_pixels = left.pixel_count();
     let right_pixels = right.pixel_count();
     let negligible_hash = distance.is_some_and(|value| value <= 1);
+    let same_dimensions =
+        left.pixel_width == right.pixel_width && left.pixel_height == right.pixel_height;
+
+    // Duplicate candidates with exactly matching decoded dimensions do not
+    // trade resolution against encoding quality. Prefer the known-lossless
+    // representation over the known-lossy one even when small encoder
+    // differences push the perceptual hash above the negligible-distance
+    // threshold. Near-sized candidates retain the stricter hash requirement
+    // below so similar crops and edits are never collapsed automatically.
+    if same_dimensions {
+        if has_objective_encoding_advantage(left, right, left_encoding, right_encoding) {
+            return QualityDecision::LeftBetter;
+        }
+        if has_objective_encoding_advantage(right, left, right_encoding, left_encoding) {
+            return QualityDecision::RightBetter;
+        }
+    }
 
     // Auto-select only when one image wins on two independent, objective axes:
     // it is at least as large in both dimensions and changes from a lossy to a
@@ -232,8 +249,6 @@ fn compare_quality_with_encoding(
             }
         }
 
-        let same_dimensions =
-            left.pixel_width == right.pixel_width && left.pixel_height == right.pixel_height;
         if same_dimensions && left.mime_type == "image/jpeg" && right.mime_type == "image/jpeg" {
             match left_jpeg
                 .zip(right_jpeg)
@@ -1534,6 +1549,16 @@ mod tests {
         let right = quality(2, 1_200_000, 4570, 1191, "image/png");
         assert_eq!(
             compare_quality(&left, &right, Some(1)),
+            QualityDecision::RightBetter
+        );
+    }
+
+    #[test]
+    fn same_dimension_lossless_image_wins_despite_small_hash_variance() {
+        let left = quality(1, 653_200, 2889, 4085, "image/jpeg");
+        let right = quality(2, 7_900_000, 2889, 4085, "image/png");
+        assert_eq!(
+            compare_quality(&left, &right, Some(3)),
             QualityDecision::RightBetter
         );
     }

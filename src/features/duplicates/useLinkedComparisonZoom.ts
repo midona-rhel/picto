@@ -32,6 +32,7 @@ interface LinkedComparisonZoomInput {
 
 const MIN_ZOOM = 0.1;
 const MAX_ZOOM = 8;
+type ZoomMode = 'fit' | 'actual' | 'custom';
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
@@ -49,6 +50,7 @@ export function useLinkedComparisonZoom({
     right: { width: 0, height: 0 },
   });
   const [zoom, setZoom] = useState(1);
+  const [zoomMode, setZoomMode] = useState<ZoomMode>('fit');
   const [center, setCenter] = useState({ x: 0.5, y: 0.5 });
   const [draggingSide, setDraggingSide] = useState<ComparisonSide | null>(null);
   const dragStartRef = useRef<{
@@ -103,11 +105,13 @@ export function useLinkedComparisonZoom({
 
   useLayoutEffect(() => {
     setZoom(1);
+    setZoomMode('fit');
     setCenter({ x: 0.5, y: 0.5 });
   }, [pairKey]);
 
   const zoomTo = useCallback((nextZoom: number) => {
     setZoom(clamp(nextZoom, MIN_ZOOM, MAX_ZOOM));
+    setZoomMode('custom');
   }, []);
   const setZoomPercent = useCallback((nextPercent: number) => {
     zoomTo(nextPercent / 100);
@@ -116,6 +120,11 @@ export function useLinkedComparisonZoom({
   const zoomOut = useCallback(() => zoomTo(zoom / 1.25), [zoom, zoomTo]);
   const fit = useCallback(() => {
     setZoom(1);
+    setZoomMode('fit');
+    setCenter({ x: 0.5, y: 0.5 });
+  }, []);
+  const actual = useCallback(() => {
+    setZoomMode('actual');
     setCenter({ x: 0.5, y: 0.5 });
   }, []);
 
@@ -129,8 +138,9 @@ export function useLinkedComparisonZoom({
     const dx = event.clientX - rect.left - rect.width / 2;
     const dy = event.clientY - rect.top - rect.height / 2;
     const fitScale = fitScales[side];
-    const displayedScale = fitScale * zoom;
-    const nextZoom = clamp(zoom * Math.exp(-event.deltaY * 0.003), MIN_ZOOM, MAX_ZOOM);
+    const relativeZoom = zoomMode === 'actual' ? 1 / fitScale : zoom;
+    const displayedScale = fitScale * relativeZoom;
+    const nextZoom = clamp(relativeZoom * Math.exp(-event.deltaY * 0.003), MIN_ZOOM, MAX_ZOOM);
     const nextDisplayedScale = fitScale * nextZoom;
     const focusX = center.x + dx / (image.width * displayedScale);
     const focusY = center.y + dy / (image.height * displayedScale);
@@ -139,7 +149,8 @@ export function useLinkedComparisonZoom({
       y: clamp(focusY - dy / (image.height * nextDisplayedScale), 0, 1),
     });
     setZoom(nextZoom);
-  }, [center, fitScales, imageSizes, leftContainerRef, rightContainerRef, zoom]);
+    setZoomMode('custom');
+  }, [center, fitScales, imageSizes, leftContainerRef, rightContainerRef, zoom, zoomMode]);
 
   useEffect(() => {
     const left = leftContainerRef.current;
@@ -171,12 +182,12 @@ export function useLinkedComparisonZoom({
     const start = dragStartRef.current;
     const image = imageSizes[side];
     if (!start || start.side !== side || !image) return;
-    const displayedScale = fitScales[side] * zoom;
+    const displayedScale = zoomMode === 'actual' ? 1 : fitScales[side] * zoom;
     setCenter({
       x: clamp(start.centerX - (event.clientX - start.pointerX) / (image.width * displayedScale), 0, 1),
       y: clamp(start.centerY - (event.clientY - start.pointerY) / (image.height * displayedScale), 0, 1),
     });
-  }, [fitScales, imageSizes, zoom]);
+  }, [fitScales, imageSizes, zoom, zoomMode]);
 
   const onPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
     if (event.currentTarget.hasPointerCapture(event.pointerId)) {
@@ -190,7 +201,7 @@ export function useLinkedComparisonZoom({
     const image = imageSizes[side];
     const pane = paneSizes[side];
     if (!image) return { inset: 0 };
-    const displayedScale = fitScales[side] * zoom;
+    const displayedScale = zoomMode === 'actual' ? 1 : fitScales[side] * zoom;
     const displayedWidth = image.width * displayedScale;
     const displayedHeight = image.height * displayedScale;
     const maxTx = Math.max(0, (displayedWidth - pane.width) / 2);
@@ -202,16 +213,18 @@ export function useLinkedComparisonZoom({
       height: image.height,
       transform: `translate(calc(-50% + ${tx}px), calc(-50% + ${ty}px)) scale(${displayedScale})`,
     };
-  }, [center, fitScales, imageSizes, paneSizes, zoom]);
+  }, [center, fitScales, imageSizes, paneSizes, zoom, zoomMode]);
 
   return {
-    zoomPercent: Math.round(zoom * 100),
-    isFit: Math.abs(zoom - 1) < 0.001,
+    zoomPercent: zoomMode === 'actual' ? 100 : Math.round(zoom * 100),
+    isFit: zoomMode === 'fit',
+    isActual: zoomMode === 'actual',
     draggingSide,
     zoomIn,
     zoomOut,
     setZoomPercent,
     fit,
+    actual,
     frameStyle,
     handlers: { onPointerDown, onPointerMove, onPointerUp },
   };

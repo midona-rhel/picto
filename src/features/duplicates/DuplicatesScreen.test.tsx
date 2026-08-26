@@ -249,6 +249,22 @@ describe('DuplicatesScreen', () => {
     })));
   });
 
+  it.each([
+    ['z', 'keep_left'],
+    ['x', 'keep_right'],
+    ['b', 'keep_both'],
+  ] as const)('resolves with the %s duplicate shortcut', async (key, action) => {
+    await renderScreen();
+    await screen.findByText('Left image');
+
+    fireEvent.keyDown(window, { key });
+
+    await waitFor(() => expect(resolveDuplicatePair).toHaveBeenLastCalledWith(action, expect.objectContaining({
+      file_id_a: 1,
+      file_id_b: 2,
+    })));
+  });
+
   it('keeps an ambiguous smart merge in review for an explicit choice', async () => {
     const user = setupUser();
     await renderScreen(true);
@@ -287,7 +303,9 @@ describe('DuplicatesScreen', () => {
     await user.click(screen.getByRole('button', { name: 'Zoom out' }));
     const leftTransform = screen.getByTestId('left-preview-layers').style.transform;
     const rightTransform = screen.getByTestId('right-preview-layers').style.transform;
-    const control = screen.getByRole('button', { name: 'Highlight differences' });
+    fireEvent.load(screen.getByTestId('left-preview-layers').querySelector('img[src*="/thumb/"]')!);
+    fireEvent.load(screen.getByTestId('right-preview-layers').querySelector('img[src*="/thumb/"]')!);
+    const control = screen.getByRole('button', { name: 'Show Difference' });
 
     await user.hover(control);
     expect(screen.getByTestId('left-difference-composite').style.transform).toBe(leftTransform);
@@ -356,6 +374,22 @@ describe('DuplicatesScreen', () => {
   it('holds the thumbnail until the full-resolution fade has completed', async () => {
     await renderScreen();
     await screen.findByText('Left image');
+    const leftThumbnail = screen.getByTestId('left-preview-layers')
+      .querySelector<HTMLImageElement>('img[src="media://localhost/thumb/left.jpg"]')!;
+    const rightThumbnail = screen.getByTestId('right-preview-layers')
+      .querySelector<HTMLImageElement>('img[src="media://localhost/thumb/right.jpg"]')!;
+
+    expect(document.querySelector('img[data-resolution="full"]')).toBeNull();
+    fireEvent.load(leftThumbnail);
+    expect(leftThumbnail.className).not.toContain('thumbnailImageReady');
+    expect(rightThumbnail.className).not.toContain('thumbnailImageReady');
+    expect(document.querySelector('img[data-resolution="full"]')).toBeNull();
+
+    fireEvent.load(rightThumbnail);
+    await waitFor(() => {
+      expect(leftThumbnail.className).toContain('thumbnailImageReady');
+      expect(rightThumbnail.className).toContain('thumbnailImageReady');
+    });
     const fullImage = await waitFor(() => {
       const image = document.querySelector<HTMLImageElement>('img[src="media://localhost/file/left.png"]');
       expect(image).not.toBeNull();
@@ -400,20 +434,39 @@ describe('DuplicatesScreen', () => {
     const user = setupUser();
     await renderScreen();
     await screen.findByText('Left image');
+    const initialLeftThumbnail = screen.getByTestId('left-preview-layers')
+      .querySelector<HTMLImageElement>('img[src="media://localhost/thumb/left.jpg"]')!;
+    const initialRightThumbnail = screen.getByTestId('right-preview-layers')
+      .querySelector<HTMLImageElement>('img[src="media://localhost/thumb/right.jpg"]')!;
+    fireEvent.load(initialLeftThumbnail);
+    fireEvent.load(initialRightThumbnail);
     const oldFull = document.querySelector<HTMLImageElement>('img[src="media://localhost/file/left.png"]')!;
     fireEvent.load(oldFull);
     fireEvent.transitionEnd(oldFull, { propertyName: 'opacity' });
 
     await user.click(screen.getByRole('button', { name: 'Next pair' }));
     const leftLayers = screen.getByTestId('left-preview-layers');
+    const rightLayers = screen.getByTestId('right-preview-layers');
     await waitFor(() => {
       expect(leftLayers.querySelector('img[src="media://localhost/file/left.png"]')).not.toBeNull();
       expect(leftLayers.querySelector('img[src="media://localhost/thumb/next-left.jpg"]')).not.toBeNull();
+      expect(rightLayers.querySelector('img[src="media://localhost/thumb/right.jpg"]')).not.toBeNull();
+      expect(rightLayers.querySelector('img[src="media://localhost/thumb/next-right.jpg"]')).not.toBeNull();
     });
 
-    fireEvent.load(leftLayers.querySelector('img[src="media://localhost/thumb/next-left.jpg"]')!);
+    const nextLeftThumbnail = leftLayers.querySelector<HTMLImageElement>('img[src="media://localhost/thumb/next-left.jpg"]')!;
+    const nextRightThumbnail = rightLayers.querySelector<HTMLImageElement>('img[src="media://localhost/thumb/next-right.jpg"]')!;
+    fireEvent.load(nextLeftThumbnail);
+    expect(nextLeftThumbnail.className).not.toContain('thumbnailImageReady');
+    expect(leftLayers.querySelector('img[src="media://localhost/file/left.png"]')).not.toBeNull();
+    expect(rightLayers.querySelector('img[src="media://localhost/thumb/right.jpg"]')).not.toBeNull();
+
+    fireEvent.load(nextRightThumbnail);
     await waitFor(() => {
       expect(leftLayers.querySelector('img[src="media://localhost/file/left.png"]')).toBeNull();
+      expect(rightLayers.querySelector('img[src="media://localhost/thumb/right.jpg"]')).toBeNull();
+      expect(nextLeftThumbnail.className).toContain('thumbnailImageReady');
+      expect(nextRightThumbnail.className).toContain('thumbnailImageReady');
     });
   });
 
@@ -421,8 +474,26 @@ describe('DuplicatesScreen', () => {
     await renderScreen();
     await screen.findByText('Left image');
 
-    expect(screen.getByRole('button', { name: 'Fit both images' }).querySelector('[data-toolbar-glyph]')).not.toBeNull();
-    expect(screen.getByRole('button', { name: 'Highlight differences' }).querySelector('[data-toolbar-glyph]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Actual pixels' }).querySelector('[data-toolbar-glyph]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Zoom to fit' }).querySelector('[data-toolbar-glyph]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Show Difference' })).toHaveTextContent('Show Difference');
+  });
+
+  it('switches the linked pair between actual pixels and zoom to fit', async () => {
+    const user = setupUser();
+    await renderScreen();
+    await screen.findByText('Left image');
+    const actual = screen.getByRole('button', { name: 'Actual pixels' });
+    const fit = screen.getByRole('button', { name: 'Zoom to fit' });
+
+    expect(fit).toHaveAttribute('aria-pressed', 'true');
+    await user.click(actual);
+    expect(actual).toHaveAttribute('aria-pressed', 'true');
+    expect(fit).toHaveAttribute('aria-pressed', 'false');
+
+    await user.click(fit);
+    expect(fit).toHaveAttribute('aria-pressed', 'true');
+    expect(actual).toHaveAttribute('aria-pressed', 'false');
   });
 
   it('keeps decisions disabled while logical details are loading', async () => {

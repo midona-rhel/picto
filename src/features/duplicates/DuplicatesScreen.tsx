@@ -49,6 +49,7 @@ import { windowController } from '../../controllers/windowController';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu/ContextMenu';
 import { buildEntityOpenContextEntries } from '../grid/gridContextMenu';
 import {
+  ToolbarActualSizeIcon,
   ToolbarChevronIcon,
   ToolbarDifferenceIcon,
   ToolbarFitIcon,
@@ -65,6 +66,7 @@ interface DuplicateToolbarModel {
   disabled: boolean;
   zoomPercent: number;
   isFit: boolean;
+  isActual: boolean;
   differenceAvailable: boolean;
   differenceActive: boolean;
   previous: () => void;
@@ -73,6 +75,7 @@ interface DuplicateToolbarModel {
   zoomIn: () => void;
   setZoomPercent: (value: number) => void;
   fit: () => void;
+  actual: () => void;
   setDifferenceHovered: (active: boolean) => void;
   setDifferenceFocused: (active: boolean) => void;
 }
@@ -109,23 +112,29 @@ export function DuplicatesToolbar() {
               <ToolbarChevronIcon direction="right" />
             </TitlebarControlButton>
           </KbdTooltip>
-          <KbdTooltip label="Fit both images">
-            <TitlebarControlButton active={model.isFit} onClick={model.fit} aria-label="Fit both images" aria-pressed={model.isFit}>
+          <KbdTooltip label="Actual pixels" shortcutId="view.actualSize">
+            <TitlebarControlButton active={model.isActual} onClick={model.actual} aria-label="Actual pixels" aria-pressed={model.isActual}>
+              <ToolbarActualSizeIcon />
+            </TitlebarControlButton>
+          </KbdTooltip>
+          <KbdTooltip label="Zoom to fit" shortcutId="view.fitWindow">
+            <TitlebarControlButton active={model.isFit} onClick={model.fit} aria-label="Zoom to fit" aria-pressed={model.isFit}>
               <ToolbarFitIcon />
             </TitlebarControlButton>
           </KbdTooltip>
-          <KbdTooltip label="Hold to highlight differences">
+          <KbdTooltip label="Show differences while held">
             <TitlebarControlButton
+              className={styles.differenceButton}
               active={model.differenceActive}
               onMouseEnter={() => model.setDifferenceHovered(true)}
               onMouseLeave={() => model.setDifferenceHovered(false)}
               onFocus={() => model.setDifferenceFocused(true)}
               onBlur={() => model.setDifferenceFocused(false)}
               disabled={model.disabled || !model.differenceAvailable}
-              aria-label="Highlight differences"
+              aria-label="Show Difference"
               aria-pressed={model.differenceActive}
             >
-              <ToolbarDifferenceIcon />
+              <ToolbarDifferenceIcon /> <span>Show Difference</span>
             </TitlebarControlButton>
           </KbdTooltip>
         </>
@@ -203,6 +212,9 @@ interface MediaCardProps {
   loading: boolean;
   onKeep: () => void;
   disabled: boolean;
+  pairKey: string;
+  pairThumbnailsReady: boolean;
+  onThumbnailReady: (side: ComparisonSide, pairKey: string) => void;
 }
 
 function DifferenceComposite({
@@ -252,6 +264,9 @@ function MediaCard({
   loading,
   onKeep,
   disabled,
+  pairKey,
+  pairThumbnailsReady,
+  onThumbnailReady,
 }: MediaCardProps) {
   const label = side === 'left' ? 'Left candidate' : 'Right candidate';
   const contextMenu = useContextMenu();
@@ -265,8 +280,8 @@ function MediaCard({
       onContextMenu={(event) => contextMenu.open(event, buildEntityOpenContextEntries({
         hash: file.file_hash,
         onOpenDefault: (hash) => { void filesController.openDefaultAppForHash(hash); },
-        onOpenNewWindow: (hash) => { void windowController.openDetailWindow({
-          hash,
+        onOpenNewWindow: () => { void windowController.openDetailWindow({
+          hash: file.file_hash,
           width: file.pixel_width,
           height: file.pixel_height,
         }); },
@@ -299,6 +314,9 @@ function MediaCard({
               thumbnailUrl={thumbnailUrl}
               fullResolutionUrl={fullResolutionUrl}
               alt={media?.name ?? file.file_hash}
+              pairKey={pairKey}
+              pairThumbnailsReady={pairThumbnailsReady}
+              onThumbnailReady={() => onThumbnailReady(side, pairKey)}
             />
           </div>
         )}
@@ -352,6 +370,9 @@ interface ProgressiveDuplicateImageProps {
   thumbnailUrl: string;
   fullResolutionUrl: string;
   alt: string;
+  pairKey: string;
+  pairThumbnailsReady: boolean;
+  onThumbnailReady: () => void;
 }
 
 function ProgressiveDuplicateImage({
@@ -359,6 +380,9 @@ function ProgressiveDuplicateImage({
   thumbnailUrl,
   fullResolutionUrl,
   alt,
+  pairKey,
+  pairThumbnailsReady,
+  onThumbnailReady,
 }: ProgressiveDuplicateImageProps) {
   const [layers, setLayers] = useState<DuplicateImageLayers>(() => ({
     assetKey,
@@ -385,11 +409,12 @@ function ProgressiveDuplicateImage({
     });
   }, [assetKey, fullResolutionUrl, thumbnailUrl]);
 
-  const markThumbnailReady = () => setLayers((current) => (
-    current.assetKey === assetKey
-      ? { ...current, thumbnailReady: true, previousUrl: null }
-      : current
-  ));
+  const markThumbnailReady = () => {
+    setLayers((current) => (
+      current.assetKey === assetKey ? { ...current, thumbnailReady: true } : current
+    ));
+    onThumbnailReady();
+  };
   const markFullReady = () => setLayers((current) => (
     current.assetKey === assetKey ? { ...current, fullReady: true } : current
   ));
@@ -401,7 +426,7 @@ function ProgressiveDuplicateImage({
 
   return (
     <>
-      {layers.previousUrl && !layers.thumbnailReady && (
+      {layers.previousUrl && !pairThumbnailsReady && (
         <img
           key={`previous:${layers.previousUrl}`}
           className={styles.previousImage}
@@ -413,25 +438,27 @@ function ProgressiveDuplicateImage({
       {!layers.fullSettled && (
         <img
           key={`thumbnail:${layers.assetKey}`}
-          className={`${styles.thumbnailImage} ${layers.thumbnailReady ? styles.thumbnailImageReady : ''}`}
+          className={`${styles.thumbnailImage} ${layers.thumbnailReady && pairThumbnailsReady ? styles.thumbnailImageReady : ''}`}
           src={layers.thumbnailUrl}
           onLoad={markThumbnailReady}
           alt={alt}
           draggable={false}
         />
       )}
-      <img
-        key={`full:${layers.assetKey}`}
-        data-resolution="full"
-        className={`${styles.fullImage} ${layers.fullReady ? styles.fullImageVisible : ''}`}
-        src={layers.fullResolutionUrl}
-        onLoad={markFullReady}
-        onTransitionEnd={settleFullImage}
-        alt=""
-        decoding="async"
-        loading="eager"
-        draggable={false}
-      />
+      {pairThumbnailsReady && (
+        <img
+          key={`full:${pairKey}:${layers.assetKey}`}
+          data-resolution="full"
+          className={`${styles.fullImage} ${layers.fullReady ? styles.fullImageVisible : ''}`}
+          src={layers.fullResolutionUrl}
+          onLoad={markFullReady}
+          onTransitionEnd={settleFullImage}
+          alt=""
+          decoding="async"
+          loading="eager"
+          draggable={false}
+        />
+      )}
     </>
   );
 }
@@ -459,6 +486,23 @@ export function DuplicatesScreen() {
   const rightPreviewRef = useRef<HTMLDivElement>(null);
 
   const currentPair = pairs[index] ?? null;
+  const pairKey = currentPair ? `${currentPair.file_id_a}:${currentPair.file_id_b}` : '';
+  const activePairKeyRef = useRef(pairKey);
+  activePairKeyRef.current = pairKey;
+  const [thumbnailGate, setThumbnailGate] = useState({ pairKey: '', left: false, right: false });
+  const markThumbnailReady = useCallback((side: ComparisonSide, readyPairKey: string) => {
+    if (readyPairKey !== activePairKeyRef.current) return;
+    setThumbnailGate((current) => {
+      const gate = current.pairKey === readyPairKey
+        ? current
+        : { pairKey: readyPairKey, left: false, right: false };
+      if (gate[side]) return gate;
+      return { ...gate, [side]: true };
+    });
+  }, []);
+  const pairThumbnailsReady = thumbnailGate.pairKey === pairKey
+    && thumbnailGate.left
+    && thumbnailGate.right;
   const resolvedCount = Math.max(0, initialTotal - total);
   const zoom = useLinkedComparisonZoom({
     leftContainerRef: leftPreviewRef,
@@ -469,10 +513,12 @@ export function DuplicatesScreen() {
     rightImageSize: currentPair?.right.file.pixel_width && currentPair.right.file.pixel_height
       ? { width: currentPair.right.file.pixel_width, height: currentPair.right.file.pixel_height }
       : null,
-    pairKey: currentPair ? `${currentPair.file_id_a}:${currentPair.file_id_b}` : '',
+    pairKey,
   });
   const differenceFiles = currentPair ? { left: currentPair.left.file, right: currentPair.right.file } : null;
-  const differenceActive = !metadataLoading && (differenceHovered || differenceFocused);
+  const differenceActive = pairThumbnailsReady
+    && !metadataLoading
+    && (differenceHovered || differenceFocused);
   const mergeWinner = currentPair ? smartMergeWinner(currentPair.decision) : null;
   const mergePreviewActive = !metadataLoading
     && !resolving
@@ -608,6 +654,7 @@ export function DuplicatesScreen() {
       disabled: resolving || metadataLoading,
       zoomPercent: zoom.zoomPercent,
       isFit: zoom.isFit,
+      isActual: zoom.isActual,
       differenceAvailable: differenceFiles != null,
       differenceActive,
       previous: goPrevious,
@@ -616,6 +663,7 @@ export function DuplicatesScreen() {
       zoomIn: zoom.zoomIn,
       setZoomPercent: zoom.setZoomPercent,
       fit: zoom.fit,
+      actual: zoom.actual,
       setDifferenceHovered,
       setDifferenceFocused,
     });
@@ -633,6 +681,8 @@ export function DuplicatesScreen() {
     setDuplicateToolbar,
     total,
     zoom.fit,
+    zoom.actual,
+    zoom.isActual,
     zoom.isFit,
     zoom.setZoomPercent,
     zoom.zoomIn,
@@ -643,10 +693,13 @@ export function DuplicatesScreen() {
   useShortcutScope((event) => {
       if (matchesShortcutDef(event, getShortcut('dup.prevPair')!)) { goPrevious(); return true; }
       if (matchesShortcutDef(event, getShortcut('dup.nextPair')!)) { goNext(); return true; }
+      if (matchesShortcutDef(event, getShortcut('dup.fitToWindow')!)) { zoom.fit(); return true; }
+      if (matchesShortcutDef(event, getShortcut('view.actualSize')!)) { zoom.actual(); return true; }
       if (!currentPair || resolving || metadataLoading) return;
       const shortcuts: Array<[string, DuplicateAction]> = [
         ['dup.keepLeft', 'keep_left'],
         ['dup.keepRight', 'keep_right'],
+        ['dup.keepBoth', 'keep_both'],
         ['dup.smartMerge', 'smart_merge'],
         ['dup.notDuplicate', 'not_duplicate'],
       ];
@@ -696,8 +749,8 @@ export function DuplicatesScreen() {
       )}
 
       <div className={styles.comparison}>
-        <MediaCard side="left" file={currentPair.left.file} occurrenceCount={currentPair.left.occurrences.length} previewRef={leftPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'left'} details={left} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_left')} />
-        <MediaCard side="right" file={currentPair.right.file} occurrenceCount={currentPair.right.occurrences.length} previewRef={rightPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'right'} details={right} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_right')} />
+        <MediaCard side="left" file={currentPair.left.file} occurrenceCount={currentPair.left.occurrences.length} previewRef={leftPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'left'} details={left} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_left')} pairKey={pairKey} pairThumbnailsReady={pairThumbnailsReady} onThumbnailReady={markThumbnailReady} />
+        <MediaCard side="right" file={currentPair.right.file} occurrenceCount={currentPair.right.occurrences.length} previewRef={rightPreviewRef} zoom={zoom} differenceActive={differenceActive} differenceFiles={differenceFiles} smartMergeSurvivor={mergePreviewActive && mergeWinner === 'right'} details={right} loading={metadataLoading} disabled={resolving || metadataLoading} onKeep={() => void finishResolution(currentPair, 'keep_right')} pairKey={pairKey} pairThumbnailsReady={pairThumbnailsReady} onThumbnailReady={markThumbnailReady} />
       </div>
 
       <footer className={styles.footer}>
@@ -705,7 +758,9 @@ export function DuplicatesScreen() {
           <KbdTooltip label="These are different media" shortcutId="dup.notDuplicate">
             <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'not_duplicate')} disabled={resolving || metadataLoading}><IconX size={15} /> Not duplicates</button>
           </KbdTooltip>
-          <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'keep_both')} disabled={resolving || metadataLoading}><IconCopy size={15} /> Keep both</button>
+          <KbdTooltip label="Keep both files" shortcutId="dup.keepBoth">
+            <button className={btnStyles.btn} onClick={() => void finishResolution(currentPair, 'keep_both')} disabled={resolving || metadataLoading}><IconCopy size={15} /> Keep both</button>
+          </KbdTooltip>
           <KbdTooltip label="Keep the stronger file and preserve item metadata" shortcutId="dup.smartMerge">
             <button
               className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}

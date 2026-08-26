@@ -28,15 +28,22 @@
   overflow: hidden;
   border-radius: var(--radius-md);
   background: transparent;
-  transition: background 140ms var(--ease-default), box-shadow 140ms var(--ease-default);
 }
 
-.mergePreview {
+.mediaCard::after {
+  content: '';
+  position: absolute;
+  z-index: 4;
+  inset: 5px;
+  pointer-events: none;
+  border-radius: calc(var(--radius-md) - 1px);
   background: rgba(72, 199, 116, 0.08);
-  box-shadow:
-    0 0 0 4px var(--color-bg-app),
-    0 0 0 5px rgba(72, 199, 116, 0.5);
+  box-shadow: 0 0 0 1px rgba(72, 199, 116, 0.5);
+  opacity: 0;
+  transition: opacity 140ms var(--ease-default);
 }
+
+.mergePreview::after { opacity: 1; }
 
 .cardHeader {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
@@ -47,6 +54,17 @@
   color: var(--duplicate-text-secondary);
   font-size: 12px;
   font-weight: var(--font-weight-medium);
+}
+
+.differenceButton {
+  width: auto;
+  min-width: 28px;
+  gap: 6px;
+  padding-inline: 9px;
+  font-family: var(--font-family-ui, var(--font-family));
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-regular);
+  white-space: nowrap;
 }
 
 .preview {
