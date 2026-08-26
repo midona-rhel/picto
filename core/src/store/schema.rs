@@ -557,90 +557,117 @@ CREATE VIRTUAL TABLE folder_search_fts USING fts5(
 );
 
 CREATE TRIGGER search_library_item_insert AFTER INSERT ON library_item BEGIN
-    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (NEW.item_id);
+    INSERT INTO search_dirty_item(item_id) VALUES (NEW.item_id)
+    ON CONFLICT(item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_library_item_update AFTER UPDATE OF kind, label ON library_item BEGIN
-    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (NEW.item_id);
+    INSERT INTO search_dirty_item(item_id) VALUES (NEW.item_id)
+    ON CONFLICT(item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_library_item_delete AFTER DELETE ON library_item BEGIN
-    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (OLD.item_id);
+    INSERT INTO search_dirty_item(item_id) VALUES (OLD.item_id)
+    ON CONFLICT(item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_collection_member_insert AFTER INSERT ON collection_member BEGIN
-    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (NEW.media_item_id);
+    INSERT INTO search_dirty_item(item_id) VALUES (NEW.media_item_id)
+    ON CONFLICT(item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_collection_member_update
 AFTER UPDATE OF media_item_id ON collection_member BEGIN
-    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (OLD.media_item_id);
-    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (NEW.media_item_id);
+    INSERT INTO search_dirty_item(item_id) VALUES (OLD.media_item_id)
+    ON CONFLICT(item_id) DO NOTHING;
+    INSERT INTO search_dirty_item(item_id) VALUES (NEW.media_item_id)
+    ON CONFLICT(item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_collection_member_delete AFTER DELETE ON collection_member BEGIN
-    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (OLD.media_item_id);
+    INSERT INTO search_dirty_item(item_id) VALUES (OLD.media_item_id)
+    ON CONFLICT(item_id) DO NOTHING;
 END;
 
 CREATE TRIGGER search_media_asset_insert AFTER INSERT ON media_asset BEGIN
-    INSERT OR IGNORE INTO search_dirty_media(media_item_id) VALUES (NEW.item_id);
+    INSERT INTO search_dirty_media(media_item_id) VALUES (NEW.item_id)
+    ON CONFLICT(media_item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_media_asset_update
 AFTER UPDATE OF name, notes, source_urls_json ON media_asset BEGIN
-    INSERT OR IGNORE INTO search_dirty_media(media_item_id) VALUES (NEW.item_id);
+    INSERT INTO search_dirty_media(media_item_id) VALUES (NEW.item_id)
+    ON CONFLICT(media_item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_media_asset_delete AFTER DELETE ON media_asset BEGIN
-    INSERT OR IGNORE INTO search_dirty_media(media_item_id) VALUES (OLD.item_id);
+    INSERT INTO search_dirty_media(media_item_id) VALUES (OLD.item_id)
+    ON CONFLICT(media_item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_media_file_update AFTER UPDATE OF mime_type ON media_file BEGIN
-    INSERT OR IGNORE INTO search_dirty_media(media_item_id)
-    SELECT item_id FROM media_asset WHERE file_id = NEW.file_id;
+    INSERT INTO search_dirty_media(media_item_id)
+    SELECT item_id FROM media_asset WHERE file_id = NEW.file_id
+    ON CONFLICT(media_item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_source_item_insert AFTER INSERT ON source_item WHEN NEW.media_item_id IS NOT NULL BEGIN
-    INSERT OR IGNORE INTO search_dirty_media(media_item_id) VALUES (NEW.media_item_id);
+    INSERT INTO search_dirty_media(media_item_id) VALUES (NEW.media_item_id)
+    ON CONFLICT(media_item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_source_item_update
 AFTER UPDATE OF source_post_id, media_url, canonical_url, media_item_id ON source_item BEGIN
-    INSERT OR IGNORE INTO search_dirty_media(media_item_id)
-    SELECT OLD.media_item_id WHERE OLD.media_item_id IS NOT NULL;
-    INSERT OR IGNORE INTO search_dirty_media(media_item_id)
-    SELECT NEW.media_item_id WHERE NEW.media_item_id IS NOT NULL;
+    INSERT INTO search_dirty_media(media_item_id)
+    SELECT OLD.media_item_id WHERE OLD.media_item_id IS NOT NULL
+    ON CONFLICT(media_item_id) DO NOTHING;
+    INSERT INTO search_dirty_media(media_item_id)
+    SELECT NEW.media_item_id WHERE NEW.media_item_id IS NOT NULL
+    ON CONFLICT(media_item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_source_item_delete AFTER DELETE ON source_item WHEN OLD.media_item_id IS NOT NULL BEGIN
-    INSERT OR IGNORE INTO search_dirty_media(media_item_id) VALUES (OLD.media_item_id);
+    INSERT INTO search_dirty_media(media_item_id) VALUES (OLD.media_item_id)
+    ON CONFLICT(media_item_id) DO NOTHING;
 END;
 CREATE TRIGGER search_source_post_update
 AFTER UPDATE OF site_id, post_key, canonical_url, creator_name, title, description ON source_post BEGIN
-    INSERT OR IGNORE INTO search_dirty_media(media_item_id)
+    INSERT INTO search_dirty_media(media_item_id)
     SELECT media_item_id FROM source_item
-    WHERE source_post_id = NEW.source_post_id AND media_item_id IS NOT NULL;
+    WHERE source_post_id = NEW.source_post_id AND media_item_id IS NOT NULL
+    ON CONFLICT(media_item_id) DO NOTHING;
 END;
 
 CREATE TRIGGER search_tag_insert AFTER INSERT ON tag BEGIN
-    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (NEW.tag_id);
+    INSERT INTO search_dirty_tag(tag_id) VALUES (NEW.tag_id)
+    ON CONFLICT(tag_id) DO NOTHING;
 END;
 CREATE TRIGGER search_tag_update AFTER UPDATE OF namespace, subtag ON tag BEGIN
-    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (NEW.tag_id);
-    INSERT OR IGNORE INTO search_dirty_tag(tag_id)
-    SELECT to_tag_id FROM tag_alias WHERE from_tag_id = NEW.tag_id;
+    INSERT INTO search_dirty_tag(tag_id) VALUES (NEW.tag_id)
+    ON CONFLICT(tag_id) DO NOTHING;
+    INSERT INTO search_dirty_tag(tag_id)
+    SELECT to_tag_id FROM tag_alias WHERE from_tag_id = NEW.tag_id
+    ON CONFLICT(tag_id) DO NOTHING;
 END;
 CREATE TRIGGER search_tag_delete AFTER DELETE ON tag BEGIN
-    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (OLD.tag_id);
+    INSERT INTO search_dirty_tag(tag_id) VALUES (OLD.tag_id)
+    ON CONFLICT(tag_id) DO NOTHING;
 END;
 CREATE TRIGGER search_tag_alias_insert AFTER INSERT ON tag_alias BEGIN
-    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (NEW.to_tag_id);
+    INSERT INTO search_dirty_tag(tag_id) VALUES (NEW.to_tag_id)
+    ON CONFLICT(tag_id) DO NOTHING;
 END;
 CREATE TRIGGER search_tag_alias_update AFTER UPDATE ON tag_alias BEGIN
-    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (OLD.to_tag_id);
-    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (NEW.to_tag_id);
+    INSERT INTO search_dirty_tag(tag_id) VALUES (OLD.to_tag_id)
+    ON CONFLICT(tag_id) DO NOTHING;
+    INSERT INTO search_dirty_tag(tag_id) VALUES (NEW.to_tag_id)
+    ON CONFLICT(tag_id) DO NOTHING;
 END;
 CREATE TRIGGER search_tag_alias_delete AFTER DELETE ON tag_alias BEGIN
-    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (OLD.to_tag_id);
+    INSERT INTO search_dirty_tag(tag_id) VALUES (OLD.to_tag_id)
+    ON CONFLICT(tag_id) DO NOTHING;
 END;
 
 CREATE TRIGGER search_folder_insert AFTER INSERT ON folder BEGIN
-    INSERT OR IGNORE INTO search_dirty_folder(folder_id) VALUES (NEW.folder_id);
+    INSERT INTO search_dirty_folder(folder_id) VALUES (NEW.folder_id)
+    ON CONFLICT(folder_id) DO NOTHING;
 END;
 CREATE TRIGGER search_folder_update AFTER UPDATE OF name, notes ON folder BEGIN
-    INSERT OR IGNORE INTO search_dirty_folder(folder_id) VALUES (NEW.folder_id);
+    INSERT INTO search_dirty_folder(folder_id) VALUES (NEW.folder_id)
+    ON CONFLICT(folder_id) DO NOTHING;
 END;
 CREATE TRIGGER search_folder_delete AFTER DELETE ON folder BEGIN
-    INSERT OR IGNORE INTO search_dirty_folder(folder_id) VALUES (OLD.folder_id);
+    INSERT INTO search_dirty_folder(folder_id) VALUES (OLD.folder_id)
+    ON CONFLICT(folder_id) DO NOTHING;
 END;
 "#;
 
@@ -923,5 +950,32 @@ mod tests {
             .query_row("SELECT revision FROM library_meta", [], |row| row.get(0))
             .unwrap();
         assert_eq!(revision, 42);
+    }
+
+    #[test]
+    fn search_dirty_triggers_remain_idempotent_under_outer_conflict_policy() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        create(&mut connection).unwrap();
+
+        connection
+            .execute_batch(
+                "INSERT INTO media_file (
+                    file_hash, mime_type, size_bytes, created_at
+                 ) VALUES ('hash', 'image/jpeg', 1, 'now');
+                 INSERT INTO library_item (item_id, item_key, kind, created_at, updated_at)
+                 VALUES (1, 'item', 'media', 'now', 'now');
+                 INSERT INTO media_asset (
+                    item_id, file_id, name, source_urls_json, imported_at, updated_at
+                 ) VALUES (1, 1, 'first', '[]', 'now', 'now');
+                 INSERT OR REPLACE INTO media_asset (
+                    item_id, file_id, name, source_urls_json, imported_at, updated_at
+                 ) VALUES (1, 1, 'second', '[]', 'now', 'now');",
+            )
+            .unwrap();
+
+        let dirty_count: i64 = connection
+            .query_row("SELECT COUNT(*) FROM search_dirty_media", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(dirty_count, 1);
     }
 }
