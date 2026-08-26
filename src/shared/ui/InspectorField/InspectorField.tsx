@@ -8,11 +8,70 @@
  * both auto-grow in the popover.
  */
 
-import { useState, useRef, useEffect, useCallback } from 'react';
+import { createContext, useState, useRef, useEffect, useCallback, useContext, useId, type ReactNode } from 'react';
 import { IconDots, IconLink, IconPlus, IconX, IconExternalLink } from '@tabler/icons-react';
 import { shellController } from '../../../controllers/shellController';
 import { KbdTooltip } from '../KbdTooltip';
 import styles from './InspectorField.module.css';
+
+type HoverGroup = {
+  activeId: string | null;
+  activate: (id: string) => void;
+  deactivate: (id: string, delay?: number) => void;
+  lock: (id: string) => void;
+  unlock: (id: string) => void;
+};
+
+const InspectorFieldHoverContext = createContext<HoverGroup | null>(null);
+
+export function InspectorFieldGroup({ children }: { children: ReactNode }) {
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const lockedId = useRef<string | null>(null);
+  const hideTimer = useRef<ReturnType<typeof setTimeout>>();
+  const clearHide = useCallback(() => clearTimeout(hideTimer.current), []);
+
+  useEffect(() => clearHide, [clearHide]);
+
+  const value: HoverGroup = {
+    activeId,
+    activate: (id) => {
+      if (lockedId.current && lockedId.current !== id) return;
+      clearHide();
+      setActiveId(id);
+    },
+    deactivate: (id, delay = 140) => {
+      if (lockedId.current === id) return;
+      clearHide();
+      hideTimer.current = setTimeout(() => {
+        setActiveId((current) => current === id ? null : current);
+      }, delay);
+    },
+    lock: (id) => {
+      clearHide();
+      lockedId.current = id;
+      setActiveId(id);
+    },
+    unlock: (id) => {
+      if (lockedId.current !== id) return;
+      lockedId.current = null;
+      setActiveId((current) => current === id ? null : current);
+    },
+  };
+
+  return <InspectorFieldHoverContext.Provider value={value}>{children}</InspectorFieldHoverContext.Provider>;
+}
+
+function useFieldHover() {
+  const group = useContext(InspectorFieldHoverContext);
+  const id = useId();
+  return {
+    active: group?.activeId === id,
+    activate: () => group?.activate(id),
+    deactivate: (delay?: number) => group?.deactivate(id, delay),
+    lock: () => group?.lock(id),
+    unlock: () => group?.unlock(id),
+  };
+}
 
 // ── InspectorField (name, notes, any text) ───────────────────────
 
@@ -26,7 +85,7 @@ interface Props {
 export function InspectorField({ value, placeholder = '', readOnly = false, onCommit }: Props) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(value);
-  const [hovered, setHovered] = useState(false);
+  const hover = useFieldHover();
   const [isMultiRow, setIsMultiRow] = useState(false);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const popoverRef = useRef<HTMLDivElement>(null);
@@ -52,25 +111,25 @@ export function InspectorField({ value, placeholder = '', readOnly = false, onCo
 
   const commit = useCallback(() => {
     setEditing(false);
-    setHovered(false);
+    hover.unlock();
     const trimmed = draft.trim();
     if (trimmed !== value && onCommit) onCommit(trimmed);
-  }, [draft, value, onCommit]);
+  }, [draft, value, onCommit, hover]);
 
   const cancel = useCallback(() => {
     setDraft(value);
     setEditing(false);
-    setHovered(false);
-  }, [value]);
+    hover.unlock();
+  }, [value, hover]);
 
   const canEdit = !readOnly && !!onCommit;
-  const showOverlay = (hovered || editing) && (!!value || editing);
+  const showOverlay = (hover.active || editing) && (!!value || editing);
 
   return (
     <div
       className={styles.fieldWrap}
-      onMouseEnter={() => { if (!editing && value) setHovered(true); }}
-      onMouseLeave={() => { if (!editing) setHovered(false); }}
+      onMouseEnter={() => { if (!editing && value) hover.activate(); }}
+      onMouseLeave={() => { if (!editing) hover.deactivate(); }}
     >
       <div className={styles.fieldRow}>
         <div className={styles.fieldContent}>
@@ -81,7 +140,7 @@ export function InspectorField({ value, placeholder = '', readOnly = false, onCo
             <div className={styles.fieldSep} />
             <button
               className={styles.fieldActionBtn}
-              onClick={() => { setEditing(true); setDraft(value); }}
+              onClick={() => { hover.lock(); setEditing(true); setDraft(value); }}
               type="button"
             >
               <IconDots size={14} stroke={1.5} />
@@ -93,6 +152,7 @@ export function InspectorField({ value, placeholder = '', readOnly = false, onCo
       {showOverlay && (
         <div
           ref={popoverRef}
+          data-inspector-field-popover=""
           className={`${styles.popover} ${!isMultiRow ? styles.popoverSingleRow : ''}`}
         >
           <div className={styles.popoverBody}>
@@ -116,7 +176,7 @@ export function InspectorField({ value, placeholder = '', readOnly = false, onCo
           {canEdit && (
             <button
               className={styles.popoverActionBtn}
-              onClick={() => { if (editing) commit(); else { setEditing(true); setDraft(value); } }}
+              onClick={() => { if (editing) commit(); else { hover.lock(); setEditing(true); setDraft(value); } }}
               type="button"
             >
               <IconDots size={14} stroke={1.5} />
@@ -142,34 +202,27 @@ function extractDomain(url: string): string {
 }
 
 export function InspectorSourceField({ urls, onChange, readOnly = false, unavailable = false }: SourceFieldProps) {
+  const hover = useFieldHover();
   const [open, setOpen] = useState(false);
   const [editIdx, setEditIdx] = useState<number | null>(null);
   const [editVal, setEditVal] = useState('');
-  const [hovered, setHovered] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const hideTimer = useRef<ReturnType<typeof setTimeout>>();
 
   const domainSummary = unavailable ? '—' : urls.length > 0 ? urls.map(extractDomain).join(', ') : '';
   const canEdit = !unavailable && !readOnly && !!onChange;
-  const showPopover = !unavailable && hovered && !open && urls.length > 0;
-
-  const clearHide = () => clearTimeout(hideTimer.current);
-  const scheduleHide = (ms: number) => {
-    hideTimer.current = setTimeout(() => setHovered(false), ms);
-  };
-
-  useEffect(() => () => clearTimeout(hideTimer.current), []);
+  const showPopover = !unavailable && hover.active && !open && urls.length > 0;
 
   useEffect(() => {
     if (!open) return;
     const handler = (e: MouseEvent) => {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
         setOpen(false); setEditIdx(null); setEditVal('');
+        hover.unlock();
       }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
-  }, [open]);
+  }, [open, hover]);
 
   const handleSave = useCallback((index: number, val: string) => {
     const trimmed = val.trim();
@@ -202,16 +255,21 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
 
   const handleBtnClick = () => {
     if (!canEdit) return;
-    setHovered(false);
-    if (urls.length === 0) handleAdd(); else setOpen(!open);
+    if (open) {
+      setOpen(false);
+      hover.unlock();
+    } else {
+      hover.lock();
+      if (urls.length === 0) handleAdd(); else setOpen(true);
+    }
   };
 
   return (
     <div ref={wrapRef} className={styles.fieldWrap}>
       <div
         className={styles.fieldRow}
-        onMouseEnter={() => { if (!unavailable && !open) { clearHide(); if (urls.length > 0) setHovered(true); } }}
-        onMouseLeave={() => scheduleHide(400)}
+        onMouseEnter={() => { if (!unavailable && !open && urls.length > 0) hover.activate(); }}
+        onMouseLeave={() => hover.deactivate()}
       >
         <div className={styles.fieldContent} onClick={handleBtnClick}>
           {domainSummary || <span className={styles.fieldPlaceholder}>Source</span>}
@@ -226,9 +284,10 @@ export function InspectorSourceField({ urls, onChange, readOnly = false, unavail
 
       {showPopover && (
         <div
+          data-inspector-field-popover=""
           className={styles.popover}
-          onMouseEnter={clearHide}
-          onMouseLeave={() => scheduleHide(200)}
+          onMouseEnter={hover.activate}
+          onMouseLeave={() => hover.deactivate()}
         >
           <div className={styles.popoverBody}>
             {urls.map((url, i) => (

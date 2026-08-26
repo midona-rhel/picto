@@ -158,6 +158,36 @@ describe('Inspector presentation branches', () => {
     }
   });
 
+  it('shows only one identity-field hover popover at a time', () => {
+    renderInspector({
+      target: { kind: 'item', itemId: 1 },
+      data: {
+        ...entity,
+        media: [{
+          ...entity.media[0],
+          notes: 'Inspector notes',
+          source_urls: ['https://example.com/source'],
+        }],
+      },
+    });
+
+    const name = document.querySelector('[data-inspector-anchor="name"] > div')!;
+    const notes = document.querySelector('[data-inspector-anchor="notes"] > div')!;
+    const source = document.querySelector('[data-inspector-anchor="source"] > div')!;
+
+    fireEvent.mouseEnter(name);
+    expect(document.querySelectorAll('[data-inspector-field-popover]')).toHaveLength(1);
+    expect(name).toHaveTextContent('Example');
+
+    fireEvent.mouseEnter(notes);
+    expect(document.querySelectorAll('[data-inspector-field-popover]')).toHaveLength(1);
+    expect(notes).toHaveTextContent('Inspector notes');
+
+    fireEvent.mouseEnter(source.querySelector('[class]') ?? source);
+    expect(document.querySelectorAll('[data-inspector-field-popover]')).toHaveLength(1);
+    expect(source).toHaveTextContent('example.com');
+  });
+
   it('uses the shared inspector action primitive for Add Tags', () => {
     const view = renderInspector({ target: { kind: 'item', itemId: 1 }, data: entity });
 

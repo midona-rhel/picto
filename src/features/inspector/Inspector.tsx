@@ -19,7 +19,7 @@ import { smartFoldersController } from '../../controllers/smartFoldersController
 import { PropertyRow } from '../../shared/ui/PropertyRow/PropertyRow';
 import { InspectorSection } from '../../shared/ui/InspectorSection/InspectorSection';
 import { StarRating } from '../../shared/ui/StarRating/StarRating';
-import { InspectorField, InspectorSourceField } from '../../shared/ui/InspectorField/InspectorField';
+import { InspectorField, InspectorFieldGroup, InspectorSourceField } from '../../shared/ui/InspectorField/InspectorField';
 import { TagChip } from '../../shared/ui/TagChip/TagChip';
 import type { ItemTarget } from '../../shared/types/generated/application/ItemTarget';
 import type { ItemDetails } from '../../shared/types/generated/application/ItemDetails';
@@ -184,7 +184,7 @@ function Preview({
           hash,
           onOpenDefault: (value) => { void filesController.openDefaultAppForHash(value); },
           onRevealInFolder: (value) => { void filesController.revealHashInFolder(value); },
-          onOpenNewWindow: (value) => { void windowController.openDetailWindow({ hash: value }); },
+          onOpenNewWindow: () => { void windowController.openDetailWindow({ hash }); },
         }).concat(buildLibraryCoverContextEntry(hash, () => {
           void openCurrentLibraryCoverPicker({
             media_item_id: -1,
@@ -523,6 +523,7 @@ export function InspectorSkeleton({
         </div>
       )}
       {(name || notes || (showSource && source)) && (
+        <InspectorFieldGroup>
         <div className={styles.fieldStack} data-inspector-identity="">
           {name && <div data-inspector-anchor="name">
             <InspectorField value={name.value} placeholder="Name" readOnly={name.readOnly} onCommit={name.onCommit} />
@@ -536,6 +537,7 @@ export function InspectorSkeleton({
             </div>
           )}
         </div>
+        </InspectorFieldGroup>
       )}
 
       {showTags && (
