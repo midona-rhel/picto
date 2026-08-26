@@ -173,6 +173,91 @@ async function hasAuthenticatedFanboxSession(webContents) {
   `, true);
 }
 
+async function inspectExhentaiPage(webContents) {
+  return webContents.executeJavaScript(String.raw`
+    (() => {
+      const href = location.href;
+      const host = location.hostname.toLowerCase();
+      const text = (document.body?.innerText || '').trim();
+      const images = Array.from(document.images).map((image) =>
+        [image.src, image.alt, image.title].filter(Boolean).join(' ')
+      ).join(' ');
+      const pageIdentity = [document.title, text, images].filter(Boolean).join(' ');
+      return {
+        href,
+        host,
+        hasLoginForm: Boolean(document.querySelector('input[type="password"], input[name="PassWord"]')),
+        accessDenied: /sad\s*panda|sadpanda|kokomade/i.test(pageIdentity),
+        blank: text.length === 0 && document.links.length === 0,
+      };
+    })()
+  `, true);
+}
+
+async function readCookiesForUrls(contents, urls) {
+  const values = new Map();
+  for (const url of urls) {
+    const cookies = await contents.session.cookies.get({ url });
+    for (const cookie of cookies) {
+      const value = String(cookie.value || '').trim();
+      if (value) values.set(cookie.name, value);
+    }
+  }
+  return values;
+}
+
+function createExhentaiAdapter(site) {
+  let navigatingToVerification = false;
+  return {
+    async prepare() {
+      return {
+        url: site.loginUrl,
+        message: 'Sign in with your E-Hentai account. Picto will verify ExHentai access automatically.',
+      };
+    },
+    async inspect(contents) {
+      const page = await inspectExhentaiPage(contents);
+      const values = await readCookiesForUrls(contents, site.cookieUrls);
+      const hasSession = site.authenticatedCookieNames.every((name) => values.has(name));
+      const onExhentai = page.host === 'exhentai.org' || page.host.endsWith('.exhentai.org');
+
+      if (onExhentai) {
+        navigatingToVerification = false;
+        if (page.accessDenied || page.blank || !hasSession) {
+          try { await contents.session.clearStorageData(); } catch {}
+          return {
+            navigate: site.loginUrl,
+            show: true,
+            status: 'active',
+            message: 'ExHentai rejected this session (Sad Panda). Sign in again to refresh it.',
+          };
+        }
+        const cookies = Object.fromEntries(site.cookieNames
+          .map((name) => [name, values.get(name)])
+          .filter(([, value]) => value));
+        return {
+          credential: { site_category: site.id, credential_type: 'cookies', cookies },
+          message: 'ExHentai session captured and verified.',
+        };
+      }
+
+      if (page.hasLoginForm || !hasSession) {
+        return { status: 'active', message: 'Log in with your E-Hentai account to continue.' };
+      }
+      if (!navigatingToVerification) {
+        navigatingToVerification = true;
+        return {
+          navigate: site.verificationUrl,
+          hide: true,
+          status: 'loading',
+          message: 'Login accepted. Verifying ExHentai access…',
+        };
+      }
+      return { status: 'loading', message: 'Verifying ExHentai access…' };
+    },
+  };
+}
+
 function createCookieAdapter(site) {
   return {
     async prepare() {
@@ -451,6 +536,7 @@ function createPixivAdapter(site, beginPixivOAuth, completePixivOAuth) {
 
 function createAdapter(site, dependencies) {
   if (site.strategy === 'cookies') return createCookieAdapter(site);
+  if (site.strategy === 'exhentai') return createExhentaiAdapter(site);
   if (site.strategy === 'onlyfans') return createOnlyFansAdapter(site);
   if (site.strategy === 'account_api') return createAccountApiAdapter(site);
   if (site.strategy === 'oauth1' || site.strategy === 'oauth2') return createOAuthAdapter(site, dependencies.fetchImpl);

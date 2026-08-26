@@ -108,6 +108,78 @@ describe('direct-site authentication', () => {
     });
   });
 
+  it('uses the E-Hentai account login and a separate ExHentai verification step', () => {
+    expect(resolveAuthSite('exhentai')).toMatchObject({
+      loginUrl: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
+      verificationUrl: 'https://exhentai.org/',
+      cookieNames: ['ipb_member_id', 'ipb_pass_hash', 'igneous'],
+      authenticatedCookieNames: ['ipb_member_id', 'ipb_pass_hash'],
+      resetSessionOnStart: true,
+    });
+  });
+
+  it('verifies ExHentai access before persisting its gallery-dl cookies', async () => {
+    const browser = createBrowserWindowMock({
+      pageResult: (url) => url.includes('exhentai.org')
+        ? { href: url, host: 'exhentai.org', hasLoginForm: false, accessDenied: false, blank: false }
+        : { href: url, host: 'forums.e-hentai.org', hasLoginForm: false, accessDenied: false, blank: false },
+      cookies: [
+        { name: 'ipb_member_id', value: 'member' },
+        { name: 'ipb_pass_hash', value: 'hash' },
+        { name: 'igneous', value: 'igneous' },
+        { name: 'analytics', value: 'ignored' },
+      ],
+    });
+    const { sessions, persistCredential } = createHarness(browser);
+
+    await sessions.startAuthSession('exhentai');
+    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    await settle();
+    expect(browser.instances[0].loadedUrl).toBe('https://exhentai.org/');
+    expect(browser.instances[0].hideCalls).toBe(1);
+
+    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    await settle();
+    expect(persistCredential).toHaveBeenCalledWith(expect.objectContaining({
+      site_id: 'exhentai',
+      credential_type: 'cookies',
+      cookies: {
+        ipb_member_id: 'member',
+        ipb_pass_hash: 'hash',
+        igneous: 'igneous',
+      },
+    }));
+    expect(sessions.getAuthSessionState().status).toBe('completed');
+  });
+
+  it('rejects an expired ExHentai session when verification returns Sad Panda', async () => {
+    const browser = createBrowserWindowMock({
+      pageResult: (url) => url.includes('exhentai.org')
+        ? { href: url, host: 'exhentai.org', hasLoginForm: false, accessDenied: true, blank: false }
+        : { href: url, host: 'forums.e-hentai.org', hasLoginForm: false, accessDenied: false, blank: false },
+      cookies: [
+        { name: 'ipb_member_id', value: 'expired-member' },
+        { name: 'ipb_pass_hash', value: 'expired-hash' },
+      ],
+    });
+    const { sessions, persistCredential } = createHarness(browser);
+
+    await sessions.startAuthSession('exhentai');
+    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    await settle();
+    await browser.instances[0].webContents.listeners.get('did-finish-load')();
+    await settle();
+
+    expect(persistCredential).not.toHaveBeenCalled();
+    expect(browser.instances[0].loadedUrl).toBe('https://forums.e-hentai.org/index.php?act=Login&CODE=00');
+    expect(browser.instances[0].webContents.session.clearStorageData).toHaveBeenCalledTimes(2);
+    expect(browser.instances[0].showCalls).toBeGreaterThan(0);
+    expect(sessions.getAuthSessionState()).toMatchObject({
+      status: 'active',
+      message: expect.stringContaining('Sad Panda'),
+    });
+  });
+
   it('opens Newgrounds at desktop width without changing other login windows', async () => {
     const newgroundsBrowser = createBrowserWindowMock();
     const { sessions: newgroundsSessions } = createHarness(newgroundsBrowser);

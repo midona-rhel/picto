@@ -188,7 +188,9 @@ pub fn classify_failure(stderr: &str) -> FailureKind {
         || lower.contains("403")
         || lower.contains("forbidden")
         || lower.contains("unauthorized")
+        || lower.contains("authorizationerror")
         || lower.contains("authenticationerror")
+        || lower.contains("sad panda")
         || lower.contains("authrequired")
         || lower.contains("missing authentication")
         || lower.contains("login required")
@@ -396,6 +398,14 @@ mod tests {
             classify_failure(
                 "gallery_dl.exception.AuthenticationError: FANBOX session was rejected"
             ),
+            FailureKind::Unauthorized
+        );
+    }
+
+    #[test]
+    fn exhentai_expired_session_is_unauthorized() {
+        assert_eq!(
+            classify_failure("gallery_dl.exception.AuthorizationError: Sad Panda"),
             FailureKind::Unauthorized
         );
     }

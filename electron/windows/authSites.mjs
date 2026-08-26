@@ -164,6 +164,21 @@ export const AUTH_SITES = Object.freeze({
   konachan: cookieSite('konachan', 'Konachan', 'https://konachan.com/user/login', 'https://konachan.com'),
   safebooru: cookieSite('safebooru', 'Safebooru', 'https://safebooru.org/index.php?page=account&s=login&code=00', 'https://safebooru.org'),
   e621: cookieSite('e621', 'e621', 'https://e621.net/session/new', 'https://e621.net'),
+  exhentai: Object.freeze({
+    id: 'exhentai',
+    label: 'ExHentai',
+    strategy: 'exhentai',
+    loginUrl: 'https://forums.e-hentai.org/index.php?act=Login&CODE=00',
+    verificationUrl: 'https://exhentai.org/',
+    cookieUrls: Object.freeze([
+      'https://forums.e-hentai.org',
+      'https://e-hentai.org',
+      'https://exhentai.org',
+    ]),
+    cookieNames: Object.freeze(['ipb_member_id', 'ipb_pass_hash', 'igneous']),
+    authenticatedCookieNames: Object.freeze(['ipb_member_id', 'ipb_pass_hash']),
+    resetSessionOnStart: true,
+  }),
 });
 
 export function resolveAuthSite(siteId) {

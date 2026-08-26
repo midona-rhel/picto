@@ -63,6 +63,8 @@ export function AuthSiteDetail({
     : `${entry.queryCount} ${entry.queryCount === 1 ? 'query' : 'queries'}`;
   const loginDescription = entry.site.id === 'pixiv'
     ? 'Sign in on Pixiv. Picto captures the OAuth session when the site completes authentication.'
+    : entry.site.id === 'exhentai'
+      ? 'Sign in with your E-Hentai account. Picto verifies ExHentai access before saving the browser session.'
     : entry.site.credential_types.includes('api_key')
       ? `Sign in on ${entry.site.name}. Picto retrieves and stores the account API credential.`
       : `Sign in on ${entry.site.name}. Picto stores the resulting browser session securely.`;
