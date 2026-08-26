@@ -420,4 +420,29 @@ describe('gridController pagination', () => {
     expect(queryItemsMock.mock.calls[0][0].filters.text).toBe('alice');
     vi.useRealTimers();
   });
+
+  it('coalesces settled text while a native search is still running', async () => {
+    vi.useFakeTimers();
+    let resolveFirst: ((value: ItemPage) => void) | undefined;
+    queryItemsMock
+      .mockImplementationOnce(() => new Promise<ItemPage>((resolve) => {
+        resolveFirst = resolve;
+      }))
+      .mockResolvedValueOnce(page([item(2)], 1));
+
+    gridController.setSearchText('alice');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(queryItemsMock).toHaveBeenCalledOnce();
+
+    gridController.setSearchText('bob');
+    await vi.advanceTimersByTimeAsync(100);
+    gridController.setSearchText('carol');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(queryItemsMock).toHaveBeenCalledOnce();
+
+    resolveFirst?.(page([item(1)], 1));
+    await vi.waitFor(() => expect(queryItemsMock).toHaveBeenCalledTimes(2));
+    expect(queryItemsMock.mock.calls[1][0].filters.text).toBe('carol');
+    vi.useRealTimers();
+  });
 });

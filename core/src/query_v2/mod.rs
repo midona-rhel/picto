@@ -237,6 +237,45 @@ pub struct SidebarCounts {
     pub revision: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct LibraryStatistics {
+    #[ts(type = "number")]
+    pub active_items: i64,
+    #[ts(type = "number")]
+    pub inbox_items: i64,
+    #[ts(type = "number")]
+    pub trash_items: i64,
+    #[ts(type = "number")]
+    pub standalone_items: i64,
+    #[ts(type = "number")]
+    pub collections: i64,
+    #[ts(type = "number")]
+    pub media_assets: i64,
+    #[ts(type = "number")]
+    pub image_assets: i64,
+    #[ts(type = "number")]
+    pub video_assets: i64,
+    #[ts(type = "number")]
+    pub audio_assets: i64,
+    #[ts(type = "number")]
+    pub other_assets: i64,
+    #[ts(type = "number")]
+    pub physical_files: i64,
+    #[ts(type = "number")]
+    pub original_bytes: i64,
+    #[ts(type = "number")]
+    pub tags: i64,
+    #[ts(type = "number")]
+    pub folders: i64,
+    #[ts(type = "number")]
+    pub smart_folders: i64,
+    #[ts(type = "number")]
+    pub subscriptions: i64,
+    #[ts(type = "number")]
+    pub revision: u64,
+}
+
 /// Resolve one canonical page from the replacement store.
 pub fn query(
     store: &Store,
@@ -244,11 +283,11 @@ pub fn query(
     page: ItemPageRequest,
 ) -> Result<ItemPage, String> {
     let page = page.normalized();
-    store.read(|connection| resolve_connection(connection, item_query, page))
+    store.read_snapshot(|connection| resolve_connection(connection, item_query, page))
 }
 
 pub fn details(store: &Store, item_id: ItemId) -> Result<ItemDetails, String> {
-    store.read(|connection| details_connection(connection, item_id.0))
+    store.read_snapshot(|connection| details_connection(connection, item_id.0))
 }
 
 pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<SelectionSummary, String> {
@@ -621,7 +660,7 @@ fn target_selection_sql(
             Ok(TargetSelectionSql {
                 with_clause: format!(
                     "WITH
-                     root_items AS (
+                     root_items AS NOT MATERIALIZED (
                          SELECT lr.item_id, lr.lifecycle, li.kind, li.label,
                                 li.created_at, li.updated_at,
                                 fi.position_rank AS folder_position, mv.viewed_at
@@ -636,7 +675,7 @@ fn target_selection_sql(
                                 WHERE member_root.media_item_id = lr.item_id
                             )
                      ),
-                     root_media AS (
+                     root_media AS NOT MATERIALIZED (
                          SELECT ri.item_id AS root_item_id, ri.item_id AS media_item_id
                          FROM root_items ri WHERE ri.kind = 'media'
                          UNION ALL
@@ -767,6 +806,62 @@ pub fn sidebar_counts(store: &Store) -> Result<SidebarCounts, String> {
         }
         result.revision = crate::store::schema::revision(connection)?;
         Ok(result)
+    })
+}
+
+pub fn library_statistics(store: &Store) -> Result<LibraryStatistics, String> {
+    store.read(|connection| {
+        connection.query_row(
+            "WITH visible_roots AS (
+                 SELECT lr.item_id, lr.lifecycle, li.kind
+                 FROM library_root lr
+                 JOIN library_item li ON li.item_id = lr.item_id
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM collection_member cm WHERE cm.media_item_id = lr.item_id
+                 )
+             )
+             SELECT
+                 COUNT(*) FILTER (WHERE lifecycle = 'active'),
+                 COUNT(*) FILTER (WHERE lifecycle = 'inbox'),
+                 COUNT(*) FILTER (WHERE lifecycle = 'trash'),
+                 COUNT(*) FILTER (WHERE kind = 'media'),
+                 COUNT(*) FILTER (WHERE kind = 'collection'),
+                 (SELECT COUNT(*) FROM media_asset),
+                 (SELECT COUNT(*) FROM media_asset ma JOIN media_file mf ON mf.file_id = ma.file_id WHERE mf.mime_type LIKE 'image/%'),
+                 (SELECT COUNT(*) FROM media_asset ma JOIN media_file mf ON mf.file_id = ma.file_id WHERE mf.mime_type LIKE 'video/%'),
+                 (SELECT COUNT(*) FROM media_asset ma JOIN media_file mf ON mf.file_id = ma.file_id WHERE mf.mime_type LIKE 'audio/%'),
+                 (SELECT COUNT(*) FROM media_asset ma JOIN media_file mf ON mf.file_id = ma.file_id WHERE mf.mime_type NOT LIKE 'image/%' AND mf.mime_type NOT LIKE 'video/%' AND mf.mime_type NOT LIKE 'audio/%'),
+                 (SELECT COUNT(*) FROM media_file),
+                 (SELECT COALESCE(SUM(size_bytes), 0) FROM media_file),
+                 (SELECT COUNT(*) FROM tag),
+                 (SELECT COUNT(*) FROM folder),
+                 (SELECT COUNT(*) FROM smart_folder),
+                 (SELECT COUNT(*) FROM subscription),
+                 (SELECT revision FROM library_meta WHERE singleton = 1)
+             FROM visible_roots",
+            [],
+            |row| {
+                Ok(LibraryStatistics {
+                    active_items: row.get(0)?,
+                    inbox_items: row.get(1)?,
+                    trash_items: row.get(2)?,
+                    standalone_items: row.get(3)?,
+                    collections: row.get(4)?,
+                    media_assets: row.get(5)?,
+                    image_assets: row.get(6)?,
+                    video_assets: row.get(7)?,
+                    audio_assets: row.get(8)?,
+                    other_assets: row.get(9)?,
+                    physical_files: row.get(10)?,
+                    original_bytes: row.get(11)?,
+                    tags: row.get(12)?,
+                    folders: row.get(13)?,
+                    smart_folders: row.get(14)?,
+                    subscriptions: row.get(15)?,
+                    revision: row.get(16)?,
+                })
+            },
+        )
     })
 }
 
@@ -997,7 +1092,7 @@ pub(crate) fn resolve_target_ids(
             }
             let sql = format!(
                 "WITH
-                 root_items AS (
+                 root_items AS NOT MATERIALIZED (
                      SELECT lr.item_id, lr.lifecycle, li.kind, li.label,
                             li.created_at, li.updated_at,
                             fi.position_rank AS folder_position, mv.viewed_at
@@ -1012,7 +1107,7 @@ pub(crate) fn resolve_target_ids(
                             WHERE member_root.media_item_id = lr.item_id
                         )
                  ),
-                 root_media AS (
+                 root_media AS NOT MATERIALIZED (
                      SELECT ri.item_id AS root_item_id, ri.item_id AS media_item_id
                      FROM root_items ri WHERE ri.kind = 'media'
                      UNION ALL
@@ -1087,7 +1182,7 @@ fn resolve_connection(
     };
     let sql = format!(
         "WITH
-         root_items AS (
+         root_items AS NOT MATERIALIZED (
              SELECT
                  lr.item_id,
                  lr.lifecycle,
@@ -1109,7 +1204,7 @@ fn resolve_connection(
                     WHERE member_root.media_item_id = lr.item_id
                 )
          ),
-         root_media AS (
+         root_media AS NOT MATERIALIZED (
              SELECT ri.item_id AS root_item_id, ri.item_id AS media_item_id
              FROM root_items ri
              WHERE ri.kind = 'media'
@@ -1119,29 +1214,41 @@ fn resolve_connection(
              JOIN collection_member cm ON cm.collection_id = ri.item_id
              WHERE ri.kind = 'collection'
          ),
-         candidate_roots AS (
+         candidate_roots AS MATERIALIZED (
              SELECT ri.*
              FROM root_items ri
              WHERE {where_clause}
          ),
-         candidate_media AS (
-             SELECT rm.root_item_id, rm.media_item_id
-             FROM root_media rm
-             JOIN candidate_roots candidate ON candidate.item_id = rm.root_item_id
-         ),
          root_stats AS (
              SELECT
-                 rm.root_item_id,
+                 candidate.item_id AS root_item_id,
+                 1 AS collection_member_count,
+                 mf.size_bytes AS total_size_bytes,
+                 ma.imported_at,
+                 ma.captured_at,
+                 ma.rating AS sort_rating,
+                 ma.item_id AS first_media_item_id
+             FROM candidate_roots candidate
+             JOIN media_asset ma ON ma.item_id = candidate.item_id
+             JOIN media_file mf ON mf.file_id = ma.file_id
+             WHERE candidate.kind = 'media'
+
+             UNION ALL
+
+             SELECT
+                 candidate.item_id AS root_item_id,
                  COUNT(*) AS collection_member_count,
                  COALESCE(SUM(mf.size_bytes), 0) AS total_size_bytes,
                  MAX(ma.imported_at) AS imported_at,
                  MAX(ma.captured_at) AS captured_at,
                  MAX(ma.rating) AS sort_rating,
-                 MIN(rm.media_item_id) AS first_media_item_id
-             FROM candidate_media rm
-             JOIN media_asset ma ON ma.item_id = rm.media_item_id
+                 MIN(cm.media_item_id) AS first_media_item_id
+             FROM candidate_roots candidate
+             JOIN collection_member cm ON cm.collection_id = candidate.item_id
+             JOIN media_asset ma ON ma.item_id = cm.media_item_id
              JOIN media_file mf ON mf.file_id = ma.file_id
-             GROUP BY rm.root_item_id
+             WHERE candidate.kind = 'collection'
+             GROUP BY candidate.item_id
          ),
          filtered_roots AS (
              SELECT
@@ -1355,73 +1462,43 @@ fn apply_filters(
     arguments: &mut Vec<Box<dyn ToSql>>,
 ) {
     if let Some(text) = filters.text.as_deref().filter(|text| !text.is_empty()) {
-        let escaped = text
-            .replace('\\', "\\\\")
-            .replace('%', "\\%")
-            .replace('_', "\\_");
-        let index = push_argument(arguments, format!("%{escaped}%"));
-        let search = [
-            format!("ri.label LIKE ?{index} ESCAPE '\\'"),
-            format!(
-                "CASE ri.kind
-                     WHEN 'media' THEN 'standalone media'
-                     ELSE 'collection'
-                 END LIKE ?{index} ESCAPE '\\'"
-            ),
-            format!(
-                "EXISTS (
-                     SELECT 1 FROM root_media rm
-                     JOIN media_asset ma ON ma.item_id = rm.media_item_id
-                     WHERE rm.root_item_id = ri.item_id
-                       AND (ma.name LIKE ?{index} ESCAPE '\\'
-                            OR ma.notes LIKE ?{index} ESCAPE '\\'
-                            OR ma.source_urls_json LIKE ?{index} ESCAPE '\\')
-                 )"
-            ),
-            format!(
-                "EXISTS (
-                     SELECT 1 FROM root_media rm
-                     JOIN source_item si ON si.media_item_id = rm.media_item_id
-                     JOIN source_post sp ON sp.source_post_id = si.source_post_id
-                     WHERE rm.root_item_id = ri.item_id
-                       AND (sp.creator_name LIKE ?{index} ESCAPE '\\'
-                            OR sp.title LIKE ?{index} ESCAPE '\\'
-                            OR sp.description LIKE ?{index} ESCAPE '\\'
-                            OR sp.canonical_url LIKE ?{index} ESCAPE '\\'
-                            OR si.canonical_url LIKE ?{index} ESCAPE '\\'
-                            OR si.media_url LIKE ?{index} ESCAPE '\\')
-                 )"
-            ),
-            format!(
-                "EXISTS (
-                     SELECT 1 FROM root_media rm
-                     JOIN media_asset ma ON ma.item_id = rm.media_item_id
-                     JOIN media_file mf ON mf.file_id = ma.file_id
-                     WHERE rm.root_item_id = ri.item_id
-                       AND mf.mime_type LIKE ?{index} ESCAPE '\\'
-                 )"
-            ),
-            format!(
-                "EXISTS (
-                     SELECT 1 FROM root_media rm
-                     JOIN media_tag mt ON mt.media_item_id = rm.media_item_id
-                     JOIN tag t ON t.tag_id = mt.tag_id
-                     WHERE rm.root_item_id = ri.item_id
-                       AND (t.subtag LIKE ?{index} ESCAPE '\\'
-                            OR (t.namespace || ':' || t.subtag) LIKE ?{index} ESCAPE '\\')
-                 )"
-            ),
-            format!(
-                "EXISTS (
-                     SELECT 1 FROM folder_item fi
-                     JOIN folder f ON f.folder_id = fi.folder_id
-                     WHERE fi.item_id = ri.item_id
-                       AND (f.name LIKE ?{index} ESCAPE '\\'
-                            OR f.notes LIKE ?{index} ESCAPE '\\')
-                 )"
-            ),
-        ];
-        predicates.push(format!("({})", search.join(" OR ")));
+        if let Some(query) = fts_match_query(text) {
+            let index = push_argument(arguments, query);
+            predicates.push(format!(
+                "ri.item_id IN (
+                    SELECT COALESCE(cm.collection_id, item_search_fts.item_id)
+                    FROM item_search_fts
+                    LEFT JOIN collection_member cm
+                      ON cm.media_item_id = item_search_fts.item_id
+                    WHERE item_search_fts MATCH ?{index}
+
+                    UNION
+
+                    SELECT COALESCE(cm.collection_id, media_search_fts.media_item_id)
+                    FROM media_search_fts
+                    LEFT JOIN collection_member cm
+                      ON cm.media_item_id = media_search_fts.media_item_id
+                    WHERE media_search_fts MATCH ?{index}
+
+                    UNION
+
+                    SELECT COALESCE(cm.collection_id, mt.media_item_id)
+                    FROM tag_search_fts
+                    JOIN media_tag mt ON mt.tag_id = tag_search_fts.tag_id
+                    LEFT JOIN collection_member cm ON cm.media_item_id = mt.media_item_id
+                    WHERE tag_search_fts MATCH ?{index}
+
+                    UNION
+
+                    SELECT fi.item_id
+                    FROM folder_search_fts
+                    JOIN folder_item fi ON fi.folder_id = folder_search_fts.folder_id
+                    WHERE folder_search_fts MATCH ?{index}
+                )"
+            ));
+        } else {
+            predicates.push("0".to_string());
+        }
     }
 
     if let Some(color_hex) = filters
@@ -1699,6 +1776,15 @@ fn apply_filters(
     }
 }
 
+fn fts_match_query(text: &str) -> Option<String> {
+    let terms = text
+        .split(|character: char| !character.is_alphanumeric() && character != '_')
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("\"{term}\"*"))
+        .collect::<Vec<_>>();
+    (!terms.is_empty()).then(|| terms.join(" AND "))
+}
+
 fn display_file_metric(column: &str) -> String {
     format!(
         "(SELECT mf.{column}
@@ -1827,8 +1913,8 @@ fn stable_seed(value: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        details, query, resolve_target_ids, selection_summary, sidebar_counts, ItemPageRequest,
-        SelectionCollectionCandidate,
+        details, library_statistics, query, resolve_target_ids, selection_summary, sidebar_counts,
+        ItemPageRequest, SelectionCollectionCandidate,
     };
     use crate::app::{
         FilterMatchMode, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope, ItemSort, ItemTarget,
@@ -2293,6 +2379,15 @@ mod tests {
     #[test]
     fn text_search_covers_all_user_facing_fields_and_item_types() {
         let (_directory, store) = seed_store();
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE library_item SET label = 'hidden member label' WHERE item_id = 11",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
         let mut item_query = query_for(ItemScope::All);
         for (text, expected) in [
             ("one.jpg", vec![ItemId(1)]),
@@ -2305,6 +2400,7 @@ mod tests {
             ("cdn.example", vec![ItemId(10)]),
             ("video/mp4", vec![ItemId(10)]),
             ("member-tag", vec![ItemId(10)]),
+            ("hidden member label", vec![ItemId(10)]),
             ("Folder", vec![ItemId(1), ItemId(10)]),
             ("portfolio bucket", vec![ItemId(1), ItemId(10)]),
             ("collection", vec![ItemId(10)]),
@@ -2321,6 +2417,57 @@ mod tests {
                 expected,
                 "search text {text:?}"
             );
+        }
+    }
+
+    #[test]
+    fn text_search_indexes_follow_metadata_tag_folder_and_source_renames() {
+        let (_directory, store) = seed_store();
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE media_asset SET name = 'renamed asset' WHERE item_id = 1",
+                    [],
+                )?;
+                transaction.execute(
+                    "UPDATE source_post SET creator_name = 'Renamed Person'
+                     WHERE source_post_id = 1",
+                    [],
+                )?;
+                transaction
+                    .execute("UPDATE tag SET subtag = 'renamed-tag' WHERE tag_id = 1", [])?;
+                transaction.execute(
+                    "UPDATE folder SET name = 'Renamed Folder' WHERE folder_id = 7",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        for (text, expected) in [
+            ("renamed asset", vec![ItemId(1)]),
+            ("Renamed Person", vec![ItemId(10)]),
+            ("renamed-tag", vec![ItemId(10)]),
+            ("Renamed Folder", vec![ItemId(1), ItemId(10)]),
+        ] {
+            let mut item_query = query_for(ItemScope::All);
+            item_query.filters.text = Some(text.to_string());
+            let page = query(&store, &item_query, ItemPageRequest::default()).unwrap();
+            assert_eq!(
+                page.items
+                    .iter()
+                    .map(|item| item.item_id)
+                    .collect::<Vec<_>>(),
+                expected,
+                "search text {text:?}"
+            );
+        }
+
+        for stale in ["one.jpg", "Source Creator", "member-tag"] {
+            let mut item_query = query_for(ItemScope::All);
+            item_query.filters.text = Some(stale.to_string());
+            let page = query(&store, &item_query, ItemPageRequest::default()).unwrap();
+            assert!(page.items.is_empty(), "stale search text {stale:?}");
         }
     }
 
@@ -2839,5 +2986,47 @@ mod tests {
         assert_eq!(counts.folders[0].count, 2);
         assert_eq!(counts.smart_folders[0].count, 1);
         assert_eq!(counts.revision, 2);
+    }
+
+    #[test]
+    fn library_statistics_separate_roots_assets_and_physical_storage() {
+        let (_directory, store) = seed_store();
+        store
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO smart_folder (
+                         smart_folder_id, smart_folder_key, name, predicate_json,
+                         created_at, updated_at
+                     ) VALUES (9, 'smart:9', 'Everything', '{\"groups\":[]}', 'now', 'now')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO subscription (
+                         subscription_id, subscription_key, name, created_at
+                     ) VALUES (1, 'subscription:1', 'Example', 'now')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        let statistics = library_statistics(&store).unwrap();
+        assert_eq!(statistics.active_items, 2);
+        assert_eq!(statistics.inbox_items, 1);
+        assert_eq!(statistics.trash_items, 1);
+        assert_eq!(statistics.standalone_items, 3);
+        assert_eq!(statistics.collections, 1);
+        assert_eq!(statistics.media_assets, 5);
+        assert_eq!(statistics.image_assets, 3);
+        assert_eq!(statistics.video_assets, 2);
+        assert_eq!(statistics.audio_assets, 0);
+        assert_eq!(statistics.other_assets, 0);
+        assert_eq!(statistics.physical_files, 5);
+        assert_eq!(statistics.original_bytes, 150);
+        assert_eq!(statistics.tags, 1);
+        assert_eq!(statistics.folders, 1);
+        assert_eq!(statistics.smart_folders, 1);
+        assert_eq!(statistics.subscriptions, 1);
+        assert_eq!(statistics.revision, 2);
     }
 }

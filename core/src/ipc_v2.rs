@@ -53,6 +53,7 @@ pub fn dispatch(
             )?)
         }
         "sidebar.counts" => read(crate::query_v2::sidebar_counts(application.store())?),
+        "library.stats" => read(crate::query_v2::library_statistics(application.store())?),
         "navigation.get" => read(crate::navigation_v2::navigation(application)?),
         "tags.list" => {
             let input: ListTagsInput = parse(args_json)?;

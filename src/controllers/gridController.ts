@@ -151,6 +151,8 @@ function queryForSession(session: GridSessionSnapshot): ItemQuery {
 
 class GridSessionController {
   private searchTimer: ReturnType<typeof setTimeout> | null = null;
+  private searchInFlight: Promise<void> | null = null;
+  private searchQueued = false;
   private preferenceTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingPreferencePatch: ViewPrefsPatch = {};
   private scopeKey = '';
@@ -249,7 +251,7 @@ class GridSessionController {
     this.cancelSearch();
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
-      void this.loadFirstPage({ preserveItems: true });
+      this.runSettledSearch();
     }, SEARCH_DEBOUNCE_MS);
   }
 
@@ -454,9 +456,26 @@ class GridSessionController {
   }
 
   private cancelSearch(): void {
-    if (!this.searchTimer) return;
-    clearTimeout(this.searchTimer);
-    this.searchTimer = null;
+    this.searchQueued = false;
+    if (this.searchTimer) {
+      clearTimeout(this.searchTimer);
+      this.searchTimer = null;
+    }
+  }
+
+  private runSettledSearch(): void {
+    if (this.searchInFlight) {
+      this.searchQueued = true;
+      return;
+    }
+    this.searchInFlight = (async () => {
+      do {
+        this.searchQueued = false;
+        await this.loadFirstPage({ preserveItems: true });
+      } while (this.searchQueued);
+    })().finally(() => {
+      this.searchInFlight = null;
+    });
   }
 }
 

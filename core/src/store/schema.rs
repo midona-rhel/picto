@@ -2,7 +2,7 @@
 
 use rusqlite::{Connection, OptionalExtension, Transaction};
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 127;
+pub const CURRENT_SCHEMA_VERSION: i64 = 128;
 pub const CURRENT_PHASH_ANALYSIS_VERSION: i64 = 3;
 pub const PHASH_VERSION_SETTING: &str = "media.perceptual_hash_version";
 
@@ -516,14 +516,246 @@ CREATE TABLE cloud_blob_state (
 CREATE INDEX idx_cloud_blob_queue ON cloud_blob_state(state, priority DESC, updated_at);
 CREATE INDEX idx_cloud_blob_upload ON cloud_blob_state(remote_present, state, updated_at);
 
-CREATE VIRTUAL TABLE media_fts USING fts5(
-    name,
-    notes,
-    source_urls,
-    content='media_asset',
-    content_rowid='item_id'
+-- Search text is indexed once per object. Tag and folder membership remains
+-- relational so a rename never rewrites every matching library item.
+CREATE TABLE search_dirty_item (
+    item_id INTEGER PRIMARY KEY
 );
+CREATE TABLE search_dirty_media (
+    media_item_id INTEGER PRIMARY KEY
+);
+CREATE TABLE search_dirty_tag (
+    tag_id INTEGER PRIMARY KEY
+);
+CREATE TABLE search_dirty_folder (
+    folder_id INTEGER PRIMARY KEY
+);
+
+CREATE VIRTUAL TABLE item_search_fts USING fts5(
+    item_id UNINDEXED,
+    searchable_text,
+    tokenize='unicode61 remove_diacritics 2',
+    prefix='2 3'
+);
+CREATE VIRTUAL TABLE media_search_fts USING fts5(
+    media_item_id UNINDEXED,
+    searchable_text,
+    tokenize='unicode61 remove_diacritics 2',
+    prefix='2 3'
+);
+CREATE VIRTUAL TABLE tag_search_fts USING fts5(
+    tag_id UNINDEXED,
+    searchable_text,
+    tokenize='unicode61 remove_diacritics 2',
+    prefix='2 3'
+);
+CREATE VIRTUAL TABLE folder_search_fts USING fts5(
+    folder_id UNINDEXED,
+    searchable_text,
+    tokenize='unicode61 remove_diacritics 2',
+    prefix='2 3'
+);
+
+CREATE TRIGGER search_library_item_insert AFTER INSERT ON library_item BEGIN
+    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (NEW.item_id);
+END;
+CREATE TRIGGER search_library_item_update AFTER UPDATE OF kind, label ON library_item BEGIN
+    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (NEW.item_id);
+END;
+CREATE TRIGGER search_library_item_delete AFTER DELETE ON library_item BEGIN
+    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (OLD.item_id);
+END;
+CREATE TRIGGER search_collection_member_insert AFTER INSERT ON collection_member BEGIN
+    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (NEW.media_item_id);
+END;
+CREATE TRIGGER search_collection_member_update
+AFTER UPDATE OF media_item_id ON collection_member BEGIN
+    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (OLD.media_item_id);
+    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (NEW.media_item_id);
+END;
+CREATE TRIGGER search_collection_member_delete AFTER DELETE ON collection_member BEGIN
+    INSERT OR IGNORE INTO search_dirty_item(item_id) VALUES (OLD.media_item_id);
+END;
+
+CREATE TRIGGER search_media_asset_insert AFTER INSERT ON media_asset BEGIN
+    INSERT OR IGNORE INTO search_dirty_media(media_item_id) VALUES (NEW.item_id);
+END;
+CREATE TRIGGER search_media_asset_update
+AFTER UPDATE OF name, notes, source_urls_json ON media_asset BEGIN
+    INSERT OR IGNORE INTO search_dirty_media(media_item_id) VALUES (NEW.item_id);
+END;
+CREATE TRIGGER search_media_asset_delete AFTER DELETE ON media_asset BEGIN
+    INSERT OR IGNORE INTO search_dirty_media(media_item_id) VALUES (OLD.item_id);
+END;
+CREATE TRIGGER search_media_file_update AFTER UPDATE OF mime_type ON media_file BEGIN
+    INSERT OR IGNORE INTO search_dirty_media(media_item_id)
+    SELECT item_id FROM media_asset WHERE file_id = NEW.file_id;
+END;
+CREATE TRIGGER search_source_item_insert AFTER INSERT ON source_item WHEN NEW.media_item_id IS NOT NULL BEGIN
+    INSERT OR IGNORE INTO search_dirty_media(media_item_id) VALUES (NEW.media_item_id);
+END;
+CREATE TRIGGER search_source_item_update
+AFTER UPDATE OF source_post_id, media_url, canonical_url, media_item_id ON source_item BEGIN
+    INSERT OR IGNORE INTO search_dirty_media(media_item_id)
+    SELECT OLD.media_item_id WHERE OLD.media_item_id IS NOT NULL;
+    INSERT OR IGNORE INTO search_dirty_media(media_item_id)
+    SELECT NEW.media_item_id WHERE NEW.media_item_id IS NOT NULL;
+END;
+CREATE TRIGGER search_source_item_delete AFTER DELETE ON source_item WHEN OLD.media_item_id IS NOT NULL BEGIN
+    INSERT OR IGNORE INTO search_dirty_media(media_item_id) VALUES (OLD.media_item_id);
+END;
+CREATE TRIGGER search_source_post_update
+AFTER UPDATE OF site_id, post_key, canonical_url, creator_name, title, description ON source_post BEGIN
+    INSERT OR IGNORE INTO search_dirty_media(media_item_id)
+    SELECT media_item_id FROM source_item
+    WHERE source_post_id = NEW.source_post_id AND media_item_id IS NOT NULL;
+END;
+
+CREATE TRIGGER search_tag_insert AFTER INSERT ON tag BEGIN
+    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (NEW.tag_id);
+END;
+CREATE TRIGGER search_tag_update AFTER UPDATE OF namespace, subtag ON tag BEGIN
+    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (NEW.tag_id);
+    INSERT OR IGNORE INTO search_dirty_tag(tag_id)
+    SELECT to_tag_id FROM tag_alias WHERE from_tag_id = NEW.tag_id;
+END;
+CREATE TRIGGER search_tag_delete AFTER DELETE ON tag BEGIN
+    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (OLD.tag_id);
+END;
+CREATE TRIGGER search_tag_alias_insert AFTER INSERT ON tag_alias BEGIN
+    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (NEW.to_tag_id);
+END;
+CREATE TRIGGER search_tag_alias_update AFTER UPDATE ON tag_alias BEGIN
+    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (OLD.to_tag_id);
+    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (NEW.to_tag_id);
+END;
+CREATE TRIGGER search_tag_alias_delete AFTER DELETE ON tag_alias BEGIN
+    INSERT OR IGNORE INTO search_dirty_tag(tag_id) VALUES (OLD.to_tag_id);
+END;
+
+CREATE TRIGGER search_folder_insert AFTER INSERT ON folder BEGIN
+    INSERT OR IGNORE INTO search_dirty_folder(folder_id) VALUES (NEW.folder_id);
+END;
+CREATE TRIGGER search_folder_update AFTER UPDATE OF name, notes ON folder BEGIN
+    INSERT OR IGNORE INTO search_dirty_folder(folder_id) VALUES (NEW.folder_id);
+END;
+CREATE TRIGGER search_folder_delete AFTER DELETE ON folder BEGIN
+    INSERT OR IGNORE INTO search_dirty_folder(folder_id) VALUES (OLD.folder_id);
+END;
 "#;
+
+/// Refresh compact FTS rows dirtied by canonical writes in this transaction.
+pub fn refresh_search_indexes(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    let dirty: bool = transaction.query_row(
+        "SELECT EXISTS(SELECT 1 FROM search_dirty_item)
+             OR EXISTS(SELECT 1 FROM search_dirty_media)
+             OR EXISTS(SELECT 1 FROM search_dirty_tag)
+             OR EXISTS(SELECT 1 FROM search_dirty_folder)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !dirty {
+        return Ok(());
+    }
+
+    transaction.execute(
+        "DELETE FROM item_search_fts
+         WHERE item_id IN (SELECT item_id FROM search_dirty_item)",
+        [],
+    )?;
+    transaction.execute(
+        "INSERT INTO item_search_fts(rowid, item_id, searchable_text)
+         SELECT li.item_id, li.item_id,
+                trim(COALESCE(li.label, '') || ' ' ||
+                     CASE li.kind
+                         WHEN 'collection' THEN 'collection group'
+                         ELSE CASE WHEN EXISTS (
+                             SELECT 1 FROM collection_member cm
+                             WHERE cm.media_item_id = li.item_id
+                         ) THEN '' ELSE 'standalone media' END
+                     END)
+         FROM library_item li
+         JOIN search_dirty_item dirty ON dirty.item_id = li.item_id",
+        [],
+    )?;
+
+    transaction.execute(
+        "DELETE FROM media_search_fts
+         WHERE media_item_id IN (SELECT media_item_id FROM search_dirty_media)",
+        [],
+    )?;
+    transaction.execute(
+        "INSERT INTO media_search_fts(rowid, media_item_id, searchable_text)
+         SELECT ma.item_id, ma.item_id,
+                trim(COALESCE(ma.name, '') || ' ' ||
+                     COALESCE(ma.notes, '') || ' ' ||
+                     COALESCE(ma.source_urls_json, '') || ' ' ||
+                     COALESCE(mf.mime_type, '') || ' ' ||
+                     COALESCE((
+                         SELECT group_concat(
+                             COALESCE(sp.site_id, '') || ' ' ||
+                             COALESCE(sp.post_key, '') || ' ' ||
+                             COALESCE(sp.creator_name, '') || ' ' ||
+                             COALESCE(sp.title, '') || ' ' ||
+                             COALESCE(sp.description, '') || ' ' ||
+                             COALESCE(sp.canonical_url, '') || ' ' ||
+                             COALESCE(si.canonical_url, '') || ' ' ||
+                             COALESCE(si.media_url, ''),
+                             ' '
+                         )
+                         FROM source_item si
+                         JOIN source_post sp ON sp.source_post_id = si.source_post_id
+                         WHERE si.media_item_id = ma.item_id
+                     ), ''))
+         FROM media_asset ma
+         JOIN media_file mf ON mf.file_id = ma.file_id
+         JOIN search_dirty_media dirty ON dirty.media_item_id = ma.item_id",
+        [],
+    )?;
+
+    transaction.execute(
+        "DELETE FROM tag_search_fts
+         WHERE tag_id IN (SELECT tag_id FROM search_dirty_tag)",
+        [],
+    )?;
+    transaction.execute(
+        "INSERT INTO tag_search_fts(rowid, tag_id, searchable_text)
+         SELECT t.tag_id, t.tag_id,
+                trim(t.subtag || ' ' || t.namespace || ':' || t.subtag || ' ' ||
+                     COALESCE((
+                         SELECT group_concat(
+                             alias.subtag || ' ' || alias.namespace || ':' || alias.subtag,
+                             ' '
+                         )
+                         FROM tag_alias ta
+                         JOIN tag alias ON alias.tag_id = ta.from_tag_id
+                         WHERE ta.to_tag_id = t.tag_id
+                     ), ''))
+         FROM tag t
+         JOIN search_dirty_tag dirty ON dirty.tag_id = t.tag_id",
+        [],
+    )?;
+
+    transaction.execute(
+        "DELETE FROM folder_search_fts
+         WHERE folder_id IN (SELECT folder_id FROM search_dirty_folder)",
+        [],
+    )?;
+    transaction.execute(
+        "INSERT INTO folder_search_fts(rowid, folder_id, searchable_text)
+         SELECT f.folder_id, f.folder_id,
+                trim(f.name || ' ' || COALESCE(f.notes, ''))
+         FROM folder f
+         JOIN search_dirty_folder dirty ON dirty.folder_id = f.folder_id",
+        [],
+    )?;
+
+    transaction.execute("DELETE FROM search_dirty_item", [])?;
+    transaction.execute("DELETE FROM search_dirty_media", [])?;
+    transaction.execute("DELETE FROM search_dirty_tag", [])?;
+    transaction.execute("DELETE FROM search_dirty_folder", [])?;
+    Ok(())
+}
 
 pub fn create(connection: &mut Connection) -> Result<(), String> {
     let transaction = connection
@@ -657,7 +889,18 @@ mod tests {
                 "retained {removed}"
             );
         }
-        assert_eq!(CURRENT_SCHEMA_VERSION, 127);
+        for expected in [
+            "item_search_fts",
+            "media_search_fts",
+            "tag_search_fts",
+            "folder_search_fts",
+        ] {
+            assert!(
+                names.iter().any(|name| name == expected),
+                "missing {expected}"
+            );
+        }
+        assert_eq!(CURRENT_SCHEMA_VERSION, 128);
     }
 
     #[test]

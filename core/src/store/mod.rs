@@ -158,6 +158,7 @@ impl Store {
         let cloud_capture = crate::cloud::capture::SemanticCapture::start(&transaction)
             .map_err(|error| error.to_string())?;
         let value = operation(&transaction).map_err(|error| error.to_string())?;
+        schema::refresh_search_indexes(&transaction).map_err(|error| error.to_string())?;
         cloud_capture
             .finish(&transaction)
             .map_err(|error| error.to_string())?;
@@ -185,6 +186,7 @@ impl Store {
         let cloud_capture = crate::cloud::capture::SemanticCapture::start(&transaction)
             .map_err(|error| error.to_string())?;
         let (value, changed) = operation(&transaction).map_err(|error| error.to_string())?;
+        schema::refresh_search_indexes(&transaction).map_err(|error| error.to_string())?;
         let revision = if changed {
             cloud_capture
                 .finish(&transaction)
@@ -220,6 +222,7 @@ impl Store {
         let cloud_capture = crate::cloud::capture::SemanticCapture::start(&transaction)
             .map_err(|error| error.to_string())?;
         let (value, delta) = operation(&transaction).map_err(|error| error.to_string())?;
+        schema::refresh_search_indexes(&transaction).map_err(|error| error.to_string())?;
         cloud_capture
             .finish(&transaction)
             .map_err(|error| error.to_string())?;
@@ -270,6 +273,7 @@ impl Store {
             .transpose()
             .map_err(|error| error.to_string())?;
         let (value, delta, changed) = operation(&transaction).map_err(|error| error.to_string())?;
+        schema::refresh_search_indexes(&transaction).map_err(|error| error.to_string())?;
         let revision = if changed {
             if let Some(cloud_capture) = cloud_capture.take() {
                 cloud_capture

@@ -150,6 +150,7 @@ impl Store {
         }
 
         let (value, delta, changed) = operation(&transaction).map_err(|error| error.to_string())?;
+        schema::refresh_search_indexes(&transaction).map_err(|error| error.to_string())?;
         let revision = if changed {
             schema::increment_revision(&transaction).map_err(|error| error.to_string())?
         } else {
@@ -295,6 +296,7 @@ impl Store {
             };
             apply_result
                 .map_err(|error| format!("History conflicts with newer library data: {error}"))?;
+            schema::refresh_search_indexes(&transaction).map_err(|error| error.to_string())?;
             if transaction
                 .prepare("PRAGMA foreign_key_check")
                 .and_then(|mut statement| statement.exists([]))
