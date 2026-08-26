@@ -46,7 +46,6 @@ function createReverseSearchConfigs() {
         document.querySelector('#searchForm')?.requestSubmit();
       })()`,
       isResultUrl: (href) => href.includes('saucenao.com/search.php'),
-      keepResultWindow: true,
     },
     yandex: {
       url: 'https://yandex.com/images/',
@@ -152,8 +151,6 @@ export async function runReverseImageSearch({
     void openExternal(url);
     return { action: 'deny' };
   });
-  let keepResultWindow = false;
-
   try {
     console.log(`[reverse-search] ${engine}: loading ${cfg.url}`);
     await Promise.race([
@@ -191,17 +188,10 @@ export async function runReverseImageSearch({
     }
 
     const resultUrl = await waitForReverseSearchResult(searchWin, cfg, engine);
-
-    if (cfg.keepResultWindow) {
-      keepResultWindow = true;
-      searchWin.show();
-      return resultUrl;
-    }
-
     await openExternal(resultUrl);
     return resultUrl;
   } finally {
-    if (!keepResultWindow && !searchWin.isDestroyed()) searchWin.destroy();
+    if (!searchWin.isDestroyed()) searchWin.destroy();
   }
 }
 
@@ -242,6 +232,14 @@ export function registerIpcHandlers({
 
     if (command === 'open_settings_window') {
       windowManager.openSettingsWindow();
+      return null;
+    }
+    if (command === 'open_external_url') {
+      const url = new URL(String(args?.url ?? ''));
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        throw new Error('Only HTTP and HTTPS links can be opened externally');
+      }
+      await shell.openExternal(url.href);
       return null;
     }
     if (command === 'auth_session_start') {
