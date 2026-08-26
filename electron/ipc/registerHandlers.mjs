@@ -23,6 +23,24 @@ function createReverseSearchConfigs() {
   `;
 
   return {
+    google: {
+      url: 'https://images.google.com/',
+      preSetup: `(async () => {
+        ${waitForHelper}
+        const btn = await __waitFor('button[aria-label="Search by image"]');
+        btn.click();
+        await __waitFor('input[type="file"][name="encoded_image"]', 8000);
+      })()`,
+      fileInputSelector: 'input[type="file"][name="encoded_image"]',
+      postSetup: `(() => {
+        const input = document.querySelector('input[type="file"][name="encoded_image"]');
+        if (!input?.files?.length) throw new Error('Google Lens did not receive the image');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new Event('change', { bubbles: true }));
+      })()`,
+      isResultUrl: (href) => /lens\.google\.com\/(search|upload)/.test(href)
+        || /google\.[^/]+\/search/.test(href) && /(?:[?&](?:udm=26|ep=|vsrid=))/.test(href),
+    },
     tineye: {
       url: 'https://tineye.com/',
       preSetup: `(async () => { ${waitForHelper} await __waitFor('#upload-box'); })()`,

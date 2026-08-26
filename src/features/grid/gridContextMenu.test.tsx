@@ -32,6 +32,7 @@ describe('buildTileContextMenu', () => {
     if (!search || !('children' in search)) throw new Error('missing reverse-image submenu');
 
     expect(search.children.map((entry) => 'label' in entry ? entry.label : '')).toEqual([
+      'Google Lens',
       'TinEye',
       'SauceNAO',
       'Yandex Images',

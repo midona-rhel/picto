@@ -24,6 +24,7 @@ Open Settings with `Ctrl+,` (`Cmd+,` on Mac). Settings are organized into panels
 ### Reverse Image Search
 
 Enable or disable search engines for the right-click → Reverse Image Search menu:
+- Google Lens
 - TinEye
 - SauceNAO
 - Yandex Images

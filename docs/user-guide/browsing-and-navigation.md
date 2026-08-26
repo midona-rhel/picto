@@ -92,7 +92,7 @@ Right-click any file (or selection of files) for the context menu with all avail
 - Open with Default App, Open in New Window
 - Reveal in Folder (Finder/Explorer)
 - Copy File Path, Copy Image to Clipboard
-- Reverse Image Search (TinEye, Bing, Yandex, SauceNAO, Sogou)
+- Reverse Image Search (Google Lens, TinEye, Bing, Yandex, SauceNAO, Sogou)
 - Add Tags, Copy Tags, Paste Tags
 - Add to Folder, Remove from Folder
 - Rename, Batch Rename

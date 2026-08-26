@@ -20,6 +20,9 @@ class FakeWebContents extends EventEmitter {
   setWindowOpenHandler(handler) { this.windowOpenHandler = handler; }
   async loadURL(url) { this.url = url; }
   async executeJavaScript(script) {
+    if (script.includes('Google Lens did not receive the image')) {
+      this.url = 'https://lens.google.com/search?p=fixture';
+    }
     if (script.includes('Bing did not receive the image')) {
       this.url = 'https://www.bing.com/images/searchbyimage/upload';
     }
@@ -41,6 +44,21 @@ class FakeBrowserWindow extends EventEmitter {
 }
 
 describe('runReverseImageSearch', () => {
+  it('uploads to Google Lens invisibly and opens the result externally', async () => {
+    const openExternal = vi.fn(async () => {});
+
+    await expect(runReverseImageSearch({
+      BrowserWindow: FakeBrowserWindow,
+      filePath: '/tmp/image.jpg',
+      engine: 'google',
+      openExternal,
+    })).resolves.toBe('https://lens.google.com/search?p=fixture');
+
+    expect(FakeBrowserWindow.instance.options.show).toBe(false);
+    expect(openExternal).toHaveBeenCalledWith('https://lens.google.com/search?p=fixture');
+    expect(FakeBrowserWindow.instance.destroyed).toBe(true);
+  });
+
   it('keeps the upload surface hidden and opens Bing results externally', async () => {
     const openExternal = vi.fn(async () => {});
 
