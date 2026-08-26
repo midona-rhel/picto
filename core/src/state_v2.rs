@@ -22,7 +22,7 @@ pub struct BackendState {
     application: Arc<Application>,
     cancel: CancellationToken,
     workers: tokio::sync::Mutex<Vec<WorkerHandle>>,
-    query_cache: parking_lot::Mutex<LruCache<String, (u64, String)>>,
+    read_cache: parking_lot::Mutex<LruCache<String, (u64, String)>>,
 }
 
 impl BackendState {
@@ -115,7 +115,7 @@ async fn open_library_inner(
         application,
         cancel,
         workers: tokio::sync::Mutex::new(Vec::new()),
-        query_cache: parking_lot::Mutex::new(LruCache::new(
+        read_cache: parking_lot::Mutex::new(LruCache::new(
             NonZeroUsize::new(16).expect("nonzero query cache capacity"),
         )),
     });
@@ -225,9 +225,11 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
     let _invocations = invocation_lock().read().await;
     let state = get_state()?;
     let started = Instant::now();
-    let query_revision = if command == "items.query" {
+    let cache_key = matches!(command, "items.query" | "sidebar.counts")
+        .then(|| format!("{command}\0{args_json}"));
+    let query_revision = if let Some(cache_key) = cache_key.as_ref() {
         let revision = state.application.store().revision()?;
-        if let Some((cached_revision, cached_result)) = state.query_cache.lock().get(args_json) {
+        if let Some((cached_revision, cached_result)) = state.read_cache.lock().get(cache_key) {
             if *cached_revision == revision {
                 return Ok(cached_result.clone());
             }
@@ -241,10 +243,10 @@ pub async fn invoke(command: &str, args_json: &str) -> Result<String, String> {
         if let Ok(serialized) = result.as_ref() {
             let revision_after = state.application.store().revision()?;
             if revision_before == revision_after {
-                state
-                    .query_cache
-                    .lock()
-                    .put(args_json.to_owned(), (revision_after, serialized.clone()));
+                state.read_cache.lock().put(
+                    cache_key.expect("cached reads have a cache key"),
+                    (revision_after, serialized.clone()),
+                );
             }
         }
     }

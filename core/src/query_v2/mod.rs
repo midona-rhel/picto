@@ -724,7 +724,7 @@ fn selection_display_hash(
         .optional()
 }
 
-pub fn sidebar_counts(store: &Store) -> Result<SidebarCounts, String> {
+fn sidebar_counts_base(store: &Store) -> Result<(SidebarCounts, Vec<i64>), String> {
     store.read(|connection| {
         let mut result = connection.query_row(
             "WITH visible_roots(item_id, lifecycle) AS (
@@ -798,15 +798,41 @@ pub fn sidebar_counts(store: &Store) -> Result<SidebarCounts, String> {
             .prepare("SELECT smart_folder_id FROM smart_folder ORDER BY smart_folder_id")?
             .query_map([], |row| row.get::<_, i64>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        for smart_folder_id in smart_ids {
-            result.smart_folders.push(ScopeCount {
-                id: smart_folder_id,
-                count: crate::smart_v2::count_smart_folder(connection, smart_folder_id)?,
-            });
-        }
         result.revision = crate::store::schema::revision(connection)?;
-        Ok(result)
+        Ok((result, smart_ids))
     })
+}
+
+pub fn sidebar_counts(store: &Store) -> Result<SidebarCounts, String> {
+    let (mut result, smart_ids) = sidebar_counts_base(store)?;
+    result.smart_folders = store.read(|connection| {
+        smart_ids
+            .into_iter()
+            .map(|id| {
+                Ok(ScopeCount {
+                    id,
+                    count: crate::smart_v2::count_smart_folder(connection, id)?,
+                })
+            })
+            .collect::<rusqlite::Result<Vec<_>>>()
+    })?;
+    Ok(result)
+}
+
+pub fn sidebar_counts_for_application(
+    application: &crate::app::Application,
+) -> Result<SidebarCounts, String> {
+    let (mut result, smart_ids) = sidebar_counts_base(application.store())?;
+    for id in smart_ids {
+        let count = match crate::smart_v2::count_smart_folder_projected(application, id)? {
+            Some(count) => count,
+            None => application
+                .store()
+                .read(|connection| crate::smart_v2::count_smart_folder(connection, id))?,
+        };
+        result.smart_folders.push(ScopeCount { id, count });
+    }
+    Ok(result)
 }
 
 pub fn library_statistics(store: &Store) -> Result<LibraryStatistics, String> {
@@ -1913,8 +1939,8 @@ fn stable_seed(value: &str) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        details, library_statistics, query, resolve_target_ids, selection_summary, sidebar_counts,
-        ItemPageRequest, SelectionCollectionCandidate,
+        details, library_statistics, query, resolve_target_ids, selection_summary,
+        sidebar_counts_for_application, ItemPageRequest, SelectionCollectionCandidate,
     };
     use crate::app::{
         FilterMatchMode, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope, ItemSort, ItemTarget,
@@ -2976,7 +3002,8 @@ mod tests {
             })
             .unwrap();
 
-        let counts = sidebar_counts(&store).unwrap();
+        let application = crate::app::Application::try_new(std::sync::Arc::new(store)).unwrap();
+        let counts = sidebar_counts_for_application(&application).unwrap();
         assert_eq!(counts.all, 2);
         assert_eq!(counts.inbox, 1);
         assert_eq!(counts.trash, 1);

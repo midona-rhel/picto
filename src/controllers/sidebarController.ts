@@ -145,15 +145,19 @@ async function readSidebarSnapshot() {
 
 let initialFetchDone = false;
 let initialFetchPromise: Promise<void> | null = null;
+let treeFetchPromise: Promise<void> | null = null;
 
 export const sidebarController = {
-  async fetchTree() {
+  fetchTree() {
+    if (treeFetchPromise) return treeFetchPromise;
     store.set(sidebarLoadingAtom, true);
-    try {
-      store.set(setSidebarTreeAtom, await readSidebarSnapshot());
-    } finally {
-      store.set(sidebarLoadingAtom, false);
-    }
+    treeFetchPromise = readSidebarSnapshot()
+      .then((tree) => { store.set(setSidebarTreeAtom, tree); })
+      .finally(() => {
+        store.set(sidebarLoadingAtom, false);
+        treeFetchPromise = null;
+      });
+    return treeFetchPromise;
   },
 
   ensureLoaded() {

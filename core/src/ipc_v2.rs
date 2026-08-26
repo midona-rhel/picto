@@ -54,7 +54,9 @@ pub fn dispatch(
                 &input.target,
             )?)
         }
-        "sidebar.counts" => read(crate::query_v2::sidebar_counts(application.store())?),
+        "sidebar.counts" => read(crate::query_v2::sidebar_counts_for_application(
+            application,
+        )?),
         "library.stats" => read(crate::query_v2::library_statistics(application.store())?),
         "navigation.get" => read(crate::navigation_v2::navigation(application)?),
         "tags.list" => {

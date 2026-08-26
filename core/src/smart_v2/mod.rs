@@ -4,8 +4,9 @@
 //! This keeps collection membership out of the predicate language: each rule
 //! can match a different member, while the resulting root sets are combined.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
+use roaring::RoaringBitmap;
 use rusqlite::{types::Value, Connection};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -71,6 +72,109 @@ pub(crate) fn count_smart_folder(
         rusqlite::params_from_iter(arguments),
         |row| row.get(0),
     )
+}
+
+/// Count tag-only predicates from the maintained root projections. This keeps
+/// sidebar refresh cost proportional to compressed bitmap operations instead
+/// of rescanning the library once per smart folder.
+pub(crate) fn count_smart_folder_projected(
+    application: &crate::app::Application,
+    smart_folder_id: i64,
+) -> Result<Option<i64>, String> {
+    let predicate = application
+        .store()
+        .read(|connection| effective_predicate(connection, smart_folder_id))?;
+    if predicate
+        .groups
+        .iter()
+        .flat_map(|group| &group.rules)
+        .any(|rule| rule.field != "tags")
+    {
+        return Ok(None);
+    }
+    if predicate.groups.is_empty() {
+        return Ok(Some(0));
+    }
+
+    let requested_tags = predicate
+        .groups
+        .iter()
+        .flat_map(|group| &group.rules)
+        .flat_map(|rule| rule.values.as_deref().unwrap_or_default())
+        .map(|tag| (tag.clone(), split_tag(tag)))
+        .collect::<HashMap<_, _>>();
+    let tag_ids = application.store().read(|connection| {
+        use rusqlite::OptionalExtension;
+        let mut statement =
+            connection.prepare("SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2")?;
+        requested_tags
+            .iter()
+            .map(|(tag, (namespace, subtag))| {
+                let id = statement
+                    .query_row(rusqlite::params![namespace, subtag], |row| {
+                        row.get::<_, i64>(0)
+                    })
+                    .optional()?;
+                Ok((tag.clone(), id))
+            })
+            .collect::<rusqlite::Result<HashMap<_, _>>>()
+    })?;
+    let active = application.projections().active_bitmap();
+    let resolve = |tag: &str| {
+        tag_ids
+            .get(tag)
+            .copied()
+            .flatten()
+            .map(|id| application.projections().effective_tag_bitmap(id))
+            .unwrap_or_default()
+    };
+
+    let mut result = active.clone();
+    for group in &predicate.groups {
+        let mut group_result = if group.rules.is_empty() {
+            active.clone()
+        } else {
+            match group.match_mode {
+                MatchMode::All => active.clone(),
+                MatchMode::Any => RoaringBitmap::new(),
+            }
+        };
+        for rule in &group.rules {
+            let values = rule.values.as_deref().unwrap_or_default();
+            let mut rule_result = if values.is_empty() {
+                match rule.op.as_str() {
+                    "do_not_include" | "exclude" => active.clone(),
+                    "include" | "include_all" | "include_any" => RoaringBitmap::new(),
+                    _ => return Ok(None),
+                }
+            } else {
+                match rule.op.as_str() {
+                    "include" | "include_all" => active.clone(),
+                    "include_any" | "do_not_include" | "exclude" => RoaringBitmap::new(),
+                    _ => return Ok(None),
+                }
+            };
+            for value in values {
+                let matches = resolve(value);
+                match rule.op.as_str() {
+                    "include" | "include_all" => rule_result &= matches,
+                    _ => rule_result |= matches,
+                }
+            }
+            if matches!(rule.op.as_str(), "do_not_include" | "exclude") {
+                rule_result = &active - &rule_result;
+            }
+            match group.match_mode {
+                MatchMode::All => group_result &= rule_result,
+                MatchMode::Any => group_result |= rule_result,
+            }
+        }
+        if group.negate {
+            group_result = &active - &group_result;
+        }
+        result &= group_result;
+    }
+    Ok(Some(result.len() as i64))
 }
 
 pub(crate) fn compile_smart_folder_sql(

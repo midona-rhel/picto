@@ -133,4 +133,20 @@ describe('replacement sidebar reads', () => {
     expect(getSidebarCounts).toHaveBeenCalledTimes(1);
     expect(getNamespaceSummary).toHaveBeenCalledTimes(1);
   });
+
+  it('coalesces concurrent sidebar reads', async () => {
+    let release!: () => void;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    getNavigation.mockImplementation(async () => { await pending; return navigation; });
+    getSidebarCounts.mockResolvedValue(counts);
+
+    const first = sidebarController.fetchTree();
+    const second = sidebarController.fetchTree();
+    release();
+    await Promise.all([first, second]);
+
+    expect(getNavigation).toHaveBeenCalledTimes(1);
+    expect(getSidebarCounts).toHaveBeenCalledTimes(1);
+    expect(getNamespaceSummary).toHaveBeenCalledTimes(1);
+  });
 });
