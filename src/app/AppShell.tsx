@@ -526,7 +526,6 @@ export function AppShell() {
   const showInspector = inspectorAvailable && !inspectorCollapsed;
   const previousInspectorAvailable = useRef(inspectorAvailable);
   const inspectorMotion = previousInspectorAvailable.current === inspectorAvailable ? 'slide' : 'fade';
-  const sidebarPresence = usePanelPresence(!sidebarCollapsed, 50);
   const inspectorPresence = usePanelPresence(showInspector, inspectorMotion === 'fade' ? 170 : 100, inspectorMotion);
 
   useEffect(() => {
@@ -610,16 +609,13 @@ export function AppShell() {
       )}
 
       <div className={styles.body}>
-        {sidebarPresence.rendered && (
-          <div
-            className={styles.sidebar}
-            data-help-id="sidebar"
-            data-presence={sidebarPresence.phase}
-            data-motion={sidebarPresence.motion}
-          >
-            <Sidebar />
-          </div>
-        )}
+        <div
+          className={styles.sidebar}
+          data-help-id="sidebar"
+          data-collapsed={sidebarCollapsed || undefined}
+        >
+          <Sidebar />
+        </div>
         <div
           className={styles.main}
           data-help-id="workspace"

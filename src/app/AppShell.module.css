@@ -60,6 +60,8 @@
   display: flex;
   align-items: center;
   background: var(--color-bg-app);
+  /* Preserve the visible rail's content box so the actions never shift 1px. */
+  border-right: 1px solid transparent;
 }
 
 /* Native macOS traffic lights remain clear of the shared titlebar actions. */
@@ -170,15 +172,13 @@
   height: 100%;
   contain: layout style;
   border-right: 1px solid var(--color-border-secondary);
+  transform: translateX(0);
+  transition: transform var(--duration-fast) var(--ease-default);
 }
 
-.sidebar[data-presence='entering'] {
-  animation: sidebarRailIn var(--duration-fast) var(--ease-default) both;
-}
-
-.sidebar[data-presence='exiting'] {
+.sidebar[data-collapsed] {
   pointer-events: none;
-  animation: sidebarRailOut var(--duration-fast) var(--ease-default) both;
+  transform: translateX(calc(-1 * var(--sidebar-width)));
 }
 
 .main {
@@ -230,16 +230,6 @@
   animation: inspectorFadeOut 170ms var(--ease-default) both;
 }
 
-@keyframes sidebarRailIn {
-  from { transform: translateX(-100%); }
-  to { transform: translateX(0); }
-}
-
-@keyframes sidebarRailOut {
-  from { transform: translateX(0); }
-  to { transform: translateX(-100%); }
-}
-
 @keyframes inspectorRailIn {
   from { transform: translateX(100%); }
   to { transform: translateX(0); }
@@ -261,9 +251,10 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .sidebar[data-presence],
+  .sidebar,
   .inspector[data-presence] {
     animation: none;
+    transition: none;
   }
 }
 

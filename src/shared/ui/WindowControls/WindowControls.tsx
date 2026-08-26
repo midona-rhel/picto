@@ -1,7 +1,8 @@
 /**
  * WindowControls — minimize, maximize, close buttons for the titlebar.
- * Matches legacy v0.5.0-alpha styling. Always visible (useful for debugging
- * on Mac too; on production Mac builds, native traffic lights are used instead).
+ * Windows uses Picto's custom titlebar controls. Other platforms keep their
+ * native window chrome, so rendering a second control set is both redundant
+ * and displaces inspector actions such as Pin.
  */
 
 import { IconMinus, IconSquare, IconX } from '@tabler/icons-react';
@@ -12,7 +13,13 @@ function callWindow(method: string) {
   (window as any).picto?.window?.call(method)?.catch?.(() => {});
 }
 
-export function WindowControls() {
+export function WindowControls({
+  platform = navigator.platform,
+}: {
+  platform?: string;
+} = {}) {
+  if (!/^Win/i.test(platform)) return null;
+
   return (
     <div className={styles.controls}>
       <KbdTooltip label="Minimize"><button className={styles.btn} onClick={() => callWindow('minimize')} aria-label="Minimize">
