@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   BADGE_PAD_X,
   INSPECTOR_BADGE_PAD_X,
+  drawGroupBadge,
   formatLabelForMime,
 } from './primitives';
 
@@ -12,6 +13,27 @@ describe('grid badge geometry', () => {
 
   it('keeps only the inspector-style horizontal spacing distinct from the duration badge', () => {
     expect(INSPECTOR_BADGE_PAD_X).toBe(4);
+  });
+
+  it('renders the group glyph rather than a text abbreviation', () => {
+    const ctx = {
+      arcTo: vi.fn(),
+      beginPath: vi.fn(),
+      fill: vi.fn(),
+      fillText: vi.fn(),
+      lineTo: vi.fn(),
+      moveTo: vi.fn(),
+      restore: vi.fn(),
+      roundRect: vi.fn(),
+      save: vi.fn(),
+      scale: vi.fn(),
+      stroke: vi.fn(),
+      translate: vi.fn(),
+    } as unknown as CanvasRenderingContext2D;
+
+    expect(drawGroupBadge(ctx, 5, 7)).toBe(18);
+    expect(ctx.fillText).not.toHaveBeenCalled();
+    expect(ctx.roundRect).toHaveBeenCalledTimes(2);
   });
 });
 

@@ -15,6 +15,7 @@ import {
   NAME_BASELINE,
   NAME_FONT,
   drawBadge,
+  drawGroupBadge,
   drawImageContain,
   drawImageCover,
   getContainRect,
@@ -269,8 +270,8 @@ export function drawCanvasBaseLayer({
     const showBadge = showExtensionLabel && formatLabel && item.kind !== 'collection';
 
     // Item-kind / extension badge — top-left
-    if (item.kind === 'collection') {
-      drawBadge(ctx, 'GRP', bx + 5, by + 5, 'left', 'inspector');
+    if (showExtensionLabel && item.kind === 'collection') {
+      drawGroupBadge(ctx, bx + 5, by + 5);
     } else if (showBadge) {
       drawBadge(ctx, formatLabel, bx + 5, by + 5, 'left', 'inspector');
     }

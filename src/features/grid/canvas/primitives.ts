@@ -10,6 +10,7 @@ import {
   GRID_RATING_FONT,
   GRID_TILE_RADIUS,
 } from '../gridAppearance';
+import { drawGroupIcon } from '../../../shared/ui/icons/group-icons';
 
 export const BADGE_H = 18;
 export const BADGE_FONT = GRID_BADGE_FONT;
@@ -118,6 +119,27 @@ export function drawBadge(
   ctx.textBaseline = 'middle';
   ctx.fillText(text, bx + padX, y + BADGE_H / 2);
 
+  return w;
+}
+
+export function drawGroupBadge(
+  ctx: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+): number {
+  const w = BADGE_H;
+
+  ctx.fillStyle = GRID_BADGE_BACKGROUND;
+  ctx.beginPath();
+  ctx.roundRect(x, y, w, BADGE_H, BADGE_RADIUS);
+  ctx.fill();
+
+  ctx.strokeStyle = GRID_BADGE_BORDER;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  ctx.strokeStyle = GRID_BADGE_TEXT;
+  drawGroupIcon(ctx, x + 2, y + 2, BADGE_H - 4);
   return w;
 }
 

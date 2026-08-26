@@ -49,7 +49,6 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
 
   useEffect(() => {
     let cancelled = false;
-    setCovers(new Map());
     const folderIds = coverRequestKey === ''
       ? []
       : coverRequestKey.split(',').map(Number);
@@ -57,6 +56,10 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
       setCovers(new Map());
       return;
     }
+    const requestedFolderIds = new Set(folderIds);
+    setCovers((current) => new Map(
+      [...current].filter(([folderId]) => requestedFolderIds.has(folderId)),
+    ));
     void foldersController.getCoverHashes(folderIds).then((results) => {
       if (cancelled) return;
       const next = new Map<number, { hash: string; mime: string }>();
@@ -66,9 +69,7 @@ export const SubfolderGrid = forwardRef<SubfolderGridHandle, SubfolderGridProps>
         }
       }
       setCovers(next);
-    }).catch(() => {
-      if (!cancelled) setCovers(new Map());
-    });
+    }).catch(() => {});
     return () => { cancelled = true; };
   }, [coverRequestKey, coverRevision]);
 

@@ -1,11 +1,22 @@
-import { fireEvent, render, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 import type { SidebarNodeDto } from '../../shared/types/canonical';
 
 const { getCoverHashesMock } = vi.hoisted(() => ({ getCoverHashesMock: vi.fn() }));
+const invalidationMock = vi.hoisted(() => ({ folders: null as null | (() => void) }));
 
 vi.mock('../../controllers/foldersController', () => ({
   foldersController: { getCoverHashes: getCoverHashesMock },
+}));
+vi.mock('../../runtime/libraryInvalidation', () => ({
+  libraryInvalidation: {
+    register: (resource: string, callback: () => void) => {
+      if (resource === 'folders') invalidationMock.folders = callback;
+      return () => {
+        if (invalidationMock.folders === callback) invalidationMock.folders = null;
+      };
+    },
+  },
 }));
 
 import { SubfolderGrid } from './SubfolderGrid';
@@ -89,6 +100,35 @@ describe('SubfolderGrid cover loading', () => {
 
     expect(getCoverHashesMock).toHaveBeenCalledTimes(requestCount);
     expect(container.querySelector('img')).toBe(cover);
+  });
+
+  it('keeps the decoded cover mounted while a folder invalidation refreshes it', async () => {
+    let resolveRefresh: ((value: Array<{ folder_id: number; entity_hash: string | null; mime_type: string | null }>) => void) | null = null;
+    getCoverHashesMock
+      .mockResolvedValueOnce([{ folder_id: 1, entity_hash: 'cover-1', mime_type: 'image/jpeg' }])
+      .mockReturnValueOnce(new Promise((resolve) => { resolveRefresh = resolve; }));
+
+    const { container } = render(
+      <SubfolderGrid
+        childFolders={[folder(1)]}
+        targetSize={220}
+        totalImageCount={0}
+        onOpenFolder={() => {}}
+      />,
+    );
+    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toContain('cover-1'));
+    const cover = container.querySelector('img');
+    const requestCount = getCoverHashesMock.mock.calls.length;
+
+    act(() => invalidationMock.folders?.());
+    await waitFor(() => expect(getCoverHashesMock).toHaveBeenCalledTimes(requestCount + 1));
+    expect(container.querySelector('img')).toBe(cover);
+    expect(container.querySelector('img')?.getAttribute('src')).toContain('cover-1');
+
+    await act(async () => {
+      resolveRefresh?.([{ folder_id: 1, entity_hash: 'cover-2', mime_type: 'image/jpeg' }]);
+    });
+    await waitFor(() => expect(container.querySelector('img')?.getAttribute('src')).toContain('cover-2'));
   });
 
   it('clears the previous view cover immediately and renders the shared broken-file artwork for a broken cover', async () => {

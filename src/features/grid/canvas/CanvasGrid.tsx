@@ -107,6 +107,10 @@ export function planFolderReorder(
   return reordered.every((itemId, index) => itemId === orderedItemIds[index]) ? [] : reordered;
 }
 
+export function isOverGridItems(layoutY: number): boolean {
+  return layoutY >= 0;
+}
+
 /** Convert viewport (visual) coordinates to CSS layout coordinates.
  *  Uses shared zoom compensation for browser zoom support. */
 function toLayoutCoords(clientX: number, clientY: number, container: HTMLDivElement, headerHeight: number) {
@@ -868,6 +872,11 @@ export function CanvasGrid({
         const ctr = containerRef.current;
         if (ctr) {
           const { x: cx, y: cy } = toLayoutCoords(e.clientX, e.clientY, ctr, headerHeightRef.current);
+          if (!isOverGridItems(cy)) {
+            reorderDropRef.current = null;
+            markDirtyRef.current('overlay');
+            return;
+          }
           // Build skip set from dragged item indices
           const draggedItemIds = new Set(getDragState().itemIds);
           const skipIdx = new Set<number>();
