@@ -71,7 +71,7 @@
   width: 100%;
   height: 28px;
   border-radius: 6px;
-  padding: 0 52px 0 8px;
+  padding: 0 32px 0 8px;
   box-sizing: border-box;
   color: var(--color-text-primary);
   font-size: 13px;
@@ -87,11 +87,12 @@
 
 .clearBtn {
   position: absolute;
-  top: 50%; right: 6px; transform: translateY(-50%);
-  height: 18px; padding: 0 4px;
+  top: 50%; right: 3px; transform: translateY(-50%);
+  display: grid;
+  width: 22px; height: 22px; padding: 0;
+  place-items: center;
   color: var(--color-text-tertiary);
-  font-size: 11px;
-  border: none; background: none; border-radius: 4px; cursor: pointer;
+  border: none; background: transparent; border-radius: 5px; cursor: pointer;
 }
 .clearBtn:hover { color: var(--color-text-primary); background: var(--color-subtle-overlay); }
 

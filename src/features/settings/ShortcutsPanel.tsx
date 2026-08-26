@@ -4,6 +4,7 @@
  */
 
 import { useState, useCallback, useRef, useMemo } from 'react';
+import { IconX } from '@tabler/icons-react';
 import { findShortcutConflict, formatKeysDisplay, getShortcutGroups, setShortcutBinding } from '../../shared/lib/shortcuts';
 import type { ShortcutGroup } from '../../shared/lib/shortcuts';
 import { useShortcutSuspension } from '../../shared/hooks/useShortcutScope';
@@ -60,10 +61,10 @@ function ShortcutInput({ value, onChange, conflict }: { value: string; onChange:
         onKeyDown={editing ? handleKeyDown : undefined}
       />
       {value && (
-        <button type="button" className={styles.clearBtn}
+        <button type="button" className={styles.clearBtn} aria-label="Clear shortcut"
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => { e.preventDefault(); onChange(''); setEditing(false); inputRef.current?.blur(); }}>
-          ×
+          <IconX size={13} stroke={2} />
         </button>
       )}
     </div>
