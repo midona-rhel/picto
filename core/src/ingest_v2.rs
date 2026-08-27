@@ -10,7 +10,7 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, Lifecycle, MutationReceipt};
 use crate::projection_v2::{
-    timestamp_ms, FolderProjectionChange, ItemProjectionChange,
+    timestamp_ms, FolderProjectionChange, GroupOrderProjectionChange, ItemProjectionChange,
     MediaClassificationProjectionChange, MembershipProjectionChange, RootProjectionChange,
     RootSummaryProjectionChange, StructureProjectionDelta,
 };
@@ -22,7 +22,6 @@ pub(crate) fn is_deleted_source_item_error(error: &str) -> bool {
     error.contains(DELETED_SOURCE_ITEM_ERROR)
 }
 
-const RANK_GAP: i64 = 1024;
 const STAGED_ROOT_ORGANIZATION_KEY: &str = "_picto_root_organization";
 const STAGED_SOURCE_METADATA_RAW_KEY: &str = "_picto_source_metadata_raw";
 
@@ -150,6 +149,13 @@ impl IngestProjectionDelta {
     }
 
     fn prepare_summaries(&mut self, transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+        for group in &self.structure.group_orders {
+            crate::operations_v2::upsert_group_root_summary(
+                transaction,
+                group.collection_id,
+                &group.media_ids,
+            )?;
+        }
         self.summary_root_ids.extend(
             self.structure
                 .roots
@@ -271,6 +277,7 @@ struct RootSettlement {
     visible: bool,
     replaced_root_item_id: Option<i64>,
     removed_root_tag_ids: Vec<i64>,
+    group_order: Option<Vec<i64>>,
 }
 
 impl Application {
@@ -285,7 +292,9 @@ impl Application {
             .transaction_if_changed_maintenance(
                 |transaction| {
                     if let Some(source) = &input.source {
-                        if let Some(existing) = existing_source_item(transaction, source)? {
+                        if let Some(existing) =
+                            existing_source_item(transaction, self.projections(), source)?
+                        {
                             match existing {
                                 ExistingSourceItem::Present {
                                     media_item_id,
@@ -335,7 +344,7 @@ impl Application {
                             }
                         }
                     } else if let Some((media_item_id, root_item_id)) =
-                        existing_manual_item(transaction, &input.file_hash)?
+                        existing_manual_item(transaction, self.projections(), &input.file_hash)?
                     {
                         let mut delta = IngestProjectionDelta::default();
                         let organization = StagedRootOrganization::from_input(input, false);
@@ -429,6 +438,7 @@ impl Application {
                             visible: true,
                             replaced_root_item_id: None,
                             removed_root_tag_ids: Vec::new(),
+                            group_order: None,
                         }
                     };
                     let root_item_id = settlement.root_item_id;
@@ -473,20 +483,13 @@ impl Application {
                             item_id: root_item_id,
                             lifecycle: Some(input.lifecycle),
                         });
-                        let mut statement = transaction.prepare(
-                            "SELECT media_item_id FROM collection_member
-                         WHERE collection_id = ?1",
-                        )?;
-                        let members = statement
-                            .query_map([root_item_id], |row| row.get::<_, i64>(0))?
-                            .collect::<rusqlite::Result<Vec<_>>>()?;
-                        drop(statement);
-                        let mut folder_statement = transaction
-                            .prepare("SELECT folder_id FROM folder_item WHERE item_id = ?1")?;
-                        let folder_ids = folder_statement
-                            .query_map([root_item_id], |row| row.get::<_, i64>(0))?
-                            .collect::<rusqlite::Result<Vec<_>>>()?;
-                        drop(folder_statement);
+                        let members = settlement.group_order.as_ref().ok_or_else(|| {
+                            invalid("Promoted source group is missing canonical member order")
+                        })?;
+                        let folder_ids = settlement
+                            .replaced_root_item_id
+                            .map(|root_id| self.projections().folder_ids_for_root(root_id))
+                            .unwrap_or_default();
                         for folder_id in folder_ids {
                             delta.structure.folders.push(FolderProjectionChange {
                                 folder_id,
@@ -503,7 +506,7 @@ impl Application {
                         }
                         for member_id in members {
                             delta.structure.roots.push(RootProjectionChange {
-                                item_id: member_id,
+                                item_id: *member_id,
                                 lifecycle: None,
                             });
                             delta
@@ -511,7 +514,7 @@ impl Application {
                                 .memberships
                                 .push(MembershipProjectionChange {
                                     collection_id: root_item_id,
-                                    media_id: member_id,
+                                    media_id: *member_id,
                                     present: true,
                                 });
                         }
@@ -523,6 +526,15 @@ impl Application {
                                 collection_id: root_item_id,
                                 media_id: media_item_id,
                                 present: true,
+                            });
+                    }
+                    if let Some(media_ids) = settlement.group_order.clone() {
+                        delta
+                            .structure
+                            .group_orders
+                            .push(GroupOrderProjectionChange {
+                                collection_id: root_item_id,
+                                media_ids,
                             });
                     }
                     if root_visible {
@@ -667,22 +679,25 @@ impl Application {
                     item_id: collection_id,
                     lifecycle: Some(lifecycle),
                 });
-                let mut members = transaction.prepare(
-                    "SELECT media_item_id FROM collection_member WHERE collection_id = ?1",
-                )?;
-                let members = members
-                    .query_map([collection_id], |row| row.get::<_, i64>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                for media_id in members {
+                let members = source_media_order(transaction, source_post_id)?;
+                set_group_cover(transaction, collection_id, &members)?;
+                for media_id in &members {
                     delta
                         .structure
                         .memberships
                         .push(MembershipProjectionChange {
                             collection_id,
-                            media_id,
+                            media_id: *media_id,
                             present: true,
                         });
                 }
+                delta
+                    .structure
+                    .group_orders
+                    .push(GroupOrderProjectionChange {
+                        collection_id,
+                        media_ids: members,
+                    });
                 delta.add_organization(collection_id, changes);
                 delta.prepare_summaries(transaction)?;
                 Ok(((), delta, true))
@@ -729,23 +744,26 @@ enum ExistingSourceItem {
 
 fn existing_manual_item(
     transaction: &Transaction<'_>,
+    projections: &crate::projection_v2::ProjectionStore,
     file_hash: &str,
 ) -> rusqlite::Result<Option<(i64, i64)>> {
-    transaction
+    let media_item_id = transaction
         .query_row(
-            "SELECT ma.item_id, COALESCE(cm.collection_id, lr.item_id)
+            "SELECT ma.item_id
              FROM media_asset ma
              JOIN media_file mf ON mf.file_id = ma.file_id
-             LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
-             LEFT JOIN library_root lr ON lr.item_id = ma.item_id
              WHERE mf.file_hash = ?1
-               AND COALESCE(cm.collection_id, lr.item_id) IS NOT NULL
-             ORDER BY cm.collection_id IS NOT NULL, ma.item_id
+             ORDER BY ma.item_id
              LIMIT 1",
             [file_hash],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| row.get::<_, i64>(0),
         )
-        .optional()
+        .optional()?;
+    Ok(media_item_id.and_then(|media_item_id| {
+        projections
+            .root_for_media(media_item_id)
+            .map(|root_item_id| (media_item_id, root_item_id))
+    }))
 }
 
 impl StagedRootOrganization {
@@ -952,21 +970,22 @@ fn merge_root_organization(
     let encoded_folders = serde_json::to_string(&organization.folder_ids)
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     let folder_ids = {
+        let current = projections.folder_ids_for_root(root_item_id);
         let mut statement = transaction.prepare(
-            "INSERT INTO folder_item (folder_id, item_id)
-             SELECT folder.folder_id, ?2
+            "SELECT folder.folder_id
              FROM json_each(?1) input
              JOIN folder ON folder.folder_id = CAST(input.value AS INTEGER)
-             WHERE 1
-             ON CONFLICT(folder_id, item_id) DO NOTHING
-             RETURNING folder_id",
+             ORDER BY folder.folder_id",
         )?;
-        let rows = statement
-            .query_map(params![encoded_folders, root_item_id], |row| {
-                row.get::<_, i64>(0)
-            })?
+        let missing = statement
+            .query_map([encoded_folders], |row| row.get::<_, i64>(0))?
+            .filter_map(|folder_id| match folder_id {
+                Ok(folder_id) if !current.contains(&folder_id) => Some(Ok(folder_id)),
+                Ok(_) => None,
+                Err(error) => Some(Err(error)),
+            })
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows
+        missing
     };
 
     Ok(RootOrganizationChanges {
@@ -1017,19 +1036,14 @@ fn validate_input(input: &PreparedMediaInput) -> Result<(), String> {
 
 fn existing_source_item(
     transaction: &Transaction<'_>,
+    projections: &crate::projection_v2::ProjectionStore,
     source: &SourcePostInput,
 ) -> rusqlite::Result<Option<ExistingSourceItem>> {
     let row = transaction
         .query_row(
-            "SELECT si.state, si.media_item_id,
-                    COALESCE(sp.root_item_id, cm.collection_id, lr.item_id),
-                    COALESCE(visible_root.item_id, 0) IS NOT 0
+            "SELECT si.state, si.media_item_id, sp.root_item_id
              FROM source_item si
              JOIN source_post sp ON sp.source_post_id = si.source_post_id
-             LEFT JOIN collection_member cm ON cm.media_item_id = si.media_item_id
-             LEFT JOIN library_root lr ON lr.item_id = si.media_item_id
-             LEFT JOIN library_root visible_root
-               ON visible_root.item_id = COALESCE(sp.root_item_id, cm.collection_id, lr.item_id)
              WHERE sp.site_id = ?1 AND sp.post_key = ?2 AND si.item_key = ?3",
             params![source.site_id, source.post_key, source.item_key],
             |row| {
@@ -1037,26 +1051,33 @@ fn existing_source_item(
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<i64>>(1)?,
                     row.get::<_, Option<i64>>(2)?,
-                    row.get::<_, bool>(3)?,
                 ))
             },
         )
         .optional()?;
-    Ok(
-        row.map(|(state, media_item_id, root_item_id, root_visible)| {
-            if state == "deleted" {
-                ExistingSourceItem::Deleted
-            } else if media_item_id.is_none() {
-                ExistingSourceItem::Pending
-            } else {
-                ExistingSourceItem::Present {
-                    media_item_id: media_item_id.unwrap(),
-                    root_item_id: root_item_id.unwrap_or_else(|| media_item_id.unwrap()),
-                    root_visible,
-                }
-            }
-        }),
-    )
+    row.map(|(state, media_item_id, persisted_root_id)| {
+        if state == "deleted" {
+            Ok(ExistingSourceItem::Deleted)
+        } else if media_item_id.is_none() {
+            Ok(ExistingSourceItem::Pending)
+        } else {
+            let media_item_id = media_item_id.unwrap();
+            let root_item_id = persisted_root_id
+                .or_else(|| projections.root_for_media(media_item_id))
+                .unwrap_or(media_item_id);
+            let root_visible = transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM library_root WHERE item_id = ?1)",
+                [root_item_id],
+                |row| row.get(0),
+            )?;
+            Ok(ExistingSourceItem::Present {
+                media_item_id,
+                root_item_id,
+                root_visible,
+            })
+        }
+    })
+    .transpose()
 }
 
 fn upsert_file(
@@ -1356,10 +1377,12 @@ fn settle_source_post_root(
             visible: true,
             replaced_root_item_id: None,
             removed_root_tag_ids: Vec::new(),
+            group_order: None,
         });
     }
 
-    let provisional_collection = provisional_source_collection(transaction, source_post_id)?;
+    let provisional_collection =
+        provisional_source_collection(transaction, projections, source_post_id)?;
     if current_root.is_none()
         && (source.force_collection || provisional_collection.is_some() || !source.post_complete)
     {
@@ -1373,12 +1396,8 @@ fn settle_source_post_root(
             )?;
             transaction.last_insert_rowid()
         };
-        append_source_collection_member(
-            transaction,
-            collection_id,
-            source_post_id,
-            new_media_item_id,
-        )?;
+        let group_order = source_media_order(transaction, source_post_id)?;
+        set_group_cover(transaction, collection_id, &group_order)?;
         if source.post_complete {
             insert_root(transaction, collection_id, lifecycle)?;
             transaction.execute(
@@ -1392,6 +1411,7 @@ fn settle_source_post_root(
                 visible: true,
                 replaced_root_item_id: None,
                 removed_root_tag_ids: Vec::new(),
+                group_order: Some(group_order),
             });
         }
         return Ok(RootSettlement {
@@ -1400,6 +1420,7 @@ fn settle_source_post_root(
             visible: false,
             replaced_root_item_id: None,
             removed_root_tag_ids: Vec::new(),
+            group_order: Some(group_order),
         });
     }
 
@@ -1424,6 +1445,7 @@ fn settle_source_post_root(
                 visible: true,
                 replaced_root_item_id: None,
                 removed_root_tag_ids: Vec::new(),
+                group_order: None,
             })
         }
         (Some(root_id), 2) if root_kind(transaction, root_id)? == "media" => {
@@ -1452,11 +1474,7 @@ fn settle_source_post_root(
                  ON CONFLICT(root_item_id) DO NOTHING",
                 params![collection_id, now, root_id],
             )?;
-            transaction.execute(
-                "INSERT INTO folder_item (folder_id, item_id, position_rank)
-                 SELECT folder_id, ?1, position_rank FROM folder_item WHERE item_id = ?2",
-                params![collection_id, root_id],
-            )?;
+            let group_order = source_media_order(transaction, source_post_id)?;
             transaction.execute(
                 "DELETE FROM library_root
                  WHERE item_id IN (
@@ -1469,19 +1487,7 @@ fn settle_source_post_root(
                  )",
                 [source_post_id],
             )?;
-            transaction.execute(
-                "INSERT INTO collection_member
-                     (collection_id, media_item_id, position_rank)
-                 SELECT ?1, media_item_id, (position + 1) * ?2
-                 FROM source_item
-                 WHERE source_post_id = ?3
-                   AND state = 'ingested'
-                   AND media_item_id IS NOT NULL
-                 ORDER BY position, source_item_id
-                 LIMIT 2",
-                params![collection_id, RANK_GAP, source_post_id],
-            )?;
-            crate::operations_v2::sync_collection_cover(transaction, collection_id)?;
+            set_group_cover(transaction, collection_id, &group_order)?;
             transaction.execute(
                 "UPDATE source_post SET root_item_id = ?1, updated_at = ?2
                  WHERE source_post_id = ?3",
@@ -1493,25 +1499,19 @@ fn settle_source_post_root(
                 visible: true,
                 replaced_root_item_id: Some(root_id),
                 removed_root_tag_ids,
+                group_order: Some(group_order),
             })
         }
         (Some(root_id), _) if root_kind(transaction, root_id)? == "collection" => {
-            transaction.execute(
-                "INSERT INTO collection_member
-                     (collection_id, media_item_id, position_rank)
-                 SELECT ?1, si.media_item_id, (si.position + 1) * ?2
-                 FROM source_item si
-                 WHERE si.source_post_id = ?3 AND si.media_item_id = ?4
-                 ON CONFLICT(collection_id, media_item_id) DO NOTHING",
-                params![root_id, RANK_GAP, source_post_id, new_media_item_id],
-            )?;
-            sync_collection_cover_if_needed(transaction, root_id, new_media_item_id)?;
+            let group_order = source_media_order(transaction, source_post_id)?;
+            set_group_cover(transaction, root_id, &group_order)?;
             Ok(RootSettlement {
                 root_item_id: root_id,
                 promoted: false,
                 visible: true,
                 replaced_root_item_id: None,
                 removed_root_tag_ids: Vec::new(),
+                group_order: Some(group_order),
             })
         }
         (Some(root_id), _) => Ok(RootSettlement {
@@ -1520,62 +1520,71 @@ fn settle_source_post_root(
             visible: true,
             replaced_root_item_id: None,
             removed_root_tag_ids: Vec::new(),
+            group_order: None,
         }),
         (None, _) => Err(invalid("Source post has media without a visible root")),
     }
 }
 
-fn append_source_collection_member(
+fn source_media_order(
     transaction: &Transaction<'_>,
-    collection_id: i64,
     source_post_id: i64,
-    media_item_id: i64,
-) -> rusqlite::Result<()> {
-    transaction.execute(
-        "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-         SELECT ?1, si.media_item_id, (si.position + 1) * ?2
-         FROM source_item si
-         WHERE si.source_post_id = ?3 AND si.media_item_id = ?4
-         ON CONFLICT(collection_id, media_item_id) DO NOTHING",
-        params![collection_id, RANK_GAP, source_post_id, media_item_id],
-    )?;
-    sync_collection_cover_if_needed(transaction, collection_id, media_item_id)
+) -> rusqlite::Result<Vec<i64>> {
+    transaction
+        .prepare_cached(
+            "SELECT media_item_id
+             FROM source_item
+             WHERE source_post_id = ?1
+               AND state = 'ingested'
+               AND media_item_id IS NOT NULL
+             ORDER BY position, source_item_id",
+        )?
+        .query_map([source_post_id], |row| row.get(0))?
+        .collect()
 }
 
-fn sync_collection_cover_if_needed(
+fn set_group_cover(
     transaction: &Transaction<'_>,
     collection_id: i64,
-    media_item_id: i64,
+    group_order: &[i64],
 ) -> rusqlite::Result<()> {
-    let is_first: bool = transaction.query_row(
-        "SELECT media_item_id = ?2
-         FROM collection_member
-         WHERE collection_id = ?1
-         ORDER BY position_rank, media_item_id
-         LIMIT 1",
-        params![collection_id, media_item_id],
-        |row| row.get(0),
+    transaction.execute(
+        "UPDATE library_item
+         SET cover_media_item_id = ?2
+         WHERE item_id = ?1 AND cover_media_item_id IS NOT ?2",
+        params![collection_id, group_order.first()],
     )?;
-    if is_first {
-        crate::operations_v2::sync_collection_cover(transaction, collection_id)?;
-    }
     Ok(())
 }
 
 fn provisional_source_collection(
     transaction: &Transaction<'_>,
+    projections: &crate::projection_v2::ProjectionStore,
     source_post_id: i64,
 ) -> rusqlite::Result<Option<i64>> {
-    transaction
+    let media_item_id = transaction
         .query_row(
-            "SELECT cm.collection_id
-             FROM source_item si
-             JOIN collection_member cm ON cm.media_item_id = si.media_item_id
-             LEFT JOIN library_root lr ON lr.item_id = cm.collection_id
-             WHERE si.source_post_id = ?1 AND lr.item_id IS NULL
-             ORDER BY cm.collection_id
+            "SELECT media_item_id
+             FROM source_item
+             WHERE source_post_id = ?1
+               AND state = 'ingested'
+               AND media_item_id IS NOT NULL
+             ORDER BY position, source_item_id
              LIMIT 1",
             [source_post_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(collection_id) = media_item_id.and_then(|id| projections.root_for_media(id)) else {
+        return Ok(None);
+    };
+    transaction
+        .query_row(
+            "SELECT item.item_id
+             FROM library_item item
+             LEFT JOIN library_root root ON root.item_id = item.item_id
+             WHERE item.item_id = ?1 AND item.kind = 'collection' AND root.item_id IS NULL",
+            [collection_id],
             |row| row.get(0),
         )
         .optional()
@@ -2193,16 +2202,20 @@ mod tests {
                 let media: i64 =
                     connection
                         .query_row("SELECT COUNT(*) FROM media_asset", [], |row| row.get(0))?;
-                let folders: i64 = connection.query_row(
+                let legacy_folders: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM folder_item WHERE item_id = ?1",
                     [first.root_item_id.0],
                     |row| row.get(0),
                 )?;
                 assert_eq!(media, 1);
-                assert_eq!(folders, 2);
+                assert_eq!(legacy_folders, 0);
                 Ok(())
             })
             .unwrap();
+        assert_eq!(
+            app.projections().folder_ids_for_root(first.root_item_id.0),
+            vec![first_folder.0, second_folder.0]
+        );
     }
 
     #[test]
@@ -2225,23 +2238,14 @@ mod tests {
         let second = app.ingest_prepared(&second_input).unwrap();
         assert!(second.promoted_to_collection);
 
-        app.store()
-            .read(|connection| {
-                let collection_memberships: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1 AND item_id = ?2",
-                    rusqlite::params![folder.0, second.root_item_id.0],
-                    |row| row.get(0),
-                )?;
-                let old_memberships: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE item_id = ?1",
-                    [first.media_item_id.0],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(collection_memberships, 1);
-                assert_eq!(old_memberships, 0);
-                Ok(())
-            })
-            .unwrap();
+        assert_eq!(
+            app.projections().folder_ids_for_root(second.root_item_id.0),
+            vec![folder.0]
+        );
+        assert!(app
+            .projections()
+            .folder_ids_for_root(first.media_item_id.0)
+            .is_empty());
         app.set_lifecycle(
             &ItemTarget::Explicit {
                 item_ids: vec![second.root_item_id],
@@ -2318,7 +2322,7 @@ mod tests {
         let result = app.ingest_prepared(&archived).unwrap();
 
         assert_ne!(result.media_item_id, result.root_item_id);
-        let (kind, members): (String, i64) = app
+        let (kind, legacy_members): (String, i64) = app
             .store()
             .read(|connection| {
                 connection.query_row(
@@ -2332,6 +2336,10 @@ mod tests {
             })
             .unwrap();
         assert_eq!(kind, "collection");
-        assert_eq!(members, 1);
+        assert_eq!(legacy_members, 0);
+        assert_eq!(
+            app.projections().group_order(result.root_item_id.0),
+            Some(vec![result.media_item_id.0])
+        );
     }
 }

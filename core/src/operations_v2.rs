@@ -2536,27 +2536,6 @@ fn require_no_selected_file_overlap(
     Ok(())
 }
 
-pub(crate) fn sync_collection_cover(
-    transaction: &Transaction<'_>,
-    collection_id: i64,
-) -> rusqlite::Result<()> {
-    let first_member = transaction
-        .query_row(
-            "SELECT media_item_id FROM collection_member
-             WHERE collection_id = ?1
-             ORDER BY position_rank, media_item_id
-             LIMIT 1",
-            [collection_id],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()?;
-    transaction.execute(
-        "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
-        params![first_member, collection_id],
-    )?;
-    Ok(())
-}
-
 fn project_detached_root(
     delta: &mut StructureProjectionDelta,
     collection_id: i64,
@@ -3223,7 +3202,7 @@ fn finish_group_create_summary_batch(
     Ok(())
 }
 
-fn upsert_group_root_summary(
+pub(crate) fn upsert_group_root_summary(
     transaction: &Transaction<'_>,
     collection_id: i64,
     media_ids: &[i64],

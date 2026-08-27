@@ -1065,18 +1065,14 @@ mod tests {
             .unwrap();
         drain_maintenance_ingest(&application);
 
-        application
+        let group_id = application
             .store()
             .read(|connection| {
-                let roots = connection.query_row(
-                    "SELECT COUNT(*) FROM library_root WHERE lifecycle = 'inbox'",
+                let group_id = connection.query_row(
+                    "SELECT item_id FROM library_root WHERE lifecycle = 'inbox'",
                     [],
                     |row| row.get::<_, i64>(0),
                 )?;
-                let members =
-                    connection.query_row("SELECT COUNT(*) FROM collection_member", [], |row| {
-                        row.get::<_, i64>(0)
-                    })?;
                 let succeeded = connection.query_row(
                     "SELECT COUNT(*) FROM ingest_job WHERE status = 'succeeded'",
                     [],
@@ -1093,12 +1089,20 @@ mod tests {
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?;
                 assert_eq!(
-                    (roots, members, succeeded, failed, status, error),
-                    (1, 2, 2, 0, "succeeded".to_string(), None)
+                    (succeeded, failed, status, error),
+                    (2, 0, "succeeded".to_string(), None)
                 );
-                Ok(())
+                Ok(group_id)
             })
             .unwrap();
+        assert_eq!(
+            application
+                .projections()
+                .group_order(group_id)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 
     #[tokio::test]
@@ -1207,23 +1211,17 @@ mod tests {
             .unwrap();
         drain_maintenance_ingest(&application);
 
-        let (kind, members): (String, i64) = application
+        let kind: String = application
             .store()
             .read(|connection| {
-                let kind = connection.query_row(
+                connection.query_row(
                     "SELECT li.kind FROM library_root lr JOIN library_item li ON li.item_id = lr.item_id",
                     [],
                     |row| row.get(0),
-                )?;
-                let members = connection.query_row(
-                    "SELECT COUNT(*) FROM collection_member",
-                    [],
-                    |row| row.get(0),
-                )?;
-                Ok((kind, members))
+                )
             })
             .unwrap();
-        assert_eq!((kind.as_str(), members), ("media", 0));
+        assert_eq!(kind, "media");
     }
 
     #[tokio::test]
@@ -1271,24 +1269,26 @@ mod tests {
             .unwrap();
         drain_maintenance_ingest(&application);
 
-        let creator_tag_id = application
+        let (creator_tag_id, root_id) = application
             .store()
             .read(|connection| {
-                let folder_members: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE folder_id IN (?1, ?2)",
-                    [folder_id, second_folder_id],
-                    |row| row.get(0),
-                )?;
                 let tag_id: i64 = connection.query_row(
                     "SELECT tag_id FROM tag
                      WHERE namespace = 'creator' AND subtag = 'alice'",
                     [],
                     |row| row.get(0),
                 )?;
-                assert_eq!(folder_members, 2);
-                Ok(tag_id)
+                let root_id =
+                    connection.query_row("SELECT item_id FROM library_root", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?;
+                Ok((tag_id, root_id))
             })
             .unwrap();
+        assert_eq!(
+            application.projections().folder_ids_for_root(root_id),
+            vec![folder_id, second_folder_id]
+        );
         assert_eq!(
             application
                 .projections()
@@ -1497,7 +1497,7 @@ mod tests {
         worker.tick(FIRST_NOW).await.unwrap().unwrap();
         drain_maintenance_ingest(&application);
 
-        application
+        let group_id = application
             .store()
             .read(|connection| {
                 let ingested: i64 = connection.query_row(
@@ -1514,20 +1514,17 @@ mod tests {
                     |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                 )?;
                 assert_eq!((root.1.as_str(), root.2.as_str()), ("inbox", "collection"));
-                let members = connection
-                    .prepare(
-                        "SELECT cm.media_item_id
-                         FROM collection_member cm
-                         JOIN source_item si ON si.media_item_id = cm.media_item_id
-                         WHERE cm.collection_id = ?1
-                         ORDER BY cm.position_rank",
-                    )?
-                    .query_map([root.0], |row| row.get::<_, i64>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                assert_eq!(members.len(), 2);
-                Ok(())
+                Ok(root.0)
             })
             .unwrap();
+        assert_eq!(
+            application
+                .projections()
+                .group_order(group_id)
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(application.projections().inbox_bitmap().len(), 1);
     }
 
@@ -1564,12 +1561,7 @@ mod tests {
                 let roots: i64 =
                     connection
                         .query_row("SELECT COUNT(*) FROM library_root", [], |row| row.get(0))?;
-                let members: i64 =
-                    connection.query_row("SELECT COUNT(*) FROM collection_member", [], |row| {
-                        row.get(0)
-                    })?;
                 assert_eq!(roots, 2);
-                assert_eq!(members, 0);
                 Ok(())
             })
             .unwrap();

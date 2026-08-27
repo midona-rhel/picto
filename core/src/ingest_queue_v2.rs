@@ -204,16 +204,15 @@ pub(crate) fn discard_abandoned_gallery_sources(
 pub(crate) fn recover_settled_provisional_collections(
     application: &Application,
 ) -> Result<usize, String> {
-    let candidates = application.store().read(|connection| {
+    let (source_media, hidden_collections) = application.store().read(|connection| {
         let mut statement = connection.prepare(
-            "SELECT cm.collection_id, si.source_post_id,
-                        COALESCE(MAX(ij.lifecycle), 'inbox')
-                 FROM collection_member cm
-                 JOIN source_item si ON si.media_item_id = cm.media_item_id
+            "SELECT si.source_post_id, si.media_item_id,
+                        COALESCE(ij.lifecycle, 'inbox')
+                 FROM source_item si
                  JOIN source_post sp ON sp.source_post_id = si.source_post_id
-                 LEFT JOIN library_root lr ON lr.item_id = cm.collection_id
                  LEFT JOIN ingest_job ij ON ij.source_item_id = si.source_item_id
-                 WHERE lr.item_id IS NULL AND sp.root_item_id IS NULL
+                 WHERE si.media_item_id IS NOT NULL
+                   AND sp.root_item_id IS NULL
                    AND NOT EXISTS (
                        SELECT 1
                        FROM source_item pending_si
@@ -222,9 +221,9 @@ pub(crate) fn recover_settled_provisional_collections(
                        WHERE pending_si.source_post_id = si.source_post_id
                          AND pending_job.status IN ('pending', 'running')
                    )
-                 GROUP BY cm.collection_id, si.source_post_id",
+                 ORDER BY si.source_post_id, si.position, si.source_item_id",
         )?;
-        let rows = statement
+        let source_media = statement
             .query_map([], |row| {
                 Ok((
                     row.get::<_, i64>(0)?,
@@ -233,10 +232,34 @@ pub(crate) fn recover_settled_provisional_collections(
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(rows)
+        let hidden_collections = connection
+            .prepare(
+                "SELECT li.item_id
+                 FROM library_item li
+                 LEFT JOIN library_root lr ON lr.item_id = li.item_id
+                 WHERE li.kind = 'collection' AND lr.item_id IS NULL",
+            )?
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<BTreeSet<_>>>()?;
+        Ok((source_media, hidden_collections))
     })?;
+    let projections = application.projections();
+    let mut candidates = BTreeMap::new();
+    for (source_post_id, media_item_id, lifecycle) in source_media {
+        let Some(collection_id) = projections.root_for_media(media_item_id) else {
+            continue;
+        };
+        if !hidden_collections.contains(&collection_id)
+            || projections.group_order(collection_id).is_none()
+        {
+            continue;
+        }
+        candidates
+            .entry((collection_id, source_post_id))
+            .or_insert(lifecycle);
+    }
     let mut recovered = 0;
-    for (collection_id, source_post_id, lifecycle) in candidates {
+    for ((collection_id, source_post_id), lifecycle) in candidates {
         let lifecycle = match lifecycle.as_str() {
             "inbox" => Lifecycle::Inbox,
             "active" => Lifecycle::Active,

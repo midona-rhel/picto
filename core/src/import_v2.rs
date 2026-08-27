@@ -725,9 +725,6 @@ mod tests {
                     .prepare("SELECT name FROM folder ORDER BY folder_id")?
                     .query_map([], |row| row.get::<_, String>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                let memberships: i64 =
-                    connection
-                        .query_row("SELECT COUNT(*) FROM folder_item", [], |row| row.get(0))?;
                 let root_metadata: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM root_metadata
                      WHERE source_urls_json = '[\"https://example.test/source\"]'",
@@ -750,7 +747,6 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 assert_eq!(folders.len(), 2, "folders: {folders:?}");
-                assert_eq!(memberships, 2);
                 assert_eq!(root_metadata, 2);
                 assert_eq!(inbox_summaries, 2);
                 assert_eq!(visible_tags, 0);
@@ -758,6 +754,18 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        let owned_folders = application
+            .projections()
+            .inbox_bitmap()
+            .iter()
+            .map(|root_id| {
+                application
+                    .projections()
+                    .folder_ids_for_root(i64::from(root_id))
+                    .len()
+            })
+            .sum::<usize>();
+        assert_eq!(owned_folders, 2);
         let tag_id = application
             .store()
             .read(|connection| {
@@ -882,25 +890,27 @@ mod tests {
                 .ingested,
             1
         );
-        application
+        let group_id = application
             .store()
             .read(|connection| {
-                let roots: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM library_root lr
+                let root_id: i64 = connection.query_row(
+                    "SELECT lr.item_id FROM library_root lr
                      JOIN library_item li ON li.item_id = lr.item_id
                      WHERE li.kind = 'collection'",
                     [],
                     |row| row.get(0),
                 )?;
-                let members: i64 =
-                    connection.query_row("SELECT COUNT(*) FROM collection_member", [], |row| {
-                        row.get(0)
-                    })?;
-                assert_eq!(roots, 1);
-                assert_eq!(members, 2);
-                Ok(())
+                Ok(root_id)
             })
             .unwrap();
+        assert_eq!(
+            application
+                .projections()
+                .group_order(group_id)
+                .unwrap()
+                .len(),
+            2
+        );
         assert_eq!(application.projections().inbox_bitmap().len(), 1);
     }
 
@@ -981,17 +991,10 @@ mod tests {
             .projections()
             .folder_bitmap(folder.0)
             .contains(root as u32));
-        let membership: i64 = application
-            .store()
-            .read(|connection| {
-                connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1 AND item_id = ?2",
-                    rusqlite::params![folder.0, root],
-                    |row| row.get(0),
-                )
-            })
-            .unwrap();
-        assert_eq!(membership, 1);
+        assert_eq!(
+            application.projections().folder_ids_for_root(root),
+            vec![folder.0]
+        );
         application
             .set_lifecycle(
                 &crate::app::ItemTarget::Explicit {
@@ -1090,19 +1093,17 @@ mod tests {
                 .ingested,
             1
         );
-        application
+        let group_id = application
             .store()
             .read(|connection| {
-                let (kind, name, members, lifecycle, media_count): (
+                let (group_id, kind, name, lifecycle, media_count): (
+                    i64,
                     String,
                     Option<String>,
-                    i64,
                     String,
                     i64,
                 ) = connection.query_row(
-                    "SELECT li.kind, metadata.name,
-                            (SELECT COUNT(*) FROM collection_member cm
-                             WHERE cm.collection_id = li.item_id),
+                    "SELECT li.item_id, li.kind, metadata.name,
                             summary.lifecycle, summary.media_count
                      FROM library_item li
                      JOIN library_root lr ON lr.item_id = li.item_id
@@ -1121,11 +1122,18 @@ mod tests {
                 )?;
                 assert_eq!(kind, "collection");
                 assert_eq!(name.as_deref(), Some("track"));
-                assert_eq!(members, 2);
                 assert_eq!(lifecycle, "inbox");
                 assert_eq!(media_count, 2);
-                Ok(())
+                Ok(group_id)
             })
             .unwrap();
+        assert_eq!(
+            application
+                .projections()
+                .group_order(group_id)
+                .unwrap()
+                .len(),
+            2
+        );
     }
 }
