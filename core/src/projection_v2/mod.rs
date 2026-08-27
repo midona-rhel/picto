@@ -2440,13 +2440,6 @@ impl ProjectionStore {
             .map(|order| (**order).clone())
     }
 
-    pub(crate) fn tag_memberships_for_roots(
-        &self,
-        roots: &RoaringBitmap,
-    ) -> Vec<(i64, RoaringBitmap)> {
-        self.selection_snapshot().tag_memberships_for_roots(roots)
-    }
-
     /// Return active roots containing at least one member with this exact MIME.
     pub fn mime_bitmap(&self, mime_type: &str) -> RoaringBitmap {
         let state = self.state.load();
@@ -3423,14 +3416,6 @@ fn apply_root_tag_changes_state(
     Ok(())
 }
 
-fn parse_lifecycle(value: &str) -> Result<Lifecycle, String> {
-    match value {
-        "inbox" => Ok(Lifecycle::Inbox),
-        "active" => Ok(Lifecycle::Active),
-        "trash" => Ok(Lifecycle::Trash),
-        other => Err(format!("invalid library lifecycle: {other}")),
-    }
-}
 
 fn validate_id(id: i64) -> Result<(), String> {
     bitmap_id(id).map(|_| ())
@@ -4652,7 +4637,7 @@ mod tests {
         );
         assert!(projection.direct_tag_bitmap(101).is_empty());
         assert_eq!(
-            projection.tag_memberships_for_roots(&roots),
+            projection.selection_snapshot().tag_memberships_for_roots(&roots),
             vec![(100, roots.clone())]
         );
 
@@ -4661,7 +4646,7 @@ mod tests {
             projection.direct_tag_bitmap(100),
             RoaringBitmap::from_iter([20])
         );
-        assert!(projection.tag_memberships_for_roots(&roots).is_empty());
+        assert!(projection.selection_snapshot().tag_memberships_for_roots(&roots).is_empty());
     }
 
     #[test]

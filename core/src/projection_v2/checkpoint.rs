@@ -456,19 +456,6 @@ impl Encoder {
         }
     }
 
-    fn pair_u32_map(&mut self, map: &ShardedMap<(i64, i64), u32>) {
-        let mut entries = map
-            .iter()
-            .map(|(key, value)| (*key, *value))
-            .collect::<Vec<_>>();
-        entries.sort_unstable_by_key(|(key, _)| *key);
-        self.len(entries.len());
-        for ((left, right), value) in entries {
-            self.i64(left);
-            self.i64(right);
-            self.u32(value);
-        }
-    }
 
     fn bitmap_map(&mut self, map: &ShardedMap<i64, Shared<RoaringBitmap>>) -> Result<(), String> {
         let mut entries = map.iter().collect::<Vec<_>>();
@@ -724,16 +711,6 @@ impl<'a> Decoder<'a> {
         Ok(map)
     }
 
-    fn pair_u32_map(&mut self) -> Result<ShardedMap<(i64, i64), u32>, String> {
-        let count = self.count(20)?;
-        let mut map = ShardedMap::default();
-        for _ in 0..count {
-            let key = (self.i64()?, self.i64()?);
-            let value = self.u32()?;
-            insert_unique(&mut map, key, value)?;
-        }
-        Ok(map)
-    }
 
     fn bitmap_map(&mut self) -> Result<ShardedMap<i64, Shared<RoaringBitmap>>, String> {
         let count = self.count(16)?;

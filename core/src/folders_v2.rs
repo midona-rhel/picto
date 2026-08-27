@@ -1557,6 +1557,7 @@ mod tests {
         let roots = roaring::RoaringBitmap::from_iter([media_id as u32]);
         let tag_ids = app
             .projections()
+            .selection_snapshot()
             .tag_memberships_for_roots(&roots)
             .into_iter()
             .map(|(tag_id, _)| tag_id)

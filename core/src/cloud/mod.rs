@@ -17,9 +17,9 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, ItemKind, Lifecycle, MutationReceipt};
 use crate::projection_v2::{
-    timestamp_ms, FolderProjectionChange, GroupOrderProjectionChange, ItemProjectionChange,
-    MediaClassificationProjectionChange, MembershipProjectionChange, ProjectionStore,
-    RootProjectionChange, RootSummaryProjectionChange, StructureProjectionDelta,
+    timestamp_ms, FolderOrderProjectionChange, FolderProjectionChange, GroupOrderProjectionChange,
+    ItemProjectionChange, MediaClassificationProjectionChange, MembershipProjectionChange,
+    ProjectionStore, RootProjectionChange, RootSummaryProjectionChange, StructureProjectionDelta,
     TagProjectionChange,
 };
 
@@ -31,7 +31,7 @@ pub mod reconcile;
 pub mod snapshot;
 pub mod worker;
 
-pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
+pub const CLOUD_SCHEMA_GENERATION: i64 = 2;
 const APPLIED_MUTATION_DIAGNOSTIC_LIMIT: i64 = 10_000;
 const MUTATION_RECEIPT_ITEM_LIMIT: usize = 256;
 
@@ -1168,6 +1168,7 @@ struct CloudProjectionState {
     tags: BTreeSet<(i64, i64)>,
     memberships: BTreeSet<(i64, i64)>,
     group_orders: BTreeMap<i64, Vec<u32>>,
+    folder_orders: BTreeMap<i64, Vec<u32>>,
     summaries: BTreeMap<i64, RootSummaryProjectionChange>,
     image_media_ids: BTreeSet<i64>,
     mime_types: BTreeMap<i64, String>,
@@ -1283,9 +1284,18 @@ impl CloudProjectionState {
             transaction,
             crate::canonical_bitmap::BitmapDomain::Folder,
         )? {
+            let mut touches_scope = false;
             for media in members.iter().map(i64::from) {
                 if state.ids.contains(&media) {
                     state.folders.insert((folder_id, media));
+                    touches_scope = true;
+                }
+            }
+            if touches_scope {
+                if let Some(order) =
+                    crate::canonical_bitmap::load_order(transaction, "folder", folder_id)?
+                {
+                    state.folder_orders.insert(folder_id, order);
                 }
             }
         }
@@ -1482,6 +1492,14 @@ impl CloudProjectionDelta {
                 });
             }
         }
+        for (folder_id, order) in &after.folder_orders {
+            if before.folder_orders.get(folder_id) != Some(order) {
+                structure.folder_orders.push(FolderOrderProjectionChange {
+                    folder_id: *folder_id,
+                    item_ids: order.iter().map(|item| i64::from(*item)).collect(),
+                });
+            }
+        }
 
         let summaries = after.summaries.into_values().collect::<Vec<_>>();
         let summary_ids = summaries
@@ -1534,6 +1552,13 @@ pub fn apply_downloaded(
         .store()
         .transaction_if_changed_settled_without_cloud_maintenance(
             |transaction| {
+                // Applied remote changes must not be captured again as local
+                // membership operations at projection persistence.
+                transaction.execute(
+                    "UPDATE projection_write_control
+                     SET suppress_membership_capture = 1 WHERE singleton = 1",
+                    [],
+                )?;
                 let before =
                     CloudProjectionState::capture(transaction, &footprint, &BTreeSet::new())?;
                 let mut summary = ApplySummary::default();
@@ -1551,6 +1576,15 @@ pub fn apply_downloaded(
                 }
                 prune_applied_mutations(transaction)?;
                 let changed = summary.applied > 0 || summary.quarantined > 0;
+                if !changed {
+                    // No projection settlement will consume the one-shot
+                    // suppression, so clear it before this transaction commits.
+                    transaction.execute(
+                        "UPDATE projection_write_control
+                         SET suppress_membership_capture = 0 WHERE singleton = 1",
+                        [],
+                    )?;
+                }
                 let delta = if summary.applied > 0 {
                     let after =
                         CloudProjectionState::capture(transaction, &footprint, &before.ids)?;
@@ -5010,6 +5044,7 @@ mod tests {
 
         let receiver = application();
         add_media(&receiver, "item-a");
+        enable_capture(&receiver);
         let structure_mutation = remote_mutation(
             &receiver,
             "sender",
@@ -5033,6 +5068,16 @@ mod tests {
         let (summary, receipt) =
             apply_downloaded(&receiver, &[structure_mutation, membership_mutation]).unwrap();
         assert_eq!(summary.quarantined, 0);
+        let echoed: i64 = receiver
+            .store()
+            .read(|connection| {
+                connection.query_row("SELECT COUNT(*) FROM cloud_outbox", [], |row| row.get(0))
+            })
+            .unwrap();
+        assert_eq!(
+            echoed, 0,
+            "remote applies must not echo into the local outbox"
+        );
         assert!(receipt
             .resources
             .contains(&resources::SMART_FOLDERS.to_string()));
@@ -5078,6 +5123,70 @@ mod tests {
         assert_eq!(watch_path, None, "watch paths are device-local");
         assert_eq!(smart_count, 1);
         assert_eq!(member_count, 1);
+    }
+
+    #[test]
+    fn folder_membership_apply_preserves_manual_order() {
+        let receiver = application();
+        let first = add_media(&receiver, "item-a");
+        let second = add_media(&receiver, "item-b");
+        let (folder_id, _) = receiver
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO folder (folder_key, name, created_at, updated_at)
+                     VALUES ('folder-a', 'Folder', 'now', 'now')",
+                    [],
+                )?;
+                let folder_id = transaction.last_insert_rowid();
+                crate::canonical_bitmap::seed_test_state(
+                    transaction,
+                    &crate::canonical_bitmap::TestMembership {
+                        folders: vec![(folder_id, vec![first as u32])],
+                        ..Default::default()
+                    },
+                )?;
+                Ok(folder_id)
+            })
+            .unwrap();
+        receiver
+            .store()
+            .read_result(|connection| receiver.projections().reload(connection))
+            .unwrap();
+
+        let mutation = remote_mutation(
+            &receiver,
+            "sender",
+            HybridTimestamp {
+                physical_ms: 50,
+                logical: 0,
+            },
+            CausalFrontier::new(),
+            CloudOperation::FolderMembership {
+                item_key: "item-b".into(),
+                folder_key: "folder-a".into(),
+                present: true,
+                position_rank: Some(0),
+            },
+        );
+        let (summary, _) = apply_downloaded(&receiver, &[mutation]).unwrap();
+        assert_eq!(summary.applied, 1);
+
+        let order = receiver
+            .store()
+            .read(|connection| {
+                crate::canonical_bitmap::load_order(connection, "folder", folder_id)
+            })
+            .unwrap()
+            .expect("manual folder order must survive projection persistence");
+        assert_eq!(order, vec![second as u32, first as u32]);
+        assert_eq!(
+            receiver
+                .projections()
+                .selection_snapshot()
+                .folder_order(folder_id),
+            Some(vec![second, first])
+        );
     }
 
     #[test]

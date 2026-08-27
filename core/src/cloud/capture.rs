@@ -102,6 +102,22 @@ impl CanonicalMembershipChanges {
 pub(crate) fn canonical_membership_capture_enabled(
     transaction: &Transaction<'_>,
 ) -> rusqlite::Result<bool> {
+    let suppressed: bool = transaction.query_row(
+        "SELECT suppress_membership_capture = 1
+         FROM projection_write_control WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    if suppressed {
+        // The suppression is one transaction's worth: consume it so later
+        // local mutations capture normally.
+        transaction.execute(
+            "UPDATE projection_write_control
+             SET suppress_membership_capture = 0 WHERE singleton = 1",
+            [],
+        )?;
+        return Ok(false);
+    }
     transaction.query_row(
         "SELECT provider IS NOT NULL FROM cloud_state WHERE singleton = 1",
         [],

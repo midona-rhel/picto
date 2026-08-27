@@ -402,29 +402,7 @@ fn read_counts(connection: &Connection) -> Result<Counts, String> {
     })
 }
 
-fn validate_invariants(connection: &Connection, counts: &Counts) -> Result<(), String> {
-    if counts.roots > counts.library_items {
-        return Err("library_root contains more rows than library_item".into());
-    }
-    if counts.media_assets > counts.library_items {
-        return Err("media_asset contains more rows than library_item".into());
-    }
-    // Row-level membership invariants apply only to the legacy source
-    // schema; the canonical destination is validated through its bitmaps
-    // and order vectors instead.
-    let has_member_rows: bool = connection
-        .query_row(
-            "SELECT EXISTS(
-                 SELECT 1 FROM sqlite_master
-                 WHERE type = 'table' AND name = 'collection_member'
-             )",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| format!("collection membership invariant failed: {error}"))?;
-    if !has_member_rows {
-        return Ok(());
-    }
+fn validate_member_row_invariants(connection: &Connection) -> Result<(), String> {
     let orphan_members: i64 = connection
         .query_row(
             "SELECT COUNT(*)
@@ -470,6 +448,32 @@ fn validate_invariants(connection: &Connection, counts: &Counts) -> Result<(), S
         .map_err(|error| format!("collection order invariant failed: {error}"))?;
     if bad_order != 0 {
         return Err(format!("{bad_order} collection order conflicts found"));
+    }
+    Ok(())
+}
+
+fn validate_invariants(connection: &Connection, counts: &Counts) -> Result<(), String> {
+    if counts.roots > counts.library_items {
+        return Err("library_root contains more rows than library_item".into());
+    }
+    if counts.media_assets > counts.library_items {
+        return Err("media_asset contains more rows than library_item".into());
+    }
+    // Row-level membership invariants apply only to the legacy source
+    // schema; the canonical destination is validated through its bitmaps
+    // and order vectors in validate_canonical_v1 below.
+    let has_member_rows: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'collection_member'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("collection membership invariant failed: {error}"))?;
+    if has_member_rows {
+        validate_member_row_invariants(connection)?;
     }
     let bad_source_order: i64 = connection
         .query_row(

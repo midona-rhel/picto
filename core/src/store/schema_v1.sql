@@ -305,7 +305,7 @@ CREATE TABLE cloud_state (
     last_snapshot_at TEXT,
     pending_blobs INTEGER NOT NULL DEFAULT 0,
     missing_blobs INTEGER NOT NULL DEFAULT 0,
-    schema_generation INTEGER NOT NULL DEFAULT 1,
+    schema_generation INTEGER NOT NULL DEFAULT 2,
     hlc_physical_ms INTEGER NOT NULL DEFAULT 0,
     hlc_logical INTEGER NOT NULL DEFAULT 0,
     retention_json TEXT NOT NULL DEFAULT '{"daily":30,"weekly":26,"yearly":5,"epochs_days":30,"deleted_blobs_days":30,"full_media_history":false}'
@@ -419,7 +419,9 @@ CREATE TABLE projection_write_control (
     suppress_tag_summary INTEGER NOT NULL DEFAULT 0 CHECK (suppress_tag_summary IN (0, 1)),
     suppress_smart_dirty INTEGER NOT NULL DEFAULT 0 CHECK (suppress_smart_dirty IN (0, 1))
 , suppress_root_summary INTEGER NOT NULL DEFAULT 0
-    CHECK (suppress_root_summary IN (0, 1)));
+    CHECK (suppress_root_summary IN (0, 1))
+, suppress_membership_capture INTEGER NOT NULL DEFAULT 0
+    CHECK (suppress_membership_capture IN (0, 1)));
 
 CREATE TABLE root_metadata (
     root_item_id INTEGER PRIMARY KEY
