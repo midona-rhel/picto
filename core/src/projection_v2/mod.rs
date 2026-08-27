@@ -1279,6 +1279,13 @@ impl ProjectionSelectionSnapshot {
             .map(|order| (**order).clone())
     }
 
+    pub(crate) fn group_order(&self, group_id: i64) -> Option<Vec<i64>> {
+        self.state
+            .collection_orders
+            .get(&group_id)
+            .map(|order| (**order).clone())
+    }
+
     pub(crate) fn tag_ids_for_root(&self, root_id: i64) -> Vec<i64> {
         self.state
             .root_owned_tags

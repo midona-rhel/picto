@@ -7,7 +7,7 @@
 use std::collections::HashMap;
 
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
-use rusqlite::{params, Connection, OptionalExtension, ToSql};
+use rusqlite::{Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
@@ -1796,13 +1796,21 @@ fn details_connection(
         rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error))
     })?;
     let folder_ids = projection.folder_ids_for_root(item_id);
+    let media_order = match kind {
+        ItemKind::Media => vec![item_id],
+        ItemKind::Collection => projection.group_order(item_id).ok_or_else(|| {
+            invalid_target(format!(
+                "Collection {item_id} has no canonical member order"
+            ))
+        })?,
+    };
+    let media_order_json = serde_json::to_string(&media_order)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     let mut media = connection
         .prepare(
             "WITH root_media(media_item_id, position) AS (
-                 SELECT ?1, 0 WHERE ?2 = 'media'
-                 UNION ALL
-                 SELECT media_item_id, position_rank FROM collection_member
-                 WHERE collection_id = ?1 AND ?2 = 'collection'
+                 SELECT CAST(value AS INTEGER), CAST(key AS INTEGER)
+                 FROM json_each(?1)
              )
              SELECT ma.item_id, mf.file_hash, mf.mime_type, mf.dominant_color_hex,
                     mf.dominant_palette_blob, mf.size_bytes, mf.pixel_width, mf.pixel_height,
@@ -1813,7 +1821,7 @@ fn details_connection(
              JOIN media_file mf ON mf.file_id = ma.file_id
              ORDER BY rm.position, ma.item_id",
         )?
-        .query_map(params![item_id, kind_string(kind)], |row| {
+        .query_map([media_order_json], |row| {
             let mime_type: String = row.get(2)?;
             let frame_count: Option<i64> = row.get(9)?;
             let supports_colors =
@@ -1900,13 +1908,6 @@ fn parse_lifecycle(value: &str) -> rusqlite::Result<Lifecycle> {
         "active" => Ok(Lifecycle::Active),
         "trash" => Ok(Lifecycle::Trash),
         _ => Err(invalid_target(format!("Unknown lifecycle: {value}"))),
-    }
-}
-
-fn kind_string(kind: ItemKind) -> &'static str {
-    match kind {
-        ItemKind::Media => "media",
-        ItemKind::Collection => "collection",
     }
 }
 
