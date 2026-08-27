@@ -560,7 +560,6 @@ async fn normalize_media_download(
             rating: None,
             source_urls: metadata.source_urls,
             tags,
-            provenance_mask: 1,
             lifecycle: Lifecycle::Inbox,
             captured_at: created_at,
             source: Some(source),

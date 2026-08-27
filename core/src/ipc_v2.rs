@@ -244,12 +244,7 @@ pub fn dispatch(
             let input: ApplyTagsInput = parse(args_json)?;
             publish(
                 application,
-                application.apply_tags(
-                    &input.target,
-                    &input.tags,
-                    input.add,
-                    input.provenance_mask,
-                )?,
+                application.apply_tags(&input.target, &input.tags, input.add)?,
             )
         }
         "items.patch_metadata" => {
@@ -814,10 +809,7 @@ pub async fn dispatch_async(
                 .collect::<Vec<_>>();
             return publish(
                 application,
-                application.apply_media_tag_assignments(
-                    &assignments,
-                    crate::ai_runtime_v2::AI_PROVENANCE_MASK,
-                )?,
+                application.apply_media_tag_assignments(&assignments)?,
             );
         }
         _ => {}
@@ -1076,9 +1068,6 @@ pub struct ApplyTagsInput {
     target: ItemTarget,
     tags: Vec<String>,
     add: bool,
-    #[serde(default = "default_provenance_mask")]
-    #[ts(type = "number")]
-    provenance_mask: i64,
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -1380,10 +1369,6 @@ fn default_page_limit() -> usize {
 fn default_distance_threshold() -> u32 {
     crate::duplicates_v2::DEFAULT_GLOBAL_DISTANCE_THRESHOLD
 }
-fn default_provenance_mask() -> i64 {
-    1
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1500,7 +1485,7 @@ mod tests {
             &application,
             "items.apply_tags",
             &format!(
-                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"tags":["general:test"],"add":true,"provenance_mask":1}}"#,
+                r#"{{"target":{{"kind":"explicit","item_ids":[{}]}},"tags":["general:test"],"add":true}}"#,
                 item_id.0
             ),
         )
@@ -1696,9 +1681,8 @@ mod tests {
                 connection.query_row(
                     "SELECT t.subtag
                      FROM root_tag rt JOIN tag t ON t.tag_id = rt.tag_id
-                     WHERE rt.root_item_id = ?1
-                       AND (rt.provenance_mask & ?2) != 0",
-                    rusqlite::params![item_id.0, crate::ai_runtime_v2::AI_PROVENANCE_MASK],
+                     WHERE rt.root_item_id = ?1",
+                    [item_id.0],
                     |row| row.get(0),
                 )
             })

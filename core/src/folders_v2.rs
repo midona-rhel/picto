@@ -361,13 +361,7 @@ impl Application {
                 let changed_tags = if added.is_empty() {
                     crate::operations_v2::BulkTagProjectionDelta::default()
                 } else {
-                    crate::operations_v2::apply_tags_to_selection(
-                        transaction,
-                        &added,
-                        true,
-                        1,
-                        "folder",
-                    )?
+                    crate::operations_v2::apply_tags_to_selection(transaction, &added, true)?
                 };
                 let changed = previous != names || changed_tags.canonical_changed;
                 Ok((root_ids, changed_tags, changed))

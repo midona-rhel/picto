@@ -1760,13 +1760,9 @@ fn apply_operation(
                     |row| row.get(0),
                 )?;
                 transaction.execute(
-                    "INSERT INTO root_tag
-                         (root_item_id, tag_id, direct_assignment_count,
-                          provenance_mask, source_mask)
-                     VALUES (?1, ?2, 1, 0, 8)
-                     ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
-                         direct_assignment_count = MAX(root_tag.direct_assignment_count, 1),
-                         source_mask = root_tag.source_mask | 8",
+                    "INSERT INTO root_tag(root_item_id, tag_id)
+                     VALUES (?1, ?2)
+                     ON CONFLICT(root_item_id, tag_id) DO NOTHING",
                     params![item_id, tag_id],
                 )?;
             } else {
@@ -4439,7 +4435,7 @@ mod tests {
     fn captured_updates_read_stable_keys_across_synced_tables() {
         let application = application();
         let media_id = add_media(&application, "member-a");
-        let (collection_id, folder_id, smart_folder_id, tag_id) = application
+        let (collection_id, folder_id, smart_folder_id, _tag_id) = application
             .store()
             .transaction(|transaction| {
                 transaction.execute(
@@ -4488,10 +4484,7 @@ mod tests {
                 )?;
                 let tag_id = transaction.last_insert_rowid();
                 transaction.execute(
-                    "INSERT INTO root_tag
-                         (root_item_id, tag_id, direct_assignment_count,
-                          provenance_mask, source_mask)
-                     VALUES (?1, ?2, 1, 0, 1)",
+                    "INSERT INTO root_tag(root_item_id, tag_id) VALUES (?1, ?2)",
                     params![collection_id, tag_id],
                 )?;
                 Ok((collection_id, folder_id, smart_folder_id, tag_id))
@@ -4536,11 +4529,6 @@ mod tests {
                     "UPDATE smart_folder SET name = 'Renamed', updated_at = 'later'
                      WHERE smart_folder_id = ?1",
                     [smart_folder_id],
-                )?;
-                transaction.execute(
-                    "UPDATE root_tag SET provenance_mask = 1
-                     WHERE root_item_id = ?1 AND tag_id = ?2",
-                    params![collection_id, tag_id],
                 )?;
                 Ok(())
             })

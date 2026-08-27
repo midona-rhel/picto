@@ -18,8 +18,6 @@ export interface CanonicalTagInfo {
   tag_id: number;
   namespace: string;
   subtag: string;
-  provenance_mask: string;
-  source: string;
 }
 
 export interface CanonicalTagRecord {

@@ -608,7 +608,7 @@ fn timed_bulk_mutations(
 
     let tag_started = Instant::now();
     application
-        .apply_tags(&target, &["benchmark:bulk".to_string()], true, 1)
+        .apply_tags(&target, &["benchmark:bulk".to_string()], true)
         .unwrap();
     let tag = tag_started.elapsed();
 
@@ -721,9 +721,8 @@ fn insert_media_batches(
                      ) VALUES (?1, ?2, NULL, NULL, '[]', '2026-01-01')",
                 )?;
                 let mut insert_tags = transaction.prepare(
-                    "INSERT INTO root_tag
-                         (root_item_id, tag_id, provenance_mask, source_mask)
-                     SELECT ?1, CAST(value AS INTEGER), 1, 1
+                    "INSERT INTO root_tag(root_item_id, tag_id)
+                     SELECT ?1, CAST(value AS INTEGER)
                      FROM json_each(?2)",
                 )?;
                 let mut insert_root = transaction
@@ -1834,7 +1833,7 @@ fn exercise_tag_membership(
         application,
         store,
         library_root,
-        || application.apply_tags(target, std::slice::from_ref(&tag), true, 1),
+        || application.apply_tags(target, std::slice::from_ref(&tag), true),
     );
     add_result.unwrap();
     measure_validation("tags.add", cardinality, || {
@@ -1870,7 +1869,7 @@ fn exercise_tag_membership(
         application,
         store,
         library_root,
-        || application.apply_tags(target, std::slice::from_ref(&tag), false, 1),
+        || application.apply_tags(target, std::slice::from_ref(&tag), false),
     );
     remove_result.unwrap();
     measure_validation("tags.remove", cardinality, || {

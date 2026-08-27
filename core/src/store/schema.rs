@@ -2392,13 +2392,7 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
-        for required in [
-            "root_item_id",
-            "tag_id",
-            "direct_assignment_count",
-            "provenance_mask",
-            "source_mask",
-        ] {
+        for required in ["root_item_id", "tag_id"] {
             assert!(
                 root_tag_columns.iter().any(|column| column == required),
                 "missing canonical root_tag column {required}"

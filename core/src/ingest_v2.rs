@@ -67,7 +67,6 @@ pub struct PreparedMediaInput {
     pub rating: Option<i64>,
     pub source_urls: Vec<String>,
     pub tags: Vec<String>,
-    pub provenance_mask: i64,
     pub lifecycle: Lifecycle,
     pub captured_at: Option<String>,
     pub source: Option<SourcePostInput>,
@@ -109,7 +108,6 @@ struct StagedRootOrganization {
 struct StagedRootTag {
     namespace: String,
     subtag: String,
-    provenance_mask: i64,
 }
 
 #[derive(Default)]
@@ -765,18 +763,14 @@ impl StagedRootOrganization {
         let mut tags = self
             .tags
             .drain(..)
-            .map(|tag| ((tag.namespace, tag.subtag), tag.provenance_mask))
-            .collect::<BTreeMap<_, _>>();
+            .map(|tag| (tag.namespace, tag.subtag))
+            .collect::<BTreeSet<_>>();
         for tag in incoming.tags {
-            *tags.entry((tag.namespace, tag.subtag)).or_default() |= tag.provenance_mask;
+            tags.insert((tag.namespace, tag.subtag));
         }
         self.tags = tags
             .into_iter()
-            .map(|((namespace, subtag), provenance_mask)| StagedRootTag {
-                namespace,
-                subtag,
-                provenance_mask,
-            })
+            .map(|(namespace, subtag)| StagedRootTag { namespace, subtag })
             .collect();
 
         if incoming.cover_order < self.cover_order || self.cover_order.is_none() {
@@ -806,11 +800,7 @@ fn parsed_root_tags(input: &PreparedMediaInput, external: bool) -> Vec<StagedRoo
         })
         .collect::<BTreeSet<_>>()
         .into_iter()
-        .map(|(namespace, subtag)| StagedRootTag {
-            namespace,
-            subtag,
-            provenance_mask: input.provenance_mask,
-        })
+        .map(|(namespace, subtag)| StagedRootTag { namespace, subtag })
         .collect()
 }
 
@@ -892,20 +882,16 @@ fn merge_root_organization(
     )?;
     let tag_ids = {
         let mut statement = transaction.prepare(
-            "WITH input(namespace, subtag, provenance_mask) AS (
+            "WITH input(namespace, subtag) AS (
                  SELECT json_extract(value, '$.namespace'),
-                        json_extract(value, '$.subtag'),
-                        json_extract(value, '$.provenance_mask')
+                        json_extract(value, '$.subtag')
                  FROM json_each(?1)
              )
-             INSERT INTO root_tag (root_item_id, tag_id, provenance_mask)
-             SELECT ?2, tag.tag_id, input.provenance_mask
+             INSERT INTO root_tag (root_item_id, tag_id)
+             SELECT ?2, tag.tag_id
              FROM input JOIN tag USING (namespace, subtag)
              WHERE 1
-             ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
-                 provenance_mask = root_tag.provenance_mask | excluded.provenance_mask
-             WHERE root_tag.provenance_mask <>
-                 (root_tag.provenance_mask | excluded.provenance_mask)
+             ON CONFLICT(root_item_id, tag_id) DO NOTHING
              RETURNING tag_id",
         )?;
         let rows = statement
@@ -1419,10 +1405,9 @@ fn settle_source_post_root(
                 params![collection_id, now, root_id],
             )?;
             transaction.execute(
-                "INSERT INTO root_tag (root_item_id, tag_id, provenance_mask)
-                 SELECT ?1, tag_id, provenance_mask FROM root_tag WHERE root_item_id = ?2
-                 ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
-                     provenance_mask = root_tag.provenance_mask | excluded.provenance_mask",
+                "INSERT INTO root_tag (root_item_id, tag_id)
+                 SELECT ?1, tag_id FROM root_tag WHERE root_item_id = ?2
+                 ON CONFLICT(root_item_id, tag_id) DO NOTHING",
                 params![collection_id, root_id],
             )?;
             transaction.execute(
@@ -1745,7 +1730,6 @@ mod tests {
             rating: None,
             source_urls: Vec::new(),
             tags: vec!["general:test".to_string()],
-            provenance_mask: 1,
             lifecycle: Lifecycle::Inbox,
             captured_at: None,
             source: Some(SourcePostInput {
@@ -2079,24 +2063,22 @@ mod tests {
                 )?;
                 assert!(unchanged.tag_ids.is_empty());
 
-                let mut updated = media.clone();
-                updated.provenance_mask = 2;
                 let changed = merge_root_organization(
                     transaction,
                     result.root_item_id.0,
-                    &StagedRootOrganization::from_input(&updated, true),
+                    &StagedRootOrganization::from_input(&media, true),
                     false,
                     "later",
                 )?;
-                assert_eq!(changed.tag_ids.len(), 2);
+                assert!(changed.tag_ids.is_empty());
                 Ok(())
             })
             .unwrap();
 
         app.store()
             .read(|connection| {
-                let mask: i64 = connection.query_row(
-                    "SELECT rt.provenance_mask
+                let assignments: i64 = connection.query_row(
+                    "SELECT COUNT(*)
                      FROM root_tag rt JOIN tag t ON t.tag_id = rt.tag_id
                      WHERE rt.root_item_id = ?1
                        AND t.namespace = 'general' AND t.subtag = 'first'
@@ -2104,7 +2086,7 @@ mod tests {
                     [result.root_item_id.0],
                     |row| row.get(0),
                 )?;
-                assert_eq!(mask, 3);
+                assert_eq!(assignments, 1);
                 Ok(())
             })
             .unwrap();

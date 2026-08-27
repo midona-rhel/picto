@@ -1757,38 +1757,14 @@ fn merge_standalone_item(
     }
 
     let tags = transaction
-        .prepare(
-            "SELECT tag_id, direct_assignment_count, provenance_mask, source_mask
-             FROM root_tag WHERE root_item_id = ?1",
-        )?
-        .query_map([loser_item_id], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, i64>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, i64>(3)?,
-            ))
-        })?
+        .prepare("SELECT tag_id FROM root_tag WHERE root_item_id = ?1")?
+        .query_map([loser_item_id], |row| row.get::<_, i64>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (tag_id, direct_assignment_count, provenance_mask, source_mask) in tags {
+    for tag_id in tags {
         transaction.execute(
-            "INSERT INTO root_tag (
-                 root_item_id, tag_id, direct_assignment_count,
-                 provenance_mask, source_mask
-             ) VALUES (?1, ?2, ?3, ?4, ?5)
-             ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
-                 direct_assignment_count = MAX(
-                     root_tag.direct_assignment_count, excluded.direct_assignment_count
-                 ),
-                 provenance_mask = root_tag.provenance_mask | excluded.provenance_mask,
-                 source_mask = root_tag.source_mask | excluded.source_mask",
-            params![
-                target_item_id,
-                tag_id,
-                direct_assignment_count,
-                provenance_mask,
-                source_mask
-            ],
+            "INSERT INTO root_tag(root_item_id, tag_id) VALUES (?1, ?2)
+             ON CONFLICT(root_item_id, tag_id) DO NOTHING",
+            params![target_item_id, tag_id],
         )?;
         delta.root_tags_added.push((target_item_id, tag_id));
     }
@@ -2841,9 +2817,7 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO root_tag (
-                         root_item_id, tag_id, provenance_mask, source_mask
-                     ) VALUES (2, 1, 2, 4)",
+                    "INSERT INTO root_tag(root_item_id, tag_id) VALUES (2, 1)",
                     [],
                 )?;
                 tx.execute(
@@ -3052,11 +3026,8 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO root_tag (
-                         root_item_id, tag_id, direct_assignment_count,
-                         provenance_mask, source_mask
-                     ) VALUES (1, 1, 1, 8, 16),
-                              (2, 1, 1, 2, 4)",
+                    "INSERT INTO root_tag(root_item_id, tag_id)
+                     VALUES (1, 1), (2, 1)",
                     [],
                 )?;
                 tx.execute(
@@ -3098,11 +3069,11 @@ mod tests {
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?;
-                let tag: (i64, i64) = connection.query_row(
-                    "SELECT provenance_mask, source_mask
-                     FROM root_tag WHERE root_item_id = 1 AND tag_id = 1",
+                let tag_count: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM root_tag
+                     WHERE root_item_id = 1 AND tag_id = 1",
                     [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| row.get(0),
                 )?;
                 let folder_count: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM folder_item WHERE item_id = 1 AND folder_id = 1",
@@ -3112,7 +3083,7 @@ mod tests {
                 assert!(!loser_exists);
                 assert_eq!(notes, "winner note\n\nloser note");
                 assert_eq!(urls, "[\"https://winner\",\"https://loser\"]");
-                assert_eq!(tag, (10, 20));
+                assert_eq!(tag_count, 1);
                 assert_eq!(folder_count, 1);
                 Ok(())
             })

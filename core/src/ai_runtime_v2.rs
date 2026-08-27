@@ -21,7 +21,6 @@ const MAX_MANUAL_PREDICTION_MODELS: usize = 8;
 const MIN_MANUAL_REVIEW_CONFIDENCE: f32 = 0.05;
 
 /// Provenance bit shared with the existing AI tagger.
-pub(crate) const AI_PROVENANCE_MASK: i64 = 1 << 1;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct MediaOriginal {
@@ -487,7 +486,7 @@ pub async fn execute_ai_tagging_batch(
             let receipt = if tags.is_empty() {
                 None
             } else {
-                Some(application.apply_media_tags(media_item_id, &tags, AI_PROVENANCE_MASK)?)
+                Some(application.apply_media_tags(media_item_id, &tags)?)
             };
             Ok(AiTagExecutionResult {
                 media_item_id,

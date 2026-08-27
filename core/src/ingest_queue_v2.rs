@@ -1132,7 +1132,6 @@ mod tests {
             rating: None,
             source_urls: Vec::new(),
             tags: Vec::new(),
-            provenance_mask: 1,
             lifecycle: Lifecycle::Inbox,
             captured_at: None,
             source: Some(SourcePostInput {

@@ -11,8 +11,7 @@ use crate::app::{resources, Application, ItemId, MutationReceipt};
 use crate::projection_v2::{ProjectionStore, TagGraphProjectionDelta, TagIdentityProjectionChange};
 use crate::store::history::{
     HistoryDescriptor, SemanticHistoryPayload, SemanticHistoryRecord, SemanticMembershipDelta,
-    SemanticRootTagState, SemanticTagGraphDelta, SemanticTagIdentityState,
-    SemanticTagRootSet,
+    SemanticRootTagState, SemanticTagGraphDelta, SemanticTagIdentityState, SemanticTagRootSet,
 };
 
 const MAX_LIMIT: i64 = 500;
@@ -157,9 +156,9 @@ impl Application {
                         transaction.execute("DELETE FROM tag WHERE tag_id = ?1", [tag_id])?;
                         let projection = TagGraphProjectionDelta {
                             identities: vec![TagIdentityProjectionChange {
-                            source_tag_id: tag_id,
-                            target_tag_id: Some(target_id),
-                            remove_tag: true,
+                                source_tag_id: tag_id,
+                                target_tag_id: Some(target_id),
+                                remove_tag: true,
                             }],
                         };
                         refresh_tag_summaries(
@@ -178,12 +177,7 @@ impl Application {
                             true,
                         ))
                     }
-                    Some(_) => Ok((
-                        Vec::new(),
-                        SemanticTagGraphDelta::default(),
-                        None,
-                        false,
-                    )),
+                    Some(_) => Ok((Vec::new(), SemanticTagGraphDelta::default(), None, false)),
                     None => {
                         let smart_roots = graph_affected_roots(transaction, [tag_id])?;
                         let (old_namespace, old_subtag) = before
@@ -329,9 +323,9 @@ impl Application {
                 transaction.execute("DELETE FROM tag WHERE tag_id = ?1", [tag_id])?;
                 let projection = TagGraphProjectionDelta {
                     identities: vec![TagIdentityProjectionChange {
-                    source_tag_id: tag_id,
-                    target_tag_id: None,
-                    remove_tag: true,
+                        source_tag_id: tag_id,
+                        target_tag_id: None,
+                        remove_tag: true,
                     }],
                 };
                 refresh_tag_summaries(transaction, affected_tag_ids(&projection).into_iter())?;
@@ -573,7 +567,7 @@ fn settle_tag_rename_smart_targets(
 #[derive(Default)]
 struct SemanticTagSnapshot {
     identities: BTreeMap<i64, (String, String)>,
-    root_tags: BTreeMap<(i64, i64), (i64, i64, i64)>,
+    root_tags: BTreeSet<(i64, i64)>,
 }
 
 fn semantic_tag_snapshot(
@@ -609,23 +603,12 @@ fn semantic_tag_snapshot(
         .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
     let root_tags = transaction
         .prepare(
-            "SELECT relation.root_item_id, relation.tag_id,
-                    relation.direct_assignment_count,
-                    relation.provenance_mask, relation.source_mask
+            "SELECT relation.root_item_id, relation.tag_id
              FROM root_tag relation
              JOIN picto_tag_history_scope scope ON scope.tag_id = relation.tag_id",
         )?
-        .query_map([], |row| {
-            Ok((
-                (row.get::<_, i64>(0)?, row.get::<_, i64>(1)?),
-                (
-                    row.get::<_, i64>(2)?,
-                    row.get::<_, i64>(3)?,
-                    row.get::<_, i64>(4)?,
-                ),
-            ))
-        })?
-        .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<rusqlite::Result<BTreeSet<_>>>()?;
     Ok(SemanticTagSnapshot {
         identities,
         root_tags,
@@ -672,30 +655,30 @@ fn semantic_tag_direction(
 
     let root_keys = current
         .root_tags
-        .keys()
-        .chain(desired.root_tags.keys())
+        .iter()
+        .chain(desired.root_tags.iter())
         .copied()
-        .filter(|key| current.root_tags.get(key) != desired.root_tags.get(key))
+        .filter(|key| current.root_tags.contains(key) != desired.root_tags.contains(key))
         .collect::<BTreeSet<_>>();
     let mut clear_by_tag = BTreeMap::<i64, RoaringBitmap>::new();
-    let mut desired_groups = BTreeMap::<(i64, i64, i64, i64), RoaringBitmap>::new();
+    let mut desired_groups = BTreeMap::<i64, RoaringBitmap>::new();
     let mut projection_by_tag = BTreeMap::<i64, (RoaringBitmap, RoaringBitmap)>::new();
     for (root_id, tag_id) in root_keys {
         let root_id_u32 = u32::try_from(root_id)
             .map_err(|_| invalid(format!("Root item {root_id} exceeds projection capacity")))?;
         clear_by_tag.entry(tag_id).or_default().insert(root_id_u32);
         match (
-            current.root_tags.get(&(root_id, tag_id)),
-            desired.root_tags.get(&(root_id, tag_id)),
+            current.root_tags.contains(&(root_id, tag_id)),
+            desired.root_tags.contains(&(root_id, tag_id)),
         ) {
-            (None, Some(_)) => {
+            (false, true) => {
                 projection_by_tag
                     .entry(tag_id)
                     .or_default()
                     .0
                     .insert(root_id_u32);
             }
-            (Some(_), None) => {
+            (true, false) => {
                 projection_by_tag
                     .entry(tag_id)
                     .or_default()
@@ -704,11 +687,9 @@ fn semantic_tag_direction(
             }
             _ => {}
         }
-        if let Some((direct, provenance, source)) =
-            desired.root_tags.get(&(root_id, tag_id))
-        {
+        if desired.root_tags.contains(&(root_id, tag_id)) {
             desired_groups
-                .entry((tag_id, *direct, *provenance, *source))
+                .entry(tag_id)
                 .or_default()
                 .insert(root_id_u32);
         }
@@ -731,15 +712,7 @@ fn semantic_tag_direction(
             .collect(),
         root_tags: desired_groups
             .into_iter()
-            .map(
-                |((tag_id, direct, provenance, source), roots)| SemanticRootTagState {
-                    tag_id,
-                    direct_assignment_count: direct,
-                    provenance_mask: provenance,
-                    source_mask: source,
-                    roots,
-                },
-            )
+            .map(|(tag_id, roots)| SemanticRootTagState { tag_id, roots })
             .collect(),
         projection_tags: projection_by_tag
             .into_iter()
@@ -747,8 +720,6 @@ fn semantic_tag_direction(
                 relation_id,
                 add,
                 remove,
-                provenance_mask: 0,
-                source_mask: 0,
             })
             .collect(),
         removed_tag_ids: current
@@ -842,23 +813,12 @@ fn move_namespace(
         params![target_namespace, source_namespace],
     )?;
     transaction.execute(
-        "INSERT INTO root_tag (
-             root_item_id, tag_id, direct_assignment_count,
-             provenance_mask, source_mask
-         )
-         SELECT relation.root_item_id, mapping.target_tag_id,
-                relation.direct_assignment_count,
-                relation.provenance_mask, relation.source_mask
+        "INSERT INTO root_tag(root_item_id, tag_id)
+         SELECT relation.root_item_id, mapping.target_tag_id
          FROM root_tag relation
          JOIN picto_tag_merge mapping ON mapping.source_tag_id = relation.tag_id
          WHERE TRUE
-         ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
-           direct_assignment_count = MAX(
-               root_tag.direct_assignment_count,
-               excluded.direct_assignment_count
-           ),
-           provenance_mask = root_tag.provenance_mask | excluded.provenance_mask,
-           source_mask = root_tag.source_mask | excluded.source_mask",
+         ON CONFLICT(root_item_id, tag_id) DO NOTHING",
         [],
     )?;
     transaction.execute(
@@ -904,20 +864,10 @@ fn move_tag_assignments(
     target_id: i64,
 ) -> rusqlite::Result<()> {
     transaction.execute(
-        "INSERT INTO root_tag (
-             root_item_id, tag_id, direct_assignment_count,
-             provenance_mask, source_mask
-         )
-         SELECT root_item_id, ?1, direct_assignment_count,
-                provenance_mask, source_mask
+        "INSERT INTO root_tag(root_item_id, tag_id)
+         SELECT root_item_id, ?1
          FROM root_tag WHERE tag_id = ?2
-         ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
-           direct_assignment_count = MAX(
-               root_tag.direct_assignment_count,
-               excluded.direct_assignment_count
-           ),
-           provenance_mask = root_tag.provenance_mask | excluded.provenance_mask,
-           source_mask = root_tag.source_mask | excluded.source_mask",
+         ON CONFLICT(root_item_id, tag_id) DO NOTHING",
         params![target_id, source_id],
     )?;
     transaction.execute("DELETE FROM root_tag WHERE tag_id = ?1", [source_id])?;
@@ -965,7 +915,7 @@ fn refresh_tag_summaries(
          SELECT tag.tag_id,
                 COUNT(DISTINCT CASE WHEN root.lifecycle = 'active'
                                     THEN relation.root_item_id END),
-                COALESCE(SUM(relation.direct_assignment_count), 0)
+                COUNT(relation.root_item_id)
          FROM picto_dirty_tag_summary dirty
          JOIN tag ON tag.tag_id = dirty.tag_id
          LEFT JOIN root_tag relation ON relation.tag_id = tag.tag_id
@@ -1112,7 +1062,6 @@ mod tests {
                 rating: None,
                 source_urls: Vec::new(),
                 tags: vec!["general:one_girl".into(), "character:melon".into()],
-                provenance_mask: 1,
                 lifecycle: Lifecycle::Active,
                 captured_at: None,
                 source: None,
@@ -1265,9 +1214,7 @@ mod tests {
                     [],
                 )?;
                 transaction.execute(
-                    "INSERT INTO root_tag (
-                         root_item_id, tag_id, provenance_mask, source_mask
-                     ) VALUES (99, ?1, 1, 1)",
+                    "INSERT INTO root_tag(root_item_id, tag_id) VALUES (99, ?1)",
                     [tag_id],
                 )?;
                 rebuild_tag_summaries(transaction)?;
@@ -1370,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn merge_unions_root_tag_provenance_and_source_masks() {
+    fn merge_keeps_one_plain_root_tag_membership() {
         let (_directory, application, media) = fixture();
         let (from, to) = application
             .store()
@@ -1381,16 +1328,6 @@ mod tests {
                          (SELECT tag_id FROM tag WHERE subtag = 'one_girl')",
                     [],
                     |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-                )?;
-                transaction.execute(
-                    "UPDATE root_tag SET provenance_mask = 2, source_mask = 4
-                     WHERE root_item_id = ?1 AND tag_id = ?2",
-                    params![media.0, ids.0],
-                )?;
-                transaction.execute(
-                    "UPDATE root_tag SET provenance_mask = 8, source_mask = 16
-                     WHERE root_item_id = ?1 AND tag_id = ?2",
-                    params![media.0, ids.1],
                 )?;
                 Ok(ids)
             })
@@ -1403,18 +1340,12 @@ mod tests {
             .store()
             .read(|connection| {
                 let merged = connection.query_row(
-                    "SELECT direct_assignment_count, provenance_mask, source_mask FROM root_tag
+                    "SELECT COUNT(*) FROM root_tag
                      WHERE root_item_id = ?1 AND tag_id = ?2",
                     params![media.0, to],
-                    |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, i64>(1)?,
-                            row.get::<_, i64>(2)?,
-                        ))
-                    },
+                    |row| row.get::<_, i64>(0),
                 )?;
-                assert_eq!(merged, (1, 10, 20));
+                assert_eq!(merged, 1);
                 Ok(())
             })
             .unwrap();

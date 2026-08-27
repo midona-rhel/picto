@@ -42,13 +42,11 @@ export function applyEntityTags(
   target: ItemTarget,
   operation: 'add' | 'remove',
   tags: string[],
-  provenanceMask = 1,
 ): Promise<MutationReceipt> {
   return invoke<MutationReceipt>('items.apply_tags', {
     target,
     tags,
     add: operation === 'add',
-    provenance_mask: provenanceMask,
   });
 }
 

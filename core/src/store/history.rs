@@ -95,10 +95,6 @@ pub struct SemanticMembershipDelta {
     pub relation_id: i64,
     pub add: RoaringBitmap,
     pub remove: RoaringBitmap,
-    /// Root-tag provenance restored when `add` is applied. Folder membership
-    /// leaves these at zero.
-    pub provenance_mask: i64,
-    pub source_mask: i64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -139,9 +135,6 @@ pub struct SemanticTagRootSet {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SemanticRootTagState {
     pub tag_id: i64,
-    pub direct_assignment_count: i64,
-    pub provenance_mask: i64,
-    pub source_mask: i64,
     pub roots: RoaringBitmap,
 }
 
@@ -185,8 +178,6 @@ pub struct SemanticGroupFolder {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SemanticGroupTag {
     pub tag_id: i64,
-    pub provenance_mask: i64,
-    pub source_mask: i64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -261,7 +252,7 @@ impl SemanticHistoryPayload {
             Self::Tags(changes) | Self::Folders(changes) => changes
                 .iter()
                 .map(|change| {
-                    std::mem::size_of::<i64>() * 3
+                    std::mem::size_of::<i64>()
                         + bitmap_bytes(&change.add)
                         + bitmap_bytes(&change.remove)
                 })
@@ -292,7 +283,7 @@ impl SemanticHistoryPayload {
                     + delta
                         .root_tags
                         .iter()
-                        .map(|state| std::mem::size_of::<i64>() * 4 + bitmap_bytes(&state.roots))
+                        .map(|state| std::mem::size_of::<i64>() + bitmap_bytes(&state.roots))
                         .sum::<usize>()
                     + delta
                         .projection_tags
@@ -1178,17 +1169,9 @@ fn apply_tag_graph(
     for state in &delta.root_tags {
         insert_bitmap_rows(
             transaction,
-            "INSERT INTO root_tag(
-                 root_item_id, tag_id, direct_assignment_count,
-                 provenance_mask, source_mask
-             ) SELECT CAST(value AS INTEGER), ?1, ?2, ?3, ?4
-               FROM json_each(?5)",
-            &[
-                rusqlite::types::Value::Integer(state.tag_id),
-                rusqlite::types::Value::Integer(state.direct_assignment_count),
-                rusqlite::types::Value::Integer(state.provenance_mask),
-                rusqlite::types::Value::Integer(state.source_mask),
-            ],
+            "INSERT INTO root_tag(root_item_id, tag_id)
+             SELECT CAST(value AS INTEGER), ?1 FROM json_each(?2)",
+            &[rusqlite::types::Value::Integer(state.tag_id)],
             &state.roots,
         )?;
     }
@@ -1240,7 +1223,7 @@ fn refresh_tag_summaries_for_history(
              SELECT tag.tag_id,
                     COUNT(DISTINCT CASE WHEN root.lifecycle = 'active'
                                         THEN relation.root_item_id END),
-                    COALESCE(SUM(relation.direct_assignment_count), 0)
+                    COUNT(relation.root_item_id)
              FROM picto_history_tag_summary dirty
              JOIN tag ON tag.tag_id = dirty.tag_id
              LEFT JOIN root_tag relation ON relation.tag_id = tag.tag_id
@@ -1480,8 +1463,6 @@ fn apply_memberships(
                  relation_id INTEGER NOT NULL,
                  root_item_id INTEGER NOT NULL,
                  present INTEGER NOT NULL,
-                 provenance_mask INTEGER NOT NULL,
-                 source_mask INTEGER NOT NULL,
                  PRIMARY KEY (relation_id, root_item_id)
              ) WITHOUT ROWID;
              DELETE FROM picto_history_membership;",
@@ -1496,21 +1477,15 @@ fn apply_memberships(
         }
         insert_bitmap_rows(
             transaction,
-            "INSERT INTO picto_history_membership(
-                 relation_id, root_item_id, present, provenance_mask, source_mask
-             ) SELECT ?1, CAST(value AS INTEGER), 1, ?2, ?3 FROM json_each(?4)",
-            &[
-                rusqlite::types::Value::Integer(change.relation_id),
-                rusqlite::types::Value::Integer(change.provenance_mask),
-                rusqlite::types::Value::Integer(change.source_mask),
-            ],
+            "INSERT INTO picto_history_membership(relation_id, root_item_id, present)
+             SELECT ?1, CAST(value AS INTEGER), 1 FROM json_each(?2)",
+            &[rusqlite::types::Value::Integer(change.relation_id)],
             &change.add,
         )?;
         insert_bitmap_rows(
             transaction,
-            "INSERT INTO picto_history_membership(
-                 relation_id, root_item_id, present, provenance_mask, source_mask
-             ) SELECT ?1, CAST(value AS INTEGER), 0, 0, 0 FROM json_each(?2)",
+            "INSERT INTO picto_history_membership(relation_id, root_item_id, present)
+             SELECT ?1, CAST(value AS INTEGER), 0 FROM json_each(?2)",
             &[rusqlite::types::Value::Integer(change.relation_id)],
             &change.remove,
         )?;
@@ -1559,8 +1534,8 @@ fn apply_memberships(
         .execute(&delete_sql, [])
         .map_err(|error| error.to_string())?;
     let insert_sql = if table == "root_tag" {
-        "INSERT INTO root_tag(root_item_id, tag_id, provenance_mask, source_mask)
-         SELECT root_item_id, relation_id, provenance_mask, source_mask
+        "INSERT INTO root_tag(root_item_id, tag_id)
+         SELECT root_item_id, relation_id
          FROM picto_history_membership WHERE present = 1
          ON CONFLICT(root_item_id, tag_id) DO NOTHING"
             .to_string()
@@ -1774,8 +1749,6 @@ fn apply_group(transaction: &Transaction<'_>, delta: &SemanticGroupDelta) -> Res
              CREATE TEMP TABLE IF NOT EXISTS picto_history_group_tag (
                  root_item_id INTEGER NOT NULL,
                  tag_id INTEGER NOT NULL,
-                 provenance_mask INTEGER NOT NULL,
-                 source_mask INTEGER NOT NULL,
                  PRIMARY KEY (root_item_id, tag_id)
              ) WITHOUT ROWID;
              DELETE FROM picto_history_remove_root;
@@ -1846,8 +1819,8 @@ fn apply_group(transaction: &Transaction<'_>, delta: &SemanticGroupDelta) -> Res
              SELECT folder_id, root_item_id, position_rank FROM picto_history_group_folder;
              DELETE FROM root_tag
              WHERE root_item_id IN (SELECT item_id FROM picto_history_group_root);
-             INSERT INTO root_tag(root_item_id, tag_id, provenance_mask, source_mask)
-             SELECT root_item_id, tag_id, provenance_mask, source_mask
+             INSERT INTO root_tag(root_item_id, tag_id)
+             SELECT root_item_id, tag_id
              FROM picto_history_group_tag;",
         )
         .map_err(|error| error.to_string())?;
@@ -1892,9 +1865,8 @@ fn stage_group_payload(
         .map_err(|error| error.to_string())?;
     let mut insert_tag = transaction
         .prepare_cached(
-            "INSERT INTO picto_history_group_tag
-                 (root_item_id, tag_id, provenance_mask, source_mask)
-             VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO picto_history_group_tag(root_item_id, tag_id)
+             VALUES (?1, ?2)",
         )
         .map_err(|error| error.to_string())?;
     for root in &delta.roots {
@@ -1928,12 +1900,7 @@ fn stage_group_payload(
         }
         for tag in &root.tags {
             insert_tag
-                .execute(params![
-                    root.item_id,
-                    tag.tag_id,
-                    tag.provenance_mask,
-                    tag.source_mask
-                ])
+                .execute(params![root.item_id, tag.tag_id])
                 .map_err(|error| error.to_string())?;
         }
     }
@@ -2293,9 +2260,6 @@ mod tests {
                     }],
                     root_tags: vec![SemanticRootTagState {
                         tag_id: 7,
-                        direct_assignment_count: 1,
-                        provenance_mask: 3,
-                        source_mask: 5,
                         roots: roots.clone(),
                     }],
                     affected_roots: roots.clone(),
@@ -2430,8 +2394,8 @@ mod tests {
                 |transaction| {
                     transaction.execute("UPDATE library_root SET lifecycle = 'trash'", [])?;
                     transaction.execute(
-                        "INSERT INTO root_tag(root_item_id, tag_id, provenance_mask, source_mask)
-                         SELECT item_id, ?1, 0, 0 FROM library_root",
+                        "INSERT INTO root_tag(root_item_id, tag_id)
+                         SELECT item_id, ?1 FROM library_root",
                         [tag_id],
                     )?;
                     transaction.execute(

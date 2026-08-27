@@ -159,7 +159,7 @@ export async function executeTutorialActions(actions: readonly TutorialAction[] 
       }
     } else if (action.type === 'set_tutorial_tag') {
       const selected = [...store.get(gridSelectionAtom).itemIds][0];
-      if (selected != null) await invoke('items.apply_tags', { target: { kind: 'explicit', item_ids: [selected] }, tags: ['general:guided tour'], add: action.present, provenance_mask: 1 });
+      if (selected != null) await invoke('items.apply_tags', { target: { kind: 'explicit', item_ids: [selected] }, tags: ['general:guided tour'], add: action.present });
     } else if (action.type === 'set_tutorial_collection_order') {
       const selected = store.get(viewerSessionAtom)?.currentItemId ?? [...store.get(gridSelectionAtom).itemIds][0];
       if (selected == null) continue;

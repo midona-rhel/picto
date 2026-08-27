@@ -13,7 +13,6 @@ use crate::folders_v2::{CreateFolderInput, FolderId};
 use crate::ingest_queue_v2::{self, IngestJobSpec};
 use crate::ingest_v2::{PreparedMediaInput, SourcePostInput};
 
-const LOCAL_PROVENANCE: i64 = 1;
 const WATCH_STABLE_DELAY: Duration = Duration::from_millis(500);
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -344,7 +343,6 @@ pub(crate) async fn prepare_input(
         rating: None,
         source_urls: source_urls.to_vec(),
         tags: tags.to_vec(),
-        provenance_mask: LOCAL_PROVENANCE,
         lifecycle,
         captured_at,
         source,

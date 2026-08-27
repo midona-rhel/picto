@@ -982,12 +982,10 @@ fn copy_canonical_rows(
         )
         .map_err(|error| format!("cannot convert root metadata: {error}"))?;
 
-    // Fold every legacy member assignment into one effective (root, tag) row.
-    // The recursive fold preserves the bitwise provenance union without a
-    // custom SQLite aggregate or per-row Rust work.
+    // Fold every legacy member assignment into one plain (root, tag) row.
     transaction
         .execute(
-            "WITH RECURSIVE
+            "WITH
              root_media(root_item_id, media_item_id) AS (
                  SELECT lr.item_id, lr.item_id
                  FROM source.library_root lr
@@ -999,39 +997,11 @@ fn copy_canonical_rows(
                  JOIN source.library_item li
                    ON li.item_id = lr.item_id AND li.kind = 'collection'
                  JOIN source.collection_member cm ON cm.collection_id = lr.item_id
-             ), numbered AS (
-                 SELECT rm.root_item_id, mt.tag_id, mt.media_item_id,
-                        COALESCE(mt.provenance_mask, 0) AS provenance_mask,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY rm.root_item_id, mt.tag_id
-                            ORDER BY mt.media_item_id, mt.source
-                        ) AS sequence,
-                        COUNT(*) OVER (
-                            PARTITION BY rm.root_item_id, mt.tag_id
-                        ) AS assignment_count
+             )
+             INSERT INTO main.root_tag(root_item_id, tag_id)
+             SELECT DISTINCT rm.root_item_id, mt.tag_id
                  FROM root_media rm
-                 JOIN source.media_tag mt ON mt.media_item_id = rm.media_item_id
-             ), folded(
-                 root_item_id, tag_id, sequence, assignment_count, provenance_mask
-             ) AS (
-                 SELECT root_item_id, tag_id, 1, assignment_count, provenance_mask
-                 FROM numbered WHERE sequence = 1
-                 UNION ALL
-                 SELECT folded.root_item_id, folded.tag_id, numbered.sequence,
-                        folded.assignment_count,
-                        folded.provenance_mask | numbered.provenance_mask
-                 FROM folded
-                 JOIN numbered
-                   ON numbered.root_item_id = folded.root_item_id
-                  AND numbered.tag_id = folded.tag_id
-                  AND numbered.sequence = folded.sequence + 1
-             )
-             INSERT INTO main.root_tag (
-                 root_item_id, tag_id, direct_assignment_count,
-                 provenance_mask
-             )
-             SELECT root_item_id, tag_id, assignment_count, provenance_mask
-             FROM folded WHERE sequence = assignment_count",
+                 JOIN source.media_tag mt ON mt.media_item_id = rm.media_item_id",
             [],
         )
         .map_err(|error| format!("cannot convert root tags: {error}"))?;
@@ -1342,7 +1312,7 @@ fn rebuild_derived_state(connection: &mut Connection) -> Result<(), String> {
              SELECT tag.tag_id,
                     COUNT(DISTINCT CASE WHEN summary.lifecycle = 'active'
                                         THEN relation.root_item_id END),
-                    COALESCE(SUM(relation.direct_assignment_count), 0)
+                    COUNT(relation.root_item_id)
              FROM tag
              LEFT JOIN root_tag relation ON relation.tag_id = tag.tag_id
              LEFT JOIN root_summary summary ON summary.root_item_id = relation.root_item_id
@@ -1875,15 +1845,15 @@ mod tests {
                 "https://example.test/common",
             ]
         );
-        let sample_tag: (i64, i64) = destination_connection
+        let sample_tag: i64 = destination_connection
             .query_row(
-                "SELECT direct_assignment_count, provenance_mask
-                 FROM root_tag WHERE root_item_id = 1 AND tag_id = 1",
+                "SELECT COUNT(*) FROM root_tag
+                 WHERE root_item_id = 1 AND tag_id = 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(sample_tag, (2, 3));
+        assert_eq!(sample_tag, 1);
         assert_eq!(
             destination_connection
                 .query_row("SELECT COUNT(*) FROM root_tag", [], |row| row

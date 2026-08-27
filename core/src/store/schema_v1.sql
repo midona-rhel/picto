@@ -486,10 +486,6 @@ CREATE TABLE root_tag (
     root_item_id INTEGER NOT NULL
         REFERENCES library_root(item_id) ON DELETE CASCADE,
     tag_id INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
-    direct_assignment_count INTEGER NOT NULL DEFAULT 1
-        CHECK (direct_assignment_count > 0),
-    provenance_mask INTEGER NOT NULL DEFAULT 0,
-    source_mask INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (root_item_id, tag_id)
 ) WITHOUT ROWID;
 
@@ -1359,4 +1355,3 @@ BEGIN
         + CASE WHEN NEW.lifecycle = 'active' THEN 1 ELSE 0 END
     WHERE tag_id IN (SELECT tag_id FROM root_tag WHERE root_item_id = NEW.root_item_id);
 END;
-
