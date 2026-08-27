@@ -727,17 +727,8 @@ fn insert_media_batches(
                          root_item_id, name, rating, notes, source_urls_json, updated_at
                      ) VALUES (?1, ?2, NULL, NULL, '[]', '2026-01-01')",
                 )?;
-                let mut insert_tags = transaction.prepare(
-                    "INSERT INTO root_tag(root_item_id, tag_id)
-                     SELECT ?1, CAST(value AS INTEGER)
-                     FROM json_each(?2)",
-                )?;
                 let mut insert_root = transaction
                     .prepare("INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)")?;
-                let mut insert_folder_item = transaction.prepare(
-                    "INSERT INTO folder_item (folder_id, item_id, position_rank)
-                     VALUES (1, ?1, ?2)",
-                )?;
                 let mut delta = FixtureProjectionDelta {
                     structure: StructureProjectionDelta {
                         items: Vec::with_capacity(count),
@@ -764,10 +755,6 @@ fn insert_media_batches(
                     insert_metadata
                         .execute(rusqlite::params![item_id, format!("item-{item_id}.png")])?;
                     let tag_ids = synthetic_tag_ids(item_id);
-                    let encoded_tags = serde_json::to_string(&tag_ids).map_err(|error| {
-                        rusqlite::Error::ToSqlConversionFailure(Box::new(error))
-                    })?;
-                    insert_tags.execute(rusqlite::params![item_id, encoded_tags])?;
                     for tag_id in tag_ids {
                         delta
                             .root_tags
@@ -806,16 +793,13 @@ fn insert_media_batches(
                         modified_at_ms: None,
                     });
                     if item_id % 4 == 0 {
-                        insert_folder_item.execute(rusqlite::params![item_id, item_id])?;
-                        if lifecycle == Lifecycle::Active {
-                            delta.structure.folders.push(
-                                picto_core::projection_v2::FolderProjectionChange {
-                                    folder_id: 1,
-                                    item_id,
-                                    present: true,
-                                },
-                            );
-                        }
+                        delta.structure.folders.push(
+                            picto_core::projection_v2::FolderProjectionChange {
+                                folder_id: 1,
+                                item_id,
+                                present: true,
+                            },
+                        );
                     }
                 }
                 Ok(((), delta))
@@ -1505,72 +1489,45 @@ fn representative_100k_fixture_has_exact_lifecycle_organization_and_groups() {
         trash_rows as i64,
     );
 
-    let hidden_organization: (i64, i64, i64, i64) = store
-        .read_snapshot(|connection| {
-            Ok((
-                connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag rt JOIN library_root lr
-                     ON lr.item_id = rt.root_item_id WHERE lr.lifecycle = 'inbox'",
-                    [],
-                    |row| row.get(0),
-                )?,
-                connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag rt JOIN library_root lr
-                     ON lr.item_id = rt.root_item_id WHERE lr.lifecycle = 'trash'",
-                    [],
-                    |row| row.get(0),
-                )?,
-                connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item fi JOIN library_root lr
-                     ON lr.item_id = fi.item_id WHERE lr.lifecycle = 'inbox'",
-                    [],
-                    |row| row.get(0),
-                )?,
-                connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item fi JOIN library_root lr
-                     ON lr.item_id = fi.item_id WHERE lr.lifecycle = 'trash'",
-                    [],
-                    |row| row.get(0),
-                )?,
-            ))
+    let inbox_bitmap = application.projections().inbox_bitmap();
+    let trash_bitmap = application.projections().trash_bitmap();
+    let folder_bitmap = application.projections().folder_bitmap(1);
+    let first_inbox = (active_rows + 1) as i64;
+    let first_trash = (active_rows + inbox_rows + 1) as i64;
+    let hidden_inbox_tags = synthetic_tag_ids(first_inbox)
+        .into_iter()
+        .filter(|tag_id| {
+            (application.projections().direct_tag_bitmap(*tag_id) & &inbox_bitmap).len() > 0
         })
-        .unwrap();
-    assert!(hidden_organization.0 > 0 && hidden_organization.1 > 0);
+        .count();
+    let hidden_trash_tags = synthetic_tag_ids(first_trash)
+        .into_iter()
+        .filter(|tag_id| {
+            (application.projections().direct_tag_bitmap(*tag_id) & &trash_bitmap).len() > 0
+        })
+        .count();
+    assert!(hidden_inbox_tags > 0 && hidden_trash_tags > 0);
     assert_eq!(
-        hidden_organization.2,
-        multiples_in_range(active_rows + 1, inbox_rows, 4) as i64
+        (&folder_bitmap & &inbox_bitmap).len(),
+        multiples_in_range(active_rows + 1, inbox_rows, 4) as u64
     );
     assert_eq!(
-        hidden_organization.3,
-        multiples_in_range(active_rows + inbox_rows + 1, trash_rows, 4) as i64
+        (&folder_bitmap & &trash_bitmap).len(),
+        multiples_in_range(active_rows + inbox_rows + 1, trash_rows, 4) as u64
     );
     assert_eq!(
-        application.projections().folder_bitmap(1).len(),
+        (&folder_bitmap & &application.projections().active_bitmap()).len(),
         (active_rows / 4) as u64
     );
-    let (active_assignments, visible_assignments, visible_folder_roots): (i64, i64, i64) = store
+    let visible_folder_roots: i64 = store
         .read_snapshot(|connection| {
-            Ok((
-                connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag rt JOIN library_root lr
-                     ON lr.item_id = rt.root_item_id WHERE lr.lifecycle = 'active'",
-                    [],
-                    |row| row.get(0),
-                )?,
-                connection.query_row(
-                    "SELECT COALESCE(SUM(visible_root_count), 0) FROM tag_summary",
-                    [],
-                    |row| row.get(0),
-                )?,
-                connection.query_row(
-                    "SELECT visible_root_count FROM folder_summary WHERE folder_id = 1",
-                    [],
-                    |row| row.get(0),
-                )?,
-            ))
+            connection.query_row(
+                "SELECT visible_root_count FROM folder_summary WHERE folder_id = 1",
+                [],
+                |row| row.get(0),
+            )
         })
         .unwrap();
-    assert_eq!(visible_assignments, active_assignments);
     assert_eq!(visible_folder_roots, (active_rows / 4) as i64);
 
     let mut next_member = 1_usize;
@@ -1612,8 +1569,8 @@ fn representative_100k_fixture_has_exact_lifecycle_organization_and_groups() {
         active.elapsed.as_secs_f64() * 1_000.0,
         inbox.elapsed.as_secs_f64() * 1_000.0,
         trash.elapsed.as_secs_f64() * 1_000.0,
-        hidden_organization.0,
-        hidden_organization.1,
+        hidden_inbox_tags,
+        hidden_trash_tags,
     );
 }
 
@@ -1668,8 +1625,6 @@ fn permanent_delete_100k_is_exact_under_fixed_rate_readers() {
         "library_root",
         "media_asset",
         "media_file",
-        "folder_item",
-        "root_tag",
         "root_summary",
     ] {
         assert_table_count(&store, table, 0);
@@ -1789,7 +1744,6 @@ fn run_broad_mutation_matrix(rows: usize, cardinalities: &[usize], delete_all: b
         assert_table_count(&store, "library_item", 0);
         assert_table_count(&store, "media_asset", 0);
         assert_table_count(&store, "media_file", 0);
-        assert_table_count(&store, "folder_item", 0);
     } else {
         let mut first = 1;
         for count in [1_usize, 50, 1_000] {

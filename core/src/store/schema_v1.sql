@@ -46,13 +46,6 @@ CREATE TABLE media_asset (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE collection_member (
-    collection_id INTEGER NOT NULL REFERENCES library_item(item_id) ON DELETE CASCADE,
-    media_item_id INTEGER NOT NULL UNIQUE REFERENCES media_asset(item_id) ON DELETE CASCADE,
-    position_rank INTEGER NOT NULL,
-    PRIMARY KEY (collection_id, media_item_id)
-);
-
 CREATE TABLE media_view (
     item_id INTEGER PRIMARY KEY REFERENCES library_root(item_id) ON DELETE CASCADE,
     viewed_at TEXT NOT NULL
@@ -81,13 +74,6 @@ CREATE TABLE folder (
     watch_subfolders INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
-);
-
-CREATE TABLE folder_item (
-    folder_id INTEGER NOT NULL REFERENCES folder(folder_id) ON DELETE CASCADE,
-    item_id INTEGER NOT NULL REFERENCES library_root(item_id) ON DELETE CASCADE,
-    position_rank INTEGER,
-    PRIMARY KEY (folder_id, item_id)
 );
 
 CREATE TABLE smart_folder (
@@ -482,13 +468,6 @@ CREATE TABLE canonical_order (
     PRIMARY KEY (owner_kind, owner_id)
 ) WITHOUT ROWID;
 
-CREATE TABLE root_tag (
-    root_item_id INTEGER NOT NULL
-        REFERENCES library_root(item_id) ON DELETE CASCADE,
-    tag_id INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
-    PRIMARY KEY (root_item_id, tag_id)
-) WITHOUT ROWID;
-
 CREATE TABLE root_summary (
     root_item_id INTEGER PRIMARY KEY
         REFERENCES library_root(item_id) ON DELETE CASCADE,
@@ -603,12 +582,7 @@ CREATE INDEX idx_library_root_lifecycle ON library_root(lifecycle, item_id);
 
 CREATE INDEX idx_media_asset_file ON media_asset(file_id, item_id);
 
-CREATE INDEX idx_collection_member_order
-    ON collection_member(collection_id, position_rank, media_item_id);
-
 CREATE INDEX idx_media_view_recent ON media_view(viewed_at DESC, item_id);
-
-CREATE INDEX idx_folder_item_item ON folder_item(item_id, folder_id);
 
 CREATE UNIQUE INDEX idx_subscription_one_active_run
     ON subscription_run(subscription_id)
@@ -721,9 +695,6 @@ CREATE INDEX idx_root_metadata_sources_present
 CREATE INDEX idx_canonical_bitmap_revision
     ON canonical_bitmap(revision, domain, key_id);
 
-CREATE INDEX idx_root_tag_tag_root
-    ON root_tag(tag_id, root_item_id);
-
 CREATE INDEX idx_root_summary_imported_asc
     ON root_summary(lifecycle, imported_at ASC, root_item_id ASC);
 
@@ -773,15 +744,6 @@ CREATE INDEX idx_smart_folder_membership_root
 
 CREATE INDEX idx_work_ready_priority
     ON work_item(status, priority DESC, available_at, work_id);
-
-CREATE INDEX idx_folder_item_root_folder
-    ON folder_item(item_id, folder_id);
-
-CREATE INDEX idx_folder_item_folder_order
-    ON folder_item(folder_id, position_rank, item_id);
-
-CREATE INDEX idx_collection_member_media_owner
-    ON collection_member(media_item_id, collection_id);
 
 CREATE INDEX idx_media_view_root_recent
     ON media_view(item_id, viewed_at DESC);
@@ -933,27 +895,8 @@ END;
 CREATE TRIGGER search_media_name_update
 AFTER UPDATE OF name ON media_asset BEGIN
     INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
-    SELECT roots.root_item_id, CAST(unixepoch('subsec') * 1000 AS INTEGER)
-    FROM (
-        SELECT item_id AS root_item_id FROM library_root WHERE item_id = NEW.item_id
-        UNION
-        SELECT collection_id FROM collection_member WHERE media_item_id = NEW.item_id
-    ) roots
-    WHERE 1
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-
-CREATE TRIGGER search_collection_member_insert AFTER INSERT ON collection_member
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
-    VALUES (NEW.collection_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
-    ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
-END;
-
-CREATE TRIGGER search_collection_member_delete AFTER DELETE ON collection_member BEGIN
-    INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
-    VALUES (OLD.collection_id, CAST(unixepoch('subsec') * 1000 AS INTEGER))
+    SELECT item_id, CAST(unixepoch('subsec') * 1000 AS INTEGER)
+    FROM library_root WHERE item_id = NEW.item_id
     ON CONFLICT(root_item_id) DO UPDATE SET queued_at_ms = excluded.queued_at_ms;
 END;
 
@@ -1032,30 +975,12 @@ BEGIN
            COALESCE(item.cover_media_item_id,
                     CASE WHEN item.kind = 'media' THEN asset.item_id END),
            CASE WHEN item.kind = 'media' AND asset.item_id IS NOT NULL THEN 1
-                WHEN item.kind = 'media' THEN 0
-                ELSE (SELECT COUNT(*) FROM collection_member
-                      WHERE collection_id = item.item_id) END,
+                ELSE 0 END,
            CASE WHEN item.kind = 'media'
                 THEN COALESCE(file.size_bytes, 0)
-                ELSE COALESCE((
-                    SELECT SUM(member_file.size_bytes)
-                    FROM collection_member member
-                    JOIN media_asset member_asset ON member_asset.item_id = member.media_item_id
-                    JOIN media_file member_file ON member_file.file_id = member_asset.file_id
-                    WHERE member.collection_id = item.item_id
-                ), 0) END,
-           CASE WHEN item.kind = 'media' THEN asset.imported_at ELSE (
-               SELECT MAX(member_asset.imported_at)
-               FROM collection_member member
-               JOIN media_asset member_asset ON member_asset.item_id = member.media_item_id
-               WHERE member.collection_id = item.item_id
-           ) END,
-           CASE WHEN item.kind = 'media' THEN asset.captured_at ELSE (
-               SELECT MAX(member_asset.captured_at)
-               FROM collection_member member
-               JOIN media_asset member_asset ON member_asset.item_id = member.media_item_id
-               WHERE member.collection_id = item.item_id
-           ) END,
+                ELSE 0 END,
+           CASE WHEN item.kind = 'media' THEN asset.imported_at END,
+           CASE WHEN item.kind = 'media' THEN asset.captured_at END,
            metadata.rating,
            COALESCE(metadata.name, asset.name),
            COALESCE(metadata.updated_at, item.updated_at)
@@ -1075,84 +1000,6 @@ BEGIN
     UPDATE root_summary SET lifecycle = NEW.lifecycle,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE root_item_id = NEW.item_id;
-END;
-
-CREATE TRIGGER canonical_member_insert AFTER INSERT ON collection_member
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET
-        cover_media_item_id = COALESCE(
-            (SELECT cover_media_item_id FROM library_item WHERE item_id = NEW.collection_id),
-            (SELECT media_item_id FROM collection_member
-             WHERE collection_id = NEW.collection_id
-             ORDER BY position_rank, media_item_id LIMIT 1)
-        ),
-        media_count = (SELECT COUNT(*) FROM collection_member
-                       WHERE collection_id = NEW.collection_id),
-        total_size_bytes = COALESCE((
-            SELECT SUM(file.size_bytes) FROM collection_member member
-            JOIN media_asset asset ON asset.item_id = member.media_item_id
-            JOIN media_file file ON file.file_id = asset.file_id
-            WHERE member.collection_id = NEW.collection_id
-        ), 0),
-        imported_at = (SELECT MAX(asset.imported_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = NEW.collection_id),
-        captured_at = (SELECT MAX(asset.captured_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = NEW.collection_id),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE root_item_id = NEW.collection_id;
-END;
-
-CREATE TRIGGER canonical_member_delete AFTER DELETE ON collection_member
-WHEN (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET
-        cover_media_item_id = COALESCE(
-            (SELECT cover_media_item_id FROM library_item WHERE item_id = OLD.collection_id),
-            (SELECT media_item_id FROM collection_member
-             WHERE collection_id = OLD.collection_id
-             ORDER BY position_rank, media_item_id LIMIT 1)
-        ),
-        media_count = (SELECT COUNT(*) FROM collection_member
-                       WHERE collection_id = OLD.collection_id),
-        total_size_bytes = COALESCE((
-            SELECT SUM(file.size_bytes) FROM collection_member member
-            JOIN media_asset asset ON asset.item_id = member.media_item_id
-            JOIN media_file file ON file.file_id = asset.file_id
-            WHERE member.collection_id = OLD.collection_id
-        ), 0),
-        imported_at = (SELECT MAX(asset.imported_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = OLD.collection_id),
-        captured_at = (SELECT MAX(asset.captured_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = OLD.collection_id),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE root_item_id = OLD.collection_id;
-END;
-
-CREATE TRIGGER canonical_member_update AFTER UPDATE OF collection_id ON collection_member
-WHEN OLD.collection_id <> NEW.collection_id
- AND (SELECT suppress_root_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE root_summary SET
-        media_count = (SELECT COUNT(*) FROM collection_member WHERE collection_id = OLD.collection_id),
-        total_size_bytes = COALESCE((SELECT SUM(file.size_bytes)
-            FROM collection_member member JOIN media_asset asset ON asset.item_id = member.media_item_id
-            JOIN media_file file ON file.file_id = asset.file_id
-            WHERE member.collection_id = OLD.collection_id), 0),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE root_item_id = OLD.collection_id;
-    UPDATE root_summary SET
-        media_count = (SELECT COUNT(*) FROM collection_member WHERE collection_id = NEW.collection_id),
-        total_size_bytes = COALESCE((SELECT SUM(file.size_bytes)
-            FROM collection_member member JOIN media_asset asset ON asset.item_id = member.media_item_id
-            JOIN media_file file ON file.file_id = asset.file_id
-            WHERE member.collection_id = NEW.collection_id), 0),
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE root_item_id = NEW.collection_id;
 END;
 
 CREATE TRIGGER canonical_metadata_insert AFTER INSERT ON root_metadata
@@ -1196,19 +1043,6 @@ BEGIN
         ), 0) ELSE total_size_bytes END,
         updated_at = NEW.updated_at
     WHERE root_item_id = NEW.item_id;
-    UPDATE root_summary SET
-        imported_at = (SELECT MAX(asset.imported_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = root_summary.root_item_id),
-        captured_at = (SELECT MAX(asset.captured_at) FROM collection_member member
-                       JOIN media_asset asset ON asset.item_id = member.media_item_id
-                       WHERE member.collection_id = root_summary.root_item_id),
-        total_size_bytes = COALESCE((SELECT SUM(file.size_bytes)
-            FROM collection_member member JOIN media_asset asset ON asset.item_id = member.media_item_id
-            JOIN media_file file ON file.file_id = asset.file_id
-            WHERE member.collection_id = root_summary.root_item_id), 0),
-        updated_at = NEW.updated_at
-    WHERE root_item_id IN (SELECT collection_id FROM collection_member WHERE media_item_id = NEW.item_id);
 END;
 
 CREATE TRIGGER canonical_media_insert AFTER INSERT ON media_asset
@@ -1237,10 +1071,6 @@ BEGIN
     UPDATE root_summary SET total_size_bytes = total_size_bytes + NEW.size_bytes - OLD.size_bytes
     WHERE root_item_id IN (
         SELECT asset.item_id FROM media_asset asset JOIN library_root root ON root.item_id = asset.item_id
-        WHERE asset.file_id = NEW.file_id
-        UNION
-        SELECT member.collection_id FROM media_asset asset
-        JOIN collection_member member ON member.media_item_id = asset.item_id
         WHERE asset.file_id = NEW.file_id
     );
 END;
@@ -1282,100 +1112,7 @@ CREATE TRIGGER canonical_folder_insert AFTER INSERT ON folder BEGIN
     ON CONFLICT(folder_id) DO NOTHING;
 END;
 
-CREATE TRIGGER canonical_folder_item_insert AFTER INSERT ON folder_item
-WHEN (SELECT suppress_folder_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    INSERT INTO folder_summary(folder_id, visible_root_count, media_count, total_size_bytes)
-    SELECT NEW.folder_id, 1, summary.media_count, summary.total_size_bytes
-    FROM root_summary summary
-    WHERE summary.root_item_id = NEW.item_id AND summary.lifecycle = 'active'
-    ON CONFLICT(folder_id) DO UPDATE SET
-        visible_root_count = folder_summary.visible_root_count + 1,
-        media_count = folder_summary.media_count + excluded.media_count,
-        total_size_bytes = folder_summary.total_size_bytes + excluded.total_size_bytes;
-END;
-
-CREATE TRIGGER canonical_folder_item_delete BEFORE DELETE ON folder_item
-WHEN (SELECT suppress_folder_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE folder_summary SET visible_root_count = visible_root_count - 1,
-        media_count = media_count - COALESCE((SELECT media_count FROM root_summary
-            WHERE root_item_id = OLD.item_id AND lifecycle = 'active'), 0),
-        total_size_bytes = total_size_bytes - COALESCE((SELECT total_size_bytes FROM root_summary
-            WHERE root_item_id = OLD.item_id AND lifecycle = 'active'), 0)
-    WHERE folder_id = OLD.folder_id AND EXISTS (
-        SELECT 1 FROM root_summary WHERE root_item_id = OLD.item_id AND lifecycle = 'active'
-    );
-END;
-
-CREATE TRIGGER canonical_folder_root_insert AFTER INSERT ON root_summary
-WHEN NEW.lifecycle = 'active'
- AND (SELECT suppress_folder_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE folder_summary SET visible_root_count = visible_root_count + 1,
-        media_count = media_count + NEW.media_count,
-        total_size_bytes = total_size_bytes + NEW.total_size_bytes
-    WHERE folder_id IN (SELECT folder_id FROM folder_item WHERE item_id = NEW.root_item_id);
-END;
-
-CREATE TRIGGER canonical_folder_root_delete BEFORE DELETE ON root_summary
-WHEN OLD.lifecycle = 'active'
- AND (SELECT suppress_folder_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE folder_summary SET visible_root_count = visible_root_count - 1,
-        media_count = media_count - OLD.media_count,
-        total_size_bytes = total_size_bytes - OLD.total_size_bytes
-    WHERE folder_id IN (SELECT folder_id FROM folder_item WHERE item_id = OLD.root_item_id);
-END;
-
-CREATE TRIGGER canonical_folder_root_update
-AFTER UPDATE OF lifecycle, media_count, total_size_bytes ON root_summary
-WHEN (SELECT suppress_folder_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE folder_summary SET
-        visible_root_count = visible_root_count - CASE WHEN OLD.lifecycle = 'active' THEN 1 ELSE 0 END
-            + CASE WHEN NEW.lifecycle = 'active' THEN 1 ELSE 0 END,
-        media_count = media_count - CASE WHEN OLD.lifecycle = 'active' THEN OLD.media_count ELSE 0 END
-            + CASE WHEN NEW.lifecycle = 'active' THEN NEW.media_count ELSE 0 END,
-        total_size_bytes = total_size_bytes - CASE WHEN OLD.lifecycle = 'active' THEN OLD.total_size_bytes ELSE 0 END
-            + CASE WHEN NEW.lifecycle = 'active' THEN NEW.total_size_bytes ELSE 0 END
-    WHERE folder_id IN (SELECT folder_id FROM folder_item WHERE item_id = NEW.root_item_id);
-END;
-
 CREATE TRIGGER canonical_tag_insert AFTER INSERT ON tag BEGIN
     INSERT INTO tag_summary(tag_id) VALUES (NEW.tag_id) ON CONFLICT(tag_id) DO NOTHING;
 END;
 
-CREATE TRIGGER canonical_root_tag_insert AFTER INSERT ON root_tag
-WHEN (SELECT suppress_tag_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    INSERT INTO tag_summary(tag_id, visible_root_count, assignment_count)
-    SELECT NEW.tag_id,
-           CASE WHEN summary.lifecycle = 'active' THEN 1 ELSE 0 END,
-           1
-    FROM root_summary summary WHERE summary.root_item_id = NEW.root_item_id
-    ON CONFLICT(tag_id) DO UPDATE SET
-        visible_root_count = tag_summary.visible_root_count + excluded.visible_root_count,
-        assignment_count = tag_summary.assignment_count + 1;
-END;
-
-CREATE TRIGGER canonical_root_tag_delete BEFORE DELETE ON root_tag
-WHEN (SELECT suppress_tag_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE tag_summary SET
-        visible_root_count = visible_root_count - CASE WHEN EXISTS (
-            SELECT 1 FROM root_summary WHERE root_item_id = OLD.root_item_id AND lifecycle = 'active'
-        ) THEN 1 ELSE 0 END,
-        assignment_count = assignment_count - 1
-    WHERE tag_id = OLD.tag_id;
-END;
-
-CREATE TRIGGER canonical_root_tag_lifecycle_update AFTER UPDATE OF lifecycle ON root_summary
-WHEN OLD.lifecycle <> NEW.lifecycle
- AND (SELECT suppress_tag_summary FROM projection_write_control WHERE singleton = 1) = 0
-BEGIN
-    UPDATE tag_summary SET visible_root_count = visible_root_count
-        - CASE WHEN OLD.lifecycle = 'active' THEN 1 ELSE 0 END
-        + CASE WHEN NEW.lifecycle = 'active' THEN 1 ELSE 0 END
-    WHERE tag_id IN (SELECT tag_id FROM root_tag WHERE root_item_id = NEW.root_item_id);
-END;

@@ -5,7 +5,7 @@ use rusqlite::{Connection, OptionalExtension, Transaction};
 use crate::canonical_bitmap;
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 1;
-pub const CURRENT_SCHEMA_FINGERPRINT: &str = "picto-canonical-bitmap-v1";
+pub const CURRENT_SCHEMA_FINGERPRINT: &str = "picto-canonical-bitmap-v2";
 pub const CURRENT_PHASH_ANALYSIS_VERSION: i64 = 5;
 pub const PHASH_VERSION_SETTING: &str = "media.perceptual_hash_version";
 const SCHEMA_V1_DDL: &str = include_str!("schema_v1.sql");
@@ -2020,7 +2020,6 @@ fn validate_canonical_shape(connection: &Connection) -> Result<(), String> {
         "canonical_bitmap_key_allocator",
         "canonical_bitmap",
         "canonical_order",
-        "root_tag",
         "root_summary",
         "tag_summary",
         "smart_folder_dependency",
@@ -2130,8 +2129,6 @@ mod tests {
             "library_root",
             "media_asset",
             "media_file",
-            "collection_member",
-            "folder_item",
             "source_post",
             "source_item",
             "ingest_job",
@@ -2157,6 +2154,9 @@ mod tests {
         for removed in [
             "media_entity",
             "folder_member",
+            "collection_member",
+            "folder_item",
+            "root_tag",
             "op_outbox",
             "sync_conflict_clock",
             "smart_projection_dirty_root",
@@ -2171,7 +2171,6 @@ mod tests {
             "root_summary",
             "folder_summary",
             "root_metadata",
-            "root_tag",
             "tag_summary",
             "smart_folder_generation",
             "smart_folder_membership",
@@ -2203,7 +2202,6 @@ mod tests {
 
         for required in [
             "root_metadata",
-            "root_tag",
             "root_summary",
             "tag_summary",
             "smart_folder_dependency",
@@ -2231,6 +2229,9 @@ mod tests {
         }
         for removed in [
             "media_tag",
+            "root_tag",
+            "collection_member",
+            "folder_item",
             "root_tag_count",
             "tag_alias",
             "tag_implication",
@@ -2285,19 +2286,6 @@ mod tests {
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap();
         assert!(!item_columns.iter().any(|column| column == "label"));
-        let root_tag_columns = connection
-            .prepare("SELECT name FROM pragma_table_info('root_tag')")
-            .unwrap()
-            .query_map([], |row| row.get::<_, String>(0))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap();
-        for required in ["root_item_id", "tag_id"] {
-            assert!(
-                root_tag_columns.iter().any(|column| column == required),
-                "missing canonical root_tag column {required}"
-            );
-        }
         let write_control_columns = connection
             .prepare("SELECT name FROM pragma_table_info('projection_write_control')")
             .unwrap()
@@ -2341,34 +2329,28 @@ mod tests {
                  VALUES (1, 1, 'active.jpg', 'now', 'now'),
                         (2, 2, 'inbox.jpg', 'now', 'now');
                  INSERT INTO root_metadata(root_item_id, name, updated_at)
-                 VALUES (1, 'Active', 'now'), (2, 'Inbox', 'now');
-                 INSERT INTO folder(folder_id, folder_key, name, created_at, updated_at)
-                 VALUES (1, 'folder', 'Folder', 'now', 'now');
-                 INSERT INTO folder_item(folder_id, item_id) VALUES (1, 1), (1, 2);
-                 INSERT INTO tag(tag_id, namespace, subtag)
-                 VALUES (1, 'creator', 'artist');
-                 INSERT INTO root_tag(root_item_id, tag_id) VALUES (1, 1), (2, 1);",
+                 VALUES (1, 'Active', 'now'), (2, 'Inbox', 'now');",
             )
             .unwrap();
 
-        let folder: (i64, i64, i64) = connection
+        let active: (i64, i64, i64) = connection
             .query_row(
-                "SELECT visible_root_count, media_count, total_size_bytes
-                 FROM folder_summary WHERE folder_id = 1",
+                "SELECT root_count, media_count, total_size_bytes
+                 FROM lifecycle_summary WHERE lifecycle = 'active'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(folder, (1, 1, 10));
-        let tag: (i64, i64) = connection
+        assert_eq!(active, (1, 1, 10));
+        let inbox: (i64, i64, i64) = connection
             .query_row(
-                "SELECT visible_root_count, assignment_count
-                 FROM tag_summary WHERE tag_id = 1",
+                "SELECT root_count, media_count, total_size_bytes
+                 FROM lifecycle_summary WHERE lifecycle = 'inbox'",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .unwrap();
-        assert_eq!(tag, (1, 2));
+        assert_eq!(inbox, (1, 1, 20));
 
         connection
             .execute_batch(
@@ -2376,23 +2358,6 @@ mod tests {
                  UPDATE library_root SET lifecycle = 'active' WHERE item_id = 2;",
             )
             .unwrap();
-        let folder: (i64, i64, i64) = connection
-            .query_row(
-                "SELECT visible_root_count, media_count, total_size_bytes
-                 FROM folder_summary WHERE folder_id = 1",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )
-            .unwrap();
-        assert_eq!(folder, (1, 1, 20));
-        let tag_visible: i64 = connection
-            .query_row(
-                "SELECT visible_root_count FROM tag_summary WHERE tag_id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(tag_visible, 1);
         let active: (i64, i64, i64) = connection
             .query_row(
                 "SELECT root_count, media_count, total_size_bytes

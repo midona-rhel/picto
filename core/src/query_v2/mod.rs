@@ -2351,9 +2351,7 @@ mod tests {
                 )?;
                 tx.execute("INSERT INTO folder (folder_id, folder_key, name, created_at, updated_at) VALUES (7, 'folder', 'Folder', 'now', 'now')", [])?;
                 tx.execute("UPDATE folder SET notes = 'portfolio bucket' WHERE folder_id = 7", [])?;
-                tx.execute("INSERT INTO folder_item (folder_id, item_id, position_rank) VALUES (7, 10, 0), (7, 1, 1)", [])?;
                 tx.execute("INSERT INTO tag (tag_id, namespace, subtag) VALUES (1, 'general', 'member-tag')", [])?;
-                tx.execute("INSERT INTO root_tag (root_item_id, tag_id) VALUES (10, 1)", [])?;
                 tx.execute(
                     "INSERT INTO source_post (
                          source_post_id, site_id, post_key, canonical_url, creator_name,
@@ -2438,15 +2436,6 @@ mod tests {
             rusqlite::params![item_id, item_key],
         )
         .unwrap();
-        for (position, member_id) in member_ids.iter().enumerate() {
-            tx.execute(
-                "INSERT INTO collection_member (
-                     collection_id, media_item_id, position_rank
-                 ) VALUES (?1, ?2, ?3)",
-                rusqlite::params![item_id, member_id, position as i64],
-            )
-            .unwrap();
-        }
         tx.execute(
             "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
             rusqlite::params![item_id, lifecycle],
@@ -2457,6 +2446,34 @@ mod tests {
                  root_item_id, name, source_urls_json, updated_at
              ) VALUES (?1, ?2, '[]', '2026-01-01')",
             rusqlite::params![item_id, name],
+        )
+        .unwrap();
+        let members_json = serde_json::to_string(member_ids).unwrap();
+        tx.execute(
+            "UPDATE root_summary SET
+                 cover_media_item_id = COALESCE(
+                     (SELECT cover_media_item_id FROM library_item WHERE item_id = ?1),
+                     (SELECT CAST(value AS INTEGER) FROM json_each(?2) LIMIT 1)
+                 ),
+                 media_count = (SELECT COUNT(*) FROM json_each(?2)),
+                 total_size_bytes = (
+                     SELECT COALESCE(SUM(file.size_bytes), 0)
+                     FROM json_each(?2) member
+                     JOIN media_asset asset ON asset.item_id = CAST(member.value AS INTEGER)
+                     JOIN media_file file ON file.file_id = asset.file_id
+                 ),
+                 imported_at = (
+                     SELECT MAX(asset.imported_at)
+                     FROM json_each(?2) member
+                     JOIN media_asset asset ON asset.item_id = CAST(member.value AS INTEGER)
+                 ),
+                 captured_at = (
+                     SELECT MAX(asset.captured_at)
+                     FROM json_each(?2) member
+                     JOIN media_asset asset ON asset.item_id = CAST(member.value AS INTEGER)
+                 )
+             WHERE root_item_id = ?1",
+            rusqlite::params![item_id, members_json],
         )
         .unwrap();
     }
@@ -2682,18 +2699,6 @@ mod tests {
             .collect::<Vec<_>>();
         named_ids.sort_by_key(|item_id| item_id.0);
         assert_eq!(named_ids, vec![ItemId(1), ItemId(10)]);
-        application
-            .store()
-            .read(|connection| {
-                let legacy_rows: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1",
-                    [folder_id],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(legacy_rows, 0);
-                Ok(())
-            })
-            .unwrap();
     }
 
     #[test]
@@ -2704,7 +2709,6 @@ mod tests {
                  SET suppress_root_summary = 1 WHERE singleton = 1",
                 [],
             )?;
-            transaction.execute("DELETE FROM collection_member", [])?;
             transaction.execute(
                 "UPDATE root_summary
                  SET imported_at = '2026-02-10T00:00:00Z',
@@ -2721,8 +2725,6 @@ mod tests {
                 "UPDATE source_post SET root_item_id = NULL WHERE source_post_id = 1",
                 [],
             )?;
-            transaction.execute("DELETE FROM root_tag", [])?;
-            transaction.execute("DELETE FROM folder_item", [])?;
             Ok(())
         });
 
@@ -2869,6 +2871,12 @@ mod tests {
                 "UPDATE media_file
                  SET duration_ms = CASE file_id WHEN 1 THEN 5000 WHEN 12 THEN 10000 END
                  WHERE file_id IN (1, 12)",
+                [],
+            )?;
+            tx.execute(
+                "UPDATE root_summary
+                 SET imported_at = '2026-02-10T00:00:00Z'
+                 WHERE root_item_id = 10",
                 [],
             )?;
             Ok(())
@@ -3060,6 +3068,13 @@ mod tests {
             .transaction(|transaction| {
                 transaction.execute(
                     "UPDATE media_asset SET name = 'hidden member name' WHERE item_id = 11",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO search_dirty_name(root_item_id, queued_at_ms)
+                     VALUES (10, CAST(unixepoch('subsec') * 1000 AS INTEGER))
+                     ON CONFLICT(root_item_id) DO UPDATE SET
+                         queued_at_ms = excluded.queued_at_ms",
                     [],
                 )?;
                 Ok(())
@@ -3914,10 +3929,16 @@ mod tests {
         assert!(!excluded_summary.stats.all_media_are_images);
 
         store
+            .projections()
+            .apply_root_tag_bitmap(1, &RoaringBitmap::from_iter([1_u32]), true)
+            .unwrap();
+        store
             .store()
             .transaction(|transaction| {
                 transaction.execute(
-                    "INSERT INTO root_tag (root_item_id, tag_id) VALUES (1, 1)",
+                    "UPDATE tag_summary
+                     SET visible_root_count = 2, assignment_count = 2
+                     WHERE tag_id = 1",
                     [],
                 )?;
                 transaction.execute(

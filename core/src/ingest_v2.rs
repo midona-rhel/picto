@@ -1888,10 +1888,6 @@ mod tests {
                 let roots: i64 =
                     connection
                         .query_row("SELECT COUNT(*) FROM library_root", [], |row| row.get(0))?;
-                let collection_members: i64 =
-                    connection.query_row("SELECT COUNT(*) FROM collection_member", [], |row| {
-                        row.get(0)
-                    })?;
                 let post_root: Option<i64> = connection.query_row(
                     "SELECT root_item_id FROM source_post
                      WHERE site_id = 'example' AND post_key = 'post'",
@@ -1899,7 +1895,6 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 assert_eq!(roots, 2);
-                assert_eq!(collection_members, 0);
                 assert_eq!(post_root, None);
                 Ok(())
             })
@@ -2202,13 +2197,7 @@ mod tests {
                 let media: i64 =
                     connection
                         .query_row("SELECT COUNT(*) FROM media_asset", [], |row| row.get(0))?;
-                let legacy_folders: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE item_id = ?1",
-                    [first.root_item_id.0],
-                    |row| row.get(0),
-                )?;
                 assert_eq!(media, 1);
-                assert_eq!(legacy_folders, 0);
                 Ok(())
             })
             .unwrap();
@@ -2322,21 +2311,17 @@ mod tests {
         let result = app.ingest_prepared(&archived).unwrap();
 
         assert_ne!(result.media_item_id, result.root_item_id);
-        let (kind, legacy_members): (String, i64) = app
+        let kind: String = app
             .store()
             .read(|connection| {
                 connection.query_row(
-                    "SELECT li.kind,
-                            (SELECT COUNT(*) FROM collection_member cm
-                             WHERE cm.collection_id = li.item_id)
-                     FROM library_item li WHERE li.item_id = ?1",
+                    "SELECT kind FROM library_item WHERE item_id = ?1",
                     [result.root_item_id.0],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| row.get(0),
                 )
             })
             .unwrap();
         assert_eq!(kind, "collection");
-        assert_eq!(legacy_members, 0);
         assert_eq!(
             app.projections().group_order(result.root_item_id.0),
             Some(vec![result.media_item_id.0])

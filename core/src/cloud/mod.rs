@@ -4613,21 +4613,11 @@ mod tests {
                 )?;
                 transaction.execute("DELETE FROM library_root WHERE item_id = ?1", [media_id])?;
                 transaction.execute(
-                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                     VALUES (?1, ?2, 4096)",
-                    params![collection_id, media_id],
-                )?;
-                transaction.execute(
                     "INSERT INTO folder (folder_key, name, created_at, updated_at)
                      VALUES ('folder-a', 'Folder', 'now', 'now')",
                     [],
                 )?;
                 let folder_id = transaction.last_insert_rowid();
-                transaction.execute(
-                    "INSERT INTO folder_item (folder_id, item_id, position_rank)
-                     VALUES (?1, ?2, 4096)",
-                    params![folder_id, collection_id],
-                )?;
                 transaction.execute(
                     "INSERT INTO smart_folder
                          (smart_folder_key, name, predicate_json, created_at, updated_at)
@@ -4640,10 +4630,6 @@ mod tests {
                     [],
                 )?;
                 let tag_id = transaction.last_insert_rowid();
-                transaction.execute(
-                    "INSERT INTO root_tag(root_item_id, tag_id) VALUES (?1, ?2)",
-                    params![collection_id, tag_id],
-                )?;
                 Ok((collection_id, folder_id, smart_folder_id, tag_id))
             })
             .unwrap()
@@ -4668,19 +4654,9 @@ mod tests {
                     [collection_id],
                 )?;
                 transaction.execute(
-                    "UPDATE collection_member SET position_rank = 8192
-                     WHERE media_item_id = ?1",
-                    [media_id],
-                )?;
-                transaction.execute(
                     "UPDATE folder SET name = 'Renamed', updated_at = 'later'
                      WHERE folder_id = ?1",
                     [folder_id],
-                )?;
-                transaction.execute(
-                    "UPDATE folder_item SET position_rank = 8192
-                     WHERE folder_id = ?1 AND item_id = ?2",
-                    params![folder_id, collection_id],
                 )?;
                 transaction.execute(
                     "UPDATE smart_folder SET name = 'Renamed', updated_at = 'later'

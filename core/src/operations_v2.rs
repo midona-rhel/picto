@@ -3694,12 +3694,6 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 assert_eq!(roots, 0);
-                let legacy_collection_folders: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE item_id = ?1",
-                    [grouped.collection_id.0],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(legacy_collection_folders, 0);
                 Ok(())
             })
             .unwrap();
@@ -3741,12 +3735,6 @@ mod tests {
                         |row| row.get(0),
                     )?;
                     assert_eq!(lifecycle, "trash");
-                    let legacy_folders: i64 = connection.query_row(
-                        "SELECT COUNT(*) FROM folder_item WHERE item_id = ?1",
-                        [id.0],
-                        |row| row.get(0),
-                    )?;
-                    assert_eq!(legacy_folders, 0);
                 }
                 let collection_exists: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM library_item WHERE item_id = ?1",
@@ -3802,17 +3790,6 @@ mod tests {
             .is_empty());
 
         app.redo().unwrap();
-        app.store()
-            .read(|connection| {
-                let legacy_members: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM collection_member WHERE collection_id = ?1",
-                    [grouped.collection_id.0],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(legacy_members, 0);
-                Ok(())
-            })
-            .unwrap();
         assert_eq!(
             app.projections()
                 .group_order(grouped.collection_id.0)
@@ -4006,20 +3983,6 @@ mod tests {
         let (_directory, app, ids) = fixture();
         let grouped = organize(&app, &ids, Some("Post"), None);
         let reordered = vec![ids[2], ids[0], ids[1]];
-        let legacy_row_order = || {
-            app.store()
-                .read(|connection| {
-                    connection
-                        .prepare(
-                            "SELECT media_item_id FROM collection_member
-                             WHERE collection_id = ?1 ORDER BY position_rank",
-                        )?
-                        .query_map([grouped.collection_id.0], |row| row.get::<_, i64>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()
-                })
-                .unwrap()
-        };
-        let unchanged_legacy_order = legacy_row_order();
 
         app.reorder_collection(ReorderCollectionInput {
             collection_id: grouped.collection_id,
@@ -4048,7 +4011,6 @@ mod tests {
             })
             .unwrap();
         assert_eq!(cached_cover, Some(reordered[0].0));
-        assert_eq!(legacy_row_order(), unchanged_legacy_order);
 
         let canonical_order = app
             .store()
@@ -4075,7 +4037,6 @@ mod tests {
                 .map(|item_id| item_id.0 as u32)
                 .collect::<Vec<_>>()
         );
-        assert_eq!(legacy_row_order(), unchanged_legacy_order);
 
         app.redo().unwrap();
         let redone_order = app
@@ -4084,7 +4045,6 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(redone_order, canonical_order);
-        assert_eq!(legacy_row_order(), unchanged_legacy_order);
     }
 
     #[test]
@@ -4305,12 +4265,6 @@ mod tests {
         );
         app.store()
             .read(|connection| {
-                let legacy_row_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag WHERE tag_id = ?1",
-                    [tag_id],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(legacy_row_count, 0);
                 let smart_count: i64 = connection.query_row(
                     "SELECT COUNT(*)
                      FROM smart_folder_generation generation
@@ -4774,12 +4728,6 @@ mod tests {
                     load_bitmap(connection, BitmapDomain::Folder, folder_id)?,
                     selected
                 );
-                let legacy_rows: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1",
-                    [folder_id],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(legacy_rows, 0);
                 let summary: (i64, i64, i64) = connection.query_row(
                     "SELECT visible_root_count, media_count, total_size_bytes
                      FROM folder_summary WHERE folder_id = ?1",

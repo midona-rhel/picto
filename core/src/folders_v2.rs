@@ -1587,15 +1587,14 @@ mod tests {
         let child = create(&app, "Child", Some(root));
         let grandchild = create(&app, "Grandchild", Some(child));
 
-        app.store()
-            .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)",
-                    rusqlite::params![root.0, media_id],
-                )?;
-                Ok(())
-            })
-            .unwrap();
+        app.set_folder_membership(
+            &crate::app::ItemTarget::Explicit {
+                item_ids: vec![crate::app::ItemId(media_id)],
+            },
+            root.0,
+            true,
+        )
+        .unwrap();
         let result = app.delete_folder(child).unwrap();
 
         assert_eq!(result.deleted_folder_ids, vec![child, grandchild]);
@@ -1628,15 +1627,15 @@ mod tests {
                     [],
                     |row| row.get(0),
                 )?;
-                let root_folder_items: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1 AND item_id = ?2",
-                    rusqlite::params![root.0, media_id],
-                    |row| row.get(0),
+                let root_members = crate::canonical_bitmap::load_bitmap(
+                    connection,
+                    crate::canonical_bitmap::BitmapDomain::Folder,
+                    root.0,
                 )?;
                 assert_eq!(media_exists, 1);
                 assert_eq!(item_exists, 1);
                 assert_eq!(file_exists, 1);
-                assert_eq!(root_folder_items, 1);
+                assert!(root_members.contains(media_id as u32));
                 Ok(())
             })
             .unwrap();
@@ -1796,12 +1795,16 @@ mod tests {
             tags: vec!["artist:melon".to_string()],
         })
         .unwrap();
+        app.set_folder_membership(
+            &crate::app::ItemTarget::Explicit {
+                item_ids: vec![crate::app::ItemId(media_id)],
+            },
+            source.0,
+            true,
+        )
+        .unwrap();
         app.store()
             .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)",
-                    rusqlite::params![source.0, media_id],
-                )?;
                 transaction.execute(
                     "UPDATE folder SET watch_path = '/tmp/source', watch_enabled = 1,
                      watch_subfolders = 1 WHERE folder_id = ?1",
@@ -1846,12 +1849,18 @@ mod tests {
                     [duplicate.0],
                     |row| row.get(0),
                 )?;
-                let copied_memberships: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE folder_id IN (?1, ?2)",
-                    rusqlite::params![duplicate.0, duplicate_child],
-                    |row| row.get(0),
+                let duplicate_members = crate::canonical_bitmap::load_bitmap(
+                    connection,
+                    crate::canonical_bitmap::BitmapDomain::Folder,
+                    duplicate.0,
                 )?;
-                assert_eq!(copied_memberships, 0);
+                let duplicate_child_members = crate::canonical_bitmap::load_bitmap(
+                    connection,
+                    crate::canonical_bitmap::BitmapDomain::Folder,
+                    duplicate_child,
+                )?;
+                assert!(duplicate_members.is_empty());
+                assert!(duplicate_child_members.is_empty());
                 Ok(duplicate_child)
             })
             .unwrap();

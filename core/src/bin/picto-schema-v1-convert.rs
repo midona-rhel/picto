@@ -370,7 +370,30 @@ fn read_counts(connection: &Connection) -> Result<Counts, String> {
         roots: count(connection, "library_root")?,
         media_assets: count(connection, "media_asset")?,
         media_files: count(connection, "media_file")?,
-        collection_members: count(connection, "collection_member")?,
+        collection_members: {
+            let has_rows: bool = connection
+                .query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM sqlite_master
+                         WHERE type = 'table' AND name = 'collection_member'
+                     )",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|error| format!("cannot probe membership tables: {error}"))?;
+            if has_rows {
+                count(connection, "collection_member")?
+            } else {
+                connection
+                    .query_row(
+                        "SELECT COALESCE(SUM(cardinality), 0)
+                         FROM canonical_order WHERE owner_kind = 'group'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .map_err(|error| format!("cannot count group members: {error}"))?
+            }
+        },
         tags: count(connection, "tag")?,
         folders: count(connection, "folder")?,
         subscriptions: count(connection, "subscription")?,
@@ -385,6 +408,22 @@ fn validate_invariants(connection: &Connection, counts: &Counts) -> Result<(), S
     }
     if counts.media_assets > counts.library_items {
         return Err("media_asset contains more rows than library_item".into());
+    }
+    // Row-level membership invariants apply only to the legacy source
+    // schema; the canonical destination is validated through its bitmaps
+    // and order vectors instead.
+    let has_member_rows: bool = connection
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM sqlite_master
+                 WHERE type = 'table' AND name = 'collection_member'
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("collection membership invariant failed: {error}"))?;
+    if !has_member_rows {
+        return Ok(());
     }
     let orphan_members: i64 = connection
         .query_row(
@@ -495,7 +534,6 @@ fn validate_canonical_v1(connection: &Connection, counts: &Counts) -> Result<(),
         "canonical_bitmap_key_allocator",
         "canonical_bitmap",
         "canonical_order",
-        "root_tag",
         "root_summary",
         "tag_summary",
         "smart_folder_dependency",
@@ -574,24 +612,23 @@ fn validate_canonical_v1(connection: &Connection, counts: &Counts) -> Result<(),
         ));
     }
 
-    let bad_tag_summaries: i64 = connection
-        .query_row(
-            "SELECT COUNT(*)
-             FROM tag_summary summary
-             WHERE summary.visible_root_count <> (
-                 SELECT COUNT(*)
-                 FROM root_tag relation
-                 JOIN root_summary root ON root.root_item_id = relation.root_item_id
-                 WHERE relation.tag_id = summary.tag_id AND root.lifecycle = 'active'
-             )",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| format!("cannot validate tag summaries: {error}"))?;
-    if bad_tag_summaries != 0 {
-        return Err(format!(
-            "{bad_tag_summaries} tag summaries are inconsistent"
-        ));
+    {
+        let active = load_bitmap(connection, BitmapDomain::Lifecycle, LIFECYCLE_ACTIVE_KEY)
+            .map_err(|error| format!("cannot decode active lifecycle bitmap: {error}"))?;
+        let summaries = connection
+            .prepare("SELECT tag_id, visible_root_count FROM tag_summary ORDER BY tag_id")
+            .map_err(|error| format!("cannot read tag summaries: {error}"))?
+            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .map_err(|error| format!("cannot read tag summaries: {error}"))?
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("cannot read tag summaries: {error}"))?;
+        for (tag_id, visible_root_count) in summaries {
+            let members = load_bitmap(connection, BitmapDomain::Tag, tag_id)
+                .map_err(|error| format!("cannot decode tag {tag_id}: {error}"))?;
+            if members.intersection_len(&active) as i64 != visible_root_count {
+                return Err(format!("tag summary {tag_id} is inconsistent"));
+            }
+        }
     }
     validate_canonical_memberships(connection)?;
     Ok(())
@@ -621,15 +658,12 @@ fn validate_canonical_memberships(connection: &Connection) -> Result<(), String>
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|error| format!("cannot read tags: {error}"))?;
     for tag_id in tag_ids {
-        let expected = query_bitmap_with_key(
-            connection,
-            "SELECT root_item_id FROM root_tag WHERE tag_id = ?1",
-            tag_id,
-        )?;
-        let actual = load_bitmap(connection, BitmapDomain::Tag, tag_id)
+        let members = load_bitmap(connection, BitmapDomain::Tag, tag_id)
             .map_err(|error| format!("cannot decode tag {tag_id}: {error}"))?;
-        if actual != expected {
-            return Err(format!("canonical tag bitmap {tag_id} is inconsistent"));
+        if !(&members - &expected_roots).is_empty() {
+            return Err(format!(
+                "canonical tag bitmap {tag_id} references unknown roots"
+            ));
         }
     }
 
@@ -941,6 +975,33 @@ fn copy_canonical_rows(
         .execute_batch("DELETE FROM cloud_state; DELETE FROM setting;")
         .map_err(|error| format!("cannot clear destination defaults: {error}"))?;
 
+    // Legacy relationship rows stage into connection-local temp tables; the
+    // canonical bitmaps and order vectors are built from them and the temp
+    // tables never reach the destination schema.
+    transaction
+        .execute_batch(
+            "CREATE TEMP TABLE collection_member (
+                 collection_id INTEGER NOT NULL,
+                 media_item_id INTEGER NOT NULL,
+                 position_rank INTEGER NOT NULL,
+                 PRIMARY KEY (collection_id, media_item_id)
+             ) WITHOUT ROWID;
+             CREATE TEMP TABLE root_tag (
+                 root_item_id INTEGER NOT NULL,
+                 tag_id INTEGER NOT NULL,
+                 PRIMARY KEY (root_item_id, tag_id)
+             ) WITHOUT ROWID;
+             CREATE TEMP TABLE folder_item (
+                 folder_id INTEGER NOT NULL,
+                 item_id INTEGER NOT NULL,
+                 position_rank INTEGER,
+                 PRIMARY KEY (folder_id, item_id)
+             ) WITHOUT ROWID;
+             INSERT INTO temp.collection_member (collection_id, media_item_id, position_rank)
+             SELECT collection_id, media_item_id, position_rank
+             FROM source.collection_member;",
+        )
+        .map_err(|error| format!("cannot stage legacy membership rows: {error}"))?;
     for (table, columns) in COPY_TABLES {
         let sql =
             format!("INSERT INTO main.{table} ({columns}) SELECT {columns} FROM source.{table}");
@@ -1027,7 +1088,7 @@ fn copy_canonical_rows(
                    ON li.item_id = lr.item_id AND li.kind = 'collection'
                  JOIN source.collection_member cm ON cm.collection_id = lr.item_id
              )
-             INSERT INTO main.root_tag(root_item_id, tag_id)
+             INSERT INTO temp.root_tag(root_item_id, tag_id)
              SELECT DISTINCT rm.root_item_id, mt.tag_id
                  FROM root_media rm
                  JOIN source.media_tag mt ON mt.media_item_id = rm.media_item_id",
@@ -1037,7 +1098,7 @@ fn copy_canonical_rows(
 
     transaction
         .execute(
-            "INSERT INTO main.folder_item(folder_id, item_id, position_rank)
+            "INSERT INTO temp.folder_item(folder_id, item_id, position_rank)
              SELECT mapped.folder_id, mapped.root_item_id, MIN(mapped.position_rank)
              FROM (
                  SELECT fi.folder_id,
@@ -1233,7 +1294,6 @@ const COPY_TABLES: &[(&str, &str)] = &[
     ("library_item", "item_id, item_key, kind, cover_media_item_id, created_at, updated_at"),
     ("library_root", "item_id, lifecycle, sort_rank"),
     ("media_asset", "item_id, file_id, name, captured_at, imported_at, updated_at"),
-    ("collection_member", "collection_id, media_item_id, position_rank"),
     ("media_view", "item_id, viewed_at"),
     ("tag", "tag_id, namespace, subtag"),
     ("folder", "folder_id, folder_key, name, parent_id, icon, color, notes, sort_rank, watch_path, watch_enabled, watch_subfolders, created_at, updated_at"),
@@ -1885,22 +1945,10 @@ mod tests {
                 "https://example.test/common",
             ]
         );
-        let sample_tag: i64 = destination_connection
-            .query_row(
-                "SELECT COUNT(*) FROM root_tag
-                 WHERE root_item_id = 1 AND tag_id = 1",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(sample_tag, 1);
-        assert_eq!(
-            destination_connection
-                .query_row("SELECT COUNT(*) FROM root_tag", [], |row| row
-                    .get::<_, i64>(0))
-                .unwrap(),
-            2
-        );
+        let sample_tag =
+            load_bitmap(&destination_connection, BitmapDomain::Tag, 1).unwrap();
+        assert!(sample_tag.contains(1));
+        assert_eq!(sample_tag.len(), 1);
         assert_eq!(
             destination_connection
                 .query_row(
@@ -1914,6 +1962,9 @@ mod tests {
         );
         for removed in [
             "media_tag",
+            "root_tag",
+            "collection_member",
+            "folder_item",
             "root_tag_count",
             "tag_search_fts",
             "folder_search_fts",

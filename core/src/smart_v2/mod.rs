@@ -1515,13 +1515,6 @@ mod tests {
         .unwrap();
 
         assert_eq!(matches, RoaringBitmap::from_iter([1]));
-        assert_eq!(
-            transaction
-                .query_row("SELECT COUNT(*) FROM root_tag", [], |row| row
-                    .get::<_, i64>(0))
-                .unwrap(),
-            0
-        );
     }
 
     #[test]

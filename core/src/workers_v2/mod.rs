@@ -508,11 +508,6 @@ mod tests {
                     [NOW],
                 )?;
                 transaction.execute(
-                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                     VALUES (10, 9, 1000), (10, 11, 2000)",
-                    [],
-                )?;
-                transaction.execute(
                     "UPDATE library_item SET cover_media_item_id = 9 WHERE item_id = 10",
                     [],
                 )?;
@@ -667,11 +662,6 @@ mod tests {
                     "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
                      VALUES (10, 8, ?1, ?1)",
                     [NOW],
-                )?;
-                transaction.execute(
-                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                     VALUES (20, 9, 1), (20, 10, 2)",
-                    [],
                 )?;
                 transaction.execute(
                     "UPDATE library_item SET cover_media_item_id = 9 WHERE item_id = 20",

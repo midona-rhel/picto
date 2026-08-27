@@ -521,6 +521,10 @@ pub(crate) fn seed_test_state(
         "DELETE FROM canonical_order WHERE owner_kind IN ('group', 'folder')",
         [],
     )?;
+    let active = lifecycles
+        .get(&LIFECYCLE_ACTIVE_KEY)
+        .cloned()
+        .unwrap_or_default();
     for (key, bitmap) in lifecycles {
         replace_bitmap(transaction, BitmapDomain::Lifecycle, key, revision, &bitmap)?;
     }
@@ -529,9 +533,28 @@ pub(crate) fn seed_test_state(
     }
     for (key, bitmap) in tags {
         replace_bitmap(transaction, BitmapDomain::Tag, key, revision, &bitmap)?;
+        transaction.execute(
+            "INSERT INTO tag_summary(tag_id, visible_root_count, assignment_count)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(tag_id) DO UPDATE SET
+                 visible_root_count = excluded.visible_root_count,
+                 assignment_count = excluded.assignment_count",
+            params![
+                key,
+                bitmap.intersection_len(&active) as i64,
+                bitmap.len() as i64
+            ],
+        )?;
     }
     for (key, bitmap) in folders {
         replace_bitmap(transaction, BitmapDomain::Folder, key, revision, &bitmap)?;
+        transaction.execute(
+            "INSERT INTO folder_summary(folder_id, visible_root_count)
+             VALUES (?1, ?2)
+             ON CONFLICT(folder_id) DO UPDATE SET
+                 visible_root_count = excluded.visible_root_count",
+            params![key, bitmap.intersection_len(&active) as i64],
+        )?;
     }
     for (folder_id, order) in folder_orders {
         replace_order(transaction, "folder", folder_id, revision, &order)?;

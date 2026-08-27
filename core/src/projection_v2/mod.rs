@@ -3934,13 +3934,9 @@ mod tests {
                     VALUES (20, 'Collection A', 'now'),
                            (11, 'Media B', 'now'),
                            (12, 'Media C', 'now');
-                INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                    VALUES (20, 10, 1);
                 INSERT INTO folder (folder_id, folder_key, name, created_at, updated_at)
                     VALUES (7, 'folder-a', 'A', 'now', 'now');
-                INSERT INTO folder_item (folder_id, item_id) VALUES (7, 20);
                 INSERT INTO tag (tag_id, subtag) VALUES (100, 'child'), (101, 'parent');
-                INSERT INTO root_tag (root_item_id, tag_id) VALUES (20, 100);
                 ",
             )
             .unwrap();
@@ -4196,12 +4192,6 @@ mod tests {
     fn folder_projection_excludes_non_active_roots() {
         let (mut connection, projection) = fixture();
         let transaction = connection.transaction().unwrap();
-        transaction
-            .execute(
-                "INSERT INTO folder_item (folder_id, item_id) VALUES (7, 12)",
-                [],
-            )
-            .unwrap();
         replace_bitmap(
             &transaction,
             BitmapDomain::Folder,
@@ -4561,13 +4551,6 @@ mod tests {
     fn canonical_root_tags_accumulate_without_member_tag_state() {
         let (mut connection, projection) = fixture();
         let transaction = connection.transaction().unwrap();
-        transaction
-            .execute(
-                "INSERT INTO root_tag(root_item_id, tag_id)
-                 VALUES (11, 100), (20, 101)",
-                [],
-            )
-            .unwrap();
         replace_bitmap(
             &transaction,
             BitmapDomain::Tag,
@@ -4603,12 +4586,6 @@ mod tests {
         let transaction = connection.transaction().unwrap();
         transaction
             .execute("INSERT INTO tag(tag_id, subtag) VALUES (200, 'plain')", [])
-            .unwrap();
-        transaction
-            .execute(
-                "INSERT INTO root_tag(root_item_id, tag_id) VALUES (20, 101)",
-                [],
-            )
             .unwrap();
         replace_bitmap(
             &transaction,
