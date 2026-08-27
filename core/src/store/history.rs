@@ -1491,23 +1491,10 @@ fn apply_group(transaction: &Transaction<'_>, delta: &SemanticGroupDelta) -> Res
                  present INTEGER NOT NULL,
                  PRIMARY KEY (collection_id, media_item_id)
              ) WITHOUT ROWID;
-             CREATE TEMP TABLE IF NOT EXISTS picto_history_group_folder (
-                 root_item_id INTEGER NOT NULL,
-                 folder_id INTEGER NOT NULL,
-                 position_rank INTEGER,
-                 PRIMARY KEY (root_item_id, folder_id)
-             ) WITHOUT ROWID;
-             CREATE TEMP TABLE IF NOT EXISTS picto_history_group_tag (
-                 root_item_id INTEGER NOT NULL,
-                 tag_id INTEGER NOT NULL,
-                 PRIMARY KEY (root_item_id, tag_id)
-             ) WITHOUT ROWID;
              DELETE FROM picto_history_remove_root;
              DELETE FROM picto_history_remove_item;
              DELETE FROM picto_history_group_root;
-             DELETE FROM picto_history_group_member;
-             DELETE FROM picto_history_group_folder;
-             DELETE FROM picto_history_group_tag;",
+             DELETE FROM picto_history_group_member;",
         )
         .map_err(|error| error.to_string())?;
     stage_group_payload(transaction, delta)?;
@@ -1563,16 +1550,7 @@ fn apply_group(transaction: &Transaction<'_>, delta: &SemanticGroupDelta) -> Res
              SELECT collection_id, media_item_id, position_rank
              FROM picto_history_group_member WHERE present = 1
              ON CONFLICT(collection_id, media_item_id) DO UPDATE SET
-                 position_rank = excluded.position_rank;
-             DELETE FROM folder_item
-             WHERE item_id IN (SELECT item_id FROM picto_history_group_root);
-             INSERT INTO folder_item(folder_id, item_id, position_rank)
-             SELECT folder_id, root_item_id, position_rank FROM picto_history_group_folder;
-             DELETE FROM root_tag
-             WHERE root_item_id IN (SELECT item_id FROM picto_history_group_root);
-             INSERT INTO root_tag(root_item_id, tag_id)
-             SELECT root_item_id, tag_id
-             FROM picto_history_group_tag;",
+                 position_rank = excluded.position_rank;",
         )
         .map_err(|error| error.to_string())?;
     Ok(())
@@ -1608,18 +1586,6 @@ fn stage_group_payload(
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
         )
         .map_err(|error| error.to_string())?;
-    let mut insert_folder = transaction
-        .prepare_cached(
-            "INSERT INTO picto_history_group_folder(root_item_id, folder_id, position_rank)
-             VALUES (?1, ?2, ?3)",
-        )
-        .map_err(|error| error.to_string())?;
-    let mut insert_tag = transaction
-        .prepare_cached(
-            "INSERT INTO picto_history_group_tag(root_item_id, tag_id)
-             VALUES (?1, ?2)",
-        )
-        .map_err(|error| error.to_string())?;
     for root in &delta.roots {
         insert_root
             .execute(params![
@@ -1640,20 +1606,6 @@ fn stage_group_payload(
                 root.updated_at,
             ])
             .map_err(|error| error.to_string())?;
-        for folder in &root.folders {
-            insert_folder
-                .execute(params![
-                    root.item_id,
-                    folder.folder_id,
-                    folder.position_rank
-                ])
-                .map_err(|error| error.to_string())?;
-        }
-        for tag in &root.tags {
-            insert_tag
-                .execute(params![root.item_id, tag.tag_id])
-                .map_err(|error| error.to_string())?;
-        }
     }
     let mut insert_member = transaction
         .prepare_cached(

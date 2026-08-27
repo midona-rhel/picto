@@ -443,6 +443,8 @@ impl Application {
                     false,
                 )?;
                 let selected_roots = bitmap_from_i64s(item_ids.iter().copied())?;
+                let projection = self.projections().selection_snapshot();
+                let inherited_folder_ids = folder_ids_for_roots(&projection, &item_ids);
                 let inherited_tag_ids = before
                     .tag_sets
                     .iter()
@@ -496,7 +498,6 @@ impl Application {
                     let label = label
                         .as_deref()
                         .ok_or_else(|| invalid("A new group requires a non-empty label"))?;
-                    let folders = folder_ids_for_roots(transaction, &item_ids)?;
                     transaction.execute(
                         "INSERT INTO library_item (item_key, kind, created_at, updated_at)
                          VALUES (?1, 'collection', ?2, ?2)",
@@ -529,13 +530,6 @@ impl Application {
                         item_id: collection_id,
                         lifecycle: Some(projected_lifecycle),
                     });
-                    delta.folders.extend(folders.into_iter().map(|folder_id| {
-                        FolderProjectionChange {
-                            folder_id,
-                            item_id: collection_id,
-                            present: true,
-                        }
-                    }));
                     collection_id
                 } else {
                     let collection_id = match input.winning_collection_id {
@@ -568,15 +562,15 @@ impl Application {
                     .map_err(|error| invalid(format!("Could not encode group roots: {error}")))?;
                 trace_bulk_stage("groups.organize.structure", "union_tags", stage_started);
                 stage_started = Instant::now();
-                transaction.execute(
-                    "INSERT INTO folder_item(folder_id, item_id)
-                     SELECT DISTINCT membership.folder_id, ?1
-                     FROM folder_item membership
-                     JOIN json_each(?2) selected
-                       ON membership.item_id = CAST(selected.value AS INTEGER)
-                     ON CONFLICT DO NOTHING",
-                    params![collection_id, encoded_roots],
-                )?;
+                delta
+                    .folders
+                    .extend(inherited_folder_ids.iter().copied().map(|folder_id| {
+                        FolderProjectionChange {
+                            folder_id,
+                            item_id: collection_id,
+                            present: true,
+                        }
+                    }));
                 trace_bulk_stage("groups.organize.structure", "union_folders", stage_started);
                 stage_started = Instant::now();
                 transaction.execute(
@@ -604,18 +598,15 @@ impl Application {
                     let encoded = serde_json::to_string(&item_ids).map_err(|error| {
                         invalid(format!("Could not encode group members: {error}"))
                     })?;
-                    let mut statement = transaction.prepare(
-                        "SELECT membership.item_id, membership.folder_id
-                         FROM folder_item membership
-                         JOIN json_each(?1) selected
-                           ON CAST(selected.value AS INTEGER) = membership.item_id
-                         ORDER BY membership.item_id, membership.folder_id",
-                    )?;
-                    let folder_rows = statement
-                        .query_map([&encoded], |row| {
-                            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-                        })?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    let folder_rows = item_ids
+                        .iter()
+                        .flat_map(|item_id| {
+                            projection
+                                .folder_ids_for_root(*item_id)
+                                .into_iter()
+                                .map(move |folder_id| (*item_id, folder_id))
+                        })
+                        .collect::<Vec<_>>();
                     remove_staged_roots_for_collection(transaction)?;
                     trace_bulk_stage(
                         "groups.organize.structure",
@@ -659,24 +650,11 @@ impl Application {
                     let mut members_by_collection = selected_collection_members(transaction)?
                         .into_iter()
                         .collect::<BTreeMap<_, _>>();
-                    let mut folders_by_root = BTreeMap::<i64, Vec<i64>>::new();
-                    {
-                        let mut statement = transaction.prepare(
-                            "SELECT membership.item_id, membership.folder_id
-                             FROM folder_item membership
-                             JOIN picto_selected_root selected
-                               ON selected.item_id = membership.item_id
-                             WHERE membership.item_id <> ?1
-                             ORDER BY membership.item_id, membership.folder_id",
-                        )?;
-                        let mut rows = statement.query([collection_id])?;
-                        while let Some(row) = rows.next()? {
-                            folders_by_root
-                                .entry(row.get(0)?)
-                                .or_default()
-                                .push(row.get(1)?);
-                        }
-                    }
+                    let mut folders_by_root = item_ids
+                        .iter()
+                        .filter(|item_id| **item_id != collection_id)
+                        .map(|item_id| (*item_id, projection.folder_ids_for_root(*item_id)))
+                        .collect::<BTreeMap<_, _>>();
                     let encoded = serde_json::to_string(&item_ids).map_err(|error| {
                         invalid(format!("Could not encode merged group roots: {error}"))
                     })?;
@@ -847,7 +825,12 @@ impl Application {
                 }
                 trace_bulk_stage("groups.organize", "summary_settlement", stage_started);
                 stage_started = Instant::now();
-                let mut after = capture_group_state_compact(transaction, &after_universe)?;
+                let mut after = capture_group_state_after_projection(
+                    transaction,
+                    &after_universe,
+                    self.projections(),
+                    &delta.folders,
+                )?;
                 let collection_root = RoaringBitmap::from_iter([root_id_u32(collection_id)?]);
                 for tag_id in &inherited_tag_ids {
                     after.tag_sets.insert(*tag_id, collection_root.clone());
@@ -909,7 +892,10 @@ impl Application {
                 let projected_lifecycle = parse_lifecycle(&lifecycle)?;
                 let detached_lifecycle = input.target_lifecycle.unwrap_or(projected_lifecycle);
                 let detached_lifecycle_name = detached_lifecycle.as_str();
-                let folders = folder_ids_for_roots(transaction, &[input.collection_id.0])?;
+                let folders = folder_ids_for_roots(
+                    &self.projections().selection_snapshot(),
+                    &[input.collection_id.0],
+                );
                 begin_structural_summary_batch(transaction, &before_universe)?;
                 stage_media_ids(transaction, &media_ids)?;
                 let missing_media_id = transaction
@@ -941,7 +927,7 @@ impl Application {
                        )",
                     [input.collection_id.0],
                 )?;
-                create_staged_roots_with_folders(
+                create_staged_roots_with_metadata(
                     transaction,
                     detached_lifecycle_name,
                     input.collection_id.0,
@@ -977,13 +963,6 @@ impl Application {
                             "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
                             params![media_id, lifecycle],
                         )?;
-                        transaction.execute(
-                            "INSERT INTO folder_item (folder_id, item_id)
-                             SELECT folder_id, ?1 FROM folder_item
-                             WHERE item_id = ?2
-                             ON CONFLICT DO NOTHING",
-                            params![media_id, input.collection_id.0],
-                        )?;
                         project_detached_root(
                             &mut delta,
                             input.collection_id.0,
@@ -1006,7 +985,12 @@ impl Application {
                 after_universe.sort_unstable();
                 after_universe.dedup();
                 finish_structural_summary_batch(transaction, &after_universe)?;
-                let after = capture_group_state_without_tags(transaction, &after_universe)?;
+                let after = capture_group_state_after_projection(
+                    transaction,
+                    &after_universe,
+                    self.projections(),
+                    &delta.folders,
+                )?;
                 let detached_roots = bitmap_from_i64s(
                     affected
                         .iter()
@@ -1082,12 +1066,15 @@ impl Application {
                 stage_started = Instant::now();
                 let lifecycle = require_collection_root(transaction, collection_id.0)?;
                 let projected_lifecycle = parse_lifecycle(&lifecycle)?;
-                let folders = folder_ids_for_roots(transaction, &[collection_id.0])?;
+                let folders = folder_ids_for_roots(
+                    &self.projections().selection_snapshot(),
+                    &[collection_id.0],
+                );
                 begin_structural_summary_batch(transaction, &before_universe)?;
                 stage_collection_members(transaction, collection_id.0)?;
                 let members = staged_media_ids(transaction)?;
                 let mut delta = StructureProjectionDelta::default();
-                create_staged_roots_with_folders(transaction, &lifecycle, collection_id.0)?;
+                create_staged_roots_with_metadata(transaction, &lifecycle, collection_id.0)?;
                 trace_bulk_stage("groups.ungroup", "create_roots", stage_started);
                 stage_started = Instant::now();
                 for member in &members {
@@ -1117,7 +1104,12 @@ impl Application {
                 finish_structural_summary_batch(transaction, &after_universe)?;
                 trace_bulk_stage("groups.ungroup", "summary_settlement", summary_started);
                 stage_started = Instant::now();
-                let after = capture_group_state_without_tags(transaction, &after_universe)?;
+                let after = capture_group_state_after_projection(
+                    transaction,
+                    &after_universe,
+                    self.projections(),
+                    &delta.folders,
+                )?;
                 let detached_roots = bitmap_from_i64s(
                     affected
                         .iter()
@@ -1962,18 +1954,36 @@ fn group_history_universe(
     item_ids
 }
 
-fn capture_group_state_compact(
+fn capture_group_state_after_projection(
     transaction: &Transaction<'_>,
     universe_ids: &[i64],
+    projections: &crate::projection_v2::ProjectionStore,
+    folder_changes: &[FolderProjectionChange],
 ) -> rusqlite::Result<CapturedGroupState> {
-    capture_group_state_internal(transaction, universe_ids, false, true)
-}
-
-fn capture_group_state_without_tags(
-    transaction: &Transaction<'_>,
-    universe_ids: &[i64],
-) -> rusqlite::Result<CapturedGroupState> {
-    capture_group_state_internal(transaction, universe_ids, false, false)
+    let mut state = capture_group_state_internal(transaction, universe_ids)?;
+    populate_group_folders_from_projection(&mut state, &projections.selection_snapshot());
+    for change in folder_changes {
+        let Some(root) = state.roots.get_mut(&change.item_id) else {
+            continue;
+        };
+        if change.present {
+            if !root
+                .folders
+                .iter()
+                .any(|folder| folder.folder_id == change.folder_id)
+            {
+                root.folders.push(SemanticGroupFolder {
+                    folder_id: change.folder_id,
+                    position_rank: None,
+                });
+            }
+        } else {
+            root.folders
+                .retain(|folder| folder.folder_id != change.folder_id);
+        }
+        root.folders.sort_by_key(|folder| folder.folder_id);
+    }
+    Ok(state)
 }
 
 fn capture_group_state_from_projection(
@@ -1982,7 +1992,8 @@ fn capture_group_state_from_projection(
     projections: &crate::projection_v2::ProjectionStore,
     include_root_tags: bool,
 ) -> rusqlite::Result<CapturedGroupState> {
-    let mut state = capture_group_state_internal(transaction, universe_ids, false, false)?;
+    let mut state = capture_group_state_internal(transaction, universe_ids)?;
+    populate_group_folders_from_projection(&mut state, &projections.selection_snapshot());
     let roots = bitmap_from_i64s(universe_ids.iter().copied())?;
     for (tag_id, tagged_roots) in projections.tag_memberships_for_roots(&roots) {
         if include_root_tags {
@@ -1997,11 +2008,25 @@ fn capture_group_state_from_projection(
     Ok(state)
 }
 
+fn populate_group_folders_from_projection(
+    state: &mut CapturedGroupState,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
+) {
+    for root in state.roots.values_mut() {
+        root.folders = projection
+            .folder_ids_for_root(root.item_id)
+            .into_iter()
+            .map(|folder_id| SemanticGroupFolder {
+                folder_id,
+                position_rank: None,
+            })
+            .collect();
+    }
+}
+
 fn capture_group_state_internal(
     transaction: &Transaction<'_>,
     universe_ids: &[i64],
-    include_root_tags: bool,
-    include_tag_sets: bool,
 ) -> rusqlite::Result<CapturedGroupState> {
     let encoded = serde_json::to_string(universe_ids)
         .map_err(|error| invalid(format!("Could not encode group history state: {error}")))?;
@@ -2071,53 +2096,6 @@ fn capture_group_state_internal(
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         state.roots = roots.into_iter().map(|root| (root.item_id, root)).collect();
-    }
-    {
-        let mut statement = transaction.prepare(
-            "SELECT membership.item_id, membership.folder_id,
-                    membership.position_rank
-             FROM folder_item membership
-             JOIN picto_group_history_universe selected
-               ON selected.item_id = membership.item_id
-             ORDER BY membership.item_id, membership.folder_id",
-        )?;
-        let mut rows = statement.query([])?;
-        while let Some(row) = rows.next()? {
-            let root_id = row.get::<_, i64>(0)?;
-            if let Some(root) = state.roots.get_mut(&root_id) {
-                root.folders.push(SemanticGroupFolder {
-                    folder_id: row.get(1)?,
-                    position_rank: row.get(2)?,
-                });
-            }
-        }
-    }
-    if include_root_tags || include_tag_sets {
-        let mut statement = transaction.prepare(
-            "SELECT relation.root_item_id, relation.tag_id
-             FROM root_tag relation
-             JOIN picto_group_history_universe selected
-               ON selected.item_id = relation.root_item_id
-             ORDER BY relation.root_item_id, relation.tag_id",
-        )?;
-        let mut rows = statement.query([])?;
-        while let Some(row) = rows.next()? {
-            let root_id = row.get::<_, i64>(0)?;
-            let tag_id = row.get::<_, i64>(1)?;
-            if include_root_tags {
-                let Some(root) = state.roots.get_mut(&root_id) else {
-                    continue;
-                };
-                root.tags.push(SemanticGroupTag { tag_id });
-            }
-            if include_tag_sets {
-                state
-                    .tag_sets
-                    .entry(tag_id)
-                    .or_default()
-                    .insert(root_id_u32(root_id)?);
-            }
-        }
     }
     {
         let mut statement = transaction.prepare(
@@ -2467,23 +2445,14 @@ fn require_folder(transaction: &Transaction<'_>, folder_id: i64) -> rusqlite::Re
 }
 
 fn folder_ids_for_roots(
-    transaction: &Transaction<'_>,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
     item_ids: &[i64],
-) -> rusqlite::Result<Vec<i64>> {
-    if item_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-    let encoded = serde_json::to_string(item_ids)
-        .map_err(|error| invalid(format!("Could not encode root selection: {error}")))?;
-    transaction
-        .prepare(
-            "SELECT DISTINCT membership.folder_id
-             FROM folder_item membership
-             JOIN json_each(?1) selected
-               ON CAST(selected.value AS INTEGER) = membership.item_id
-             ORDER BY membership.folder_id",
-        )?
-        .query_map([encoded], |row| row.get::<_, i64>(0))?
+) -> Vec<i64> {
+    item_ids
+        .iter()
+        .flat_map(|item_id| projection.folder_ids_for_root(*item_id))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
         .collect()
 }
 
@@ -2944,7 +2913,7 @@ fn staged_media_ids(transaction: &Transaction<'_>) -> rusqlite::Result<Vec<i64>>
         .collect()
 }
 
-fn create_staged_roots_with_folders(
+fn create_staged_roots_with_metadata(
     transaction: &Transaction<'_>,
     lifecycle: &str,
     source_root_id: i64,
@@ -2961,17 +2930,6 @@ fn create_staged_roots_with_folders(
         "library_root",
         stage_started,
     );
-    stage_started = Instant::now();
-    transaction.execute(
-        "INSERT INTO folder_item (folder_id, item_id)
-         SELECT source.folder_id, selected.media_item_id
-         FROM folder_item source
-         CROSS JOIN picto_selected_media selected
-         WHERE source.item_id = ?1
-         ON CONFLICT DO NOTHING",
-        [source_root_id],
-    )?;
-    trace_bulk_stage("groups.create_detached_roots", "folders", stage_started);
     stage_started = Instant::now();
     let now = chrono::Utc::now().to_rfc3339();
     transaction.execute(
@@ -2994,16 +2952,6 @@ fn create_staged_roots_with_folders(
         params![source_root_id, now],
     )?;
     trace_bulk_stage("groups.create_detached_roots", "metadata", stage_started);
-    stage_started = Instant::now();
-    transaction.execute(
-        "INSERT INTO root_tag(root_item_id, tag_id)
-         SELECT selected.media_item_id, source.tag_id
-         FROM picto_selected_media selected
-         JOIN root_tag source ON source.root_item_id = ?1
-         ORDER BY selected.media_item_id, source.tag_id",
-        [source_root_id],
-    )?;
-    trace_bulk_stage("groups.create_detached_roots", "tags", stage_started);
     trace_bulk_stage("groups.create_detached_roots", "total", operation_started);
     Ok(())
 }
@@ -3966,15 +3914,20 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 assert_eq!(roots, 0);
-                let collection_folders: i64 = connection.query_row(
+                let legacy_collection_folders: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM folder_item WHERE item_id = ?1",
                     [grouped.collection_id.0],
                     |row| row.get(0),
                 )?;
-                assert_eq!(collection_folders, 1);
+                assert_eq!(legacy_collection_folders, 0);
                 Ok(())
             })
             .unwrap();
+        assert_eq!(
+            app.projections()
+                .folder_ids_for_root(grouped.collection_id.0),
+            vec![1]
+        );
 
         app.set_lifecycle(
             &ItemTarget::Explicit {
@@ -4008,12 +3961,12 @@ mod tests {
                         |row| row.get(0),
                     )?;
                     assert_eq!(lifecycle, "trash");
-                    let folders: i64 = connection.query_row(
+                    let legacy_folders: i64 = connection.query_row(
                         "SELECT COUNT(*) FROM folder_item WHERE item_id = ?1",
                         [id.0],
                         |row| row.get(0),
                     )?;
-                    assert_eq!(folders, 1);
+                    assert_eq!(legacy_folders, 0);
                 }
                 let collection_exists: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM library_item WHERE item_id = ?1",
@@ -4024,12 +3977,23 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        for id in &ids[..2] {
+            assert_eq!(app.projections().folder_ids_for_root(id.0), vec![1]);
+        }
     }
 
     #[test]
     fn grouping_round_trips_through_application_history() {
         let (_directory, app, ids) = fixture();
         let grouped = organize(&app, &ids[..2], Some("Post"), None);
+        assert_eq!(
+            app.projections()
+                .folder_ids_for_root(grouped.collection_id.0),
+            vec![1]
+        );
+        for id in &ids[..2] {
+            assert!(app.projections().folder_ids_for_root(id.0).is_empty());
+        }
 
         app.undo().unwrap();
         app.store()
@@ -4049,6 +4013,13 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        for id in &ids[..2] {
+            assert_eq!(app.projections().folder_ids_for_root(id.0), vec![1]);
+        }
+        assert!(app
+            .projections()
+            .folder_ids_for_root(grouped.collection_id.0)
+            .is_empty());
 
         app.redo().unwrap();
         app.store()
@@ -4062,6 +4033,14 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        assert_eq!(
+            app.projections()
+                .folder_ids_for_root(grouped.collection_id.0),
+            vec![1]
+        );
+        for id in &ids[..2] {
+            assert!(app.projections().folder_ids_for_root(id.0).is_empty());
+        }
     }
 
     #[test]

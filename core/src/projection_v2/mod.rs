@@ -2204,7 +2204,7 @@ impl ProjectionStore {
                     .folder_members
                     .get_mut(&change.folder_id)
                     .is_some_and(|members| members.remove(change.item_id as u32));
-                if is_root && removed {
+                if removed {
                     if let Some(bitmap) = state.folder_bitmaps.get_mut(&change.folder_id) {
                         bitmap.remove(change.item_id as u32);
                     }
@@ -2445,7 +2445,7 @@ impl ProjectionStore {
                 .folder_members
                 .get_mut(&folder_id)
                 .is_some_and(|members| members.remove(item_id as u32));
-            if is_root && removed {
+            if removed {
                 if let Some(bitmap) = state.folder_bitmaps.get_mut(&folder_id) {
                     bitmap.remove(item_id as u32);
                 }
@@ -2496,9 +2496,9 @@ impl ProjectionStore {
                 *members -= item_ids;
             }
             if let Some(bitmap) = state.folder_bitmaps.get_mut(&folder_id) {
-                *bitmap -= &visible_changed;
+                *bitmap -= &changed;
             }
-            for item_id in visible_changed.into_iter().map(i64::from) {
+            for item_id in changed.into_iter().map(i64::from) {
                 remove_root_folder(&mut state, item_id, folder_id);
             }
         }
