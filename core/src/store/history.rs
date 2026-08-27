@@ -1498,6 +1498,19 @@ fn apply_group(transaction: &Transaction<'_>, delta: &SemanticGroupDelta) -> Res
         )
         .map_err(|error| error.to_string())?;
     stage_group_payload(transaction, delta)?;
+    let creates_root: bool = transaction
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM picto_history_group_root staged
+                 LEFT JOIN library_root root ON root.item_id = staged.item_id
+                 WHERE root.item_id IS NULL
+             )",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| error.to_string())?;
+    let structural_change =
+        creates_root || !delta.remove_root_ids.is_empty() || !delta.remove_item_ids.is_empty();
 
     transaction
         .execute(
@@ -1538,21 +1551,27 @@ fn apply_group(transaction: &Transaction<'_>, delta: &SemanticGroupDelta) -> Res
                  rating = excluded.rating,
                  notes = excluded.notes,
                  source_urls_json = excluded.source_urls_json,
-                 updated_at = excluded.updated_at;
-             DELETE FROM collection_member
-             WHERE EXISTS (
-                 SELECT 1 FROM picto_history_group_member staged
-                 WHERE staged.present = 0
-                   AND staged.collection_id = collection_member.collection_id
-                   AND staged.media_item_id = collection_member.media_item_id
-             );
-             INSERT INTO collection_member(collection_id, media_item_id, position_rank)
-             SELECT collection_id, media_item_id, position_rank
-             FROM picto_history_group_member WHERE present = 1
-             ON CONFLICT(collection_id, media_item_id) DO UPDATE SET
-                 position_rank = excluded.position_rank;",
+                 updated_at = excluded.updated_at;",
         )
         .map_err(|error| error.to_string())?;
+    if structural_change {
+        transaction
+            .execute_batch(
+                "DELETE FROM collection_member
+                 WHERE EXISTS (
+                     SELECT 1 FROM picto_history_group_member staged
+                     WHERE staged.present = 0
+                       AND staged.collection_id = collection_member.collection_id
+                       AND staged.media_item_id = collection_member.media_item_id
+                 );
+                 INSERT INTO collection_member(collection_id, media_item_id, position_rank)
+                 SELECT collection_id, media_item_id, position_rank
+                 FROM picto_history_group_member WHERE present = 1
+                 ON CONFLICT(collection_id, media_item_id) DO UPDATE SET
+                     position_rank = excluded.position_rank;",
+            )
+            .map_err(|error| error.to_string())?;
+    }
     Ok(())
 }
 

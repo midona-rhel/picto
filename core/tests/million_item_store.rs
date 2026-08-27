@@ -1573,7 +1573,7 @@ fn representative_100k_fixture_has_exact_lifecycle_organization_and_groups() {
                 winning_collection_id: None,
             })
             .unwrap();
-        assert_collection_state(&store, result.collection_id, group_size as i64);
+        assert_collection_state(&application, result.collection_id, group_size as i64);
         println!(
             "fixture_stage stage=group_create cardinality={} elapsed_ms={:.3}",
             group_size,
@@ -2233,7 +2233,7 @@ fn exercise_group_operations(
         || application.organize_into_collection(input),
     );
     let collection_id = organized.unwrap().collection_id;
-    assert_collection_state(store, collection_id, group_size as i64);
+    assert_collection_state(application, collection_id, group_size as i64);
     assert_root_state(application, (total_rows - group_size + 1) as i64, 0, 0);
 
     let mut reversed = members.clone();
@@ -2252,15 +2252,10 @@ fn exercise_group_operations(
         },
     );
     reorder_result.unwrap();
-    let first_member: i64 = store
-        .read_snapshot(|connection| {
-            connection.query_row(
-                "SELECT media_item_id FROM collection_member
-                 WHERE collection_id = ?1 ORDER BY position_rank, media_item_id LIMIT 1",
-                [collection_id.0],
-                |row| row.get(0),
-            )
-        })
+    let first_member = application
+        .projections()
+        .group_order(collection_id.0)
+        .and_then(|order| order.first().copied())
         .unwrap();
     assert_eq!(first_member, group_size as i64);
 
@@ -2273,12 +2268,12 @@ fn exercise_group_operations(
             })
         });
     detach_result.unwrap();
-    assert_collection_state(store, collection_id, group_size as i64 - 1);
+    assert_collection_state(application, collection_id, group_size as i64 - 1);
     assert!(application.projections().active_bitmap().contains(1));
     application.undo().unwrap();
-    assert_collection_state(store, collection_id, group_size as i64);
+    assert_collection_state(application, collection_id, group_size as i64);
     application.redo().unwrap();
-    assert_collection_state(store, collection_id, group_size as i64 - 1);
+    assert_collection_state(application, collection_id, group_size as i64 - 1);
 
     let (ungroup_result, ungroup) = measure_mutation(
         "groups.ungroup",
@@ -2289,7 +2284,7 @@ fn exercise_group_operations(
         || application.ungroup_collection(collection_id),
     );
     ungroup_result.unwrap();
-    assert_collection_state(store, collection_id, 0);
+    assert_collection_state(application, collection_id, 0);
     assert_root_state(application, total_rows as i64, 0, 0);
     let ungroup_history = application.history_state().unwrap();
     eprintln!(
@@ -2800,23 +2795,25 @@ fn assert_smart_cardinality(store: &Store, smart_folder_id: i64, expected: i64) 
     assert_eq!(materialized, expected);
 }
 
-fn assert_collection_state(store: &Store, collection_id: ItemId, expected_members: i64) {
-    let (root_exists, members): (bool, i64) = store
+fn assert_collection_state(
+    application: &Application,
+    collection_id: ItemId,
+    expected_members: i64,
+) {
+    let root_exists: bool = application
+        .store()
         .read_snapshot(|connection| {
-            Ok((
-                connection.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM library_root WHERE item_id = ?1)",
-                    [collection_id.0],
-                    |row| row.get(0),
-                )?,
-                connection.query_row(
-                    "SELECT COUNT(*) FROM collection_member WHERE collection_id = ?1",
-                    [collection_id.0],
-                    |row| row.get(0),
-                )?,
-            ))
+            connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM library_root WHERE item_id = ?1)",
+                [collection_id.0],
+                |row| row.get(0),
+            )
         })
         .unwrap();
+    let members = application
+        .projections()
+        .group_order(collection_id.0)
+        .map_or(0, |members| members.len() as i64);
     assert_eq!(members, expected_members);
     assert_eq!(root_exists, expected_members > 0);
 }

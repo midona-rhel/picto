@@ -1325,6 +1325,23 @@ impl ProjectionSelectionSnapshot {
             .unwrap_or_default()
     }
 
+    pub(crate) fn tag_memberships_for_roots(
+        &self,
+        roots: &RoaringBitmap,
+    ) -> Vec<(i64, RoaringBitmap)> {
+        let mut memberships = self
+            .state
+            .direct_tag_bitmaps
+            .iter()
+            .filter_map(|(tag_id, tagged)| {
+                let matching = roots & &**tagged;
+                (!matching.is_empty()).then_some((*tag_id, matching))
+            })
+            .collect::<Vec<_>>();
+        memberships.sort_unstable_by_key(|(tag_id, _)| *tag_id);
+        memberships
+    }
+
     pub(crate) fn smart_folder_bitmap(&self, smart_folder_id: i64) -> RoaringBitmap {
         self.state
             .smart_folder_bitmaps
@@ -2323,24 +2340,19 @@ impl ProjectionStore {
             .unwrap_or_default()
     }
 
-    /// Return every exact root/tag intersection for a root selection. This is
-    /// the reverse view used by mutations and in-memory history; no SQL
-    /// relationship expansion is required.
+    pub fn group_order(&self, group_id: i64) -> Option<Vec<i64>> {
+        self.state
+            .load()
+            .collection_orders
+            .get(&group_id)
+            .map(|order| (**order).clone())
+    }
+
     pub(crate) fn tag_memberships_for_roots(
         &self,
         roots: &RoaringBitmap,
     ) -> Vec<(i64, RoaringBitmap)> {
-        let state = self.state.load();
-        let mut memberships = state
-            .direct_tag_bitmaps
-            .iter()
-            .filter_map(|(tag_id, tagged)| {
-                let matching = roots & &**tagged;
-                (!matching.is_empty()).then_some((*tag_id, matching))
-            })
-            .collect::<Vec<_>>();
-        memberships.sort_unstable_by_key(|(tag_id, _)| *tag_id);
-        memberships
+        self.selection_snapshot().tag_memberships_for_roots(roots)
     }
 
     /// Return active roots containing at least one member with this exact MIME.

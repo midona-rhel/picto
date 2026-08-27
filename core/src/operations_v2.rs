@@ -51,7 +51,7 @@ struct GroupProjectionDelta {
     rating_changes: SemanticRatingDelta,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct CapturedGroupState {
     item_ids: BTreeSet<i64>,
     roots: BTreeMap<i64, SemanticGroupRoot>,
@@ -437,15 +437,15 @@ impl Application {
                 let mut stage_started = operation_started;
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, &input.target)?;
                 stage_root_ids(transaction, &item_ids)?;
-                let before_universe = group_history_universe(transaction, &item_ids)?;
+                let projection = self.projections().selection_snapshot();
+                let before_universe = group_history_universe(&projection, &item_ids)?;
                 let before = capture_group_state_from_projection(
                     transaction,
                     &before_universe,
-                    self.projections(),
+                    &projection,
                     false,
                 )?;
                 let selected_roots = bitmap_from_i64s(item_ids.iter().copied())?;
-                let projection = self.projections().selection_snapshot();
                 let inherited_folder_ids = folder_ids_for_roots(&projection, &item_ids);
                 let inherited_tag_ids = before
                     .tag_sets
@@ -830,7 +830,8 @@ impl Application {
                 let mut after = capture_group_state_after_projection(
                     transaction,
                     &after_universe,
-                    self.projections(),
+                    &projection,
+                    &delta,
                     &delta.folders,
                 )?;
                 let collection_root = RoaringBitmap::from_iter([root_id_u32(collection_id)?]);
@@ -885,11 +886,12 @@ impl Application {
             |transaction| {
                 let mut seeds = media_ids.clone();
                 seeds.push(input.collection_id.0);
-                let before_universe = group_history_universe(transaction, &seeds)?;
+                let projection = self.projections().selection_snapshot();
+                let before_universe = group_history_universe(&projection, &seeds)?;
                 let before = capture_group_state_from_projection(
                     transaction,
                     &before_universe,
-                    self.projections(),
+                    &projection,
                     true,
                 )?;
                 let lifecycle = require_collection_root(transaction, input.collection_id.0)?;
@@ -992,7 +994,8 @@ impl Application {
                 let after = capture_group_state_after_projection(
                     transaction,
                     &after_universe,
-                    self.projections(),
+                    &projection,
+                    &delta,
                     &delta.folders,
                 )?;
                 let detached_roots = bitmap_from_i64s(
@@ -1061,11 +1064,12 @@ impl Application {
             |transaction| {
                 let operation_started = Instant::now();
                 let mut stage_started = operation_started;
-                let before_universe = group_history_universe(transaction, &[collection_id.0])?;
+                let projection = self.projections().selection_snapshot();
+                let before_universe = group_history_universe(&projection, &[collection_id.0])?;
                 let before = capture_group_state_from_projection(
                     transaction,
                     &before_universe,
-                    self.projections(),
+                    &projection,
                     true,
                 )?;
                 trace_bulk_stage("groups.ungroup", "capture_before", stage_started);
@@ -1113,7 +1117,8 @@ impl Application {
                 let after = capture_group_state_after_projection(
                     transaction,
                     &after_universe,
-                    self.projections(),
+                    &projection,
+                    &delta,
                     &delta.folders,
                 )?;
                 let detached_roots = bitmap_from_i64s(
@@ -1183,73 +1188,49 @@ impl Application {
             ),
             |transaction| {
                 require_collection_root(transaction, input.collection_id.0)?;
-                let universe = group_history_universe(transaction, &[input.collection_id.0])?;
-                let before = capture_group_state_from_projection(
-                    transaction,
-                    &universe,
-                    self.projections(),
-                    true,
-                )?;
-                let encoded = serde_json::to_string(&media_ids)
-                    .map_err(|error| invalid(format!("Could not encode group order: {error}")))?;
-                transaction.execute_batch(
-                    "CREATE TEMP TABLE IF NOT EXISTS picto_collection_order (
-                         media_item_id INTEGER PRIMARY KEY,
-                         position_rank INTEGER NOT NULL
-                     ) WITHOUT ROWID;
-                     DELETE FROM picto_collection_order;",
-                )?;
-                transaction.execute(
-                    "INSERT INTO picto_collection_order(media_item_id, position_rank)
-                     SELECT CAST(value AS INTEGER), (CAST(key AS INTEGER) + 1) * ?2
-                     FROM json_each(?1)",
-                    params![encoded, RANK_GAP],
-                )?;
-                let (member_count, matched_count): (i64, i64) = transaction.query_row(
-                    "SELECT
-                         (SELECT COUNT(*) FROM collection_member
-                          WHERE collection_id = ?1),
-                         (SELECT COUNT(*)
-                          FROM picto_collection_order desired
-                          JOIN collection_member member
-                            ON member.collection_id = ?1
-                           AND member.media_item_id = desired.media_item_id)",
-                    [input.collection_id.0],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )?;
-                if member_count != media_ids.len() as i64 || matched_count != member_count {
+                let projection = self.projections().selection_snapshot();
+                let universe = group_history_universe(&projection, &[input.collection_id.0])?;
+                let before =
+                    capture_group_state_from_projection(transaction, &universe, &projection, true)?;
+                let current_order = projection
+                    .group_order(input.collection_id.0)
+                    .ok_or_else(|| invalid("Group has no canonical member order"))?;
+                if current_order.len() != media_ids.len()
+                    || current_order.iter().copied().collect::<BTreeSet<_>>()
+                        != media_ids.iter().copied().collect::<BTreeSet<_>>()
+                {
                     return Err(invalid(
                         "Reorder must contain every group member exactly once",
                     ));
                 }
                 transaction.execute(
-                    "UPDATE collection_member
-                     SET position_rank = (
-                         SELECT desired.position_rank
-                         FROM picto_collection_order desired
-                         WHERE desired.media_item_id = collection_member.media_item_id
-                     )
-                     WHERE collection_id = ?1",
-                    [input.collection_id.0],
+                    "UPDATE library_item SET cover_media_item_id = ?1 WHERE item_id = ?2",
+                    params![media_ids.first(), input.collection_id.0],
                 )?;
-                sync_collection_cover(transaction, input.collection_id.0)?;
-                let after = capture_group_state_from_projection(
+                transaction.execute(
+                    "UPDATE root_summary SET cover_media_item_id = ?1
+                     WHERE root_item_id = ?2",
+                    params![media_ids.first(), input.collection_id.0],
+                )?;
+                let structure = StructureProjectionDelta {
+                    group_orders: vec![GroupOrderProjectionChange {
+                        collection_id: input.collection_id.0,
+                        media_ids: media_ids.clone(),
+                    }],
+                    ..StructureProjectionDelta::default()
+                };
+                let after = capture_group_state_after_projection(
                     transaction,
                     &universe,
-                    self.projections(),
-                    true,
+                    &projection,
+                    &structure,
+                    &[],
                 )?;
                 let (history, forward) = group_history_record(&before, &after)?;
                 Ok((
                     (),
                     GroupProjectionDelta {
-                        structure: StructureProjectionDelta {
-                            group_orders: vec![GroupOrderProjectionChange {
-                                collection_id: input.collection_id.0,
-                                media_ids: media_ids.clone(),
-                            }],
-                            ..StructureProjectionDelta::default()
-                        },
+                        structure,
                         rating_changes: forward.rating_changes,
                         ..GroupProjectionDelta::default()
                     },
@@ -1967,40 +1948,35 @@ fn receipt(revision: u64, resources: &[&str], item_ids: &[i64]) -> MutationRecei
 }
 
 fn group_history_universe(
-    transaction: &Transaction<'_>,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
     seed_ids: &[i64],
 ) -> rusqlite::Result<Vec<i64>> {
-    let encoded = serde_json::to_string(seed_ids)
-        .map_err(|error| invalid(format!("Could not encode group history roots: {error}")))?;
-    let mut statement = transaction.prepare(
-        "WITH seed(item_id) AS MATERIALIZED (
-             SELECT CAST(value AS INTEGER) FROM json_each(?1)
-         )
-         SELECT item_id FROM seed
-         UNION
-         SELECT member.media_item_id
-         FROM collection_member member
-         JOIN seed ON seed.item_id = member.collection_id
-         UNION
-         SELECT member.collection_id
-         FROM collection_member member
-         JOIN seed ON seed.item_id = member.media_item_id
-         ORDER BY 1",
-    )?;
-    let item_ids = statement
-        .query_map([encoded], |row| row.get::<_, i64>(0))?
-        .collect();
-    item_ids
+    let mut item_ids = seed_ids.iter().copied().collect::<BTreeSet<_>>();
+    for seed_id in seed_ids {
+        if let Some(members) = projection.group_order(*seed_id) {
+            item_ids.extend(members);
+        }
+        if let Some(root_id) = projection.root_for_media(*seed_id) {
+            item_ids.insert(root_id);
+            if root_id != *seed_id {
+                item_ids.extend(projection.group_order(root_id).unwrap_or_default());
+            }
+        }
+    }
+    Ok(item_ids.into_iter().collect())
 }
 
 fn capture_group_state_after_projection(
     transaction: &Transaction<'_>,
     universe_ids: &[i64],
-    projections: &crate::projection_v2::ProjectionStore,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
+    structure: &StructureProjectionDelta,
     folder_changes: &[FolderProjectionChange],
 ) -> rusqlite::Result<CapturedGroupState> {
     let mut state = capture_group_state_internal(transaction, universe_ids)?;
-    populate_group_folders_from_projection(&mut state, &projections.selection_snapshot());
+    populate_group_folders_from_projection(&mut state, projection);
+    populate_group_members_from_projection(&mut state, projection);
+    apply_structure_to_captured_group_state(&mut state, structure);
     for change in folder_changes {
         let Some(root) = state.roots.get_mut(&change.item_id) else {
             continue;
@@ -2028,13 +2004,14 @@ fn capture_group_state_after_projection(
 fn capture_group_state_from_projection(
     transaction: &Transaction<'_>,
     universe_ids: &[i64],
-    projections: &crate::projection_v2::ProjectionStore,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
     include_root_tags: bool,
 ) -> rusqlite::Result<CapturedGroupState> {
     let mut state = capture_group_state_internal(transaction, universe_ids)?;
-    populate_group_folders_from_projection(&mut state, &projections.selection_snapshot());
+    populate_group_folders_from_projection(&mut state, projection);
+    populate_group_members_from_projection(&mut state, projection);
     let roots = bitmap_from_i64s(universe_ids.iter().copied())?;
-    for (tag_id, tagged_roots) in projections.tag_memberships_for_roots(&roots) {
+    for (tag_id, tagged_roots) in projection.tag_memberships_for_roots(&roots) {
         if include_root_tags {
             for root_id in tagged_roots.iter().map(i64::from) {
                 if let Some(root) = state.roots.get_mut(&root_id) {
@@ -2045,6 +2022,69 @@ fn capture_group_state_from_projection(
         state.tag_sets.insert(tag_id, tagged_roots);
     }
     Ok(state)
+}
+
+fn populate_group_members_from_projection(
+    state: &mut CapturedGroupState,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
+) {
+    for collection_id in state.item_ids.iter().copied() {
+        let Some(order) = projection.group_order(collection_id) else {
+            continue;
+        };
+        for (position, media_item_id) in order.into_iter().enumerate() {
+            state.members.insert(
+                (collection_id, media_item_id),
+                i64::try_from(position + 1)
+                    .unwrap_or(i64::MAX)
+                    .saturating_mul(RANK_GAP),
+            );
+        }
+    }
+}
+
+fn apply_structure_to_captured_group_state(
+    state: &mut CapturedGroupState,
+    structure: &StructureProjectionDelta,
+) {
+    for change in &structure.items {
+        if !change.present && change.kind == crate::app::ItemKind::Collection {
+            state
+                .members
+                .retain(|(collection_id, _), _| *collection_id != change.item_id);
+        }
+    }
+    for change in &structure.memberships {
+        if change.present {
+            let next_rank = state
+                .members
+                .range((change.collection_id, i64::MIN)..=(change.collection_id, i64::MAX))
+                .map(|(_, rank)| *rank)
+                .max()
+                .unwrap_or_default()
+                .saturating_add(RANK_GAP);
+            state
+                .members
+                .insert((change.collection_id, change.media_id), next_rank);
+        } else {
+            state
+                .members
+                .remove(&(change.collection_id, change.media_id));
+        }
+    }
+    for order in &structure.group_orders {
+        state
+            .members
+            .retain(|(collection_id, _), _| *collection_id != order.collection_id);
+        for (position, media_item_id) in order.media_ids.iter().copied().enumerate() {
+            state.members.insert(
+                (order.collection_id, media_item_id),
+                i64::try_from(position + 1)
+                    .unwrap_or(i64::MAX)
+                    .saturating_mul(RANK_GAP),
+            );
+        }
+    }
 }
 
 fn populate_group_folders_from_projection(
@@ -2135,25 +2175,6 @@ fn capture_group_state_internal(
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         state.roots = roots.into_iter().map(|root| (root.item_id, root)).collect();
-    }
-    {
-        let mut statement = transaction.prepare(
-            "SELECT member.collection_id, member.media_item_id,
-                    member.position_rank
-             FROM collection_member member
-             WHERE member.collection_id IN (
-                       SELECT item_id FROM picto_group_history_universe
-                   )
-                OR member.media_item_id IN (
-                       SELECT item_id FROM picto_group_history_universe
-                   )
-             ORDER BY member.collection_id, member.position_rank, member.media_item_id",
-        )?;
-        state.members = statement
-            .query_map([], |row| {
-                Ok(((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?), row.get(2)?))
-            })?
-            .collect::<rusqlite::Result<_>>()?;
     }
     Ok(state)
 }
@@ -4292,6 +4313,20 @@ mod tests {
         let (_directory, app, ids) = fixture();
         let grouped = organize(&app, &ids, Some("Post"), None);
         let reordered = vec![ids[2], ids[0], ids[1]];
+        let legacy_row_order = || {
+            app.store()
+                .read(|connection| {
+                    connection
+                        .prepare(
+                            "SELECT media_item_id FROM collection_member
+                             WHERE collection_id = ?1 ORDER BY position_rank",
+                        )?
+                        .query_map([grouped.collection_id.0], |row| row.get::<_, i64>(0))?
+                        .collect::<rusqlite::Result<Vec<_>>>()
+                })
+                .unwrap()
+        };
+        let unchanged_legacy_order = legacy_row_order();
 
         app.reorder_collection(ReorderCollectionInput {
             collection_id: grouped.collection_id,
@@ -4320,6 +4355,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(cached_cover, Some(reordered[0].0));
+        assert_eq!(legacy_row_order(), unchanged_legacy_order);
 
         let canonical_order = app
             .store()
@@ -4346,6 +4382,7 @@ mod tests {
                 .map(|item_id| item_id.0 as u32)
                 .collect::<Vec<_>>()
         );
+        assert_eq!(legacy_row_order(), unchanged_legacy_order);
 
         app.redo().unwrap();
         let redone_order = app
@@ -4354,6 +4391,7 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(redone_order, canonical_order);
+        assert_eq!(legacy_row_order(), unchanged_legacy_order);
     }
 
     #[test]
