@@ -39,7 +39,10 @@ pub(crate) fn compile_item_query(
         ItemScope::Untagged => projection.untagged_bitmap(),
         ItemScope::Uncategorized => projection.uncategorized_bitmap(),
         ItemScope::Folder { folder_id } => projection.folder_bitmap(folder_id),
-        ItemScope::RecentlyViewed | ItemScope::SmartFolder { .. } => return Ok(None),
+        ItemScope::SmartFolder { smart_folder_id } => {
+            projection.smart_folder_bitmap(smart_folder_id)
+        }
+        ItemScope::RecentlyViewed => return Ok(None),
     };
 
     apply_folder_filters(projection, &query.filters, &mut roots);

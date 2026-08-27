@@ -18,7 +18,7 @@ use super::{
 const COMPONENT: &str = "projection-v2-roaring";
 const MAGIC: &[u8; 8] = b"PCTOV2\0\x02";
 const IMPLEMENTATION_MATERIAL: &[u8] =
-    b"projection-v2-checkpoint-v4:group-aware-mime-classification:complete-immutable-state:portable-roaring";
+    b"projection-v2-checkpoint-v5:group-aware-mime-and-smart-folders:complete-immutable-state:portable-roaring";
 const MAX_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ENTRY_COUNT: usize = 100_000_000;
 
@@ -265,6 +265,7 @@ fn encode_state(state: &State) -> Result<Vec<u8>, String> {
     encoder.id_vec_map(&state.root_owned_tags);
     encoder.bitmap_map(&state.direct_tag_bitmaps)?;
     encoder.bitmap(&state.tagged_roots)?;
+    encoder.bitmap_map(&state.smart_folder_bitmaps)?;
     Ok(encoder.bytes)
 }
 
@@ -292,6 +293,7 @@ fn decode_state(bytes: &[u8]) -> Result<State, String> {
         root_owned_tags: decoder.id_vec_map()?,
         direct_tag_bitmaps: decoder.bitmap_map()?,
         tagged_roots: decoder.bitmap()?.into(),
+        smart_folder_bitmaps: decoder.bitmap_map()?,
     };
     decoder.finish()?;
     rebuild_all_mime_roots(&mut state);

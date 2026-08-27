@@ -2894,7 +2894,9 @@ mod tests {
         Application, FilterMatchMode, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope,
         ItemSort, ItemTarget,
     };
+    use crate::canonical_bitmap::{replace_bitmap, BitmapDomain};
     use crate::store::Store;
+    use roaring::RoaringBitmap;
 
     fn query_for(scope: ItemScope) -> ItemQuery {
         ItemQuery {
@@ -4522,6 +4524,17 @@ mod tests {
                 rusqlite::params![smart_folder_id, root_item_id],
             )?;
         }
+        let members = root_item_ids
+            .iter()
+            .map(|root_item_id| u32::try_from(*root_item_id).unwrap())
+            .collect::<RoaringBitmap>();
+        replace_bitmap(
+            transaction,
+            BitmapDomain::SmartFolder,
+            smart_folder_id,
+            3,
+            &members,
+        )?;
         Ok(())
     }
 }

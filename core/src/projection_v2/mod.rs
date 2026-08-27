@@ -42,12 +42,14 @@ struct CanonicalDirty {
     tags: Vec<i64>,
     folders: Vec<i64>,
     groups: Vec<i64>,
+    smart_folders: Vec<i64>,
 }
 
 impl PreparedProjection {
-    fn persist(&self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String> {
+    fn persist(&mut self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String> {
         let revision = i64::try_from(revision)
             .map_err(|_| "Library revision exceeds SQLite range".to_string())?;
+        self.absorb_smart_folder_changes(transaction)?;
         if self.dirty.lifecycle {
             for (key, lifecycle) in [
                 (LIFECYCLE_ACTIVE_KEY, Lifecycle::Active),
@@ -171,12 +173,121 @@ impl PreparedProjection {
             )
             .map_err(|error| error.to_string())?;
         }
+        for smart_folder_id in &self.dirty.smart_folders {
+            let exists = transaction
+                .query_row(
+                    "SELECT EXISTS(
+                         SELECT 1 FROM smart_folder WHERE smart_folder_id = ?1
+                     )",
+                    [smart_folder_id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if exists {
+                let bitmap = self
+                    .state
+                    .smart_folder_bitmaps
+                    .get(smart_folder_id)
+                    .map(|value| (**value).clone())
+                    .unwrap_or_default();
+                canonical_bitmap::replace_bitmap(
+                    transaction,
+                    BitmapDomain::SmartFolder,
+                    *smart_folder_id,
+                    revision,
+                    &bitmap,
+                )
+                .map_err(|error| error.to_string())?;
+            } else {
+                transaction
+                    .execute(
+                        "DELETE FROM canonical_bitmap
+                         WHERE domain = ?1 AND key_id = ?2",
+                        rusqlite::params![BitmapDomain::SmartFolder.as_i64(), smart_folder_id],
+                    )
+                    .map_err(|error| error.to_string())?;
+            }
+        }
+        Ok(())
+    }
+
+    fn absorb_smart_folder_changes(&mut self, transaction: &Transaction<'_>) -> Result<(), String> {
+        let staged: bool = transaction
+            .query_row(
+                "SELECT EXISTS(
+                     SELECT 1 FROM sqlite_temp_master
+                     WHERE type = 'table' AND name = 'picto_smart_projection_delta'
+                 )",
+                [],
+                |row| row.get(0),
+            )
+            .map_err(|error| error.to_string())?;
+        if !staged {
+            return Ok(());
+        }
+        let smart_folder_ids = transaction
+            .prepare("SELECT smart_folder_id FROM picto_smart_projection_delta ORDER BY 1")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .map_err(|error| error.to_string())?;
+        if smart_folder_ids.is_empty() {
+            return Ok(());
+        }
+
+        let state = Arc::make_mut(&mut self.state);
+        for smart_folder_id in &smart_folder_ids {
+            let roots = transaction
+                .prepare_cached(
+                    "SELECT membership.root_item_id
+                     FROM smart_folder_generation generation
+                     JOIN smart_folder_membership membership
+                       ON membership.generation_id = generation.generation_id
+                     WHERE generation.smart_folder_id = ?1
+                       AND generation.state = 'active'
+                     ORDER BY membership.root_item_id",
+                )
+                .and_then(|mut statement| {
+                    statement
+                        .query_map([smart_folder_id], |row| row.get::<_, i64>(0))?
+                        .map(|root_id| {
+                            root_id.and_then(|root_id| {
+                                u32::try_from(root_id).map_err(|_| {
+                                    rusqlite::Error::IntegralValueOutOfRange(0, root_id)
+                                })
+                            })
+                        })
+                        .collect::<rusqlite::Result<RoaringBitmap>>()
+                })
+                .map_err(|error| error.to_string())?;
+            let invalid = &roots - &state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)];
+            if let Some(root_id) = invalid.min() {
+                return Err(format!(
+                    "smart folder {smart_folder_id} references inactive root {root_id}"
+                ));
+            }
+            if roots.is_empty() {
+                state.smart_folder_bitmaps.remove(smart_folder_id);
+            } else {
+                state
+                    .smart_folder_bitmaps
+                    .insert(*smart_folder_id, roots.into());
+            }
+        }
+        transaction
+            .execute("DELETE FROM picto_smart_projection_delta", [])
+            .map_err(|error| error.to_string())?;
+        self.dirty.smart_folders.extend(smart_folder_ids);
+        self.dirty.smart_folders.sort_unstable();
+        self.dirty.smart_folders.dedup();
         Ok(())
     }
 }
 
 impl crate::store::PreparedSettlement for PreparedProjection {
-    fn persist(&self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String> {
+    fn persist(&mut self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String> {
         self.persist(transaction, revision)
     }
 }
@@ -583,6 +694,7 @@ struct State {
     root_owned_tags: ShardedMap<i64, Shared<Vec<i64>>>,
     direct_tag_bitmaps: ShardedMap<i64, Shared<RoaringBitmap>>,
     tagged_roots: Shared<RoaringBitmap>,
+    smart_folder_bitmaps: ShardedMap<i64, Shared<RoaringBitmap>>,
 }
 
 fn all_roots(state: &State) -> RoaringBitmap {
@@ -632,6 +744,10 @@ fn canonical_diff(before: &State, after: &State) -> CanonicalDirty {
         tags: changed_bitmap_keys(&before.direct_tag_bitmaps, &after.direct_tag_bitmaps),
         folders: changed_bitmap_keys(&before.folder_members, &after.folder_members),
         groups: changed_bitmap_keys(&before.collection_members, &after.collection_members),
+        smart_folders: changed_bitmap_keys(
+            &before.smart_folder_bitmaps,
+            &after.smart_folder_bitmaps,
+        ),
     }
 }
 
@@ -748,6 +864,14 @@ impl ProjectionSelectionSnapshot {
         self.state
             .folder_bitmaps
             .get(&folder_id)
+            .map(|bitmap| (**bitmap).clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn smart_folder_bitmap(&self, smart_folder_id: i64) -> RoaringBitmap {
+        self.state
+            .smart_folder_bitmaps
+            .get(&smart_folder_id)
             .map(|bitmap| (**bitmap).clone())
             .unwrap_or_default()
     }
@@ -1204,6 +1328,51 @@ impl ProjectionStore {
                     tag_id,
                 );
             }
+        }
+
+        let mut smart_folder_bitmaps =
+            canonical_bitmap::load_domain(connection, BitmapDomain::SmartFolder)
+                .map_err(|error| error.to_string())?;
+        let active_smart_folders = connection
+            .prepare(
+                "SELECT folder.smart_folder_id, generation.member_count
+                 FROM smart_folder folder
+                 JOIN smart_folder_generation generation
+                   ON generation.smart_folder_id = folder.smart_folder_id
+                  AND generation.state = 'active'
+                 ORDER BY folder.smart_folder_id",
+            )
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .map_err(|error| error.to_string())?;
+        for (smart_folder_id, member_count) in active_smart_folders {
+            let members = smart_folder_bitmaps
+                .remove(&smart_folder_id)
+                .unwrap_or_default();
+            if members.len() != u64::try_from(member_count).unwrap_or(u64::MAX) {
+                return Err(format!(
+                    "canonical smart folder {smart_folder_id} cardinality differs from its active generation"
+                ));
+            }
+            let invalid = &members - &state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)];
+            if let Some(root_id) = invalid.min() {
+                return Err(format!(
+                    "canonical smart folder {smart_folder_id} references inactive root {root_id}"
+                ));
+            }
+            if !members.is_empty() {
+                state
+                    .smart_folder_bitmaps
+                    .insert(smart_folder_id, members.into());
+            }
+        }
+        if let Some(smart_folder_id) = smart_folder_bitmaps.keys().next() {
+            return Err(format!(
+                "canonical bitmap references unknown smart folder {smart_folder_id}"
+            ));
         }
 
         validate_bitmap_ids(&state)?;

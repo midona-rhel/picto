@@ -440,6 +440,7 @@ impl Application {
                     .optional()?
                     .ok_or_else(|| invalid("smart folder does not exist"))?;
                 let deleted_ids = descendant_ids(transaction, smart_folder_id)?;
+                crate::smart_v2::stage_projection_changes(transaction, &deleted_ids)?;
                 let deleted_keys = deleted_ids
                     .iter()
                     .map(|deleted_id| {
@@ -648,9 +649,11 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::canonical_bitmap::{load_bitmap, BitmapDomain};
     use crate::smart_v2::{MatchMode, PredicateRule, SmartRuleGroup};
     use crate::store::schema::create_canonical_v1;
     use crate::store::Store;
+    use roaring::RoaringBitmap;
     use rusqlite::Connection;
 
     fn fixture() -> (tempfile::TempDir, Application) {
@@ -715,6 +718,53 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        let mut structure = crate::projection_v2::StructureProjectionDelta::default();
+        for item_id in [1, 2] {
+            structure
+                .items
+                .push(crate::projection_v2::ItemProjectionChange {
+                    item_id,
+                    kind: crate::app::ItemKind::Media,
+                    present: true,
+                });
+            structure.media_classifications.push(
+                crate::projection_v2::MediaClassificationProjectionChange {
+                    media_id: item_id,
+                    is_image: true,
+                    mime_type: "image/png".to_string(),
+                },
+            );
+            structure
+                .roots
+                .push(crate::projection_v2::RootProjectionChange {
+                    item_id,
+                    lifecycle: Some(crate::app::Lifecycle::Active),
+                });
+        }
+        application
+            .projections()
+            .apply_structure_delta(structure)
+            .unwrap();
+        application
+            .projections()
+            .apply_root_summary_changes(
+                &[
+                    crate::projection_v2::RootSummaryProjectionChange {
+                        item_id: 1,
+                        total_size_bytes: 10,
+                        media_count: 1,
+                        rating: Some(5),
+                    },
+                    crate::projection_v2::RootSummaryProjectionChange {
+                        item_id: 2,
+                        total_size_bytes: 10,
+                        media_count: 1,
+                        rating: Some(2),
+                    },
+                ],
+                &RoaringBitmap::new(),
+            )
+            .unwrap();
     }
 
     fn generation_state(
@@ -765,6 +815,35 @@ mod tests {
         assert_eq!(state.2, expected_members);
         assert_eq!(state.3, expected_members);
         assert_eq!(state.4, 0);
+        let expected = application
+            .store()
+            .read(|connection| {
+                connection
+                    .prepare(
+                        "SELECT membership.root_item_id
+                         FROM smart_folder_generation generation
+                         JOIN smart_folder_membership membership
+                           ON membership.generation_id = generation.generation_id
+                         WHERE generation.smart_folder_id = ?1
+                           AND generation.state = 'active'
+                         ORDER BY membership.root_item_id",
+                    )?
+                    .query_map([smart_folder_id], |row| row.get::<_, u32>(0))?
+                    .collect::<rusqlite::Result<RoaringBitmap>>()
+            })
+            .unwrap();
+        assert_eq!(
+            application
+                .projections()
+                .selection_snapshot()
+                .smart_folder_bitmap(smart_folder_id),
+            expected
+        );
+        let canonical = application
+            .store()
+            .read(|connection| load_bitmap(connection, BitmapDomain::SmartFolder, smart_folder_id))
+            .unwrap();
+        assert_eq!(canonical, expected);
         state.0
     }
 
@@ -818,6 +897,11 @@ mod tests {
         assert_eq!(receipt.deleted_smart_folder_ids, vec![parent, child]);
         assert_eq!(receipt.fallback_smart_folder_id, None);
         assert!(navigation(&application).unwrap().smart_folders.is_empty());
+        assert!(application
+            .projections()
+            .selection_snapshot()
+            .smart_folder_bitmap(parent)
+            .is_empty());
 
         application.undo().unwrap();
         let restored = navigation(&application).unwrap().smart_folders;
@@ -828,6 +912,8 @@ mod tests {
         assert!(restored
             .iter()
             .any(|folder| folder.smart_folder_id == child));
+        let parent_state = generation_state(&application, parent);
+        assert_exact_active(&application, parent, parent_state.1 as u64, 0);
     }
 
     #[test]

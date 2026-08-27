@@ -652,6 +652,35 @@ fn validate_canonical_memberships(connection: &Connection) -> Result<(), String>
             return Err(format!("group {group_id} membership and order diverge"));
         }
     }
+    let smart_folder_ids = connection
+        .prepare(
+            "SELECT smart_folder_id FROM smart_folder_generation
+             WHERE state = 'active' ORDER BY smart_folder_id",
+        )
+        .map_err(|error| format!("cannot read smart folders: {error}"))?
+        .query_map([], |row| row.get::<_, i64>(0))
+        .map_err(|error| format!("cannot read smart folders: {error}"))?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("cannot read smart folders: {error}"))?;
+    for smart_folder_id in smart_folder_ids {
+        let expected = query_bitmap_with_key(
+            connection,
+            "SELECT membership.root_item_id
+             FROM smart_folder_generation generation
+             JOIN smart_folder_membership membership
+               ON membership.generation_id = generation.generation_id
+             WHERE generation.smart_folder_id = ?1
+               AND generation.state = 'active'",
+            smart_folder_id,
+        )?;
+        let actual = load_bitmap(connection, BitmapDomain::SmartFolder, smart_folder_id)
+            .map_err(|error| format!("cannot decode smart folder {smart_folder_id}: {error}"))?;
+        if actual != expected {
+            return Err(format!(
+                "canonical smart-folder bitmap {smart_folder_id} is inconsistent"
+            ));
+        }
+    }
     Ok(())
 }
 
@@ -1508,6 +1537,17 @@ fn populate_canonical_bitmaps(transaction: &rusqlite::Transaction<'_>) -> Result
         "folder memberships",
     )?;
     write_bitmap_map(transaction, BitmapDomain::Folder, folders)?;
+    let smart_folders = collect_pair_bitmaps(
+        transaction,
+        "SELECT generation.smart_folder_id, membership.root_item_id
+         FROM smart_folder_generation generation
+         JOIN smart_folder_membership membership
+           ON membership.generation_id = generation.generation_id
+         WHERE generation.state = 'active'
+         ORDER BY generation.smart_folder_id, membership.root_item_id",
+        "smart-folder memberships",
+    )?;
+    write_bitmap_map(transaction, BitmapDomain::SmartFolder, smart_folders)?;
 
     let groups = {
         let mut statement = transaction

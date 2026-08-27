@@ -38,11 +38,11 @@ pub struct Store {
 /// representation it is about to publish. This runs inside the same SQLite
 /// transaction and before the publication gate is acquired.
 pub(crate) trait PreparedSettlement {
-    fn persist(&self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String>;
+    fn persist(&mut self, transaction: &Transaction<'_>, revision: u64) -> Result<(), String>;
 }
 
 impl PreparedSettlement for () {
-    fn persist(&self, _transaction: &Transaction<'_>, _revision: u64) -> Result<(), String> {
+    fn persist(&mut self, _transaction: &Transaction<'_>, _revision: u64) -> Result<(), String> {
         Ok(())
     }
 }
@@ -573,7 +573,7 @@ impl Store {
             .map_err(|error| error.to_string())?;
         let revision =
             schema::increment_revision(&transaction).map_err(|error| error.to_string())?;
-        let prepared = prepare(delta)?;
+        let mut prepared = prepare(delta)?;
         prepared.persist(&transaction, revision)?;
         let _publication = self.consistency_write(std::panic::Location::caller())?;
         transaction.commit().map_err(|error| error.to_string())?;
@@ -672,8 +672,8 @@ impl Store {
             schema::revision(&transaction).map_err(|error| error.to_string())?
         };
         drop(cloud_capture);
-        let prepared = changed.then(|| prepare(delta)).transpose()?;
-        if let Some(prepared) = prepared.as_ref() {
+        let mut prepared = changed.then(|| prepare(delta)).transpose()?;
+        if let Some(prepared) = prepared.as_mut() {
             prepared.persist(&transaction, revision)?;
         }
         let _publication = self.consistency_write(std::panic::Location::caller())?;

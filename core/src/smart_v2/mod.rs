@@ -378,6 +378,9 @@ pub(crate) fn refresh_impacted_roots(
          CREATE TEMP TABLE IF NOT EXISTS picto_smart_changed_tag (
              tag_id INTEGER PRIMARY KEY
          );
+         CREATE TEMP TABLE IF NOT EXISTS picto_smart_projection_delta (
+             smart_folder_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
          DELETE FROM picto_smart_impacted_root;
          DELETE FROM picto_smart_target_folder;
          DELETE FROM picto_smart_changed_tag;",
@@ -459,6 +462,13 @@ pub(crate) fn refresh_impacted_roots(
         )?
         .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    stage_projection_changes(
+        transaction,
+        &targets
+            .iter()
+            .map(|(smart_folder_id, _)| *smart_folder_id)
+            .collect::<Vec<_>>(),
+    )?;
     trace_smart_stage("resolve_targets", stage_started);
     if targets.is_empty() {
         transaction.execute_batch(
@@ -604,6 +614,7 @@ fn settle_building_generations(
     }
 
     let smart_folder_ids = builds.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    stage_projection_changes(transaction, &smart_folder_ids)?;
     rebuild_dependencies(transaction, &smart_folder_ids)?;
     let next_revision: i64 = transaction.query_row(
         "SELECT revision + 1 FROM library_meta WHERE singleton = 1",
@@ -653,6 +664,28 @@ fn settle_building_generations(
          WHERE singleton = 1",
         [],
     )?;
+    Ok(())
+}
+
+pub(crate) fn stage_projection_changes(
+    transaction: &Transaction<'_>,
+    smart_folder_ids: &[i64],
+) -> rusqlite::Result<()> {
+    if smart_folder_ids.is_empty() {
+        return Ok(());
+    }
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_smart_projection_delta (
+             smart_folder_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;",
+    )?;
+    let mut insert = transaction.prepare_cached(
+        "INSERT INTO picto_smart_projection_delta(smart_folder_id) VALUES (?1)
+         ON CONFLICT(smart_folder_id) DO NOTHING",
+    )?;
+    for smart_folder_id in smart_folder_ids {
+        insert.execute([smart_folder_id])?;
+    }
     Ok(())
 }
 

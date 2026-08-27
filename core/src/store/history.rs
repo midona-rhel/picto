@@ -568,8 +568,8 @@ impl Store {
         let history_elapsed = history_started.elapsed();
 
         let prepare_started = Instant::now();
-        let prepared = changed.then(|| prepare(delta)).transpose()?;
-        if let Some(prepared) = prepared.as_ref() {
+        let mut prepared = changed.then(|| prepare(delta)).transpose()?;
+        if let Some(prepared) = prepared.as_mut() {
             prepared.persist(&transaction, revision)?;
         }
         let prepare_elapsed = prepare_started.elapsed();
@@ -717,8 +717,8 @@ impl Store {
         };
 
         let prepare_started = Instant::now();
-        let prepared = changed.then(|| prepare(delta)).transpose()?;
-        if let Some(prepared) = prepared.as_ref() {
+        let mut prepared = changed.then(|| prepare(delta)).transpose()?;
+        if let Some(prepared) = prepared.as_mut() {
             prepared.persist(&transaction, revision)?;
         }
         let prepare_elapsed = prepare_started.elapsed();
@@ -894,7 +894,7 @@ impl Store {
             let revision =
                 schema::increment_revision(&transaction).map_err(|error| error.to_string())?;
             let prepare_started = Instant::now();
-            let prepared = prepare(projection_request)?;
+            let mut prepared = prepare(projection_request)?;
             prepared.persist(&transaction, revision)?;
             let prepare_elapsed = prepare_started.elapsed();
             let commit_started = Instant::now();

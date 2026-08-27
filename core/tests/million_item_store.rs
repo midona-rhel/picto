@@ -780,6 +780,7 @@ fn insert_media_batches(
                         picto_core::projection_v2::MediaClassificationProjectionChange {
                             media_id: item_id,
                             is_image: true,
+                            mime_type: "image/png".to_string(),
                         },
                     );
                     delta.structure.roots.push(RootProjectionChange {
