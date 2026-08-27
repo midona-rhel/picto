@@ -300,14 +300,7 @@ pub fn query_for_application(
     application.store().read_snapshot_captured(
         || application.projections().selection_snapshot(),
         |connection, revision, projection| {
-            let plain_indexed_scope = item_query.filters == ItemFilters::default()
-                && matches!(
-                    item_query.scope,
-                    ItemScope::All | ItemScope::Inbox | ItemScope::Trash | ItemScope::Folder { .. }
-                );
-            if matches!(item_query.sort.field, crate::app::ItemSortField::ImportedAt)
-                && !plain_indexed_scope
-            {
+            if matches!(item_query.sort.field, crate::app::ItemSortField::ImportedAt) {
                 if let Some(roots) =
                     crate::predicate_v2::compile_item_query(connection, &projection, item_query)
                         .map_err(|error| error.to_string())?
@@ -3609,6 +3602,61 @@ mod tests {
         );
         assert_eq!(page.visible_item_count, Some(2));
         assert_eq!(page.visible_media_count, Some(3));
+    }
+
+    #[test]
+    fn application_folder_grid_reads_canonical_bitmap_membership() {
+        let (_directory, store) = seed_store();
+        let application = Application::new(Arc::new(store));
+        let folder_id = application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO folder(folder_key, name, created_at, updated_at)
+                     VALUES ('canonical-query-folder', 'Canonical query folder', 'now', 'now')",
+                    [],
+                )?;
+                Ok(transaction.last_insert_rowid())
+            })
+            .unwrap()
+            .0;
+        application
+            .set_folder_membership(
+                &ItemTarget::Explicit {
+                    item_ids: vec![ItemId(1), ItemId(10)],
+                },
+                folder_id,
+                true,
+            )
+            .unwrap();
+
+        let page = query_for_application(
+            &application,
+            &query_for(ItemScope::Folder { folder_id }),
+            ItemPageRequest::default(),
+        )
+        .unwrap();
+        let mut item_ids = page
+            .items
+            .iter()
+            .map(|item| item.item_id)
+            .collect::<Vec<_>>();
+        item_ids.sort_by_key(|item_id| item_id.0);
+        assert_eq!(item_ids, vec![ItemId(1), ItemId(10)]);
+        assert_eq!(page.visible_item_count, Some(2));
+        assert_eq!(page.visible_media_count, Some(3));
+        application
+            .store()
+            .read(|connection| {
+                let legacy_rows: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1",
+                    [folder_id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(legacy_rows, 0);
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
