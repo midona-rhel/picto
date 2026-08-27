@@ -31,8 +31,8 @@ export async function openCurrentLibraryCoverPicker(
 
 export async function loadLibraryCoverCandidates(
   libraryPath: string,
-  offset = 0,
-): Promise<MediaCoverCandidatePage<number>> {
+  cursor: string | null = null,
+): Promise<MediaCoverCandidatePage<string>> {
   const library = (window as any).picto?.library;
   if (!library) throw new Error('Library service is unavailable.');
   const config = await library.getConfig();
@@ -49,7 +49,7 @@ export async function loadLibraryCoverCandidates(
       exclude_folder_ids: [],
     },
     sort: { field: 'imported_at', direction: 'descending', random_seed: null },
-  }, { offset, limit: PAGE_SIZE });
+  }, { cursor, limit: PAGE_SIZE });
   return {
     candidates: page.items
       .filter((item) => item.kind === 'media')
@@ -61,9 +61,7 @@ export async function loadLibraryCoverCandidates(
         pixel_height: item.pixel_height,
         mime_type: item.display_mime_type,
       })),
-    next_cursor: offset + page.items.length < (page.visible_item_count ?? 0)
-      ? offset + page.items.length
-      : null,
+    next_cursor: page.next_cursor,
   };
 }
 

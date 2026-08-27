@@ -7,6 +7,7 @@ import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { ItemSort } from '../shared/types/generated/application/ItemSort';
 import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
 import { clearSelectionAtom } from '../state/selection';
+import { libraryInvalidation } from '../runtime/libraryInvalidation';
 import { itemFiltersEqual } from '../shared/lib/itemFilters';
 import {
   currentGridQueryAtom,
@@ -157,6 +158,7 @@ class GridSessionController {
   private pendingPreferencePatch: ViewPrefsPatch = {};
   private scopeKey = '';
   private navigationRequest = 0;
+  private queryVersion = 0;
 
   async navigateTo(scope: BaseScope, options?: { filters?: QueryFilters; sort?: ItemSort }): Promise<void> {
     const request = ++this.navigationRequest;
@@ -171,6 +173,7 @@ class GridSessionController {
     options?: { filters?: QueryFilters; sort?: ItemSort },
   ): Promise<PreparedGridNavigation> {
     this.cancelSearch();
+    const queryVersion = ++this.queryVersion;
     const current = store.get(gridSessionAtom);
     const scopeKey = scopeToKey(scope);
     const [defaults, overrides] = await Promise.all([
@@ -193,6 +196,7 @@ class GridSessionController {
       cursor: null,
       totalCount: null,
       totalSizeBytes: null,
+      revision: current.revision,
       status: 'loading',
       error: null,
       generation: current.generation + 1,
@@ -200,7 +204,11 @@ class GridSessionController {
     };
 
     try {
-      const result = await queryItems(queryForSession(session), { offset: 0, limit: PAGE_SIZE });
+      const result = await this.queryFirstPageUntilCurrent(
+        queryForSession(session),
+        () => queryVersion === this.queryVersion,
+      );
+      if (result == null) throw new Error('Grid navigation was superseded');
       if (result.visible_item_count == null || result.total_size_bytes == null) {
         throw new Error('The first grid page did not include exact totals');
       }
@@ -209,9 +217,10 @@ class GridSessionController {
         session: {
           ...session,
           items: result.items,
-          cursor: nextOffset(result.items.length, result.visible_item_count),
+          cursor: result.next_cursor,
           totalCount: result.visible_item_count,
           totalSizeBytes: result.total_size_bytes,
+          revision: result.revision,
           status: 'idle',
         },
       };
@@ -236,6 +245,7 @@ class GridSessionController {
   }
 
   deactivate(): void {
+    this.queryVersion += 1;
     this.cancelSearch();
     store.set(clearSelectionAtom);
     updateSession((current) => ({
@@ -248,6 +258,8 @@ class GridSessionController {
 
   setSearchText(text: string): void {
     updateSession({ searchText: text });
+    this.queryVersion += 1;
+    store.set(clearSelectionAtom);
     this.cancelSearch();
     this.searchTimer = setTimeout(() => {
       this.searchTimer = null;
@@ -300,6 +312,7 @@ class GridSessionController {
   }
 
   async loadFirstPage(options?: { preserveItems?: boolean; generation?: number }): Promise<void> {
+    const queryVersion = this.queryVersion;
     const generation = options?.generation ?? store.get(gridSessionAtom).generation + 1;
     updateSession((current) => ({
       ...current,
@@ -311,17 +324,22 @@ class GridSessionController {
       totalCount: options?.preserveItems ? current.totalCount : null,
     }));
     try {
-      const result = await queryItems(store.get(currentGridQueryAtom), { offset: 0, limit: PAGE_SIZE });
-      if (store.get(gridSessionAtom).generation !== generation) return;
+      const query = store.get(currentGridQueryAtom);
+      const result = await this.queryFirstPageUntilCurrent(
+        query,
+        () => queryVersion === this.queryVersion && store.get(gridSessionAtom).generation === generation,
+      );
+      if (result == null) return;
       if (result.visible_item_count == null || result.total_size_bytes == null) {
         throw new Error('The first grid page did not include exact totals');
       }
       const current = store.get(gridSessionAtom);
       updateSession({
         items: reuseStablePageItems(current.items, result.items),
-        cursor: nextOffset(result.items.length, result.visible_item_count),
+        cursor: result.next_cursor,
         totalCount: result.visible_item_count,
         totalSizeBytes: result.total_size_bytes,
+        revision: result.revision,
         status: 'idle',
       });
     } catch (error) {
@@ -333,20 +351,27 @@ class GridSessionController {
   async loadNextPage(): Promise<void> {
     const before = store.get(gridSessionAtom);
     if (before.cursor == null || before.status === 'appending' || before.status === 'loading') return;
-    const offset = before.cursor;
+    const cursor = before.cursor;
     const generation = before.generation;
     updateSession({ status: 'appending', error: null });
     try {
-      const result = await queryItems(store.get(currentGridQueryAtom), { offset, limit: PAGE_SIZE });
+      const result = await queryItems(store.get(currentGridQueryAtom), { cursor, limit: PAGE_SIZE });
       const current = store.get(gridSessionAtom);
-      if (current.generation !== generation || current.cursor !== offset) return;
+      if (current.generation !== generation || current.cursor !== cursor) return;
+      if (result.revision !== current.revision
+        || result.revision < libraryInvalidation.latestRevision('library')) {
+        updateSession({ status: 'idle' });
+        await this.reconcile();
+        return;
+      }
       const items = [...current.items, ...result.items];
       const totalCount = current.totalCount ?? result.visible_item_count ?? items.length;
       updateSession({
         items,
-        cursor: nextOffset(items.length, totalCount),
+        cursor: result.next_cursor,
         totalCount,
         totalSizeBytes: current.totalSizeBytes ?? result.total_size_bytes,
+        revision: result.revision,
         status: 'idle',
       });
     } catch (error) {
@@ -355,53 +380,47 @@ class GridSessionController {
     }
   }
 
-  removeItems(itemIds: number[]): void {
-    const remove = new Set(itemIds);
-    updateSession((current) => {
-      const items = current.items.filter((item) => !remove.has(item.item_id));
-      const removed = current.items.length - items.length;
-      return removed === 0 ? current : {
-        ...current,
-        items,
-        totalCount: current.totalCount == null ? null : Math.max(0, current.totalCount - removed),
-        cursor: nextOffset(items.length, current.totalCount == null ? items.length : current.totalCount - removed),
-      };
-    });
-  }
-
-  async reconcile(affectedItemIds: readonly number[] = []): Promise<boolean> {
+  async reconcile(_affectedItemIds: readonly number[] = []): Promise<boolean> {
     const before = store.get(gridSessionAtom);
     if (!before.active || before.status === 'loading' || before.status === 'appending') return false;
     const generation = before.generation;
+    const queryVersion = this.queryVersion;
 
     try {
       const query = store.get(currentGridQueryAtom);
-      const result = await queryItems(query, { offset: 0, limit: PAGE_SIZE });
+      const result = await this.queryFirstPageUntilCurrent(
+        query,
+        () => queryVersion === this.queryVersion
+          && store.get(gridSessionAtom).generation === generation
+          && store.get(gridSessionAtom).active,
+      );
+      if (result == null) return false;
       const current = store.get(gridSessionAtom);
       if (current.generation !== generation || !current.active) return false;
       if (result.visible_item_count == null || result.total_size_bytes == null) {
         throw new Error('The reconciled grid page did not include exact totals');
       }
       const previousById = new Map(current.items.map((item) => [item.item_id, item]));
-      const refreshed = result.items.map((item) => {
+      const items = result.items.map((item) => {
         const previous = previousById.get(item.item_id);
         return previous != null && itemSummaryEqual(previous, item) ? previous : item;
       });
-      const refreshedIds = new Set(refreshed.map((item) => item.item_id));
-      const affectedIds = new Set(affectedItemIds);
-      const items = [
-        ...refreshed,
-        ...current.items.filter((item) => !refreshedIds.has(item.item_id) && !affectedIds.has(item.item_id)),
-      ];
       const desiredLength = current.cursor == null
         ? result.visible_item_count
         : Math.min(current.items.length, result.visible_item_count);
-      if (items.length < desiredLength) {
+      let nextCursor = result.next_cursor;
+      let resultRevision = result.revision;
+      while (items.length < desiredLength && nextCursor != null) {
+        const remaining = desiredLength - items.length;
         const append = await queryItems(query, {
-          offset: items.length,
+          cursor: nextCursor,
           limit: Math.min(PAGE_SIZE, desiredLength - items.length),
         });
         if (store.get(gridSessionAtom).generation !== generation) return false;
+        if (append.revision !== resultRevision
+          || append.revision < libraryInvalidation.latestRevision('library')) {
+          return this.reconcile();
+        }
         const knownIds = new Set(items.map((item) => item.item_id));
         for (const item of append.items) {
           if (knownIds.has(item.item_id)) continue;
@@ -409,13 +428,17 @@ class GridSessionController {
           items.push(previous != null && itemSummaryEqual(previous, item) ? previous : item);
           knownIds.add(item.item_id);
         }
+        nextCursor = append.next_cursor;
+        resultRevision = Math.max(resultRevision, append.revision);
+        if (append.items.length === 0 || remaining === desiredLength - items.length) break;
       }
       items.length = Math.min(items.length, desiredLength);
       updateSession({
         items,
-        cursor: nextOffset(items.length, result.visible_item_count),
+        cursor: items.length < result.visible_item_count ? nextCursor : null,
         totalCount: result.visible_item_count,
         totalSizeBytes: result.total_size_bytes,
+        revision: resultRevision,
         error: null,
       });
       return true;
@@ -434,6 +457,8 @@ class GridSessionController {
   private setFiltersNow(filters: QueryFilters): void {
     if (itemFiltersEqual(store.get(gridSessionAtom).filters, filters)) return;
     updateSession({ filters: { ...filters, include_tags: [...filters.include_tags], exclude_tags: [...filters.exclude_tags] } });
+    this.queryVersion += 1;
+    store.set(clearSelectionAtom);
     void this.loadFirstPage({ preserveItems: true });
   }
 
@@ -451,6 +476,8 @@ class GridSessionController {
         randomSeed: field === 'random' ? createRandomSeed() : null,
       },
     });
+    this.queryVersion += 1;
+    store.set(clearSelectionAtom);
     if (persistSort) this.saveViewPref({ sort_field: field, sort_order: direction });
     void this.loadFirstPage({ preserveItems: true });
   }
@@ -476,6 +503,18 @@ class GridSessionController {
     })().finally(() => {
       this.searchInFlight = null;
     });
+  }
+
+  private async queryFirstPageUntilCurrent(
+    query: ItemQuery,
+    isCurrent: () => boolean,
+  ) {
+    while (isCurrent()) {
+      const result = await queryItems(query, { cursor: null, limit: PAGE_SIZE });
+      if (!isCurrent()) return null;
+      if (result.revision >= libraryInvalidation.latestRevision('library')) return result;
+    }
+    return null;
   }
 }
 
@@ -515,10 +554,6 @@ function reuseStablePageItems(
 
 function createRandomSeed(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-}
-
-function nextOffset(loaded: number, visibleCount: number): number | null {
-  return loaded < visibleCount ? loaded : null;
 }
 
 export const gridController = new GridSessionController();

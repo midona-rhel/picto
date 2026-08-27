@@ -184,6 +184,6 @@ mod tests {
         assert_eq!(tasks.cloud, QueueCounts::default());
         assert_eq!(tasks.issues.len(), 2);
         assert_eq!(tasks.issues[0].source, "background");
-        assert_eq!(tasks.revision, 1);
+        assert_eq!(tasks.revision, 2);
     }
 }

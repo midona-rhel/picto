@@ -34,13 +34,6 @@ export interface TagPage {
   next_cursor: string | null;
 }
 
-export interface CanonicalTagRelation {
-  tag_id: number;
-  namespace: string;
-  subtag: string;
-  relation: string;
-}
-
 export interface CanonicalNamespaceSummary {
   namespace: string;
   count: number;
@@ -208,7 +201,8 @@ export interface SelectionTagCount {
 
 export interface SelectionSummaryStats {
   total_size_bytes: number | null;
-  mime_counts: Record<string, number> | null;
+  media_count: number;
+  all_media_are_images: boolean;
   rating_stats: { min: number | null; max: number | null; shared: number | null } | null;
 }
 
@@ -225,9 +219,9 @@ export interface SelectionSummary {
   top_tags: SelectionTagCount[];
   shared_folders: SelectionFolderInfo[];
   shared_notes: string | null;
-  notes_present_count: number;
+  has_notes: boolean;
   shared_source_urls: string[] | null;
-  source_urls_present_count: number;
+  has_source_urls: boolean;
   stats: SelectionSummaryStats;
   pending: boolean;
   generated_at: string;

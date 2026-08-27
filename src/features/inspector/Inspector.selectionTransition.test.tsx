@@ -19,7 +19,7 @@ vi.mock('../../controllers/entityMutations', () => ({
 }));
 
 import * as entityMutations from '../../controllers/entityMutations';
-import { gridSessionAtom } from '../../state/grid';
+import { currentGridQueryAtom, gridSessionAtom } from '../../state/grid';
 import {
   displayedInspectorItemDetailsAtom,
   displayedInspectorTargetAtom,
@@ -71,12 +71,13 @@ const summary = {
   top_tags: [],
   shared_folders: [],
   shared_notes: null,
-  notes_present_count: 0,
+  has_notes: false,
   shared_source_urls: [],
-  source_urls_present_count: 0,
+  has_source_urls: false,
   stats: {
     total_size_bytes: 300,
-    mime_counts: { 'image/jpeg': 2 },
+    media_count: 2,
+    all_media_are_images: true,
     rating_stats: { min: null, max: null, shared: null },
   },
   revision: 2,
@@ -91,7 +92,12 @@ describe('Inspector selection transition', () => {
       active: true,
       totalCount: 2,
     });
-    store.set(gridSelectionAtom, { ...emptyGridSelection(), mode: 'query_results' });
+    store.set(gridSelectionAtom, {
+      ...emptyGridSelection(),
+      mode: 'query_results',
+      query: store.get(currentGridQueryAtom),
+      queryTotalCount: 2,
+    });
     store.set(displayedInspectorTargetAtom, { kind: 'item', itemId: 1 });
     store.set(displayedInspectorItemDetailsAtom, itemDetails as never);
     store.set(inspectorLoadingAtom, false);

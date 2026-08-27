@@ -120,7 +120,7 @@ export async function getFolderCover(folderId: number): Promise<{ entity_hash: s
     scope: { kind: 'folder', folder_id: folderId },
     filters: createEmptyItemFilters(),
     sort: { field: 'folder_order', direction: 'ascending', random_seed: null },
-  }, { offset: 0, limit: 1 });
+  }, { cursor: null, limit: 1 });
   const item = page.items[0];
   return item ? { entity_hash: item.display_file_hash, mime_type: item.display_mime_type } : null;
 }

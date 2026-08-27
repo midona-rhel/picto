@@ -39,7 +39,7 @@ pub fn seed_local_originals(application: &Application) -> Result<usize, String> 
         .collect::<HashMap<_, _>>();
     application
         .store()
-        .transaction(|transaction| {
+        .transaction_cloud(|transaction| {
             let now = Utc::now().to_rfc3339();
             let mut statement = transaction.prepare("SELECT file_hash FROM media_file")?;
             let hashes = statement
@@ -244,7 +244,7 @@ pub fn prioritize(
     hashes: &[String],
     priority: i64,
 ) -> Result<(), String> {
-    application.store().transaction(|transaction| {
+    application.store().transaction_cloud(|transaction| {
         let now = Utc::now().to_rfc3339();
         for hash in hashes {
             transaction.execute(
@@ -311,7 +311,7 @@ fn set_state(
     error: Option<&str>,
     extension: Option<&str>,
 ) -> Result<(), String> {
-    application.store().transaction(|transaction| {
+    application.store().transaction_cloud(|transaction| {
         transaction.execute(
             "UPDATE cloud_blob_state SET state = ?1, last_error = ?2,
                     remote_extension = COALESCE(?3, remote_extension), updated_at = ?4
@@ -324,7 +324,7 @@ fn set_state(
 }
 
 fn mark_uploaded(application: &Application, hash: &str, extension: &str) -> Result<(), String> {
-    application.store().transaction(|transaction| {
+    application.store().transaction_cloud(|transaction| {
         let now = Utc::now().to_rfc3339();
         transaction.execute(
             "UPDATE cloud_blob_state SET remote_present = 1, remote_extension = ?1,
@@ -338,7 +338,7 @@ fn mark_uploaded(application: &Application, hash: &str, extension: &str) -> Resu
 }
 
 fn mark_available(application: &Application, hash: &str, extension: &str) -> Result<(), String> {
-    application.store().transaction(|transaction| {
+    application.store().transaction_cloud(|transaction| {
         transaction.execute(
             "UPDATE cloud_blob_state SET state = 'available', remote_present = 1,
                     remote_extension = ?1, last_error = NULL, updated_at = ?2
@@ -351,7 +351,9 @@ fn mark_available(application: &Application, hash: &str, extension: &str) -> Res
 }
 
 fn refresh_counts(application: &Application) -> Result<(), String> {
-    application.store().transaction(|transaction| {
+    application
+        .store()
+        .transaction_cloud(|transaction| {
         transaction.execute(
             "UPDATE cloud_state SET
                  pending_blobs = (SELECT COUNT(*) FROM cloud_blob_state WHERE state IN ('queued', 'downloading')),

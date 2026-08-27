@@ -21,8 +21,31 @@ use crate::blob_store::mime_to_extension;
 use crate::media_processing::{PreparedMediaSource, DEFAULT_THUMBNAIL_DIMENSIONS};
 use crate::projection_v2::{
     FolderProjectionChange, ItemProjectionChange, RootProjectionChange, StructureProjectionDelta,
-    TagProjectionChange,
 };
+
+#[derive(Default)]
+struct DuplicateProjectionDelta {
+    structure: StructureProjectionDelta,
+    root_tags_added: Vec<(i64, i64)>,
+}
+
+fn settle_duplicate_projection(
+    projections: &crate::projection_v2::ProjectionStore,
+    delta: DuplicateProjectionDelta,
+) -> Result<(), String> {
+    projections.apply_structure_delta(delta.structure)?;
+
+    let mut roots_by_tag = BTreeMap::<i64, roaring::RoaringBitmap>::new();
+    for (root_id, tag_id) in delta.root_tags_added {
+        let root_id = u32::try_from(root_id)
+            .map_err(|_| format!("Item ID {root_id} exceeds projection capacity"))?;
+        roots_by_tag.entry(tag_id).or_default().insert(root_id);
+    }
+    for (tag_id, root_ids) in roots_by_tag {
+        projections.apply_root_tag_bitmap(tag_id, &root_ids, true)?;
+    }
+    Ok(())
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -1326,7 +1349,7 @@ pub fn resolve(
                             None,
                             false,
                         ),
-                        StructureProjectionDelta::default(),
+                        DuplicateProjectionDelta::default(),
                     ))
                 }
                 ResolutionChoice::KeepFile { winner_file_id } => {
@@ -1346,7 +1369,7 @@ pub fn resolve(
                     collect_pair_roots(transaction, file_id_a, file_id_b, &mut affected)?;
                     let collapse =
                         collapsible_standalone_items(transaction, winner_file_id, loser_file_id)?;
-                    let mut delta = StructureProjectionDelta::default();
+                    let mut delta = DuplicateProjectionDelta::default();
 
                     transaction.execute(
                         "UPDATE media_asset SET file_id = ?1 WHERE file_id = ?2",
@@ -1362,6 +1385,43 @@ pub fn resolve(
                             )?;
                         }
                     }
+                    let impacted_roots = affected
+                        .iter()
+                        .map(|item_id| {
+                            u32::try_from(*item_id).map_err(|_| {
+                                invalid(format!("Item ID {item_id} exceeds projection capacity"))
+                            })
+                        })
+                        .collect::<rusqlite::Result<roaring::RoaringBitmap>>()?;
+                    let changed_tag_ids = delta
+                        .root_tags_added
+                        .iter()
+                        .map(|(_, tag_id)| *tag_id)
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect::<Vec<_>>();
+                    crate::smart_v2::refresh_impacted_roots(
+                        transaction,
+                        &impacted_roots,
+                        &[
+                            "name",
+                            "notes",
+                            "rating",
+                            "source_urls",
+                            "tags",
+                            "file_size",
+                            "width",
+                            "height",
+                            "duration",
+                            "aspect_ratio",
+                            "file_type",
+                            "date_added",
+                            "date_captured",
+                            "has_audio",
+                            "color",
+                        ],
+                        &changed_tag_ids,
+                    )?;
                     transaction.execute(
                         "UPDATE duplicate SET status = 'resolved', decided_at = ?3,
                                 winner_file_id = ?4
@@ -1387,14 +1447,14 @@ pub fn resolve(
                         (
                             affected.into_iter().map(ItemId).collect::<Vec<_>>(),
                             Some(FileHash(loser_hash)),
-                            !delta.items.is_empty(),
+                            !delta.structure.items.is_empty(),
                         ),
                         delta,
                     ))
                 }
             }
         },
-        |projections, delta| projections.apply_structure_delta(delta),
+        settle_duplicate_projection,
     )?;
 
     let changes_library = matches!(choice, ResolutionChoice::KeepFile { .. });
@@ -1625,24 +1685,46 @@ fn merge_standalone_item(
     transaction: &Transaction<'_>,
     target_item_id: i64,
     loser_item_id: i64,
-    delta: &mut StructureProjectionDelta,
+    delta: &mut DuplicateProjectionDelta,
 ) -> rusqlite::Result<()> {
-    let target_metadata = media_metadata(transaction, target_item_id)?;
-    let loser_metadata = media_metadata(transaction, loser_item_id)?;
+    let target_lifecycle = transaction.query_row(
+        "SELECT lifecycle FROM library_root WHERE item_id = ?1",
+        [target_item_id],
+        |row| row.get::<_, String>(0),
+    )?;
+    let target_lifecycle = match target_lifecycle.as_str() {
+        "inbox" => crate::app::Lifecycle::Inbox,
+        "active" => crate::app::Lifecycle::Active,
+        "trash" => crate::app::Lifecycle::Trash,
+        value => return Err(invalid(format!("Unknown lifecycle {value}"))),
+    };
+    let target_media = media_facts(transaction, target_item_id)?;
+    let loser_media = media_facts(transaction, loser_item_id)?;
+    let target_metadata = root_metadata(transaction, target_item_id)?;
+    let loser_metadata = root_metadata(transaction, loser_item_id)?;
     let source_urls = merge_source_urls(&target_metadata.source_urls, &loser_metadata.source_urls);
     let source_urls_json = serde_json::to_string(&source_urls)
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     transaction.execute(
         "UPDATE media_asset
-         SET name = ?1, notes = ?2, rating = ?3, source_urls_json = ?4,
-             captured_at = ?5, updated_at = ?6
-         WHERE item_id = ?7",
+         SET name = ?1, captured_at = ?2, updated_at = ?3
+         WHERE item_id = ?4",
+        params![
+            prefer_text(target_media.name, loser_media.name),
+            target_media.captured_at.or(loser_media.captured_at),
+            Utc::now().to_rfc3339(),
+            target_item_id,
+        ],
+    )?;
+    transaction.execute(
+        "UPDATE root_metadata
+         SET name = ?1, notes = ?2, rating = ?3, source_urls_json = ?4, updated_at = ?5
+         WHERE root_item_id = ?6",
         params![
             prefer_text(target_metadata.name, loser_metadata.name),
             merge_notes(target_metadata.notes, loser_metadata.notes),
             target_metadata.rating.or(loser_metadata.rating),
             source_urls_json,
-            target_metadata.captured_at.or(loser_metadata.captured_at),
             Utc::now().to_rfc3339(),
             target_item_id,
         ],
@@ -1660,12 +1742,12 @@ fn merge_standalone_item(
              VALUES (?1, ?2, ?3)",
             params![folder_id, target_item_id, position_rank],
         )?;
-        delta.folders.push(FolderProjectionChange {
+        delta.structure.folders.push(FolderProjectionChange {
             folder_id,
             item_id: target_item_id,
             present: true,
         });
-        delta.folders.push(FolderProjectionChange {
+        delta.structure.folders.push(FolderProjectionChange {
             folder_id,
             item_id: loser_item_id,
             present: false,
@@ -1673,28 +1755,46 @@ fn merge_standalone_item(
     }
 
     let tags = transaction
-        .prepare("SELECT tag_id, source, provenance_mask FROM media_tag WHERE media_item_id = ?1")?
+        .prepare(
+            "SELECT tag_id, direct_assignment_count, provenance_mask, source_mask
+             FROM root_tag WHERE root_item_id = ?1",
+        )?
         .query_map([loser_item_id], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
+                row.get::<_, i64>(1)?,
                 row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (tag_id, source, provenance_mask) in tags {
+    for (
+        tag_id,
+        direct_assignment_count,
+        provenance_mask,
+        source_mask,
+    ) in tags
+    {
         transaction.execute(
-            "INSERT INTO media_tag (media_item_id, tag_id, source, provenance_mask)
-             VALUES (?1, ?2, ?3, ?4)
-             ON CONFLICT(media_item_id, tag_id, source) DO UPDATE SET
-                 provenance_mask = media_tag.provenance_mask | excluded.provenance_mask",
-            params![target_item_id, tag_id, source, provenance_mask],
+            "INSERT INTO root_tag (
+                 root_item_id, tag_id, direct_assignment_count,
+                 provenance_mask, source_mask
+             ) VALUES (?1, ?2, ?3, ?4, ?5)
+             ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
+                 direct_assignment_count = MAX(
+                     root_tag.direct_assignment_count, excluded.direct_assignment_count
+                 ),
+                 provenance_mask = root_tag.provenance_mask | excluded.provenance_mask,
+                 source_mask = root_tag.source_mask | excluded.source_mask",
+            params![
+                target_item_id,
+                tag_id,
+                direct_assignment_count,
+                provenance_mask,
+                source_mask
+            ],
         )?;
-        delta.tags.push(TagProjectionChange {
-            media_id: target_item_id,
-            tag_id,
-            present: true,
-        });
+        delta.root_tags_added.push((target_item_id, tag_id));
     }
 
     let viewed_at = transaction
@@ -1716,42 +1816,68 @@ fn merge_standalone_item(
         "DELETE FROM library_item WHERE item_id = ?1",
         [loser_item_id],
     )?;
-    delta.items.push(ItemProjectionChange {
+    delta.structure.items.push(ItemProjectionChange {
         item_id: loser_item_id,
         kind: crate::app::ItemKind::Media,
         present: false,
     });
-    delta.roots.push(RootProjectionChange {
+    delta.structure.roots.push(RootProjectionChange {
         item_id: loser_item_id,
         lifecycle: None,
+    });
+    // Duplicate resolution may be the first projection-settled operation after
+    // recovery or conversion. Reassert the surviving root so the prepared delta
+    // is self-contained instead of depending on an already-warm projection.
+    delta.structure.items.push(ItemProjectionChange {
+        item_id: target_item_id,
+        kind: crate::app::ItemKind::Media,
+        present: true,
+    });
+    delta.structure.roots.push(RootProjectionChange {
+        item_id: target_item_id,
+        lifecycle: Some(target_lifecycle),
     });
     Ok(())
 }
 
-struct MediaMetadata {
+struct MediaFacts {
+    name: Option<String>,
+    captured_at: Option<String>,
+}
+
+struct RootMetadata {
     name: Option<String>,
     notes: Option<String>,
     rating: Option<i64>,
     source_urls: Vec<String>,
-    captured_at: Option<String>,
 }
 
-fn media_metadata(transaction: &Transaction<'_>, item_id: i64) -> rusqlite::Result<MediaMetadata> {
+fn media_facts(transaction: &Transaction<'_>, item_id: i64) -> rusqlite::Result<MediaFacts> {
     transaction.query_row(
-        "SELECT name, notes, rating, source_urls_json, captured_at
+        "SELECT name, captured_at
          FROM media_asset WHERE item_id = ?1",
         [item_id],
         |row| {
-            let raw_urls = row.get::<_, Option<String>>(3)?;
-            Ok(MediaMetadata {
+            Ok(MediaFacts {
+                name: row.get(0)?,
+                captured_at: row.get(1)?,
+            })
+        },
+    )
+}
+
+fn root_metadata(transaction: &Transaction<'_>, item_id: i64) -> rusqlite::Result<RootMetadata> {
+    transaction.query_row(
+        "SELECT name, notes, rating, source_urls_json
+         FROM root_metadata WHERE root_item_id = ?1",
+        [item_id],
+        |row| {
+            let raw_urls = row.get::<_, String>(3)?;
+            Ok(RootMetadata {
                 name: row.get(0)?,
                 notes: row.get(1)?,
                 rating: row.get(2)?,
-                source_urls: raw_urls
-                    .as_deref()
-                    .and_then(|value| serde_json::from_str(value).ok())
-                    .unwrap_or_default(),
-                captured_at: row.get(4)?,
+                source_urls: serde_json::from_str(&raw_urls).unwrap_or_default(),
             })
         },
     )
@@ -2331,10 +2457,6 @@ mod tests {
                         params![item_id, format!("item-{item_id}")],
                     )?;
                     transaction.execute(
-                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
-                        [item_id],
-                    )?;
-                    transaction.execute(
                         "INSERT INTO media_file
                              (file_id, file_hash, mime_type, size_bytes, pixel_width,
                               pixel_height, perceptual_hash, created_at)
@@ -2345,6 +2467,10 @@ mod tests {
                         "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
                          VALUES (?1, ?2, 'now', 'now')",
                         params![item_id, file_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
+                        [item_id],
                     )?;
                 }
                 Ok(())
@@ -2392,11 +2518,6 @@ mod tests {
                     [],
                 )?;
                 transaction.execute(
-                    "INSERT INTO library_root (item_id, lifecycle)
-                     VALUES (101, 'active'), (102, 'active')",
-                    [],
-                )?;
-                transaction.execute(
                     "INSERT INTO media_file
                          (file_id, file_hash, mime_type, size_bytes, pixel_width,
                           pixel_height, perceptual_hash, created_at)
@@ -2412,6 +2533,11 @@ mod tests {
                 transaction.execute(
                     "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
                      VALUES (101, 1, 1024), (102, 2, 1024)",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle)
+                     VALUES (101, 'active'), (102, 'active')",
                     [],
                 )?;
                 Ok(())
@@ -2461,10 +2587,6 @@ mod tests {
                         params![item_id, format!("item-{item_id}")],
                     )?;
                     transaction.execute(
-                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
-                        [item_id],
-                    )?;
-                    transaction.execute(
                         "INSERT INTO media_file
                              (file_id, file_hash, mime_type, size_bytes, created_at)
                          VALUES (?1, ?2, 'image/jpeg', 1, 'now')",
@@ -2474,6 +2596,10 @@ mod tests {
                         "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
                          VALUES (?1, ?2, 'now', 'now')",
                         params![item_id, file_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
+                        [item_id],
                     )?;
                 }
                 transaction.execute(
@@ -2513,10 +2639,6 @@ mod tests {
                          VALUES (?1, ?2, 'media', 'now', 'now')",
                         params![item_id, format!("item-{item_id}")],
                     )?;
-                    tx.execute(
-                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
-                        [item_id],
-                    )?;
                 }
                 tx.execute(
                     "INSERT INTO media_file
@@ -2532,6 +2654,11 @@ mod tests {
                      VALUES (1, 10, '2024-01-01T00:00:00Z', 'now', 'now'),
                             (2, 11, '2025-01-01T00:00:00Z', 'now', 'now'),
                             (3, 10, '2024-01-01T00:00:00Z', 'now', 'now')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO library_root (item_id, lifecycle)
+                     VALUES (1, 'active'), (2, 'active'), (3, 'active')",
                     [],
                 )?;
                 Ok(())
@@ -2593,10 +2720,6 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO library_root (item_id, lifecycle) VALUES (2, 'inbox')",
-                    [],
-                )?;
-                tx.execute(
                     "INSERT INTO media_file
                          (file_id, file_hash, mime_type, size_bytes, pixel_width,
                           pixel_height, perceptual_hash, created_at)
@@ -2607,6 +2730,10 @@ mod tests {
                 tx.execute(
                     "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
                      VALUES (1, 10, 'now', 'now'), (2, 11, 'now', 'now')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (2, 'inbox')",
                     [],
                 )?;
                 tx.execute(
@@ -2654,11 +2781,6 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO library_root (item_id, lifecycle)
-                     VALUES (1, 'active'), (2, 'active')",
-                    [],
-                )?;
-                tx.execute(
                     "INSERT INTO media_file
                          (file_id, file_hash, mime_type, size_bytes, pixel_width,
                           pixel_height, perceptual_hash, created_at)
@@ -2668,9 +2790,21 @@ mod tests {
                 )?;
                 tx.execute(
                     "INSERT INTO media_asset
-                         (item_id, file_id, name, notes, imported_at, updated_at)
-                     VALUES (1, 10, 'one', 'keep-one', 'now', 'now'),
-                            (2, 11, 'two', 'keep-two', 'now', 'now')",
+                         (item_id, file_id, name, imported_at, updated_at)
+                     VALUES (1, 10, 'one', 'now', 'now'),
+                            (2, 11, 'two', 'now', 'now')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO library_root (item_id, lifecycle)
+                     VALUES (1, 'active'), (2, 'active')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO root_metadata (
+                         root_item_id, name, notes, source_urls_json, updated_at
+                     ) VALUES (1, 'one', 'keep-one', '[]', 'now'),
+                              (2, 'two', 'keep-two', '[]', 'now')",
                     [],
                 )?;
                 tx.execute(
@@ -2678,7 +2812,9 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO media_tag (media_item_id, tag_id) VALUES (2, 1)",
+                    "INSERT INTO root_tag (
+                         root_item_id, tag_id, provenance_mask, source_mask
+                     ) VALUES (2, 1, 2, 4)",
                     [],
                 )?;
                 tx.execute(
@@ -2722,7 +2858,7 @@ mod tests {
                     .collect::<rusqlite::Result<_>>()?;
                 assert_eq!(assets, vec![(1, 10), (2, 10)]);
                 let tag_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM media_tag WHERE media_item_id = 2",
+                    "SELECT COUNT(*) FROM root_tag WHERE root_item_id = 2",
                     [],
                     |row| row.get(0),
                 )?;
@@ -2762,11 +2898,6 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO library_root (item_id, lifecycle)
-                     VALUES (2, 'active'), (100, 'active')",
-                    [],
-                )?;
-                tx.execute(
                     "INSERT INTO media_file
                          (file_id, file_hash, mime_type, size_bytes, pixel_width,
                           pixel_height, created_at)
@@ -2780,8 +2911,16 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (2, 'active')",
+                    [],
+                )?;
+                tx.execute(
                     "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
                      VALUES (100, 1, 1024)",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (100, 'active')",
                     [],
                 )?;
                 tx.execute(
@@ -2854,11 +2993,6 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO library_root (item_id, lifecycle)
-                     VALUES (1, 'active'), (2, 'active')",
-                    [],
-                )?;
-                tx.execute(
                     "INSERT INTO media_file (file_id, file_hash, mime_type, size_bytes, created_at)
                      VALUES (10, 'winner-file', 'image/jpeg', 1000, 'now'),
                             (11, 'loser-file', 'image/jpeg', 500, 'now')",
@@ -2866,9 +3000,22 @@ mod tests {
                 )?;
                 tx.execute(
                     "INSERT INTO media_asset
-                         (item_id, file_id, name, notes, source_urls_json, imported_at, updated_at)
-                     VALUES (1, 10, 'Winner', 'winner note', '[\"https://winner\"]', 'now', 'now'),
-                            (2, 11, 'Loser', 'loser note', '[\"https://loser\"]', 'now', 'now')",
+                         (item_id, file_id, name, imported_at, updated_at)
+                     VALUES (1, 10, 'Winner', 'now', 'now'),
+                            (2, 11, 'Loser', 'now', 'now')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO library_root (item_id, lifecycle)
+                     VALUES (1, 'active'), (2, 'active')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO root_metadata (
+                         root_item_id, name, notes, source_urls_json, updated_at
+                     ) VALUES
+                         (1, 'Winner', 'winner note', '[\"https://winner\"]', 'now'),
+                         (2, 'Loser', 'loser note', '[\"https://loser\"]', 'now')",
                     [],
                 )?;
                 tx.execute(
@@ -2876,7 +3023,11 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO media_tag (media_item_id, tag_id) VALUES (2, 1)",
+                    "INSERT INTO root_tag (
+                         root_item_id, tag_id, direct_assignment_count,
+                         provenance_mask, source_mask
+                     ) VALUES (1, 1, 1, 8, 16),
+                              (2, 1, 1, 2, 4)",
                     [],
                 )?;
                 tx.execute(
@@ -2913,14 +3064,16 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 let (notes, urls): (String, String) = connection.query_row(
-                    "SELECT notes, source_urls_json FROM media_asset WHERE item_id = 1",
+                    "SELECT notes, source_urls_json
+                     FROM root_metadata WHERE root_item_id = 1",
                     [],
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )?;
-                let tag_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM media_tag WHERE media_item_id = 1 AND tag_id = 1",
+                let tag: (i64, i64) = connection.query_row(
+                    "SELECT provenance_mask, source_mask
+                     FROM root_tag WHERE root_item_id = 1 AND tag_id = 1",
                     [],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )?;
                 let folder_count: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM folder_item WHERE item_id = 1 AND folder_id = 1",
@@ -2930,7 +3083,7 @@ mod tests {
                 assert!(!loser_exists);
                 assert_eq!(notes, "winner note\n\nloser note");
                 assert_eq!(urls, "[\"https://winner\",\"https://loser\"]");
-                assert_eq!(tag_count, 1);
+                assert_eq!(tag, (10, 20));
                 assert_eq!(folder_count, 1);
                 Ok(())
             })
@@ -2950,10 +3103,6 @@ mod tests {
                     [],
                 )?;
                 tx.execute(
-                    "INSERT INTO library_root (item_id, lifecycle) VALUES (1, 'active'), (2, 'active')",
-                    [],
-                )?;
-                tx.execute(
                     "INSERT INTO media_file (file_id, file_hash, mime_type, size_bytes, created_at)
                      VALUES (10, 'a', 'image/jpeg', 10, 'now'), (11, 'b', 'image/jpeg', 10, 'now')",
                     [],
@@ -2961,6 +3110,10 @@ mod tests {
                 tx.execute(
                     "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
                      VALUES (1, 10, 'now', 'now'), (2, 11, 'now', 'now')",
+                    [],
+                )?;
+                tx.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (1, 'active'), (2, 'active')",
                     [],
                 )?;
                 tx.execute(

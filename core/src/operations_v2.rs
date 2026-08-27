@@ -1,21 +1,62 @@
 //! Replacement mutations over library roots and media assets.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use rand::RngCore;
+use roaring::RoaringBitmap;
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, ItemTarget, Lifecycle, MutationReceipt};
 use crate::projection_v2::{
-    FolderProjectionChange, ItemProjectionChange, MembershipProjectionChange, RootProjectionChange,
-    StructureProjectionDelta,
+    FolderProjectionChange, ItemProjectionChange, LifecycleSummaryDelta,
+    MembershipProjectionChange, RootProjectionChange, StructureProjectionDelta,
 };
-use crate::store::history::HistoryDescriptor;
+use crate::store::history::{
+    HistoryDescriptor, SemanticGroupDelta, SemanticGroupFolder, SemanticGroupMember,
+    SemanticGroupRoot, SemanticGroupTag, SemanticHistoryPayload, SemanticHistoryRecord,
+    SemanticLifecycleDelta, SemanticMembershipDelta, SemanticRatingDelta,
+};
 
 const RANK_GAP: i64 = 1024;
 const MAX_RECEIPT_ITEM_IDS: usize = 256;
+
+#[derive(Default)]
+pub(crate) struct BulkTagProjectionDelta {
+    pub(crate) changes: Vec<(i64, RoaringBitmap)>,
+    pub(crate) history_changes: Vec<SemanticMembershipDelta>,
+    pub(crate) canonical_changed: bool,
+}
+
+#[derive(Default)]
+struct BulkFolderProjectionDelta {
+    roots: RoaringBitmap,
+    tags: BulkTagProjectionDelta,
+}
+
+struct BulkLifecycleProjectionDelta {
+    roots: RoaringBitmap,
+    lifecycle: Lifecycle,
+}
+
+#[derive(Default)]
+struct GroupProjectionDelta {
+    structure: StructureProjectionDelta,
+    tag_changes: Vec<SemanticMembershipDelta>,
+    rating_changes: SemanticRatingDelta,
+}
+
+#[derive(Default)]
+struct CapturedGroupState {
+    item_ids: BTreeSet<i64>,
+    roots: BTreeMap<i64, SemanticGroupRoot>,
+    members: BTreeMap<(i64, i64), i64>,
+    tag_sets: BTreeMap<(i64, i64, i64), RoaringBitmap>,
+}
+
+type CapturedRootTagState = BTreeMap<(i64, i64), (i64, i64)>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -71,8 +112,7 @@ pub struct DeleteItemsResult {
 }
 
 impl Application {
-    /// Rename one visible root. Collection names are structural; standalone
-    /// media names remain media-owned.
+    /// Rename one visible root without changing the media-owned source name.
     pub fn rename_item(&self, item_id: ItemId, name: &str) -> Result<MutationReceipt, String> {
         let name = name.trim();
         if name.is_empty() {
@@ -99,20 +139,25 @@ impl Application {
                     .ok_or_else(|| invalid(format!("Item {} is not a library root", item_id.0)))?;
                 let now = chrono::Utc::now().to_rfc3339();
                 match kind.as_str() {
-                    "collection" => {
+                    "collection" | "media" => {
                         transaction.execute(
-                            "UPDATE library_item SET label = ?1, updated_at = ?2 WHERE item_id = ?3",
-                            params![name, now, item_id.0],
-                        )?;
-                    }
-                    "media" => {
-                        transaction.execute(
-                            "UPDATE media_asset SET name = ?1, updated_at = ?2 WHERE item_id = ?3",
-                            params![name, now, item_id.0],
+                            "INSERT INTO root_metadata (
+                                 root_item_id, name, source_urls_json, updated_at
+                             ) VALUES (?1, ?2, '[]', ?3)
+                             ON CONFLICT(root_item_id) DO UPDATE SET
+                                 name = excluded.name,
+                                 updated_at = excluded.updated_at",
+                            params![item_id.0, name, now],
                         )?;
                     }
                     other => return Err(invalid(format!("Unsupported item kind '{other}'"))),
                 }
+                crate::smart_v2::refresh_impacted_roots(
+                    transaction,
+                    &RoaringBitmap::from_iter([root_id_u32(item_id.0)?]),
+                    &["name"],
+                    &[],
+                )?;
                 Ok(((), ()))
             },
             |_, ()| Ok(()),
@@ -144,10 +189,8 @@ impl Application {
             }
             normalized.push((rename.item_id, name.to_string()));
         }
-        let resources_for_history = std::iter::once(resources::LIBRARY.to_string())
-            .chain(item_ids.iter().map(|item_id| resources::item(*item_id)))
-            .collect();
-        let history_ids = item_ids.iter().copied().collect::<Vec<_>>();
+        let history_ids = capped_ids(item_ids.iter().copied());
+        let resources_for_history = capped_item_resources(resources::LIBRARY, &history_ids);
         let (_, revision, _) = self.undoable_transaction(
             HistoryDescriptor::new(
                 "items.rename_many",
@@ -167,19 +210,30 @@ impl Application {
                             |row| row.get(0),
                         )
                         .optional()?
-                        .ok_or_else(|| invalid(format!("Item {} is not a library root", item_id.0)))?;
+                        .ok_or_else(|| {
+                            invalid(format!("Item {} is not a library root", item_id.0))
+                        })?;
                     match kind.as_str() {
-                        "collection" => transaction.execute(
-                            "UPDATE library_item SET label = ?1, updated_at = ?2 WHERE item_id = ?3",
-                            params![name, now, item_id.0],
-                        )?,
-                        "media" => transaction.execute(
-                            "UPDATE media_asset SET name = ?1, updated_at = ?2 WHERE item_id = ?3",
-                            params![name, now, item_id.0],
-                        )?,
+                        "collection" | "media" => {
+                            transaction.execute(
+                                "INSERT INTO root_metadata (
+                                     root_item_id, name, source_urls_json, updated_at
+                                 ) VALUES (?1, ?2, '[]', ?3)
+                                 ON CONFLICT(root_item_id) DO UPDATE SET
+                                     name = excluded.name,
+                                     updated_at = excluded.updated_at",
+                                params![item_id.0, name, now],
+                            )?;
+                        }
                         other => return Err(invalid(format!("Unsupported item kind '{other}'"))),
                     };
                 }
+                crate::smart_v2::refresh_impacted_roots(
+                    transaction,
+                    &bitmap_from_i64s(normalized.iter().map(|(item_id, _)| item_id.0))?,
+                    &["name"],
+                    &[],
+                )?;
                 Ok(((), ()))
             },
             |_, ()| Ok(()),
@@ -192,7 +246,8 @@ impl Application {
         target: &ItemTarget,
         lifecycle: Lifecycle,
     ) -> Result<MutationReceipt, String> {
-        let (item_ids, revision, _) = self.undoable_transaction(
+        let item_ids = mutation_item_hints(target);
+        let (_, revision, _, _) = self.semantic_undoable_transaction_if_changed_captured(
             HistoryDescriptor::new(
                 "items.set_lifecycle",
                 match lifecycle {
@@ -204,27 +259,68 @@ impl Application {
                     resources::SIDEBAR.to_string(),
                 ],
                 vec![],
-            )
-            .rebuilding_projections(),
-            |transaction| {
-                let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
-                for item_id in &item_ids {
-                    let changed = transaction.execute(
-                        "UPDATE library_root SET lifecycle = ?1 WHERE item_id = ?2",
-                        params![lifecycle.as_str(), item_id],
+            ),
+            |projections| projections.selection_snapshot(),
+            |transaction, projection| {
+                let operation_started = Instant::now();
+                let mut stage_started = operation_started;
+                stage_root_selection(transaction, target)?;
+                transaction.execute_batch(
+                    "CREATE TEMP TABLE IF NOT EXISTS picto_changed_root (
+                         item_id INTEGER PRIMARY KEY
+                     ) WITHOUT ROWID;
+                     DELETE FROM picto_changed_root;",
+                )?;
+                transaction.execute(
+                    "INSERT INTO picto_changed_root(item_id)
+                     SELECT selected.item_id
+                     FROM picto_selected_root selected
+                     JOIN library_root root ON root.item_id = selected.item_id
+                     WHERE root.lifecycle <> ?1",
+                    [lifecycle.as_str()],
+                )?;
+                let changed_ids =
+                    selected_id_bitmap(transaction, "SELECT item_id FROM picto_changed_root")?;
+                let undo = lifecycle_delta_for_table(transaction, "picto_changed_root", "item_id")?;
+                trace_bulk_stage("items.lifecycle", "stage_selection", stage_started);
+                stage_started = Instant::now();
+                if !changed_ids.is_empty() {
+                    let summary_delta = projection
+                        .lifecycle_summary_delta(&changed_ids, lifecycle)
+                        .map_err(invalid)?;
+                    begin_bulk_lifecycle_settlement(transaction, &summary_delta)?;
+                    trace_bulk_stage("items.lifecycle", "prepare_summaries", stage_started);
+                    stage_started = Instant::now();
+                    transaction.execute(
+                        "UPDATE library_root
+                         SET lifecycle = ?1
+                         WHERE item_id IN (SELECT item_id FROM picto_changed_root)",
+                        [lifecycle.as_str()],
                     )?;
-                    if changed != 1 {
-                        return Err(invalid(format!("Item {item_id} is not a library root")));
-                    }
+                    trace_bulk_stage("items.lifecycle", "canonical_roots", stage_started);
+                    stage_started = Instant::now();
+                    finish_bulk_lifecycle_settlement(transaction, lifecycle)?;
+                    trace_bulk_stage("items.lifecycle", "exact_summaries", stage_started);
                 }
-                Ok((item_ids.clone(), item_ids))
+                trace_bulk_stage("items.lifecycle", "closure_total", operation_started);
+                let changed = !changed_ids.is_empty();
+                let redo = lifecycle_delta_for_target(&changed_ids, lifecycle);
+                Ok((
+                    (),
+                    BulkLifecycleProjectionDelta {
+                        roots: changed_ids,
+                        lifecycle,
+                    },
+                    changed.then(|| {
+                        SemanticHistoryRecord::new(
+                            SemanticHistoryPayload::Lifecycle(undo),
+                            SemanticHistoryPayload::Lifecycle(redo),
+                        )
+                    }),
+                    changed,
+                ))
             },
-            |projections, changed_ids| {
-                for item_id in changed_ids {
-                    projections.apply_lifecycle_delta(item_id, lifecycle)?;
-                }
-                Ok(())
-            },
+            |projections, delta| projections.apply_lifecycle_bitmap(&delta.roots, delta.lifecycle),
         )?;
         Ok(receipt(
             revision,
@@ -239,7 +335,8 @@ impl Application {
         folder_id: i64,
         present: bool,
     ) -> Result<MutationReceipt, String> {
-        let ((item_ids, _changed_tags), revision, _) = self.undoable_transaction(
+        let item_ids = mutation_item_hints(target);
+        let (_, revision, _, _) = self.semantic_undoable_transaction_if_changed(
             HistoryDescriptor::new(
                 "items.set_folder",
                 if present {
@@ -253,48 +350,46 @@ impl Application {
                     resources::FOLDERS.to_string(),
                 ],
                 vec![],
-            )
-            .rebuilding_projections(),
+            ),
             |transaction| {
-                let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
                 require_folder(transaction, folder_id)?;
-                for item_id in &item_ids {
-                    require_root(transaction, *item_id)?;
-                    if present {
-                        transaction.execute(
-                            "INSERT INTO folder_item (folder_id, item_id)
-                         VALUES (?1, ?2) ON CONFLICT DO NOTHING",
-                            params![folder_id, item_id],
-                        )?;
-                    } else {
-                        transaction.execute(
-                            "DELETE FROM folder_item WHERE folder_id = ?1 AND item_id = ?2",
-                            params![folder_id, item_id],
-                        )?;
-                    }
-                }
-                let changed_tags = if present {
+                stage_root_selection(transaction, target)?;
+                let changed_roots = apply_folder_to_selection(transaction, folder_id, present)?;
+                let changed_tags = if present && !changed_roots.is_empty() {
                     let tags =
                         crate::folders_v2::inherited_folder_auto_tags(transaction, folder_id)?;
                     if tags.is_empty() {
-                        Vec::new()
+                        BulkTagProjectionDelta::default()
                     } else {
-                        let media_ids = media_items_for_roots(transaction, &item_ids)?;
-                        apply_tags_in(transaction, &media_ids, &tags, true, 1, "folder")?
+                        apply_tags_to_selection(transaction, &tags, true, 1, "folder")?
                     }
                 } else {
-                    Vec::new()
+                    BulkTagProjectionDelta::default()
                 };
+                let changed = !changed_roots.is_empty() || changed_tags.canonical_changed;
+                let undo = SemanticHistoryPayload::Composite(vec![
+                    semantic_membership(folder_id, &changed_roots, !present, false),
+                    semantic_tag_memberships(&changed_tags, false),
+                ]);
+                let redo = SemanticHistoryPayload::Composite(vec![
+                    semantic_membership(folder_id, &changed_roots, present, false),
+                    semantic_tag_memberships(&changed_tags, true),
+                ]);
                 Ok((
-                    (item_ids.clone(), changed_tags.clone()),
-                    (item_ids, changed_tags),
+                    (),
+                    BulkFolderProjectionDelta {
+                        roots: changed_roots,
+                        tags: changed_tags,
+                    },
+                    changed.then(|| SemanticHistoryRecord::new(undo, redo)),
+                    changed,
                 ))
             },
-            |projections, (changed_ids, changed_tags)| {
-                for item_id in changed_ids {
-                    projections.apply_folder_delta(folder_id, item_id, present)?;
+            |projections, delta| {
+                projections.apply_folder_bitmap(folder_id, &delta.roots, present)?;
+                for (tag_id, root_ids) in delta.tags.changes {
+                    projections.apply_root_tag_bitmap(tag_id, &root_ids, true)?;
                 }
-                projections.apply_tag_changes(&changed_tags, true)?;
                 Ok(())
             },
         )?;
@@ -323,7 +418,7 @@ impl Application {
             .map(str::to_owned);
         let now = chrono::Utc::now().to_rfc3339();
         let key = new_key("collection");
-        let ((collection_id, affected), revision, _) = self.undoable_transaction(
+        let ((collection_id, affected), revision, _) = self.semantic_undoable_transaction(
             HistoryDescriptor::new(
                 "collections.organize",
                 "Create or merge group",
@@ -333,42 +428,37 @@ impl Application {
                     resources::FOLDERS.to_string(),
                 ],
                 Vec::new(),
-            )
-            .rebuilding_projections(),
+            ),
             |transaction| {
+                let operation_started = Instant::now();
+                let mut stage_started = operation_started;
                 let item_ids = crate::query_v2::resolve_target_ids(transaction, &input.target)?;
-                let mut collection_ids = Vec::new();
-                let mut standalone_media_ids = Vec::new();
-                let mut members_by_collection = Vec::new();
-                for item_id in &item_ids {
-                    let kind: String = transaction.query_row(
-                        "SELECT kind FROM library_item WHERE item_id = ?1",
-                        [item_id],
-                        |row| row.get(0),
+                stage_root_ids(transaction, &item_ids)?;
+                let before_universe = group_history_universe(transaction, &item_ids)?;
+                let before = capture_group_state_compact(transaction, &before_universe)?;
+                trace_bulk_stage("groups.organize", "capture_before", stage_started);
+                stage_started = Instant::now();
+                let (selected_count, media_count, collection_count): (i64, i64, i64) = transaction
+                    .query_row(
+                        "SELECT COUNT(*),
+                                COALESCE(SUM(item.kind = 'media'), 0),
+                                COALESCE(SUM(item.kind = 'collection'), 0)
+                         FROM picto_selected_root selected
+                         JOIN library_root root ON root.item_id = selected.item_id
+                         JOIN library_item item ON item.item_id = selected.item_id",
+                        [],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
                     )?;
-                    match kind.as_str() {
-                        "media" => {
-                            require_standalone_media_root(transaction, *item_id)?;
-                            standalone_media_ids.push(*item_id);
-                        }
-                        "collection" => {
-                            let members = collection_members(transaction, *item_id)?;
-                            collection_ids.push(*item_id);
-                            members_by_collection.push((*item_id, members));
-                        }
-                        other => return Err(invalid(format!("Unsupported item kind '{other}'"))),
-                    }
+                if selected_count != item_ids.len() as i64
+                    || media_count + collection_count != selected_count
+                {
+                    return Err(invalid("A targeted item is not a supported library root"));
                 }
-                let mut member_groups = standalone_media_ids
-                    .iter()
-                    .map(|media_item_id| vec![*media_item_id])
-                    .collect::<Vec<_>>();
-                member_groups.extend(
-                    members_by_collection
-                        .iter()
-                        .map(|(_, members)| members.clone()),
-                );
-                require_no_collection_file_overlap(transaction, &member_groups)?;
+                let standalone_media_ids = selected_root_ids_of_kind(transaction, "media")?;
+                let collection_ids = selected_root_ids_of_kind(transaction, "collection")?;
+                require_no_selected_file_overlap(transaction)?;
+                trace_bulk_stage("groups.organize", "validate_selection", stage_started);
+                stage_started = Instant::now();
                 if collection_ids.is_empty() && item_ids.len() < 2 {
                     return Err(invalid(
                         "Creating a group requires at least two standalone media items",
@@ -381,28 +471,41 @@ impl Application {
                 }
                 let lifecycle = require_same_root_lifecycle(transaction, &item_ids)?;
                 let projected_lifecycle = parse_lifecycle(&lifecycle)?;
+                let creating_collection = collection_ids.is_empty();
+                if creating_collection {
+                    begin_group_create_summary_batch(transaction)?;
+                } else {
+                    begin_structural_summary_batch(transaction, &before_universe)?;
+                }
                 let mut delta = StructureProjectionDelta::default();
-                let collection_id = if collection_ids.is_empty() {
+                let collection_id = if creating_collection {
                     let label = label
                         .as_deref()
                         .ok_or_else(|| invalid("A new group requires a non-empty label"))?;
                     let folders = folder_ids_for_roots(transaction, &item_ids)?;
                     transaction.execute(
-                        "INSERT INTO library_item (item_key, kind, label, created_at, updated_at)
-                         VALUES (?1, 'collection', ?2, ?3, ?3)",
-                        params![key, label, now],
+                        "INSERT INTO library_item (item_key, kind, created_at, updated_at)
+                         VALUES (?1, 'collection', ?2, ?2)",
+                        params![key, now],
                     )?;
                     let collection_id = transaction.last_insert_rowid();
                     transaction.execute(
                         "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
                         params![collection_id, lifecycle],
                     )?;
-                    for folder_id in &folders {
-                        transaction.execute(
-                            "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)",
-                            params![folder_id, collection_id],
-                        )?;
-                    }
+                    let cover_root_id = item_ids[0];
+                    transaction.execute(
+                        "INSERT INTO root_metadata (
+                             root_item_id, name, rating, notes, source_urls_json, updated_at
+                         )
+                         SELECT ?1, ?2, metadata.rating, metadata.notes,
+                                COALESCE(metadata.source_urls_json, '[]'), ?3
+                         FROM library_item cover
+                         LEFT JOIN root_metadata metadata
+                           ON metadata.root_item_id = cover.item_id
+                         WHERE cover.item_id = ?4",
+                        params![collection_id, label, now, cover_root_id],
+                    )?;
                     delta.items.push(ItemProjectionChange {
                         item_id: collection_id,
                         kind: crate::app::ItemKind::Collection,
@@ -444,34 +547,113 @@ impl Application {
                     }
                     collection_id
                 };
+                trace_bulk_stage("groups.organize", "create_winner", stage_started);
+                stage_started = Instant::now();
 
-                let mut next_position: i64 = transaction.query_row(
-                    "SELECT COALESCE(MAX(position_rank), 0) + ?1
-                     FROM collection_member WHERE collection_id = ?2",
-                    params![RANK_GAP, collection_id],
-                    |row| row.get(0),
-                )?;
-                let mut affected = vec![collection_id];
-                for item_id in &item_ids {
-                    affected.push(*item_id);
-                    if *item_id == collection_id {
-                        continue;
-                    }
-                    let folders = folder_ids_for_roots(transaction, &[*item_id])?;
-                    let kind: String = transaction.query_row(
-                        "SELECT kind FROM library_item WHERE item_id = ?1",
-                        [item_id],
-                        |row| row.get(0),
+                let encoded_roots = serde_json::to_string(&item_ids)
+                    .map_err(|error| invalid(format!("Could not encode group roots: {error}")))?;
+                if creating_collection {
+                    transaction.execute(
+                        "INSERT INTO root_tag (
+                             root_item_id, tag_id, provenance_mask, source_mask
+                         )
+                         SELECT ?1, tag_id, provenance_mask, source_mask
+                         FROM picto_group_create_tag
+                         WHERE TRUE
+                         ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
+                             provenance_mask = root_tag.provenance_mask
+                                 | excluded.provenance_mask,
+                             source_mask = root_tag.source_mask | excluded.source_mask",
+                        [collection_id],
                     )?;
-                    if kind == "media" {
-                        transaction
-                            .execute("DELETE FROM library_root WHERE item_id = ?1", [item_id])?;
-                        transaction.execute(
-                            "INSERT INTO collection_member
-                             (collection_id, media_item_id, position_rank)
-                             VALUES (?1, ?2, ?3)",
-                            params![collection_id, item_id, next_position],
-                        )?;
+                } else {
+                    transaction.execute(
+                        "INSERT INTO root_tag (
+                             root_item_id, tag_id, provenance_mask, source_mask
+                         )
+                         SELECT ?1, relation.tag_id,
+                                picto_bit_or(relation.provenance_mask),
+                                picto_bit_or(relation.source_mask)
+                         FROM root_tag relation
+                         JOIN picto_selected_root selected
+                           ON relation.root_item_id = selected.item_id
+                         GROUP BY relation.tag_id
+                         ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
+                             provenance_mask = root_tag.provenance_mask
+                                 | excluded.provenance_mask,
+                             source_mask = root_tag.source_mask | excluded.source_mask",
+                        [collection_id],
+                    )?;
+                }
+                trace_bulk_stage("groups.organize.structure", "union_tags", stage_started);
+                stage_started = Instant::now();
+                transaction.execute(
+                    "INSERT INTO folder_item(folder_id, item_id)
+                     SELECT DISTINCT membership.folder_id, ?1
+                     FROM folder_item membership
+                     JOIN json_each(?2) selected
+                       ON membership.item_id = CAST(selected.value AS INTEGER)
+                     ON CONFLICT DO NOTHING",
+                    params![collection_id, encoded_roots],
+                )?;
+                trace_bulk_stage("groups.organize.structure", "union_folders", stage_started);
+                stage_started = Instant::now();
+                transaction.execute(
+                    "UPDATE root_metadata
+                     SET source_urls_json = COALESCE((
+                           SELECT json_group_array(url)
+                           FROM (
+                               SELECT DISTINCT CAST(url.value AS TEXT) AS url
+                               FROM root_metadata source
+                               JOIN json_each(?1) selected
+                                 ON source.root_item_id = CAST(selected.value AS INTEGER)
+                               JOIN json_each(source.source_urls_json) url
+                               WHERE CAST(url.value AS TEXT) <> ''
+                               ORDER BY url
+                           )
+                         ), '[]'),
+                         updated_at = ?2
+                     WHERE root_item_id = ?3",
+                    params![encoded_roots, now, collection_id],
+                )?;
+                trace_bulk_stage("groups.organize.structure", "union_sources", stage_started);
+                stage_started = Instant::now();
+                let mut affected = vec![collection_id];
+                if creating_collection {
+                    let encoded = serde_json::to_string(&item_ids).map_err(|error| {
+                        invalid(format!("Could not encode group members: {error}"))
+                    })?;
+                    let mut statement = transaction.prepare(
+                        "SELECT membership.item_id, membership.folder_id
+                         FROM folder_item membership
+                         JOIN json_each(?1) selected
+                           ON CAST(selected.value AS INTEGER) = membership.item_id
+                         ORDER BY membership.item_id, membership.folder_id",
+                    )?;
+                    let folder_rows = statement
+                        .query_map([&encoded], |row| {
+                            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                        })?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    remove_staged_roots_for_collection(transaction)?;
+                    trace_bulk_stage(
+                        "groups.organize.structure",
+                        "remove_member_roots",
+                        stage_started,
+                    );
+                    stage_started = Instant::now();
+                    transaction.execute(
+                        "INSERT INTO collection_member
+                         (collection_id, media_item_id, position_rank)
+                         SELECT ?1,
+                                CAST(value AS INTEGER),
+                                (CAST(key AS INTEGER) + 1) * ?2
+                         FROM json_each(?3)",
+                        params![collection_id, RANK_GAP, &encoded],
+                    )?;
+                    trace_bulk_stage("groups.organize.structure", "insert_members", stage_started);
+                    stage_started = Instant::now();
+                    for item_id in &item_ids {
                         delta.roots.push(RootProjectionChange {
                             item_id: *item_id,
                             lifecycle: None,
@@ -481,71 +663,224 @@ impl Application {
                             media_id: *item_id,
                             present: true,
                         });
-                        delta.folders.extend(folders.into_iter().map(|folder_id| {
+                        affected.push(*item_id);
+                    }
+                    delta
+                        .folders
+                        .extend(folder_rows.into_iter().map(|(item_id, folder_id)| {
                             FolderProjectionChange {
                                 folder_id,
-                                item_id: *item_id,
+                                item_id,
                                 present: false,
                             }
                         }));
-                        affected.push(*item_id);
-                        next_position += RANK_GAP;
-                        continue;
+                } else {
+                    let mut members_by_collection = selected_collection_members(transaction)?
+                        .into_iter()
+                        .collect::<BTreeMap<_, _>>();
+                    let mut folders_by_root = BTreeMap::<i64, Vec<i64>>::new();
+                    {
+                        let mut statement = transaction.prepare(
+                            "SELECT membership.item_id, membership.folder_id
+                             FROM folder_item membership
+                             JOIN picto_selected_root selected
+                               ON selected.item_id = membership.item_id
+                             WHERE membership.item_id <> ?1
+                             ORDER BY membership.item_id, membership.folder_id",
+                        )?;
+                        let mut rows = statement.query([collection_id])?;
+                        while let Some(row) = rows.next()? {
+                            folders_by_root
+                                .entry(row.get(0)?)
+                                .or_default()
+                                .push(row.get(1)?);
+                        }
                     }
-
-                    let members = members_by_collection
-                        .iter()
-                        .find(|(id, _)| id == item_id)
-                        .map(|(_, members)| members.clone())
-                        .unwrap_or_default();
-                    if *item_id != collection_id {
-                        for media_id in members {
-                            transaction.execute(
-                                "UPDATE collection_member
-                                 SET collection_id = ?1, position_rank = ?2
-                                 WHERE collection_id = ?3 AND media_item_id = ?4",
-                                params![collection_id, next_position, item_id, media_id],
-                            )?;
-                            delta.memberships.push(MembershipProjectionChange {
-                                collection_id: *item_id,
-                                media_id,
-                                present: false,
+                    let encoded = serde_json::to_string(&item_ids).map_err(|error| {
+                        invalid(format!("Could not encode merged group roots: {error}"))
+                    })?;
+                    transaction.execute_batch(
+                        "CREATE TEMP TABLE IF NOT EXISTS picto_group_merge_member (
+                             media_item_id INTEGER PRIMARY KEY,
+                             source_collection_id INTEGER,
+                             position_rank INTEGER NOT NULL
+                         ) WITHOUT ROWID;
+                         DELETE FROM picto_group_merge_member;",
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO picto_group_merge_member (
+                             media_item_id, source_collection_id, position_rank
+                         )
+                         WITH selected(item_id, selection_order) AS (
+                             SELECT CAST(value AS INTEGER), CAST(key AS INTEGER)
+                             FROM json_each(?1)
+                         ), candidate(media_item_id, source_collection_id,
+                                      selection_order, member_order) AS (
+                             SELECT selected.item_id, NULL,
+                                    selected.selection_order, 0
+                             FROM selected
+                             JOIN library_item item ON item.item_id = selected.item_id
+                             WHERE item.kind = 'media' AND selected.item_id <> ?2
+                             UNION ALL
+                             SELECT member.media_item_id, member.collection_id,
+                                    selected.selection_order, member.position_rank
+                             FROM selected
+                             JOIN library_item item ON item.item_id = selected.item_id
+                             JOIN collection_member member
+                               ON member.collection_id = selected.item_id
+                             WHERE item.kind = 'collection' AND selected.item_id <> ?2
+                         ), ranked AS (
+                             SELECT media_item_id, source_collection_id,
+                                    ROW_NUMBER() OVER (
+                                        ORDER BY selection_order, member_order, media_item_id
+                                    ) AS ordinal
+                             FROM candidate
+                         )
+                         SELECT media_item_id, source_collection_id,
+                                (SELECT COALESCE(MAX(position_rank), 0)
+                                 FROM collection_member WHERE collection_id = ?2)
+                                    + ordinal * ?3
+                         FROM ranked",
+                        params![encoded, collection_id, RANK_GAP],
+                    )?;
+                    transaction.execute(
+                        "UPDATE collection_member
+                         SET collection_id = ?1,
+                             position_rank = (
+                                 SELECT staged.position_rank
+                                 FROM picto_group_merge_member staged
+                                 WHERE staged.media_item_id = collection_member.media_item_id
+                             )
+                         WHERE EXISTS (
+                             SELECT 1 FROM picto_group_merge_member staged
+                             WHERE staged.source_collection_id = collection_member.collection_id
+                               AND staged.media_item_id = collection_member.media_item_id
+                         )",
+                        [collection_id],
+                    )?;
+                    transaction.execute(
+                        "DELETE FROM library_root
+                         WHERE item_id IN (
+                             SELECT selected.item_id
+                             FROM picto_selected_root selected
+                             JOIN library_item item ON item.item_id = selected.item_id
+                             WHERE item.kind = 'media' AND selected.item_id <> ?1
+                         )",
+                        [collection_id],
+                    )?;
+                    transaction.execute(
+                        "INSERT INTO collection_member (
+                             collection_id, media_item_id, position_rank
+                         )
+                         SELECT ?1, staged.media_item_id, staged.position_rank
+                         FROM picto_group_merge_member staged
+                         WHERE staged.source_collection_id IS NULL",
+                        [collection_id],
+                    )?;
+                    transaction.execute(
+                        "DELETE FROM library_item
+                         WHERE item_id IN (
+                             SELECT selected.item_id
+                             FROM picto_selected_root selected
+                             JOIN library_item item ON item.item_id = selected.item_id
+                             WHERE item.kind = 'collection' AND selected.item_id <> ?1
+                         )",
+                        [collection_id],
+                    )?;
+                    for item_id in &item_ids {
+                        affected.push(*item_id);
+                        if *item_id == collection_id {
+                            continue;
+                        }
+                        let folders = folders_by_root.remove(item_id).unwrap_or_default();
+                        if standalone_media_ids.binary_search(item_id).is_ok() {
+                            delta.roots.push(RootProjectionChange {
+                                item_id: *item_id,
+                                lifecycle: None,
                             });
                             delta.memberships.push(MembershipProjectionChange {
                                 collection_id,
-                                media_id,
+                                media_id: *item_id,
                                 present: true,
                             });
-                            affected.push(media_id);
-                            next_position += RANK_GAP;
+                            delta.folders.extend(folders.into_iter().map(|folder_id| {
+                                FolderProjectionChange {
+                                    folder_id,
+                                    item_id: *item_id,
+                                    present: false,
+                                }
+                            }));
+                            affected.push(*item_id);
+                            continue;
                         }
-                        transaction
-                            .execute("DELETE FROM library_item WHERE item_id = ?1", [item_id])?;
-                        delta.items.push(ItemProjectionChange {
-                            item_id: *item_id,
-                            kind: crate::app::ItemKind::Collection,
-                            present: false,
-                        });
-                        delta.roots.push(RootProjectionChange {
-                            item_id: *item_id,
-                            lifecycle: None,
-                        });
-                        delta.folders.extend(folders.into_iter().map(|folder_id| {
-                            FolderProjectionChange {
-                                folder_id,
-                                item_id: *item_id,
-                                present: false,
+
+                        let members = members_by_collection.remove(item_id).unwrap_or_default();
+                        if *item_id != collection_id {
+                            for media_id in members {
+                                delta.memberships.push(MembershipProjectionChange {
+                                    collection_id: *item_id,
+                                    media_id,
+                                    present: false,
+                                });
+                                delta.memberships.push(MembershipProjectionChange {
+                                    collection_id,
+                                    media_id,
+                                    present: true,
+                                });
+                                affected.push(media_id);
                             }
-                        }));
+                            delta.items.push(ItemProjectionChange {
+                                item_id: *item_id,
+                                kind: crate::app::ItemKind::Collection,
+                                present: false,
+                            });
+                            delta.roots.push(RootProjectionChange {
+                                item_id: *item_id,
+                                lifecycle: None,
+                            });
+                            delta.folders.extend(folders.into_iter().map(|folder_id| {
+                                FolderProjectionChange {
+                                    folder_id,
+                                    item_id: *item_id,
+                                    present: false,
+                                }
+                            }));
+                        }
                     }
                 }
 
                 sync_collection_cover(transaction, collection_id)?;
+                trace_bulk_stage("groups.organize", "canonical_structure", stage_started);
+                stage_started = Instant::now();
                 affected.sort_unstable();
                 affected.dedup();
-                Ok(((collection_id, affected), delta))
+                let mut after_universe = before_universe;
+                after_universe.extend(affected.iter().copied());
+                after_universe.push(collection_id);
+                after_universe.sort_unstable();
+                after_universe.dedup();
+                if creating_collection {
+                    finish_group_create_summary_batch(transaction, collection_id)?;
+                } else {
+                    finish_structural_summary_batch(transaction, &after_universe)?;
+                }
+                trace_bulk_stage("groups.organize", "summary_settlement", stage_started);
+                stage_started = Instant::now();
+                let after = capture_group_state_compact(transaction, &after_universe)?;
+                let (history, forward) = group_history_record(&before, &after)?;
+                trace_bulk_stage("groups.organize", "capture_after_history", stage_started);
+                trace_bulk_stage("groups.organize", "closure_total", operation_started);
+                Ok((
+                    (collection_id, affected),
+                    GroupProjectionDelta {
+                        structure: delta,
+                        tag_changes: forward.tag_changes,
+                        rating_changes: forward.rating_changes,
+                    },
+                    history,
+                ))
             },
-            |projections, delta| projections.apply_structure_delta(delta),
+            apply_group_projection_delta,
         )?;
         let receipt = receipt(
             revision,
@@ -563,7 +898,7 @@ impl Application {
         if media_ids.is_empty() {
             return Err("No group members were selected".to_string());
         }
-        let (affected, revision, _) = self.undoable_transaction(
+        let (affected, revision, _) = self.semantic_undoable_transaction(
             HistoryDescriptor::new(
                 "collections.detach",
                 "Remove from group",
@@ -573,33 +908,54 @@ impl Application {
                     resources::FOLDERS.to_string(),
                 ],
                 Vec::new(),
-            )
-            .rebuilding_projections(),
+            ),
             |transaction| {
+                let mut seeds = media_ids.clone();
+                seeds.push(input.collection_id.0);
+                let before_universe = group_history_universe(transaction, &seeds)?;
+                let before = capture_group_state(transaction, &before_universe)?;
                 let lifecycle = require_collection_root(transaction, input.collection_id.0)?;
                 let projected_lifecycle = parse_lifecycle(&lifecycle)?;
                 let detached_lifecycle = input.target_lifecycle.unwrap_or(projected_lifecycle);
                 let detached_lifecycle_name = detached_lifecycle.as_str();
                 let folders = folder_ids_for_roots(transaction, &[input.collection_id.0])?;
+                begin_structural_summary_batch(transaction, &before_universe)?;
+                stage_media_ids(transaction, &media_ids)?;
+                let missing_media_id = transaction
+                    .query_row(
+                        "SELECT selected.media_item_id
+                         FROM picto_selected_media selected
+                         WHERE NOT EXISTS (
+                             SELECT 1 FROM collection_member member
+                             WHERE member.collection_id = ?1
+                               AND member.media_item_id = selected.media_item_id
+                         )
+                         LIMIT 1",
+                        [input.collection_id.0],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .optional()?;
+                if let Some(media_id) = missing_media_id {
+                    return Err(invalid(format!(
+                        "Media item {media_id} is not attached to group {}",
+                        input.collection_id.0
+                    )));
+                }
                 let mut delta = StructureProjectionDelta::default();
+                transaction.execute(
+                    "DELETE FROM collection_member
+                     WHERE collection_id = ?1
+                       AND media_item_id IN (
+                           SELECT media_item_id FROM picto_selected_media
+                       )",
+                    [input.collection_id.0],
+                )?;
+                create_staged_roots_with_folders(
+                    transaction,
+                    detached_lifecycle_name,
+                    input.collection_id.0,
+                )?;
                 for media_id in &media_ids {
-                    let removed = transaction.execute(
-                        "DELETE FROM collection_member
-                         WHERE collection_id = ?1 AND media_item_id = ?2",
-                        params![input.collection_id.0, media_id],
-                    )?;
-                    if removed != 1 {
-                        return Err(invalid(format!(
-                            "Media item {media_id} is not attached to group {}",
-                            input.collection_id.0
-                        )));
-                    }
-                    create_root_with_folders(
-                        transaction,
-                        *media_id,
-                        detached_lifecycle_name,
-                        &folders,
-                    )?;
                     project_detached_root(
                         &mut delta,
                         input.collection_id.0,
@@ -611,17 +967,32 @@ impl Application {
 
                 let mut affected = media_ids.clone();
                 affected.push(input.collection_id.0);
-                let remaining = collection_members(transaction, input.collection_id.0)?;
-                if remaining.len() > 1 {
+                let (remaining_count, last_member): (i64, Option<i64>) = transaction.query_row(
+                    "SELECT COUNT(*), MIN(media_item_id)
+                     FROM collection_member WHERE collection_id = ?1",
+                    [input.collection_id.0],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                if remaining_count > 1 {
                     sync_collection_cover(transaction, input.collection_id.0)?;
                 } else {
-                    if let Some(media_id) = remaining.first().copied() {
+                    if let Some(media_id) = last_member {
                         transaction.execute(
                             "DELETE FROM collection_member
                              WHERE collection_id = ?1 AND media_item_id = ?2",
                             params![input.collection_id.0, media_id],
                         )?;
-                        create_root_with_folders(transaction, media_id, &lifecycle, &folders)?;
+                        transaction.execute(
+                            "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
+                            params![media_id, lifecycle],
+                        )?;
+                        transaction.execute(
+                            "INSERT INTO folder_item (folder_id, item_id)
+                             SELECT folder_id, ?1 FROM folder_item
+                             WHERE item_id = ?2
+                             ON CONFLICT DO NOTHING",
+                            params![media_id, input.collection_id.0],
+                        )?;
                         project_detached_root(
                             &mut delta,
                             input.collection_id.0,
@@ -637,9 +1008,47 @@ impl Application {
                     )?;
                     project_removed_collection(&mut delta, input.collection_id.0, &folders);
                 }
-                Ok((affected, delta))
+                affected.sort_unstable();
+                affected.dedup();
+                let mut after_universe = before_universe;
+                after_universe.extend(affected.iter().copied());
+                after_universe.sort_unstable();
+                after_universe.dedup();
+                finish_structural_summary_batch(transaction, &after_universe)?;
+                let after = capture_group_state_without_tags(transaction, &after_universe)?;
+                let detached_roots = bitmap_from_i64s(
+                    affected
+                        .iter()
+                        .copied()
+                        .filter(|item_id| *item_id != input.collection_id.0),
+                )?;
+                let (folder_changes, tag_changes) = inherited_group_membership_changes(
+                    before.roots.get(&input.collection_id.0).ok_or_else(|| {
+                        invalid(format!(
+                            "Group {} has no root metadata",
+                            input.collection_id.0
+                        ))
+                    })?,
+                    &detached_roots,
+                    remaining_count <= 1,
+                )?;
+                let (history, forward) = group_history_record_with_memberships(
+                    &before,
+                    &after,
+                    folder_changes,
+                    tag_changes,
+                )?;
+                Ok((
+                    affected,
+                    GroupProjectionDelta {
+                        structure: delta,
+                        tag_changes: forward.tag_changes,
+                        rating_changes: forward.rating_changes,
+                    },
+                    history,
+                ))
             },
-            |projections, delta| projections.apply_structure_delta(delta),
+            apply_group_projection_delta,
         )?;
         Ok(receipt(
             revision,
@@ -649,7 +1058,7 @@ impl Application {
     }
 
     pub fn ungroup_collection(&self, collection_id: ItemId) -> Result<MutationReceipt, String> {
-        let (affected, revision, _) = self.undoable_transaction(
+        let (affected, revision, _) = self.semantic_undoable_transaction(
             HistoryDescriptor::new(
                 "collections.ungroup",
                 "Ungroup",
@@ -659,16 +1068,25 @@ impl Application {
                     resources::FOLDERS.to_string(),
                 ],
                 vec![collection_id.0],
-            )
-            .rebuilding_projections(),
+            ),
             |transaction| {
+                let operation_started = Instant::now();
+                let mut stage_started = operation_started;
+                let before_universe = group_history_universe(transaction, &[collection_id.0])?;
+                let before = capture_group_state(transaction, &before_universe)?;
+                trace_bulk_stage("groups.ungroup", "capture_before", stage_started);
+                stage_started = Instant::now();
                 let lifecycle = require_collection_root(transaction, collection_id.0)?;
                 let projected_lifecycle = parse_lifecycle(&lifecycle)?;
                 let folders = folder_ids_for_roots(transaction, &[collection_id.0])?;
-                let members = collection_members(transaction, collection_id.0)?;
+                begin_structural_summary_batch(transaction, &before_universe)?;
+                stage_collection_members(transaction, collection_id.0)?;
+                let members = staged_media_ids(transaction)?;
                 let mut delta = StructureProjectionDelta::default();
+                create_staged_roots_with_folders(transaction, &lifecycle, collection_id.0)?;
+                trace_bulk_stage("groups.ungroup", "create_roots", stage_started);
+                stage_started = Instant::now();
                 for member in &members {
-                    create_root_with_folders(transaction, *member, &lifecycle, &folders)?;
                     project_detached_root(
                         &mut delta,
                         collection_id.0,
@@ -681,12 +1099,53 @@ impl Application {
                     "DELETE FROM library_item WHERE item_id = ?1",
                     [collection_id.0],
                 )?;
+                trace_bulk_stage("groups.ungroup", "delete_collection", stage_started);
                 project_removed_collection(&mut delta, collection_id.0, &folders);
                 let mut affected = members;
                 affected.push(collection_id.0);
-                Ok((affected, delta))
+                affected.sort_unstable();
+                affected.dedup();
+                let mut after_universe = before_universe;
+                after_universe.extend(affected.iter().copied());
+                after_universe.sort_unstable();
+                after_universe.dedup();
+                let summary_started = Instant::now();
+                finish_structural_summary_batch(transaction, &after_universe)?;
+                trace_bulk_stage("groups.ungroup", "summary_settlement", summary_started);
+                stage_started = Instant::now();
+                let after = capture_group_state_without_tags(transaction, &after_universe)?;
+                let detached_roots = bitmap_from_i64s(
+                    affected
+                        .iter()
+                        .copied()
+                        .filter(|item_id| *item_id != collection_id.0),
+                )?;
+                let (folder_changes, tag_changes) = inherited_group_membership_changes(
+                    before.roots.get(&collection_id.0).ok_or_else(|| {
+                        invalid(format!("Group {} has no root metadata", collection_id.0))
+                    })?,
+                    &detached_roots,
+                    true,
+                )?;
+                let (history, forward) = group_history_record_with_memberships(
+                    &before,
+                    &after,
+                    folder_changes,
+                    tag_changes,
+                )?;
+                trace_bulk_stage("groups.ungroup", "capture_after_history", stage_started);
+                trace_bulk_stage("groups.ungroup", "closure_total", operation_started);
+                Ok((
+                    affected,
+                    GroupProjectionDelta {
+                        structure: delta,
+                        tag_changes: forward.tag_changes,
+                        rating_changes: forward.rating_changes,
+                    },
+                    history,
+                ))
             },
-            |projections, delta| projections.apply_structure_delta(delta),
+            apply_group_projection_delta,
         )?;
         Ok(receipt(
             revision,
@@ -712,26 +1171,48 @@ impl Application {
             ),
             |transaction| {
                 require_collection_root(transaction, input.collection_id.0)?;
-                let existing = collection_members(transaction, input.collection_id.0)?;
-                if existing.len() != media_ids.len()
-                    || existing.iter().copied().collect::<BTreeSet<_>>()
-                        != media_ids.iter().copied().collect::<BTreeSet<_>>()
-                {
+                let encoded = serde_json::to_string(&media_ids)
+                    .map_err(|error| invalid(format!("Could not encode group order: {error}")))?;
+                transaction.execute_batch(
+                    "CREATE TEMP TABLE IF NOT EXISTS picto_collection_order (
+                         media_item_id INTEGER PRIMARY KEY,
+                         position_rank INTEGER NOT NULL
+                     ) WITHOUT ROWID;
+                     DELETE FROM picto_collection_order;",
+                )?;
+                transaction.execute(
+                    "INSERT INTO picto_collection_order(media_item_id, position_rank)
+                     SELECT CAST(value AS INTEGER), (CAST(key AS INTEGER) + 1) * ?2
+                     FROM json_each(?1)",
+                    params![encoded, RANK_GAP],
+                )?;
+                let (member_count, matched_count): (i64, i64) = transaction.query_row(
+                    "SELECT
+                         (SELECT COUNT(*) FROM collection_member
+                          WHERE collection_id = ?1),
+                         (SELECT COUNT(*)
+                          FROM picto_collection_order desired
+                          JOIN collection_member member
+                            ON member.collection_id = ?1
+                           AND member.media_item_id = desired.media_item_id)",
+                    [input.collection_id.0],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?;
+                if member_count != media_ids.len() as i64 || matched_count != member_count {
                     return Err(invalid(
                         "Reorder must contain every group member exactly once",
                     ));
                 }
-                for (index, media_id) in media_ids.iter().enumerate() {
-                    transaction.execute(
-                        "UPDATE collection_member SET position_rank = ?1
-                     WHERE collection_id = ?2 AND media_item_id = ?3",
-                        params![
-                            (index as i64 + 1) * RANK_GAP,
-                            input.collection_id.0,
-                            media_id
-                        ],
-                    )?;
-                }
+                transaction.execute(
+                    "UPDATE collection_member
+                     SET position_rank = (
+                         SELECT desired.position_rank
+                         FROM picto_collection_order desired
+                         WHERE desired.media_item_id = collection_member.media_item_id
+                     )
+                     WHERE collection_id = ?1",
+                    [input.collection_id.0],
+                )?;
                 sync_collection_cover(transaction, input.collection_id.0)?;
                 Ok(((), ()))
             },
@@ -758,7 +1239,8 @@ impl Application {
         if tags.is_empty() {
             return Err("No valid tags were provided".to_string());
         }
-        let (item_ids, revision, _, _) = self.undoable_transaction_if_changed(
+        let item_ids = mutation_item_hints(target);
+        let (_, revision, _, _) = self.semantic_undoable_transaction_if_changed(
             HistoryDescriptor::new(
                 "items.apply_tags",
                 if add { "Add tags" } else { "Remove tags" },
@@ -769,23 +1251,27 @@ impl Application {
                     resources::SMART_FOLDERS.to_string(),
                 ],
                 vec![],
-            )
-            .rebuilding_projections(),
+            ),
             |transaction| {
-                let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
-                let media_ids = media_items_for_roots(transaction, &item_ids)?;
-                let changed_tags = apply_tags_in(
-                    transaction,
-                    &media_ids,
-                    &tags,
-                    add,
-                    provenance_mask,
-                    "local",
-                )?;
-                let changed = !changed_tags.is_empty();
-                Ok((item_ids, changed_tags, changed))
+                stage_root_selection(transaction, target)?;
+                let delta =
+                    apply_tags_to_selection(transaction, &tags, add, provenance_mask, "local")?;
+                let changed = delta.canonical_changed;
+                let undo = semantic_tag_memberships(&delta, !add);
+                let redo = semantic_tag_memberships(&delta, add);
+                Ok((
+                    (),
+                    delta,
+                    changed.then(|| SemanticHistoryRecord::new(undo, redo)),
+                    changed,
+                ))
             },
-            |projections, changed_tags| projections.apply_tag_changes(&changed_tags, add),
+            |projections, delta| {
+                for (tag_id, root_ids) in delta.changes {
+                    projections.apply_root_tag_bitmap(tag_id, &root_ids, add)?;
+                }
+                Ok(())
+            },
         )?;
         Ok(receipt(
             revision,
@@ -799,8 +1285,8 @@ impl Application {
         ))
     }
 
-    /// Internal media-owned write used by per-media workers. User collection
-    /// writes continue to use `apply_tags`, which intentionally fans out.
+    /// Worker tags resolve to the owning root so attached group members never
+    /// acquire independent organization state.
     pub(crate) fn apply_media_tags(
         &self,
         media_item_id: ItemId,
@@ -817,18 +1303,38 @@ impl Application {
         let (root_id, revision, _) = self.transaction_if_changed(
             |transaction| {
                 let root_id = root_for_media(transaction, media_item_id.0)?;
-                let changed_tags = apply_tags_in(
+                let changed_tags = apply_root_tags_in(
                     transaction,
-                    &[media_item_id.0],
+                    &[root_id],
                     &tags,
                     true,
                     provenance_mask,
                     "ai",
                 )?;
                 let changed = !changed_tags.is_empty();
+                if changed {
+                    let roots = RoaringBitmap::from_iter([root_id_u32(root_id)?]);
+                    let tag_ids = changed_tags
+                        .iter()
+                        .map(|(_, tag_id)| *tag_id)
+                        .collect::<Vec<_>>();
+                    crate::smart_v2::refresh_impacted_roots(
+                        transaction,
+                        &roots,
+                        &["tags"],
+                        &tag_ids,
+                    )?;
+                }
                 Ok((root_id, changed_tags, changed))
             },
-            |projections, changed_tags| projections.apply_tag_changes(&changed_tags, true),
+            |projections, changed_tags| {
+                for (root_id, tag_id) in changed_tags {
+                    let roots = RoaringBitmap::from_iter([u32::try_from(root_id)
+                        .map_err(|_| format!("Item ID {root_id} exceeds projection capacity"))?]);
+                    projections.apply_root_tag_bitmap(tag_id, &roots, true)?;
+                }
+                Ok(())
+            },
         )?;
         Ok(receipt(
             revision,
@@ -873,7 +1379,7 @@ impl Application {
                 Ok((*media_item_id, tags))
             })
             .collect::<Result<Vec<_>, String>>()?;
-        let (root_ids, revision, _, _) = self.undoable_transaction_if_changed(
+        let (root_ids, revision, _, _) = self.semantic_undoable_transaction_if_changed(
             HistoryDescriptor::new(
                 "items.apply_ai_tags",
                 "Apply AI tags",
@@ -884,16 +1390,19 @@ impl Application {
                     resources::SMART_FOLDERS.to_string(),
                 ],
                 vec![],
-            )
-            .rebuilding_projections(),
+            ),
             |transaction| {
                 let mut root_ids = BTreeSet::new();
+                for (media_item_id, _) in &normalized {
+                    root_ids.insert(root_for_media(transaction, media_item_id.0)?);
+                }
+                let before = capture_root_tag_state(transaction, &root_ids)?;
                 let mut changed_tags = Vec::new();
                 for (media_item_id, tags) in &normalized {
-                    root_ids.insert(root_for_media(transaction, media_item_id.0)?);
-                    changed_tags.extend(apply_tags_in(
+                    let root_id = root_for_media(transaction, media_item_id.0)?;
+                    changed_tags.extend(apply_root_tags_in(
                         transaction,
-                        &[media_item_id.0],
+                        &[root_id],
                         tags,
                         true,
                         provenance_mask,
@@ -901,13 +1410,31 @@ impl Application {
                     )?);
                 }
                 let changed = !changed_tags.is_empty();
+                let history = if changed {
+                    let after = capture_root_tag_state(transaction, &root_ids)?;
+                    Some(root_tag_history_record(&before, &after)?)
+                } else {
+                    None
+                };
                 Ok((
                     root_ids.into_iter().collect::<Vec<_>>(),
                     changed_tags,
+                    history,
                     changed,
                 ))
             },
-            |projections, changed_tags| projections.apply_tag_changes(&changed_tags, true),
+            |projections, changed_tags| {
+                let mut roots_by_tag = std::collections::BTreeMap::<i64, RoaringBitmap>::new();
+                for (root_id, tag_id) in changed_tags {
+                    let root_id = u32::try_from(root_id)
+                        .map_err(|_| format!("Item ID {root_id} exceeds projection capacity"))?;
+                    roots_by_tag.entry(tag_id).or_default().insert(root_id);
+                }
+                for (tag_id, root_ids) in roots_by_tag {
+                    projections.apply_root_tag_bitmap(tag_id, &root_ids, true)?;
+                }
+                Ok(())
+            },
         )?;
         Ok(receipt(
             revision,
@@ -926,6 +1453,11 @@ impl Application {
         target: &ItemTarget,
         patch: &MediaMetadataPatch,
     ) -> Result<MutationReceipt, String> {
+        if let Some(rating) = patch.rating {
+            if patch.notes.is_none() && patch.source_urls.is_none() {
+                return self.patch_rating(target, rating);
+            }
+        }
         let source_urls_json = patch
             .source_urls
             .as_ref()
@@ -956,33 +1488,165 @@ impl Application {
                 vec![],
             ),
             |transaction| {
-                let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
-                let media_ids = media_items_for_roots(transaction, &item_ids)?;
+                stage_root_selection(transaction, target)?;
+                let item_ids = limited_staged_hints(
+                    transaction,
+                    "picto_selected_root",
+                    "item_id",
+                )?;
                 let now = chrono::Utc::now().to_rfc3339();
-                for media_id in media_ids {
-                    if let Some(rating) = patch.rating {
-                        transaction.execute(
-                        "UPDATE media_asset SET rating = ?1, updated_at = ?2 WHERE item_id = ?3",
-                        params![rating, now, media_id],
-                    )?;
-                    }
-                    if let Some(notes) = &patch.notes {
-                        transaction.execute(
-                            "UPDATE media_asset SET notes = ?1, updated_at = ?2 WHERE item_id = ?3",
-                            params![notes, now, media_id],
-                        )?;
-                    }
-                    if patch.source_urls.is_some() {
-                        transaction.execute(
-                            "UPDATE media_asset SET source_urls_json = ?1, updated_at = ?2
-                         WHERE item_id = ?3",
-                            params![source_urls_json, now, media_id],
-                        )?;
-                    }
-                }
+                transaction.execute(
+                    "INSERT INTO root_metadata (
+                         root_item_id, name, rating, notes, source_urls_json, updated_at
+                     )
+                     SELECT selected.item_id, metadata.name, ?1, ?2, COALESCE(?3, '[]'), ?4
+                     FROM picto_selected_root selected
+                     LEFT JOIN root_metadata metadata
+                       ON metadata.root_item_id = selected.item_id
+                     WHERE TRUE
+                     ON CONFLICT(root_item_id) DO UPDATE SET
+                         rating = CASE WHEN ?5 THEN excluded.rating ELSE root_metadata.rating END,
+                         notes = CASE WHEN ?6 THEN excluded.notes ELSE root_metadata.notes END,
+                         source_urls_json = CASE WHEN ?7 THEN excluded.source_urls_json ELSE root_metadata.source_urls_json END,
+                         updated_at = excluded.updated_at",
+                    params![
+                        patch.rating.flatten(),
+                        patch.notes.as_ref().and_then(|value| value.clone()),
+                        source_urls_json,
+                        now,
+                        patch.rating.is_some(),
+                        patch.notes.is_some(),
+                        patch.source_urls.is_some(),
+                    ],
+                )?;
+                let changed_fields = [
+                    patch.rating.is_some().then_some("rating"),
+                    patch.notes.is_some().then_some("notes"),
+                    patch.source_urls.is_some().then_some("source_urls"),
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>();
+                let roots = selected_id_bitmap(
+                    transaction,
+                    "SELECT item_id FROM picto_selected_root",
+                )?;
+                crate::smart_v2::refresh_impacted_roots(
+                    transaction,
+                    &roots,
+                    &changed_fields,
+                    &[],
+                )?;
                 Ok((item_ids, ()))
             },
             |_, ()| Ok(()),
+        )?;
+        Ok(receipt(
+            revision,
+            &[
+                resources::LIBRARY,
+                resources::SIDEBAR,
+                resources::SMART_FOLDERS,
+            ],
+            &item_ids,
+        ))
+    }
+
+    fn patch_rating(
+        &self,
+        target: &ItemTarget,
+        rating: Option<i64>,
+    ) -> Result<MutationReceipt, String> {
+        if rating.is_some_and(|rating| !(0..=5).contains(&rating)) {
+            return Err("Rating must be between 0 and 5".to_string());
+        }
+        let item_ids = mutation_item_hints(target);
+        let (_, revision, _, _) = self.semantic_undoable_transaction_if_changed(
+            HistoryDescriptor::new(
+                "items.patch_rating",
+                "Change rating",
+                vec![
+                    resources::LIBRARY.to_string(),
+                    resources::SIDEBAR.to_string(),
+                    resources::SMART_FOLDERS.to_string(),
+                ],
+                vec![],
+            ),
+            |transaction| {
+                let operation_started = Instant::now();
+                let mut stage_started = Instant::now();
+                stage_root_selection(transaction, target)?;
+                trace_bulk_stage("items.patch_rating", "stage_selection", stage_started);
+                stage_started = Instant::now();
+                transaction.execute(
+                    "DELETE FROM picto_selected_root
+                     WHERE item_id IN (
+                         SELECT root_item_id FROM root_metadata
+                         WHERE rating IS ?1
+                     )",
+                    [rating],
+                )?;
+                trace_bulk_stage("items.patch_rating", "stage_changes", stage_started);
+                stage_started = Instant::now();
+                let changed_roots =
+                    selected_id_bitmap(transaction, "SELECT item_id FROM picto_selected_root")?;
+                let undo = rating_delta_for_table(transaction, "picto_selected_root", "item_id")?;
+                trace_bulk_stage("items.patch_rating", "capture_history", stage_started);
+                if !changed_roots.is_empty() {
+                    stage_started = Instant::now();
+                    let now = chrono::Utc::now().to_rfc3339();
+                    transaction.execute(
+                        "UPDATE projection_write_control
+                         SET suppress_root_summary = 1
+                         WHERE singleton = 1",
+                        [],
+                    )?;
+                    transaction.execute(
+                        "UPDATE root_metadata
+                         SET rating = ?1, updated_at = ?2
+                         WHERE root_item_id IN (
+                             SELECT item_id FROM picto_selected_root
+                         )",
+                        params![rating, now],
+                    )?;
+                    transaction.execute(
+                        "UPDATE root_summary
+                         SET sort_rating = ?1
+                         WHERE root_item_id IN (
+                             SELECT item_id FROM picto_selected_root
+                        )",
+                        [rating],
+                    )?;
+                    transaction.execute(
+                        "UPDATE projection_write_control
+                         SET suppress_root_summary = 0
+                         WHERE singleton = 1",
+                        [],
+                    )?;
+                    trace_bulk_stage("items.patch_rating", "canonical_update", stage_started);
+                }
+                let changed = !changed_roots.is_empty();
+                let redo = rating_delta_for_target(&changed_roots, rating);
+                trace_bulk_stage("items.patch_rating", "closure_total", operation_started);
+                Ok((
+                    (),
+                    changed_roots,
+                    changed.then(|| {
+                        SemanticHistoryRecord::new(
+                            SemanticHistoryPayload::Ratings(undo),
+                            SemanticHistoryPayload::Ratings(redo),
+                        )
+                    }),
+                    changed,
+                ))
+            },
+            |projections, changed_roots| {
+                let rating = rating
+                    .map(u8::try_from)
+                    .transpose()
+                    .map_err(|_| "Rating is outside the projection range".to_string())?;
+                projections.apply_rating_bitmap(&changed_roots, rating)
+            },
         )?;
         Ok(receipt(
             revision,
@@ -1001,82 +1665,77 @@ impl Application {
         // recoverable Undo action.
         let ((freed_file_hashes, item_ids), revision) = self.transaction(
             |transaction| {
-                let item_ids = crate::query_v2::resolve_target_ids(transaction, target)?;
-                let roots_json = serde_json::to_string(&item_ids).map_err(|error| {
-                    invalid(format!("Could not encode deleted root IDs: {error}"))
-                })?;
-                let mut delete_items = BTreeSet::new();
-                let mut delta = StructureProjectionDelta::default();
+                let operation_started = Instant::now();
+                let mut stage_started = operation_started;
+                stage_mutation_selection(transaction, target)?;
+                transaction.execute_batch(
+                    "CREATE TEMP TABLE IF NOT EXISTS picto_delete_item (
+                         item_id INTEGER PRIMARY KEY
+                     ) WITHOUT ROWID;
+                     CREATE TEMP TABLE IF NOT EXISTS picto_candidate_file (
+                         file_id INTEGER PRIMARY KEY
+                     ) WITHOUT ROWID;
+                     DELETE FROM picto_delete_item;
+                     DELETE FROM picto_candidate_file;
+                     INSERT INTO picto_delete_item(item_id)
+                     SELECT item_id FROM picto_selected_root;
+                     INSERT INTO picto_delete_item(item_id)
+                     SELECT member.media_item_id
+                     FROM picto_selected_root selected
+                     JOIN collection_member member
+                       ON member.collection_id = selected.item_id
+                     ON CONFLICT DO NOTHING;
+                     INSERT INTO picto_candidate_file(file_id)
+                     SELECT DISTINCT asset.file_id
+                     FROM media_asset asset
+                     JOIN picto_delete_item deleted ON deleted.item_id = asset.item_id;",
+                )?;
+                let item_ids = limited_staged_hints(transaction, "picto_delete_item", "item_id")?;
+                let selected_roots =
+                    selected_id_bitmap(transaction, "SELECT item_id FROM picto_selected_root")?;
+                begin_structural_summary_batch_from_staged_roots(transaction)?;
+                trace_bulk_stage("items.delete", "stage_selection", stage_started);
+                stage_started = Instant::now();
+                let delete_count: i64 =
+                    transaction.query_row("SELECT COUNT(*) FROM picto_delete_item", [], |row| {
+                        row.get(0)
+                    })?;
+                let delete_count = usize::try_from(delete_count)
+                    .map_err(|_| invalid("Delete selection exceeds addressable memory"))?;
+                let mut delta = StructureProjectionDelta {
+                    items: Vec::with_capacity(delete_count),
+                    roots: Vec::with_capacity(selected_roots.len() as usize),
+                    ..StructureProjectionDelta::default()
+                };
                 {
                     let mut statement = transaction.prepare(
-                        "SELECT lr.item_id, li.kind, cm.media_item_id
-                         FROM json_each(?1) requested
-                         JOIN library_root lr
-                           ON lr.item_id = CAST(requested.value AS INTEGER)
-                         JOIN library_item li ON li.item_id = lr.item_id
-                         LEFT JOIN collection_member cm ON cm.collection_id = lr.item_id
-                         ORDER BY CAST(requested.key AS INTEGER), cm.position_rank, cm.media_item_id",
+                        "SELECT member.collection_id, member.media_item_id
+                         FROM collection_member member
+                         JOIN picto_selected_root selected
+                           ON selected.item_id = member.collection_id
+                         ORDER BY member.collection_id, member.media_item_id",
                     )?;
-                    let rows = statement.query_map([&roots_json], |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, String>(1)?,
-                            row.get::<_, Option<i64>>(2)?,
-                        ))
-                    })?;
-                    let mut projected_roots = BTreeSet::new();
+                    let rows = statement
+                        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
                     for row in rows {
-                        let (root_id, kind, member_id) = row?;
-                        delete_items.insert(root_id);
-                        if projected_roots.insert(root_id) {
-                            let kind = match kind.as_str() {
-                                "media" => crate::app::ItemKind::Media,
-                                "collection" => crate::app::ItemKind::Collection,
-                                other => {
-                                    return Err(invalid(format!(
-                                        "Unsupported item kind '{other}'"
-                                    )))
-                                }
-                            };
-                            delta.items.push(ItemProjectionChange {
-                                item_id: root_id,
-                                kind,
-                                present: false,
-                            });
-                            delta.roots.push(RootProjectionChange {
-                                item_id: root_id,
-                                lifecycle: None,
-                            });
-                        }
-                        if let Some(member_id) = member_id {
-                            delete_items.insert(member_id);
-                            delta.memberships.push(MembershipProjectionChange {
-                                collection_id: root_id,
-                                media_id: member_id,
-                                present: false,
-                            });
-                            delta.items.push(ItemProjectionChange {
-                                item_id: member_id,
-                                kind: crate::app::ItemKind::Media,
-                                present: false,
-                            });
-                        }
-                    }
-                    if projected_roots.len() != item_ids.len() {
-                        return Err(invalid("A targeted item is not a library root"));
+                        let (collection_id, media_id) = row?;
+                        delta.memberships.push(MembershipProjectionChange {
+                            collection_id,
+                            media_id,
+                            present: false,
+                        });
                     }
                 }
                 {
                     let mut statement = transaction.prepare(
                         "SELECT fi.item_id, fi.folder_id
                          FROM folder_item fi
-                         JOIN json_each(?1) requested
-                           ON fi.item_id = CAST(requested.value AS INTEGER)
-                         ORDER BY CAST(requested.key AS INTEGER), fi.folder_id",
+                         JOIN picto_selected_root selected
+                           ON selected.item_id = fi.item_id
+                         ORDER BY fi.item_id, fi.folder_id",
                     )?;
-                    let rows = statement.query_map([&roots_json], |row| {
-                        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-                    })?;
+                    let rows = statement
+                        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
                     for row in rows {
                         let (item_id, folder_id) = row?;
                         delta.folders.push(FolderProjectionChange {
@@ -1086,65 +1745,76 @@ impl Application {
                         });
                     }
                 }
-                let affected_item_ids = delete_items.iter().copied().collect::<Vec<_>>();
-                let affected_json = serde_json::to_string(&affected_item_ids).map_err(|error| {
-                    invalid(format!("Could not encode deleted item IDs: {error}"))
-                })?;
-                let candidate_file_ids = {
-                    let mut statement = transaction.prepare(
-                        "SELECT DISTINCT mf.file_id
-                         FROM media_asset ma
-                         JOIN media_file mf ON mf.file_id = ma.file_id
-                         WHERE ma.item_id IN (
-                             SELECT CAST(value AS INTEGER) FROM json_each(?1)
-                         )",
-                    )?;
-                    let file_ids = statement
-                        .query_map([&affected_json], |row| row.get::<_, i64>(0))?
-                        .collect::<rusqlite::Result<Vec<_>>>()?;
-                    file_ids
-                };
-                let deleted_source_item_ids = {
+                trace_bulk_stage("items.delete", "prepare_projection", stage_started);
+                stage_started = Instant::now();
+                let cloud_configured: bool = transaction.query_row(
+                    "SELECT provider IS NOT NULL FROM cloud_state WHERE singleton = 1",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let deleted_source_item_ids = if cloud_configured {
                     let mut statement = transaction.prepare(
                         "SELECT source_item_id FROM source_item
-                         WHERE media_item_id IN (
-                             SELECT CAST(value AS INTEGER) FROM json_each(?1)
-                         )",
+                         WHERE media_item_id IN (SELECT item_id FROM picto_delete_item)",
                     )?;
                     let source_item_ids = statement
-                        .query_map([&affected_json], |row| row.get::<_, i64>(0))?
+                        .query_map([], |row| row.get::<_, i64>(0))?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
                     source_item_ids
+                } else {
+                    Vec::new()
                 };
                 let now = chrono::Utc::now().to_rfc3339();
                 transaction.execute(
                     "UPDATE source_item
                      SET state = 'deleted', media_item_id = NULL, updated_at = ?1
-                     WHERE media_item_id IN (
-                         SELECT CAST(value AS INTEGER) FROM json_each(?2)
-                     )",
-                    params![&now, &affected_json],
+                     WHERE media_item_id IN (SELECT item_id FROM picto_delete_item)",
+                    [&now],
                 )?;
-                crate::cloud::capture::record_source_item_deletes(
-                    transaction,
-                    &deleted_source_item_ids,
-                )?;
-                transaction.execute(
-                    "DELETE FROM library_item
-                     WHERE item_id IN (
-                         SELECT CAST(value AS INTEGER) FROM json_each(?1)
-                     )",
-                    [&affected_json],
-                )?;
+                if cloud_configured {
+                    crate::cloud::capture::record_source_item_deletes(
+                        transaction,
+                        &deleted_source_item_ids,
+                    )?;
+                }
+                trace_bulk_stage("items.delete", "source_tombstones", stage_started);
+                stage_started = Instant::now();
+                {
+                    let mut statement = transaction.prepare(
+                        "DELETE FROM library_item
+                         WHERE item_id IN (SELECT item_id FROM picto_delete_item)
+                         RETURNING item_id, kind",
+                    )?;
+                    let mut rows = statement.query([])?;
+                    while let Some(row) = rows.next()? {
+                        let item_id = row.get::<_, i64>(0)?;
+                        let kind = match row.get::<_, String>(1)?.as_str() {
+                            "media" => crate::app::ItemKind::Media,
+                            "collection" => crate::app::ItemKind::Collection,
+                            other => {
+                                return Err(invalid(format!("Unsupported item kind '{other}'")))
+                            }
+                        };
+                        delta.items.push(ItemProjectionChange {
+                            item_id,
+                            kind,
+                            present: false,
+                        });
+                        if selected_roots.contains(root_id_u32(item_id)?) {
+                            delta.roots.push(RootProjectionChange {
+                                item_id,
+                                lifecycle: None,
+                            });
+                        }
+                    }
+                }
+                trace_bulk_stage("items.delete", "canonical_delete", stage_started);
+                stage_started = Instant::now();
 
-                let candidate_files_json = serde_json::to_string(&candidate_file_ids)
-                    .map_err(|error| invalid(format!("Could not encode deleted files: {error}")))?;
                 let hashes = {
                     let mut statement = transaction.prepare(
                         "DELETE FROM media_file
-                         WHERE file_id IN (
-                             SELECT CAST(value AS INTEGER) FROM json_each(?1)
-                         )
+                         WHERE file_id IN (SELECT file_id FROM picto_candidate_file)
                            AND NOT EXISTS (
                                SELECT 1 FROM media_asset
                                WHERE media_asset.file_id = media_file.file_id
@@ -1152,7 +1822,7 @@ impl Application {
                          RETURNING file_hash",
                     )?;
                     let hashes = statement
-                        .query_map([candidate_files_json], |row| row.get::<_, String>(0))?
+                        .query_map([], |row| row.get::<_, String>(0))?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
                     hashes
                 };
@@ -1172,7 +1842,12 @@ impl Application {
                         params![hashes_json, now],
                     )?;
                 }
-                Ok(((hashes, affected_item_ids), delta))
+                trace_bulk_stage("items.delete", "blob_work", stage_started);
+                stage_started = Instant::now();
+                finish_structural_summary_batch_from_staged_roots(transaction)?;
+                trace_bulk_stage("items.delete", "summary_settlement", stage_started);
+                trace_bulk_stage("items.delete", "closure_total", operation_started);
+                Ok(((hashes, item_ids), delta))
             },
             |projections, delta| projections.apply_structure_delta(delta),
         )?;
@@ -1190,6 +1865,52 @@ impl Application {
             freed_file_hashes,
         })
     }
+}
+
+fn remove_staged_roots_for_collection(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    let mut stage_started;
+    for (stage, statement) in [
+        (
+            "smart_memberships",
+            "DELETE FROM smart_folder_membership
+             WHERE root_item_id IN (SELECT item_id FROM picto_selected_root)",
+        ),
+        (
+            "recently_viewed",
+            "DELETE FROM media_view
+             WHERE item_id IN (SELECT item_id FROM picto_selected_root)",
+        ),
+        (
+            "folders",
+            "DELETE FROM folder_item
+             WHERE item_id IN (SELECT item_id FROM picto_selected_root)",
+        ),
+        (
+            "tags",
+            "DELETE FROM root_tag
+             WHERE root_item_id IN (SELECT item_id FROM picto_selected_root)",
+        ),
+        (
+            "metadata",
+            "DELETE FROM root_metadata
+             WHERE root_item_id IN (SELECT item_id FROM picto_selected_root)",
+        ),
+        (
+            "summaries",
+            "DELETE FROM root_summary
+             WHERE root_item_id IN (SELECT item_id FROM picto_selected_root)",
+        ),
+        (
+            "roots",
+            "DELETE FROM library_root
+             WHERE item_id IN (SELECT item_id FROM picto_selected_root)",
+        ),
+    ] {
+        stage_started = Instant::now();
+        transaction.execute(statement, [])?;
+        trace_bulk_stage("groups.remove_roots", stage, stage_started);
+    }
+    Ok(())
 }
 
 fn unique_ids(item_ids: &[ItemId]) -> Result<Vec<i64>, String> {
@@ -1210,6 +1931,547 @@ fn receipt(revision: u64, resources: &[&str], item_ids: &[i64]) -> MutationRecei
             Vec::new()
         },
     }
+}
+
+fn group_history_universe(
+    transaction: &Transaction<'_>,
+    seed_ids: &[i64],
+) -> rusqlite::Result<Vec<i64>> {
+    let encoded = serde_json::to_string(seed_ids)
+        .map_err(|error| invalid(format!("Could not encode group history roots: {error}")))?;
+    let mut statement = transaction.prepare(
+        "WITH seed(item_id) AS MATERIALIZED (
+             SELECT CAST(value AS INTEGER) FROM json_each(?1)
+         )
+         SELECT item_id FROM seed
+         UNION
+         SELECT member.media_item_id
+         FROM collection_member member
+         JOIN seed ON seed.item_id = member.collection_id
+         UNION
+         SELECT member.collection_id
+         FROM collection_member member
+         JOIN seed ON seed.item_id = member.media_item_id
+         ORDER BY 1",
+    )?;
+    let item_ids = statement
+        .query_map([encoded], |row| row.get::<_, i64>(0))?
+        .collect();
+    item_ids
+}
+
+fn capture_root_tag_state(
+    transaction: &Transaction<'_>,
+    root_ids: &BTreeSet<i64>,
+) -> rusqlite::Result<CapturedRootTagState> {
+    let encoded = serde_json::to_string(root_ids)
+        .map_err(|error| invalid(format!("Could not encode tag history roots: {error}")))?;
+    let mut statement = transaction.prepare(
+        "SELECT relation.root_item_id, relation.tag_id,
+                relation.provenance_mask, relation.source_mask
+         FROM root_tag relation
+         JOIN json_each(?1) selected
+           ON relation.root_item_id = CAST(selected.value AS INTEGER)
+         ORDER BY relation.root_item_id, relation.tag_id",
+    )?;
+    let state = statement
+        .query_map([encoded], |row| {
+            Ok((
+                (row.get::<_, i64>(0)?, row.get::<_, i64>(1)?),
+                (row.get::<_, i64>(2)?, row.get::<_, i64>(3)?),
+            ))
+        })?
+        .collect();
+    state
+}
+
+fn root_tag_history_record(
+    before: &CapturedRootTagState,
+    after: &CapturedRootTagState,
+) -> rusqlite::Result<SemanticHistoryRecord> {
+    Ok(SemanticHistoryRecord::new(
+        SemanticHistoryPayload::Tags(root_tag_delta_between(after, before)?),
+        SemanticHistoryPayload::Tags(root_tag_delta_between(before, after)?),
+    ))
+}
+
+fn root_tag_delta_between(
+    current: &CapturedRootTagState,
+    desired: &CapturedRootTagState,
+) -> rusqlite::Result<Vec<SemanticMembershipDelta>> {
+    let mut grouped = BTreeMap::<(i64, i64, i64), (RoaringBitmap, RoaringBitmap)>::new();
+    for key @ (root_id, tag_id) in current
+        .keys()
+        .chain(desired.keys())
+        .copied()
+        .collect::<BTreeSet<_>>()
+    {
+        let current_value = current.get(&key).copied();
+        let desired_value = desired.get(&key).copied();
+        if current_value == desired_value {
+            continue;
+        }
+        let (provenance_mask, source_mask) = desired_value.unwrap_or_default();
+        let entry = grouped
+            .entry((tag_id, provenance_mask, source_mask))
+            .or_default();
+        let root_id = root_id_u32(root_id)?;
+        if current_value.is_some() {
+            entry.1.insert(root_id);
+        }
+        if desired_value.is_some() {
+            entry.0.insert(root_id);
+        }
+    }
+    Ok(grouped
+        .into_iter()
+        .map(
+            |((relation_id, provenance_mask, source_mask), (add, remove))| {
+                SemanticMembershipDelta {
+                    relation_id,
+                    add,
+                    remove,
+                    provenance_mask,
+                    source_mask,
+                }
+            },
+        )
+        .collect())
+}
+
+fn capture_group_state(
+    transaction: &Transaction<'_>,
+    universe_ids: &[i64],
+) -> rusqlite::Result<CapturedGroupState> {
+    capture_group_state_internal(transaction, universe_ids, true, true)
+}
+
+fn capture_group_state_compact(
+    transaction: &Transaction<'_>,
+    universe_ids: &[i64],
+) -> rusqlite::Result<CapturedGroupState> {
+    capture_group_state_internal(transaction, universe_ids, false, true)
+}
+
+fn capture_group_state_without_tags(
+    transaction: &Transaction<'_>,
+    universe_ids: &[i64],
+) -> rusqlite::Result<CapturedGroupState> {
+    capture_group_state_internal(transaction, universe_ids, false, false)
+}
+
+fn capture_group_state_internal(
+    transaction: &Transaction<'_>,
+    universe_ids: &[i64],
+    include_root_tags: bool,
+    include_tag_sets: bool,
+) -> rusqlite::Result<CapturedGroupState> {
+    let encoded = serde_json::to_string(universe_ids)
+        .map_err(|error| invalid(format!("Could not encode group history state: {error}")))?;
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_group_history_universe (
+             item_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         DELETE FROM picto_group_history_universe;",
+    )?;
+    transaction.execute(
+        "INSERT INTO picto_group_history_universe(item_id)
+         SELECT CAST(value AS INTEGER) FROM json_each(?1)",
+        [encoded],
+    )?;
+
+    let mut state = CapturedGroupState::default();
+    {
+        let mut statement = transaction.prepare(
+            "SELECT item.item_id
+             FROM library_item item
+             JOIN picto_group_history_universe selected
+               ON selected.item_id = item.item_id
+             ORDER BY item.item_id",
+        )?;
+        state.item_ids = statement
+            .query_map([], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<_>>()?;
+    }
+    {
+        let mut statement = transaction.prepare(
+            "SELECT item.item_id, item.item_key, item.kind,
+                    item.cover_media_item_id, root.lifecycle, root.sort_rank,
+                    metadata.name, metadata.rating, metadata.notes,
+                    COALESCE(metadata.source_urls_json, '[]'),
+                    item.created_at, item.updated_at
+             FROM picto_group_history_universe selected
+             JOIN library_item item ON item.item_id = selected.item_id
+             JOIN library_root root ON root.item_id = item.item_id
+             LEFT JOIN root_metadata metadata
+               ON metadata.root_item_id = item.item_id
+             ORDER BY item.item_id",
+        )?;
+        let roots = statement
+            .query_map([], |row| {
+                let kind = match row.get::<_, String>(2)?.as_str() {
+                    "media" => crate::app::ItemKind::Media,
+                    "collection" => crate::app::ItemKind::Collection,
+                    other => return Err(invalid(format!("Unsupported item kind '{other}'"))),
+                };
+                let lifecycle = parse_lifecycle(&row.get::<_, String>(4)?)?;
+                Ok(SemanticGroupRoot {
+                    item_id: row.get(0)?,
+                    item_key: row.get(1)?,
+                    kind,
+                    cover_media_item_id: row.get(3)?,
+                    lifecycle,
+                    sort_rank: row.get(5)?,
+                    name: row.get(6)?,
+                    rating: row.get(7)?,
+                    notes: row.get(8)?,
+                    source_urls_json: row.get(9)?,
+                    created_at: row.get(10)?,
+                    updated_at: row.get(11)?,
+                    folders: Vec::new(),
+                    tags: Vec::new(),
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        state.roots = roots.into_iter().map(|root| (root.item_id, root)).collect();
+    }
+    {
+        let mut statement = transaction.prepare(
+            "SELECT membership.item_id, membership.folder_id,
+                    membership.position_rank
+             FROM folder_item membership
+             JOIN picto_group_history_universe selected
+               ON selected.item_id = membership.item_id
+             ORDER BY membership.item_id, membership.folder_id",
+        )?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let root_id = row.get::<_, i64>(0)?;
+            if let Some(root) = state.roots.get_mut(&root_id) {
+                root.folders.push(SemanticGroupFolder {
+                    folder_id: row.get(1)?,
+                    position_rank: row.get(2)?,
+                });
+            }
+        }
+    }
+    if include_root_tags || include_tag_sets {
+        let mut statement = transaction.prepare(
+            "SELECT relation.root_item_id, relation.tag_id,
+                    relation.provenance_mask, relation.source_mask
+             FROM root_tag relation
+             JOIN picto_group_history_universe selected
+               ON selected.item_id = relation.root_item_id
+             ORDER BY relation.root_item_id, relation.tag_id",
+        )?;
+        let mut rows = statement.query([])?;
+        while let Some(row) = rows.next()? {
+            let root_id = row.get::<_, i64>(0)?;
+            let tag_id = row.get::<_, i64>(1)?;
+            let provenance_mask = row.get::<_, i64>(2)?;
+            let source_mask = row.get::<_, i64>(3)?;
+            if include_root_tags {
+                let Some(root) = state.roots.get_mut(&root_id) else {
+                    continue;
+                };
+                root.tags.push(SemanticGroupTag {
+                    tag_id,
+                    provenance_mask,
+                    source_mask,
+                });
+            }
+            if include_tag_sets {
+                state
+                    .tag_sets
+                    .entry((tag_id, provenance_mask, source_mask))
+                    .or_default()
+                    .insert(root_id_u32(root_id)?);
+            }
+        }
+    }
+    {
+        let mut statement = transaction.prepare(
+            "SELECT member.collection_id, member.media_item_id,
+                    member.position_rank
+             FROM collection_member member
+             WHERE member.collection_id IN (
+                       SELECT item_id FROM picto_group_history_universe
+                   )
+                OR member.media_item_id IN (
+                       SELECT item_id FROM picto_group_history_universe
+                   )
+             ORDER BY member.collection_id, member.position_rank, member.media_item_id",
+        )?;
+        state.members = statement
+            .query_map([], |row| {
+                Ok(((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?), row.get(2)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?;
+    }
+    Ok(state)
+}
+
+fn group_history_record(
+    before: &CapturedGroupState,
+    after: &CapturedGroupState,
+) -> rusqlite::Result<(SemanticHistoryRecord, SemanticGroupDelta)> {
+    let undo = group_delta_between(after, before)?;
+    let redo = group_delta_between(before, after)?;
+    Ok((
+        SemanticHistoryRecord::new(
+            compact_group_history_payload(undo),
+            compact_group_history_payload(redo.clone()),
+        ),
+        redo,
+    ))
+}
+
+fn group_history_record_with_memberships(
+    before: &CapturedGroupState,
+    after: &CapturedGroupState,
+    forward_folders: Vec<SemanticMembershipDelta>,
+    forward_tags: Vec<SemanticMembershipDelta>,
+) -> rusqlite::Result<(SemanticHistoryRecord, SemanticGroupDelta)> {
+    let mut undo = group_delta_between(after, before)?;
+    undo.folder_changes = reverse_membership_changes(&forward_folders);
+    undo.tag_changes = reverse_membership_changes(&forward_tags);
+
+    let mut redo = group_delta_between(before, after)?;
+    redo.folder_changes = forward_folders;
+    redo.tag_changes = forward_tags;
+
+    Ok((
+        SemanticHistoryRecord::new(
+            compact_group_history_payload(undo),
+            compact_group_history_payload(redo.clone()),
+        ),
+        redo,
+    ))
+}
+
+fn compact_group_history_payload(mut delta: SemanticGroupDelta) -> SemanticHistoryPayload {
+    let folders = std::mem::take(&mut delta.folder_changes);
+    let tags = std::mem::take(&mut delta.tag_changes);
+    for root in &mut delta.roots {
+        root.folders.clear();
+        root.tags.clear();
+    }
+    SemanticHistoryPayload::Composite(vec![
+        SemanticHistoryPayload::Group(delta),
+        SemanticHistoryPayload::Folders(folders),
+        SemanticHistoryPayload::Tags(tags),
+    ])
+}
+
+fn reverse_membership_changes(changes: &[SemanticMembershipDelta]) -> Vec<SemanticMembershipDelta> {
+    changes
+        .iter()
+        .map(|change| SemanticMembershipDelta {
+            relation_id: change.relation_id,
+            add: change.remove.clone(),
+            remove: change.add.clone(),
+            provenance_mask: change.provenance_mask,
+            source_mask: change.source_mask,
+        })
+        .collect()
+}
+
+fn inherited_group_membership_changes(
+    source: &SemanticGroupRoot,
+    detached_roots: &RoaringBitmap,
+    collection_removed: bool,
+) -> rusqlite::Result<(Vec<SemanticMembershipDelta>, Vec<SemanticMembershipDelta>)> {
+    let collection_root = root_id_u32(source.item_id)?;
+    let folders = source
+        .folders
+        .iter()
+        .map(|folder| SemanticMembershipDelta {
+            relation_id: folder.folder_id,
+            add: detached_roots.clone(),
+            remove: collection_removed
+                .then(|| RoaringBitmap::from_iter([collection_root]))
+                .unwrap_or_default(),
+            provenance_mask: 0,
+            source_mask: 0,
+        })
+        .collect();
+    let tags = source
+        .tags
+        .iter()
+        .map(|tag| SemanticMembershipDelta {
+            relation_id: tag.tag_id,
+            add: detached_roots.clone(),
+            remove: collection_removed
+                .then(|| RoaringBitmap::from_iter([collection_root]))
+                .unwrap_or_default(),
+            provenance_mask: tag.provenance_mask,
+            source_mask: tag.source_mask,
+        })
+        .collect();
+    Ok((folders, tags))
+}
+
+fn group_delta_between(
+    current: &CapturedGroupState,
+    desired: &CapturedGroupState,
+) -> rusqlite::Result<SemanticGroupDelta> {
+    let remove_root_ids = bitmap_from_i64s(
+        current
+            .roots
+            .keys()
+            .filter(|item_id| !desired.roots.contains_key(item_id))
+            .copied(),
+    )?;
+    let remove_item_ids =
+        bitmap_from_i64s(current.item_ids.difference(&desired.item_ids).copied())?;
+    let member_keys = current
+        .members
+        .keys()
+        .chain(desired.members.keys())
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let members = member_keys
+        .into_iter()
+        .map(|(collection_id, media_item_id)| SemanticGroupMember {
+            collection_id,
+            media_item_id,
+            position_rank: desired
+                .members
+                .get(&(collection_id, media_item_id))
+                .copied()
+                .or_else(|| {
+                    current
+                        .members
+                        .get(&(collection_id, media_item_id))
+                        .copied()
+                })
+                .unwrap_or_default(),
+            present: desired
+                .members
+                .contains_key(&(collection_id, media_item_id)),
+        })
+        .collect();
+    Ok(SemanticGroupDelta {
+        remove_root_ids,
+        remove_item_ids,
+        roots: desired.roots.values().cloned().collect(),
+        members,
+        folder_changes: group_folder_changes(current, desired)?,
+        tag_changes: group_tag_changes(current, desired)?,
+        rating_changes: group_rating_changes(current, desired)?,
+    })
+}
+
+fn group_folder_changes(
+    current: &CapturedGroupState,
+    desired: &CapturedGroupState,
+) -> rusqlite::Result<Vec<SemanticMembershipDelta>> {
+    let current = group_folder_memberships(current)?;
+    let desired = group_folder_memberships(desired)?;
+    Ok(membership_difference(&current, &desired))
+}
+
+fn group_tag_changes(
+    current: &CapturedGroupState,
+    desired: &CapturedGroupState,
+) -> rusqlite::Result<Vec<SemanticMembershipDelta>> {
+    Ok(current
+        .tag_sets
+        .keys()
+        .chain(desired.tag_sets.keys())
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|key @ (relation_id, provenance_mask, source_mask)| {
+            let current = current.tag_sets.get(&key).cloned().unwrap_or_default();
+            let desired = desired.tag_sets.get(&key).cloned().unwrap_or_default();
+            let add = &desired - &current;
+            let remove = &current - &desired;
+            (!add.is_empty() || !remove.is_empty()).then_some(SemanticMembershipDelta {
+                relation_id,
+                add,
+                remove,
+                provenance_mask,
+                source_mask,
+            })
+        })
+        .collect())
+}
+
+fn group_folder_memberships(
+    state: &CapturedGroupState,
+) -> rusqlite::Result<BTreeMap<i64, RoaringBitmap>> {
+    let mut values = BTreeMap::new();
+    for root in state.roots.values() {
+        let root_id = root_id_u32(root.item_id)?;
+        for folder in &root.folders {
+            values
+                .entry(folder.folder_id)
+                .or_insert_with(RoaringBitmap::new)
+                .insert(root_id);
+        }
+    }
+    Ok(values)
+}
+
+fn membership_difference(
+    current: &BTreeMap<i64, RoaringBitmap>,
+    desired: &BTreeMap<i64, RoaringBitmap>,
+) -> Vec<SemanticMembershipDelta> {
+    current
+        .keys()
+        .chain(desired.keys())
+        .copied()
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter_map(|relation_id| {
+            let current = current.get(&relation_id).cloned().unwrap_or_default();
+            let desired = desired.get(&relation_id).cloned().unwrap_or_default();
+            let add = &desired - &current;
+            let remove = &current - &desired;
+            (!add.is_empty() || !remove.is_empty()).then_some(SemanticMembershipDelta {
+                relation_id,
+                add,
+                remove,
+                provenance_mask: 0,
+                source_mask: 0,
+            })
+        })
+        .collect()
+}
+
+fn group_rating_changes(
+    current: &CapturedGroupState,
+    desired: &CapturedGroupState,
+) -> rusqlite::Result<SemanticRatingDelta> {
+    let mut delta = SemanticRatingDelta::default();
+    let mut rated = BTreeMap::<i64, RoaringBitmap>::new();
+    for root in desired.roots.values() {
+        if current.roots.get(&root.item_id).map(|value| value.rating) == Some(root.rating) {
+            continue;
+        }
+        let root_id = root_id_u32(root.item_id)?;
+        if let Some(rating) = root.rating {
+            rated.entry(rating).or_default().insert(root_id);
+        } else {
+            delta.unrated.insert(root_id);
+        }
+    }
+    delta.rated = rated.into_iter().collect();
+    Ok(delta)
+}
+
+fn bitmap_from_i64s(ids: impl IntoIterator<Item = i64>) -> rusqlite::Result<RoaringBitmap> {
+    ids.into_iter()
+        .try_fold(RoaringBitmap::new(), |mut bitmap, item_id| {
+            bitmap.insert(root_id_u32(item_id)?);
+            Ok(bitmap)
+        })
+}
+
+fn root_id_u32(item_id: i64) -> rusqlite::Result<u32> {
+    u32::try_from(item_id)
+        .map_err(|_| invalid(format!("Item ID {item_id} exceeds projection capacity")))
 }
 
 fn invalid(message: impl Into<String>) -> rusqlite::Error {
@@ -1250,36 +2512,30 @@ fn require_collection_root(
         .ok_or_else(|| invalid(format!("Item {item_id} is not a group root")))
 }
 
-fn require_standalone_media_root(
-    transaction: &Transaction<'_>,
-    item_id: i64,
-) -> rusqlite::Result<()> {
-    let found = transaction
-        .query_row(
-            "SELECT 1
-             FROM library_root lr
-             JOIN media_asset ma ON ma.item_id = lr.item_id
-             WHERE lr.item_id = ?1",
-            [item_id],
-            |_| Ok(()),
-        )
-        .optional()?;
-    found.ok_or_else(|| invalid(format!("Item {item_id} is not standalone media")))
-}
-
 fn require_same_root_lifecycle(
     transaction: &Transaction<'_>,
     item_ids: &[i64],
 ) -> rusqlite::Result<String> {
-    let mut lifecycle = None;
-    for item_id in item_ids {
-        let current = require_root(transaction, *item_id)?;
-        if lifecycle.as_ref().is_some_and(|value| value != &current) {
-            return Err(invalid("Group members must share one lifecycle"));
-        }
-        lifecycle = Some(current);
+    if item_ids.is_empty() {
+        return Err(invalid("No items selected"));
     }
-    lifecycle.ok_or_else(|| invalid("No items selected"))
+    let encoded = serde_json::to_string(item_ids)
+        .map_err(|error| invalid(format!("Could not encode root selection: {error}")))?;
+    let (count, minimum, maximum): (i64, Option<String>, Option<String>) = transaction.query_row(
+        "SELECT COUNT(*), MIN(root.lifecycle), MAX(root.lifecycle)
+         FROM json_each(?1) selected
+         JOIN library_root root
+           ON root.item_id = CAST(selected.value AS INTEGER)",
+        [encoded],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    if count != item_ids.len() as i64 {
+        return Err(invalid("A targeted item is not a library root"));
+    }
+    if minimum != maximum {
+        return Err(invalid("Group members must share one lifecycle"));
+    }
+    minimum.ok_or_else(|| invalid("No items selected"))
 }
 
 fn require_folder(transaction: &Transaction<'_>, folder_id: i64) -> rusqlite::Result<()> {
@@ -1293,74 +2549,104 @@ fn require_folder(transaction: &Transaction<'_>, folder_id: i64) -> rusqlite::Re
     found.ok_or_else(|| invalid(format!("Folder {folder_id} does not exist")))
 }
 
-fn folder_ids_for_roots(
-    transaction: &Transaction<'_>,
-    item_ids: &[i64],
-) -> rusqlite::Result<Vec<i64>> {
-    let mut folders = BTreeSet::new();
-    let mut stmt = transaction.prepare("SELECT folder_id FROM folder_item WHERE item_id = ?1")?;
-    for item_id in item_ids {
-        for row in stmt.query_map([item_id], |row| row.get::<_, i64>(0))? {
-            folders.insert(row?);
-        }
-    }
-    Ok(folders.into_iter().collect())
-}
-
 fn collection_members(
     transaction: &Transaction<'_>,
     collection_id: i64,
 ) -> rusqlite::Result<Vec<i64>> {
-    let mut stmt = transaction.prepare(
-        "SELECT media_item_id FROM collection_member
-         WHERE collection_id = ?1 ORDER BY position_rank, media_item_id",
-    )?;
-    let members = stmt.query_map([collection_id], |row| row.get(0))?.collect();
-    members
+    transaction
+        .prepare(
+            "SELECT media_item_id FROM collection_member
+             WHERE collection_id = ?1 ORDER BY position_rank, media_item_id",
+        )?
+        .query_map([collection_id], |row| row.get(0))?
+        .collect()
 }
 
-fn require_no_collection_file_overlap(
+fn folder_ids_for_roots(
     transaction: &Transaction<'_>,
-    member_groups: &[Vec<i64>],
-) -> rusqlite::Result<()> {
-    let mut file_ids = BTreeSet::new();
-    for members in member_groups {
-        let mut group_file_ids = BTreeSet::new();
-        for media_item_id in members {
-            let file_id: i64 = transaction.query_row(
-                "SELECT file_id FROM media_asset WHERE item_id = ?1",
-                [media_item_id],
-                |row| row.get(0),
-            )?;
-            group_file_ids.insert(file_id);
-        }
-        for file_id in group_file_ids {
-            if !file_ids.insert(file_id) {
-                return Err(invalid(
-                    "A group cannot contain the same physical file more than once",
-                ));
-            }
-        }
+    item_ids: &[i64],
+) -> rusqlite::Result<Vec<i64>> {
+    if item_ids.is_empty() {
+        return Ok(Vec::new());
     }
-    Ok(())
+    let encoded = serde_json::to_string(item_ids)
+        .map_err(|error| invalid(format!("Could not encode root selection: {error}")))?;
+    transaction
+        .prepare(
+            "SELECT DISTINCT membership.folder_id
+             FROM folder_item membership
+             JOIN json_each(?1) selected
+               ON CAST(selected.value AS INTEGER) = membership.item_id
+             ORDER BY membership.folder_id",
+        )?
+        .query_map([encoded], |row| row.get::<_, i64>(0))?
+        .collect()
 }
 
-fn create_root_with_folders(
+fn selected_root_ids_of_kind(
     transaction: &Transaction<'_>,
-    item_id: i64,
-    lifecycle: &str,
-    folder_ids: &[i64],
-) -> rusqlite::Result<()> {
-    transaction.execute(
-        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
-        params![item_id, lifecycle],
+    kind: &str,
+) -> rusqlite::Result<Vec<i64>> {
+    transaction
+        .prepare(
+            "SELECT selected.item_id
+             FROM picto_selected_root selected
+             JOIN library_item item ON item.item_id = selected.item_id
+             WHERE item.kind = ?1
+             ORDER BY selected.item_id",
+        )?
+        .query_map([kind], |row| row.get(0))?
+        .collect()
+}
+
+fn selected_collection_members(
+    transaction: &Transaction<'_>,
+) -> rusqlite::Result<Vec<(i64, Vec<i64>)>> {
+    let mut statement = transaction.prepare(
+        "SELECT member.collection_id, member.media_item_id
+         FROM collection_member member
+         JOIN picto_selected_root selected ON selected.item_id = member.collection_id
+         ORDER BY member.collection_id, member.position_rank, member.media_item_id",
     )?;
-    for folder_id in folder_ids {
-        transaction.execute(
-            "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)
-             ON CONFLICT DO NOTHING",
-            params![folder_id, item_id],
-        )?;
+    let mut rows = statement.query([])?;
+    let mut grouped = Vec::<(i64, Vec<i64>)>::new();
+    while let Some(row) = rows.next()? {
+        let collection_id = row.get::<_, i64>(0)?;
+        let media_id = row.get::<_, i64>(1)?;
+        if grouped.last().map(|(id, _)| *id) != Some(collection_id) {
+            grouped.push((collection_id, Vec::new()));
+        }
+        grouped.last_mut().unwrap().1.push(media_id);
+    }
+    Ok(grouped)
+}
+
+fn require_no_selected_file_overlap(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    let repeated: Option<i64> = transaction
+        .query_row(
+            "WITH candidate(origin_id, media_item_id) AS (
+                 SELECT selected.item_id, selected.item_id
+                 FROM picto_selected_root selected
+                 JOIN media_asset asset ON asset.item_id = selected.item_id
+                 UNION ALL
+                 SELECT selected.item_id, member.media_item_id
+                 FROM picto_selected_root selected
+                 JOIN collection_member member ON member.collection_id = selected.item_id
+             )
+             SELECT asset.file_id
+             FROM candidate
+             JOIN media_asset asset ON asset.item_id = candidate.media_item_id
+             GROUP BY asset.file_id
+             HAVING COUNT(DISTINCT candidate.origin_id) > 1
+             LIMIT 1",
+            [],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if repeated.is_some() {
+        return Err(invalid(
+            "A group cannot contain the same physical file more than once",
+        ));
     }
     Ok(())
 }
@@ -1458,16 +2744,1398 @@ pub(crate) fn media_items_for_roots(
     Ok(media_ids.into_iter().collect())
 }
 
-pub(crate) fn apply_tags_in(
+fn mutation_item_hints(target: &ItemTarget) -> Vec<i64> {
+    match target {
+        ItemTarget::Explicit { item_ids } => capped_ids(item_ids.iter().map(|item_id| item_id.0)),
+        ItemTarget::Query { .. } | ItemTarget::Range { .. } => Vec::new(),
+    }
+}
+
+fn capped_ids(ids: impl IntoIterator<Item = i64>) -> Vec<i64> {
+    let mut capped = ids
+        .into_iter()
+        .take(MAX_RECEIPT_ITEM_IDS + 1)
+        .collect::<Vec<_>>();
+    if capped.len() > MAX_RECEIPT_ITEM_IDS {
+        capped.clear();
+    }
+    capped
+}
+
+fn capped_item_resources(base: &str, item_ids: &[i64]) -> Vec<String> {
+    let mut values = Vec::with_capacity(item_ids.len().saturating_add(1));
+    values.push(base.to_string());
+    values.extend(item_ids.iter().map(|item_id| resources::item(*item_id)));
+    values
+}
+
+fn semantic_membership(
+    relation_id: i64,
+    roots: &RoaringBitmap,
+    present: bool,
+    tags: bool,
+) -> SemanticHistoryPayload {
+    let change = SemanticMembershipDelta {
+        relation_id,
+        add: present.then(|| roots.clone()).unwrap_or_default(),
+        remove: (!present).then(|| roots.clone()).unwrap_or_default(),
+        provenance_mask: 0,
+        source_mask: 0,
+    };
+    if tags {
+        SemanticHistoryPayload::Tags(vec![change])
+    } else {
+        SemanticHistoryPayload::Folders(vec![change])
+    }
+}
+
+fn semantic_tag_memberships(
+    delta: &BulkTagProjectionDelta,
+    present: bool,
+) -> SemanticHistoryPayload {
+    SemanticHistoryPayload::Tags(
+        delta
+            .history_changes
+            .iter()
+            .map(|change| SemanticMembershipDelta {
+                relation_id: change.relation_id,
+                add: present.then(|| change.add.clone()).unwrap_or_default(),
+                remove: (!present).then(|| change.add.clone()).unwrap_or_default(),
+                provenance_mask: change.provenance_mask,
+                source_mask: change.source_mask,
+            })
+            .collect(),
+    )
+}
+
+fn lifecycle_delta_for_table(
     transaction: &Transaction<'_>,
-    media_ids: &[i64],
+    table: &str,
+    column: &str,
+) -> rusqlite::Result<SemanticLifecycleDelta> {
+    let sql = format!(
+        "SELECT selected.{column}, root.lifecycle
+         FROM {table} selected
+         JOIN library_root root ON root.item_id = selected.{column}"
+    );
+    let mut delta = SemanticLifecycleDelta::default();
+    let mut statement = transaction.prepare(&sql)?;
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let item_id = u32::try_from(row.get::<_, i64>(0)?)
+            .map_err(|_| invalid("Item ID exceeds projection capacity"))?;
+        match row.get::<_, String>(1)?.as_str() {
+            "inbox" => delta.inbox.insert(item_id),
+            "active" => delta.active.insert(item_id),
+            "trash" => delta.trash.insert(item_id),
+            other => return Err(invalid(format!("Unknown lifecycle '{other}'"))),
+        };
+    }
+    Ok(delta)
+}
+
+fn rating_delta_for_table(
+    transaction: &Transaction<'_>,
+    table: &str,
+    column: &str,
+) -> rusqlite::Result<SemanticRatingDelta> {
+    let sql = format!(
+        "SELECT changed.{column}, metadata.rating
+         FROM {table} changed
+         JOIN root_metadata metadata ON metadata.root_item_id = changed.{column}"
+    );
+    let mut delta = SemanticRatingDelta::default();
+    let mut statement = transaction.prepare(&sql)?;
+    let mut rows = statement.query([])?;
+    let mut rated = std::collections::BTreeMap::<i64, RoaringBitmap>::new();
+    while let Some(row) = rows.next()? {
+        let root_id_value = row.get::<_, i64>(0)?;
+        let root_id = u32::try_from(root_id_value)
+            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id_value))?;
+        match row.get::<_, Option<i64>>(1)? {
+            Some(rating) => {
+                rated.entry(rating).or_default().insert(root_id);
+            }
+            None => {
+                delta.unrated.insert(root_id);
+            }
+        }
+    }
+    delta.rated = rated.into_iter().collect();
+    Ok(delta)
+}
+
+fn rating_delta_for_target(roots: &RoaringBitmap, rating: Option<i64>) -> SemanticRatingDelta {
+    match rating {
+        Some(rating) => SemanticRatingDelta {
+            rated: vec![(rating, roots.clone())],
+            ..SemanticRatingDelta::default()
+        },
+        None => SemanticRatingDelta {
+            unrated: roots.clone(),
+            ..SemanticRatingDelta::default()
+        },
+    }
+}
+
+fn lifecycle_delta_for_target(
+    roots: &RoaringBitmap,
+    lifecycle: Lifecycle,
+) -> SemanticLifecycleDelta {
+    let mut delta = SemanticLifecycleDelta::default();
+    match lifecycle {
+        Lifecycle::Inbox => delta.inbox = roots.clone(),
+        Lifecycle::Active => delta.active = roots.clone(),
+        Lifecycle::Trash => delta.trash = roots.clone(),
+    }
+    delta
+}
+
+fn apply_group_projection_delta(
+    projections: &crate::projection_v2::ProjectionStore,
+    delta: GroupProjectionDelta,
+) -> Result<(), String> {
+    projections.apply_structure_delta(delta.structure)?;
+    for change in delta.tag_changes {
+        projections.apply_root_tag_bitmap(change.relation_id, &change.remove, false)?;
+        projections.apply_root_tag_bitmap(change.relation_id, &change.add, true)?;
+    }
+    projections.apply_rating_bitmap(&delta.rating_changes.unrated, None)?;
+    for (rating, roots) in delta.rating_changes.rated {
+        projections.apply_rating_bitmap(
+            &roots,
+            Some(
+                u8::try_from(rating)
+                    .map_err(|_| format!("rating {rating} is outside the projection range"))?,
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+fn limited_staged_hints(
+    transaction: &Transaction<'_>,
+    table: &str,
+    column: &str,
+) -> rusqlite::Result<Vec<i64>> {
+    let sql = format!(
+        "SELECT {column} FROM {table} LIMIT {}",
+        MAX_RECEIPT_ITEM_IDS + 1
+    );
+    let mut statement = transaction.prepare(&sql)?;
+    let hints = statement
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(if hints.len() > MAX_RECEIPT_ITEM_IDS {
+        Vec::new()
+    } else {
+        hints
+    })
+}
+
+fn stage_mutation_selection(
+    transaction: &Transaction<'_>,
+    target: &ItemTarget,
+) -> rusqlite::Result<()> {
+    stage_root_selection(transaction, target)?;
+    populate_staged_media(transaction)
+}
+
+fn stage_root_selection(
+    transaction: &Transaction<'_>,
+    target: &ItemTarget,
+) -> rusqlite::Result<()> {
+    prepare_mutation_selection_tables(transaction)?;
+    let selection = crate::query_v2::target_selection_sql(transaction, target)?;
+    let sql = format!(
+        "{}
+         INSERT INTO picto_selected_root(item_id)
+         SELECT item_id FROM selected_roots",
+        selection.with_clause
+    );
+    transaction.execute(&sql, selection.parameters().as_slice())?;
+    Ok(())
+}
+
+fn stage_root_ids(transaction: &Transaction<'_>, item_ids: &[i64]) -> rusqlite::Result<()> {
+    prepare_mutation_selection_tables(transaction)?;
+    let encoded = serde_json::to_string(item_ids)
+        .map_err(|error| invalid(format!("Could not encode root selection: {error}")))?;
+    transaction.execute(
+        "INSERT INTO picto_selected_root(item_id)
+         SELECT CAST(value AS INTEGER) FROM json_each(?1)",
+        [encoded],
+    )?;
+    populate_staged_media(transaction)
+}
+
+fn prepare_mutation_selection_tables(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_selected_root (
+             item_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_selected_media (
+             media_item_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         DELETE FROM picto_selected_root;
+         DELETE FROM picto_selected_media;",
+    )
+}
+
+fn populate_staged_media(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "INSERT INTO picto_selected_media(media_item_id)
+         SELECT selected.item_id
+         FROM picto_selected_root selected
+         JOIN media_asset asset ON asset.item_id = selected.item_id
+         UNION
+         SELECT member.media_item_id
+         FROM picto_selected_root selected
+         JOIN collection_member member ON member.collection_id = selected.item_id;",
+    )?;
+    Ok(())
+}
+
+fn stage_media_ids(transaction: &Transaction<'_>, media_ids: &[i64]) -> rusqlite::Result<()> {
+    prepare_mutation_selection_tables(transaction)?;
+    let encoded = serde_json::to_string(media_ids)
+        .map_err(|error| invalid(format!("Could not encode media selection: {error}")))?;
+    transaction.execute(
+        "INSERT INTO picto_selected_media(media_item_id)
+         SELECT CAST(value AS INTEGER) FROM json_each(?1)",
+        [encoded],
+    )?;
+    Ok(())
+}
+
+fn stage_collection_members(
+    transaction: &Transaction<'_>,
+    collection_id: i64,
+) -> rusqlite::Result<()> {
+    prepare_mutation_selection_tables(transaction)?;
+    transaction.execute(
+        "INSERT INTO picto_selected_media(media_item_id)
+         SELECT media_item_id FROM collection_member
+         WHERE collection_id = ?1",
+        [collection_id],
+    )?;
+    Ok(())
+}
+
+fn staged_media_ids(transaction: &Transaction<'_>) -> rusqlite::Result<Vec<i64>> {
+    transaction
+        .prepare("SELECT media_item_id FROM picto_selected_media ORDER BY media_item_id")?
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect()
+}
+
+fn create_staged_roots_with_folders(
+    transaction: &Transaction<'_>,
+    lifecycle: &str,
+    source_root_id: i64,
+) -> rusqlite::Result<()> {
+    let operation_started = Instant::now();
+    let mut stage_started = operation_started;
+    transaction.execute(
+        "INSERT INTO library_root (item_id, lifecycle)
+         SELECT media_item_id, ?1 FROM picto_selected_media",
+        [lifecycle],
+    )?;
+    trace_bulk_stage(
+        "groups.create_detached_roots",
+        "library_root",
+        stage_started,
+    );
+    stage_started = Instant::now();
+    transaction.execute(
+        "INSERT INTO folder_item (folder_id, item_id)
+         SELECT source.folder_id, selected.media_item_id
+         FROM folder_item source
+         CROSS JOIN picto_selected_media selected
+         WHERE source.item_id = ?1
+         ON CONFLICT DO NOTHING",
+        [source_root_id],
+    )?;
+    trace_bulk_stage("groups.create_detached_roots", "folders", stage_started);
+    stage_started = Instant::now();
+    let now = chrono::Utc::now().to_rfc3339();
+    transaction.execute(
+        "INSERT INTO root_metadata (
+             root_item_id, name, rating, notes, source_urls_json, updated_at
+         )
+         SELECT selected.media_item_id, asset.name, source.rating, source.notes,
+                COALESCE(source.source_urls_json, '[]'), ?2
+         FROM picto_selected_media selected
+         JOIN media_asset asset ON asset.item_id = selected.media_item_id
+         LEFT JOIN root_metadata source ON source.root_item_id = ?1
+         WHERE TRUE
+         ORDER BY selected.media_item_id
+         ON CONFLICT(root_item_id) DO UPDATE SET
+             name = excluded.name,
+             rating = excluded.rating,
+             notes = excluded.notes,
+             source_urls_json = excluded.source_urls_json,
+             updated_at = excluded.updated_at",
+        params![source_root_id, now],
+    )?;
+    trace_bulk_stage("groups.create_detached_roots", "metadata", stage_started);
+    stage_started = Instant::now();
+    transaction.execute(
+        "INSERT INTO root_tag (root_item_id, tag_id, provenance_mask, source_mask)
+         SELECT selected.media_item_id, source.tag_id,
+                source.provenance_mask, source.source_mask
+         FROM picto_selected_media selected
+         JOIN root_tag source ON source.root_item_id = ?1
+         ORDER BY selected.media_item_id, source.tag_id",
+        [source_root_id],
+    )?;
+    trace_bulk_stage("groups.create_detached_roots", "tags", stage_started);
+    trace_bulk_stage("groups.create_detached_roots", "total", operation_started);
+    Ok(())
+}
+
+fn prepare_structural_summary_tables(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_structural_root (
+             item_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_structural_folder (
+             folder_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_structural_tag (
+             tag_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_structural_old_summary (
+             root_item_id INTEGER PRIMARY KEY,
+             lifecycle TEXT NOT NULL,
+             media_count INTEGER NOT NULL,
+             total_size_bytes INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_structural_lifecycle_before (
+             lifecycle TEXT PRIMARY KEY,
+             root_count INTEGER NOT NULL,
+             media_count INTEGER NOT NULL,
+             total_size_bytes INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_structural_old_folder (
+             root_item_id INTEGER NOT NULL,
+             folder_id INTEGER NOT NULL,
+             PRIMARY KEY (root_item_id, folder_id)
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_structural_old_tag (
+             root_item_id INTEGER NOT NULL,
+             tag_id INTEGER NOT NULL,
+             PRIMARY KEY (root_item_id, tag_id)
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_structural_folder_before (
+             folder_id INTEGER PRIMARY KEY,
+             visible_root_count INTEGER NOT NULL,
+             media_count INTEGER NOT NULL,
+             total_size_bytes INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_structural_tag_before (
+             tag_id INTEGER PRIMARY KEY,
+             visible_root_count INTEGER NOT NULL,
+             assignment_count INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE INDEX IF NOT EXISTS temp.picto_structural_old_folder_by_folder
+             ON picto_structural_old_folder(folder_id, root_item_id);
+         CREATE INDEX IF NOT EXISTS temp.picto_structural_old_tag_by_tag
+             ON picto_structural_old_tag(tag_id, root_item_id);
+         DELETE FROM picto_structural_root;
+         DELETE FROM picto_structural_folder;
+         DELETE FROM picto_structural_tag;
+         DELETE FROM picto_structural_old_summary;
+         DELETE FROM picto_structural_lifecycle_before;
+         DELETE FROM picto_structural_old_folder;
+         DELETE FROM picto_structural_old_tag;
+         DELETE FROM picto_structural_folder_before;
+         DELETE FROM picto_structural_tag_before;",
+    )
+}
+
+fn stage_structural_summary_dependencies(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "INSERT INTO picto_structural_folder(folder_id)
+         SELECT DISTINCT membership.folder_id
+         FROM folder_item membership
+         JOIN picto_structural_root changed ON changed.item_id = membership.item_id
+         WHERE TRUE
+         ON CONFLICT DO NOTHING;
+         INSERT INTO picto_structural_tag(tag_id)
+         SELECT DISTINCT relation.tag_id
+         FROM root_tag relation
+         JOIN picto_structural_root changed ON changed.item_id = relation.root_item_id
+         WHERE TRUE
+         ON CONFLICT DO NOTHING;",
+    )
+}
+
+fn stage_structural_summary_roots(
+    transaction: &Transaction<'_>,
+    root_ids: &[i64],
+) -> rusqlite::Result<()> {
+    if root_ids.is_empty() {
+        return Ok(());
+    }
+    let encoded = serde_json::to_string(root_ids)
+        .map_err(|error| invalid(format!("Could not encode structural roots: {error}")))?;
+    transaction.execute(
+        "INSERT INTO picto_structural_root(item_id)
+         SELECT CAST(value AS INTEGER) FROM json_each(?1)
+         WHERE TRUE
+         ON CONFLICT DO NOTHING",
+        [encoded],
+    )?;
+    Ok(())
+}
+
+fn suppress_structural_summaries(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute(
+        "UPDATE projection_write_control
+         SET suppress_root_summary = 1,
+             suppress_folder_summary = 1,
+             suppress_tag_summary = 1,
+             suppress_smart_dirty = 1
+         WHERE singleton = 1",
+        [],
+    )?;
+    Ok(())
+}
+
+fn begin_group_create_summary_batch(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_group_create_root (
+             lifecycle TEXT PRIMARY KEY,
+             root_count INTEGER NOT NULL,
+             media_count INTEGER NOT NULL,
+             total_size_bytes INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_group_create_folder (
+             folder_id INTEGER PRIMARY KEY,
+             visible_root_count INTEGER NOT NULL,
+             media_count INTEGER NOT NULL,
+             total_size_bytes INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_group_create_tag (
+             tag_id INTEGER PRIMARY KEY,
+             visible_root_count INTEGER NOT NULL,
+             assignment_count INTEGER NOT NULL,
+             provenance_mask INTEGER NOT NULL,
+             source_mask INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         DELETE FROM picto_group_create_root;
+         DELETE FROM picto_group_create_folder;
+         DELETE FROM picto_group_create_tag;
+
+         INSERT INTO picto_group_create_root (
+             lifecycle, root_count, media_count, total_size_bytes
+         )
+         SELECT summary.lifecycle, COUNT(*), SUM(summary.media_count),
+                SUM(summary.total_size_bytes)
+         FROM root_summary summary
+         JOIN picto_selected_root selected
+           ON selected.item_id = summary.root_item_id
+         GROUP BY summary.lifecycle;
+
+         INSERT INTO picto_group_create_folder (
+             folder_id, visible_root_count, media_count, total_size_bytes
+         )
+         SELECT membership.folder_id,
+                SUM(summary.lifecycle = 'active'),
+                COALESCE(SUM(CASE WHEN summary.lifecycle = 'active'
+                                  THEN summary.media_count ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN summary.lifecycle = 'active'
+                                  THEN summary.total_size_bytes ELSE 0 END), 0)
+         FROM folder_item membership
+         JOIN picto_selected_root selected ON selected.item_id = membership.item_id
+         JOIN root_summary summary ON summary.root_item_id = membership.item_id
+         GROUP BY membership.folder_id;
+
+         INSERT INTO picto_group_create_tag (
+             tag_id, visible_root_count, assignment_count,
+             provenance_mask, source_mask
+         )
+         SELECT relation.tag_id,
+                SUM(summary.lifecycle = 'active'),
+                COUNT(*),
+                picto_bit_or(relation.provenance_mask),
+                picto_bit_or(relation.source_mask)
+         FROM root_tag relation
+         JOIN picto_selected_root selected
+           ON selected.item_id = relation.root_item_id
+         JOIN root_summary summary ON summary.root_item_id = relation.root_item_id
+         GROUP BY relation.tag_id;",
+    )?;
+    suppress_structural_summaries(transaction)
+}
+
+fn finish_group_create_summary_batch(
+    transaction: &Transaction<'_>,
+    collection_id: i64,
+) -> rusqlite::Result<()> {
+    transaction.execute(
+        "INSERT INTO root_summary (
+             root_item_id, lifecycle, kind, cover_media_item_id, media_count,
+             total_size_bytes, imported_at, captured_at, sort_rating,
+             sort_name, updated_at
+         )
+         SELECT item.item_id, root.lifecycle, item.kind,
+                COALESCE(
+                    item.cover_media_item_id,
+                    (SELECT member.media_item_id
+                     FROM collection_member member
+                     WHERE member.collection_id = item.item_id
+                     ORDER BY member.position_rank, member.media_item_id LIMIT 1)
+                ),
+                COUNT(member.media_item_id),
+                COALESCE(SUM(file.size_bytes), 0),
+                MAX(asset.imported_at), MAX(asset.captured_at), metadata.rating,
+                metadata.name, COALESCE(metadata.updated_at, item.updated_at)
+         FROM library_item item
+         JOIN library_root root ON root.item_id = item.item_id
+         JOIN collection_member member ON member.collection_id = item.item_id
+         JOIN media_asset asset ON asset.item_id = member.media_item_id
+         JOIN media_file file ON file.file_id = asset.file_id
+         LEFT JOIN root_metadata metadata ON metadata.root_item_id = item.item_id
+         WHERE item.item_id = ?1
+         GROUP BY item.item_id",
+        [collection_id],
+    )?;
+    let (lifecycle, media_count, total_size_bytes): (String, i64, i64) = transaction.query_row(
+        "SELECT lifecycle, media_count, total_size_bytes
+         FROM root_summary WHERE root_item_id = ?1",
+        [collection_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    transaction.execute(
+        "UPDATE lifecycle_summary
+         SET root_count = root_count
+                 - COALESCE((SELECT root_count FROM picto_group_create_root old
+                             WHERE old.lifecycle = lifecycle_summary.lifecycle), 0)
+                 + CASE WHEN lifecycle = ?1 THEN 1 ELSE 0 END,
+             media_count = media_count
+                 - COALESCE((SELECT media_count FROM picto_group_create_root old
+                             WHERE old.lifecycle = lifecycle_summary.lifecycle), 0)
+                 + CASE WHEN lifecycle = ?1 THEN ?2 ELSE 0 END,
+             total_size_bytes = total_size_bytes
+                 - COALESCE((SELECT total_size_bytes FROM picto_group_create_root old
+                             WHERE old.lifecycle = lifecycle_summary.lifecycle), 0)
+                 + CASE WHEN lifecycle = ?1 THEN ?3 ELSE 0 END",
+        params![lifecycle, media_count, total_size_bytes],
+    )?;
+    transaction.execute(
+        "UPDATE folder_summary
+         SET visible_root_count = visible_root_count
+                 - (SELECT old.visible_root_count FROM picto_group_create_folder old
+                    WHERE old.folder_id = folder_summary.folder_id)
+                 + CASE WHEN ?1 = 'active' THEN 1 ELSE 0 END,
+             media_count = media_count
+                 - (SELECT old.media_count FROM picto_group_create_folder old
+                    WHERE old.folder_id = folder_summary.folder_id)
+                 + CASE WHEN ?1 = 'active' THEN ?2 ELSE 0 END,
+             total_size_bytes = total_size_bytes
+                 - (SELECT old.total_size_bytes FROM picto_group_create_folder old
+                    WHERE old.folder_id = folder_summary.folder_id)
+                 + CASE WHEN ?1 = 'active' THEN ?3 ELSE 0 END
+         WHERE folder_id IN (SELECT folder_id FROM picto_group_create_folder)",
+        params![lifecycle, media_count, total_size_bytes],
+    )?;
+    transaction.execute(
+        "UPDATE tag_summary
+         SET visible_root_count = visible_root_count
+                 - (SELECT old.visible_root_count FROM picto_group_create_tag old
+                    WHERE old.tag_id = tag_summary.tag_id)
+                 + CASE WHEN ?1 = 'active' THEN 1 ELSE 0 END,
+             assignment_count = assignment_count
+                 - (SELECT old.assignment_count FROM picto_group_create_tag old
+                    WHERE old.tag_id = tag_summary.tag_id)
+                 + 1
+         WHERE tag_id IN (SELECT tag_id FROM picto_group_create_tag)",
+        [lifecycle],
+    )?;
+    transaction.execute(
+        "UPDATE projection_write_control
+         SET suppress_root_summary = 0,
+             suppress_folder_summary = 0,
+             suppress_tag_summary = 0,
+             suppress_smart_dirty = 0
+         WHERE singleton = 1",
+        [],
+    )?;
+    Ok(())
+}
+
+fn begin_bulk_lifecycle_settlement(
+    transaction: &Transaction<'_>,
+    summary_delta: &LifecycleSummaryDelta,
+) -> rusqlite::Result<()> {
+    crate::store::schema::suspend_bulk_lifecycle_triggers(transaction)?;
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_lifecycle_old_root (
+             root_item_id INTEGER PRIMARY KEY,
+             lifecycle TEXT NOT NULL,
+             media_count INTEGER NOT NULL,
+             total_size_bytes INTEGER NOT NULL
+         ) WITHOUT ROWID;
+         DELETE FROM picto_lifecycle_old_root;
+         INSERT INTO picto_lifecycle_old_root (
+             root_item_id, lifecycle, media_count, total_size_bytes
+         )
+         SELECT summary.root_item_id, summary.lifecycle,
+                summary.media_count, summary.total_size_bytes
+         FROM root_summary summary
+         JOIN picto_changed_root changed ON changed.item_id = summary.root_item_id;
+
+         UPDATE projection_write_control
+         SET suppress_root_summary = 1,
+             suppress_folder_summary = 1,
+             suppress_tag_summary = 1
+         WHERE singleton = 1;
+
+        ",
+    )?;
+    summary_delta.stage(transaction)
+}
+
+fn finish_bulk_lifecycle_settlement(
+    transaction: &Transaction<'_>,
+    lifecycle: Lifecycle,
+) -> rusqlite::Result<()> {
+    transaction.execute(
+        "UPDATE root_summary
+         SET lifecycle = ?1,
+             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         WHERE root_item_id IN (SELECT root_item_id FROM picto_lifecycle_old_root)",
+        [lifecycle.as_str()],
+    )?;
+    transaction.execute(
+        "UPDATE lifecycle_summary
+         SET root_count = root_count
+                 - COALESCE((
+                     SELECT COUNT(*) FROM picto_lifecycle_old_root old
+                     WHERE old.lifecycle = lifecycle_summary.lifecycle
+                 ), 0)
+                 + CASE WHEN lifecycle_summary.lifecycle = ?1
+                     THEN (SELECT COUNT(*) FROM picto_lifecycle_old_root)
+                     ELSE 0 END,
+             media_count = media_count
+                 - COALESCE((
+                     SELECT SUM(old.media_count) FROM picto_lifecycle_old_root old
+                     WHERE old.lifecycle = lifecycle_summary.lifecycle
+                 ), 0)
+                 + CASE WHEN lifecycle_summary.lifecycle = ?1
+                     THEN COALESCE((SELECT SUM(media_count) FROM picto_lifecycle_old_root), 0)
+                     ELSE 0 END,
+             total_size_bytes = total_size_bytes
+                 - COALESCE((
+                     SELECT SUM(old.total_size_bytes) FROM picto_lifecycle_old_root old
+                     WHERE old.lifecycle = lifecycle_summary.lifecycle
+                 ), 0)
+                 + CASE WHEN lifecycle_summary.lifecycle = ?1
+                     THEN COALESCE((SELECT SUM(total_size_bytes)
+                                    FROM picto_lifecycle_old_root), 0)
+                     ELSE 0 END",
+        [lifecycle.as_str()],
+    )?;
+    transaction.execute(
+        "UPDATE folder_summary
+         SET visible_root_count = visible_root_count + (
+                 SELECT delta.root_count FROM picto_lifecycle_folder_delta delta
+                 WHERE delta.folder_id = folder_summary.folder_id
+             ),
+             media_count = media_count + (
+                 SELECT delta.media_count FROM picto_lifecycle_folder_delta delta
+                 WHERE delta.folder_id = folder_summary.folder_id
+             ),
+             total_size_bytes = total_size_bytes + (
+                 SELECT delta.total_size_bytes FROM picto_lifecycle_folder_delta delta
+                 WHERE delta.folder_id = folder_summary.folder_id
+             )
+         WHERE folder_id IN (SELECT folder_id FROM picto_lifecycle_folder_delta)",
+        [],
+    )?;
+    transaction.execute(
+        "UPDATE tag_summary
+         SET visible_root_count = visible_root_count + (
+             SELECT delta.visible_root_count FROM picto_lifecycle_tag_delta delta
+             WHERE delta.tag_id = tag_summary.tag_id
+         )
+         WHERE tag_id IN (SELECT tag_id FROM picto_lifecycle_tag_delta)",
+        [],
+    )?;
+    transaction.execute_batch(
+        "UPDATE projection_write_control
+         SET suppress_root_summary = 0,
+             suppress_folder_summary = 0,
+             suppress_tag_summary = 0
+         WHERE singleton = 1;",
+    )?;
+    crate::store::schema::restore_bulk_lifecycle_triggers(transaction)
+}
+
+fn capture_structural_summary_baseline(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "INSERT INTO picto_structural_old_summary (
+             root_item_id, lifecycle, media_count, total_size_bytes
+         )
+         SELECT summary.root_item_id, summary.lifecycle,
+                summary.media_count, summary.total_size_bytes
+         FROM root_summary summary
+         JOIN picto_structural_root changed ON changed.item_id = summary.root_item_id;
+         INSERT INTO picto_structural_lifecycle_before (
+             lifecycle, root_count, media_count, total_size_bytes
+         )
+         SELECT lifecycle, root_count, media_count, total_size_bytes
+         FROM lifecycle_summary;
+         INSERT INTO picto_structural_old_folder(root_item_id, folder_id)
+         SELECT membership.item_id, membership.folder_id
+         FROM folder_item membership
+         JOIN picto_structural_root changed ON changed.item_id = membership.item_id;
+         INSERT INTO picto_structural_old_tag(root_item_id, tag_id)
+         SELECT relation.root_item_id, relation.tag_id
+         FROM root_tag relation
+         JOIN picto_structural_root changed ON changed.item_id = relation.root_item_id;
+         INSERT INTO picto_structural_folder_before (
+             folder_id, visible_root_count, media_count, total_size_bytes
+         )
+         SELECT summary.folder_id, summary.visible_root_count,
+                summary.media_count, summary.total_size_bytes
+         FROM folder_summary summary
+         JOIN picto_structural_folder changed ON changed.folder_id = summary.folder_id;
+         INSERT INTO picto_structural_tag_before (
+             tag_id, visible_root_count, assignment_count
+         )
+         SELECT summary.tag_id, summary.visible_root_count, summary.assignment_count
+         FROM tag_summary summary
+         JOIN picto_structural_tag changed ON changed.tag_id = summary.tag_id;",
+    )
+}
+
+fn begin_structural_summary_batch(
+    transaction: &Transaction<'_>,
+    root_ids: &[i64],
+) -> rusqlite::Result<()> {
+    prepare_structural_summary_tables(transaction)?;
+    stage_structural_summary_roots(transaction, root_ids)?;
+    stage_structural_summary_dependencies(transaction)?;
+    capture_structural_summary_baseline(transaction)?;
+    suppress_structural_summaries(transaction)
+}
+
+fn begin_structural_summary_batch_from_staged_roots(
+    transaction: &Transaction<'_>,
+) -> rusqlite::Result<()> {
+    prepare_structural_summary_tables(transaction)?;
+    transaction.execute_batch(
+        "INSERT INTO picto_structural_root(item_id)
+         SELECT item_id FROM picto_selected_root
+         WHERE TRUE
+         ON CONFLICT DO NOTHING;",
+    )?;
+    stage_structural_summary_dependencies(transaction)?;
+    capture_structural_summary_baseline(transaction)?;
+    suppress_structural_summaries(transaction)
+}
+
+fn finish_structural_summary_batch(
+    transaction: &Transaction<'_>,
+    root_ids: &[i64],
+) -> rusqlite::Result<()> {
+    stage_structural_summary_roots(transaction, root_ids)?;
+    finish_structural_summary_batch_inner(transaction)
+}
+
+fn finish_structural_summary_batch_from_staged_roots(
+    transaction: &Transaction<'_>,
+) -> rusqlite::Result<()> {
+    finish_structural_summary_batch_inner(transaction)
+}
+
+fn finish_structural_summary_batch_inner(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    stage_structural_summary_dependencies(transaction)?;
+    transaction.execute(
+        "DELETE FROM root_summary
+         WHERE root_item_id IN (SELECT item_id FROM picto_structural_root)
+           AND NOT EXISTS (
+               SELECT 1 FROM library_root root
+               WHERE root.item_id = root_summary.root_item_id
+           )",
+        [],
+    )?;
+    transaction.execute(
+        "INSERT INTO root_summary (
+             root_item_id, lifecycle, kind, cover_media_item_id, media_count,
+             total_size_bytes, imported_at, captured_at, sort_rating,
+             sort_name, updated_at
+         )
+         SELECT item.item_id,
+                root.lifecycle,
+                item.kind,
+                COALESCE(
+                    item.cover_media_item_id,
+                    CASE WHEN item.kind = 'media' THEN item.item_id END,
+                    (SELECT member.media_item_id
+                     FROM collection_member member
+                     WHERE member.collection_id = item.item_id
+                     ORDER BY member.position_rank, member.media_item_id
+                     LIMIT 1)
+                ),
+                CASE WHEN item.kind = 'media' THEN 1 ELSE (
+                    SELECT COUNT(*) FROM collection_member member
+                    WHERE member.collection_id = item.item_id
+                ) END,
+                CASE WHEN item.kind = 'media' THEN COALESCE(file.size_bytes, 0)
+                     ELSE COALESCE((
+                         SELECT SUM(member_file.size_bytes)
+                         FROM collection_member member
+                         JOIN media_asset member_asset
+                           ON member_asset.item_id = member.media_item_id
+                         JOIN media_file member_file
+                           ON member_file.file_id = member_asset.file_id
+                         WHERE member.collection_id = item.item_id
+                     ), 0) END,
+                CASE WHEN item.kind = 'media' THEN asset.imported_at ELSE (
+                    SELECT MAX(member_asset.imported_at)
+                    FROM collection_member member
+                    JOIN media_asset member_asset
+                      ON member_asset.item_id = member.media_item_id
+                    WHERE member.collection_id = item.item_id
+                ) END,
+                CASE WHEN item.kind = 'media' THEN asset.captured_at ELSE (
+                    SELECT MAX(member_asset.captured_at)
+                    FROM collection_member member
+                    JOIN media_asset member_asset
+                      ON member_asset.item_id = member.media_item_id
+                    WHERE member.collection_id = item.item_id
+                ) END,
+                metadata.rating,
+                COALESCE(metadata.name, asset.name),
+                COALESCE(metadata.updated_at, item.updated_at)
+         FROM picto_structural_root changed
+         JOIN library_root root ON root.item_id = changed.item_id
+         JOIN library_item item ON item.item_id = root.item_id
+         LEFT JOIN media_asset asset ON asset.item_id = COALESCE(
+             item.cover_media_item_id,
+             CASE WHEN item.kind = 'media' THEN item.item_id END,
+             (SELECT member.media_item_id
+              FROM collection_member member
+              WHERE member.collection_id = item.item_id
+              ORDER BY member.position_rank, member.media_item_id
+              LIMIT 1)
+         )
+         LEFT JOIN media_file file ON file.file_id = asset.file_id
+         LEFT JOIN root_metadata metadata ON metadata.root_item_id = item.item_id
+         WHERE item.kind = 'media'
+            OR EXISTS (
+                SELECT 1 FROM collection_member member
+                WHERE member.collection_id = item.item_id
+            )
+         ON CONFLICT(root_item_id) DO UPDATE SET
+             lifecycle = excluded.lifecycle,
+             kind = excluded.kind,
+             cover_media_item_id = excluded.cover_media_item_id,
+             media_count = excluded.media_count,
+             total_size_bytes = excluded.total_size_bytes,
+             imported_at = excluded.imported_at,
+             captured_at = excluded.captured_at,
+             sort_rating = excluded.sort_rating,
+             sort_name = excluded.sort_name,
+             updated_at = excluded.updated_at",
+        [],
+    )?;
+    transaction.execute_batch(
+        "UPDATE lifecycle_summary
+         SET root_count = (
+                 SELECT baseline.root_count
+                 FROM picto_structural_lifecycle_before baseline
+                 WHERE baseline.lifecycle = lifecycle_summary.lifecycle
+             )
+             - (SELECT COUNT(*) FROM picto_structural_old_summary old
+                WHERE old.lifecycle = lifecycle_summary.lifecycle)
+             + (SELECT COUNT(*)
+                FROM root_summary summary
+                JOIN picto_structural_root changed
+                  ON changed.item_id = summary.root_item_id
+                WHERE summary.lifecycle = lifecycle_summary.lifecycle),
+             media_count = (
+                 SELECT baseline.media_count
+                 FROM picto_structural_lifecycle_before baseline
+                 WHERE baseline.lifecycle = lifecycle_summary.lifecycle
+             )
+             - COALESCE((SELECT SUM(old.media_count)
+                         FROM picto_structural_old_summary old
+                         WHERE old.lifecycle = lifecycle_summary.lifecycle), 0)
+             + COALESCE((SELECT SUM(summary.media_count)
+                         FROM root_summary summary
+                         JOIN picto_structural_root changed
+                           ON changed.item_id = summary.root_item_id
+                         WHERE summary.lifecycle = lifecycle_summary.lifecycle), 0),
+             total_size_bytes = (
+                 SELECT baseline.total_size_bytes
+                 FROM picto_structural_lifecycle_before baseline
+                 WHERE baseline.lifecycle = lifecycle_summary.lifecycle
+             )
+             - COALESCE((SELECT SUM(old.total_size_bytes)
+                         FROM picto_structural_old_summary old
+                         WHERE old.lifecycle = lifecycle_summary.lifecycle), 0)
+             + COALESCE((SELECT SUM(summary.total_size_bytes)
+                         FROM root_summary summary
+                         JOIN picto_structural_root changed
+                           ON changed.item_id = summary.root_item_id
+                         WHERE summary.lifecycle = lifecycle_summary.lifecycle), 0);
+
+         INSERT INTO folder_summary (
+             folder_id, visible_root_count, media_count, total_size_bytes
+         )
+         SELECT folder.folder_id,
+                COALESCE(baseline.visible_root_count, 0)
+                    - (SELECT COUNT(*)
+                       FROM picto_structural_old_folder old_membership
+                       JOIN picto_structural_old_summary old_summary
+                         ON old_summary.root_item_id = old_membership.root_item_id
+                       WHERE old_membership.folder_id = folder.folder_id
+                         AND old_summary.lifecycle = 'active')
+                    + (SELECT COUNT(*)
+                       FROM folder_item membership
+                       JOIN picto_structural_root changed_root
+                         ON changed_root.item_id = membership.item_id
+                       JOIN root_summary summary
+                         ON summary.root_item_id = membership.item_id
+                       WHERE membership.folder_id = folder.folder_id
+                         AND summary.lifecycle = 'active'),
+                COALESCE(baseline.media_count, 0)
+                    - COALESCE((
+                        SELECT SUM(old_summary.media_count)
+                        FROM picto_structural_old_folder old_membership
+                        JOIN picto_structural_old_summary old_summary
+                          ON old_summary.root_item_id = old_membership.root_item_id
+                        WHERE old_membership.folder_id = folder.folder_id
+                          AND old_summary.lifecycle = 'active'
+                    ), 0)
+                    + COALESCE((
+                        SELECT SUM(summary.media_count)
+                        FROM folder_item membership
+                        JOIN picto_structural_root changed_root
+                          ON changed_root.item_id = membership.item_id
+                        JOIN root_summary summary
+                          ON summary.root_item_id = membership.item_id
+                        WHERE membership.folder_id = folder.folder_id
+                          AND summary.lifecycle = 'active'
+                    ), 0),
+                COALESCE(baseline.total_size_bytes, 0)
+                    - COALESCE((
+                        SELECT SUM(old_summary.total_size_bytes)
+                        FROM picto_structural_old_folder old_membership
+                        JOIN picto_structural_old_summary old_summary
+                          ON old_summary.root_item_id = old_membership.root_item_id
+                        WHERE old_membership.folder_id = folder.folder_id
+                          AND old_summary.lifecycle = 'active'
+                    ), 0)
+                    + COALESCE((
+                        SELECT SUM(summary.total_size_bytes)
+                        FROM folder_item membership
+                        JOIN picto_structural_root changed_root
+                          ON changed_root.item_id = membership.item_id
+                        JOIN root_summary summary
+                          ON summary.root_item_id = membership.item_id
+                        WHERE membership.folder_id = folder.folder_id
+                          AND summary.lifecycle = 'active'
+                    ), 0)
+         FROM picto_structural_folder changed
+         JOIN folder ON folder.folder_id = changed.folder_id
+         LEFT JOIN picto_structural_folder_before baseline
+           ON baseline.folder_id = folder.folder_id
+         ON CONFLICT(folder_id) DO UPDATE SET
+             visible_root_count = excluded.visible_root_count,
+             media_count = excluded.media_count,
+             total_size_bytes = excluded.total_size_bytes;
+
+         INSERT INTO tag_summary (
+             tag_id, visible_root_count, assignment_count
+         )
+         SELECT tag.tag_id,
+                COALESCE(baseline.visible_root_count, 0)
+                    - (SELECT COUNT(*)
+                       FROM picto_structural_old_tag old_relation
+                       JOIN picto_structural_old_summary old_summary
+                         ON old_summary.root_item_id = old_relation.root_item_id
+                       WHERE old_relation.tag_id = tag.tag_id
+                         AND old_summary.lifecycle = 'active')
+                    + (SELECT COUNT(*)
+                       FROM root_tag relation
+                       JOIN picto_structural_root changed_root
+                         ON changed_root.item_id = relation.root_item_id
+                       JOIN root_summary summary
+                         ON summary.root_item_id = relation.root_item_id
+                       WHERE relation.tag_id = tag.tag_id
+                         AND summary.lifecycle = 'active'),
+                COALESCE(baseline.assignment_count, 0)
+                    - (SELECT COUNT(*) FROM picto_structural_old_tag old_relation
+                       WHERE old_relation.tag_id = tag.tag_id)
+                    + (SELECT COUNT(*)
+                       FROM root_tag relation
+                       JOIN picto_structural_root changed_root
+                         ON changed_root.item_id = relation.root_item_id
+                       WHERE relation.tag_id = tag.tag_id)
+         FROM picto_structural_tag changed
+         JOIN tag ON tag.tag_id = changed.tag_id
+         LEFT JOIN picto_structural_tag_before baseline ON baseline.tag_id = tag.tag_id
+         ON CONFLICT(tag_id) DO UPDATE SET
+             visible_root_count = excluded.visible_root_count,
+             assignment_count = excluded.assignment_count;
+
+         UPDATE projection_write_control
+         SET suppress_root_summary = 0,
+             suppress_folder_summary = 0,
+             suppress_tag_summary = 0,
+             suppress_smart_dirty = 0
+         WHERE singleton = 1;",
+    )?;
+    Ok(())
+}
+
+fn trace_bulk_stage(operation: &str, stage: &str, started: Instant) {
+    if std::env::var_os("PICTO_TRACE_STORE_STAGES").is_some() {
+        eprintln!(
+            "bulk_operation_stage operation={operation} stage={stage} elapsed_ms={:.3}",
+            started.elapsed().as_secs_f64() * 1_000.0
+        );
+    }
+}
+
+pub(crate) fn stage_folder_subtree_selection(
+    transaction: &Transaction<'_>,
+    folder_id: i64,
+) -> rusqlite::Result<()> {
+    prepare_mutation_selection_tables(transaction)?;
+    transaction.execute(
+        "WITH RECURSIVE descendants(folder_id) AS (
+             SELECT ?1
+             UNION ALL
+             SELECT folder.folder_id
+             FROM folder
+             JOIN descendants parent ON folder.parent_id = parent.folder_id
+         )
+         INSERT INTO picto_selected_root(item_id)
+         SELECT DISTINCT membership.item_id
+         FROM folder_item membership
+         JOIN descendants ON descendants.folder_id = membership.folder_id",
+        [folder_id],
+    )?;
+    populate_staged_media(transaction)
+}
+
+pub(crate) fn staged_root_hints(transaction: &Transaction<'_>) -> rusqlite::Result<Vec<i64>> {
+    limited_staged_hints(transaction, "picto_selected_root", "item_id")
+}
+
+fn apply_folder_to_selection(
+    transaction: &Transaction<'_>,
+    folder_id: i64,
+    present: bool,
+) -> rusqlite::Result<RoaringBitmap> {
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_changed_root (
+             item_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         DELETE FROM picto_changed_root;",
+    )?;
+    if present {
+        let folder_is_empty = !transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM folder_item WHERE folder_id = ?1)",
+            [folder_id],
+            |row| row.get::<_, bool>(0),
+        )?;
+        if folder_is_empty {
+            transaction.execute(
+                "INSERT INTO picto_changed_root(item_id)
+                 SELECT item_id FROM picto_selected_root",
+                [],
+            )?;
+        } else {
+            transaction.execute(
+                "INSERT INTO picto_changed_root(item_id)
+                 SELECT selected.item_id
+                 FROM picto_selected_root selected
+                 LEFT JOIN folder_item existing
+                   ON existing.folder_id = ?1
+                  AND existing.item_id = selected.item_id
+                 WHERE existing.item_id IS NULL",
+                [folder_id],
+            )?;
+        }
+    } else {
+        transaction.execute(
+            "INSERT INTO picto_changed_root(item_id)
+             SELECT existing.item_id
+             FROM folder_item existing
+             JOIN picto_selected_root selected ON selected.item_id = existing.item_id
+             WHERE existing.folder_id = ?1",
+            [folder_id],
+        )?;
+    }
+    let changed = selected_id_bitmap(transaction, "SELECT item_id FROM picto_changed_root")?;
+    if changed.is_empty() {
+        return Ok(changed);
+    }
+    let (root_count, media_count, total_size_bytes): (i64, i64, i64) = transaction.query_row(
+        "SELECT COUNT(*),
+                COALESCE(SUM(summary.media_count), 0),
+                COALESCE(SUM(summary.total_size_bytes), 0)
+         FROM picto_changed_root changed
+         JOIN root_summary summary ON summary.root_item_id = changed.item_id
+         WHERE summary.lifecycle = 'active'
+           AND NOT EXISTS (
+               SELECT 1 FROM collection_member member
+               WHERE member.media_item_id = changed.item_id
+           )",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+
+    transaction.execute(
+        "UPDATE projection_write_control
+         SET suppress_folder_summary = 1
+         WHERE singleton = 1",
+        [],
+    )?;
+    crate::store::schema::suspend_bulk_folder_membership_triggers(transaction)?;
+    let sql = if present {
+        "INSERT INTO folder_item (folder_id, item_id)
+             SELECT ?1, item_id FROM picto_changed_root"
+    } else {
+        "DELETE FROM folder_item
+             WHERE folder_id = ?1
+               AND item_id IN (SELECT item_id FROM picto_changed_root)"
+    };
+    transaction.execute(sql, [folder_id])?;
+    let direction = if present { 1 } else { -1 };
+    transaction.execute(
+        "UPDATE folder_summary
+         SET visible_root_count = visible_root_count + ?2 * ?3,
+             media_count = media_count + ?2 * ?4,
+             total_size_bytes = total_size_bytes + ?2 * ?5
+         WHERE folder_id = ?1",
+        params![
+            folder_id,
+            direction,
+            root_count,
+            media_count,
+            total_size_bytes
+        ],
+    )?;
+    transaction.execute(
+        "UPDATE projection_write_control
+         SET suppress_folder_summary = 0
+         WHERE singleton = 1",
+        [],
+    )?;
+    crate::store::schema::restore_bulk_folder_membership_triggers(transaction)?;
+    Ok(changed)
+}
+
+pub(crate) fn apply_tags_to_selection(
+    transaction: &Transaction<'_>,
+    tags: &[(String, String)],
+    add: bool,
+    provenance_mask: i64,
+    source: &str,
+) -> rusqlite::Result<BulkTagProjectionDelta> {
+    let mut delta = BulkTagProjectionDelta::default();
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_changed_root_tag (
+             root_item_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;",
+    )?;
+    crate::store::schema::suspend_bulk_tag_membership_triggers(transaction)?;
+    for (namespace, subtag) in tags {
+        let tag_started = Instant::now();
+        let tag_was_created = transaction.execute(
+            "INSERT INTO tag (namespace, subtag) VALUES (?1, ?2)
+             ON CONFLICT(namespace, subtag) DO NOTHING",
+            params![namespace, subtag],
+        )? > 0;
+        let tag_id: i64 = transaction.query_row(
+            "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
+            params![namespace, subtag],
+            |row| row.get(0),
+        )?;
+        let lookup_elapsed = tag_started.elapsed();
+        let changed_roots_started = Instant::now();
+        transaction.execute("DELETE FROM picto_changed_root_tag", [])?;
+        if add {
+            if tag_was_created {
+                transaction.execute(
+                    "INSERT INTO picto_changed_root_tag(root_item_id)
+                     SELECT item_id FROM picto_selected_root",
+                    [],
+                )?;
+            } else {
+                transaction.execute(
+                    "INSERT INTO picto_changed_root_tag(root_item_id)
+                     SELECT selected.item_id
+                     FROM picto_selected_root selected
+                     LEFT JOIN root_tag existing
+                       ON existing.root_item_id = selected.item_id
+                      AND existing.tag_id = ?1
+                     WHERE existing.root_item_id IS NULL",
+                    [tag_id],
+                )?;
+            }
+        } else {
+            transaction.execute(
+                "INSERT INTO picto_changed_root_tag(root_item_id)
+                 SELECT existing.root_item_id
+                 FROM root_tag existing
+                 JOIN picto_selected_root selected
+                   ON selected.item_id = existing.root_item_id
+                 WHERE existing.tag_id = ?1",
+                [tag_id],
+            )?;
+        }
+        let changed_roots_elapsed = changed_roots_started.elapsed();
+        let changed_root_ids = selected_id_bitmap(
+            transaction,
+            "SELECT root_item_id FROM picto_changed_root_tag",
+        )?;
+        if add {
+            if !changed_root_ids.is_empty() {
+                delta.history_changes.push(SemanticMembershipDelta {
+                    relation_id: tag_id,
+                    add: changed_root_ids.clone(),
+                    remove: RoaringBitmap::new(),
+                    provenance_mask,
+                    source_mask: tag_source_mask(source),
+                });
+            }
+        } else {
+            let mut statement = transaction.prepare(
+                "SELECT relation.provenance_mask, relation.source_mask, relation.root_item_id
+                 FROM root_tag relation
+                 JOIN picto_changed_root_tag changed
+                   ON changed.root_item_id = relation.root_item_id
+                 WHERE relation.tag_id = ?1
+                 ORDER BY relation.provenance_mask, relation.source_mask, relation.root_item_id",
+            )?;
+            let mut rows = statement.query([tag_id])?;
+            let mut grouped = std::collections::BTreeMap::<(i64, i64), RoaringBitmap>::new();
+            while let Some(row) = rows.next()? {
+                let provenance = row.get::<_, i64>(0)?;
+                let source_mask = row.get::<_, i64>(1)?;
+                let root_id_value = row.get::<_, i64>(2)?;
+                let root_id = u32::try_from(root_id_value)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, root_id_value))?;
+                grouped
+                    .entry((provenance, source_mask))
+                    .or_default()
+                    .insert(root_id);
+            }
+            delta.history_changes.extend(grouped.into_iter().map(
+                |((provenance_mask, source_mask), roots)| SemanticMembershipDelta {
+                    relation_id: tag_id,
+                    add: roots,
+                    remove: RoaringBitmap::new(),
+                    provenance_mask,
+                    source_mask,
+                },
+            ));
+        }
+        transaction.execute(
+            "UPDATE projection_write_control
+             SET suppress_tag_summary = 1, suppress_smart_dirty = 1
+             WHERE singleton = 1",
+            [],
+        )?;
+        let canonical_started = Instant::now();
+        let sql = if add {
+            "INSERT INTO root_tag (root_item_id, tag_id, provenance_mask, source_mask)
+                 SELECT root_item_id, ?1, ?2, ?3
+                 FROM picto_changed_root_tag"
+        } else {
+            "DELETE FROM root_tag
+                 WHERE tag_id = ?1
+                   AND root_item_id IN (SELECT root_item_id FROM picto_changed_root_tag)"
+        };
+        let changed = if add {
+            transaction.execute(
+                sql,
+                params![tag_id, provenance_mask, tag_source_mask(source)],
+            )?
+        } else {
+            transaction.execute(sql, [tag_id])?
+        };
+        delta.canonical_changed |= changed > 0;
+        let canonical_elapsed = canonical_started.elapsed();
+        let summary_started = Instant::now();
+        transaction.execute(
+            "INSERT INTO tag_summary(tag_id, visible_root_count, assignment_count)
+             VALUES (
+                 ?1,
+                 (SELECT COUNT(*) FROM root_tag relation
+                  JOIN library_root root ON root.item_id = relation.root_item_id
+                  WHERE relation.tag_id = ?1 AND root.lifecycle = 'active'),
+                 (SELECT COUNT(*) FROM root_tag WHERE tag_id = ?1)
+             )
+             ON CONFLICT(tag_id) DO UPDATE SET
+                 visible_root_count = excluded.visible_root_count,
+                 assignment_count = excluded.assignment_count",
+            [tag_id],
+        )?;
+        let summary_elapsed = summary_started.elapsed();
+        transaction.execute(
+            "UPDATE projection_write_control
+             SET suppress_tag_summary = 0, suppress_smart_dirty = 0
+             WHERE singleton = 1",
+            [],
+        )?;
+        let bitmap_started = Instant::now();
+        if !changed_root_ids.is_empty() {
+            delta.changes.push((tag_id, changed_root_ids));
+        }
+        let bitmap_elapsed = bitmap_started.elapsed();
+        if std::env::var_os("PICTO_TRACE_STORE_STAGES").is_some()
+            && tag_started.elapsed() >= Duration::from_millis(25)
+        {
+            eprintln!(
+                "bulk_root_tag_stages tag_id={} total_ms={:.2} lookup_ms={:.2} changed_roots_ms={:.2} canonical_ms={:.2} summary_ms={:.2} bitmap_ms={:.2}",
+                tag_id,
+                tag_started.elapsed().as_secs_f64() * 1_000.0,
+                lookup_elapsed.as_secs_f64() * 1_000.0,
+                changed_roots_elapsed.as_secs_f64() * 1_000.0,
+                canonical_elapsed.as_secs_f64() * 1_000.0,
+                summary_elapsed.as_secs_f64() * 1_000.0,
+                bitmap_elapsed.as_secs_f64() * 1_000.0,
+            );
+        }
+    }
+    crate::store::schema::restore_bulk_tag_membership_triggers(transaction)?;
+    Ok(delta)
+}
+
+fn selected_id_bitmap(transaction: &Transaction<'_>, sql: &str) -> rusqlite::Result<RoaringBitmap> {
+    let mut statement = transaction.prepare(sql)?;
+    let mut rows = statement.query([])?;
+    let mut ids = RoaringBitmap::new();
+    while let Some(row) = rows.next()? {
+        let item_id: i64 = row.get(0)?;
+        let item_id = u32::try_from(item_id)
+            .map_err(|_| invalid(format!("Item ID {item_id} exceeds projection capacity")))?;
+        ids.insert(item_id);
+    }
+    Ok(ids)
+}
+
+pub(crate) fn apply_root_tags_in(
+    transaction: &Transaction<'_>,
+    root_ids: &[i64],
     tags: &[(String, String)],
     add: bool,
     provenance_mask: i64,
     source: &str,
 ) -> rusqlite::Result<Vec<(i64, i64)>> {
     let mut changed_tags = Vec::new();
-    let media_ids_json = serde_json::to_string(media_ids)
+    let root_ids_json = serde_json::to_string(root_ids)
         .map_err(|error| invalid(format!("Could not encode tag targets: {error}")))?;
     for (namespace, subtag) in tags {
         transaction.execute(
@@ -1480,40 +4148,56 @@ pub(crate) fn apply_tags_in(
             params![namespace, subtag],
             |row| row.get(0),
         )?;
-        let changed_media = if add {
+        let changed_roots = if add {
             let mut statement = transaction.prepare(
-                "INSERT INTO media_tag (media_item_id, tag_id, source, provenance_mask)
+                "INSERT INTO root_tag (root_item_id, tag_id, provenance_mask, source_mask)
                  SELECT CAST(value AS INTEGER), ?2, ?3, ?4 FROM json_each(?1) WHERE 1
-                 ON CONFLICT(media_item_id, tag_id, source) DO UPDATE SET
-                     provenance_mask = media_tag.provenance_mask | excluded.provenance_mask
-                 WHERE media_tag.provenance_mask <>
-                     (media_tag.provenance_mask | excluded.provenance_mask)
-                 RETURNING media_item_id",
+                 ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
+                     provenance_mask = root_tag.provenance_mask | excluded.provenance_mask,
+                     source_mask = root_tag.source_mask | excluded.source_mask
+                 WHERE root_tag.provenance_mask <>
+                         (root_tag.provenance_mask | excluded.provenance_mask)
+                    OR root_tag.source_mask <> (root_tag.source_mask | excluded.source_mask)
+                 RETURNING root_item_id",
             )?;
-            let media_ids = statement
+            let root_ids = statement
                 .query_map(
-                    params![media_ids_json, tag_id, source, provenance_mask],
+                    params![
+                        root_ids_json,
+                        tag_id,
+                        provenance_mask,
+                        tag_source_mask(source)
+                    ],
                     |row| row.get::<_, i64>(0),
                 )?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            media_ids
+            root_ids
         } else {
             let mut statement = transaction.prepare(
-                "DELETE FROM media_tag
+                "DELETE FROM root_tag
                  WHERE tag_id = ?2
-                   AND media_item_id IN (
+                   AND root_item_id IN (
                        SELECT CAST(value AS INTEGER) FROM json_each(?1)
                    )
-                 RETURNING media_item_id",
+                 RETURNING root_item_id",
             )?;
-            let media_ids = statement
-                .query_map(params![media_ids_json, tag_id], |row| row.get::<_, i64>(0))?
+            let root_ids = statement
+                .query_map(params![root_ids_json, tag_id], |row| row.get::<_, i64>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
-            media_ids
+            root_ids
         };
-        changed_tags.extend(changed_media.into_iter().map(|media_id| (media_id, tag_id)));
+        changed_tags.extend(changed_roots.into_iter().map(|root_id| (root_id, tag_id)));
     }
     Ok(changed_tags)
+}
+
+fn tag_source_mask(source: &str) -> i64 {
+    match source {
+        "local" => 1,
+        "ai" => 2,
+        "subscription" => 4,
+        _ => 8,
+    }
 }
 
 fn root_for_media(transaction: &Transaction<'_>, media_item_id: i64) -> rusqlite::Result<i64> {
@@ -1692,7 +4376,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             detached.item_ids,
-            vec![ids[0], grouped.collection_id, ids[1]]
+            vec![ids[0], ids[1], grouped.collection_id]
         );
         let trash = app.projections().trash_bitmap();
         assert!(trash.contains(ids[0].0 as u32));
@@ -1827,7 +4511,7 @@ mod tests {
         app.store()
             .read(|connection| {
                 let label: String = connection.query_row(
-                    "SELECT label FROM library_item WHERE item_id = ?1",
+                    "SELECT name FROM root_metadata WHERE root_item_id = ?1",
                     [grouped.collection_id.0],
                     |row| row.get(0),
                 )?;
@@ -2005,7 +4689,7 @@ mod tests {
         app.store()
             .read(|connection| {
                 let label: String = connection.query_row(
-                    "SELECT label FROM library_item WHERE item_id = ?1",
+                    "SELECT name FROM root_metadata WHERE root_item_id = ?1",
                     [right.collection_id.0],
                     |row| row.get(0),
                 )?;
@@ -2083,7 +4767,7 @@ mod tests {
     }
 
     #[test]
-    fn worker_tags_only_the_analyzed_collection_member() {
+    fn worker_tags_the_analyzed_members_owning_collection_root() {
         let (_directory, app, ids) = fixture();
         let grouped = organize(&app, &ids[..2], None, None);
         let first = app
@@ -2098,17 +4782,17 @@ mod tests {
             .read(|connection| {
                 let tagged: Vec<i64> = {
                     let mut statement = connection.prepare(
-                        "SELECT mt.media_item_id FROM media_tag mt
-                         JOIN tag t ON t.tag_id = mt.tag_id
+                        "SELECT relation.root_item_id FROM root_tag relation
+                         JOIN tag t ON t.tag_id = relation.tag_id
                          WHERE t.namespace = 'general' AND t.subtag = 'predicted'
-                         ORDER BY mt.media_item_id",
+                         ORDER BY relation.root_item_id",
                     )?;
                     let rows = statement
                         .query_map([], |row| row.get::<_, i64>(0))?
                         .collect::<rusqlite::Result<Vec<_>>>()?;
                     rows
                 };
-                assert_eq!(tagged, vec![ids[0].0]);
+                assert_eq!(tagged, vec![grouped.collection_id.0]);
                 Ok(())
             })
             .unwrap();
@@ -2137,20 +4821,22 @@ mod tests {
             .read(|connection| {
                 connection
                     .prepare(
-                        "SELECT mt.media_item_id, t.subtag
-                         FROM media_tag mt JOIN tag t ON t.tag_id = mt.tag_id
-                         WHERE mt.source = 'ai'
-                         ORDER BY mt.media_item_id",
+                        "SELECT relation.root_item_id, t.subtag
+                         FROM root_tag relation JOIN tag t ON t.tag_id = relation.tag_id
+                         WHERE (relation.source_mask & ?1) <> 0
+                         ORDER BY relation.root_item_id, t.subtag",
                     )?
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .query_map([super::tag_source_mask("ai")], |row| {
+                        Ok((row.get(0)?, row.get(1)?))
+                    })?
                     .collect()
             })
             .unwrap();
         assert_eq!(
             assignments,
             vec![
-                (ids[0].0, "first".to_string()),
-                (ids[1].0, "second".to_string())
+                (grouped.collection_id.0, "first".to_string()),
+                (grouped.collection_id.0, "second".to_string())
             ]
         );
 
@@ -2159,8 +4845,8 @@ mod tests {
             .store()
             .read(|connection| {
                 connection.query_row(
-                    "SELECT COUNT(*) FROM media_tag WHERE source = 'ai'",
-                    [],
+                    "SELECT COUNT(*) FROM root_tag WHERE (source_mask & ?1) <> 0",
+                    [super::tag_source_mask("ai")],
                     |row| row.get::<_, i64>(0),
                 )
             })
@@ -2175,6 +4861,30 @@ mod tests {
         let target = ItemTarget::Explicit {
             item_ids: vec![grouped.collection_id],
         };
+        app.store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO smart_folder (
+                         smart_folder_id, smart_folder_key, name, predicate_json,
+                         created_at, updated_at
+                     ) VALUES (99, 'smart:shared', 'Shared', ?1, 'now', 'now')",
+                    [serde_json::json!({
+                        "groups": [{
+                            "match_mode": "all",
+                            "negate": false,
+                            "rules": [{
+                                "field": "tags",
+                                "op": "include",
+                                "values": ["general:shared"]
+                            }]
+                        }]
+                    })
+                    .to_string()],
+                )?;
+                crate::smart_v2::refresh_materialized(transaction)?;
+                Ok(())
+            })
+            .unwrap();
         app.apply_tags(&target, &["general:shared".to_string()], true, 1)
             .unwrap();
         let tag_id = app
@@ -2194,11 +4904,23 @@ mod tests {
         app.store()
             .read(|connection| {
                 let count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM media_tag WHERE tag_id = ?1",
+                    "SELECT COUNT(*) FROM root_tag WHERE tag_id = ?1",
                     [tag_id],
                     |row| row.get(0),
                 )?;
-                assert_eq!(count, 2);
+                assert_eq!(count, 1);
+                let smart_count: i64 = connection.query_row(
+                    "SELECT COUNT(*)
+                     FROM smart_folder_generation generation
+                     JOIN smart_folder_membership membership
+                       ON membership.generation_id = generation.generation_id
+                     WHERE generation.smart_folder_id = 99
+                       AND generation.state = 'active'
+                       AND membership.root_item_id = ?1",
+                    [grouped.collection_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(smart_count, 1);
                 Ok(())
             })
             .unwrap();
@@ -2206,6 +4928,23 @@ mod tests {
         app.apply_tags(&target, &["general:shared".to_string()], false, 1)
             .unwrap();
         assert!(app.projections().direct_tag_bitmap(tag_id).is_empty());
+        let smart_count = app
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT COUNT(*)
+                     FROM smart_folder_generation generation
+                     JOIN smart_folder_membership membership
+                       ON membership.generation_id = generation.generation_id
+                     WHERE generation.smart_folder_id = 99
+                       AND generation.state = 'active'
+                       AND membership.root_item_id = ?1",
+                    [grouped.collection_id.0],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(smart_count, 0);
     }
 
     #[test]
@@ -2503,7 +5242,11 @@ mod tests {
                         .iter()
                         .map(|item_id| {
                             connection.query_row(
-                                "SELECT name FROM media_asset WHERE item_id = ?1",
+                                "SELECT COALESCE(metadata.name, asset.name, '')
+                                 FROM media_asset asset
+                                 LEFT JOIN root_metadata metadata
+                                   ON metadata.root_item_id = asset.item_id
+                                 WHERE asset.item_id = ?1",
                                 [item_id.0],
                                 |row| {
                                     row.get::<_, Option<String>>(0)

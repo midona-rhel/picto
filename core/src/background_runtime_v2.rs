@@ -3,12 +3,12 @@
 //! The queue owns claim, retry, and completion state. This runtime only
 //! performs the side effect and batches the resulting invalidation receipt.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::app::{resources, Application, ItemId, MutationReceipt};
 use crate::media_processing_v2::{self, BlobSource, DerivativeOutcome};
 use crate::store::Store;
-use crate::workers_v2::{self, WorkItem, WorkKind, WorkSpec, Worker, DEFAULT_BATCH_SIZE};
+use crate::workers_v2::{self, WorkItem, WorkKind, DEFAULT_BATCH_SIZE};
 
 type WorkExecution = Result<(Option<MutationReceipt>, Option<DerivativeOutcome>), String>;
 
@@ -26,32 +26,6 @@ pub struct DrainBatchResult {
 pub struct DominantColorChange {
     pub file_hash: String,
     pub dominant_color_hex: Option<String>,
-}
-
-/// Durable executor for one bounded batch of replacement-backend work.
-pub struct BackgroundRuntime<'a> {
-    application: &'a Application,
-    queue: Worker<'a>,
-}
-
-impl<'a> BackgroundRuntime<'a> {
-    /// Recover work interrupted by a previous process before accepting claims.
-    pub fn start(application: &'a Application) -> Result<Self, String> {
-        Ok(Self {
-            application,
-            queue: Worker::start(application.store())?,
-        })
-    }
-
-    pub fn enqueue(&self, spec: WorkSpec) -> Result<workers_v2::EnqueueResult, String> {
-        self.queue.enqueue(spec)
-    }
-
-    /// Claim and execute at most `limit` items. The queue applies its own
-    /// hard batch bound, so callers cannot accidentally drain unbounded work.
-    pub async fn drain_batch(&self, limit: usize) -> Result<DrainBatchResult, String> {
-        drain_claimed_batch(self.application, self.application.blobs(), limit).await
-    }
 }
 
 pub async fn drain_batch(
@@ -78,31 +52,24 @@ async fn drain_claimed_batch<B: BlobSource>(
     let mut thumbnail_file_hashes = BTreeSet::new();
     let mut dominant_color_changes = BTreeMap::new();
     let mut duplicate_analysis_touched = false;
+    let mut completed_work_ids = Vec::new();
 
     let mut groups: Vec<Vec<WorkItem>> = Vec::new();
+    let mut group_indexes: HashMap<(u8, i64), usize> = HashMap::new();
     for item in items {
-        if item.kind == WorkKind::AiTag {
-            if let Some(group) = groups.iter_mut().find(|group| {
-                group
-                    .first()
-                    .is_some_and(|candidate| candidate.kind == WorkKind::AiTag)
-            }) {
-                group.push(item);
-                continue;
-            }
+        let key = if item.kind == WorkKind::AiTag {
+            (0_u8, 0_i64)
+        } else if is_derivative(item.kind) {
+            (1_u8, item.file_id.unwrap_or(item.work_id))
+        } else {
+            (2_u8, item.work_id)
+        };
+        if let Some(index) = group_indexes.get(&key).copied() {
+            groups[index].push(item);
+        } else {
+            group_indexes.insert(key, groups.len());
+            groups.push(vec![item]);
         }
-        let derivative_file = is_derivative(item.kind).then_some(item.file_id).flatten();
-        if let Some(file_id) = derivative_file {
-            if let Some(group) = groups.iter_mut().find(|group| {
-                group.first().is_some_and(|candidate| {
-                    is_derivative(candidate.kind) && candidate.file_id == Some(file_id)
-                })
-            }) {
-                group.push(item);
-                continue;
-            }
-        }
-        groups.push(vec![item]);
     }
 
     for group in groups {
@@ -197,12 +164,7 @@ async fn drain_claimed_batch<B: BlobSource>(
                     duplicate_analysis_touched |= item.kind == WorkKind::PerceptualHash
                         || derivative_outcome
                             .is_some_and(|outcome| outcome.perceptual_hash_written);
-                    if !workers_v2::complete(store, item.work_id)? {
-                        return Err(format!(
-                            "Work item {} succeeded but could not be completed",
-                            item.work_id
-                        ));
-                    }
+                    completed_work_ids.push(item.work_id);
                     result.succeeded += 1;
                 }
                 Err(error) => {
@@ -216,6 +178,16 @@ async fn drain_claimed_batch<B: BlobSource>(
                     }
                 }
             }
+        }
+    }
+
+    if !completed_work_ids.is_empty() {
+        let completed = workers_v2::complete_many(store, &completed_work_ids)?;
+        if completed != completed_work_ids.len() {
+            return Err(format!(
+                "{} work items succeeded but only {completed} could be completed",
+                completed_work_ids.len()
+            ));
         }
     }
 
@@ -461,7 +433,7 @@ mod tests {
                 succeeded: 1,
                 retried: 0,
                 receipt: Some(crate::app::MutationReceipt {
-                    revision: 5,
+                    revision: 6,
                     resources: vec![resources::TASKS.to_string()],
                     item_ids: vec![],
                 }),

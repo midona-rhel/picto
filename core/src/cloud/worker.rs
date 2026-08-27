@@ -168,17 +168,19 @@ fn set_status(
     phase: &str,
     message: &str,
 ) -> Result<bool, String> {
-    let (_, _, changed) = application.store().transaction_if_changed(|transaction| {
-        let changed = transaction.execute(
-            "UPDATE cloud_state SET state = ?1, phase = ?2, blocking = 0,
+    let (_, _, changed) = application
+        .store()
+        .transaction_if_changed_cloud(|transaction| {
+            let changed = transaction.execute(
+                "UPDATE cloud_state SET state = ?1, phase = ?2, blocking = 0,
                     completed_units = 0, total_units = NULL, message = ?3
              WHERE singleton = 1
                AND (state != ?1 OR phase != ?2 OR blocking != 0
                     OR completed_units != 0 OR total_units IS NOT NULL OR message != ?3)",
-            rusqlite::params![state, phase, message],
-        )? > 0;
-        Ok(((), changed))
-    })?;
+                rusqlite::params![state, phase, message],
+            )? > 0;
+            Ok(((), changed))
+        })?;
     Ok(changed)
 }
 

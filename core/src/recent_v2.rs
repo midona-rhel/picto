@@ -109,12 +109,18 @@ mod tests {
                 transaction.execute("DELETE FROM library_root WHERE item_id = 11", [])?;
                 transaction.execute(
                     "INSERT INTO library_item
-                        (item_id, item_key, kind, label, created_at, updated_at)
-                     VALUES (10, 'collection', 'collection', 'Album', '2026-01-01', '2026-01-01')",
+                        (item_id, item_key, kind, created_at, updated_at)
+                     VALUES (10, 'collection', 'collection', '2026-01-01', '2026-01-01')",
                     [],
                 )?;
                 transaction.execute(
                     "INSERT INTO library_root (item_id, lifecycle) VALUES (10, 'active')",
+                    [],
+                )?;
+                transaction.execute(
+                    "INSERT INTO root_metadata
+                        (root_item_id, name, source_urls_json, updated_at)
+                     VALUES (10, 'Album', '[]', '2026-01-01')",
                     [],
                 )?;
                 transaction.execute(
@@ -145,6 +151,14 @@ mod tests {
             .unwrap();
         transaction
             .execute(
+                "INSERT INTO root_metadata
+                    (root_item_id, name, source_urls_json, updated_at)
+                 VALUES (?1, ?2, '[]', '2026-01-01')",
+                rusqlite::params![item_id, item_key],
+            )
+            .unwrap();
+        transaction
+            .execute(
                 "INSERT INTO media_file
                     (file_id, file_hash, mime_type, size_bytes, created_at)
                  VALUES (?1, ?2, 'image/jpeg', 1, '2026-01-01')",
@@ -153,9 +167,9 @@ mod tests {
             .unwrap();
         transaction
             .execute(
-                "INSERT INTO media_asset (item_id, file_id, imported_at, updated_at)
-                 VALUES (?1, ?1, '2026-01-01', '2026-01-01')",
-                [item_id],
+                "INSERT INTO media_asset (item_id, file_id, name, imported_at, updated_at)
+                 VALUES (?1, ?1, ?2, '2026-01-01', '2026-01-01')",
+                rusqlite::params![item_id, item_key],
             )
             .unwrap();
     }
@@ -167,7 +181,7 @@ mod tests {
         let first = application
             .record_recent_view_at(ItemId(1), "2026-08-23T10:00:00Z")
             .unwrap();
-        assert_eq!(first.revision, 2);
+        assert_eq!(first.revision, 3);
         assert_eq!(
             first.resources,
             vec![
@@ -180,7 +194,7 @@ mod tests {
         let second = application
             .record_recent_view_at(ItemId(1), "2026-08-23T11:00:00Z")
             .unwrap();
-        assert_eq!(second.revision, 3);
+        assert_eq!(second.revision, 4);
         let viewed_at: String = application
             .store()
             .read(|connection| {
@@ -206,7 +220,7 @@ mod tests {
             .record_recent_view_at(ItemId(1), timestamp)
             .unwrap();
 
-        assert_eq!(first.revision, 2);
+        assert_eq!(first.revision, 3);
         assert_eq!(second.revision, first.revision);
         assert_eq!(application.store().revision().unwrap(), first.revision);
     }
@@ -232,7 +246,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(view_count, 0);
-        assert_eq!(revision, 1);
+        assert_eq!(revision, 2);
     }
 
     #[test]

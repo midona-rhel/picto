@@ -343,7 +343,9 @@ fn update_status(
     total: Option<i64>,
     message: &str,
 ) -> Result<(), String> {
-    let (_, revision) = application.store().transaction(|transaction| {
+    let (_, revision) = application
+        .store()
+        .transaction_cloud(|transaction| {
         transaction.execute(
             "UPDATE cloud_state SET state = ?1, phase = ?2, blocking = ?3,
                     completed_units = ?4, total_units = ?5, message = ?6,
@@ -373,7 +375,9 @@ fn update_status(
 }
 
 fn update_blob_counts(application: &Application) -> Result<(), String> {
-    application.store().transaction(|transaction| {
+    application
+        .store()
+        .transaction_cloud(|transaction| {
         transaction.execute(
             "UPDATE cloud_state SET
                  pending_blobs = (SELECT COUNT(*) FROM cloud_blob_state WHERE state IN ('queued', 'downloading')),

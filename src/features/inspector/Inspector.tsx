@@ -121,14 +121,7 @@ function selectionSupportsAiTagging(
   target: ItemTarget | null | undefined,
   summary: SelectionSummary | null,
 ): boolean {
-  if (!target || !summary) return false;
-  const mimeCounts = summary.stats.mime_counts;
-  if (!mimeCounts) return false;
-  const imageCount = Object.entries(mimeCounts)
-    .filter(([mime]) => mime.startsWith('image/'))
-    .reduce((count, [, value]) => count + value, 0);
-  const mediaCount = Object.values(mimeCounts).reduce((count, value) => count + value, 0);
-  return mediaCount > 0 && imageCount === mediaCount;
+  return Boolean(target && summary?.stats.all_media_are_images);
 }
 
 // ── Portal opener ───────────────────────────────────────────────
@@ -486,6 +479,7 @@ function itemDetailsDisplay(details: ItemDetails) {
 
 type CorePropertyLabel =
   | 'Items'
+  | 'Media'
   | 'Dimensions'
   | 'Size'
   | 'Type'
@@ -505,6 +499,7 @@ type CoreProperty = {
 
 const CORE_PROPERTIES: Array<Pick<CoreProperty, 'label' | 'mono'>> = [
   { label: 'Items', mono: true },
+  { label: 'Media', mono: true },
   { label: 'Dimensions', mono: true },
   { label: 'Size', mono: true },
   { label: 'Type', mono: false },
@@ -787,13 +782,9 @@ export function Inspector() {
       return { id: f.folder_id, name: n?.name ?? f.name, color: n?.color ?? null };
     });
     const previewHashes = summary?.sample_hashes ?? [];
-    const previewMimeTypes = Object.keys(summary?.stats?.mime_counts ?? {});
-    const fontPreviewHashes = previewMimeTypes.length > 0 && previewMimeTypes.every((mime) => mime.startsWith('font/'))
-      ? new Set(previewHashes)
-      : undefined;
     const commitNotes = selTarget ? (notes: string) => {
       const apply = () => { void entityMutations.setTargetNotes(selTarget, notes); };
-      if ((summary?.notes_present_count ?? 0) > 0 && notes !== (summary?.shared_notes ?? '')) {
+      if (summary?.has_notes && notes !== (summary.shared_notes ?? '')) {
         confirmSelectionOverwrite('notes', count, apply);
       } else {
         apply();
@@ -802,7 +793,7 @@ export function Inspector() {
     const commitSources = selTarget ? (urls: string[]) => {
       if (sameStrings(summary?.shared_source_urls, urls)) return;
       const apply = () => { void entityMutations.setTargetSourceUrls(selTarget, urls); };
-      if ((summary?.source_urls_present_count ?? 0) > 0) {
+      if (summary?.has_source_urls) {
         confirmSelectionOverwrite('sources', count, apply);
       } else {
         apply();
@@ -810,13 +801,16 @@ export function Inspector() {
     } : undefined;
 
     return <InspectorSkeleton
-      preview={<Preview hashes={previewHashes} type="stacked" fontHashes={fontPreviewHashes} />}
+      preview={<Preview hashes={previewHashes} type="stacked" />}
       palette={[]}
       selectionCount={count}
       notes={{ value: summary?.shared_notes ?? '', onCommit: commitNotes, readOnly: summaryPending }}
       source={{ urls: summary?.shared_source_urls ?? [], onChange: commitSources, unavailable: summaryPending }}
       rating={{ value: summary?.stats?.rating_stats?.shared ?? 0, onChange: selTarget ? (rating) => entityMutations.setTargetRating(selTarget, rating) : undefined }}
       coreProperties={normalizedCoreProperties({
+        Media: summaryPending
+          ? { value: '', loading: true, showLoading: showSummaryLoading }
+          : { value: summary ? summary.stats.media_count.toLocaleString() : '—' },
         Size: summaryPending
           ? { value: '', loading: true, showLoading: showSummaryLoading }
           : { value: summary?.stats?.total_size_bytes != null ? fmtSize(summary.stats.total_size_bytes) : '—' },

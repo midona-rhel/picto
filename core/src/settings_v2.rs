@@ -44,16 +44,17 @@ pub fn subscription_inbox_item_limit(application: &Application) -> Result<u64, S
 pub fn subscription_inbox_is_full(application: &Application) -> Result<bool, String> {
     let limit = subscription_inbox_item_limit(application)?;
     application.store().read(|connection| {
-        let count: u64 = connection.query_row(
+        let sql_limit = i64::try_from(limit).unwrap_or(i64::MAX);
+        let count: i64 = connection.query_row(
             "SELECT COUNT(*) FROM (
                  SELECT 1 FROM library_root
                  WHERE lifecycle = 'inbox'
                  LIMIT ?1
              )",
-            [limit],
+            [sql_limit],
             |row| row.get(0),
         )?;
-        Ok(count >= limit)
+        Ok(count >= sql_limit)
     })
 }
 
@@ -332,11 +333,11 @@ mod tests {
         let first = application
             .patch_application_settings(&serde_json::json!({"zoom": 1.25, "theme": "dark"}))
             .unwrap();
-        assert_eq!(first.revision, 1);
+        assert_eq!(first.revision, 2);
         let no_op = application
             .patch_application_settings(&serde_json::json!({"zoom": 1.25}))
             .unwrap();
-        assert_eq!(no_op.revision, 1);
+        assert_eq!(no_op.revision, 2);
         assert_eq!(
             application_settings(&application).unwrap().value,
             serde_json::json!({"zoom": 1.25, "theme": "dark"})

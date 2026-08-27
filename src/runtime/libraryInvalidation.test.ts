@@ -30,23 +30,33 @@ describe('library invalidation', () => {
     removeListener.mockClear();
   });
 
-  it('coalesces a burst into the highest revision and unioned payload', async () => {
+  it('coalesces a burst without relabeling older resources as a newer revision', async () => {
     const registry = createLibraryInvalidationRegistry();
-    const callback = vi.fn();
-    registry.register('library', callback);
+    const libraryCallback = vi.fn();
+    const sidebarCallback = vi.fn();
+    registry.register('library', libraryCallback);
+    registry.register('sidebar', sidebarCallback);
     registry.start();
 
     emit({ revision: 4, resources: ['library', 'sidebar'], item_ids: [7] });
     emit({ revision: 5, resources: ['tags', 'library'], item_ids: [8, 7] });
 
-    expect(callback).not.toHaveBeenCalled();
+    expect(libraryCallback).not.toHaveBeenCalled();
     await Promise.resolve();
-    expect(callback).toHaveBeenCalledTimes(1);
-    expect(callback).toHaveBeenCalledWith({
+    expect(libraryCallback).toHaveBeenCalledOnce();
+    expect(libraryCallback).toHaveBeenCalledWith({
       revision: 5,
-      resources: ['library', 'sidebar', 'tags'],
+      resources: ['library'],
       item_ids: [7, 8],
     });
+    expect(sidebarCallback).toHaveBeenCalledOnce();
+    expect(sidebarCallback).toHaveBeenCalledWith({
+      revision: 4,
+      resources: ['sidebar'],
+      item_ids: [7],
+    });
+    expect(registry.latestRevision('library')).toBe(5);
+    expect(registry.latestRevision('sidebar')).toBe(4);
   });
 
   it('suppresses revisions already delivered', async () => {
@@ -62,6 +72,51 @@ describe('library invalidation', () => {
     await Promise.resolve();
 
     expect(callback).toHaveBeenCalledTimes(1);
+  });
+
+  it('tracks resource revisions independently', async () => {
+    const registry = createLibraryInvalidationRegistry();
+    const libraryCallback = vi.fn();
+    registry.register('library', libraryCallback);
+    registry.start();
+
+    emit({ revision: 8, resources: ['sidebar'], item_ids: [] });
+    await Promise.resolve();
+    emit({ revision: 7, resources: ['library'], item_ids: [] });
+    await Promise.resolve();
+
+    expect(libraryCallback).toHaveBeenCalledTimes(1);
+    expect(libraryCallback).toHaveBeenCalledWith({
+      revision: 7,
+      resources: ['library'],
+      item_ids: [],
+    });
+  });
+
+  it('does not retain per-item watermarks without a mounted item consumer', async () => {
+    const registry = createLibraryInvalidationRegistry();
+    registry.register('library', vi.fn());
+    registry.start();
+
+    emit({ revision: 3, resources: ['library'], item_ids: [10, 11, 12] });
+    await Promise.resolve();
+
+    expect(registry.latestRevision('library')).toBe(3);
+    expect(registry.latestRevision('item:10')).toBe(-Infinity);
+  });
+
+  it('drops queued state when the last consumer unregisters before delivery', async () => {
+    const registry = createLibraryInvalidationRegistry();
+    const callback = vi.fn();
+    const unregister = registry.register('library', callback);
+    registry.start();
+
+    emit({ revision: 6, resources: ['library'], item_ids: [1] });
+    unregister();
+    await Promise.resolve();
+
+    expect(callback).not.toHaveBeenCalled();
+    expect(registry.latestRevision('library')).toBe(-Infinity);
   });
 
   it('matches exact resources and item keys without duplicate callback delivery', async () => {

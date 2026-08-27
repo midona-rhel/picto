@@ -1,18 +1,23 @@
 //! Durable entrypoint for every media import.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Mutex;
+use std::time::{Duration as StdDuration, Instant};
 
 use chrono::{Duration, Utc};
 use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
 
-use crate::app::{resources, Application, ItemId, MutationReceipt};
-use crate::ingest_v2::{IngestMediaResult, PreparedMediaInput, DELETED_SOURCE_ITEM_ERROR};
+use crate::app::{resources, Application, ItemId, Lifecycle, MutationReceipt};
+use crate::ingest_v2::{PreparedMediaInput, DELETED_SOURCE_ITEM_ERROR};
 
-const DEFAULT_BATCH_SIZE: usize = 8;
+const DEFAULT_BATCH_SIZE: usize = 64;
+const INVALIDATION_CADENCE: StdDuration = StdDuration::from_millis(16);
+const MAX_INVALIDATION_ITEM_IDS: usize = 256;
 const MAX_ATTEMPTS: i64 = 8;
 const MAX_BACKOFF_SECONDS: i64 = 300;
 
@@ -199,11 +204,9 @@ pub(crate) fn discard_abandoned_gallery_sources(
 pub(crate) fn recover_settled_provisional_collections(
     application: &Application,
 ) -> Result<usize, String> {
-    let now = Utc::now().to_rfc3339();
-    let (recovered, _, _) = application.store().transaction_if_changed(|transaction| {
-        let candidates = {
-            let mut statement = transaction.prepare(
-                "SELECT cm.collection_id, si.source_post_id,
+    let candidates = application.store().read(|connection| {
+        let mut statement = connection.prepare(
+            "SELECT cm.collection_id, si.source_post_id,
                         COALESCE(MAX(ij.lifecycle), 'inbox')
                  FROM collection_member cm
                  JOIN source_item si ON si.media_item_id = cm.media_item_id
@@ -220,34 +223,32 @@ pub(crate) fn recover_settled_provisional_collections(
                          AND pending_job.status IN ('pending', 'running')
                    )
                  GROUP BY cm.collection_id, si.source_post_id",
-            )?;
-            let rows = statement
-                .query_map([], |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, i64>(1)?,
-                        row.get::<_, String>(2)?,
-                    ))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            rows
-        };
-
-        for (collection_id, source_post_id, lifecycle) in &candidates {
-            transaction.execute(
-                "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)
-                 ON CONFLICT(item_id) DO NOTHING",
-                params![collection_id, lifecycle],
-            )?;
-            transaction.execute(
-                "UPDATE source_post SET root_item_id = ?1, updated_at = ?2
-                 WHERE source_post_id = ?3 AND root_item_id IS NULL",
-                params![collection_id, now, source_post_id],
-            )?;
-        }
-        let recovered = candidates.len();
-        Ok((recovered, recovered != 0))
+        )?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, String>(2)?,
+                ))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
     })?;
+    let mut recovered = 0;
+    for (collection_id, source_post_id, lifecycle) in candidates {
+        let lifecycle = match lifecycle.as_str() {
+            "inbox" => Lifecycle::Inbox,
+            "active" => Lifecycle::Active,
+            "trash" => Lifecycle::Trash,
+            value => return Err(format!("Invalid provisional lifecycle: {value}")),
+        };
+        recovered += usize::from(application.recover_provisional_source_root(
+            collection_id,
+            source_post_id,
+            lifecycle,
+        )?);
+    }
     if recovered != 0 {
         tracing::info!(recovered, "Recovered settled provisional collections");
     }
@@ -523,6 +524,19 @@ fn existing_job(application: &Application, job_key: &str) -> Result<Option<Exist
 }
 
 fn stage_source(application: &Application, spec: &IngestJobSpec) -> Result<StagedSource, String> {
+    if tokio::runtime::Handle::try_current()
+        .ok()
+        .is_some_and(|handle| handle.runtime_flavor() == tokio::runtime::RuntimeFlavor::MultiThread)
+    {
+        return tokio::task::block_in_place(|| stage_source_blocking(application, spec));
+    }
+    stage_source_blocking(application, spec)
+}
+
+fn stage_source_blocking(
+    application: &Application,
+    spec: &IngestJobSpec,
+) -> Result<StagedSource, String> {
     let source = Path::new(&spec.source_path);
     if !source.is_file() {
         return Err(format!("Ingest source is missing: {}", source.display()));
@@ -633,11 +647,11 @@ pub fn claim(application: &Application, limit: usize) -> Result<Vec<IngestJob>, 
 fn claim_at(application: &Application, limit: usize, now: &str) -> Result<Vec<IngestJob>, String> {
     let (jobs, _, _) = application.store().transaction_if_changed(|transaction| {
         let mut statement = transaction.prepare(
-            "SELECT ingest_job_id, source_path, delete_after_ingest,
-                    payload_json, attempt_count
-             FROM ingest_job
-             WHERE status = 'pending' AND available_at <= ?1
-             ORDER BY available_at, ingest_job_id
+            "SELECT ij.ingest_job_id, ij.source_path, ij.delete_after_ingest,
+                    ij.payload_json, ij.attempt_count
+             FROM ingest_job ij
+             WHERE ij.status = 'pending' AND ij.available_at <= ?1
+             ORDER BY ij.available_at, ij.ingest_job_id
              LIMIT ?2",
         )?;
         let rows = statement
@@ -653,31 +667,42 @@ fn claim_at(application: &Application, limit: usize, now: &str) -> Result<Vec<In
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
 
-        let mut jobs = Vec::with_capacity(rows.len());
-        for (ingest_job_id, source_path, delete_after_ingest, payload, attempt_count) in rows {
-            let input: PreparedMediaInput = serde_json::from_str(&payload).map_err(|error| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    3,
-                    rusqlite::types::Type::Text,
-                    Box::new(error),
-                )
-            })?;
-            let changed = transaction.execute(
+        let job_ids = rows.iter().map(|row| row.0).collect::<Vec<_>>();
+        if !job_ids.is_empty() {
+            let encoded = serde_json::to_string(&job_ids)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            transaction.execute(
                 "UPDATE ingest_job SET status = 'running', updated_at = ?1
-                 WHERE ingest_job_id = ?2 AND status = 'pending'",
-                params![now, ingest_job_id],
+                 WHERE status = 'pending'
+                   AND ingest_job_id IN (
+                       SELECT CAST(value AS INTEGER) FROM json_each(?2)
+                   )",
+                params![now, encoded],
             )?;
-            if changed == 1 {
-                jobs.push(IngestJob {
-                    ingest_job_id,
-                    source_path,
-                    delete_after_ingest,
-                    input,
-                    status: IngestJobStatus::Running,
-                    attempt_count,
-                });
-            }
         }
+        let jobs = rows
+            .into_iter()
+            .map(
+                |(ingest_job_id, source_path, delete_after_ingest, payload, attempt_count)| {
+                    let input: PreparedMediaInput =
+                        serde_json::from_str(&payload).map_err(|error| {
+                            rusqlite::Error::FromSqlConversionFailure(
+                                3,
+                                rusqlite::types::Type::Text,
+                                Box::new(error),
+                            )
+                        })?;
+                    Ok(IngestJob {
+                        ingest_job_id,
+                        source_path,
+                        delete_after_ingest,
+                        input,
+                        status: IngestJobStatus::Running,
+                        attempt_count,
+                    })
+                },
+            )
+            .collect::<rusqlite::Result<Vec<_>>>()?;
         let changed = !jobs.is_empty();
         Ok((jobs, changed))
     })?;
@@ -685,28 +710,81 @@ fn claim_at(application: &Application, limit: usize, now: &str) -> Result<Vec<In
 }
 
 pub fn run_batch(application: &Application, limit: usize) -> Result<IngestRunReport, String> {
-    // Subscription workers and maintenance share this queue. Only one owner
-    // may decode/persist an ingest batch at a time; otherwise thumbnail-first
-    // ingest and derivative work compete across cores and duplicate I/O.
     let _execution = application.lock_ingest_execution()?;
     let jobs = claim(application, limit)?;
+    run_claimed_batch(application, jobs)
+}
+
+pub(crate) fn drain_query(
+    _application: &Application,
+    _run_query_id: i64,
+    _limit: usize,
+) -> Result<IngestRunReport, String> {
+    // Source runners only enqueue durable work. The maintenance loop is the
+    // sole ingest consumer, preventing competing publishers and out-of-order
+    // source settlement.
+    Ok(IngestRunReport::default())
+}
+
+fn run_claimed_batch(
+    application: &Application,
+    jobs: Vec<IngestJob>,
+) -> Result<IngestRunReport, String> {
     let mut report = IngestRunReport {
         claimed: jobs.len(),
         ..IngestRunReport::default()
     };
-    let mut resources_changed = BTreeSet::from([resources::TASKS.to_string()]);
+    let mut resources_changed = BTreeSet::new();
     let mut item_ids = BTreeSet::new();
+    let mut report_item_ids = BTreeSet::new();
+    let mut last_invalidation = Instant::now();
+    let preparations = prepare_jobs_bounded(application, jobs);
 
-    for job in jobs {
-        match process_job(application, &job) {
+    let mut ready = Vec::new();
+    for (job, preparation) in preparations {
+        match preparation {
+            Ok(thumbnail_prepared) => ready.push((job, thumbnail_prepared)),
+            Err(error) => {
+                if retry_or_fail(application, &job, &error)? {
+                    report.failed += 1;
+                } else {
+                    report.retried += 1;
+                }
+            }
+        }
+    }
+
+    // File preparation is outside SQLite writer ownership. The caller holds
+    // the queue execution lease so another driver cannot claim later source
+    // items and publish them out of order while this batch is being prepared.
+    let mut succeeded = Vec::new();
+    let mut deferred = Vec::new();
+    let mut processed = 0_usize;
+    let commit_started = Instant::now();
+
+    for (job, thumbnail_prepared) in ready {
+        if processed != 0 && commit_started.elapsed() >= INVALIDATION_CADENCE {
+            deferred.push(job);
+            continue;
+        }
+        processed += 1;
+        match application.ingest_prepared(&job.input) {
             Ok(result) => {
-                mark_succeeded(application, job.ingest_job_id)?;
-                cleanup_staged_source(&job);
                 report.ingested += 1;
-                item_ids.insert(result.root_item_id.0);
+                succeeded.push((job, thumbnail_prepared));
                 if let Some(receipt) = result.receipt {
                     resources_changed.extend(receipt.resources);
-                    item_ids.extend(receipt.item_ids.into_iter().map(|item_id| item_id.0));
+                    let visible_ids = receipt
+                        .item_ids
+                        .into_iter()
+                        .map(|item_id| item_id.0)
+                        .collect::<Vec<_>>();
+                    item_ids.extend(visible_ids.iter().copied());
+                    report_item_ids.extend(visible_ids);
+                }
+                if last_invalidation.elapsed() >= INVALIDATION_CADENCE {
+                    publish_ingest_changes(application, &mut resources_changed, &mut item_ids)?;
+                    last_invalidation = Instant::now();
                 }
             }
             Err(error) => {
@@ -719,15 +797,112 @@ pub fn run_batch(application: &Application, limit: usize) -> Result<IngestRunRep
         }
     }
 
-    report.item_ids = item_ids.iter().copied().map(ItemId).collect();
+    if !deferred.is_empty() {
+        report.claimed = report.claimed.saturating_sub(deferred.len());
+        release_claimed(application, &deferred)?;
+    }
+
+    settle_succeeded(application, &succeeded)?;
+    for (job, _) in &succeeded {
+        cleanup_staged_source(job);
+    }
+
+    report.item_ids = report_item_ids.into_iter().map(ItemId).collect();
     if report.claimed != 0 {
-        application.publish(&MutationReceipt {
-            revision: application.store().revision()?,
-            resources: resources_changed.into_iter().collect(),
-            item_ids: report.item_ids.clone(),
-        });
+        resources_changed.insert(resources::TASKS.to_string());
+        publish_ingest_changes(application, &mut resources_changed, &mut item_ids)?;
     }
     Ok(report)
+}
+
+fn prepare_jobs_bounded(
+    application: &Application,
+    jobs: Vec<IngestJob>,
+) -> Vec<(IngestJob, Result<bool, String>)> {
+    let mut representatives = BTreeMap::new();
+    for job in &jobs {
+        representatives
+            .entry((job.input.file_hash.clone(), job.input.mime_type.clone()))
+            .or_insert_with(|| job.clone());
+    }
+    let representatives = representatives.into_iter().collect::<Vec<_>>();
+    let worker_count = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1)
+        .min(4)
+        .min(representatives.len().max(1));
+    let next = AtomicUsize::new(0);
+    let prepared = Mutex::new(Vec::with_capacity(representatives.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..worker_count {
+            scope.spawn(|| loop {
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                let Some((key, job)) = representatives.get(index) else {
+                    return;
+                };
+                let result = prepare_job_media(application, job);
+                prepared
+                    .lock()
+                    .expect("preparation lock poisoned")
+                    .push((key.clone(), result));
+            });
+        }
+    });
+    let prepared = prepared
+        .into_inner()
+        .expect("preparation lock poisoned")
+        .into_iter()
+        .collect::<BTreeMap<_, _>>();
+    jobs.into_iter()
+        .map(|job| {
+            let key = (job.input.file_hash.clone(), job.input.mime_type.clone());
+            let result = prepared
+                .get(&key)
+                .cloned()
+                .unwrap_or_else(|| Err("Ingest preparation produced no result".to_string()));
+            (job, result)
+        })
+        .collect()
+}
+
+fn release_claimed(application: &Application, jobs: &[IngestJob]) -> Result<(), String> {
+    let job_ids = jobs.iter().map(|job| job.ingest_job_id).collect::<Vec<_>>();
+    let encoded = serde_json::to_string(&job_ids)
+        .map_err(|error| format!("Could not encode deferred ingest IDs: {error}"))?;
+    application.store().transaction_if_changed(|transaction| {
+        let changed = transaction.execute(
+            "UPDATE ingest_job SET status = 'pending'
+             WHERE status = 'running'
+               AND ingest_job_id IN (
+                   SELECT CAST(value AS INTEGER) FROM json_each(?1)
+               )",
+            [encoded],
+        )? != 0;
+        Ok(((), changed))
+    })?;
+    Ok(())
+}
+
+fn publish_ingest_changes(
+    application: &Application,
+    resources_changed: &mut BTreeSet<String>,
+    item_ids: &mut BTreeSet<i64>,
+) -> Result<(), String> {
+    if resources_changed.is_empty() && item_ids.is_empty() {
+        return Ok(());
+    }
+    let bounded_item_ids = if item_ids.len() <= MAX_INVALIDATION_ITEM_IDS {
+        item_ids.iter().copied().map(ItemId).collect()
+    } else {
+        Vec::new()
+    };
+    application.publish(&MutationReceipt {
+        revision: application.store().revision()?,
+        resources: std::mem::take(resources_changed).into_iter().collect(),
+        item_ids: bounded_item_ids,
+    });
+    item_ids.clear();
+    Ok(())
 }
 
 pub fn has_ready_or_running(application: &Application) -> Result<bool, String> {
@@ -745,7 +920,7 @@ pub fn has_ready_or_running(application: &Application) -> Result<bool, String> {
     })
 }
 
-fn process_job(application: &Application, job: &IngestJob) -> Result<IngestMediaResult, String> {
+fn prepare_job_media(application: &Application, job: &IngestJob) -> Result<bool, String> {
     let extension = crate::blob_store::mime_to_extension(&job.input.mime_type);
     let source = Path::new(&job.source_path);
     let stored = application
@@ -773,73 +948,88 @@ fn process_job(application: &Application, job: &IngestJob) -> Result<IngestMedia
                 error => format!("Failed to persist original blob: {error}"),
             })?;
     }
-    let result = application.ingest_prepared(&job.input)?;
-    ensure_display_thumbnail_before_publish(application, &job.input, &result)?;
-    Ok(result)
-}
-
-fn ensure_display_thumbnail_before_publish(
-    application: &Application,
-    input: &PreparedMediaInput,
-    result: &IngestMediaResult,
-) -> Result<(), String> {
     use crate::media_capabilities::ThumbnailBackend;
 
     let capabilities = crate::media_capabilities::capabilities_for_stored_media(
-        &input.mime_type,
-        input.frame_count,
+        &job.input.mime_type,
+        job.input.frame_count,
     );
     if capabilities.thumbnail_backend != Some(ThumbnailBackend::Inline) {
-        return Ok(());
-    }
-
-    let is_display_media = result.root_item_id == result.media_item_id
-        || application.store().read(|connection| {
-            connection.query_row(
-                "SELECT COALESCE(cover_media_item_id = ?1, 0)
-                 FROM library_item WHERE item_id = ?2",
-                params![result.media_item_id.0, result.root_item_id.0],
-                |row| row.get::<_, bool>(0),
-            )
-        })?;
-    if !is_display_media {
-        return Ok(());
+        return Ok(false);
     }
 
     if application
         .blobs()
-        .find_thumbnail_path(&input.file_hash)
+        .find_thumbnail_path(&job.input.file_hash)
         .map_err(|error| format!("Thumbnail lookup failed: {error}"))?
         .is_none()
     {
-        let extension = crate::blob_store::mime_to_extension(&input.mime_type);
+        let extension = crate::blob_store::mime_to_extension(&job.input.mime_type);
         let original = application
             .blobs()
-            .original_path_with_ext(&input.file_hash, Some(extension))
+            .original_path_with_ext(&job.input.file_hash, Some(extension))
             .map_err(|error| format!("Original lookup failed: {error}"))?;
         let mut source = crate::media_processing::PreparedMediaSource::from_stored_metadata(
             original,
-            &input.mime_type,
-            input.duration_ms,
-            input.frame_count,
+            &job.input.mime_type,
+            job.input.duration_ms,
+            job.input.frame_count,
         );
         let (bytes, thumbnail_extension) = source
             .render_inline_thumbnail_bytes(crate::media_processing::DEFAULT_THUMBNAIL_DIMENSIONS)
             .map_err(|error| format!("Initial thumbnail generation failed: {error}"))?;
         application
             .blobs()
-            .write_thumbnail(&input.file_hash, &bytes, &thumbnail_extension)
+            .write_thumbnail(&job.input.file_hash, &bytes, &thumbnail_extension)
             .map_err(|error| format!("Initial thumbnail write failed: {error}"))?;
     }
+    Ok(true)
+}
 
+fn settle_succeeded(
+    application: &Application,
+    succeeded: &[(IngestJob, bool)],
+) -> Result<(), String> {
+    if succeeded.is_empty() {
+        return Ok(());
+    }
+    let now = Utc::now().to_rfc3339();
     application.store().transaction_if_changed(|transaction| {
-        let deleted = transaction.execute(
-            "DELETE FROM work_item
-             WHERE file_id = (SELECT file_id FROM media_file WHERE file_hash = ?1)
-               AND work_type = 'thumbnail'",
-            [&input.file_hash],
-        )?;
-        Ok(((), deleted != 0))
+        let job_ids = succeeded
+            .iter()
+            .map(|(job, _)| job.ingest_job_id)
+            .collect::<Vec<_>>();
+        let encoded_job_ids = serde_json::to_string(&job_ids)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let changed = transaction.execute(
+            "UPDATE ingest_job
+             SET status = 'succeeded', payload_json = '{}', last_error = NULL, updated_at = ?1
+             WHERE status = 'running'
+               AND ingest_job_id IN (
+                   SELECT CAST(value AS INTEGER) FROM json_each(?2)
+               )",
+            params![now, encoded_job_ids],
+        )? != 0;
+
+        let thumbnail_hashes = succeeded
+            .iter()
+            .filter(|(_, prepared)| *prepared)
+            .map(|(job, _)| job.input.file_hash.as_str())
+            .collect::<Vec<_>>();
+        if !thumbnail_hashes.is_empty() {
+            let encoded_hashes = serde_json::to_string(&thumbnail_hashes)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            transaction.execute(
+                "DELETE FROM work_item
+                 WHERE work_type = 'thumbnail'
+                   AND file_id IN (
+                       SELECT file_id FROM media_file
+                       WHERE file_hash IN (SELECT value FROM json_each(?1))
+                   )",
+                [encoded_hashes],
+            )?;
+        }
+        Ok(((), changed))
     })?;
     Ok(())
 }
@@ -871,19 +1061,6 @@ pub(crate) fn existing_watch_job_keys(
             .collect::<rusqlite::Result<std::collections::HashSet<_>>>()?;
         Ok(keys)
     })
-}
-
-fn mark_succeeded(application: &Application, ingest_job_id: i64) -> Result<(), String> {
-    application.store().transaction(|transaction| {
-        transaction.execute(
-            "UPDATE ingest_job
-             SET status = 'succeeded', payload_json = '{}', last_error = NULL, updated_at = ?1
-             WHERE ingest_job_id = ?2 AND status = 'running'",
-            params![Utc::now().to_rfc3339(), ingest_job_id],
-        )?;
-        Ok(())
-    })?;
-    Ok(())
 }
 
 fn retry_or_fail(application: &Application, job: &IngestJob, error: &str) -> Result<bool, String> {

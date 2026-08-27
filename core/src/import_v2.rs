@@ -687,7 +687,9 @@ mod tests {
         fs::create_dir(source.path().join("child")).unwrap();
         fs::create_dir(source.path().join("without-media")).unwrap();
         png(&source.path().join("one.png"));
-        png(&source.path().join("child/two.png"));
+        DynamicImage::ImageRgb8(ImageBuffer::from_pixel(2, 2, Rgb([4, 5, 6])))
+            .save_with_format(source.path().join("child/two.png"), ImageFormat::Png)
+            .unwrap();
         fs::write(source.path().join("child/ignored.exe"), b"ignored").unwrap();
         fs::write(source.path().join("without-media/ignored.exe"), b"ignored").unwrap();
         let application = Application::new(Arc::new(Store::open(library.path()).unwrap()));
@@ -696,7 +698,7 @@ mod tests {
             .enqueue_manual_import(&ManualImportInput {
                 paths: vec![source.path().display().to_string()],
                 tags: vec!["general:test".to_string()],
-                source_urls: Vec::new(),
+                source_urls: vec!["https://example.test/source".to_string()],
                 lifecycle: Lifecycle::Inbox,
                 parent_folder_id: None,
                 preserve_structure: true,
@@ -710,12 +712,14 @@ mod tests {
             .unwrap();
         assert_eq!(report.discovered, 2);
         assert_eq!(report.queued, 2);
-        assert_eq!(
-            ingest_queue_v2::run_batch(&application, 8)
+        // A loaded batch may defer after its first commit to honor the invalidation cadence.
+        let ingested = ingest_queue_v2::run_batch(&application, 8)
+            .unwrap()
+            .ingested
+            + ingest_queue_v2::run_batch(&application, 8)
                 .unwrap()
-                .ingested,
-            2
-        );
+                .ingested;
+        assert_eq!(ingested, 2);
         application
             .store()
             .read(|connection| {
@@ -726,8 +730,36 @@ mod tests {
                 let memberships: i64 =
                     connection
                         .query_row("SELECT COUNT(*) FROM folder_item", [], |row| row.get(0))?;
+                let root_metadata: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM root_metadata
+                     WHERE source_urls_json = '[\"https://example.test/source\"]'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let root_tags: i64 =
+                    connection.query_row("SELECT COUNT(*) FROM root_tag", [], |row| row.get(0))?;
+                let inbox_summaries: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM root_summary WHERE lifecycle = 'inbox'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let visible_tags: i64 = connection.query_row(
+                    "SELECT COALESCE(SUM(visible_root_count), 0) FROM tag_summary",
+                    [],
+                    |row| row.get(0),
+                )?;
+                let visible_folders: i64 = connection.query_row(
+                    "SELECT COALESCE(SUM(visible_root_count), 0) FROM folder_summary",
+                    [],
+                    |row| row.get(0),
+                )?;
                 assert_eq!(folders.len(), 2, "folders: {folders:?}");
                 assert_eq!(memberships, 2);
+                assert_eq!(root_metadata, 2);
+                assert_eq!(root_tags, 2);
+                assert_eq!(inbox_summaries, 2);
+                assert_eq!(visible_tags, 0);
+                assert_eq!(visible_folders, 0);
                 Ok(())
             })
             .unwrap();
@@ -1054,18 +1086,37 @@ mod tests {
         application
             .store()
             .read(|connection| {
-                let (kind, label, members): (String, Option<String>, i64) = connection.query_row(
-                    "SELECT li.kind, li.label,
+                let (kind, name, members, lifecycle, media_count): (
+                    String,
+                    Option<String>,
+                    i64,
+                    String,
+                    i64,
+                ) = connection.query_row(
+                    "SELECT li.kind, metadata.name,
                             (SELECT COUNT(*) FROM collection_member cm
-                             WHERE cm.collection_id = li.item_id)
+                             WHERE cm.collection_id = li.item_id),
+                            summary.lifecycle, summary.media_count
                      FROM library_item li
-                     JOIN library_root lr ON lr.item_id = li.item_id",
+                     JOIN library_root lr ON lr.item_id = li.item_id
+                     JOIN root_summary summary ON summary.root_item_id = li.item_id
+                     LEFT JOIN root_metadata metadata ON metadata.root_item_id = li.item_id",
                     [],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
                 )?;
                 assert_eq!(kind, "collection");
-                assert_eq!(label.as_deref(), Some("album"));
+                assert_eq!(name.as_deref(), Some("track"));
                 assert_eq!(members, 2);
+                assert_eq!(lifecycle, "inbox");
+                assert_eq!(media_count, 2);
                 Ok(())
             })
             .unwrap();

@@ -4,17 +4,23 @@
 //! globally keyed operations whose conflicts are resolved here before normal
 //! projection settlement and invalidation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::Utc;
+use roaring::RoaringBitmap;
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use ts_rs::TS;
 
-use crate::app::{resources, Application, ItemId, MutationReceipt};
+use crate::app::{resources, Application, ItemId, ItemKind, Lifecycle, MutationReceipt};
+use crate::projection_v2::{
+    FolderProjectionChange, ItemProjectionChange, MediaClassificationProjectionChange,
+    MembershipProjectionChange, ProjectionStore, RootProjectionChange, RootSummaryProjectionChange,
+    StructureProjectionDelta, TagProjectionChange,
+};
 
 pub mod blob;
 pub mod capture;
@@ -26,6 +32,7 @@ pub mod worker;
 
 pub const CLOUD_SCHEMA_GENERATION: i64 = 1;
 const APPLIED_MUTATION_DIAGNOSTIC_LIMIT: i64 = 10_000;
+const MUTATION_RECEIPT_ITEM_LIMIT: usize = 256;
 
 #[derive(
     Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS,
@@ -703,31 +710,70 @@ fn stamp_local_operation(
     operation: &CloudOperation,
     mutation: &CloudMutation,
 ) -> rusqlite::Result<()> {
+    let mut plan = LocalStampPlan::default();
+    collect_local_stamps(transaction, operation, &mut plan)?;
+    apply_local_stamp_plan(transaction, plan, mutation)
+}
+
+#[derive(Default)]
+struct LocalStampPlan {
+    field_clocks: BTreeSet<(String, String, String)>,
+    membership_clocks: BTreeMap<(String, String, String), bool>,
+    membership_removals: BTreeSet<(String, String, String)>,
+    tombstones: BTreeMap<(String, String), bool>,
+    available_blobs: BTreeSet<String>,
+}
+
+impl LocalStampPlan {
+    fn field(&mut self, kind: &str, key: &str, field: &str) {
+        self.field_clocks
+            .insert((kind.to_owned(), key.to_owned(), field.to_owned()));
+    }
+
+    fn membership(&mut self, relation: &str, owner: &str, member: &str, present: bool) {
+        let key = (relation.to_owned(), owner.to_owned(), member.to_owned());
+        if !present {
+            self.membership_removals.insert(key.clone());
+        }
+        self.membership_clocks.insert(key, present);
+    }
+
+    fn has_field(&self, kind: &str, key: &str, field: &str) -> bool {
+        self.field_clocks
+            .contains(&(kind.to_owned(), key.to_owned(), field.to_owned()))
+    }
+
+    fn tombstone(&mut self, kind: &str, key: &str, present: bool) {
+        self.tombstones
+            .insert((kind.to_owned(), key.to_owned()), present);
+        self.field(kind, key, "tombstone");
+    }
+}
+
+fn collect_local_stamps(
+    transaction: &Transaction<'_>,
+    operation: &CloudOperation,
+    plan: &mut LocalStampPlan,
+) -> rusqlite::Result<()> {
     match operation {
         CloudOperation::Batch { operations } => {
             for operation in operations {
-                stamp_local_operation(transaction, operation, mutation)?;
+                collect_local_stamps(transaction, operation, plan)?;
             }
         }
         CloudOperation::UpsertItem { item } => {
-            write_field_clock(transaction, "item", &item.item_key, "exists", mutation)?;
+            plan.field("item", &item.item_key, "exists");
             if let Some(media) = &item.media {
-                transaction.execute(
-                    "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
-                     VALUES (?1, 'available', ?2)
-                     ON CONFLICT(file_hash) DO UPDATE SET
-                         state = 'available', last_error = NULL, updated_at = excluded.updated_at",
-                    params![media.file_hash, Utc::now().to_rfc3339()],
-                )?;
+                plan.available_blobs.insert(media.file_hash.clone());
             }
         }
         CloudOperation::ItemFields { item_key, fields } => {
             for field in fields.keys() {
-                write_field_clock(transaction, "item", item_key, field, mutation)?;
+                plan.field("item", item_key, field);
             }
         }
         CloudOperation::Lifecycle { item_key, .. } => {
-            write_field_clock(transaction, "item", item_key, "lifecycle", mutation)?;
+            plan.field("item", item_key, "lifecycle");
         }
         CloudOperation::TagMembership {
             item_key,
@@ -735,14 +781,12 @@ fn stamp_local_operation(
             subtag,
             present,
         } => {
-            write_membership_clock(
-                transaction,
+            plan.membership(
                 "tag",
                 item_key,
                 &format!("{namespace}\u{0}{subtag}"),
                 *present,
-                mutation,
-            )?;
+            );
         }
         CloudOperation::FolderMembership {
             item_key,
@@ -750,179 +794,101 @@ fn stamp_local_operation(
             present,
             ..
         } => {
-            write_membership_clock(
-                transaction,
-                "folder",
-                folder_key,
-                item_key,
-                *present,
-                mutation,
-            )?;
+            plan.membership("folder", folder_key, item_key, *present);
         }
         CloudOperation::UpsertFolder {
             folder,
             changed_fields,
         } => {
             for field in changed_fields {
-                write_field_clock(transaction, "folder", &folder.folder_key, field, mutation)?;
+                plan.field("folder", &folder.folder_key, field);
             }
         }
         CloudOperation::DeleteFolder { folder_key } => {
-            write_tombstone(transaction, "folder", folder_key, mutation)?;
-            write_field_clock(transaction, "folder", folder_key, "tombstone", mutation)?;
+            plan.tombstone("folder", folder_key, true);
         }
         CloudOperation::UpsertSmartFolder {
             smart_folder,
             changed_fields,
         } => {
             for field in changed_fields {
-                write_field_clock(
-                    transaction,
-                    "smart_folder",
-                    &smart_folder.smart_folder_key,
-                    field,
-                    mutation,
-                )?;
+                plan.field("smart_folder", &smart_folder.smart_folder_key, field);
             }
         }
         CloudOperation::DeleteSmartFolder { smart_folder_key } => {
-            write_tombstone(transaction, "smart_folder", smart_folder_key, mutation)?;
-            write_field_clock(
-                transaction,
-                "smart_folder",
-                smart_folder_key,
-                "tombstone",
-                mutation,
-            )?;
+            plan.tombstone("smart_folder", smart_folder_key, true);
         }
         CloudOperation::UpsertSubscription {
             subscription,
             changed_fields,
         } => {
             for field in changed_fields {
-                write_field_clock(
-                    transaction,
-                    "subscription",
-                    &subscription.subscription_key,
-                    field,
-                    mutation,
-                )?;
+                plan.field("subscription", &subscription.subscription_key, field);
             }
         }
         CloudOperation::DeleteSubscription { subscription_key } => {
-            write_tombstone(transaction, "subscription", subscription_key, mutation)?;
-            write_field_clock(
-                transaction,
-                "subscription",
-                subscription_key,
-                "tombstone",
-                mutation,
-            )?;
+            plan.tombstone("subscription", subscription_key, true);
         }
         CloudOperation::UpsertSubscriptionQuery {
             query,
             changed_fields,
         } => {
             for field in changed_fields {
-                write_field_clock(
-                    transaction,
-                    "subscription_query",
-                    &query.query_key,
-                    field,
-                    mutation,
-                )?;
+                plan.field("subscription_query", &query.query_key, field);
             }
         }
         CloudOperation::DeleteSubscriptionQuery { query_key } => {
-            write_tombstone(transaction, "subscription_query", query_key, mutation)?;
-            write_field_clock(
-                transaction,
-                "subscription_query",
-                query_key,
-                "tombstone",
-                mutation,
-            )?;
+            plan.tombstone("subscription_query", query_key, true);
         }
         CloudOperation::UpsertSourcePost {
             source_post,
             changed_fields,
         } => {
-            if field_clock_exists(
-                transaction,
-                "source_post",
-                &source_post.source_post_key,
-                "exists",
-            )? {
-                for field in changed_fields
-                    .iter()
-                    .filter(|field| field.as_str() != "exists")
-                {
-                    write_field_clock(
-                        transaction,
-                        "source_post",
-                        &source_post.source_post_key,
-                        field,
-                        mutation,
-                    )?;
-                }
-            } else {
-                write_field_clock(
+            if plan.has_field("source_post", &source_post.source_post_key, "exists")
+                || field_clock_exists(
                     transaction,
                     "source_post",
                     &source_post.source_post_key,
                     "exists",
-                    mutation,
-                )?;
+                )?
+            {
+                for field in changed_fields
+                    .iter()
+                    .filter(|field| field.as_str() != "exists")
+                {
+                    plan.field("source_post", &source_post.source_post_key, field);
+                }
+            } else {
+                plan.field("source_post", &source_post.source_post_key, "exists");
             }
         }
         CloudOperation::UpsertSourceItem {
             source_item,
             changed_fields,
         } => {
-            if field_clock_exists(
-                transaction,
-                "source_item",
-                &source_item.source_item_key,
-                "exists",
-            )? {
-                for field in changed_fields
-                    .iter()
-                    .filter(|field| field.as_str() != "exists")
-                {
-                    write_field_clock(
-                        transaction,
-                        "source_item",
-                        &source_item.source_item_key,
-                        field,
-                        mutation,
-                    )?;
-                }
-            } else {
-                write_field_clock(
+            if plan.has_field("source_item", &source_item.source_item_key, "exists")
+                || field_clock_exists(
                     transaction,
                     "source_item",
                     &source_item.source_item_key,
                     "exists",
-                    mutation,
-                )?;
+                )?
+            {
+                for field in changed_fields
+                    .iter()
+                    .filter(|field| field.as_str() != "exists")
+                {
+                    plan.field("source_item", &source_item.source_item_key, field);
+                }
+            } else {
+                plan.field("source_item", &source_item.source_item_key, "exists");
             }
         }
         CloudOperation::DeleteSourceItem { source_item_key } => {
-            write_tombstone(transaction, "source_item", source_item_key, mutation)?;
-            write_field_clock(
-                transaction,
-                "source_item",
-                source_item_key,
-                "tombstone",
-                mutation,
-            )?;
+            plan.tombstone("source_item", source_item_key, true);
         }
         CloudOperation::RestoreSourceItem { source_item, .. } => {
-            transaction.execute(
-                "DELETE FROM cloud_tombstone
-                 WHERE object_kind = 'source_item' AND object_key = ?1",
-                [&source_item.source_item_key],
-            )?;
+            plan.tombstone("source_item", &source_item.source_item_key, false);
             for field in [
                 "exists",
                 "position",
@@ -931,13 +897,7 @@ fn stamp_local_operation(
                 "media_item",
                 "tombstone",
             ] {
-                write_field_clock(
-                    transaction,
-                    "source_item",
-                    &source_item.source_item_key,
-                    field,
-                    mutation,
-                )?;
+                plan.field("source_item", &source_item.source_item_key, field);
             }
         }
         CloudOperation::SubscriptionSourcePost {
@@ -946,59 +906,586 @@ fn stamp_local_operation(
             present,
             ..
         } => {
-            write_membership_clock(
-                transaction,
+            plan.membership(
                 "subscription_source_post",
                 query_key,
                 source_post_key,
                 *present,
-                mutation,
-            )?;
+            );
         }
         CloudOperation::GroupAssignment { media_item_key, .. } => {
-            write_field_clock(transaction, "item", media_item_key, "collection", mutation)?;
+            plan.field("item", media_item_key, "collection");
         }
         CloudOperation::ReorderMember { media_item_key, .. } => {
-            write_field_clock(
-                transaction,
-                "item",
-                media_item_key,
-                "position_rank",
-                mutation,
-            )?;
+            plan.field("item", media_item_key, "position_rank");
         }
         CloudOperation::DeleteItem { item_key } => {
-            write_tombstone(transaction, "item", item_key, mutation)?;
-            write_field_clock(transaction, "item", item_key, "tombstone", mutation)?;
+            plan.tombstone("item", item_key, true);
         }
         CloudOperation::RestoreItem { item, .. } => {
-            transaction.execute(
-                "DELETE FROM cloud_tombstone WHERE object_kind = 'item' AND object_key = ?1",
-                [&item.item_key],
-            )?;
-            write_field_clock(transaction, "item", &item.item_key, "tombstone", mutation)?;
+            plan.tombstone("item", &item.item_key, false);
         }
     }
     Ok(())
+}
+
+fn apply_local_stamp_plan(
+    transaction: &Transaction<'_>,
+    plan: LocalStampPlan,
+    mutation: &CloudMutation,
+) -> rusqlite::Result<()> {
+    let field_clocks = serde_json::to_string(&plan.field_clocks).map_err(json_sql_error)?;
+    transaction.execute(
+        "INSERT INTO cloud_field_clock
+             (object_kind, object_key, field_name, hlc_physical_ms, hlc_logical,
+              device_id, mutation_id)
+         SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
+                json_extract(value, '$[2]'), ?2, ?3, ?4, ?5
+         FROM json_each(?1)
+         WHERE 1
+         ON CONFLICT(object_kind, object_key, field_name) DO UPDATE SET
+             hlc_physical_ms=excluded.hlc_physical_ms,
+             hlc_logical=excluded.hlc_logical,
+             device_id=excluded.device_id,
+             mutation_id=excluded.mutation_id",
+        params![
+            field_clocks,
+            mutation.timestamp.physical_ms as i64,
+            mutation.timestamp.logical as i64,
+            mutation.device_id,
+            mutation.mutation_id,
+        ],
+    )?;
+
+    let memberships = serde_json::to_string(
+        &plan
+            .membership_clocks
+            .into_iter()
+            .map(|((relation, owner, member), present)| {
+                let retain_history = plan.membership_removals.contains(&(
+                    relation.clone(),
+                    owner.clone(),
+                    member.clone(),
+                ));
+                (relation, owner, member, present, retain_history)
+            })
+            .collect::<Vec<_>>(),
+    )
+    .map_err(json_sql_error)?;
+    let frontier = serde_json::to_string(&mutation.causal_frontier).map_err(json_sql_error)?;
+    transaction.execute(
+        "WITH incoming AS (
+             SELECT json_extract(value, '$[0]') AS relation_kind,
+                    json_extract(value, '$[1]') AS owner_key,
+                    json_extract(value, '$[2]') AS member_key,
+                    CAST(json_extract(value, '$[3]') AS INTEGER) AS present,
+                    CAST(json_extract(value, '$[4]') AS INTEGER) AS retain_history
+             FROM json_each(?1)
+         )
+         INSERT INTO cloud_membership_clock
+             (relation_kind, owner_key, member_key, present, hlc_physical_ms, hlc_logical,
+              device_id, mutation_id, causal_frontier_json)
+         SELECT incoming.relation_kind, incoming.owner_key, incoming.member_key,
+                incoming.present, ?2, ?3, ?4, ?5, ?6
+         FROM incoming
+         WHERE incoming.retain_history = 1 OR EXISTS (
+             SELECT 1 FROM cloud_membership_clock current
+             WHERE current.relation_kind = incoming.relation_kind
+               AND current.owner_key = incoming.owner_key
+               AND current.member_key = incoming.member_key
+         )
+         ON CONFLICT(relation_kind, owner_key, member_key) DO UPDATE SET
+             present=excluded.present,
+             hlc_physical_ms=excluded.hlc_physical_ms,
+             hlc_logical=excluded.hlc_logical,
+             device_id=excluded.device_id,
+             mutation_id=excluded.mutation_id,
+             causal_frontier_json=excluded.causal_frontier_json",
+        params![
+            memberships,
+            mutation.timestamp.physical_ms as i64,
+            mutation.timestamp.logical as i64,
+            mutation.device_id,
+            mutation.mutation_id,
+            frontier,
+        ],
+    )?;
+
+    let (deleted_tombstones, restored_tombstones): (Vec<_>, Vec<_>) = plan
+        .tombstones
+        .into_iter()
+        .partition(|(_, present)| *present);
+    let deleted_tombstones = serde_json::to_string(
+        &deleted_tombstones
+            .into_iter()
+            .map(|((kind, key), _)| (kind, key))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(json_sql_error)?;
+    let now = Utc::now();
+    transaction.execute(
+        "INSERT INTO cloud_tombstone
+             (object_kind, object_key, mutation_id, hlc_physical_ms, hlc_logical,
+              device_id, causal_frontier_json, deleted_at, purge_after)
+         SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]'),
+                ?2, ?3, ?4, ?5, ?6, ?7, ?8
+         FROM json_each(?1)
+         WHERE 1
+         ON CONFLICT(object_kind, object_key) DO UPDATE SET
+             mutation_id=excluded.mutation_id,
+             hlc_physical_ms=excluded.hlc_physical_ms,
+             hlc_logical=excluded.hlc_logical,
+             device_id=excluded.device_id,
+             causal_frontier_json=excluded.causal_frontier_json,
+             deleted_at=excluded.deleted_at,
+             purge_after=excluded.purge_after",
+        params![
+            deleted_tombstones,
+            mutation.mutation_id,
+            mutation.timestamp.physical_ms as i64,
+            mutation.timestamp.logical as i64,
+            mutation.device_id,
+            serde_json::to_string(&mutation.causal_frontier).map_err(json_sql_error)?,
+            now.to_rfc3339(),
+            (now + chrono::Duration::days(30)).to_rfc3339(),
+        ],
+    )?;
+    let restored_tombstones = serde_json::to_string(
+        &restored_tombstones
+            .into_iter()
+            .map(|((kind, key), _)| (kind, key))
+            .collect::<Vec<_>>(),
+    )
+    .map_err(json_sql_error)?;
+    transaction.execute(
+        "DELETE FROM cloud_tombstone
+         WHERE (object_kind, object_key) IN (
+             SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')
+             FROM json_each(?1)
+         )",
+        [restored_tombstones],
+    )?;
+
+    let blobs = serde_json::to_string(&plan.available_blobs).map_err(json_sql_error)?;
+    transaction.execute(
+        "INSERT INTO cloud_blob_state (file_hash, state, updated_at)
+         SELECT value, 'available', ?2 FROM json_each(?1)
+         WHERE 1
+         ON CONFLICT(file_hash) DO UPDATE SET
+             state='available', last_error=NULL, updated_at=excluded.updated_at",
+        params![blobs, Utc::now().to_rfc3339()],
+    )?;
+    Ok(())
+}
+
+#[derive(Default)]
+struct CloudProjectionFootprint {
+    item_keys: BTreeSet<String>,
+    folder_keys: BTreeSet<String>,
+}
+
+impl CloudProjectionFootprint {
+    fn collect(operation: &CloudOperation, footprint: &mut Self) {
+        match operation {
+            CloudOperation::Batch { operations } => {
+                for operation in operations {
+                    Self::collect(operation, footprint);
+                }
+            }
+            CloudOperation::UpsertItem { item } | CloudOperation::RestoreItem { item, .. } => {
+                footprint.item_keys.insert(item.item_key.clone());
+                if let Some(cover_key) = &item.cover_media_item_key {
+                    footprint.item_keys.insert(cover_key.clone());
+                }
+            }
+            CloudOperation::ItemFields { item_key, .. }
+            | CloudOperation::Lifecycle { item_key, .. }
+            | CloudOperation::TagMembership { item_key, .. }
+            | CloudOperation::DeleteItem { item_key } => {
+                footprint.item_keys.insert(item_key.clone());
+            }
+            CloudOperation::FolderMembership {
+                item_key,
+                folder_key,
+                ..
+            } => {
+                footprint.item_keys.insert(item_key.clone());
+                footprint.folder_keys.insert(folder_key.clone());
+            }
+            CloudOperation::UpsertFolder { folder, .. } => {
+                footprint.folder_keys.insert(folder.folder_key.clone());
+            }
+            CloudOperation::DeleteFolder { folder_key } => {
+                footprint.folder_keys.insert(folder_key.clone());
+            }
+            CloudOperation::GroupAssignment {
+                media_item_key,
+                collection_item_key,
+                ..
+            } => {
+                footprint.item_keys.insert(media_item_key.clone());
+                if let Some(collection_item_key) = collection_item_key {
+                    footprint.item_keys.insert(collection_item_key.clone());
+                }
+            }
+            CloudOperation::ReorderMember {
+                collection_item_key,
+                media_item_key,
+                ..
+            } => {
+                footprint.item_keys.insert(collection_item_key.clone());
+                footprint.item_keys.insert(media_item_key.clone());
+            }
+            CloudOperation::UpsertSmartFolder { .. }
+            | CloudOperation::DeleteSmartFolder { .. }
+            | CloudOperation::UpsertSubscription { .. }
+            | CloudOperation::DeleteSubscription { .. }
+            | CloudOperation::UpsertSubscriptionQuery { .. }
+            | CloudOperation::DeleteSubscriptionQuery { .. }
+            | CloudOperation::UpsertSourcePost { .. }
+            | CloudOperation::UpsertSourceItem { .. }
+            | CloudOperation::DeleteSourceItem { .. }
+            | CloudOperation::RestoreSourceItem { .. }
+            | CloudOperation::SubscriptionSourcePost { .. } => {}
+        }
+    }
+
+    fn from_mutations(mutations: &[CloudMutation]) -> Self {
+        let mut footprint = Self::default();
+        for mutation in mutations {
+            Self::collect(&mutation.operation, &mut footprint);
+        }
+        footprint
+    }
+}
+
+#[derive(Default)]
+struct CloudProjectionState {
+    ids: BTreeSet<i64>,
+    items: BTreeMap<i64, (ItemKind, Option<Lifecycle>)>,
+    folders: BTreeSet<(i64, i64)>,
+    tags: BTreeSet<(i64, i64)>,
+    memberships: BTreeSet<(i64, i64)>,
+    summaries: BTreeMap<i64, RootSummaryProjectionChange>,
+    image_media_ids: BTreeSet<i64>,
+}
+
+impl CloudProjectionState {
+    fn capture(
+        transaction: &Transaction<'_>,
+        footprint: &CloudProjectionFootprint,
+        known_ids: &BTreeSet<i64>,
+    ) -> rusqlite::Result<Self> {
+        let mut state = Self {
+            ids: known_ids.clone(),
+            ..Self::default()
+        };
+
+        let item_keys = serde_json::to_string(&footprint.item_keys).map_err(json_sql_error)?;
+        let mut statement = transaction.prepare(
+            "SELECT li.item_id
+             FROM library_item li
+             WHERE li.item_key IN (SELECT value FROM json_each(?1))",
+        )?;
+        let item_ids = statement
+            .query_map([item_keys], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        state.ids.extend(item_ids);
+
+        let folder_keys = serde_json::to_string(&footprint.folder_keys).map_err(json_sql_error)?;
+        let mut statement = transaction.prepare(
+            "SELECT fi.item_id
+             FROM folder f
+             JOIN folder_item fi ON fi.folder_id = f.folder_id
+             WHERE f.folder_key IN (SELECT value FROM json_each(?1))",
+        )?;
+        let folder_item_ids = statement
+            .query_map([folder_keys], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        state.ids.extend(folder_item_ids);
+
+        if state.ids.is_empty() {
+            return Ok(state);
+        }
+
+        let ids = serde_json::to_string(&state.ids).map_err(json_sql_error)?;
+        let mut statement = transaction.prepare(
+            "SELECT collection_id, media_item_id
+             FROM collection_member
+             WHERE collection_id IN (SELECT value FROM json_each(?1))
+                OR media_item_id IN (SELECT value FROM json_each(?1))",
+        )?;
+        let memberships = statement
+            .query_map([ids], |row| Ok((row.get(0)?, row.get(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for membership in memberships {
+            state.ids.insert(membership.0);
+            state.ids.insert(membership.1);
+            state.memberships.insert(membership);
+        }
+
+        let ids = serde_json::to_string(&state.ids).map_err(json_sql_error)?;
+        let mut statement = transaction.prepare(
+            "SELECT li.item_id, li.kind, lr.lifecycle
+             FROM library_item li
+             LEFT JOIN library_root lr ON lr.item_id = li.item_id
+             WHERE li.item_id IN (SELECT value FROM json_each(?1))",
+        )?;
+        let items = statement
+            .query_map([ids.clone()], |row| {
+                let kind = parse_projection_kind(&row.get::<_, String>(1)?)?;
+                let lifecycle = row
+                    .get::<_, Option<String>>(2)?
+                    .map(|value| parse_projection_lifecycle(&value))
+                    .transpose()?;
+                Ok((row.get::<_, i64>(0)?, kind, lifecycle))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (item_id, kind, lifecycle) in items {
+            state.items.insert(item_id, (kind, lifecycle));
+        }
+
+        let mut statement = transaction.prepare(
+            "SELECT asset.item_id
+             FROM media_asset asset
+             JOIN media_file file ON file.file_id = asset.file_id
+             WHERE asset.item_id IN (SELECT value FROM json_each(?1))
+               AND file.mime_type LIKE 'image/%'",
+        )?;
+        state.image_media_ids.extend(
+            statement
+                .query_map([ids.clone()], |row| row.get::<_, i64>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        );
+
+        let mut statement = transaction.prepare(
+            "SELECT folder_id, item_id FROM folder_item
+             WHERE item_id IN (SELECT value FROM json_each(?1))",
+        )?;
+        state.folders.extend(
+            statement
+                .query_map([ids.clone()], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        );
+
+        let mut statement = transaction.prepare(
+            "SELECT root_item_id, tag_id FROM root_tag
+             WHERE root_item_id IN (SELECT value FROM json_each(?1))",
+        )?;
+        state.tags.extend(
+            statement
+                .query_map([ids.clone()], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+        );
+
+        let mut statement = transaction.prepare(
+            "SELECT root_item_id, total_size_bytes, media_count, sort_rating
+             FROM root_summary
+             WHERE root_item_id IN (SELECT value FROM json_each(?1))",
+        )?;
+        let summaries = statement
+            .query_map([ids], |row| {
+                Ok(RootSummaryProjectionChange {
+                    item_id: row.get(0)?,
+                    total_size_bytes: u64::try_from(row.get::<_, i64>(1)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    media_count: u64::try_from(row.get::<_, i64>(2)?)
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    rating: row
+                        .get::<_, Option<i64>>(3)?
+                        .map(u8::try_from)
+                        .transpose()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for summary in summaries {
+            state.summaries.insert(summary.item_id, summary);
+        }
+        Ok(state)
+    }
+}
+
+#[derive(Default)]
+struct CloudProjectionDelta {
+    structure: StructureProjectionDelta,
+    summaries: Vec<RootSummaryProjectionChange>,
+    removed_summaries: RoaringBitmap,
+    item_ids: Vec<i64>,
+}
+
+impl CloudProjectionDelta {
+    fn between(before: CloudProjectionState, after: CloudProjectionState) -> Self {
+        let item_ids = before.ids.union(&after.ids).copied().collect::<Vec<_>>();
+        let final_roots = after
+            .items
+            .iter()
+            .filter_map(|(item_id, (_, lifecycle))| lifecycle.map(|_| *item_id))
+            .collect::<BTreeSet<_>>();
+        let mut structure = StructureProjectionDelta::default();
+        for item_id in &item_ids {
+            match after.items.get(item_id) {
+                Some((kind, lifecycle)) => {
+                    structure.items.push(ItemProjectionChange {
+                        item_id: *item_id,
+                        kind: *kind,
+                        present: true,
+                    });
+                    if matches!(kind, ItemKind::Media) {
+                        structure
+                            .media_classifications
+                            .push(MediaClassificationProjectionChange {
+                                media_id: *item_id,
+                                is_image: after.image_media_ids.contains(item_id),
+                            });
+                    }
+                    structure.roots.push(RootProjectionChange {
+                        item_id: *item_id,
+                        lifecycle: *lifecycle,
+                    });
+                }
+                None => {
+                    structure.items.push(ItemProjectionChange {
+                        item_id: *item_id,
+                        kind: before
+                            .items
+                            .get(item_id)
+                            .map(|(kind, _)| *kind)
+                            .unwrap_or(ItemKind::Media),
+                        present: false,
+                    });
+                    structure.roots.push(RootProjectionChange {
+                        item_id: *item_id,
+                        lifecycle: None,
+                    });
+                }
+            }
+        }
+        structure
+            .memberships
+            .extend(before.memberships.difference(&after.memberships).map(
+                |(collection_id, media_id)| MembershipProjectionChange {
+                    collection_id: *collection_id,
+                    media_id: *media_id,
+                    present: false,
+                },
+            ));
+        structure
+            .memberships
+            .extend(after.memberships.difference(&before.memberships).map(
+                |(collection_id, media_id)| MembershipProjectionChange {
+                    collection_id: *collection_id,
+                    media_id: *media_id,
+                    present: true,
+                },
+            ));
+        structure
+            .folders
+            .extend(
+                before
+                    .folders
+                    .difference(&after.folders)
+                    .map(|(folder_id, item_id)| FolderProjectionChange {
+                        folder_id: *folder_id,
+                        item_id: *item_id,
+                        present: false,
+                    }),
+            );
+        structure
+            .folders
+            .extend(
+                after
+                    .folders
+                    .difference(&before.folders)
+                    .map(|(folder_id, item_id)| FolderProjectionChange {
+                        folder_id: *folder_id,
+                        item_id: *item_id,
+                        present: true,
+                    }),
+            );
+        structure.tags.extend(
+            before
+                .tags
+                .difference(&after.tags)
+                .filter(|(item_id, _)| final_roots.contains(item_id))
+                .map(|(item_id, tag_id)| TagProjectionChange {
+                    media_id: *item_id,
+                    tag_id: *tag_id,
+                    present: false,
+                }),
+        );
+        structure.tags.extend(
+            after
+                .tags
+                .difference(&before.tags)
+                .filter(|(item_id, _)| final_roots.contains(item_id))
+                .map(|(item_id, tag_id)| TagProjectionChange {
+                    media_id: *item_id,
+                    tag_id: *tag_id,
+                    present: true,
+                }),
+        );
+
+        let summaries = after.summaries.into_values().collect::<Vec<_>>();
+        let summary_ids = summaries
+            .iter()
+            .map(|summary| summary.item_id)
+            .collect::<BTreeSet<_>>();
+        let removed_summaries = RoaringBitmap::from_iter(
+            item_ids
+                .iter()
+                .filter(|item_id| !summary_ids.contains(item_id))
+                .filter_map(|item_id| u32::try_from(*item_id).ok()),
+        );
+        Self {
+            structure,
+            summaries,
+            removed_summaries,
+            item_ids,
+        }
+    }
+
+    fn settle(self, projections: &ProjectionStore) -> Result<(), String> {
+        projections.apply_structure_delta(self.structure)?;
+        projections.apply_root_summary_changes(&self.summaries, &self.removed_summaries)
+    }
+}
+
+fn parse_projection_kind(value: &str) -> rusqlite::Result<ItemKind> {
+    match value {
+        "media" => Ok(ItemKind::Media),
+        "collection" => Ok(ItemKind::Collection),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
+}
+
+fn parse_projection_lifecycle(value: &str) -> rusqlite::Result<Lifecycle> {
+    match value {
+        "inbox" => Ok(Lifecycle::Inbox),
+        "active" => Ok(Lifecycle::Active),
+        "trash" => Ok(Lifecycle::Trash),
+        _ => Err(rusqlite::Error::InvalidQuery),
+    }
 }
 
 pub fn apply_downloaded(
     application: &Application,
     mutations: &[CloudMutation],
 ) -> Result<(ApplySummary, MutationReceipt), String> {
-    let projections = application.projections();
+    let footprint = CloudProjectionFootprint::from_mutations(mutations);
     let (summary, revision, changed) = application
         .store()
-        .transaction_if_changed_settled_without_cloud(
+        .transaction_if_changed_settled_without_cloud_maintenance(
             |transaction| {
+                let before =
+                    CloudProjectionState::capture(transaction, &footprint, &BTreeSet::new())?;
                 let mut summary = ApplySummary::default();
                 for mutation in mutations {
                     match apply_one(transaction, mutation)? {
-                        ApplyOutcome::Applied(item_id) => {
+                        ApplyOutcome::Applied(_) => summary.applied += 1,
+                        ApplyOutcome::AppliedAndQuarantined(_) => {
                             summary.applied += 1;
-                            if let Some(item_id) = item_id {
-                                summary.item_ids.push(ItemId(item_id));
-                            }
+                            summary.quarantined += 1;
                         }
                         ApplyOutcome::Duplicate => summary.duplicate += 1,
                         ApplyOutcome::Ignored => summary.ignored += 1,
@@ -1006,12 +1493,25 @@ pub fn apply_downloaded(
                     }
                 }
                 prune_applied_mutations(transaction)?;
-                summary.item_ids.sort_by_key(|item| item.0);
-                summary.item_ids.dedup();
                 let changed = summary.applied > 0 || summary.quarantined > 0;
-                Ok((summary, (), changed))
+                let delta = if summary.applied > 0 {
+                    let after =
+                        CloudProjectionState::capture(transaction, &footprint, &before.ids)?;
+                    CloudProjectionDelta::between(before, after)
+                } else {
+                    CloudProjectionDelta::default()
+                };
+                if delta.item_ids.len() <= MUTATION_RECEIPT_ITEM_LIMIT {
+                    summary.item_ids = delta.item_ids.iter().copied().map(ItemId).collect();
+                }
+                Ok((summary, delta, changed))
             },
-            |connection, ()| projections.reload(connection),
+            |delta| {
+                application
+                    .projections()
+                    .prepare(|candidate| delta.settle(candidate))
+            },
+            |prepared| application.projections().publish_prepared(prepared),
         )?;
     let receipt = MutationReceipt {
         revision,
@@ -1048,6 +1548,7 @@ fn prune_applied_mutations(transaction: &Transaction<'_>) -> rusqlite::Result<us
 
 enum ApplyOutcome {
     Applied(Option<i64>),
+    AppliedAndQuarantined(Option<i64>),
     Duplicate,
     Ignored,
     Quarantined,
@@ -1142,17 +1643,43 @@ fn apply_operation(
 ) -> rusqlite::Result<ApplyOutcome> {
     match &mutation.operation {
         CloudOperation::Batch { operations } => {
-            let mut result = ApplyOutcome::Ignored;
+            let mut applied = false;
+            let mut applied_item_id = None;
+            let mut quarantined = false;
             for operation in operations {
-                let mut child = mutation.clone();
-                child.operation = operation.clone();
+                // Do not clone the enclosing batch for every child. A 10k
+                // operation envelope otherwise copies the complete payload
+                // 10k times before any SQL is applied.
+                let child = CloudMutation {
+                    mutation_id: mutation.mutation_id.clone(),
+                    library_id: mutation.library_id.clone(),
+                    device_id: mutation.device_id.clone(),
+                    timestamp: mutation.timestamp,
+                    causal_frontier: mutation.causal_frontier.clone(),
+                    operation: operation.clone(),
+                    schema_generation: mutation.schema_generation,
+                    checksum: mutation.checksum.clone(),
+                };
                 match apply_checked_operation(transaction, &child)? {
-                    ApplyOutcome::Applied(item_id) => result = ApplyOutcome::Applied(item_id),
-                    ApplyOutcome::Quarantined => result = ApplyOutcome::Quarantined,
+                    ApplyOutcome::Applied(item_id) => {
+                        applied = true;
+                        applied_item_id = item_id.or(applied_item_id);
+                    }
+                    ApplyOutcome::AppliedAndQuarantined(item_id) => {
+                        applied = true;
+                        applied_item_id = item_id.or(applied_item_id);
+                        quarantined = true;
+                    }
+                    ApplyOutcome::Quarantined => quarantined = true,
                     ApplyOutcome::Ignored | ApplyOutcome::Duplicate => {}
                 }
             }
-            Ok(result)
+            Ok(match (applied, quarantined) {
+                (true, true) => ApplyOutcome::AppliedAndQuarantined(applied_item_id),
+                (true, false) => ApplyOutcome::Applied(applied_item_id),
+                (false, true) => ApplyOutcome::Quarantined,
+                (false, false) => ApplyOutcome::Ignored,
+            })
         }
         CloudOperation::UpsertItem { item } => {
             if item_id(transaction, &item.item_key)?.is_some() {
@@ -1233,13 +1760,18 @@ fn apply_operation(
                     |row| row.get(0),
                 )?;
                 transaction.execute(
-                    "INSERT INTO media_tag (media_item_id, tag_id, source)
-                     VALUES (?1, ?2, 'cloud') ON CONFLICT DO NOTHING",
+                    "INSERT INTO root_tag
+                         (root_item_id, tag_id, direct_assignment_count,
+                          provenance_mask, source_mask)
+                     VALUES (?1, ?2, 1, 0, 8)
+                     ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
+                         direct_assignment_count = MAX(root_tag.direct_assignment_count, 1),
+                         source_mask = root_tag.source_mask | 8",
                     params![item_id, tag_id],
                 )?;
             } else {
                 transaction.execute(
-                    "DELETE FROM media_tag WHERE media_item_id = ?1 AND tag_id IN (
+                    "DELETE FROM root_tag WHERE root_item_id = ?1 AND tag_id IN (
                          SELECT tag_id FROM tag WHERE namespace = ?2 AND subtag = ?3
                      )",
                     params![item_id, namespace, subtag],
@@ -2274,30 +2806,27 @@ fn apply_item_field(
     field: &str,
     value: &Value,
 ) -> rusqlite::Result<bool> {
+    let now = Utc::now().to_rfc3339();
     let changed = match field {
-        "label" => transaction.execute(
-            "UPDATE library_item SET label = ?1, updated_at = ?2 WHERE item_id = ?3",
-            params![
-                json_optional_string(value)?,
-                Utc::now().to_rfc3339(),
-                item_id
-            ],
-        )?,
-        "name" | "notes" | "source_urls_json" | "captured_at" => {
-            let sql =
-                format!("UPDATE media_asset SET {field} = ?1, updated_at = ?2 WHERE item_id = ?3");
-            transaction.execute(
-                &sql,
-                params![
-                    json_optional_string(value)?,
-                    Utc::now().to_rfc3339(),
-                    item_id
-                ],
-            )?
+        "label" | "notes" | "source_urls_json" => {
+            let column = if field == "label" { "name" } else { field };
+            let sql = format!(
+                "UPDATE root_metadata SET {column} = ?1, updated_at = ?2
+                 WHERE root_item_id = ?3"
+            );
+            transaction.execute(&sql, params![json_optional_string(value)?, now, item_id])?
         }
+        "name" => transaction.execute(
+            "UPDATE media_asset SET name = ?1, updated_at = ?2 WHERE item_id = ?3",
+            params![json_optional_string(value)?, now, item_id],
+        )?,
+        "captured_at" => transaction.execute(
+            "UPDATE media_asset SET captured_at = ?1, updated_at = ?2 WHERE item_id = ?3",
+            params![json_optional_string(value)?, now, item_id],
+        )?,
         "rating" => transaction.execute(
-            "UPDATE media_asset SET rating = ?1, updated_at = ?2 WHERE item_id = ?3",
-            params![json_optional_i64(value)?, Utc::now().to_rfc3339(), item_id],
+            "UPDATE root_metadata SET rating = ?1, updated_at = ?2 WHERE root_item_id = ?3",
+            params![json_optional_i64(value)?, now, item_id],
         )?,
         _ => return Ok(false),
     };
@@ -2868,15 +3397,11 @@ fn create_item(
         quarantine(transaction, mutation, "invalid item shape")?;
         return Ok(ApplyOutcome::Quarantined);
     }
+    let now = Utc::now().to_rfc3339();
     transaction.execute(
-        "INSERT INTO library_item (item_key, kind, label, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?4)",
-        params![
-            item.item_key,
-            item.kind,
-            item.label,
-            Utc::now().to_rfc3339()
-        ],
+        "INSERT INTO library_item (item_key, kind, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?3)",
+        params![item.item_key, item.kind, now],
     )?;
     let item_id = transaction.last_insert_rowid();
     if item.kind == "media" {
@@ -2906,16 +3431,12 @@ fn create_item(
         )?;
         transaction.execute(
             "INSERT INTO media_asset
-                 (item_id, file_id, name, notes, rating, source_urls_json, captured_at,
-                  imported_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 (item_id, file_id, name, captured_at, imported_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
             params![
                 item_id,
                 file_id,
                 media.name,
-                media.notes,
-                media.rating,
-                media.source_urls_json,
                 media.captured_at,
                 media.imported_at,
                 Utc::now().to_rfc3339(),
@@ -2931,6 +3452,20 @@ fn create_item(
     transaction.execute(
         "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
         params![item_id, item.lifecycle],
+    )?;
+    let media = item.media.as_ref();
+    transaction.execute(
+        "INSERT INTO root_metadata
+             (root_item_id, name, rating, notes, source_urls_json, updated_at)
+         VALUES (?1, ?2, ?3, ?4, COALESCE(?5, '[]'), ?6)",
+        params![
+            item_id,
+            item.label,
+            media.and_then(|media| media.rating),
+            media.and_then(|media| media.notes.as_deref()),
+            media.and_then(|media| media.source_urls_json.as_deref()),
+            Utc::now().to_rfc3339(),
+        ],
     )?;
     if let Some(cover_key) = &item.cover_media_item_key {
         transaction.execute(
@@ -3369,6 +3904,12 @@ mod tests {
                     "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
                     [item_id],
                 )?;
+                transaction.execute(
+                    "INSERT INTO root_metadata
+                         (root_item_id, name, source_urls_json, updated_at)
+                     VALUES (?1, ?2, '[]', 'now')",
+                    params![item_id, key],
+                )?;
                 Ok(item_id)
             })
             .unwrap()
@@ -3556,6 +4097,102 @@ mod tests {
     }
 
     #[test]
+    fn broad_local_batch_stamps_clocks_and_tombstones_set_wise() {
+        let application = application();
+        enable_capture(&application);
+        let mut operations = Vec::with_capacity(11_000);
+        operations.extend((0..1_000).map(|index| CloudOperation::GroupAssignment {
+            media_item_key: format!("member-{index:04}"),
+            collection_item_key: Some("group-a".into()),
+            position_rank: Some(index * 1024),
+        }));
+        operations.extend((0..10_000).map(|index| CloudOperation::DeleteItem {
+            item_key: format!("deleted-{index:05}"),
+        }));
+
+        let mutation = application
+            .store()
+            .transaction(|transaction| {
+                record_local(transaction, CloudOperation::Batch { operations })
+            })
+            .unwrap()
+            .0;
+
+        let (outbox, clocks, tombstones, distinct_tombstone_mutations) = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT
+                         (SELECT COUNT(*) FROM cloud_outbox
+                          WHERE mutation_id = ?1),
+                         (SELECT COUNT(*) FROM cloud_field_clock
+                          WHERE mutation_id = ?1),
+                         (SELECT COUNT(*) FROM cloud_tombstone
+                          WHERE mutation_id = ?1),
+                         (SELECT COUNT(DISTINCT mutation_id) FROM cloud_tombstone
+                          WHERE mutation_id = ?1)",
+                    [&mutation.mutation_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                            row.get::<_, i64>(3)?,
+                        ))
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(outbox, 1);
+        assert_eq!(clocks, 11_000);
+        assert_eq!(tombstones, 10_000);
+        assert_eq!(distinct_tombstone_mutations, 1);
+    }
+
+    #[test]
+    fn local_batch_retains_remove_wins_history_after_observed_readd() {
+        let application = application();
+        enable_capture(&application);
+        application
+            .store()
+            .transaction(|transaction| {
+                record_local(
+                    transaction,
+                    CloudOperation::Batch {
+                        operations: vec![
+                            CloudOperation::TagMembership {
+                                item_key: "item-a".into(),
+                                namespace: "general".into(),
+                                subtag: "blue".into(),
+                                present: false,
+                            },
+                            CloudOperation::TagMembership {
+                                item_key: "item-a".into(),
+                                namespace: "general".into(),
+                                subtag: "blue".into(),
+                                present: true,
+                            },
+                        ],
+                    },
+                )
+            })
+            .unwrap();
+
+        let present = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT present FROM cloud_membership_clock
+                     WHERE relation_kind = 'tag' AND owner_key = 'item-a'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(present, 1);
+    }
+
+    #[test]
     fn metadata_update_captures_unchanged_item_identity() {
         let application = application();
         let item_id = add_media(&application, "rated-item");
@@ -3565,7 +4202,8 @@ mod tests {
             .store()
             .transaction(|transaction| {
                 transaction.execute(
-                    "UPDATE media_asset SET rating = 4, updated_at = 'later' WHERE item_id = ?1",
+                    "UPDATE root_metadata SET rating = 4, updated_at = 'later'
+                     WHERE root_item_id = ?1",
                     [item_id],
                 )?;
                 Ok(())
@@ -3583,6 +4221,221 @@ mod tests {
     }
 
     #[test]
+    fn remote_item_fields_update_canonical_root_metadata() {
+        let application = application();
+        add_media(&application, "metadata-item");
+        let mutation = remote_mutation(
+            &application,
+            "remote",
+            HybridTimestamp {
+                physical_ms: 10,
+                logical: 0,
+            },
+            CausalFrontier::new(),
+            CloudOperation::ItemFields {
+                item_key: "metadata-item".into(),
+                fields: BTreeMap::from([
+                    ("label".into(), Value::String("Root name".into())),
+                    ("name".into(), Value::String("Media name".into())),
+                    ("notes".into(), Value::String("Root notes".into())),
+                    ("rating".into(), Value::from(5)),
+                    ("source_urls_json".into(), Value::String("[]".into())),
+                    ("captured_at".into(), Value::String("captured".into())),
+                ]),
+            },
+        );
+
+        apply_downloaded(&application, &[mutation]).unwrap();
+        let (root_name, media_name, notes, rating, source_urls, captured_at) = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT rm.name, ma.name, rm.notes, rm.rating, rm.source_urls_json,
+                            ma.captured_at
+                     FROM library_item li
+                     JOIN root_metadata rm ON rm.root_item_id = li.item_id
+                     JOIN media_asset ma ON ma.item_id = li.item_id
+                     WHERE li.item_key = 'metadata-item'",
+                    [],
+                    |row| {
+                        Ok((
+                            row.get::<_, Option<String>>(0)?,
+                            row.get::<_, Option<String>>(1)?,
+                            row.get::<_, Option<String>>(2)?,
+                            row.get::<_, Option<i64>>(3)?,
+                            row.get::<_, String>(4)?,
+                            row.get::<_, Option<String>>(5)?,
+                        ))
+                    },
+                )
+            })
+            .unwrap();
+        assert_eq!(root_name.as_deref(), Some("Root name"));
+        assert_eq!(media_name.as_deref(), Some("Media name"));
+        assert_eq!(notes.as_deref(), Some("Root notes"));
+        assert_eq!(rating, Some(5));
+        assert_eq!(source_urls, "[]");
+        assert_eq!(captured_at.as_deref(), Some("captured"));
+    }
+
+    #[test]
+    fn remote_item_lifecycle_tag_and_folder_changes_settle_incrementally() {
+        let application = application();
+        let item_id = add_media(&application, "item-a");
+        let unrelated_id = add_media(&application, "unrelated");
+        assert!(application.projections().active_bitmap().is_empty());
+
+        let setup = remote_mutation(
+            &application,
+            "remote",
+            HybridTimestamp {
+                physical_ms: 10,
+                logical: 0,
+            },
+            CausalFrontier::new(),
+            CloudOperation::Batch {
+                operations: vec![
+                    CloudOperation::UpsertFolder {
+                        folder: CloudFolder {
+                            folder_key: "folder-a".into(),
+                            name: "Folder A".into(),
+                            parent_key: None,
+                            icon: None,
+                            color: None,
+                            notes: None,
+                            sort_rank: None,
+                            created_at: "now".into(),
+                            updated_at: "now".into(),
+                        },
+                        changed_fields: vec!["exists".into(), "name".into()],
+                    },
+                    CloudOperation::FolderMembership {
+                        item_key: "item-a".into(),
+                        folder_key: "folder-a".into(),
+                        present: true,
+                        position_rank: Some(1024),
+                    },
+                    CloudOperation::TagMembership {
+                        item_key: "item-a".into(),
+                        namespace: "general".into(),
+                        subtag: "blue".into(),
+                        present: true,
+                    },
+                    CloudOperation::ItemFields {
+                        item_key: "item-a".into(),
+                        fields: BTreeMap::from([
+                            ("label".into(), Value::String("Remote name".into())),
+                            ("rating".into(), Value::from(4)),
+                        ]),
+                    },
+                    CloudOperation::Lifecycle {
+                        item_key: "missing-item".into(),
+                        lifecycle: "active".into(),
+                    },
+                ],
+            },
+        );
+        let (summary, receipt) = apply_downloaded(&application, &[setup]).unwrap();
+        assert_eq!(summary.applied, 1);
+        assert_eq!(summary.quarantined, 1);
+        assert_eq!(receipt.item_ids, vec![ItemId(item_id)]);
+
+        let (folder_id, tag_id): (i64, i64) = application
+            .store()
+            .read(|connection| {
+                Ok((
+                    connection.query_row(
+                        "SELECT folder_id FROM folder WHERE folder_key = 'folder-a'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                    connection.query_row(
+                        "SELECT tag_id FROM tag
+                         WHERE namespace = 'general' AND subtag = 'blue'",
+                        [],
+                        |row| row.get(0),
+                    )?,
+                ))
+            })
+            .unwrap();
+        assert!(application
+            .projections()
+            .active_bitmap()
+            .contains(item_id as u32));
+        assert!(application
+            .projections()
+            .folder_bitmap(folder_id)
+            .contains(item_id as u32));
+        assert!(application
+            .projections()
+            .direct_tag_bitmap(tag_id)
+            .contains(item_id as u32));
+        assert_eq!(
+            application
+                .projections()
+                .rating_aggregate(&RoaringBitmap::from_iter([item_id as u32]))
+                .sum,
+            4
+        );
+        assert!(
+            !application
+                .projections()
+                .active_bitmap()
+                .contains(unrelated_id as u32),
+            "incremental cloud settlement must not reconstruct unrelated SQL rows"
+        );
+
+        let lifecycle = remote_mutation(
+            &application,
+            "remote",
+            HybridTimestamp {
+                physical_ms: 20,
+                logical: 0,
+            },
+            CausalFrontier::new(),
+            CloudOperation::Lifecycle {
+                item_key: "item-a".into(),
+                lifecycle: "trash".into(),
+            },
+        );
+        apply_downloaded(&application, &[lifecycle]).unwrap();
+        assert!(!application
+            .projections()
+            .active_bitmap()
+            .contains(item_id as u32));
+        assert!(application
+            .projections()
+            .trash_bitmap()
+            .contains(item_id as u32));
+
+        let delete = remote_mutation(
+            &application,
+            "remote",
+            HybridTimestamp {
+                physical_ms: 30,
+                logical: 0,
+            },
+            CausalFrontier::new(),
+            CloudOperation::DeleteItem {
+                item_key: "item-a".into(),
+            },
+        );
+        apply_downloaded(&application, &[delete]).unwrap();
+        assert!(!application
+            .projections()
+            .trash_bitmap()
+            .contains(item_id as u32));
+        assert!(!application
+            .projections()
+            .direct_tag_bitmap(tag_id)
+            .contains(item_id as u32));
+        assert!(!application
+            .projections()
+            .folder_bitmap(folder_id)
+            .contains(item_id as u32));
+    }
+
+    #[test]
     fn captured_updates_read_stable_keys_across_synced_tables() {
         let application = application();
         let media_id = add_media(&application, "member-a");
@@ -3597,6 +4450,12 @@ mod tests {
                 let collection_id = transaction.last_insert_rowid();
                 transaction.execute(
                     "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
+                    [collection_id],
+                )?;
+                transaction.execute(
+                    "INSERT INTO root_metadata
+                         (root_item_id, name, source_urls_json, updated_at)
+                     VALUES (?1, 'group-a', '[]', 'now')",
                     [collection_id],
                 )?;
                 transaction.execute("DELETE FROM library_root WHERE item_id = ?1", [media_id])?;
@@ -3629,9 +4488,11 @@ mod tests {
                 )?;
                 let tag_id = transaction.last_insert_rowid();
                 transaction.execute(
-                    "INSERT INTO media_tag (media_item_id, tag_id, source)
-                     VALUES (?1, ?2, 'local')",
-                    params![media_id, tag_id],
+                    "INSERT INTO root_tag
+                         (root_item_id, tag_id, direct_assignment_count,
+                          provenance_mask, source_mask)
+                     VALUES (?1, ?2, 1, 0, 1)",
+                    params![collection_id, tag_id],
                 )?;
                 Ok((collection_id, folder_id, smart_folder_id, tag_id))
             })
@@ -3643,8 +4504,8 @@ mod tests {
             .store()
             .transaction(|transaction| {
                 transaction.execute(
-                    "UPDATE library_item SET label = 'Group', updated_at = 'later'
-                     WHERE item_id = ?1",
+                    "UPDATE root_metadata SET name = 'Group', updated_at = 'later'
+                     WHERE root_item_id = ?1",
                     [collection_id],
                 )?;
                 transaction.execute(
@@ -3652,9 +4513,9 @@ mod tests {
                     [collection_id],
                 )?;
                 transaction.execute(
-                    "UPDATE media_asset SET notes = 'note', updated_at = 'later'
-                     WHERE item_id = ?1",
-                    [media_id],
+                    "UPDATE root_metadata SET notes = 'note', updated_at = 'later'
+                     WHERE root_item_id = ?1",
+                    [collection_id],
                 )?;
                 transaction.execute(
                     "UPDATE collection_member SET position_rank = 8192
@@ -3677,9 +4538,9 @@ mod tests {
                     [smart_folder_id],
                 )?;
                 transaction.execute(
-                    "UPDATE media_tag SET provenance_mask = 1
-                     WHERE media_item_id = ?1 AND tag_id = ?2 AND source = 'local'",
-                    params![media_id, tag_id],
+                    "UPDATE root_tag SET provenance_mask = 1
+                     WHERE root_item_id = ?1 AND tag_id = ?2",
+                    params![collection_id, tag_id],
                 )?;
                 Ok(())
             })
@@ -3742,7 +4603,7 @@ mod tests {
             application
                 .store()
                 .read(|connection| connection.query_row(
-                    "SELECT COUNT(*) FROM media_tag",
+                    "SELECT COUNT(*) FROM root_tag",
                     [],
                     |row| row.get::<_, i64>(0)
                 ))
@@ -3784,7 +4645,7 @@ mod tests {
             application
                 .store()
                 .read(|connection| connection.query_row(
-                    "SELECT COUNT(*) FROM media_tag",
+                    "SELECT COUNT(*) FROM root_tag",
                     [],
                     |row| row.get::<_, i64>(0)
                 ))

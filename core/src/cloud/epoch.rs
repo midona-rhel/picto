@@ -208,7 +208,7 @@ fn frontier_with_pack(store: &Store, pack: &EpochPack) -> Result<CausalFrontier,
 }
 
 fn mark_published(store: &Store, mutation_ids: &[&str], sealed: bool) -> Result<(), String> {
-    store.transaction(|transaction| {
+    store.transaction_cloud(|transaction| {
         let now = Utc::now().to_rfc3339();
         let ids_json = serde_json::to_string(mutation_ids).map_err(json_sql_error)?;
         if sealed {

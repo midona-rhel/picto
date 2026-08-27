@@ -1640,7 +1640,7 @@ mod tests {
         let (subscription_id, receipt) = application
             .create_subscription_definition(&input(), "2026-01-01T00:00:00Z")
             .unwrap();
-        assert_eq!(receipt.revision, 1);
+        assert_eq!(receipt.revision, 2);
 
         let catalog = list(&application).unwrap();
         assert_eq!(catalog.subscriptions.len(), 1);

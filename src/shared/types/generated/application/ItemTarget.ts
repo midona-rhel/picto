@@ -2,4 +2,4 @@
 import type { ItemId } from "./ItemId";
 import type { ItemQuery } from "./ItemQuery";
 
-export type ItemTarget = { "kind": "explicit", item_ids: Array<ItemId>, } | { "kind": "query", query: ItemQuery, excluded_item_ids: Array<ItemId>, };
+export type ItemTarget = { "kind": "explicit", item_ids: Array<ItemId>, } | { "kind": "query", query: ItemQuery, excluded_item_ids: Array<ItemId>, } | { "kind": "range", query: ItemQuery, anchor_item_id: ItemId, focus_item_id: ItemId, };

@@ -1,6 +1,7 @@
 import { createStore } from 'jotai';
 import { describe, expect, it } from 'vitest';
 import type { ItemSummary } from '../shared/types/generated/application/ItemSummary';
+import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 import { currentGridQueryAtom, gridSessionAtom } from './grid';
 import {
   clearSelectionAtom,
@@ -35,6 +36,24 @@ function buildGridItem(itemId: number, fileHash: string): ItemSummary {
 }
 
 describe('selection state', () => {
+  it('exposes range targets without expanding unloaded renderer item IDs', () => {
+    const query = createStore().get(currentGridQueryAtom);
+    const target: ItemTarget = {
+      kind: 'range',
+      query,
+      anchor_item_id: 11,
+      focus_item_id: 999_999,
+    };
+
+    expect(target).toEqual({
+      kind: 'range',
+      query,
+      anchor_item_id: 11,
+      focus_item_id: 999_999,
+    });
+    expect('item_ids' in target).toBe(false);
+  });
+
   it('builds query targets from the canonical grid session', () => {
     const store = createStore();
     store.set(gridSessionAtom, {

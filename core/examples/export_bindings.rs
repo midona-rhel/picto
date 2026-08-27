@@ -74,8 +74,8 @@ fn main() {
         ScheduleSubscriptionInput, ScopeInput, SiteInput, SmartFolderInput,
         SubscriptionCoverCandidatesInput, SubscriptionCoverInput, SubscriptionDestinationInput,
         SubscriptionInput, SubscriptionPostsPerRunInput, SubscriptionQueryInput,
-        SubscriptionRunActivityInput, SubscriptionRunsInput, TagAliasInput, TagGroupInput,
-        TagImplicationInput, TagInput, TargetInput, UpdateSmartFolderInput,
+        SubscriptionRunActivityInput, SubscriptionRunsInput, TagGroupInput,
+        TagInput, TargetInput, UpdateSmartFolderInput,
         UpdateSubscriptionQueryInput, ValueInput,
     };
     use picto_core::media_io_v2::{
@@ -107,7 +107,7 @@ fn main() {
         SubscriptionCoverSelection, SubscriptionDestinationPolicy, SubscriptionList,
         SubscriptionProgress, SubscriptionQueryView, SubscriptionView,
     };
-    use picto_core::tags_v2::{TagPage, TagRelation, TagRelations, TagSummary};
+    use picto_core::tags_v2::{TagPage, TagSummary};
     use picto_core::tasks_v2::{QueueCounts, TaskIssue, TaskSnapshot};
 
     // Export paths are relative to core/src in the derive attributes.
@@ -128,7 +128,7 @@ fn main() {
         FolderWatchInput, FolderMutationReceipt,
         FolderNavigationItem, SmartFolderNavigationItem, NavigationSnapshot,
         CreateSmartFolderInput, SmartFolderMutationReceipt,
-        TagSummary, TagPage, TagRelation, TagRelations,
+        TagSummary, TagPage,
         FileQuality, QualityDecision, DuplicateCandidate, CandidateSide, CandidateOccurrence,
         DuplicateScanResult, ResolutionChoice, ResolutionResult,
         NewSubscriptionQuery, NewSubscription, SubscriptionCoverCandidate,
@@ -148,7 +148,7 @@ fn main() {
         ManualImportInput, ImportEnqueueReport,
         QueryItemsInput, ItemInput, FileHashInput, FileHashesInput, TargetInput,
         LifecycleInput, FolderMembershipInput, ApplyTagsInput,
-        PatchMetadataInput, ListTagsInput, TagInput, TagAliasInput, TagImplicationInput,
+        PatchMetadataInput, ListTagsInput, TagInput,
         RenameTagInput, RenameTagGroupInput, TagGroupInput, LimitInput, ScanDuplicatesInput, ResolveDuplicateInput,
         AutomaticDuplicateInput, FolderInput, RenameFolderInput, MoveFolderInput,
         SmartFolderInput, UpdateSmartFolderInput, MoveSmartFolderInput,

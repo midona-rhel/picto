@@ -1,4 +1,5 @@
 import { atom } from 'jotai';
+import type { ItemQuery } from '../shared/types/generated/application/ItemQuery';
 import type { ItemTarget } from '../shared/types/generated/application/ItemTarget';
 import { currentGridQueryAtom, gridItemsAtom, gridTotalCountAtom } from './grid';
 
@@ -8,6 +9,8 @@ export interface GridSelection {
   mode: SelectionMode;
   itemIds: Set<number>;
   excludedItemIds: Set<number>;
+  query?: ItemQuery | null;
+  queryTotalCount?: number | null;
   folderNodeIds: Set<string>;
   anchor: { kind: 'item'; id: number } | { kind: 'folder'; id: string } | null;
 }
@@ -20,7 +23,7 @@ export type GridSelectionAction =
   | { type: 'replace_folders'; ids: Set<string>; anchor?: string | null }
   | { type: 'toggle_folder'; id: string }
   | { type: 'marquee'; itemIds: Set<number>; folderNodeIds: Set<string>; additive: boolean }
-  | { type: 'select_all'; totalCount: number }
+  | { type: 'select_all'; totalCount: number; query?: ItemQuery }
   | { type: 'toggle_query_item'; itemId: number; totalCount: number }
   | { type: 'set_anchor'; anchor: GridSelection['anchor'] };
 
@@ -28,6 +31,8 @@ export const emptyGridSelection = (): GridSelection => ({
   mode: 'explicit',
   itemIds: new Set<number>(),
   excludedItemIds: new Set<number>(),
+  query: null,
+  queryTotalCount: null,
   folderNodeIds: new Set<string>(),
   anchor: null,
 });
@@ -96,13 +101,20 @@ export function reduceGridSelection(state: GridSelection, action: GridSelectionA
       };
     }
     case 'select_all':
-      return action.totalCount > 0 ? { ...emptyGridSelection(), mode: 'query_results' } : emptyGridSelection();
+      return action.totalCount > 0
+        ? {
+            ...emptyGridSelection(),
+            mode: 'query_results',
+            query: action.query ?? null,
+            queryTotalCount: action.totalCount,
+          }
+        : emptyGridSelection();
     case 'toggle_query_item': {
       if (state.mode !== 'query_results') return state;
       const excludedItemIds = new Set(state.excludedItemIds);
       if (excludedItemIds.has(action.itemId)) excludedItemIds.delete(action.itemId);
       else excludedItemIds.add(action.itemId);
-      return excludedItemIds.size >= action.totalCount
+      return excludedItemIds.size >= (state.queryTotalCount ?? action.totalCount)
         ? emptyGridSelection()
         : { ...state, excludedItemIds, anchor: { kind: 'item', id: action.itemId } };
     }
@@ -180,7 +192,9 @@ export const selectedItemIdAtom = atom((get) => {
 export const selectionCountAtom = atom((get) => {
   const selection = get(gridSelectionAtom);
   if (selection.mode === 'query_results') {
-    const totalCount = get(gridTotalCountAtom) ?? get(gridItemsAtom).length;
+    const totalCount = selection.queryTotalCount
+      ?? get(gridTotalCountAtom)
+      ?? get(gridItemsAtom).length;
     return Math.max(0, totalCount - selection.excludedItemIds.size);
   }
   return selection.itemIds.size;
@@ -189,9 +203,15 @@ export const selectionCountAtom = atom((get) => {
 export const selectionTargetAtom = atom<ItemTarget | null>((get) => {
   if (get(selectionCountAtom) <= 0) return null;
   const selection = get(gridSelectionAtom);
-  return selection.mode === 'query_results'
-    ? { kind: 'query', query: get(currentGridQueryAtom), excluded_item_ids: [...selection.excludedItemIds] }
-    : { kind: 'explicit', item_ids: [...selection.itemIds] };
+  if (selection.mode === 'query_results') {
+    if (selection.query == null) return null;
+    return {
+      kind: 'query',
+      query: selection.query,
+      excluded_item_ids: [...selection.excludedItemIds],
+    };
+  }
+  return { kind: 'explicit', item_ids: [...selection.itemIds] };
 });
 
 export const selectionFingerprintAtom = atom((get) => {
@@ -202,5 +222,9 @@ export const selectionFingerprintAtom = atom((get) => {
 export const clearSelectionAtom = atom(null, (_get, set) => set(gridSelectionActionAtom, { type: 'clear' }));
 export const selectAllResultsAtom = atom(null, (get, set) => set(
   gridSelectionActionAtom,
-  { type: 'select_all', totalCount: get(gridTotalCountAtom) ?? get(gridItemsAtom).length },
+  {
+    type: 'select_all',
+    totalCount: get(gridTotalCountAtom) ?? get(gridItemsAtom).length,
+    query: get(currentGridQueryAtom),
+  },
 ));

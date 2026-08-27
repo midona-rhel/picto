@@ -41,10 +41,12 @@ export interface GridSessionSnapshot {
   filters: QueryFilters;
   view: GridViewPreferences;
   items: CanonicalEntityGridItem[];
-  /** Next offset, or null when the loaded window reaches visible_item_count. */
-  cursor: number | null;
+  /** Opaque cursor for the next canonical page, or null at the end. */
+  cursor: string | null;
   totalCount: number | null;
   totalSizeBytes: number | null;
+  /** Canonical database/projection revision used to produce the loaded window. */
+  revision: number;
   status: 'idle' | 'loading' | 'appending' | 'error';
   error: string | null;
   generation: number;
@@ -81,6 +83,7 @@ export const gridSessionAtom = atom<GridSessionSnapshot>({
   cursor: null,
   totalCount: null,
   totalSizeBytes: null,
+  revision: 0,
   status: 'idle',
   error: null,
   generation: 0,

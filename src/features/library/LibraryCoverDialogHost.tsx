@@ -9,13 +9,13 @@ export function LibraryCoverDialogHost() {
   const setState = useSetAtom(libraryCoverModalAtom);
 
   return (
-    <MediaCoverDialog<number>
+    <MediaCoverDialog<string>
       target={state.open ? { id: state.path, name: state.name } : null}
       busy={false}
       initialCandidate={state.initialCandidate}
       instructions="Select a media item from this library, then adjust its position and zoom."
       emptyText="This library has no media available for a cover."
-      onLoad={(path, offset) => loadLibraryCoverCandidates(path, offset ?? 0)}
+      onLoad={(path, cursor) => loadLibraryCoverCandidates(path, cursor ?? null)}
       onSave={async (path, candidate, crop) => {
         try {
           await saveLibraryCover(path, candidate, crop);

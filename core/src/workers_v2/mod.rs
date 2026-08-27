@@ -46,6 +46,19 @@ impl WorkKind {
             )),
         }
     }
+
+    /// Higher values are claimed first. Keep this persisted rather than
+    /// deriving queue order in every claim so the ready index can satisfy the
+    /// scheduler without a work-type sort.
+    const fn priority(self) -> i64 {
+        match self {
+            Self::Thumbnail => 500,
+            Self::DominantColors => 400,
+            Self::PerceptualHash => 300,
+            Self::AiTag => 200,
+            Self::BlobDelete => 100,
+        }
+    }
 }
 
 pub(crate) fn enqueue_blob_delete_in(
@@ -55,11 +68,11 @@ pub(crate) fn enqueue_blob_delete_in(
 ) -> rusqlite::Result<()> {
     transaction.execute(
         "INSERT INTO work_item (
-             file_hash, work_type, status, attempt_count,
+             file_hash, work_type, priority, status, attempt_count,
              available_at, created_at, updated_at
-         ) VALUES (?1, 'blob_delete', 'pending', 0, ?2, ?2, ?2)
+         ) VALUES (?1, 'blob_delete', ?2, 'pending', 0, ?3, ?3, ?3)
          ON CONFLICT(file_hash, work_type) WHERE file_hash IS NOT NULL DO NOTHING",
-        params![file_hash, now],
+        params![file_hash, WorkKind::BlobDelete.priority(), now],
     )?;
     Ok(())
 }
@@ -135,50 +148,6 @@ pub struct EnqueueResult {
     pub inserted: bool,
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub struct RunReport {
-    pub claimed: usize,
-    pub succeeded: usize,
-    pub retried: usize,
-}
-
-pub trait WorkExecutor {
-    fn execute(&mut self, item: &WorkItem) -> Result<(), String>;
-}
-
-impl<F> WorkExecutor for F
-where
-    F: FnMut(&WorkItem) -> Result<(), String>,
-{
-    fn execute(&mut self, item: &WorkItem) -> Result<(), String> {
-        self(item)
-    }
-}
-
-pub struct Worker<'a> {
-    store: &'a Store,
-}
-
-impl<'a> Worker<'a> {
-    /// Reset interrupted work before the worker starts accepting claims.
-    pub fn start(store: &'a Store) -> Result<Self, String> {
-        reset_running(store)?;
-        Ok(Self { store })
-    }
-
-    pub fn enqueue(&self, spec: WorkSpec) -> Result<EnqueueResult, String> {
-        enqueue(self.store, spec)
-    }
-
-    pub fn run_batch<E: WorkExecutor>(
-        &self,
-        limit: usize,
-        executor: &mut E,
-    ) -> Result<RunReport, String> {
-        run_batch(self.store, limit, executor)
-    }
-}
-
 pub fn enqueue(store: &Store, spec: WorkSpec) -> Result<EnqueueResult, String> {
     enqueue_at(store, spec, &Utc::now().to_rfc3339())
 }
@@ -188,7 +157,7 @@ pub fn enqueue_at(store: &Store, spec: WorkSpec, now: &str) -> Result<EnqueueRes
         return Err("work item needs a media item or file target".to_string());
     }
 
-    let (result, _, _) = store.transaction_if_changed(|transaction| {
+    let (result, _, _) = store.transaction_if_changed_background(|transaction| {
         let existing = find_work_id(transaction, &spec)?;
         if let Some(work_id) = existing {
             return Ok((
@@ -202,14 +171,15 @@ pub fn enqueue_at(store: &Store, spec: WorkSpec, now: &str) -> Result<EnqueueRes
 
         transaction.execute(
             "INSERT INTO work_item (
-                 media_item_id, file_id, file_hash, work_type, status, attempt_count,
+                 media_item_id, file_id, file_hash, work_type, priority, status, attempt_count,
                  available_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, 'pending', 0, ?5, ?5, ?5)",
+             ) VALUES (?1, ?2, ?3, ?4, ?5, 'pending', 0, ?6, ?6, ?6)",
             params![
                 spec.media_item_id,
                 spec.file_id,
                 spec.file_hash,
                 spec.kind.as_str(),
+                spec.kind.priority(),
                 now
             ],
         )?;
@@ -232,7 +202,7 @@ pub fn reset_running(store: &Store) -> Result<usize, String> {
 /// policy. Missing member thumbnails are queued on demand when a viewport or
 /// collection editor actually requests them.
 pub fn prune_deferred_thumbnail_work(store: &Store) -> Result<usize, String> {
-    let (count, _, _) = store.transaction_if_changed(|transaction| {
+    let (count, _, _) = store.transaction_if_changed_background(|transaction| {
         let count = transaction.execute(
             "DELETE FROM work_item
              WHERE status = 'pending'
@@ -258,7 +228,7 @@ pub fn prune_deferred_thumbnail_work(store: &Store) -> Result<usize, String> {
 }
 
 pub fn reset_running_at(store: &Store, now: &str) -> Result<usize, String> {
-    let (count, _, _) = store.transaction_if_changed(|transaction| {
+    let (count, _, _) = store.transaction_if_changed_background(|transaction| {
         let count = transaction.execute(
             "UPDATE work_item
              SET status = 'pending', available_at = ?1, updated_at = ?1
@@ -276,7 +246,7 @@ pub fn claim(store: &Store, limit: usize) -> Result<Vec<WorkItem>, String> {
 
 pub fn claim_at(store: &Store, limit: usize, now: &str) -> Result<Vec<WorkItem>, String> {
     let limit = limit.min(DEFAULT_BATCH_SIZE);
-    let (items, _, _) = store.transaction_if_changed(|transaction| {
+    let (items, _, _) = store.transaction_if_changed_background(|transaction| {
         let mut statement = transaction.prepare(
             "SELECT work_id, media_item_id, file_id, file_hash, work_type, attempt_count,
                     available_at, last_error
@@ -304,15 +274,7 @@ pub fn claim_at(store: &Store, limit: usize, now: &str) -> Result<Vec<WorkItem>,
                          )
                    )
                )
-             ORDER BY CASE work_type
-                          WHEN 'thumbnail' THEN 0
-                          WHEN 'dominant_colors' THEN 1
-                          WHEN 'perceptual_hash' THEN 2
-                          WHEN 'ai_tag' THEN 3
-                          WHEN 'blob_delete' THEN 4
-                          ELSE 5
-                      END,
-                      available_at,
+             ORDER BY priority DESC, available_at,
                       work_id
              LIMIT ?2",
         )?;
@@ -332,26 +294,31 @@ pub fn claim_at(store: &Store, limit: usize, now: &str) -> Result<Vec<WorkItem>,
             .collect::<rusqlite::Result<Vec<_>>>()?;
         drop(statement);
 
-        let mut items = Vec::with_capacity(rows.len());
-        for (
-            work_id,
-            media_item_id,
-            file_id,
-            file_hash,
-            kind,
-            attempt_count,
-            available_at,
-            last_error,
-        ) in rows
-        {
-            let changed = transaction.execute(
+        let work_ids = rows.iter().map(|row| row.0).collect::<Vec<_>>();
+        if !work_ids.is_empty() {
+            let encoded = serde_json::to_string(&work_ids)
+                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+            transaction.execute(
                 "UPDATE work_item
                  SET status = 'running', updated_at = ?1
-                 WHERE work_id = ?2 AND status = 'pending'",
-                params![now, work_id],
+                 WHERE status = 'pending'
+                   AND work_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?2))",
+                params![now, encoded],
             )?;
-            if changed == 1 {
-                items.push(WorkItem {
+        }
+        let items = rows
+            .into_iter()
+            .map(
+                |(
+                    work_id,
+                    media_item_id,
+                    file_id,
+                    file_hash,
+                    kind,
+                    attempt_count,
+                    available_at,
+                    last_error,
+                )| WorkItem {
                     work_id,
                     media_item_id,
                     file_id,
@@ -361,9 +328,9 @@ pub fn claim_at(store: &Store, limit: usize, now: &str) -> Result<Vec<WorkItem>,
                     attempt_count,
                     available_at,
                     last_error,
-                });
-            }
-        }
+                },
+            )
+            .collect::<Vec<_>>();
         let changed = !items.is_empty();
         Ok((items, changed))
     })?;
@@ -371,7 +338,7 @@ pub fn claim_at(store: &Store, limit: usize, now: &str) -> Result<Vec<WorkItem>,
 }
 
 pub fn complete(store: &Store, work_id: i64) -> Result<bool, String> {
-    let (changed, _, _) = store.transaction_if_changed(|transaction| {
+    let (changed, _, _) = store.transaction_if_changed_background(|transaction| {
         let count = transaction.execute(
             "DELETE FROM work_item WHERE work_id = ?1 AND status = 'running'",
             [work_id],
@@ -379,6 +346,24 @@ pub fn complete(store: &Store, work_id: i64) -> Result<bool, String> {
         Ok((count == 1, count == 1))
     })?;
     Ok(changed)
+}
+
+pub fn complete_many(store: &Store, work_ids: &[i64]) -> Result<usize, String> {
+    if work_ids.is_empty() {
+        return Ok(0);
+    }
+    let (completed, _, _) = store.transaction_if_changed_background(|transaction| {
+        let encoded = serde_json::to_string(work_ids)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+        let completed = transaction.execute(
+            "DELETE FROM work_item
+             WHERE status = 'running'
+               AND work_id IN (SELECT CAST(value AS INTEGER) FROM json_each(?1))",
+            [encoded],
+        )?;
+        Ok((completed, completed != 0))
+    })?;
+    Ok(completed)
 }
 
 pub fn fail(store: &Store, work_id: i64, error: &str) -> Result<bool, String> {
@@ -392,7 +377,7 @@ pub fn fail_at(
     error: &str,
 ) -> Result<bool, String> {
     let now_text = now.to_rfc3339();
-    let (changed, _, _) = store.transaction_if_changed(|transaction| {
+    let (changed, _, _) = store.transaction_if_changed_background(|transaction| {
         let attempt_count: Option<i64> = transaction
             .query_row(
                 "SELECT attempt_count FROM work_item
@@ -416,31 +401,6 @@ pub fn fail_at(
         Ok((true, true))
     })?;
     Ok(changed)
-}
-
-pub fn run_batch<E: WorkExecutor>(
-    store: &Store,
-    limit: usize,
-    executor: &mut E,
-) -> Result<RunReport, String> {
-    let items = claim(store, limit)?;
-    let mut report = RunReport {
-        claimed: items.len(),
-        ..RunReport::default()
-    };
-    for item in items {
-        match executor.execute(&item) {
-            Ok(()) => {
-                complete(store, item.work_id)?;
-                report.succeeded += 1;
-            }
-            Err(error) => {
-                fail(store, item.work_id, &error)?;
-                report.retried += 1;
-            }
-        }
-    }
-    Ok(report)
 }
 
 fn find_work_id(transaction: &Transaction<'_>, spec: &WorkSpec) -> rusqlite::Result<Option<i64>> {
@@ -664,6 +624,31 @@ mod tests {
 
         let phash = claim_at(&store, 1, "2026-01-01T00:03:00Z").unwrap();
         assert_eq!(phash[0].kind, WorkKind::PerceptualHash);
+    }
+
+    #[test]
+    fn enqueue_persists_numeric_priority_used_by_the_ready_index() {
+        let (_directory, store) = store();
+        let colors = enqueue_at(&store, WorkSpec::file(7, WorkKind::DominantColors), NOW).unwrap();
+        let phash = enqueue_at(&store, WorkSpec::file(7, WorkKind::PerceptualHash), NOW).unwrap();
+        let priorities = store
+            .read(|connection| {
+                let mut statement = connection.prepare(
+                    "SELECT work_id, priority FROM work_item
+                     WHERE work_id IN (?1, ?2) ORDER BY priority DESC",
+                )?;
+                let rows = statement
+                    .query_map(params![colors.work_id, phash.work_id], |row| {
+                        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap();
+        assert_eq!(
+            priorities,
+            vec![(colors.work_id, 400), (phash.work_id, 300)]
+        );
     }
 
     #[test]

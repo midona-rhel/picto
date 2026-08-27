@@ -4,15 +4,11 @@ import {
   deleteTagGroup,
   getNamespaceSummary,
   getUnusedTagCount,
-  getTagRelations,
   getTagsPaginated,
-  manageTagAlias,
-  manageTagImplication,
   mergeTags,
   renameTagGroup,
   renameTag,
 } from '../platform/tagApi';
-import type { TagRelationGroups } from '../platform/tagApi';
 import type {
   CanonicalNamespaceSummary,
   TagPage,
@@ -35,10 +31,6 @@ export const tagsController = {
 
   getUnusedCount(): Promise<number> {
     return getUnusedTagCount();
-  },
-
-  getRelations(tagId: number): Promise<TagRelationGroups> {
-    return getTagRelations(tagId);
   },
 
   async rename(tagId: number, newName: string): Promise<unknown> {
@@ -77,13 +69,4 @@ export const tagsController = {
     return result;
   },
 
-  async setAlias(fromTagId: number, toTagId?: number | null): Promise<void> {
-    await manageTagAlias(fromTagId, toTagId);
-    await announceUndoableMutation('tags.set_alias');
-  },
-
-  async setImplication(childTagId: number, parentTagId: number, present: boolean): Promise<void> {
-    await manageTagImplication(childTagId, parentTagId, present);
-    await announceUndoableMutation('tags.set_implication');
-  },
 };

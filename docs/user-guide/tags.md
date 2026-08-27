@@ -69,29 +69,6 @@ Namespaces group related tags. Each namespace gets a distinct color in the UI:
 
 Tags are sorted by namespace in the inspector: creator → studio → series → character → person → species → meta → system → unnamespaced.
 
-## Tag Relations
-
-Tags can have relationships that automate tagging:
-
-### Aliases
-
-An alias merges one tag into another. If you alias `artist:jdoe` → `creator:john_doe`, any file tagged with `artist:jdoe` will show `creator:john_doe` instead.
-
-### Implications
-
-An implication means applying one tag automatically applies another. For example:
-
-- `character:sonic` implies `series:sonic_the_hedgehog`
-- Tagging a file with `character:sonic` automatically adds `series:sonic_the_hedgehog`
-
-### Managing Relations
-
-In the Tag Manager, right-click a tag to:
-- **Create alias** — Merge this tag into another
-- **Create implication** — This tag implies another
-- **Create reverse implication** — Another tag implies this one
-- **View all relations** — See all aliases, implications, and implied-by relationships
-
 ## Batch Tagging
 
 Select multiple files with `Ctrl+click`, `Shift+click`, or `Ctrl+A`, then press `T` to tag them all at once. Tags are applied to every selected file.

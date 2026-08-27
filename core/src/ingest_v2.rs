@@ -1,16 +1,18 @@
 //! One durable-media materialization path for manual and source imports.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use rand::RngCore;
+use roaring::RoaringBitmap;
 use rusqlite::{params, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, Lifecycle, MutationReceipt};
 use crate::projection_v2::{
-    FolderProjectionChange, ItemProjectionChange, MembershipProjectionChange, RootProjectionChange,
-    StructureProjectionDelta, TagProjectionChange,
+    FolderProjectionChange, ItemProjectionChange, MediaClassificationProjectionChange,
+    MembershipProjectionChange, RootProjectionChange, RootSummaryProjectionChange,
+    StructureProjectionDelta,
 };
 
 pub(crate) const DELETED_SOURCE_ITEM_ERROR: &str =
@@ -21,6 +23,8 @@ pub(crate) fn is_deleted_source_item_error(error: &str) -> bool {
 }
 
 const RANK_GAP: i64 = 1024;
+const STAGED_ROOT_ORGANIZATION_KEY: &str = "_picto_root_organization";
+const STAGED_SOURCE_METADATA_RAW_KEY: &str = "_picto_source_metadata_raw";
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -83,6 +87,159 @@ pub struct IngestMediaResult {
     pub receipt: Option<MutationReceipt>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct StagedRootOrganization {
+    #[serde(default)]
+    cover_order: Option<(i64, String)>,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    rating: Option<i64>,
+    #[serde(default)]
+    notes: Option<String>,
+    #[serde(default)]
+    source_urls: BTreeSet<String>,
+    #[serde(default)]
+    tags: Vec<StagedRootTag>,
+    #[serde(default)]
+    folder_ids: BTreeSet<i64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StagedRootTag {
+    namespace: String,
+    subtag: String,
+    provenance_mask: i64,
+}
+
+#[derive(Default)]
+struct RootOrganizationChanges {
+    tag_ids: Vec<i64>,
+    folder_ids: Vec<i64>,
+    metadata_changed: bool,
+}
+
+#[derive(Default)]
+struct IngestProjectionDelta {
+    structure: StructureProjectionDelta,
+    root_tags_added: Vec<(i64, i64)>,
+    root_tags_removed: Vec<(i64, i64)>,
+    summary_root_ids: BTreeSet<i64>,
+    summaries: Vec<RootSummaryProjectionChange>,
+}
+
+impl IngestProjectionDelta {
+    fn add_organization(&mut self, root_item_id: i64, changes: RootOrganizationChanges) {
+        self.summary_root_ids.insert(root_item_id);
+        self.root_tags_added.extend(
+            changes
+                .tag_ids
+                .into_iter()
+                .map(|tag_id| (root_item_id, tag_id)),
+        );
+        self.structure
+            .folders
+            .extend(
+                changes
+                    .folder_ids
+                    .into_iter()
+                    .map(|folder_id| FolderProjectionChange {
+                        folder_id,
+                        item_id: root_item_id,
+                        present: true,
+                    }),
+            );
+    }
+
+    fn prepare_summaries(&mut self, transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+        self.summary_root_ids.extend(
+            self.structure
+                .roots
+                .iter()
+                .filter(|change| change.lifecycle.is_some())
+                .map(|change| change.item_id),
+        );
+        self.summary_root_ids.extend(
+            self.structure
+                .memberships
+                .iter()
+                .map(|change| change.collection_id),
+        );
+
+        self.summaries.clear();
+        for item_id in &self.summary_root_ids {
+            let summary = transaction
+                .query_row(
+                    "SELECT total_size_bytes, media_count, sort_rating
+                     FROM root_summary WHERE root_item_id = ?1",
+                    [item_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, Option<i64>>(2)?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((total_size_bytes, media_count, rating)) = summary else {
+                continue;
+            };
+            self.summaries.push(RootSummaryProjectionChange {
+                item_id: *item_id,
+                total_size_bytes: u64::try_from(total_size_bytes)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, total_size_bytes))?,
+                media_count: u64::try_from(media_count)
+                    .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(1, media_count))?,
+                rating: rating
+                    .map(|rating| {
+                        u8::try_from(rating)
+                            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, rating))
+                    })
+                    .transpose()?,
+            });
+        }
+        Ok(())
+    }
+}
+
+fn settle_ingest_projection(
+    projections: &crate::projection_v2::ProjectionStore,
+    delta: IngestProjectionDelta,
+) -> Result<(), String> {
+    let mut removed_by_tag = BTreeMap::<i64, RoaringBitmap>::new();
+    for (root_id, tag_id) in delta.root_tags_removed {
+        let root_id = u32::try_from(root_id)
+            .map_err(|_| format!("Item ID {root_id} exceeds projection capacity"))?;
+        removed_by_tag.entry(tag_id).or_default().insert(root_id);
+    }
+    for (tag_id, root_ids) in removed_by_tag {
+        projections.apply_root_tag_bitmap(tag_id, &root_ids, false)?;
+    }
+
+    projections.apply_structure_delta(delta.structure)?;
+    projections.apply_root_summary_changes(&delta.summaries, &RoaringBitmap::new())?;
+
+    let mut added_by_tag = BTreeMap::<i64, RoaringBitmap>::new();
+    for (root_id, tag_id) in delta.root_tags_added {
+        let root_id = u32::try_from(root_id)
+            .map_err(|_| format!("Item ID {root_id} exceeds projection capacity"))?;
+        added_by_tag.entry(tag_id).or_default().insert(root_id);
+    }
+    for (tag_id, root_ids) in added_by_tag {
+        projections.apply_root_tag_bitmap(tag_id, &root_ids, true)?;
+    }
+    Ok(())
+}
+
+struct RootSettlement {
+    root_item_id: i64,
+    promoted: bool,
+    visible: bool,
+    replaced_root_item_id: Option<i64>,
+    removed_root_tag_ids: Vec<i64>,
+}
+
 impl Application {
     pub(crate) fn ingest_prepared(
         &self,
@@ -91,8 +248,8 @@ impl Application {
         validate_input(input)?;
         let enqueue_ai = should_enqueue_ai(self, input)?;
         let now = chrono::Utc::now().to_rfc3339();
-        let ((media_item_id, root_item_id, reused, promoted), revision, changed) = self
-            .transaction_if_changed(
+        let ((media_item_id, root_item_id, reused, promoted, visible), revision, changed) = self
+            .transaction_if_changed_maintenance(
                 |transaction| {
                     if let Some(source) = &input.source {
                         if let Some(existing) = existing_source_item(transaction, source)? {
@@ -100,31 +257,39 @@ impl Application {
                                 ExistingSourceItem::Present {
                                     media_item_id,
                                     root_item_id,
+                                    root_visible,
                                 } => {
-                                    let mut delta = StructureProjectionDelta::default();
-                                    let tag_ids = insert_tags(
-                                        transaction,
-                                        media_item_id,
-                                        &input.tags,
-                                        input.provenance_mask,
-                                        true,
-                                    )?;
-                                    delta.tags.extend(tag_ids.into_iter().map(|tag_id| {
-                                        TagProjectionChange {
-                                            media_id: media_item_id,
-                                            tag_id,
-                                            present: true,
-                                        }
-                                    }));
-                                    let metadata_changed = merge_reused_metadata(
-                                        transaction,
-                                        media_item_id,
-                                        input,
-                                        &now,
-                                    )?;
-                                    let changed = metadata_changed || !delta.tags.is_empty();
+                                    let mut delta = IngestProjectionDelta::default();
+                                    let changed = if root_visible {
+                                        let organization =
+                                            StagedRootOrganization::from_input(input, true);
+                                        let preserve_cover =
+                                            root_kind(transaction, root_item_id)? == "collection";
+                                        let changes = merge_root_organization(
+                                            transaction,
+                                            root_item_id,
+                                            &organization,
+                                            preserve_cover,
+                                            &now,
+                                        )?;
+                                        let changed = changes.metadata_changed
+                                            || !changes.tag_ids.is_empty()
+                                            || !changes.folder_ids.is_empty();
+                                        delta.add_organization(root_item_id, changes);
+                                        changed
+                                    } else {
+                                        stage_source_root_organization(
+                                            transaction,
+                                            source,
+                                            input,
+                                            &now,
+                                        )?
+                                    };
+                                    if changed {
+                                        delta.prepare_summaries(transaction)?;
+                                    }
                                     return Ok((
-                                        (media_item_id, root_item_id, true, false),
+                                        (media_item_id, root_item_id, true, false, root_visible),
                                         delta,
                                         changed,
                                     ));
@@ -138,46 +303,37 @@ impl Application {
                     } else if let Some((media_item_id, root_item_id)) =
                         existing_manual_item(transaction, &input.file_hash)?
                     {
-                        let mut delta = StructureProjectionDelta::default();
-                        let tag_ids = insert_tags(
+                        let mut delta = IngestProjectionDelta::default();
+                        let organization = StagedRootOrganization::from_input(input, false);
+                        let preserve_cover = root_kind(transaction, root_item_id)? == "collection";
+                        let changes = merge_root_organization(
                             transaction,
-                            media_item_id,
-                            &input.tags,
-                            input.provenance_mask,
-                            false,
-                        )?;
-                        delta
-                            .tags
-                            .extend(tag_ids.into_iter().map(|tag_id| TagProjectionChange {
-                                media_id: media_item_id,
-                                tag_id,
-                                present: true,
-                            }));
-                        let folder_changed = attach_target_folders(
-                            transaction,
-                            input.target_folder_id,
-                            &input.target_folder_ids,
                             root_item_id,
-                            &mut delta,
+                            &organization,
+                            preserve_cover,
+                            &now,
                         )?;
-                        let metadata_changed =
-                            merge_reused_metadata(transaction, media_item_id, input, &now)?;
-                        let changed = folder_changed || metadata_changed || !delta.tags.is_empty();
-                        return Ok(((media_item_id, root_item_id, true, false), delta, changed));
+                        let changed = changes.metadata_changed
+                            || !changes.tag_ids.is_empty()
+                            || !changes.folder_ids.is_empty();
+                        delta.add_organization(root_item_id, changes);
+                        if changed {
+                            delta.prepare_summaries(transaction)?;
+                        }
+                        return Ok((
+                            (media_item_id, root_item_id, true, false, true),
+                            delta,
+                            changed,
+                        ));
                     }
 
                     let file_id = upsert_file(transaction, input, &now)?;
                     let media_item_id = insert_media_asset(transaction, file_id, input, &now)?;
-                    let tag_ids = insert_tags(
-                        transaction,
-                        media_item_id,
-                        &input.tags,
-                        input.provenance_mask,
-                        input.source.is_some(),
-                    )?;
-                    let (root_item_id, promoted, root_visible) = if let Some(source) = &input.source
-                    {
+                    let settlement = if let Some(source) = &input.source {
                         attach_source_item(transaction, source, media_item_id, &now)?;
+                        if source.group_post || source.force_collection {
+                            stage_source_root_organization(transaction, source, input, &now)?;
+                        }
                         let settled = settle_source_post_root(
                             transaction,
                             source,
@@ -231,8 +387,17 @@ impl Application {
                         settled
                     } else {
                         insert_root(transaction, media_item_id, input.lifecycle)?;
-                        (media_item_id, false, true)
+                        RootSettlement {
+                            root_item_id: media_item_id,
+                            promoted: false,
+                            visible: true,
+                            replaced_root_item_id: None,
+                            removed_root_tag_ids: Vec::new(),
+                        }
                     };
+                    let root_item_id = settlement.root_item_id;
+                    let promoted = settlement.promoted;
+                    let root_visible = settlement.visible;
                     if root_visible {
                         enqueue_root_thumbnail(transaction, root_item_id, &now)?;
                     }
@@ -244,24 +409,30 @@ impl Application {
                         enqueue_ai,
                         &now,
                     )?;
-                    let mut delta = StructureProjectionDelta::default();
-                    delta.items.push(ItemProjectionChange {
+                    let mut delta = IngestProjectionDelta::default();
+                    delta.structure.items.push(ItemProjectionChange {
                         item_id: media_item_id,
                         kind: crate::app::ItemKind::Media,
                         present: true,
                     });
+                    delta.structure.media_classifications.push(
+                        MediaClassificationProjectionChange {
+                            media_id: media_item_id,
+                            is_image: input.mime_type.starts_with("image/"),
+                        },
+                    );
                     if media_item_id == root_item_id {
-                        delta.roots.push(RootProjectionChange {
+                        delta.structure.roots.push(RootProjectionChange {
                             item_id: media_item_id,
                             lifecycle: Some(input.lifecycle),
                         });
                     } else if promoted {
-                        delta.items.push(ItemProjectionChange {
+                        delta.structure.items.push(ItemProjectionChange {
                             item_id: root_item_id,
                             kind: crate::app::ItemKind::Collection,
                             present: true,
                         });
-                        delta.roots.push(RootProjectionChange {
+                        delta.structure.roots.push(RootProjectionChange {
                             item_id: root_item_id,
                             lifecycle: Some(input.lifecycle),
                         });
@@ -280,59 +451,96 @@ impl Application {
                             .collect::<rusqlite::Result<Vec<_>>>()?;
                         drop(folder_statement);
                         for folder_id in folder_ids {
-                            delta.folders.push(FolderProjectionChange {
+                            delta.structure.folders.push(FolderProjectionChange {
                                 folder_id,
                                 item_id: root_item_id,
                                 present: true,
                             });
-                            for member_id in &members {
-                                delta.folders.push(FolderProjectionChange {
+                            if let Some(replaced_root_item_id) = settlement.replaced_root_item_id {
+                                delta.structure.folders.push(FolderProjectionChange {
                                     folder_id,
-                                    item_id: *member_id,
+                                    item_id: replaced_root_item_id,
                                     present: false,
                                 });
                             }
                         }
                         for member_id in members {
-                            delta.roots.push(RootProjectionChange {
+                            delta.structure.roots.push(RootProjectionChange {
                                 item_id: member_id,
                                 lifecycle: None,
                             });
-                            delta.memberships.push(MembershipProjectionChange {
-                                collection_id: root_item_id,
-                                media_id: member_id,
-                                present: true,
-                            });
+                            delta
+                                .structure
+                                .memberships
+                                .push(MembershipProjectionChange {
+                                    collection_id: root_item_id,
+                                    media_id: member_id,
+                                    present: true,
+                                });
                         }
                     } else {
-                        delta.memberships.push(MembershipProjectionChange {
-                            collection_id: root_item_id,
-                            media_id: media_item_id,
-                            present: true,
-                        });
+                        delta
+                            .structure
+                            .memberships
+                            .push(MembershipProjectionChange {
+                                collection_id: root_item_id,
+                                media_id: media_item_id,
+                                present: true,
+                            });
                     }
                     if root_visible {
-                        attach_target_folders(
+                        let organization = if input
+                            .source
+                            .as_ref()
+                            .is_some_and(|source| source.group_post || source.force_collection)
+                        {
+                            take_staged_source_root_organization(
+                                transaction,
+                                input.source.as_ref().expect("source checked above"),
+                            )?
+                            .unwrap_or_else(|| StagedRootOrganization::from_input(input, true))
+                        } else {
+                            StagedRootOrganization::from_input(input, input.source.is_some())
+                        };
+                        let preserve_cover = root_kind(transaction, root_item_id)? == "collection";
+                        let changes = merge_root_organization(
                             transaction,
-                            input.target_folder_id,
-                            &input.target_folder_ids,
                             root_item_id,
-                            &mut delta,
+                            &organization,
+                            preserve_cover,
+                            &now,
                         )?;
+                        delta.add_organization(root_item_id, changes);
+                        if promoted {
+                            delta.root_tags_added.extend(
+                                root_tag_ids(transaction, root_item_id)?
+                                    .into_iter()
+                                    .map(|tag_id| (root_item_id, tag_id)),
+                            );
+                        }
                     }
-                    delta
-                        .tags
-                        .extend(tag_ids.into_iter().map(|tag_id| TagProjectionChange {
-                            media_id: media_item_id,
-                            tag_id,
-                            present: true,
-                        }));
-                    Ok(((media_item_id, root_item_id, false, promoted), delta, true))
+                    if let Some(replaced_root_item_id) = settlement.replaced_root_item_id {
+                        delta.root_tags_removed.extend(
+                            settlement
+                                .removed_root_tag_ids
+                                .into_iter()
+                                .map(|tag_id| (replaced_root_item_id, tag_id)),
+                        );
+                    }
+                    delta.prepare_summaries(transaction)?;
+                    Ok((
+                        (media_item_id, root_item_id, false, promoted, root_visible),
+                        delta,
+                        true,
+                    ))
                 },
-                |projections, delta| projections.apply_structure_delta(delta),
+                settle_ingest_projection,
             )?;
 
-        let receipt = changed.then(|| MutationReceipt {
+        // Provisional source groups intentionally have no library root. Their
+        // canonical members may commit progressively, but no visible-library
+        // invalidation is published until the coherent group root exists.
+        let receipt = (changed && visible).then(|| MutationReceipt {
             revision,
             resources: {
                 let mut changed_resources = vec![
@@ -361,12 +569,123 @@ impl Application {
             receipt,
         })
     }
+
+    pub(crate) fn recover_provisional_source_root(
+        &self,
+        collection_id: i64,
+        source_post_id: i64,
+        lifecycle: Lifecycle,
+    ) -> Result<bool, String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let (_, _, changed) = self.transaction_if_changed_maintenance(
+            |transaction| {
+                let inserted = transaction.execute(
+                    "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)
+                     ON CONFLICT(item_id) DO NOTHING",
+                    params![collection_id, lifecycle.as_str()],
+                )? != 0;
+                if !inserted {
+                    return Ok(((), IngestProjectionDelta::default(), false));
+                }
+
+                let metadata = transaction.query_row(
+                    "SELECT metadata_json FROM source_post WHERE source_post_id = ?1",
+                    [source_post_id],
+                    |row| row.get::<_, Option<String>>(0),
+                )?;
+                let organization = take_staged_root_organization_by_id(
+                    transaction,
+                    source_post_id,
+                    metadata.as_deref(),
+                )?;
+                let organization = match organization {
+                    Some(organization) => organization,
+                    None => staged_root_organization_from_jobs(transaction, source_post_id)?,
+                };
+                let changes = merge_root_organization(
+                    transaction,
+                    collection_id,
+                    &organization,
+                    false,
+                    &now,
+                )?;
+                transaction.execute(
+                    "UPDATE source_post SET root_item_id = ?1, updated_at = ?2
+                     WHERE source_post_id = ?3 AND root_item_id IS NULL",
+                    params![collection_id, now, source_post_id],
+                )?;
+                enqueue_root_thumbnail(transaction, collection_id, &now)?;
+
+                let mut delta = IngestProjectionDelta::default();
+                delta.structure.items.push(ItemProjectionChange {
+                    item_id: collection_id,
+                    kind: crate::app::ItemKind::Collection,
+                    present: true,
+                });
+                delta.structure.roots.push(RootProjectionChange {
+                    item_id: collection_id,
+                    lifecycle: Some(lifecycle),
+                });
+                let mut members = transaction.prepare(
+                    "SELECT media_item_id FROM collection_member WHERE collection_id = ?1",
+                )?;
+                let members = members
+                    .query_map([collection_id], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                for media_id in members {
+                    delta
+                        .structure
+                        .memberships
+                        .push(MembershipProjectionChange {
+                            collection_id,
+                            media_id,
+                            present: true,
+                        });
+                }
+                delta.add_organization(collection_id, changes);
+                delta.root_tags_added.extend(
+                    root_tag_ids(transaction, collection_id)?
+                        .into_iter()
+                        .map(|tag_id| (collection_id, tag_id)),
+                );
+                delta.prepare_summaries(transaction)?;
+                Ok(((), delta, true))
+            },
+            settle_ingest_projection,
+        )?;
+        Ok(changed)
+    }
+}
+
+fn staged_root_organization_from_jobs(
+    transaction: &Transaction<'_>,
+    source_post_id: i64,
+) -> rusqlite::Result<StagedRootOrganization> {
+    let mut statement = transaction.prepare(
+        "SELECT ingest_job.payload_json
+         FROM source_item
+         JOIN ingest_job USING (source_item_id)
+         WHERE source_item.source_post_id = ?1
+           AND ingest_job.payload_json <> '{}'
+         ORDER BY source_item.position, source_item.source_item_id",
+    )?;
+    let payloads = statement
+        .query_map([source_post_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut organization = StagedRootOrganization::default();
+    for payload in payloads {
+        if let Ok(input) = serde_json::from_str::<PreparedMediaInput>(&payload) {
+            organization.merge(StagedRootOrganization::from_input(&input, true));
+        }
+    }
+    Ok(organization)
 }
 
 enum ExistingSourceItem {
     Present {
         media_item_id: i64,
         root_item_id: i64,
+        root_visible: bool,
     },
     Pending,
     Deleted,
@@ -393,119 +712,251 @@ fn existing_manual_item(
         .optional()
 }
 
-fn merge_reused_metadata(
-    transaction: &Transaction<'_>,
-    media_item_id: i64,
-    input: &PreparedMediaInput,
-    now: &str,
-) -> rusqlite::Result<bool> {
-    let (existing_notes, existing_sources): (Option<String>, Option<String>) = transaction
-        .query_row(
-            "SELECT notes, source_urls_json FROM media_asset WHERE item_id = ?1",
-            [media_item_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )?;
+impl StagedRootOrganization {
+    fn from_input(input: &PreparedMediaInput, external_tags: bool) -> Self {
+        let mut organization = Self::default();
+        let source_order = input
+            .source
+            .as_ref()
+            .map(|source| (source.position, source.item_key.clone()))
+            .unwrap_or_else(|| (0, String::new()));
+        organization.cover_order = Some(source_order);
+        organization.name = trimmed(input.name.as_deref())
+            .map(str::to_string)
+            .or_else(|| {
+                input
+                    .source
+                    .as_ref()
+                    .and_then(|source| trimmed(source.title.as_deref()))
+                    .map(str::to_string)
+            });
+        organization.rating = input.rating;
+        organization.notes = trimmed(input.notes.as_deref()).map(str::to_string);
+        organization.source_urls.extend(
+            input
+                .source_urls
+                .iter()
+                .filter_map(|url| trimmed(Some(url.as_str())).map(str::to_string)),
+        );
+        if let Some(source) = &input.source {
+            organization.source_urls.extend(
+                [
+                    source.canonical_post_url.as_deref(),
+                    source.canonical_media_url.as_deref(),
+                ]
+                .into_iter()
+                .filter_map(|url| trimmed(url).map(str::to_string)),
+            );
+        }
+        organization.folder_ids.extend(
+            input
+                .target_folder_id
+                .into_iter()
+                .chain(input.target_folder_ids.iter().copied()),
+        );
+        organization.tags = parsed_root_tags(input, external_tags);
+        organization
+    }
 
-    let merged_notes = input
-        .notes
-        .as_deref()
-        .map(str::trim)
-        .filter(|notes| !notes.is_empty())
-        .and_then(|incoming| {
-            let current = existing_notes.as_deref().unwrap_or_default().trim();
-            if current.split("\n\n").any(|part| part.trim() == incoming) {
-                None
-            } else if current.is_empty() {
-                Some(incoming.to_string())
+    fn merge(&mut self, incoming: Self) {
+        self.source_urls.extend(incoming.source_urls);
+        self.folder_ids.extend(incoming.folder_ids);
+
+        let mut tags = self
+            .tags
+            .drain(..)
+            .map(|tag| ((tag.namespace, tag.subtag), tag.provenance_mask))
+            .collect::<BTreeMap<_, _>>();
+        for tag in incoming.tags {
+            *tags.entry((tag.namespace, tag.subtag)).or_default() |= tag.provenance_mask;
+        }
+        self.tags = tags
+            .into_iter()
+            .map(|((namespace, subtag), provenance_mask)| StagedRootTag {
+                namespace,
+                subtag,
+                provenance_mask,
+            })
+            .collect();
+
+        if incoming.cover_order < self.cover_order || self.cover_order.is_none() {
+            self.cover_order = incoming.cover_order;
+            self.name = incoming.name;
+            self.rating = incoming.rating;
+            self.notes = incoming.notes;
+        }
+    }
+}
+
+fn trimmed(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn parsed_root_tags(input: &PreparedMediaInput, external: bool) -> Vec<StagedRootTag> {
+    input
+        .tags
+        .iter()
+        .filter_map(|tag| {
+            let parsed = if external {
+                crate::tag_name_v2::parse_external(tag)
             } else {
-                Some(format!("{current}\n\n{incoming}"))
-            }
-        });
+                crate::tag_name_v2::parse_local(tag)
+            };
+            parsed.ok()
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|(namespace, subtag)| StagedRootTag {
+            namespace,
+            subtag,
+            provenance_mask: input.provenance_mask,
+        })
+        .collect()
+}
 
-    let mut sources: Vec<String> = existing_sources
-        .as_deref()
-        .and_then(|json| serde_json::from_str(json).ok())
-        .unwrap_or_default();
-    let original_source_count = sources.len();
-    for source in &input.source_urls {
-        let source = source.trim();
-        if !source.is_empty() && !sources.iter().any(|existing| existing == source) {
-            sources.push(source.to_string());
-        }
-    }
-    let sources_changed = sources.len() != original_source_count;
-    let merged_sources = if sources_changed {
-        Some(
-            serde_json::to_string(&sources)
-                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
+fn merge_root_organization(
+    transaction: &Transaction<'_>,
+    root_item_id: i64,
+    organization: &StagedRootOrganization,
+    preserve_cover_fields: bool,
+    now: &str,
+) -> rusqlite::Result<RootOrganizationChanges> {
+    let existing = transaction
+        .query_row(
+            "SELECT name, rating, notes, source_urls_json
+             FROM root_metadata WHERE root_item_id = ?1",
+            [root_item_id],
+            |row| {
+                Ok((
+                    row.get::<_, Option<String>>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            },
         )
-    } else {
-        None
-    };
+        .optional()?;
 
-    if merged_notes.is_none() && merged_sources.is_none() {
-        return Ok(false);
-    }
-    transaction.execute(
-        "UPDATE media_asset
-         SET notes = COALESCE(?1, notes),
-             source_urls_json = COALESCE(?2, source_urls_json),
-             updated_at = ?3
-         WHERE item_id = ?4",
-        params![merged_notes, merged_sources, now, media_item_id],
-    )?;
-    Ok(true)
-}
+    let mut source_urls = existing
+        .as_ref()
+        .and_then(|(_, _, _, json)| serde_json::from_str::<BTreeSet<String>>(json).ok())
+        .unwrap_or_default();
+    source_urls.extend(organization.source_urls.iter().cloned());
+    let source_urls_json = serde_json::to_string(&source_urls)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
 
-fn attach_target_folder(
-    transaction: &Transaction<'_>,
-    folder_id: Option<i64>,
-    root_item_id: i64,
-    delta: &mut StructureProjectionDelta,
-) -> rusqlite::Result<bool> {
-    let Some(folder_id) = folder_id else {
-        return Ok(false);
-    };
-    let exists: bool = transaction.query_row(
-        "SELECT EXISTS(SELECT 1 FROM folder WHERE folder_id = ?1)",
-        [folder_id],
-        |row| row.get(0),
-    )?;
-    if !exists {
-        return Err(invalid(format!("Folder {folder_id} does not exist")));
-    }
-    let changed = transaction.execute(
-        "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)
-         ON CONFLICT(folder_id, item_id) DO NOTHING",
-        params![folder_id, root_item_id],
-    )? != 0;
-    if changed {
-        delta.folders.push(FolderProjectionChange {
-            folder_id,
-            item_id: root_item_id,
-            present: true,
-        });
-    }
-    Ok(changed)
-}
-
-fn attach_target_folders(
-    transaction: &Transaction<'_>,
-    legacy_folder_id: Option<i64>,
-    folder_ids: &[i64],
-    root_item_id: i64,
-    delta: &mut StructureProjectionDelta,
-) -> rusqlite::Result<bool> {
-    let mut changed = false;
-    if let Some(folder_id) = legacy_folder_id {
-        changed |= attach_target_folder(transaction, Some(folder_id), root_item_id, delta)?;
-    }
-    for &folder_id in folder_ids {
-        if Some(folder_id) != legacy_folder_id {
-            changed |= attach_target_folder(transaction, Some(folder_id), root_item_id, delta)?;
+    let (name, rating, notes) = match existing.as_ref() {
+        None => (
+            organization.name.clone(),
+            organization.rating,
+            organization.notes.clone(),
+        ),
+        Some((name, rating, notes, _)) if preserve_cover_fields => {
+            (name.clone(), *rating, notes.clone())
         }
+        Some((name, rating, notes, _)) => (
+            name.clone().or_else(|| organization.name.clone()),
+            rating.or(organization.rating),
+            merge_notes(notes.as_deref(), organization.notes.as_deref()),
+        ),
+    };
+
+    let metadata_changed = transaction.execute(
+        "INSERT INTO root_metadata (
+             root_item_id, name, rating, notes, source_urls_json, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(root_item_id) DO UPDATE SET
+             name = excluded.name,
+             rating = excluded.rating,
+             notes = excluded.notes,
+             source_urls_json = excluded.source_urls_json,
+             updated_at = excluded.updated_at
+         WHERE root_metadata.name IS NOT excluded.name
+            OR root_metadata.rating IS NOT excluded.rating
+            OR root_metadata.notes IS NOT excluded.notes
+            OR root_metadata.source_urls_json <> excluded.source_urls_json",
+        params![root_item_id, name, rating, notes, source_urls_json, now],
+    )? != 0;
+
+    let encoded_tags = serde_json::to_string(&organization.tags)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    transaction.execute(
+        "WITH input(namespace, subtag) AS (
+             SELECT json_extract(value, '$.namespace'), json_extract(value, '$.subtag')
+             FROM json_each(?1)
+         )
+         INSERT INTO tag (namespace, subtag)
+         SELECT namespace, subtag FROM input WHERE 1
+         ON CONFLICT(namespace, subtag) DO NOTHING",
+        [&encoded_tags],
+    )?;
+    let tag_ids = {
+        let mut statement = transaction.prepare(
+            "WITH input(namespace, subtag, provenance_mask) AS (
+                 SELECT json_extract(value, '$.namespace'),
+                        json_extract(value, '$.subtag'),
+                        json_extract(value, '$.provenance_mask')
+                 FROM json_each(?1)
+             )
+             INSERT INTO root_tag (root_item_id, tag_id, provenance_mask)
+             SELECT ?2, tag.tag_id, input.provenance_mask
+             FROM input JOIN tag USING (namespace, subtag)
+             WHERE 1
+             ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
+                 provenance_mask = root_tag.provenance_mask | excluded.provenance_mask
+             WHERE root_tag.provenance_mask <>
+                 (root_tag.provenance_mask | excluded.provenance_mask)
+             RETURNING tag_id",
+        )?;
+        let rows = statement
+            .query_map(params![encoded_tags, root_item_id], |row| {
+                row.get::<_, i64>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+
+    let encoded_folders = serde_json::to_string(&organization.folder_ids)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    let folder_ids = {
+        let mut statement = transaction.prepare(
+            "INSERT INTO folder_item (folder_id, item_id)
+             SELECT folder.folder_id, ?2
+             FROM json_each(?1) input
+             JOIN folder ON folder.folder_id = CAST(input.value AS INTEGER)
+             WHERE 1
+             ON CONFLICT(folder_id, item_id) DO NOTHING
+             RETURNING folder_id",
+        )?;
+        let rows = statement
+            .query_map(params![encoded_folders, root_item_id], |row| {
+                row.get::<_, i64>(0)
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows
+    };
+
+    Ok(RootOrganizationChanges {
+        tag_ids,
+        folder_ids,
+        metadata_changed,
+    })
+}
+
+fn merge_notes(existing: Option<&str>, incoming: Option<&str>) -> Option<String> {
+    let existing = trimmed(existing);
+    let incoming = trimmed(incoming);
+    match (existing, incoming) {
+        (None, None) => None,
+        (Some(existing), None) => Some(existing.to_string()),
+        (None, Some(incoming)) => Some(incoming.to_string()),
+        (Some(existing), Some(incoming))
+            if existing.split("\n\n").any(|part| part.trim() == incoming) =>
+        {
+            Some(existing.to_string())
+        }
+        (Some(existing), Some(incoming)) => Some(format!("{existing}\n\n{incoming}")),
     }
-    Ok(changed)
 }
 
 fn validate_input(input: &PreparedMediaInput) -> Result<(), String> {
@@ -537,9 +988,15 @@ fn existing_source_item(
 ) -> rusqlite::Result<Option<ExistingSourceItem>> {
     let row = transaction
         .query_row(
-            "SELECT si.state, si.media_item_id, sp.root_item_id
+            "SELECT si.state, si.media_item_id,
+                    COALESCE(sp.root_item_id, cm.collection_id, lr.item_id),
+                    COALESCE(visible_root.item_id, 0) IS NOT 0
              FROM source_item si
              JOIN source_post sp ON sp.source_post_id = si.source_post_id
+             LEFT JOIN collection_member cm ON cm.media_item_id = si.media_item_id
+             LEFT JOIN library_root lr ON lr.item_id = si.media_item_id
+             LEFT JOIN library_root visible_root
+               ON visible_root.item_id = COALESCE(sp.root_item_id, cm.collection_id, lr.item_id)
              WHERE sp.site_id = ?1 AND sp.post_key = ?2 AND si.item_key = ?3",
             params![source.site_id, source.post_key, source.item_key],
             |row| {
@@ -547,22 +1004,26 @@ fn existing_source_item(
                     row.get::<_, String>(0)?,
                     row.get::<_, Option<i64>>(1)?,
                     row.get::<_, Option<i64>>(2)?,
+                    row.get::<_, bool>(3)?,
                 ))
             },
         )
         .optional()?;
-    Ok(row.map(|(state, media_item_id, root_item_id)| {
-        if state == "deleted" {
-            ExistingSourceItem::Deleted
-        } else if media_item_id.is_none() {
-            ExistingSourceItem::Pending
-        } else {
-            ExistingSourceItem::Present {
-                media_item_id: media_item_id.unwrap(),
-                root_item_id: root_item_id.unwrap_or_else(|| media_item_id.unwrap()),
+    Ok(
+        row.map(|(state, media_item_id, root_item_id, root_visible)| {
+            if state == "deleted" {
+                ExistingSourceItem::Deleted
+            } else if media_item_id.is_none() {
+                ExistingSourceItem::Pending
+            } else {
+                ExistingSourceItem::Present {
+                    media_item_id: media_item_id.unwrap(),
+                    root_item_id: root_item_id.unwrap_or_else(|| media_item_id.unwrap()),
+                    root_visible,
+                }
             }
-        }
-    }))
+        }),
+    )
 }
 
 fn upsert_file(
@@ -612,29 +1073,11 @@ fn insert_media_asset(
         params![new_key("media"), now],
     )?;
     let item_id = transaction.last_insert_rowid();
-    let source_urls_json = if input.source_urls.is_empty() {
-        None
-    } else {
-        Some(
-            serde_json::to_string(&input.source_urls)
-                .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
-        )
-    };
     transaction.execute(
         "INSERT INTO media_asset (
-             item_id, file_id, name, notes, rating, source_urls_json,
-             captured_at, imported_at, updated_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)",
-        params![
-            item_id,
-            file_id,
-            input.name,
-            input.notes,
-            input.rating,
-            source_urls_json,
-            input.captured_at,
-            now,
-        ],
+             item_id, file_id, name, captured_at, imported_at, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        params![item_id, file_id, input.name, input.captured_at, now,],
     )?;
     Ok(item_id)
 }
@@ -657,6 +1100,18 @@ fn attach_source_item(
     media_item_id: i64,
     now: &str,
 ) -> rusqlite::Result<()> {
+    let previous_metadata = transaction
+        .query_row(
+            "SELECT metadata_json FROM source_post WHERE site_id = ?1 AND post_key = ?2",
+            params![source.site_id, source.post_key],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    let metadata_json = preserve_staged_root_organization(
+        previous_metadata.as_deref(),
+        source.metadata_json.as_deref(),
+    )?;
     transaction.execute(
         "INSERT INTO source_post (
              site_id, post_key, canonical_url, creator_name, title, description,
@@ -678,7 +1133,7 @@ fn attach_source_item(
             source.title,
             source.description,
             source.captured_at,
-            source.metadata_json,
+            metadata_json,
             now,
         ],
     )?;
@@ -717,13 +1172,141 @@ fn attach_source_item(
     Ok(())
 }
 
+fn preserve_staged_root_organization(
+    previous: Option<&str>,
+    incoming: Option<&str>,
+) -> rusqlite::Result<Option<String>> {
+    let Some(incoming) = incoming else {
+        return Ok(previous.map(str::to_string));
+    };
+    let Some(staged) = parse_metadata_object(previous).remove(STAGED_ROOT_ORGANIZATION_KEY) else {
+        return Ok(Some(incoming.to_string()));
+    };
+    let mut incoming_value = metadata_staging_object(Some(incoming));
+    incoming_value.insert(
+        STAGED_SOURCE_METADATA_RAW_KEY.to_string(),
+        serde_json::Value::String(incoming.to_string()),
+    );
+    incoming_value.insert(STAGED_ROOT_ORGANIZATION_KEY.to_string(), staged);
+    encode_metadata_staging_object(incoming_value)
+}
+
+fn parse_metadata_object(metadata: Option<&str>) -> serde_json::Map<String, serde_json::Value> {
+    metadata_staging_object(metadata)
+}
+
+fn metadata_staging_object(metadata: Option<&str>) -> serde_json::Map<String, serde_json::Value> {
+    let Some(metadata) = metadata else {
+        return serde_json::Map::new();
+    };
+    serde_json::from_str::<serde_json::Value>(metadata)
+        .ok()
+        .and_then(|value| value.as_object().cloned())
+        .unwrap_or_else(|| {
+            serde_json::Map::from_iter([(
+                STAGED_SOURCE_METADATA_RAW_KEY.to_string(),
+                serde_json::Value::String(metadata.to_string()),
+            )])
+        })
+}
+
+fn encode_metadata_staging_object(
+    mut metadata: serde_json::Map<String, serde_json::Value>,
+) -> rusqlite::Result<Option<String>> {
+    if !metadata.contains_key(STAGED_ROOT_ORGANIZATION_KEY) {
+        if let Some(serde_json::Value::String(raw)) =
+            metadata.remove(STAGED_SOURCE_METADATA_RAW_KEY)
+        {
+            return Ok(Some(raw));
+        }
+    }
+    if metadata.is_empty() {
+        return Ok(None);
+    }
+    serde_json::to_string(&metadata)
+        .map(Some)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))
+}
+
+fn stage_source_root_organization(
+    transaction: &Transaction<'_>,
+    source: &SourcePostInput,
+    input: &PreparedMediaInput,
+    now: &str,
+) -> rusqlite::Result<bool> {
+    let (source_post_id, metadata_json): (i64, Option<String>) = transaction.query_row(
+        "SELECT source_post_id, metadata_json FROM source_post
+         WHERE site_id = ?1 AND post_key = ?2",
+        params![source.site_id, source.post_key],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let mut metadata = parse_metadata_object(metadata_json.as_deref());
+    if !metadata.contains_key(STAGED_ROOT_ORGANIZATION_KEY) {
+        if let Some(metadata_json) = metadata_json {
+            metadata.insert(
+                STAGED_SOURCE_METADATA_RAW_KEY.to_string(),
+                serde_json::Value::String(metadata_json),
+            );
+        }
+    }
+    let mut organization = metadata
+        .get(STAGED_ROOT_ORGANIZATION_KEY)
+        .cloned()
+        .and_then(|value| serde_json::from_value::<StagedRootOrganization>(value).ok())
+        .unwrap_or_default();
+    organization.merge(StagedRootOrganization::from_input(input, true));
+    metadata.insert(
+        STAGED_ROOT_ORGANIZATION_KEY.to_string(),
+        serde_json::to_value(organization)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?,
+    );
+    let encoded = encode_metadata_staging_object(metadata)?;
+    Ok(transaction.execute(
+        "UPDATE source_post SET metadata_json = ?1, updated_at = ?2
+         WHERE source_post_id = ?3 AND metadata_json IS NOT ?1",
+        params![encoded, now, source_post_id],
+    )? != 0)
+}
+
+fn take_staged_source_root_organization(
+    transaction: &Transaction<'_>,
+    source: &SourcePostInput,
+) -> rusqlite::Result<Option<StagedRootOrganization>> {
+    let (source_post_id, metadata): (i64, Option<String>) = transaction.query_row(
+        "SELECT source_post_id, metadata_json FROM source_post
+         WHERE site_id = ?1 AND post_key = ?2",
+        params![source.site_id, source.post_key],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    take_staged_root_organization_by_id(transaction, source_post_id, metadata.as_deref())
+}
+
+fn take_staged_root_organization_by_id(
+    transaction: &Transaction<'_>,
+    source_post_id: i64,
+    metadata: Option<&str>,
+) -> rusqlite::Result<Option<StagedRootOrganization>> {
+    let mut metadata = parse_metadata_object(metadata);
+    let organization = metadata
+        .remove(STAGED_ROOT_ORGANIZATION_KEY)
+        .and_then(|value| serde_json::from_value(value).ok());
+    if organization.is_some() {
+        let encoded = encode_metadata_staging_object(metadata)?;
+        transaction.execute(
+            "UPDATE source_post SET metadata_json = ?1 WHERE source_post_id = ?2",
+            params![encoded, source_post_id],
+        )?;
+    }
+    Ok(organization)
+}
+
 fn settle_source_post_root(
     transaction: &Transaction<'_>,
     source: &SourcePostInput,
     new_media_item_id: i64,
     lifecycle: Lifecycle,
     now: &str,
-) -> rusqlite::Result<(i64, bool, bool)> {
+) -> rusqlite::Result<RootSettlement> {
     let (source_post_id, current_root): (i64, Option<i64>) = transaction.query_row(
         "SELECT source_post_id, root_item_id FROM source_post
          WHERE site_id = ?1 AND post_key = ?2",
@@ -731,19 +1314,15 @@ fn settle_source_post_root(
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
 
-    let mut stmt = transaction.prepare(
-        "SELECT media_item_id FROM source_item
-         WHERE source_post_id = ?1 AND state = 'ingested' AND media_item_id IS NOT NULL
-         ORDER BY position, source_item_id",
-    )?;
-    let media_ids = stmt
-        .query_map([source_post_id], |row| row.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    drop(stmt);
-
     if !source.group_post && !source.force_collection {
         insert_root(transaction, new_media_item_id, lifecycle)?;
-        return Ok((new_media_item_id, false, true));
+        return Ok(RootSettlement {
+            root_item_id: new_media_item_id,
+            promoted: false,
+            visible: true,
+            replaced_root_item_id: None,
+            removed_root_tag_ids: Vec::new(),
+        });
     }
 
     let provisional_collection = provisional_source_collection(transaction, source_post_id)?;
@@ -754,23 +1333,18 @@ fn settle_source_post_root(
             collection_id
         } else {
             transaction.execute(
-                "INSERT INTO library_item (item_key, kind, label, created_at, updated_at)
-                 VALUES (?1, 'collection', ?2, ?3, ?3)",
-                params![new_key("collection"), source.title, now],
+                "INSERT INTO library_item (item_key, kind, created_at, updated_at)
+                 VALUES (?1, 'collection', ?2, ?2)",
+                params![new_key("collection"), now],
             )?;
             transaction.last_insert_rowid()
         };
-        for media_id in &media_ids {
-            transaction.execute(
-                "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                 SELECT ?1, si.media_item_id, (si.position + 1) * ?2
-                 FROM source_item si
-                 WHERE si.source_post_id = ?3 AND si.media_item_id = ?4
-                 ON CONFLICT(collection_id, media_item_id) DO NOTHING",
-                params![collection_id, RANK_GAP, source_post_id, media_id],
-            )?;
-        }
-        crate::operations_v2::sync_collection_cover(transaction, collection_id)?;
+        append_source_collection_member(
+            transaction,
+            collection_id,
+            source_post_id,
+            new_media_item_id,
+        )?;
         if source.post_complete {
             insert_root(transaction, collection_id, lifecycle)?;
             transaction.execute(
@@ -778,12 +1352,31 @@ fn settle_source_post_root(
                  WHERE source_post_id = ?3",
                 params![collection_id, now, source_post_id],
             )?;
-            return Ok((collection_id, true, true));
+            return Ok(RootSettlement {
+                root_item_id: collection_id,
+                promoted: true,
+                visible: true,
+                replaced_root_item_id: None,
+                removed_root_tag_ids: Vec::new(),
+            });
         }
-        return Ok((collection_id, false, false));
+        return Ok(RootSettlement {
+            root_item_id: collection_id,
+            promoted: false,
+            visible: false,
+            replaced_root_item_id: None,
+            removed_root_tag_ids: Vec::new(),
+        });
     }
 
-    match (current_root, media_ids.len()) {
+    let media_count: i64 = transaction.query_row(
+        "SELECT COUNT(*) FROM source_item
+         WHERE source_post_id = ?1 AND state = 'ingested' AND media_item_id IS NOT NULL",
+        [source_post_id],
+        |row| row.get(0),
+    )?;
+
+    match (current_root, media_count) {
         (None, 1) => {
             insert_root(transaction, new_media_item_id, lifecycle)?;
             transaction.execute(
@@ -791,7 +1384,13 @@ fn settle_source_post_root(
                  WHERE source_post_id = ?3",
                 params![new_media_item_id, now, source_post_id],
             )?;
-            Ok((new_media_item_id, false, true))
+            Ok(RootSettlement {
+                root_item_id: new_media_item_id,
+                promoted: false,
+                visible: true,
+                replaced_root_item_id: None,
+                removed_root_tag_ids: Vec::new(),
+            })
         }
         (Some(root_id), 2) if root_kind(transaction, root_id)? == "media" => {
             let existing_lifecycle: String = transaction.query_row(
@@ -803,53 +1402,137 @@ fn settle_source_post_root(
                 return Err(invalid("Source post items cannot cross lifecycle scopes"));
             }
             transaction.execute(
-                "INSERT INTO library_item (item_key, kind, label, created_at, updated_at)
-                 VALUES (?1, 'collection', ?2, ?3, ?3)",
-                params![new_key("collection"), source.title, now],
+                "INSERT INTO library_item (item_key, kind, created_at, updated_at)
+                 VALUES (?1, 'collection', ?2, ?2)",
+                params![new_key("collection"), now],
             )?;
             let collection_id = transaction.last_insert_rowid();
             insert_root(transaction, collection_id, lifecycle)?;
+            let removed_root_tag_ids = root_tag_ids(transaction, root_id)?;
+            transaction.execute(
+                "INSERT INTO root_metadata (
+                     root_item_id, name, rating, notes, source_urls_json, updated_at
+                 )
+                 SELECT ?1, name, rating, notes, source_urls_json, ?2
+                 FROM root_metadata WHERE root_item_id = ?3
+                 ON CONFLICT(root_item_id) DO NOTHING",
+                params![collection_id, now, root_id],
+            )?;
+            transaction.execute(
+                "INSERT INTO root_tag (root_item_id, tag_id, provenance_mask)
+                 SELECT ?1, tag_id, provenance_mask FROM root_tag WHERE root_item_id = ?2
+                 ON CONFLICT(root_item_id, tag_id) DO UPDATE SET
+                     provenance_mask = root_tag.provenance_mask | excluded.provenance_mask",
+                params![collection_id, root_id],
+            )?;
             transaction.execute(
                 "INSERT INTO folder_item (folder_id, item_id, position_rank)
                  SELECT folder_id, ?1, position_rank FROM folder_item WHERE item_id = ?2",
                 params![collection_id, root_id],
             )?;
-            for (index, media_id) in media_ids.iter().enumerate() {
-                transaction.execute("DELETE FROM library_root WHERE item_id = ?1", [media_id])?;
-                transaction.execute(
-                    "INSERT INTO collection_member
-                         (collection_id, media_item_id, position_rank)
-                     VALUES (?1, ?2, ?3)",
-                    params![collection_id, media_id, (index as i64 + 1) * RANK_GAP],
-                )?;
-            }
+            transaction.execute(
+                "DELETE FROM library_root
+                 WHERE item_id IN (
+                     SELECT media_item_id FROM source_item
+                     WHERE source_post_id = ?1
+                       AND state = 'ingested'
+                       AND media_item_id IS NOT NULL
+                     ORDER BY position, source_item_id
+                     LIMIT 2
+                 )",
+                [source_post_id],
+            )?;
+            transaction.execute(
+                "INSERT INTO collection_member
+                     (collection_id, media_item_id, position_rank)
+                 SELECT ?1, media_item_id, (position + 1) * ?2
+                 FROM source_item
+                 WHERE source_post_id = ?3
+                   AND state = 'ingested'
+                   AND media_item_id IS NOT NULL
+                 ORDER BY position, source_item_id
+                 LIMIT 2",
+                params![collection_id, RANK_GAP, source_post_id],
+            )?;
             crate::operations_v2::sync_collection_cover(transaction, collection_id)?;
             transaction.execute(
                 "UPDATE source_post SET root_item_id = ?1, updated_at = ?2
                  WHERE source_post_id = ?3",
                 params![collection_id, now, source_post_id],
             )?;
-            Ok((collection_id, true, true))
+            Ok(RootSettlement {
+                root_item_id: collection_id,
+                promoted: true,
+                visible: true,
+                replaced_root_item_id: Some(root_id),
+                removed_root_tag_ids,
+            })
         }
         (Some(root_id), _) if root_kind(transaction, root_id)? == "collection" => {
             transaction.execute(
-                "UPDATE library_item
-                 SET label = ?1, updated_at = ?2
-                 WHERE item_id = ?3 AND (label IS NULL OR TRIM(label) = '')",
-                params![source.title, now, root_id],
-            )?;
-            transaction.execute(
                 "INSERT INTO collection_member
                      (collection_id, media_item_id, position_rank)
-                 VALUES (?1, ?2, ?3)",
-                params![root_id, new_media_item_id, (source.position + 1) * RANK_GAP],
+                 SELECT ?1, si.media_item_id, (si.position + 1) * ?2
+                 FROM source_item si
+                 WHERE si.source_post_id = ?3 AND si.media_item_id = ?4
+                 ON CONFLICT(collection_id, media_item_id) DO NOTHING",
+                params![root_id, RANK_GAP, source_post_id, new_media_item_id],
             )?;
-            crate::operations_v2::sync_collection_cover(transaction, root_id)?;
-            Ok((root_id, false, true))
+            sync_collection_cover_if_needed(transaction, root_id, new_media_item_id)?;
+            Ok(RootSettlement {
+                root_item_id: root_id,
+                promoted: false,
+                visible: true,
+                replaced_root_item_id: None,
+                removed_root_tag_ids: Vec::new(),
+            })
         }
-        (Some(root_id), _) => Ok((root_id, false, true)),
+        (Some(root_id), _) => Ok(RootSettlement {
+            root_item_id: root_id,
+            promoted: false,
+            visible: true,
+            replaced_root_item_id: None,
+            removed_root_tag_ids: Vec::new(),
+        }),
         (None, _) => Err(invalid("Source post has media without a visible root")),
     }
+}
+
+fn append_source_collection_member(
+    transaction: &Transaction<'_>,
+    collection_id: i64,
+    source_post_id: i64,
+    media_item_id: i64,
+) -> rusqlite::Result<()> {
+    transaction.execute(
+        "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
+         SELECT ?1, si.media_item_id, (si.position + 1) * ?2
+         FROM source_item si
+         WHERE si.source_post_id = ?3 AND si.media_item_id = ?4
+         ON CONFLICT(collection_id, media_item_id) DO NOTHING",
+        params![collection_id, RANK_GAP, source_post_id, media_item_id],
+    )?;
+    sync_collection_cover_if_needed(transaction, collection_id, media_item_id)
+}
+
+fn sync_collection_cover_if_needed(
+    transaction: &Transaction<'_>,
+    collection_id: i64,
+    media_item_id: i64,
+) -> rusqlite::Result<()> {
+    let is_first: bool = transaction.query_row(
+        "SELECT media_item_id = ?2
+         FROM collection_member
+         WHERE collection_id = ?1
+         ORDER BY position_rank, media_item_id
+         LIMIT 1",
+        params![collection_id, media_item_id],
+        |row| row.get(0),
+    )?;
+    if is_first {
+        crate::operations_v2::sync_collection_cover(transaction, collection_id)?;
+    }
+    Ok(())
 }
 
 fn provisional_source_collection(
@@ -881,68 +1564,13 @@ fn root_kind(transaction: &Transaction<'_>, root_id: i64) -> rusqlite::Result<St
     )
 }
 
-fn insert_tags(
-    transaction: &Transaction<'_>,
-    media_item_id: i64,
-    tags: &[String],
-    provenance_mask: i64,
-    external: bool,
-) -> rusqlite::Result<Vec<i64>> {
-    let parsed = tags
-        .iter()
-        .filter_map(|tag| {
-            if external {
-                crate::tag_name_v2::parse_external(tag)
-            } else {
-                crate::tag_name_v2::parse_local(tag)
-            }
-            .ok()
-        })
-        .collect::<BTreeSet<_>>();
-    if parsed.is_empty() {
-        return Ok(Vec::new());
-    }
-    let encoded = serde_json::to_string(&parsed)
-        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
-
-    transaction.execute(
-        "WITH input(namespace, subtag) AS (
-             SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')
-             FROM json_each(?1)
-         )
-         INSERT INTO tag (namespace, subtag)
-         SELECT namespace, subtag FROM input WHERE 1
-         ON CONFLICT(namespace, subtag) DO NOTHING",
-        [&encoded],
-    )?;
-
-    let mut statement = transaction.prepare(
-        "WITH input(namespace, subtag) AS (
-             SELECT json_extract(value, '$[0]'), json_extract(value, '$[1]')
-             FROM json_each(?1)
-         )
-         INSERT INTO media_tag (media_item_id, tag_id, source, provenance_mask)
-         SELECT ?2, t.tag_id, ?3, ?4
-         FROM input JOIN tag t USING (namespace, subtag)
-         WHERE 1
-         ON CONFLICT(media_item_id, tag_id, source) DO UPDATE SET
-             provenance_mask = media_tag.provenance_mask | excluded.provenance_mask
-         WHERE media_tag.provenance_mask <>
-             (media_tag.provenance_mask | excluded.provenance_mask)
-         RETURNING tag_id",
-    )?;
-    let tag_ids = statement
-        .query_map(
-            params![
-                encoded,
-                media_item_id,
-                if external { "remote" } else { "local" },
-                provenance_mask,
-            ],
-            |row| row.get(0),
-        )?
+fn root_tag_ids(transaction: &Transaction<'_>, root_item_id: i64) -> rusqlite::Result<Vec<i64>> {
+    let mut statement = transaction
+        .prepare("SELECT tag_id FROM root_tag WHERE root_item_id = ?1 ORDER BY tag_id")?;
+    let rows = statement
+        .query_map([root_item_id], |row| row.get::<_, i64>(0))?
         .collect();
-    tag_ids
+    rows
 }
 
 fn enqueue_derivatives(
@@ -975,14 +1603,28 @@ fn enqueue_derivatives(
             work.push("ai_tag");
         }
     }
-    for work_type in work {
+    if !work.is_empty() {
+        let work_json = serde_json::to_string(&work)
+            .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
         transaction.execute(
             "INSERT INTO work_item (
-                 media_item_id, file_id, work_type, status, attempt_count,
+                 media_item_id, file_id, work_type, priority, status, attempt_count,
                  available_at, created_at, updated_at
-             ) VALUES (?1, ?2, ?3, 'pending', 0, ?4, ?4, ?4)
+             )
+             SELECT ?1, ?2, value,
+                    CASE value
+                        WHEN 'thumbnail' THEN 500
+                        WHEN 'dominant_colors' THEN 400
+                        WHEN 'perceptual_hash' THEN 300
+                        WHEN 'ai_tag' THEN 200
+                        WHEN 'blob_delete' THEN 100
+                        ELSE 0
+                    END,
+                    'pending', 0, ?3, ?3, ?3
+             FROM json_each(?4)
+             WHERE 1
              ON CONFLICT DO NOTHING",
-            params![media_item_id, file_id, work_type, now],
+            params![media_item_id, file_id, now, work_json],
         )?;
     }
     Ok(())
@@ -1027,9 +1669,9 @@ fn enqueue_root_thumbnail(
     }
     transaction.execute(
         "INSERT INTO work_item (
-             media_item_id, file_id, work_type, status, attempt_count,
+             media_item_id, file_id, work_type, priority, status, attempt_count,
              available_at, created_at, updated_at
-         ) VALUES (?1, ?2, 'thumbnail', 'pending', 0, ?3, ?3, ?3)
+         ) VALUES (?1, ?2, 'thumbnail', 500, 'pending', 0, ?3, ?3, ?3)
          ON CONFLICT DO NOTHING",
         params![media_item_id, file_id, now],
     )?;
@@ -1077,9 +1719,14 @@ fn new_key(prefix: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
     use std::sync::Arc;
 
-    use super::{insert_tags, PreparedMediaInput, SourcePostInput};
+    use roaring::RoaringBitmap;
+
+    use super::{
+        merge_root_organization, PreparedMediaInput, SourcePostInput, StagedRootOrganization,
+    };
     use crate::app::{Application, ItemTarget, Lifecycle};
     use crate::store::Store;
 
@@ -1152,6 +1799,11 @@ mod tests {
             .projections()
             .inbox_bitmap()
             .contains(first.media_item_id.0 as u32));
+        let aggregate = app
+            .projections()
+            .numeric_aggregates(&RoaringBitmap::from_iter([second.root_item_id.0 as u32]));
+        assert_eq!(aggregate.total_size_bytes.sum, 20);
+        assert_eq!(aggregate.media_count.sum, 2);
         let second_thumbnail_jobs = app
             .store()
             .read(|connection| {
@@ -1234,10 +1886,18 @@ mod tests {
         let app = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
         let mut first_input = input("first", "post", "a", 0);
         first_input.source.as_mut().unwrap().post_complete = false;
+        first_input.name = Some("Cover name".to_string());
+        first_input.notes = Some("Cover notes".to_string());
+        first_input.rating = Some(5);
+        first_input.source_urls = vec!["https://example.test/cover".to_string()];
+        first_input.tags = vec!["creator:cover".to_string()];
+        first_input.source.as_mut().unwrap().metadata_json =
+            Some("[1, {\"immutable\": true}]".to_string());
         let first = app.ingest_prepared(&first_input).unwrap();
 
         assert_ne!(first.media_item_id, first.root_item_id);
         assert!(!first.promoted_to_collection);
+        assert!(first.receipt.is_none());
         assert!(app.projections().inbox_bitmap().is_empty());
         let roots_after_first: i64 = app
             .store()
@@ -1246,18 +1906,75 @@ mod tests {
             })
             .unwrap();
         assert_eq!(roots_after_first, 0);
+        app.store()
+            .read(|connection| {
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM root_metadata", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    0
+                );
+                assert_eq!(
+                    connection.query_row("SELECT COUNT(*) FROM root_tag", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                    0
+                );
+                Ok(())
+            })
+            .unwrap();
 
         let mut second_input = input("second", "post", "b", 1);
         second_input.source.as_mut().unwrap().post_complete = true;
+        second_input.notes = Some("Non-cover notes".to_string());
+        second_input.rating = Some(1);
+        second_input.source_urls = vec!["https://example.test/second".to_string()];
+        second_input.tags = vec!["character:second".to_string()];
         let second = app.ingest_prepared(&second_input).unwrap();
 
         assert_eq!(second.root_item_id, first.root_item_id);
         assert!(second.promoted_to_collection);
+        assert!(second.receipt.is_some());
         assert_eq!(app.projections().inbox_bitmap().len(), 1);
         assert!(app
             .projections()
             .inbox_bitmap()
             .contains(second.root_item_id.0 as u32));
+        app.store()
+            .read(|connection| {
+                let (name, rating, notes, source_urls): (String, i64, String, String) = connection
+                    .query_row(
+                        "SELECT name, rating, notes, source_urls_json
+                         FROM root_metadata WHERE root_item_id = ?1",
+                        [second.root_item_id.0],
+                        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+                    )?;
+                assert_eq!(name, "Cover name");
+                assert_eq!(rating, 5);
+                assert_eq!(notes, "Cover notes");
+                assert_eq!(
+                    serde_json::from_str::<BTreeSet<String>>(&source_urls).unwrap(),
+                    BTreeSet::from([
+                        "https://example.test/cover".to_string(),
+                        "https://example.test/second".to_string(),
+                    ])
+                );
+                let tags: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM root_tag WHERE root_item_id = ?1",
+                    [second.root_item_id.0],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(tags, 2);
+                let metadata: String = connection.query_row(
+                    "SELECT metadata_json FROM source_post
+                     WHERE site_id = 'example' AND post_key = 'post'",
+                    [],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(metadata, "[1, {\"immutable\": true}]");
+                Ok(())
+            })
+            .unwrap();
     }
 
     #[test]
@@ -1292,8 +2009,8 @@ mod tests {
                 let (name, notes, rating, sources): (String, String, i64, String) = connection
                     .query_row(
                         "SELECT name, notes, rating, source_urls_json
-                         FROM media_asset WHERE item_id = ?1",
-                        [first.media_item_id.0],
+                         FROM root_metadata WHERE root_item_id = ?1",
+                        [first.root_item_id.0],
                         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                     )?;
                 assert_eq!(name, "Accepted name");
@@ -1308,10 +2025,10 @@ mod tests {
                 );
                 let creator_tags: i64 = connection.query_row(
                     "SELECT COUNT(*)
-                     FROM media_tag mt JOIN tag t ON t.tag_id = mt.tag_id
-                     WHERE mt.media_item_id = ?1
+                     FROM root_tag rt JOIN tag t ON t.tag_id = rt.tag_id
+                     WHERE rt.root_item_id = ?1
                        AND t.namespace = 'creator' AND t.subtag = 'leonardo'",
-                    [first.media_item_id.0],
+                    [first.root_item_id.0],
                     |row| row.get(0),
                 )?;
                 assert_eq!(creator_tags, 1);
@@ -1342,8 +2059,8 @@ mod tests {
         app.store()
             .read(|connection| {
                 let assignments: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM media_tag WHERE media_item_id = ?1",
-                    [result.media_item_id.0],
+                    "SELECT COUNT(*) FROM root_tag WHERE root_item_id = ?1",
+                    [result.root_item_id.0],
                     |row| row.get(0),
                 )?;
                 assert_eq!(assignments, 2);
@@ -1353,23 +2070,25 @@ mod tests {
 
         app.store()
             .transaction(|transaction| {
-                let unchanged = insert_tags(
+                let unchanged = merge_root_organization(
                     transaction,
-                    result.media_item_id.0,
-                    &["general:first".to_string(), "general:first".to_string()],
-                    1,
-                    true,
+                    result.root_item_id.0,
+                    &StagedRootOrganization::from_input(&media, true),
+                    false,
+                    "now",
                 )?;
-                assert!(unchanged.is_empty());
+                assert!(unchanged.tag_ids.is_empty());
 
-                let changed = insert_tags(
+                let mut updated = media.clone();
+                updated.provenance_mask = 2;
+                let changed = merge_root_organization(
                     transaction,
-                    result.media_item_id.0,
-                    &["general:first".to_string(), "general:first".to_string()],
-                    2,
-                    true,
+                    result.root_item_id.0,
+                    &StagedRootOrganization::from_input(&updated, true),
+                    false,
+                    "later",
                 )?;
-                assert_eq!(changed.len(), 1);
+                assert_eq!(changed.tag_ids.len(), 2);
                 Ok(())
             })
             .unwrap();
@@ -1377,12 +2096,12 @@ mod tests {
         app.store()
             .read(|connection| {
                 let mask: i64 = connection.query_row(
-                    "SELECT mt.provenance_mask
-                     FROM media_tag mt JOIN tag t ON t.tag_id = mt.tag_id
-                     WHERE mt.media_item_id = ?1
+                    "SELECT rt.provenance_mask
+                     FROM root_tag rt JOIN tag t ON t.tag_id = rt.tag_id
+                     WHERE rt.root_item_id = ?1
                        AND t.namespace = 'general' AND t.subtag = 'first'
-                       AND mt.source = 'remote'",
-                    [result.media_item_id.0],
+                    ",
+                    [result.root_item_id.0],
                     |row| row.get(0),
                 )?;
                 assert_eq!(mask, 3);

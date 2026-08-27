@@ -16,8 +16,9 @@ use super::{
 const CAPTURED_TABLES: &[&str] = &[
     "library_item",
     "library_root",
+    "root_metadata",
     "media_asset",
-    "media_tag",
+    "root_tag",
     "folder",
     "folder_item",
     "smart_folder",
@@ -43,7 +44,7 @@ impl<'connection> SemanticCapture<'connection> {
         begin_explicit_capture(transaction)?;
         let mut session = Session::new(transaction)?;
         for table in CAPTURED_TABLES {
-            session.attach(Some(table))?;
+            session.attach(Some(*table))?;
         }
         Ok(Self {
             session: Some(session),
@@ -99,7 +100,8 @@ fn finish_captured(
     if !configured {
         return Ok(0);
     }
-    let mut item_ids = BTreeSet::new();
+    let mut item_field_ids = BTreeSet::new();
+    let mut lifecycle_ids = BTreeSet::new();
     let mut inserted_item_ids = BTreeSet::new();
     let mut deleted_item_keys = BTreeSet::new();
     let mut tag_changes = BTreeMap::new();
@@ -142,9 +144,10 @@ fn finish_captured(
             match operation.table_name() {
                 "library_item" => {
                     if let Some(item_id) = row_integer(change, 0, operation.code())? {
-                        item_ids.insert(item_id);
                         if operation.code() == Action::SQLITE_INSERT {
                             inserted_item_ids.insert(item_id);
+                        } else {
+                            item_field_ids.insert(item_id);
                         }
                     }
                     if operation.code() == Action::SQLITE_DELETE {
@@ -153,19 +156,22 @@ fn finish_captured(
                         }
                     }
                 }
-                "library_root" | "media_asset" => {
+                "library_root" => {
                     if let Some(item_id) = row_integer(change, 0, operation.code())? {
-                        item_ids.insert(item_id);
+                        lifecycle_ids.insert(item_id);
                     }
                 }
-                "media_tag" => {
-                    let media_id = row_integer(change, 0, operation.code())?;
+                "root_metadata" | "media_asset" => {
+                    if let Some(item_id) = row_integer(change, 0, operation.code())? {
+                        item_field_ids.insert(item_id);
+                    }
+                }
+                "root_tag" => {
+                    let root_id = row_integer(change, 0, operation.code())?;
                     let tag_id = row_integer(change, 1, operation.code())?;
-                    if let (Some(media_id), Some(tag_id)) = (media_id, tag_id) {
-                        tag_changes.insert(
-                            (media_id, tag_id),
-                            operation.code() != Action::SQLITE_DELETE,
-                        );
+                    if let (Some(root_id), Some(tag_id)) = (root_id, tag_id) {
+                        tag_changes
+                            .insert((root_id, tag_id), operation.code() != Action::SQLITE_DELETE);
                     }
                 }
                 "folder_item" => {
@@ -272,21 +278,20 @@ fn finish_captured(
     for item_key in deleted_item_keys {
         operations.push(CloudOperation::DeleteItem { item_key });
     }
-    for item_id in &inserted_item_ids {
-        if let Some(item) = restored_item_state(transaction, *item_id)? {
-            operations.push(CloudOperation::UpsertItem { item });
-        }
-    }
-    for item_id in item_ids.difference(&inserted_item_ids) {
-        if let Some(operation) = item_state(transaction, *item_id)? {
-            operations.extend(operation);
-        }
-    }
+    operations.extend(
+        restored_item_states(transaction, &inserted_item_ids)?
+            .into_iter()
+            .map(|item| CloudOperation::UpsertItem { item }),
+    );
+    item_field_ids.retain(|item_id| !inserted_item_ids.contains(item_id));
+    lifecycle_ids.retain(|item_id| !inserted_item_ids.contains(item_id));
+    operations.extend(item_field_states(transaction, &item_field_ids)?);
+    operations.extend(lifecycle_states(transaction, &lifecycle_ids)?);
     if !tag_changes.is_empty() {
         let changes = serde_json::to_string(
             &tag_changes
                 .into_iter()
-                .map(|((media_id, tag_id), present)| (media_id, tag_id, present))
+                .map(|((root_id, tag_id), present)| (root_id, tag_id, present))
                 .collect::<Vec<_>>(),
         )
         .map_err(json_sql_error)?;
@@ -343,11 +348,7 @@ fn finish_captured(
             .collect::<rusqlite::Result<Vec<_>>>()?;
         operations.extend(memberships);
     }
-    for media_id in group_changes {
-        if let Some(operation) = group_state(transaction, media_id)? {
-            operations.push(operation);
-        }
-    }
+    operations.extend(group_states(transaction, &group_changes)?);
     // Source links may reference items created in this transaction, so they
     // follow item creation and group assignment in the same envelope.
     operations.append(&mut source_operations);
@@ -1028,176 +1029,199 @@ fn smart_folder_depth(
     )
 }
 
+fn stage_capture_item_ids(
+    transaction: &Transaction<'_>,
+    item_ids: &BTreeSet<i64>,
+) -> rusqlite::Result<bool> {
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS cloud_capture_item_id (
+             item_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         DELETE FROM cloud_capture_item_id;",
+    )?;
+    if item_ids.is_empty() {
+        return Ok(false);
+    }
+    let item_ids_json = serde_json::to_string(&item_ids.iter().copied().collect::<Vec<_>>())
+        .map_err(json_sql_error)?;
+    transaction.execute(
+        "INSERT INTO cloud_capture_item_id (item_id)
+         SELECT CAST(value AS INTEGER) FROM json_each(?1)",
+        [item_ids_json],
+    )?;
+    Ok(true)
+}
+
+fn restored_item_states(
+    transaction: &Transaction<'_>,
+    item_ids: &BTreeSet<i64>,
+) -> rusqlite::Result<Vec<RestoredItem>> {
+    if !stage_capture_item_ids(transaction, item_ids)? {
+        return Ok(Vec::new());
+    }
+    transaction
+        .prepare(
+            "SELECT li.item_key, li.kind, COALESCE(rm.name, ma.name), cover.item_key,
+                    COALESCE(lr.lifecycle, 'active'), mf.file_hash, mf.mime_type,
+                    mf.size_bytes, mf.pixel_width, mf.pixel_height, mf.duration_ms,
+                    mf.frame_count, mf.has_audio, ma.name, rm.notes, rm.rating,
+                    rm.source_urls_json, ma.captured_at, ma.imported_at
+             FROM cloud_capture_item_id capture
+             JOIN library_item li ON li.item_id = capture.item_id
+             LEFT JOIN library_item cover ON cover.item_id = li.cover_media_item_id
+             LEFT JOIN library_root lr ON lr.item_id = li.item_id
+             LEFT JOIN root_metadata rm ON rm.root_item_id = li.item_id
+             LEFT JOIN media_asset ma ON ma.item_id = li.item_id
+             LEFT JOIN media_file mf ON mf.file_id = ma.file_id
+             ORDER BY capture.item_id",
+        )?
+        .query_map([], |row| {
+            let kind = row.get::<_, String>(1)?;
+            let media = if kind == "media" {
+                let Some(file_hash) = row.get::<_, Option<String>>(5)? else {
+                    return Ok(None);
+                };
+                Some(RestoredMedia {
+                    file_hash,
+                    mime_type: row.get(6)?,
+                    size_bytes: row.get(7)?,
+                    pixel_width: row.get(8)?,
+                    pixel_height: row.get(9)?,
+                    duration_ms: row.get(10)?,
+                    frame_count: row.get(11)?,
+                    has_audio: row.get::<_, Option<i64>>(12)?.unwrap_or_default() != 0,
+                    name: row.get(13)?,
+                    notes: row.get(14)?,
+                    rating: row.get(15)?,
+                    source_urls_json: row.get(16)?,
+                    captured_at: row.get(17)?,
+                    imported_at: row.get::<_, Option<String>>(18)?.unwrap_or_default(),
+                })
+            } else {
+                None
+            };
+            Ok(Some(RestoredItem {
+                item_key: row.get(0)?,
+                kind,
+                label: row.get(2)?,
+                cover_media_item_key: row.get(3)?,
+                lifecycle: row.get(4)?,
+                media,
+            }))
+        })?
+        .filter_map(|result| result.transpose())
+        .collect()
+}
+
+fn item_field_states(
+    transaction: &Transaction<'_>,
+    item_ids: &BTreeSet<i64>,
+) -> rusqlite::Result<Vec<CloudOperation>> {
+    if !stage_capture_item_ids(transaction, item_ids)? {
+        return Ok(Vec::new());
+    }
+    transaction
+        .prepare(
+            "SELECT li.item_key, COALESCE(rm.name, ma.name), ma.name, rm.notes,
+                    rm.rating, rm.source_urls_json, ma.captured_at,
+                    ma.item_id IS NOT NULL, rm.root_item_id IS NOT NULL
+             FROM cloud_capture_item_id capture
+             JOIN library_item li ON li.item_id = capture.item_id
+             LEFT JOIN root_metadata rm ON rm.root_item_id = li.item_id
+             LEFT JOIN media_asset ma ON ma.item_id = li.item_id
+             ORDER BY capture.item_id",
+        )?
+        .query_map([], |row| {
+            let mut fields = BTreeMap::from([("label".to_string(), optional_string(row.get(1)?))]);
+            if row.get::<_, bool>(7)? {
+                fields.insert("name".into(), optional_string(row.get(2)?));
+                fields.insert("captured_at".into(), optional_string(row.get(6)?));
+            }
+            if row.get::<_, bool>(8)? {
+                fields.insert("notes".into(), optional_string(row.get(3)?));
+                fields.insert(
+                    "rating".into(),
+                    row.get::<_, Option<i64>>(4)?
+                        .map(Value::from)
+                        .unwrap_or(Value::Null),
+                );
+                fields.insert("source_urls_json".into(), optional_string(row.get(5)?));
+            }
+            Ok(CloudOperation::ItemFields {
+                item_key: row.get(0)?,
+                fields,
+            })
+        })?
+        .collect()
+}
+
+fn lifecycle_states(
+    transaction: &Transaction<'_>,
+    item_ids: &BTreeSet<i64>,
+) -> rusqlite::Result<Vec<CloudOperation>> {
+    if !stage_capture_item_ids(transaction, item_ids)? {
+        return Ok(Vec::new());
+    }
+    transaction
+        .prepare(
+            "SELECT li.item_key, lr.lifecycle
+             FROM cloud_capture_item_id capture
+             JOIN library_item li ON li.item_id = capture.item_id
+             JOIN library_root lr ON lr.item_id = li.item_id
+             ORDER BY capture.item_id",
+        )?
+        .query_map([], |row| {
+            Ok(CloudOperation::Lifecycle {
+                item_key: row.get(0)?,
+                lifecycle: row.get(1)?,
+            })
+        })?
+        .collect()
+}
+
+fn group_states(
+    transaction: &Transaction<'_>,
+    media_ids: &BTreeSet<i64>,
+) -> rusqlite::Result<Vec<CloudOperation>> {
+    if !stage_capture_item_ids(transaction, media_ids)? {
+        return Ok(Vec::new());
+    }
+    transaction
+        .prepare(
+            "SELECT media.item_key, collection.item_key, member.position_rank
+             FROM cloud_capture_item_id capture
+             JOIN library_item media ON media.item_id = capture.item_id
+             LEFT JOIN collection_member member ON member.media_item_id = media.item_id
+             LEFT JOIN library_item collection ON collection.item_id = member.collection_id
+             ORDER BY capture.item_id",
+        )?
+        .query_map([], |row| {
+            Ok(CloudOperation::GroupAssignment {
+                media_item_key: row.get(0)?,
+                collection_item_key: row.get(1)?,
+                position_rank: row.get(2)?,
+            })
+        })?
+        .collect()
+}
+
+#[cfg(test)]
 fn restored_item_state(
     transaction: &Transaction<'_>,
     item_id: i64,
 ) -> rusqlite::Result<Option<RestoredItem>> {
-    let item: Option<(
-        String,
-        String,
-        Option<String>,
-        Option<String>,
-        Option<String>,
-    )> = transaction
-        .query_row(
-            "SELECT li.item_key, li.kind, li.label,
-                    (SELECT cover.item_key FROM library_item cover
-                     WHERE cover.item_id = li.cover_media_item_id),
-                    (SELECT lifecycle FROM library_root WHERE item_id = li.item_id)
-             FROM library_item li WHERE li.item_id = ?1",
-            [item_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )
-        .optional()?;
-    let Some((item_key, kind, label, cover_media_item_key, lifecycle)) = item else {
-        return Ok(None);
-    };
-    let media = if kind == "media" {
-        transaction
-            .query_row(
-                "SELECT mf.file_hash, mf.mime_type, mf.size_bytes, mf.pixel_width,
-                        mf.pixel_height, mf.duration_ms, mf.frame_count, mf.has_audio,
-                        ma.name, ma.notes, ma.rating, ma.source_urls_json, ma.captured_at,
-                        ma.imported_at
-                 FROM media_asset ma
-                 JOIN media_file mf ON mf.file_id = ma.file_id
-                 WHERE ma.item_id = ?1",
-                [item_id],
-                |row| {
-                    Ok(RestoredMedia {
-                        file_hash: row.get(0)?,
-                        mime_type: row.get(1)?,
-                        size_bytes: row.get(2)?,
-                        pixel_width: row.get(3)?,
-                        pixel_height: row.get(4)?,
-                        duration_ms: row.get(5)?,
-                        frame_count: row.get(6)?,
-                        has_audio: row.get::<_, i64>(7)? != 0,
-                        name: row.get(8)?,
-                        notes: row.get(9)?,
-                        rating: row.get(10)?,
-                        source_urls_json: row.get(11)?,
-                        captured_at: row.get(12)?,
-                        imported_at: row.get(13)?,
-                    })
-                },
-            )
-            .optional()?
-    } else {
-        None
-    };
-    if kind == "media" && media.is_none() {
-        return Ok(None);
-    }
-    Ok(Some(RestoredItem {
-        item_key,
-        kind,
-        label,
-        cover_media_item_key,
-        lifecycle: lifecycle.unwrap_or_else(|| "active".to_string()),
-        media,
-    }))
+    restored_item_states(transaction, &BTreeSet::from([item_id])).map(|mut items| items.pop())
 }
 
+#[cfg(test)]
 fn item_state(
     transaction: &Transaction<'_>,
     item_id: i64,
 ) -> rusqlite::Result<Option<Vec<CloudOperation>>> {
-    let item: Option<(String, Option<String>, Option<String>)> = transaction
-        .query_row(
-            "SELECT item_key, label,
-                    (SELECT lifecycle FROM library_root WHERE item_id = library_item.item_id)
-             FROM library_item WHERE item_id = ?1",
-            [item_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?;
-    let Some((item_key, label, lifecycle)) = item else {
-        return Ok(None);
-    };
-    let mut fields = BTreeMap::from([("label".to_string(), optional_string(label))]);
-    let media: Option<(
-        Option<String>,
-        Option<String>,
-        Option<i64>,
-        Option<String>,
-        Option<String>,
-    )> = transaction
-        .query_row(
-            "SELECT name, notes, rating, source_urls_json, captured_at
-             FROM media_asset WHERE item_id = ?1",
-            [item_id],
-            |row| {
-                Ok((
-                    row.get(0)?,
-                    row.get(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ))
-            },
-        )
-        .optional()?;
-    if let Some((name, notes, rating, source_urls, captured_at)) = media {
-        fields.insert("name".into(), optional_string(name));
-        fields.insert("notes".into(), optional_string(notes));
-        fields.insert(
-            "rating".into(),
-            rating.map(Value::from).unwrap_or(Value::Null),
-        );
-        fields.insert("source_urls_json".into(), optional_string(source_urls));
-        fields.insert("captured_at".into(), optional_string(captured_at));
-    }
-    let mut operations = vec![CloudOperation::ItemFields {
-        item_key: item_key.clone(),
-        fields,
-    }];
-    if let Some(lifecycle) = lifecycle {
-        operations.push(CloudOperation::Lifecycle {
-            item_key,
-            lifecycle,
-        });
-    }
-    Ok(Some(operations))
-}
-
-fn group_state(
-    transaction: &Transaction<'_>,
-    media_id: i64,
-) -> rusqlite::Result<Option<CloudOperation>> {
-    let media_key: Option<String> = transaction
-        .query_row(
-            "SELECT item_key FROM library_item WHERE item_id = ?1",
-            [media_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let Some(media_item_key) = media_key else {
-        return Ok(None);
-    };
-    let collection: Option<(String, i64)> = transaction
-        .query_row(
-            "SELECT li.item_key, cm.position_rank
-             FROM collection_member cm
-             JOIN library_item li ON li.item_id = cm.collection_id
-             WHERE cm.media_item_id = ?1",
-            [media_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    Ok(Some(CloudOperation::GroupAssignment {
-        media_item_key,
-        collection_item_key: collection.as_ref().map(|value| value.0.clone()),
-        position_rank: collection.map(|value| value.1),
-    }))
+    let item_ids = BTreeSet::from([item_id]);
+    let mut operations = item_field_states(transaction, &item_ids)?;
+    operations.extend(lifecycle_states(transaction, &item_ids)?);
+    Ok((!operations.is_empty()).then_some(operations))
 }
 
 fn row_integer(
@@ -1241,4 +1265,139 @@ fn row_text(
 
 fn optional_string(value: Option<String>) -> Value {
     value.map(Value::String).unwrap_or(Value::Null)
+}
+
+#[cfg(test)]
+mod tests {
+    use rusqlite::Connection;
+
+    use super::*;
+
+    fn canonical_item_fixture() -> Connection {
+        let connection = Connection::open_in_memory().unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE library_item (
+                     item_id INTEGER PRIMARY KEY,
+                     item_key TEXT NOT NULL,
+                     kind TEXT NOT NULL,
+                     cover_media_item_id INTEGER
+                 );
+                 CREATE TABLE library_root (
+                     item_id INTEGER PRIMARY KEY,
+                     lifecycle TEXT NOT NULL
+                 );
+                 CREATE TABLE root_metadata (
+                     root_item_id INTEGER PRIMARY KEY,
+                     name TEXT,
+                     rating INTEGER,
+                     notes TEXT,
+                     source_urls_json TEXT NOT NULL,
+                     updated_at TEXT NOT NULL
+                 );
+                 CREATE TABLE media_file (
+                     file_id INTEGER PRIMARY KEY,
+                     file_hash TEXT NOT NULL,
+                     mime_type TEXT NOT NULL,
+                     size_bytes INTEGER NOT NULL,
+                     pixel_width INTEGER,
+                     pixel_height INTEGER,
+                     duration_ms INTEGER,
+                     frame_count INTEGER,
+                     has_audio INTEGER NOT NULL
+                 );
+                 CREATE TABLE media_asset (
+                     item_id INTEGER PRIMARY KEY,
+                     file_id INTEGER NOT NULL,
+                     name TEXT,
+                     captured_at TEXT,
+                     imported_at TEXT,
+                     updated_at TEXT NOT NULL
+                 );
+                 INSERT INTO library_item (item_id, item_key, kind)
+                 VALUES (1, 'root-item', 'media'), (2, 'member-item', 'media');
+                 INSERT INTO library_root (item_id, lifecycle) VALUES (1, 'active');
+                 INSERT INTO root_metadata (
+                     root_item_id, name, rating, notes, source_urls_json, updated_at
+                 ) VALUES (1, 'User-facing root name', 4, 'Root notes', '[\"source\"]', 'now');
+                 INSERT INTO media_file (
+                     file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height,
+                     duration_ms, frame_count, has_audio
+                 ) VALUES
+                     (1, 'root-hash', 'image/jpeg', 10, 1, 1, NULL, 1, 0),
+                     (2, 'member-hash', 'image/jpeg', 10, 1, 1, NULL, 1, 0);
+                 INSERT INTO media_asset (
+                     item_id, file_id, name, captured_at, imported_at, updated_at
+                 ) VALUES
+                     (1, 1, 'Immutable root media name', NULL, 'now', 'now'),
+                     (2, 2, 'Immutable member media name', NULL, 'now', 'now');",
+            )
+            .unwrap();
+        connection
+    }
+
+    #[test]
+    fn restored_items_use_root_names_and_member_media_names() {
+        let mut connection = canonical_item_fixture();
+        let transaction = connection.transaction().unwrap();
+
+        let root = restored_item_state(&transaction, 1).unwrap().unwrap();
+        assert_eq!(root.label.as_deref(), Some("User-facing root name"));
+        assert_eq!(
+            root.media.as_ref().and_then(|media| media.name.as_deref()),
+            Some("Immutable root media name")
+        );
+        assert_eq!(root.media.as_ref().and_then(|media| media.rating), Some(4));
+        assert_eq!(
+            root.media.as_ref().and_then(|media| media.notes.as_deref()),
+            Some("Root notes")
+        );
+        assert_eq!(
+            root.media
+                .as_ref()
+                .and_then(|media| media.source_urls_json.as_deref()),
+            Some("[\"source\"]")
+        );
+
+        let member = restored_item_state(&transaction, 2).unwrap().unwrap();
+        assert_eq!(member.label.as_deref(), Some("Immutable member media name"));
+        assert_eq!(
+            member
+                .media
+                .as_ref()
+                .and_then(|media| media.name.as_deref()),
+            Some("Immutable member media name")
+        );
+    }
+
+    #[test]
+    fn item_fields_keep_protocol_label_but_derive_it_canonically() {
+        assert!(CAPTURED_TABLES.contains(&"root_metadata"));
+        assert!(CAPTURED_TABLES.contains(&"root_tag"));
+        assert!(!CAPTURED_TABLES.contains(&"media_tag"));
+        let mut connection = canonical_item_fixture();
+        let transaction = connection.transaction().unwrap();
+
+        let operations = item_state(&transaction, 1).unwrap().unwrap();
+        let CloudOperation::ItemFields { fields, .. } = &operations[0] else {
+            panic!("first operation must contain item fields");
+        };
+        assert_eq!(
+            fields.get("label"),
+            Some(&Value::String("User-facing root name".into()))
+        );
+        assert_eq!(
+            fields.get("name"),
+            Some(&Value::String("Immutable root media name".into()))
+        );
+        assert_eq!(fields.get("rating"), Some(&Value::from(4)));
+        assert_eq!(
+            fields.get("notes"),
+            Some(&Value::String("Root notes".into()))
+        );
+        assert_eq!(
+            fields.get("source_urls_json"),
+            Some(&Value::String("[\"source\"]".into()))
+        );
+    }
 }

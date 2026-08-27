@@ -10,15 +10,12 @@ const mocks = vi.hoisted(() => ({
   getPaginated: vi.fn(),
   getNamespaceSummary: vi.fn(),
   getUnusedCount: vi.fn(),
-  getRelations: vi.fn(),
   rename: vi.fn(),
   merge: vi.fn(),
   delete: vi.fn(),
   deleteUnused: vi.fn(),
   renameGroup: vi.fn(),
   deleteGroup: vi.fn(),
-  setAlias: vi.fn(),
-  setImplication: vi.fn(),
   registerInvalidation: vi.fn(),
   startInvalidation: vi.fn(),
   showTagManagerItems: vi.fn(),
@@ -73,7 +70,6 @@ beforeEach(() => {
     { namespace: 'character', count: 2 },
     { namespace: 'creator', count: 1 },
   ]);
-  mocks.getRelations.mockResolvedValue({ aliases: [], implications: [] });
   mocks.getUnusedCount.mockResolvedValue(1);
   mocks.rename.mockResolvedValue(undefined);
   mocks.merge.mockResolvedValue(undefined);
@@ -81,8 +77,6 @@ beforeEach(() => {
   mocks.deleteUnused.mockResolvedValue(undefined);
   mocks.renameGroup.mockResolvedValue(undefined);
   mocks.deleteGroup.mockResolvedValue(undefined);
-  mocks.setAlias.mockResolvedValue(undefined);
-  mocks.setImplication.mockResolvedValue(undefined);
   mocks.getSettings.mockResolvedValue({ showTagGroups: true, starredTags: [] });
   mocks.patchSettings.mockResolvedValue({ revision: 1, resources: ['settings'], item_ids: [] });
   mocks.registerInvalidation.mockImplementation((_resource: string, handler: () => void) => {
@@ -227,7 +221,7 @@ describe('TagManagerScreen', () => {
     expect(screen.queryByText('wrong-result')).not.toBeInTheDocument();
   });
 
-  it('opens the editor and calls rename, alias, and implication mutations', async () => {
+  it('opens the editor and renames a tag', async () => {
     const user = setupUser();
     await renderScreen();
     await user.click(await screen.findByRole('button', { name: /alice/ }));
@@ -242,25 +236,6 @@ describe('TagManagerScreen', () => {
     await settle();
     await waitFor(() => expect(mocks.rename).toHaveBeenCalledWith(1, 'character:alice-renamed'));
 
-    await user.click(await screen.findByRole('button', { name: /alice/ }));
-    await settle();
-    await user.click(screen.getByRole('button', { name: 'Add alias' }));
-    await settle();
-    const aliasDialog = screen.getByRole('dialog', { name: 'Add existing alias' });
-    await user.type(within(aliasDialog).getByPlaceholderText('Search existing tags'), 'bob');
-    await settle();
-    await user.click(await within(aliasDialog).findByRole('button', { name: /bob/ }));
-    await settle();
-    await waitFor(() => expect(mocks.setAlias).toHaveBeenCalledWith(3, 1));
-
-    await user.click(screen.getByRole('button', { name: 'Add parent' }));
-    await settle();
-    const parentDialog = screen.getByRole('dialog', { name: 'Add existing parent' });
-    await user.type(within(parentDialog).getByPlaceholderText('Search existing tags'), 'bob');
-    await settle();
-    await user.click(await within(parentDialog).findByRole('button', { name: /bob/ }));
-    await settle();
-    await waitFor(() => expect(mocks.setImplication).toHaveBeenCalledWith(1, 3, true));
     expect(mocks.getPaginated).not.toHaveBeenCalledWith(expect.objectContaining({ limit: 0 }));
   });
 
@@ -386,7 +361,7 @@ describe('TagManagerScreen', () => {
 
     await user.click(await screen.findByRole('button', { name: 'Delete unused tags 1' }));
     const dialog = screen.getByRole('dialog', { name: 'Delete unused tags' });
-    expect(dialog).toHaveTextContent('1 tag with no media assignments or relationships');
+    expect(dialog).toHaveTextContent('1 tag with no media assignments');
     await user.click(within(dialog).getByRole('button', { name: 'Delete unused tags' }));
 
     await waitFor(() => expect(mocks.deleteUnused).toHaveBeenCalledTimes(1));

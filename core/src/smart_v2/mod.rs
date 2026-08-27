@@ -4,11 +4,10 @@
 //! This keeps collection membership out of the predicate language: each rule
 //! can match a different member, while the resulting root sets are combined.
 
-use std::collections::{HashMap, HashSet};
-
 use roaring::RoaringBitmap;
-use rusqlite::{types::Value, Connection};
+use rusqlite::{types::Value, Connection, OptionalExtension, Transaction};
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeSet, HashSet};
 use ts_rs::TS;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
@@ -58,14 +57,29 @@ pub fn compile_smart_folder(
     connection: &Connection,
     smart_folder_id: i64,
 ) -> rusqlite::Result<Vec<i64>> {
-    let predicate = effective_predicate(connection, smart_folder_id)?;
-    compile_predicate(connection, &predicate)
+    let (sql, arguments) = compile_smart_folder_sql(connection, smart_folder_id, 0)?;
+    connection
+        .prepare(&sql)?
+        .query_map(rusqlite::params_from_iter(arguments), |row| row.get(0))?
+        .collect()
 }
 
 pub(crate) fn count_smart_folder(
     connection: &Connection,
     smart_folder_id: i64,
 ) -> rusqlite::Result<i64> {
+    if let Some(count) = connection
+        .query_row(
+            "SELECT member_count
+             FROM smart_folder_generation
+             WHERE smart_folder_id = ?1 AND state = 'active'",
+            [smart_folder_id],
+            |row| row.get(0),
+        )
+        .optional()?
+    {
+        return Ok(count);
+    }
     let (sql, arguments) = compile_smart_folder_sql(connection, smart_folder_id, 0)?;
     connection.query_row(
         &format!("SELECT COUNT(*) FROM ({sql})"),
@@ -74,116 +88,47 @@ pub(crate) fn count_smart_folder(
     )
 }
 
-/// Count tag-only predicates from the maintained root projections. This keeps
-/// sidebar refresh cost proportional to compressed bitmap operations instead
-/// of rescanning the library once per smart folder.
-pub(crate) fn count_smart_folder_projected(
-    application: &crate::app::Application,
-    smart_folder_id: i64,
-) -> Result<Option<i64>, String> {
-    let predicate = application
-        .store()
-        .read(|connection| effective_predicate(connection, smart_folder_id))?;
-    if predicate
-        .groups
-        .iter()
-        .flat_map(|group| &group.rules)
-        .any(|rule| rule.field != "tags")
-    {
-        return Ok(None);
-    }
-    if predicate.groups.is_empty() {
-        return Ok(Some(0));
-    }
-
-    let requested_tags = predicate
-        .groups
-        .iter()
-        .flat_map(|group| &group.rules)
-        .flat_map(|rule| rule.values.as_deref().unwrap_or_default())
-        .map(|tag| (tag.clone(), split_tag(tag)))
-        .collect::<HashMap<_, _>>();
-    let tag_ids = application.store().read(|connection| {
-        use rusqlite::OptionalExtension;
-        let mut statement =
-            connection.prepare("SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2")?;
-        requested_tags
-            .iter()
-            .map(|(tag, (namespace, subtag))| {
-                let id = statement
-                    .query_row(rusqlite::params![namespace, subtag], |row| {
-                        row.get::<_, i64>(0)
-                    })
-                    .optional()?;
-                Ok((tag.clone(), id))
-            })
-            .collect::<rusqlite::Result<HashMap<_, _>>>()
-    })?;
-    let active = application.projections().active_bitmap();
-    let resolve = |tag: &str| {
-        tag_ids
-            .get(tag)
-            .copied()
-            .flatten()
-            .map(|id| application.projections().effective_tag_bitmap(id))
-            .unwrap_or_default()
-    };
-
-    let mut result = active.clone();
-    for group in &predicate.groups {
-        let mut group_result = if group.rules.is_empty() {
-            active.clone()
-        } else {
-            match group.match_mode {
-                MatchMode::All => active.clone(),
-                MatchMode::Any => RoaringBitmap::new(),
-            }
-        };
-        for rule in &group.rules {
-            let values = rule.values.as_deref().unwrap_or_default();
-            let mut rule_result = if values.is_empty() {
-                match rule.op.as_str() {
-                    "do_not_include" | "exclude" => active.clone(),
-                    "include" | "include_all" | "include_any" => RoaringBitmap::new(),
-                    _ => return Ok(None),
-                }
-            } else {
-                match rule.op.as_str() {
-                    "include" | "include_all" => active.clone(),
-                    "include_any" | "do_not_include" | "exclude" => RoaringBitmap::new(),
-                    _ => return Ok(None),
-                }
-            };
-            for value in values {
-                let matches = resolve(value);
-                match rule.op.as_str() {
-                    "include" | "include_all" => rule_result &= matches,
-                    _ => rule_result |= matches,
-                }
-            }
-            if matches!(rule.op.as_str(), "do_not_include" | "exclude") {
-                rule_result = &active - &rule_result;
-            }
-            match group.match_mode {
-                MatchMode::All => group_result &= rule_result,
-                MatchMode::Any => group_result |= rule_result,
-            }
-        }
-        if group.negate {
-            group_result = &active - &group_result;
-        }
-        result &= group_result;
-    }
-    Ok(Some(result.len() as i64))
-}
-
 pub(crate) fn compile_smart_folder_sql(
     connection: &Connection,
     smart_folder_id: i64,
     parameter_offset: usize,
 ) -> rusqlite::Result<(String, Vec<Value>)> {
+    let has_active_generation: bool = connection.query_row(
+        "SELECT EXISTS(
+             SELECT 1 FROM smart_folder_generation
+             WHERE smart_folder_id = ?1 AND state = 'active'
+         )",
+        [smart_folder_id],
+        |row| row.get(0),
+    )?;
+    if has_active_generation {
+        return Ok((
+            format!(
+                "SELECT membership.root_item_id AS root_id
+                 FROM smart_folder_generation generation
+                 JOIN smart_folder_membership membership
+                   ON membership.generation_id = generation.generation_id
+                 WHERE generation.smart_folder_id = ?{}
+                   AND generation.state = 'active'",
+                parameter_offset + 1
+            ),
+            vec![Value::Integer(smart_folder_id)],
+        ));
+    }
+
     let predicate = effective_predicate(connection, smart_folder_id)?;
-    predicate_sql(&predicate, parameter_offset)
+    let read_models_available: bool = connection.query_row(
+        "SELECT NOT EXISTS(SELECT 1 FROM library_root)
+             OR EXISTS(SELECT 1 FROM root_summary)",
+        [],
+        |row| row.get(0),
+    )?;
+    predicate_sql(
+        read_models_available.then_some(connection),
+        &predicate,
+        parameter_offset,
+        false,
+    )
 }
 
 /// Evaluate a predicate against the replacement schema and return root IDs.
@@ -191,7 +136,7 @@ pub fn compile_predicate(
     connection: &Connection,
     predicate: &SmartFolderPredicate,
 ) -> rusqlite::Result<Vec<i64>> {
-    let (sql, arguments) = predicate_sql(predicate, 0)?;
+    let (sql, arguments) = predicate_sql(None, predicate, 0, false)?;
     let mut statement = connection.prepare(&sql)?;
     let roots = statement
         .query_map(rusqlite::params_from_iter(arguments), |row| row.get(0))?
@@ -200,8 +145,10 @@ pub fn compile_predicate(
 }
 
 fn predicate_sql(
+    connection: Option<&Connection>,
     predicate: &SmartFolderPredicate,
     parameter_offset: usize,
+    impacted_roots_only: bool,
 ) -> rusqlite::Result<(String, Vec<Value>)> {
     if predicate.groups.is_empty() {
         return Ok((
@@ -210,27 +157,58 @@ fn predicate_sql(
         ));
     }
 
-    let mut sql = String::from(
-        "WITH root_media AS (
-             SELECT lr.item_id AS root_id, lr.item_id AS media_id
-             FROM library_root lr
-             JOIN library_item li ON li.item_id = lr.item_id
-             JOIN media_asset ma ON ma.item_id = lr.item_id
-             WHERE lr.lifecycle = 'active'
-               AND li.kind = 'media'
-               AND NOT EXISTS (
-                   SELECT 1 FROM collection_member cm
-                   WHERE cm.media_item_id = lr.item_id
-               )
-             UNION
-             SELECT lr.item_id AS root_id, cm.media_item_id AS media_id
-             FROM library_root lr
-             JOIN library_item li ON li.item_id = lr.item_id
-             JOIN collection_member cm ON cm.collection_id = lr.item_id
-             WHERE lr.lifecycle = 'active'
-               AND li.kind = 'collection'
-         )",
-    );
+    let needs_root_media = predicate
+        .groups
+        .iter()
+        .flat_map(|group| &group.rules)
+        .any(|rule| !is_root_owned_rule(&rule.field));
+    let mut sql = if connection.is_some() && impacted_roots_only {
+        String::from(
+            "WITH active_roots AS (
+                 SELECT rs.root_item_id AS root_id
+                 FROM picto_smart_impacted_root impacted
+                 JOIN root_summary rs ON rs.root_item_id = impacted.root_item_id
+                 WHERE rs.lifecycle = 'active'
+             )",
+        )
+    } else if connection.is_some() {
+        String::from(
+            "WITH active_roots AS (
+                 SELECT root_item_id AS root_id
+                 FROM root_summary
+                 WHERE lifecycle = 'active'
+             )",
+        )
+    } else {
+        String::from(
+            "WITH active_roots AS (
+                 SELECT item_id AS root_id
+                 FROM library_root
+                 WHERE lifecycle = 'active'
+             )",
+        )
+    };
+    if needs_root_media {
+        sql.push_str(
+            ", root_media AS (
+                 SELECT ar.root_id, ar.root_id AS media_id
+                 FROM active_roots ar
+                 JOIN library_item li ON li.item_id = ar.root_id
+                 JOIN media_asset ma ON ma.item_id = ar.root_id
+                 WHERE li.kind = 'media'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM collection_member cm
+                       WHERE cm.media_item_id = ar.root_id
+                   )
+                 UNION
+                 SELECT ar.root_id, cm.media_item_id AS media_id
+                 FROM active_roots ar
+                 JOIN library_item li ON li.item_id = ar.root_id
+                 JOIN collection_member cm ON cm.collection_id = ar.root_id
+                 WHERE li.kind = 'collection'
+             )",
+        );
+    }
     let mut arguments = vec![Value::Null; parameter_offset];
     let mut group_names = Vec::with_capacity(predicate.groups.len());
     let mut rule_index = 0;
@@ -240,21 +218,46 @@ fn predicate_sql(
         for rule in &group.rules {
             let name = format!("r{rule_index}");
             rule_index += 1;
-            let condition = rule_condition(rule, &mut arguments)?;
-            sql.push_str(&format!(
-                ", {name} AS ( SELECT DISTINCT rm.root_id
-                 FROM root_media rm
-                 JOIN media_asset ma ON ma.item_id = rm.media_id
-                 JOIN media_file mf ON mf.file_id = ma.file_id
-                 WHERE {condition} )"
-            ));
+            if rule.field == "tags" && connection.is_some() {
+                let set_sql = root_tag_set_sql(
+                    connection.expect("tag rule requires a connection"),
+                    rule,
+                    &mut arguments,
+                )?;
+                sql.push_str(&format!(", {name} AS ({set_sql})"));
+            } else if is_root_owned_rule(&rule.field) {
+                let condition = root_rule_condition(rule, &mut arguments)?;
+                sql.push_str(&format!(
+                    ", {name} AS ( SELECT ar.root_id
+                     FROM active_roots ar
+                     JOIN library_item li ON li.item_id = ar.root_id
+                     LEFT JOIN root_metadata metadata ON metadata.root_item_id = ar.root_id
+                     LEFT JOIN media_asset cover_asset
+                       ON cover_asset.item_id = COALESCE(
+                            li.cover_media_item_id,
+                            CASE WHEN li.kind = 'media' THEN ar.root_id END
+                          )
+                     WHERE {condition} )"
+                ));
+            } else {
+                let condition = rule_condition(rule, &mut arguments)?;
+                sql.push_str(&format!(
+                    ", {name} AS ( SELECT DISTINCT rm.root_id
+                     FROM root_media rm
+                     JOIN media_asset ma ON ma.item_id = rm.media_id
+                     JOIN media_file mf ON mf.file_id = ma.file_id
+                     WHERE {condition} )"
+                ));
+            }
             rule_names.push(name);
         }
 
         let raw_name = format!("g{group_index}_raw");
         let group_name = format!("g{group_index}");
         if rule_names.is_empty() {
-            sql.push_str(&format!(", {raw_name} AS (SELECT root_id FROM root_media)"));
+            sql.push_str(&format!(
+                ", {raw_name} AS (SELECT root_id FROM active_roots)"
+            ));
         } else {
             let joiner = match group.match_mode {
                 MatchMode::All => " INTERSECT ",
@@ -270,7 +273,7 @@ fn predicate_sql(
         if group.negate {
             sql.push_str(&format!(
                 ", {group_name} AS (
-                    SELECT root_id FROM root_media
+                    SELECT root_id FROM active_roots
                     EXCEPT
                     SELECT root_id FROM {raw_name}
                 )"
@@ -292,6 +295,530 @@ fn predicate_sql(
     sql.push_str(&format!("({groups}) ORDER BY root_id"));
 
     Ok((sql, arguments.split_off(parameter_offset)))
+}
+
+/// Complete pending definition or tag-graph rebuilds inside the canonical
+/// write transaction. Ordinary root changes use `refresh_impacted_roots`;
+/// broad changes build a complete shadow generation before activation.
+pub(crate) fn refresh_materialized(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    refresh_canonical_materialized(transaction)
+}
+
+/// Build replacement generations for definitions whose meaning changed.
+/// Existing active generations remain readable until every replacement has
+/// been materialized and the transaction commits.
+pub(crate) fn rebuild_generations(
+    transaction: &Transaction<'_>,
+    smart_folder_ids: &[i64],
+) -> rusqlite::Result<()> {
+    if smart_folder_ids.is_empty() {
+        return Ok(());
+    }
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_smart_rebuild_target (
+             smart_folder_id INTEGER PRIMARY KEY
+         );
+         DELETE FROM picto_smart_rebuild_target;",
+    )?;
+    {
+        let mut insert = transaction.prepare_cached(
+            "INSERT INTO picto_smart_rebuild_target(smart_folder_id) VALUES (?1)
+             ON CONFLICT(smart_folder_id) DO NOTHING",
+        )?;
+        for smart_folder_id in smart_folder_ids {
+            insert.execute([smart_folder_id])?;
+        }
+    }
+    transaction.execute(
+        "DELETE FROM smart_folder_generation
+         WHERE state = 'building'
+           AND smart_folder_id IN (
+               SELECT smart_folder_id FROM picto_smart_rebuild_target
+           )",
+        [],
+    )?;
+    transaction.execute(
+        "INSERT INTO smart_folder_generation (
+             smart_folder_id, database_revision, state, created_at
+         )
+         SELECT folder.smart_folder_id,
+                (SELECT revision + 1 FROM library_meta WHERE singleton = 1),
+                'building', strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         FROM smart_folder folder
+         JOIN picto_smart_rebuild_target target
+           ON target.smart_folder_id = folder.smart_folder_id",
+        [],
+    )?;
+    settle_building_generations(transaction, true)?;
+    transaction.execute("DELETE FROM picto_smart_rebuild_target", [])?;
+    Ok(())
+}
+
+/// Re-evaluate only the supplied roots against definitions affected by the
+/// changed fields or tags. Callers never need to know generation identities or
+/// membership-table details.
+pub(crate) fn refresh_impacted_roots(
+    transaction: &Transaction<'_>,
+    roots: &RoaringBitmap,
+    changed_fields: &[&str],
+    changed_tag_ids: &[i64],
+) -> rusqlite::Result<()> {
+    if roots.is_empty() {
+        return Ok(());
+    }
+    let operation_started = std::time::Instant::now();
+    let mut stage_started = operation_started;
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_smart_impacted_root (
+             root_item_id INTEGER PRIMARY KEY
+         );
+         CREATE TEMP TABLE IF NOT EXISTS picto_smart_target_folder (
+             smart_folder_id INTEGER PRIMARY KEY
+         );
+         CREATE TEMP TABLE IF NOT EXISTS picto_smart_changed_tag (
+             tag_id INTEGER PRIMARY KEY
+         );
+         DELETE FROM picto_smart_impacted_root;
+         DELETE FROM picto_smart_target_folder;
+         DELETE FROM picto_smart_changed_tag;",
+    )?;
+    let encoded_roots = bitmap_json(roots);
+    transaction.execute(
+        "INSERT INTO picto_smart_impacted_root(root_item_id)
+         SELECT CAST(value AS INTEGER) FROM json_each(?1)",
+        [encoded_roots],
+    )?;
+    trace_smart_stage("stage_roots", stage_started);
+    stage_started = std::time::Instant::now();
+
+    if changed_fields.contains(&"lifecycle") {
+        transaction.execute(
+            "INSERT INTO picto_smart_target_folder(smart_folder_id)
+             SELECT smart_folder_id FROM smart_folder
+             WHERE TRUE
+             ON CONFLICT(smart_folder_id) DO NOTHING",
+            [],
+        )?;
+    } else {
+        let mut target = transaction.prepare_cached(
+            "INSERT INTO picto_smart_target_folder(smart_folder_id)
+             SELECT smart_folder_id
+             FROM smart_folder_dependency
+             WHERE dependency_kind = ?1 AND dependency_key = ?2
+             ON CONFLICT(smart_folder_id) DO NOTHING",
+        )?;
+        for field in changed_fields {
+            if *field == "tags" {
+                continue;
+            }
+            let canonical = canonical_dependency_field(field);
+            let kind = if is_root_owned_rule(canonical) {
+                "root_field"
+            } else {
+                "media_field"
+            };
+            target.execute(rusqlite::params![kind, canonical])?;
+        }
+    }
+
+    if !changed_tag_ids.is_empty() {
+        let mut insert = transaction.prepare_cached(
+            "INSERT INTO picto_smart_changed_tag(tag_id) VALUES (?1)
+             ON CONFLICT(tag_id) DO NOTHING",
+        )?;
+        for tag_id in changed_tag_ids {
+            insert.execute([tag_id])?;
+        }
+        transaction.execute(
+            "WITH affected(tag_id) AS (
+                 SELECT tag_id FROM picto_smart_changed_tag
+             )
+             INSERT INTO picto_smart_target_folder(smart_folder_id)
+             SELECT DISTINCT dependency.smart_folder_id
+             FROM affected
+             JOIN tag ON tag.tag_id = affected.tag_id
+             JOIN smart_folder_dependency dependency
+               ON dependency.dependency_kind = 'tag'
+              AND dependency.dependency_key = CASE
+                    WHEN tag.namespace = 'general' THEN tag.subtag
+                    ELSE tag.namespace || ':' || tag.subtag
+                  END
+             ON CONFLICT(smart_folder_id) DO NOTHING",
+            [],
+        )?;
+    }
+
+    let targets = transaction
+        .prepare(
+            "SELECT target.smart_folder_id, generation.generation_id
+             FROM picto_smart_target_folder target
+             JOIN smart_folder_generation generation
+               ON generation.smart_folder_id = target.smart_folder_id
+              AND generation.state = 'active'
+             ORDER BY target.smart_folder_id",
+        )?
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    trace_smart_stage("resolve_targets", stage_started);
+    if targets.is_empty() {
+        transaction.execute_batch(
+            "DELETE FROM picto_smart_impacted_root;
+             DELETE FROM picto_smart_changed_tag;",
+        )?;
+        return Ok(());
+    }
+    let has_active_roots: bool = transaction.query_row(
+        "SELECT EXISTS(
+             SELECT 1
+             FROM picto_smart_impacted_root impacted
+             JOIN root_summary summary ON summary.root_item_id = impacted.root_item_id
+             WHERE summary.lifecycle = 'active'
+         )",
+        [],
+        |row| row.get(0),
+    )?;
+    let next_revision: i64 = transaction.query_row(
+        "SELECT revision + 1 FROM library_meta WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    transaction.execute(
+        "UPDATE projection_write_control
+         SET suppress_smart_dirty = 1
+         WHERE singleton = 1",
+        [],
+    )?;
+    for (smart_folder_id, generation_id) in targets {
+        stage_started = std::time::Instant::now();
+        transaction.execute(
+            "DELETE FROM smart_folder_membership
+             WHERE generation_id = ?1
+               AND root_item_id IN (
+                   SELECT root_item_id FROM picto_smart_impacted_root
+               )",
+            [generation_id],
+        )?;
+        trace_smart_stage("delete_membership", stage_started);
+        if has_active_roots {
+            stage_started = std::time::Instant::now();
+            insert_generation_matches(transaction, generation_id, smart_folder_id, true)?;
+            trace_smart_stage("insert_matches", stage_started);
+        }
+        stage_started = std::time::Instant::now();
+        transaction.execute(
+            "UPDATE smart_folder_generation
+             SET database_revision = ?2,
+                 member_count = (
+                     SELECT COUNT(*) FROM smart_folder_membership membership
+                     WHERE membership.generation_id = ?1
+                 )
+             WHERE generation_id = ?1 AND state = 'active'",
+            rusqlite::params![generation_id, next_revision],
+        )?;
+        trace_smart_stage("update_count", stage_started);
+    }
+
+    transaction.execute(
+        "UPDATE projection_write_control
+         SET suppress_smart_dirty = 0
+         WHERE singleton = 1",
+        [],
+    )?;
+
+    transaction.execute_batch(
+        "DELETE FROM picto_smart_impacted_root;
+         DELETE FROM picto_smart_target_folder;
+         DELETE FROM picto_smart_changed_tag;",
+    )?;
+    trace_smart_stage("total", operation_started);
+    Ok(())
+}
+
+fn trace_smart_stage(stage: &str, started: std::time::Instant) {
+    if std::env::var_os("PICTO_TRACE_STORE_STAGES").is_some() {
+        let elapsed = started.elapsed();
+        if elapsed >= std::time::Duration::from_millis(5) || stage == "total" {
+            eprintln!(
+                "smart_settlement_stage stage={stage} elapsed_ms={:.3}",
+                elapsed.as_secs_f64() * 1_000.0
+            );
+        }
+    }
+}
+
+fn bitmap_json(bitmap: &RoaringBitmap) -> String {
+    let mut json = String::with_capacity(bitmap.len() as usize * 8 + 2);
+    json.push('[');
+    for (index, value) in bitmap.iter().enumerate() {
+        if index != 0 {
+            json.push(',');
+        }
+        json.push_str(&value.to_string());
+    }
+    json.push(']');
+    json
+}
+
+fn refresh_canonical_materialized(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
+    transaction.execute(
+        "INSERT OR IGNORE INTO smart_folder_generation (
+             smart_folder_id, database_revision, state, created_at
+         )
+         SELECT folder.smart_folder_id,
+                (SELECT revision + 1 FROM library_meta WHERE singleton = 1),
+                'building',
+                strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+         FROM smart_folder folder
+         WHERE NOT EXISTS (
+                   SELECT 1 FROM smart_folder_generation generation
+                   WHERE generation.smart_folder_id = folder.smart_folder_id
+                     AND generation.state IN ('active', 'building')
+               )",
+        [],
+    )?;
+    settle_building_generations(transaction, false)
+}
+
+fn settle_building_generations(
+    transaction: &Transaction<'_>,
+    targeted: bool,
+) -> rusqlite::Result<()> {
+    let target_filter = if targeted {
+        "AND smart_folder_id IN (
+             SELECT smart_folder_id FROM picto_smart_rebuild_target
+         )"
+    } else {
+        ""
+    };
+    let builds = transaction
+        .prepare(&format!(
+            "SELECT smart_folder_id, generation_id
+             FROM smart_folder_generation
+             WHERE state = 'building' {target_filter}
+             ORDER BY smart_folder_id, generation_id"
+        ))?
+        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if builds.is_empty() {
+        return Ok(());
+    }
+
+    let smart_folder_ids = builds.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+    rebuild_dependencies(transaction, &smart_folder_ids)?;
+    let next_revision: i64 = transaction.query_row(
+        "SELECT revision + 1 FROM library_meta WHERE singleton = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    transaction.execute(
+        "UPDATE projection_write_control
+         SET suppress_smart_dirty = 1
+         WHERE singleton = 1",
+        [],
+    )?;
+    for (smart_folder_id, generation_id) in builds {
+        transaction.execute(
+            "DELETE FROM smart_folder_membership WHERE generation_id = ?1",
+            [generation_id],
+        )?;
+        insert_generation_matches(transaction, generation_id, smart_folder_id, false)?;
+        let member_count: i64 = transaction.query_row(
+            "SELECT COUNT(*) FROM smart_folder_membership WHERE generation_id = ?1",
+            [generation_id],
+            |row| row.get(0),
+        )?;
+        transaction.execute(
+            "UPDATE smart_folder_generation
+             SET state = 'retired'
+             WHERE smart_folder_id = ?1 AND state = 'active'",
+            [smart_folder_id],
+        )?;
+        transaction.execute(
+            "UPDATE smart_folder_generation
+             SET state = 'active', member_count = ?2,
+                 database_revision = ?3,
+                 activated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+             WHERE generation_id = ?1 AND state = 'building'",
+            rusqlite::params![generation_id, member_count, next_revision],
+        )?;
+        transaction.execute(
+            "DELETE FROM smart_folder_generation
+             WHERE smart_folder_id = ?1 AND state = 'retired'",
+            [smart_folder_id],
+        )?;
+    }
+    transaction.execute(
+        "UPDATE projection_write_control
+         SET suppress_smart_dirty = 0
+         WHERE singleton = 1",
+        [],
+    )?;
+    Ok(())
+}
+
+/// Return whether changing one direct tag can affect a smart-folder predicate.
+pub(crate) fn tag_affects_any_smart_folder(
+    connection: &Connection,
+    changed_tag_id: i64,
+) -> rusqlite::Result<bool> {
+    connection.query_row(
+        "WITH affected_query_tag(tag_id) AS (SELECT ?1)
+         SELECT EXISTS(
+             SELECT 1
+             FROM affected_query_tag affected
+             JOIN tag ON tag.tag_id = affected.tag_id
+             JOIN smart_folder_dependency dependency
+               ON dependency.dependency_kind = 'tag'
+              AND dependency.dependency_key = CASE
+                    WHEN tag.namespace = 'general' THEN tag.subtag
+                    ELSE tag.namespace || ':' || tag.subtag
+                  END
+         )",
+        [changed_tag_id],
+        |row| row.get(0),
+    )
+}
+
+fn insert_materialized_matches_into(
+    transaction: &Transaction<'_>,
+    target_table: &str,
+    smart_folder_id: i64,
+    dirty_roots_only: bool,
+) -> rusqlite::Result<()> {
+    let predicate = effective_predicate(transaction, smart_folder_id)?;
+    let (sql, arguments) = predicate_sql(Some(transaction), &predicate, 1, dirty_roots_only)?;
+    let mut parameters = vec![Value::Integer(smart_folder_id)];
+    parameters.extend(arguments);
+    transaction.execute(
+        &format!(
+            "INSERT INTO {target_table} (smart_folder_id, root_item_id)
+             SELECT ?1, root_id FROM ({sql}) GROUP BY root_id"
+        ),
+        rusqlite::params_from_iter(parameters),
+    )?;
+    Ok(())
+}
+
+fn insert_generation_matches(
+    transaction: &Transaction<'_>,
+    generation_id: i64,
+    smart_folder_id: i64,
+    impacted_roots_only: bool,
+) -> rusqlite::Result<()> {
+    let predicate = effective_predicate(transaction, smart_folder_id)?;
+    let (sql, arguments) = predicate_sql(Some(transaction), &predicate, 1, impacted_roots_only)?;
+    let mut parameters = vec![Value::Integer(generation_id)];
+    parameters.extend(arguments);
+    transaction.execute(
+        &format!(
+            "INSERT INTO smart_folder_membership (generation_id, root_item_id)
+             SELECT ?1, root_id FROM ({sql}) GROUP BY root_id"
+        ),
+        rusqlite::params_from_iter(parameters),
+    )?;
+    Ok(())
+}
+
+fn rebuild_dependencies(
+    transaction: &Transaction<'_>,
+    smart_folder_ids: &[i64],
+) -> rusqlite::Result<()> {
+    let mut insert = transaction.prepare_cached(
+        "INSERT INTO smart_folder_dependency (
+             smart_folder_id, dependency_kind, dependency_key
+         ) VALUES (?1, ?2, ?3)
+         ON CONFLICT DO NOTHING",
+    )?;
+    for smart_folder_id in smart_folder_ids {
+        transaction.execute(
+            "DELETE FROM smart_folder_dependency WHERE smart_folder_id = ?1",
+            [smart_folder_id],
+        )?;
+        let predicate = effective_predicate(transaction, *smart_folder_id)?;
+        let mut dependencies = BTreeSet::new();
+        for rule in predicate.groups.iter().flat_map(|group| &group.rules) {
+            if rule.field == "tags" {
+                for tag in rule.values.as_deref().unwrap_or_default() {
+                    let (namespace, subtag) = split_tag(tag);
+                    let key = if namespace == "general" {
+                        subtag
+                    } else {
+                        format!("{namespace}:{subtag}")
+                    };
+                    dependencies.insert(("tag", key));
+                }
+            } else {
+                let kind = if is_root_owned_rule(&rule.field) {
+                    "root_field"
+                } else {
+                    "media_field"
+                };
+                dependencies.insert((kind, canonical_dependency_field(&rule.field).to_string()));
+            }
+        }
+        for (kind, key) in dependencies {
+            insert.execute(rusqlite::params![smart_folder_id, kind, key])?;
+        }
+    }
+    Ok(())
+}
+
+fn canonical_dependency_field(field: &str) -> &str {
+    match field {
+        "source_url" | "source_urls_json" => "source_urls",
+        "imported" | "imported_at" | "imported_date" | "date_imported" => "date_added",
+        "captured" | "captured_at" | "captured_date" => "date_captured",
+        field => field,
+    }
+}
+
+fn root_tag_set_sql(
+    connection: &Connection,
+    rule: &PredicateRule,
+    arguments: &mut Vec<Value>,
+) -> rusqlite::Result<String> {
+    let values = rule.values.as_deref().unwrap_or_default();
+    if values.is_empty() {
+        return Ok(if rule.op == "do_not_include" || rule.op == "exclude" {
+            "SELECT root_id FROM active_roots".to_string()
+        } else {
+            "SELECT root_id FROM active_roots WHERE 0".to_string()
+        });
+    }
+
+    let mut sets = Vec::with_capacity(values.len());
+    for tag in values {
+        let (namespace, subtag) = split_tag(tag);
+        let tag_ids = crate::tags_v2::effective_query_tag_ids(connection, &namespace, &subtag)?;
+        if tag_ids.is_empty() {
+            sets.push("SELECT root_id FROM active_roots WHERE 0".to_string());
+            continue;
+        }
+        let placeholders = tag_ids
+            .into_iter()
+            .map(|tag_id| {
+                arguments.push(Value::Integer(tag_id));
+                format!("?{}", arguments.len())
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        sets.push(format!(
+            "SELECT relation.root_item_id AS root_id
+             FROM root_tag relation
+             JOIN active_roots ar ON ar.root_id = relation.root_item_id
+             WHERE relation.tag_id IN ({placeholders})"
+        ));
+    }
+
+    match rule.op.as_str() {
+        "include" | "include_all" => Ok(sets.join(" INTERSECT ")),
+        "include_any" => Ok(sets.join(" UNION ")),
+        "do_not_include" | "exclude" => Ok(format!(
+            "SELECT root_id FROM active_roots EXCEPT {}",
+            sets.join(" UNION ")
+        )),
+        op => Err(invalid(format!("Unknown tag operator: {op}"))),
+    }
 }
 
 /// Alias named for callers that treat compilation as evaluation.
@@ -332,8 +859,6 @@ fn effective_predicate(
 
 fn rule_condition(rule: &PredicateRule, arguments: &mut Vec<Value>) -> rusqlite::Result<String> {
     match rule.field.as_str() {
-        "tags" => tag_condition(rule, arguments),
-        "rating" => numeric_condition("ma.rating", rule, arguments),
         "file_size" => numeric_condition("mf.size_bytes", rule, arguments),
         "width" => numeric_condition("mf.pixel_width", rule, arguments),
         "height" => numeric_condition("mf.pixel_height", rule, arguments),
@@ -351,11 +876,33 @@ fn rule_condition(rule: &PredicateRule, arguments: &mut Vec<Value>) -> rusqlite:
             comparable_condition("ma.captured_at", rule, arguments)
         }
         "has_audio" => has_audio_condition(rule, arguments),
-        "notes" => text_condition("ma.notes", rule, arguments),
-        "name" => text_condition("ma.name", rule, arguments),
-        "source_url" | "source_urls" => text_condition("ma.source_urls_json", rule, arguments),
         "color" => color_condition(rule, arguments),
         field => Err(invalid(format!("Unknown smart-folder field: {field}"))),
+    }
+}
+
+fn is_root_owned_rule(field: &str) -> bool {
+    matches!(
+        field,
+        "tags" | "rating" | "notes" | "name" | "source_url" | "source_urls"
+    )
+}
+
+fn root_rule_condition(
+    rule: &PredicateRule,
+    arguments: &mut Vec<Value>,
+) -> rusqlite::Result<String> {
+    match rule.field.as_str() {
+        "tags" => tag_condition(rule, arguments),
+        "rating" => numeric_condition("metadata.rating", rule, arguments),
+        "notes" => text_condition("metadata.notes", rule, arguments),
+        "name" => text_condition("COALESCE(metadata.name, cover_asset.name)", rule, arguments),
+        "source_url" | "source_urls" => {
+            text_condition("metadata.source_urls_json", rule, arguments)
+        }
+        field => Err(invalid(format!(
+            "Unknown root-owned smart-folder field: {field}"
+        ))),
     }
 }
 
@@ -447,7 +994,7 @@ fn tag_condition(rule: &PredicateRule, arguments: &mut Vec<Value>) -> rusqlite::
             let namespace_index = arguments.len();
             arguments.push(Value::Text(subtag));
             let subtag_index = arguments.len();
-            crate::tags_v2::effective_tag_exists_sql("ma.item_id", namespace_index, subtag_index)
+            crate::tags_v2::effective_tag_exists_sql("ar.root_id", namespace_index, subtag_index)
         })
         .collect::<Vec<_>>();
 
@@ -598,13 +1145,38 @@ fn invalid(message: impl Into<String>) -> rusqlite::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::schema::LIBRARY_DDL;
+    use crate::store::schema::create_canonical_v1;
     use rusqlite::params;
 
     fn connection() -> Connection {
-        let connection = Connection::open_in_memory().unwrap();
-        connection.execute_batch(LIBRARY_DDL).unwrap();
+        canonical_connection()
+    }
+
+    fn canonical_connection() -> Connection {
+        let mut connection = Connection::open_in_memory().unwrap();
+        create_canonical_v1(&mut connection).unwrap();
         connection
+    }
+
+    fn canonical_media(connection: &Connection, item_id: i64, name: &str, rating: i64) {
+        connection
+            .execute_batch(&format!(
+                "INSERT INTO media_file (
+                     file_id, file_hash, mime_type, size_bytes, created_at
+                 ) VALUES ({item_id}, 'hash-{item_id}', 'image/png', 10, 'now');
+                 INSERT INTO library_item (
+                     item_id, item_key, kind, created_at, updated_at
+                 ) VALUES ({item_id}, 'item-{item_id}', 'media', 'now', 'now');
+                 INSERT INTO library_root(item_id, lifecycle)
+                 VALUES ({item_id}, 'active');
+                 INSERT INTO media_asset (
+                     item_id, file_id, name, imported_at, updated_at
+                 ) VALUES ({item_id}, {item_id}, '{name}', 'now', 'now');
+                 INSERT INTO root_metadata (
+                     root_item_id, name, rating, notes, source_urls_json, updated_at
+                 ) VALUES ({item_id}, '{name}', {rating}, NULL, '[]', 'now');"
+            ))
+            .unwrap();
     }
 
     fn media(
@@ -638,8 +1210,16 @@ mod tests {
             .unwrap();
         connection
             .execute(
-                "INSERT INTO media_asset (item_id, file_id, name, rating, imported_at, updated_at)
-                 VALUES (?1, ?1, ?2, ?3, '2026-01-01', '2026-01-01')",
+                "INSERT INTO media_asset (item_id, file_id, name, imported_at, updated_at)
+                 VALUES (?1, ?1, ?2, '2026-01-01', '2026-01-01')",
+                params![item_id, name],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO root_metadata (
+                     root_item_id, name, rating, notes, source_urls_json, updated_at
+                 ) VALUES (?1, ?2, ?3, NULL, '[]', '2026-01-01')",
                 params![item_id, name, rating],
             )
             .unwrap();
@@ -706,14 +1286,28 @@ mod tests {
         media(&connection, 2, "two", "active", "two", 2, 200);
         connection
             .execute(
-                "INSERT INTO library_item (item_id, item_key, kind, label, created_at, updated_at)
-                 VALUES (10, 'collection', 'collection', 'Collection', '2026-01-01', '2026-01-01')",
+                "UPDATE media_file SET pixel_width = 500 WHERE file_id = 1",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO library_item (item_id, item_key, kind, created_at, updated_at)
+                 VALUES (10, 'collection', 'collection', '2026-01-01', '2026-01-01')",
                 [],
             )
             .unwrap();
         connection
             .execute(
                 "INSERT INTO library_root (item_id, lifecycle) VALUES (10, 'active')",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "INSERT INTO root_metadata (
+                     root_item_id, name, source_urls_json, updated_at
+                 ) VALUES (10, 'Collection', '[]', '2026-01-01')",
                 [],
             )
             .unwrap();
@@ -730,7 +1324,7 @@ mod tests {
                 match_mode: MatchMode::All,
                 negate: false,
                 rules: vec![
-                    rule("rating", "gte", serde_json::json!(4)),
+                    rule("width", "gte", serde_json::json!(400)),
                     rule("file_size", "gte", serde_json::json!(100)),
                 ],
             }],
@@ -753,6 +1347,32 @@ mod tests {
                 match_mode: MatchMode::All,
                 negate: false,
                 rules: vec![rule("rating", "gte", serde_json::json!(4))],
+            }],
+        };
+
+        assert_eq!(compile_predicate(&connection, &predicate).unwrap(), vec![1]);
+    }
+
+    #[test]
+    fn metadata_rules_read_root_metadata_instead_of_media_assets() {
+        let connection = connection();
+        media(&connection, 1, "root-owned", "active", "media-owned", 1, 10);
+        connection
+            .execute(
+                "UPDATE root_metadata
+                 SET name = 'root-owned', rating = 5
+                 WHERE root_item_id = 1",
+                [],
+            )
+            .unwrap();
+        let predicate = SmartFolderPredicate {
+            groups: vec![SmartRuleGroup {
+                match_mode: MatchMode::All,
+                negate: false,
+                rules: vec![
+                    rule("name", "is", serde_json::json!("root-owned")),
+                    rule("rating", "gte", serde_json::json!(5)),
+                ],
             }],
         };
 
@@ -788,58 +1408,6 @@ mod tests {
     }
 
     #[test]
-    fn tag_rules_use_aliases_and_transitive_implications() {
-        let connection = connection();
-        media(&connection, 1, "one", "active", "one", 5, 10);
-        connection
-            .execute(
-                "INSERT INTO tag (tag_id, namespace, subtag) VALUES
-                     (1, 'general', 'direct'),
-                     (2, 'general', 'alias'),
-                     (3, 'general', 'parent'),
-                     (4, 'general', 'grandparent')",
-                [],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO media_tag (media_item_id, tag_id) VALUES (1, 1)",
-                [],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO tag_alias (from_tag_id, to_tag_id) VALUES (1, 2)",
-                [],
-            )
-            .unwrap();
-        connection
-            .execute(
-                "INSERT INTO tag_implication (child_tag_id, parent_tag_id) VALUES
-                     (1, 3), (3, 4)",
-                [],
-            )
-            .unwrap();
-
-        for tag in ["alias", "parent", "grandparent"] {
-            let predicate = SmartFolderPredicate {
-                groups: vec![SmartRuleGroup {
-                    match_mode: MatchMode::All,
-                    negate: false,
-                    rules: vec![PredicateRule {
-                        field: "tags".to_string(),
-                        op: "include".to_string(),
-                        value: None,
-                        value2: None,
-                        values: Some(vec![tag.to_string()]),
-                    }],
-                }],
-            };
-            assert_eq!(compile_predicate(&connection, &predicate).unwrap(), vec![1]);
-        }
-    }
-
-    #[test]
     fn parent_cycles_are_rejected() {
         let connection = connection();
         let empty = predicate(Vec::new());
@@ -859,5 +1427,367 @@ mod tests {
             .unwrap();
 
         assert!(compile_smart_folder(&connection, 10).is_err());
+    }
+
+    #[test]
+    fn canonical_impacted_root_refresh_updates_active_generation_exactly() {
+        let mut connection = canonical_connection();
+        canonical_media(&connection, 1, "one", 5);
+        canonical_media(&connection, 2, "two", 2);
+        folder(
+            &connection,
+            10,
+            None,
+            &predicate(vec![rule("rating", "gte", serde_json::json!(4))]),
+        );
+        {
+            let transaction = connection.transaction().unwrap();
+            refresh_materialized(&transaction).unwrap();
+            transaction.commit().unwrap();
+        }
+        let generation_id: i64 = connection
+            .query_row(
+                "SELECT generation_id FROM smart_folder_generation
+                 WHERE smart_folder_id = 10 AND state = 'active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(compile_smart_folder(&connection, 10).unwrap(), vec![1]);
+        assert_eq!(count_smart_folder(&connection, 10).unwrap(), 1);
+
+        {
+            let transaction = connection.transaction().unwrap();
+            transaction
+                .execute(
+                    "UPDATE root_metadata SET rating = 5 WHERE root_item_id = 2",
+                    [],
+                )
+                .unwrap();
+            let roots = RoaringBitmap::from_iter([2]);
+            refresh_impacted_roots(&transaction, &roots, &["rating"], &[]).unwrap();
+            assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 2);
+            assert_eq!(
+                transaction
+                    .query_row(
+                        "SELECT member_count FROM smart_folder_generation
+                         WHERE generation_id = ?1 AND state = 'active'",
+                        [generation_id],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                2
+            );
+            transaction.commit().unwrap();
+        }
+
+        assert_eq!(compile_smart_folder(&connection, 10).unwrap(), vec![1, 2]);
+        assert_eq!(count_smart_folder(&connection, 10).unwrap(), 2);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT generation_id FROM smart_folder_generation
+                     WHERE smart_folder_id = 10 AND state = 'active'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            generation_id
+        );
+
+        {
+            let transaction = connection.transaction().unwrap();
+            transaction
+                .execute("DELETE FROM library_root WHERE item_id = 2", [])
+                .unwrap();
+            let roots = RoaringBitmap::from_iter([2]);
+            refresh_impacted_roots(&transaction, &roots, &["lifecycle"], &[]).unwrap();
+            assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 1);
+            transaction.commit().unwrap();
+        }
+        assert_eq!(compile_smart_folder(&connection, 10).unwrap(), vec![1]);
+        assert_eq!(count_smart_folder(&connection, 10).unwrap(), 1);
+    }
+
+    #[test]
+    fn canonical_name_rule_uses_cover_media_when_root_name_is_missing() {
+        let mut connection = canonical_connection();
+        canonical_media(&connection, 1, "media fallback", 0);
+        connection
+            .execute(
+                "UPDATE root_metadata SET name = NULL WHERE root_item_id = 1",
+                [],
+            )
+            .unwrap();
+        folder(
+            &connection,
+            10,
+            None,
+            &predicate(vec![rule(
+                "name",
+                "is",
+                serde_json::json!("media fallback"),
+            )]),
+        );
+
+        let transaction = connection.transaction().unwrap();
+        refresh_materialized(&transaction).unwrap();
+        assert_eq!(compile_smart_folder(&transaction, 10).unwrap(), vec![1]);
+        assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 1);
+        transaction.commit().unwrap();
+    }
+
+    #[test]
+    fn canonical_definition_rebuild_activates_complete_shadow_generation() {
+        let mut connection = canonical_connection();
+        canonical_media(&connection, 1, "one", 5);
+        canonical_media(&connection, 2, "two", 2);
+        folder(
+            &connection,
+            10,
+            None,
+            &predicate(vec![rule("rating", "gte", serde_json::json!(4))]),
+        );
+        {
+            let transaction = connection.transaction().unwrap();
+            refresh_materialized(&transaction).unwrap();
+            transaction.commit().unwrap();
+        }
+        let first_generation: i64 = connection
+            .query_row(
+                "SELECT generation_id FROM smart_folder_generation
+                 WHERE smart_folder_id = 10 AND state = 'active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        {
+            let transaction = connection.transaction().unwrap();
+            transaction
+                .execute(
+                    "UPDATE smart_folder SET predicate_json = ?1
+                     WHERE smart_folder_id = 10",
+                    [predicate(vec![rule("rating", "gte", serde_json::json!(2))])],
+                )
+                .unwrap();
+            assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 1);
+            assert_eq!(
+                transaction
+                    .query_row(
+                        "SELECT COUNT(*) FROM smart_folder_generation
+                         WHERE smart_folder_id = 10 AND state = 'building'",
+                        [],
+                        |row| row.get::<_, i64>(0),
+                    )
+                    .unwrap(),
+                1
+            );
+            refresh_materialized(&transaction).unwrap();
+            assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 2);
+            transaction.commit().unwrap();
+        }
+
+        let active: (i64, i64) = connection
+            .query_row(
+                "SELECT generation_id, member_count
+                 FROM smart_folder_generation
+                 WHERE smart_folder_id = 10 AND state = 'active'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_ne!(active.0, first_generation);
+        assert_eq!(active.1, 2);
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT COUNT(*) FROM smart_folder_generation
+                     WHERE smart_folder_id = 10 AND state != 'active'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            0
+        );
+    }
+
+    #[test]
+    fn targeted_rebuild_leaves_unrelated_pending_generation_unsettled() {
+        let mut connection = canonical_connection();
+        canonical_media(&connection, 1, "one", 5);
+        canonical_media(&connection, 2, "two", 2);
+        folder(
+            &connection,
+            10,
+            None,
+            &predicate(vec![rule("rating", "gte", serde_json::json!(4))]),
+        );
+        folder(
+            &connection,
+            11,
+            None,
+            &predicate(vec![rule("name", "is", serde_json::json!("two"))]),
+        );
+        {
+            let transaction = connection.transaction().unwrap();
+            refresh_materialized(&transaction).unwrap();
+            transaction.commit().unwrap();
+        }
+        let unrelated_active: i64 = connection
+            .query_row(
+                "SELECT generation_id FROM smart_folder_generation
+                 WHERE smart_folder_id = 11 AND state = 'active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let transaction = connection.transaction().unwrap();
+        transaction
+            .execute(
+                "UPDATE smart_folder SET predicate_json = ?1
+                 WHERE smart_folder_id = 10",
+                [predicate(vec![rule("rating", "gte", serde_json::json!(2))])],
+            )
+            .unwrap();
+        transaction
+            .execute(
+                "UPDATE smart_folder SET predicate_json = ?1
+                 WHERE smart_folder_id = 11",
+                [predicate(vec![rule(
+                    "name",
+                    "is",
+                    serde_json::json!("one"),
+                )])],
+            )
+            .unwrap();
+
+        rebuild_generations(&transaction, &[10]).unwrap();
+
+        assert_eq!(compile_smart_folder(&transaction, 10).unwrap(), vec![1, 2]);
+        assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 2);
+        assert_eq!(compile_smart_folder(&transaction, 11).unwrap(), vec![2]);
+        assert_eq!(
+            transaction
+                .query_row(
+                    "SELECT generation_id FROM smart_folder_generation
+                     WHERE smart_folder_id = 11 AND state = 'active'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            unrelated_active
+        );
+        assert_eq!(
+            transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM smart_folder_generation
+                     WHERE smart_folder_id = 11 AND state = 'building'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            1
+        );
+        transaction.commit().unwrap();
+    }
+
+    #[test]
+    fn impacted_root_refresh_work_is_bounded_to_dependent_active_folders() {
+        const UNRELATED_FOLDERS: i64 = 64;
+
+        let mut connection = canonical_connection();
+        canonical_media(&connection, 1, "one", 5);
+        canonical_media(&connection, 2, "two", 2);
+        folder(
+            &connection,
+            10,
+            None,
+            &predicate(vec![rule("rating", "gte", serde_json::json!(4))]),
+        );
+        for offset in 0..UNRELATED_FOLDERS {
+            folder(
+                &connection,
+                100 + offset,
+                None,
+                &predicate(vec![rule("name", "is", serde_json::json!("two"))]),
+            );
+        }
+        {
+            let transaction = connection.transaction().unwrap();
+            refresh_materialized(&transaction).unwrap();
+            transaction.commit().unwrap();
+        }
+        let rating_generation: i64 = connection
+            .query_row(
+                "SELECT generation_id FROM smart_folder_generation
+                 WHERE smart_folder_id = 10 AND state = 'active'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let transaction = connection.transaction().unwrap();
+        transaction
+            .execute(
+                "UPDATE smart_folder
+                 SET predicate_json = ?1
+                 WHERE smart_folder_id >= 100",
+                [predicate(vec![rule(
+                    "name",
+                    "is",
+                    serde_json::json!("one"),
+                )])],
+            )
+            .unwrap();
+        assert_eq!(
+            transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM smart_folder_generation WHERE state = 'building'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            UNRELATED_FOLDERS
+        );
+        transaction
+            .execute(
+                "UPDATE root_metadata SET rating = 5 WHERE root_item_id = 2",
+                [],
+            )
+            .unwrap();
+        refresh_impacted_roots(
+            &transaction,
+            &RoaringBitmap::from_iter([2]),
+            &["rating"],
+            &[],
+        )
+        .unwrap();
+
+        assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 2);
+        assert_eq!(
+            transaction
+                .query_row(
+                    "SELECT generation_id FROM smart_folder_generation
+                     WHERE smart_folder_id = 10 AND state = 'active'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            rating_generation
+        );
+        assert_eq!(
+            transaction
+                .query_row(
+                    "SELECT COUNT(*) FROM smart_folder_generation WHERE state = 'building'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            UNRELATED_FOLDERS
+        );
+        assert_eq!(compile_smart_folder(&transaction, 100).unwrap(), vec![2]);
+        transaction.commit().unwrap();
     }
 }

@@ -49,8 +49,8 @@ pub fn dispatch(
         }
         "items.selection_summary" => {
             let input: TargetInput = parse(args_json)?;
-            read(crate::query_v2::selection_summary(
-                application.store(),
+            read(crate::query_v2::selection_summary_for_application(
+                application,
                 &input.target,
             )?)
         }
@@ -71,10 +71,6 @@ pub fn dispatch(
         }
         "tags.namespace_counts" => read(crate::tags_v2::namespace_counts(application)?),
         "tags.unused_count" => read(crate::tags_v2::unused_count(application)?),
-        "tags.relations" => {
-            let input: TagInput = parse(args_json)?;
-            read(crate::tags_v2::relations(application, input.tag_id)?)
-        }
         "duplicates.list" => {
             let input: LimitInput = parse(args_json)?;
             read(crate::duplicates_v2::list_candidates(
@@ -389,24 +385,6 @@ pub fn dispatch(
             )
         }
 
-        "tags.set_alias" => {
-            let input: TagAliasInput = parse(args_json)?;
-            publish(
-                application,
-                application.set_tag_alias(input.from_tag_id, input.to_tag_id)?,
-            )
-        }
-        "tags.set_implication" => {
-            let input: TagImplicationInput = parse(args_json)?;
-            publish(
-                application,
-                application.set_tag_implication(
-                    input.child_tag_id,
-                    input.parent_tag_id,
-                    input.present,
-                )?,
-            )
-        }
         "tags.rename_or_merge" => {
             let input: RenameTagInput = parse(args_json)?;
             publish(
@@ -1126,23 +1104,6 @@ pub struct TagInput {
 }
 #[derive(Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
-pub struct TagAliasInput {
-    #[ts(type = "number")]
-    from_tag_id: i64,
-    #[ts(type = "number | null")]
-    to_tag_id: Option<i64>,
-}
-#[derive(Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/application/")]
-pub struct TagImplicationInput {
-    #[ts(type = "number")]
-    child_tag_id: i64,
-    #[ts(type = "number")]
-    parent_tag_id: i64,
-    present: bool,
-}
-#[derive(Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/application/")]
 pub struct RenameTagInput {
     #[ts(type = "number")]
     tag_id: i64,
@@ -1511,6 +1472,26 @@ mod tests {
     }
 
     #[test]
+    fn range_target_round_trips_through_the_typed_ipc_boundary() {
+        let (_directory, application, item_id) = fixture();
+        let output = dispatch(
+            &application,
+            "items.selection_summary",
+            &format!(
+                r#"{{"target":{{"kind":"range","query":{{"scope":{{"kind":"all"}}}},"anchor_item_id":{},"focus_item_id":{}}}}}"#,
+                item_id.0, item_id.0
+            ),
+        )
+        .unwrap();
+        let summary: crate::query_v2::SelectionSummary = serde_json::from_str(&output).unwrap();
+        assert_eq!(summary.selected_count, 1);
+        assert_eq!(
+            summary.sample_hashes,
+            vec![FileHash("ipc-hash".to_string())]
+        );
+    }
+
+    #[test]
     fn tag_history_rebuilds_projection_state() {
         let (_directory, application, item_id) = fixture();
         assert_eq!(page(&application, "untagged").visible_item_count, Some(1));
@@ -1648,7 +1629,7 @@ mod tests {
             .store()
             .read(|connection| {
                 connection.query_row(
-                    "SELECT name FROM media_asset WHERE item_id = ?1",
+                    "SELECT (SELECT name FROM root_metadata WHERE root_item_id = ?1)",
                     [item_id.0],
                     |row| row.get(0),
                 )
@@ -1661,7 +1642,7 @@ mod tests {
             .store()
             .read(|connection| {
                 connection.query_row(
-                    "SELECT name FROM media_asset WHERE item_id = ?1",
+                    "SELECT (SELECT name FROM root_metadata WHERE root_item_id = ?1)",
                     [item_id.0],
                     |row| row.get(0),
                 )
@@ -1713,9 +1694,13 @@ mod tests {
             .read(|connection| {
                 connection.query_row(
                     "SELECT t.subtag
-                     FROM media_tag mt JOIN tag t ON t.tag_id = mt.tag_id
-                     WHERE mt.media_item_id = ?1 AND mt.source = 'ai'",
-                    [item_id.0],
+                     FROM root_tag rt JOIN tag t ON t.tag_id = rt.tag_id
+                     WHERE rt.root_item_id = ?1
+                       AND (rt.provenance_mask & ?2) != 0",
+                    rusqlite::params![
+                        item_id.0,
+                        crate::ai_runtime_v2::AI_PROVENANCE_MASK
+                    ],
                     |row| row.get(0),
                 )
             })

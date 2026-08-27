@@ -213,7 +213,7 @@ impl Application {
                     ],
                 )?;
                 let smart_folder_id = transaction.last_insert_rowid();
-                crate::smart_v2::compile_smart_folder(transaction, smart_folder_id)?;
+                crate::smart_v2::rebuild_generations(transaction, &[smart_folder_id])?;
                 record_smart_folder_created(transaction, &[smart_folder_id])?;
                 Ok((smart_folder_id, ()))
             },
@@ -277,27 +277,50 @@ impl Application {
                 .into_iter()
                 .filter_map(|(field, changed)| changed.then_some(field))
                 .collect::<Vec<_>>();
-                transaction.execute(
-                    "UPDATE smart_folder
-                 SET name = ?1, parent_id = ?2, icon = ?3, color = ?4, notes = ?5,
-                     predicate_json = ?6, sort_field = ?7, sort_order = ?8, updated_at = ?9
-                 WHERE smart_folder_id = ?10",
-                    params![
-                        input.name,
-                        input.parent_id,
-                        input.icon,
-                        input.color,
-                        input.notes,
-                        input.predicate_json,
-                        input.sort_field,
-                        input.sort_order,
-                        now,
-                        smart_folder_id,
-                    ],
-                )?;
+                let definition_changed = changed_fields
+                    .iter()
+                    .any(|field| matches!(*field, "parent" | "predicate_json"));
+                if definition_changed {
+                    transaction.execute(
+                        "UPDATE smart_folder
+                         SET name = ?1, parent_id = ?2, icon = ?3, color = ?4, notes = ?5,
+                             predicate_json = ?6, sort_field = ?7, sort_order = ?8,
+                             updated_at = ?9
+                         WHERE smart_folder_id = ?10",
+                        params![
+                            input.name,
+                            input.parent_id,
+                            input.icon,
+                            input.color,
+                            input.notes,
+                            input.predicate_json,
+                            input.sort_field,
+                            input.sort_order,
+                            now,
+                            smart_folder_id,
+                        ],
+                    )?;
+                } else {
+                    transaction.execute(
+                        "UPDATE smart_folder
+                         SET name = ?1, icon = ?2, color = ?3, notes = ?4,
+                             sort_field = ?5, sort_order = ?6, updated_at = ?7
+                         WHERE smart_folder_id = ?8",
+                        params![
+                            input.name,
+                            input.icon,
+                            input.color,
+                            input.notes,
+                            input.sort_field,
+                            input.sort_order,
+                            now,
+                            smart_folder_id,
+                        ],
+                    )?;
+                }
                 let affected = descendant_ids(transaction, smart_folder_id)?;
-                for id in &affected {
-                    crate::smart_v2::compile_smart_folder(transaction, *id)?;
+                if definition_changed {
+                    crate::smart_v2::rebuild_generations(transaction, &affected)?;
                 }
                 record_smart_folder_upsert(transaction, &[smart_folder_id], &changed_fields)?;
                 Ok((affected, ()))
@@ -318,22 +341,38 @@ impl Application {
             |transaction| {
                 require_smart_folder(transaction, smart_folder_id)?;
                 validate_parent(transaction, smart_folder_id, parent_id)?;
+                let previous_parent_id: Option<i64> = transaction.query_row(
+                    "SELECT parent_id FROM smart_folder WHERE smart_folder_id = ?1",
+                    [smart_folder_id],
+                    |row| row.get(0),
+                )?;
                 let display_order = next_order(transaction, parent_id, Some(smart_folder_id))?;
-                transaction.execute(
-                    "UPDATE smart_folder
-                 SET parent_id = ?1, display_order = ?2, updated_at = ?3
-                 WHERE smart_folder_id = ?4",
-                    params![parent_id, display_order, now, smart_folder_id],
-                )?;
-                let affected = descendant_ids(transaction, smart_folder_id)?;
-                for id in &affected {
-                    crate::smart_v2::compile_smart_folder(transaction, *id)?;
+                let parent_changed = previous_parent_id != parent_id;
+                if parent_changed {
+                    transaction.execute(
+                        "UPDATE smart_folder
+                         SET parent_id = ?1, display_order = ?2, updated_at = ?3
+                         WHERE smart_folder_id = ?4",
+                        params![parent_id, display_order, now, smart_folder_id],
+                    )?;
+                } else {
+                    transaction.execute(
+                        "UPDATE smart_folder
+                         SET display_order = ?1, updated_at = ?2
+                         WHERE smart_folder_id = ?3",
+                        params![display_order, now, smart_folder_id],
+                    )?;
                 }
-                record_smart_folder_upsert(
-                    transaction,
-                    &[smart_folder_id],
-                    &["parent", "display_order"],
-                )?;
+                let affected = descendant_ids(transaction, smart_folder_id)?;
+                if parent_changed {
+                    crate::smart_v2::rebuild_generations(transaction, &affected)?;
+                }
+                let changed_fields = if parent_changed {
+                    &["parent", "display_order"][..]
+                } else {
+                    &["display_order"][..]
+                };
+                record_smart_folder_upsert(transaction, &[smart_folder_id], changed_fields)?;
                 Ok((affected, ()))
             },
             |_, ()| Ok(()),
@@ -516,14 +555,16 @@ fn descendant_ids(
 ) -> rusqlite::Result<Vec<i64>> {
     transaction
         .prepare(
-            "WITH RECURSIVE descendants(smart_folder_id, depth) AS (
-                 SELECT smart_folder_id, 0 FROM smart_folder WHERE smart_folder_id = ?1
-                 UNION ALL
-                 SELECT child.smart_folder_id, parent.depth + 1
+            "WITH RECURSIVE descendants(smart_folder_id) AS (
+                 SELECT smart_folder_id FROM smart_folder WHERE smart_folder_id = ?1
+                 UNION
+                 SELECT child.smart_folder_id
                  FROM smart_folder child
                  JOIN descendants parent ON child.parent_id = parent.smart_folder_id
              )
-             SELECT smart_folder_id FROM descendants ORDER BY depth, smart_folder_id",
+             SELECT smart_folder_id
+             FROM descendants
+             ORDER BY smart_folder_id != ?1, smart_folder_id",
         )?
         .query_map([smart_folder_id], |row| row.get(0))?
         .collect()
@@ -608,7 +649,9 @@ mod tests {
 
     use super::*;
     use crate::smart_v2::{MatchMode, PredicateRule, SmartRuleGroup};
+    use crate::store::schema::create_canonical_v1;
     use crate::store::Store;
+    use rusqlite::Connection;
 
     fn fixture() -> (tempfile::TempDir, Application) {
         let directory = tempfile::tempdir().unwrap();
@@ -641,6 +684,90 @@ mod tests {
         }
     }
 
+    fn seed_media(application: &Application) {
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute_batch(
+                    "INSERT INTO media_file (
+                         file_id, file_hash, mime_type, size_bytes, created_at
+                     ) VALUES
+                         (1, 'hash-1', 'image/png', 10, 'now'),
+                         (2, 'hash-2', 'image/png', 10, 'now');
+                     INSERT INTO library_item (
+                         item_id, item_key, kind, created_at, updated_at
+                     ) VALUES
+                         (1, 'item-1', 'media', 'now', 'now'),
+                         (2, 'item-2', 'media', 'now', 'now');
+                     INSERT INTO library_root(item_id, lifecycle) VALUES
+                         (1, 'active'), (2, 'active');
+                     INSERT INTO media_asset (
+                         item_id, file_id, name, imported_at, updated_at
+                     ) VALUES
+                         (1, 1, 'one', 'now', 'now'),
+                         (2, 2, 'two', 'now', 'now');
+                     INSERT INTO root_metadata (
+                         root_item_id, name, rating, notes, source_urls_json, updated_at
+                     ) VALUES
+                         (1, 'one', 5, NULL, '[]', 'now'),
+                         (2, 'two', 2, NULL, '[]', 'now');",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    fn generation_state(
+        application: &Application,
+        smart_folder_id: i64,
+    ) -> (i64, i64, i64, i64, i64) {
+        application
+            .store()
+            .read(|connection| {
+                let active = connection.query_row(
+                    "SELECT generation_id, database_revision, member_count
+                     FROM smart_folder_generation
+                     WHERE smart_folder_id = ?1 AND state = 'active'",
+                    [smart_folder_id],
+                    |row| {
+                        Ok((
+                            row.get::<_, i64>(0)?,
+                            row.get::<_, i64>(1)?,
+                            row.get::<_, i64>(2)?,
+                        ))
+                    },
+                )?;
+                let actual_members: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM smart_folder_membership
+                     WHERE generation_id = ?1",
+                    [active.0],
+                    |row| row.get(0),
+                )?;
+                let building: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM smart_folder_generation
+                     WHERE smart_folder_id = ?1 AND state = 'building'",
+                    [smart_folder_id],
+                    |row| row.get(0),
+                )?;
+                Ok((active.0, active.1, active.2, actual_members, building))
+            })
+            .unwrap()
+    }
+
+    fn assert_exact_active(
+        application: &Application,
+        smart_folder_id: i64,
+        revision: u64,
+        expected_members: i64,
+    ) -> i64 {
+        let state = generation_state(application, smart_folder_id);
+        assert_eq!(state.1, revision as i64);
+        assert_eq!(state.2, expected_members);
+        assert_eq!(state.3, expected_members);
+        assert_eq!(state.4, 0);
+        state.0
+    }
+
     #[test]
     fn navigation_reads_ordered_folder_and_smart_folder_rows() {
         let (_directory, application) = fixture();
@@ -659,7 +786,7 @@ mod tests {
         assert_eq!(snapshot.folders[0].name, "Folder");
         assert_eq!(snapshot.smart_folders[0].smart_folder_id, smart_id);
         assert_eq!(snapshot.smart_folders[0].name, "Smart");
-        assert_eq!(snapshot.revision, 2);
+        assert_eq!(snapshot.revision, 3);
     }
 
     #[test]
@@ -701,5 +828,94 @@ mod tests {
         assert!(restored
             .iter()
             .any(|folder| folder.smart_folder_id == child));
+    }
+
+    #[test]
+    fn create_update_and_move_publish_exact_active_generations() {
+        let (_directory, application) = fixture();
+        seed_media(&application);
+        let (high, high_create) = application
+            .create_smart_folder_v2(&input("High", None, 4))
+            .unwrap();
+        let (any, any_create) = application
+            .create_smart_folder_v2(&input("Any", None, 0))
+            .unwrap();
+        let (child, child_create) = application
+            .create_smart_folder_v2(&input("Child", Some(high), 0))
+            .unwrap();
+
+        assert_exact_active(&application, high, high_create.receipt.revision, 1);
+        assert_exact_active(&application, any, any_create.receipt.revision, 2);
+        assert_exact_active(&application, child, child_create.receipt.revision, 1);
+
+        let updated = application
+            .update_smart_folder_v2(high, &input("High", None, 5))
+            .unwrap();
+        assert_eq!(updated.smart_folder_ids, vec![high, child]);
+        assert_exact_active(&application, high, updated.receipt.revision, 1);
+        assert_exact_active(&application, child, updated.receipt.revision, 1);
+
+        let moved = application.move_smart_folder_v2(child, Some(any)).unwrap();
+        assert_exact_active(&application, child, moved.receipt.revision, 2);
+    }
+
+    #[test]
+    fn metadata_only_edits_and_same_parent_moves_keep_the_active_generation() {
+        let (_directory, application) = fixture();
+        let (smart_folder_id, created) = application
+            .create_smart_folder_v2(&input("Original", None, 1))
+            .unwrap();
+        let original =
+            assert_exact_active(&application, smart_folder_id, created.receipt.revision, 0);
+
+        let mut metadata_edit = input("Renamed", None, 1);
+        metadata_edit.icon = Some("star".to_string());
+        metadata_edit.notes = Some("presentation only".to_string());
+        application
+            .update_smart_folder_v2(smart_folder_id, &metadata_edit)
+            .unwrap();
+        assert_eq!(generation_state(&application, smart_folder_id).0, original);
+        assert_eq!(generation_state(&application, smart_folder_id).4, 0);
+
+        application
+            .move_smart_folder_v2(smart_folder_id, None)
+            .unwrap();
+        assert_eq!(generation_state(&application, smart_folder_id).0, original);
+        assert_eq!(generation_state(&application, smart_folder_id).4, 0);
+    }
+
+    #[test]
+    fn descendant_walk_terminates_on_a_corrupt_parent_cycle() {
+        let mut connection = Connection::open_in_memory().unwrap();
+        create_canonical_v1(&mut connection).unwrap();
+        let empty_predicate =
+            serde_json::to_string(&SmartFolderPredicate { groups: Vec::new() }).unwrap();
+        connection
+            .execute(
+                "INSERT INTO smart_folder (
+                     smart_folder_id, smart_folder_key, name, predicate_json,
+                     created_at, updated_at
+                 ) VALUES
+                     (10, 'ten', 'Ten', ?1, 'now', 'now'),
+                     (11, 'eleven', 'Eleven', ?1, 'now', 'now')",
+                [&empty_predicate],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE smart_folder SET parent_id = 11 WHERE smart_folder_id = 10",
+                [],
+            )
+            .unwrap();
+        connection
+            .execute(
+                "UPDATE smart_folder SET parent_id = 10 WHERE smart_folder_id = 11",
+                [],
+            )
+            .unwrap();
+
+        let transaction = connection.transaction().unwrap();
+        assert_eq!(descendant_ids(&transaction, 10).unwrap(), vec![10, 11]);
+        transaction.rollback().unwrap();
     }
 }

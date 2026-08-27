@@ -20,11 +20,14 @@ use crate::subscriptions_v2::{self, RecoveryCounts};
 
 const SUBSCRIPTION_TICK: StdDuration = StdDuration::from_secs(1);
 const SUBSCRIPTION_WORKER_COUNT: usize = 4;
-const MAINTENANCE_TICK: StdDuration = StdDuration::from_millis(250);
+const MAINTENANCE_TICK: StdDuration = StdDuration::from_millis(16);
+const SEARCH_TICK: StdDuration = StdDuration::from_millis(250);
 const WATCH_TICK: StdDuration = StdDuration::from_secs(30);
 const CLOUD_TICK: StdDuration = StdDuration::from_secs(2);
-const INGEST_BATCH_SIZE: usize = 8;
+const CHECKPOINT_TICK: StdDuration = StdDuration::from_secs(15);
+const INGEST_BATCH_SIZE: usize = 64;
 const WORK_BATCH_SIZE: usize = 8;
+const SEARCH_BATCH_SIZE: usize = 16;
 const THUMBNAIL_CHANGED_EVENT: &str = "picto:thumbnail-changed";
 const DOMINANT_COLOR_CHANGED_EVENT: &str = "picto:dominant-color-changed";
 
@@ -60,6 +63,7 @@ pub struct SubscriptionTickResult {
 pub struct MaintenanceTickResult {
     pub ingest: IngestRunReport,
     pub work: DrainBatchResult,
+    pub search_refreshed: bool,
 }
 
 pub fn recover(application: &Application, now: &str) -> Result<StartupRecovery, String> {
@@ -108,10 +112,17 @@ pub async fn subscription_tick<R: SourceRunner>(
 }
 
 pub async fn maintenance_tick(application: &Application) -> Result<MaintenanceTickResult, String> {
+    maintenance_tick_inner(application, true).await
+}
+
+async fn maintenance_tick_inner(
+    application: &Application,
+    maintain_search: bool,
+) -> Result<MaintenanceTickResult, String> {
     let ingest = ingest_queue_v2::run_batch(application, INGEST_BATCH_SIZE)?;
     // User-visible ingest thumbnails win over colors, pHash, and other
-    // derivatives. A subscription worker may be draining the same queue, so
-    // checking both ready and running jobs prevents derivative contention.
+    // derivatives. Maintenance is the sole ingest consumer; ready/running
+    // canonical jobs suppress derivative contention.
     let work = if ingest_queue_v2::has_ready_or_running(application)? {
         DrainBatchResult::default()
     } else {
@@ -132,7 +143,28 @@ pub async fn maintenance_tick(application: &Application) -> Result<MaintenanceTi
             },
         );
     }
-    Ok(MaintenanceTickResult { ingest, work })
+    // FTS is rebuildable, lowest-priority work, but it must not be starved by
+    // a long ingest. The store's writer admission lets foreground mutations
+    // overtake this bounded batch.
+    let search_revision = if maintain_search {
+        application
+            .store()
+            .maintain_search_indexes(SEARCH_BATCH_SIZE)?
+    } else {
+        None
+    };
+    if let Some(revision) = search_revision {
+        application.publish(&MutationReceipt {
+            revision,
+            resources: vec![resources::LIBRARY.to_string()],
+            item_ids: Vec::new(),
+        });
+    }
+    Ok(MaintenanceTickResult {
+        ingest,
+        work,
+        search_refreshed: search_revision.is_some(),
+    })
 }
 
 /// Start replacement workers after the replacement store becomes the active
@@ -215,11 +247,19 @@ pub fn start(
     let maintenance_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(MAINTENANCE_TICK);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_search = tokio::time::Instant::now() - SEARCH_TICK;
         loop {
             tokio::select! {
                 _ = maintenance_cancel.cancelled() => return,
                 _ = interval.tick() => {
-                    if let Err(error) = maintenance_tick(&maintenance_application).await {
+                    let maintain_search = last_search.elapsed() >= SEARCH_TICK;
+                    if maintain_search {
+                        last_search = tokio::time::Instant::now();
+                    }
+                    if let Err(error) = maintenance_tick_inner(
+                        &maintenance_application,
+                        maintain_search,
+                    ).await {
                         tracing::warn!(error = %error, "Replacement maintenance tick failed");
                     }
                 }
@@ -254,6 +294,17 @@ pub fn start(
             tokio::select! {
                 _ = cloud_cancel.cancelled() => return,
                 _ = interval.tick() => {
+                    // Cloud is the lowest-priority durable worker and may lag
+                    // while canonical ingest has ready work.
+                    match ingest_queue_v2::has_ready_or_running(&cloud_application) {
+                        Ok(true) => continue,
+                        Ok(false) => {}
+                        Err(error) => {
+                            tracing::warn!(error = %error, "Checking ingest before cloud sync failed");
+                            continue;
+                        }
+                    }
+                    tokio::task::yield_now().await;
                     match crate::cloud::worker::tick(&cloud_application, &mut state).await {
                         Ok(result) if result.state_changed => {
                             match cloud_application.store().revision() {
@@ -276,11 +327,35 @@ pub fn start(
         }
     });
 
+    let checkpoint_application = Arc::clone(&application);
+    let checkpoint_cancel = cancel.clone();
+    let checkpoint_handle = tokio::spawn(async move {
+        let mut interval = tokio::time::interval_at(
+            tokio::time::Instant::now() + CHECKPOINT_TICK,
+            CHECKPOINT_TICK,
+        );
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            tokio::select! {
+                _ = checkpoint_cancel.cancelled() => return,
+                _ = interval.tick() => {
+                    let application = Arc::clone(&checkpoint_application);
+                    match tokio::task::spawn_blocking(move || application.store().checkpoint()).await {
+                        Ok(Ok(())) => {}
+                        Ok(Err(error)) => tracing::warn!(error = %error, "Passive WAL checkpoint failed"),
+                        Err(error) => tracing::warn!(error = %error, "Passive WAL checkpoint task failed"),
+                    }
+                }
+            }
+        }
+    });
+
     let mut handles = vec![
         ("replacement_subscription_scheduler", scheduler_handle),
         ("replacement_maintenance", maintenance_handle),
         ("replacement_folder_watches", watch_handle),
         ("replacement_cloud_sync", cloud_handle),
+        ("replacement_wal_checkpoint", checkpoint_handle),
     ];
     handles.extend(
         subscription_handles
@@ -306,11 +381,19 @@ pub fn start_tutorial(
     let maintenance_handle = tokio::spawn(async move {
         let mut interval = tokio::time::interval(MAINTENANCE_TICK);
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_search = tokio::time::Instant::now() - SEARCH_TICK;
         loop {
             tokio::select! {
                 _ = maintenance_cancel.cancelled() => return,
                 _ = interval.tick() => {
-                    if let Err(error) = maintenance_tick(&maintenance_application).await {
+                    let maintain_search = last_search.elapsed() >= SEARCH_TICK;
+                    if maintain_search {
+                        last_search = tokio::time::Instant::now();
+                    }
+                    if let Err(error) = maintenance_tick_inner(
+                        &maintenance_application,
+                        maintain_search,
+                    ).await {
                         tracing::warn!(error = %error, "Tutorial maintenance tick failed");
                     }
                 }
@@ -431,11 +514,11 @@ mod tests {
     fn idle_recovery_does_not_advance_revision() {
         let directory = tempfile::tempdir().unwrap();
         let application = Application::new(Arc::new(Store::open(directory.path()).unwrap()));
-        assert_eq!(application.store().revision().unwrap(), 0);
+        assert_eq!(application.store().revision().unwrap(), 1);
         assert_eq!(
             recover(&application, "2026-01-01T00:00:00Z").unwrap(),
             StartupRecovery::default()
         );
-        assert_eq!(application.store().revision().unwrap(), 0);
+        assert_eq!(application.store().revision().unwrap(), 1);
     }
 }

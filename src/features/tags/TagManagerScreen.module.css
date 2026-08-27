@@ -10,7 +10,6 @@
 
 .canvasHeader,
 .sectionHeader,
-.relationRow,
 .editorIntro,
 .editorActions {
   display: flex;
@@ -294,11 +293,6 @@
 .sectionHeader { justify-content: space-between; gap: 12px; }
 .sectionHeader h2 { margin: 0; font-size: var(--font-size-md); font-weight: var(--font-weight-bold); }
 .editorActions { gap: 8px; padding-top: 2px; border-top: 1px solid var(--color-border-secondary); }
-
-.relationList { max-height: 150px; overflow-y: auto; scrollbar-gutter: stable; }
-.relationRow { gap: 8px; min-height: 32px; padding: 2px 0; }
-.relationKind { margin-left: auto; color: var(--color-text-secondary); font-size: var(--font-size-caption); }
-.relationEmpty { color: var(--color-text-tertiary); font-size: var(--font-size-sm); }
 
 .pickerBody { display: flex; min-height: 260px; flex-direction: column; gap: 10px; }
 .pickerResults { min-height: 0; flex: 1; overflow-y: auto; scrollbar-gutter: stable; }

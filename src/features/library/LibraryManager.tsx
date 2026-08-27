@@ -792,12 +792,12 @@ export function LibraryManager() {
         </footer>
       </section>
 
-      <MediaCoverDialog<number>
+      <MediaCoverDialog<string>
         target={coverPath && selectedEntry ? { id: coverPath, name: selectedEntry.name } : null}
         busy={busy !== null}
         instructions="Select a media item from this library, then adjust its position and zoom."
         emptyText="This library has no media available for a cover."
-        onLoad={(path, offset) => loadLibraryCoverCandidates(path, offset ?? 0)}
+        onLoad={(path, cursor) => loadLibraryCoverCandidates(path, cursor ?? null)}
         onSave={async (path, candidate, crop) => {
           try {
             await saveLibraryCover(path, candidate, crop);

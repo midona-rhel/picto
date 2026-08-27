@@ -345,6 +345,10 @@ async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
     close_library_inner().await?;
 
     let database_path = library_root.join(crate::store::DATABASE_FILE);
+    if let Err(error) = consolidate_closed_database(&database_path) {
+        let _ = open_library_inner(library_root, None).await;
+        return Err(error);
+    }
     if let Some(parent) = prepared.emergency_copy_path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("Failed to create emergency restore directory: {error}"))?;
@@ -352,6 +356,7 @@ async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
     std::fs::rename(&database_path, &prepared.emergency_copy_path)
         .map_err(|error| format!("Failed to preserve the active database: {error}"))?;
     if let Err(error) = std::fs::rename(&prepared.database_path, &database_path) {
+        let _ = remove_sqlite_sidecars(&database_path);
         let _ = std::fs::rename(&prepared.emergency_copy_path, &database_path);
         let _ = open_library_inner(library_root, None).await;
         return Err(format!("Failed to activate the restored database: {error}"));
@@ -384,6 +389,7 @@ async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
     if let Err(error) = activation {
         let failed =
             database_path.with_extension(format!("failed-restore-{}.sqlite", uuid::Uuid::new_v4()));
+        let _ = remove_sqlite_sidecars(&database_path);
         let _ = std::fs::rename(&database_path, failed);
         let _ = std::fs::rename(&prepared.emergency_copy_path, &database_path);
         let _ = open_library_inner(library_root, None).await;
@@ -392,6 +398,7 @@ async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
     if let Err(error) = open_library_inner(library_root.clone(), None).await {
         let failed =
             database_path.with_extension(format!("failed-restore-{}.sqlite", uuid::Uuid::new_v4()));
+        let _ = remove_sqlite_sidecars(&database_path);
         let _ = std::fs::rename(&database_path, failed);
         let _ = std::fs::rename(&prepared.emergency_copy_path, &database_path);
         let _ = open_library_inner(library_root, None).await;
@@ -402,6 +409,54 @@ async fn restore_cloud_snapshot(args_json: &str) -> Result<String, String> {
         restored: true,
     })
     .map_err(|error| error.to_string())
+}
+
+/// Turn a closed WAL database into one self-contained main database before it
+/// is moved aside. A restore must never leave an old generation's WAL/SHM at
+/// the canonical path: snapshots share the same SQLite lineage, so those WAL
+/// frames can otherwise be validly replayed over the restored main database.
+fn consolidate_closed_database(database_path: &std::path::Path) -> Result<(), String> {
+    let connection = rusqlite::Connection::open(database_path)
+        .map_err(|error| format!("Failed to open the active database for restore: {error}"))?;
+    connection
+        .busy_timeout(Duration::from_secs(5))
+        .map_err(|error| format!("Failed to configure restore checkpoint: {error}"))?;
+    let (busy, remaining): (i64, i64) = connection
+        .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)? - row.get::<_, i64>(2)?,
+            ))
+        })
+        .map_err(|error| {
+            format!("Failed to checkpoint the active database for restore: {error}")
+        })?;
+    if busy != 0 || remaining != 0 {
+        return Err(format!(
+            "Active database could not be checkpointed safely (busy={busy}, remaining={remaining})"
+        ));
+    }
+    drop(connection);
+    remove_sqlite_sidecars(database_path)
+}
+
+fn remove_sqlite_sidecars(database_path: &std::path::Path) -> Result<(), String> {
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = database_path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        let sidecar = PathBuf::from(sidecar);
+        match std::fs::remove_file(&sidecar) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "Failed to remove stale SQLite sidecar {}: {error}",
+                    sidecar.display()
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn join_cloud_library(args_json: &str) -> Result<String, String> {
@@ -776,10 +831,25 @@ mod tests {
                 .device_id,
             device_before
         );
-        assert!(std::fs::read_dir(directory.path().join("cloud/emergency"))
+        let emergency_path = std::fs::read_dir(directory.path().join("cloud/emergency"))
             .unwrap()
             .next()
-            .is_some());
+            .unwrap()
+            .unwrap()
+            .path();
+        let emergency = rusqlite::Connection::open_with_flags(
+            emergency_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let emergency_marker: String = emergency
+            .query_row(
+                "SELECT value_json FROM setting WHERE key = 'restore-marker'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(emergency_marker, "\"after\"");
         drop(restored);
         close_library().await.unwrap();
     }

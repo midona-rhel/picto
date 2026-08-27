@@ -6,7 +6,6 @@ import {
   IconGitMerge,
   IconBookmark,
   IconBookmarks,
-  IconPlus,
   IconSearch,
   IconStar,
   IconTrash,
@@ -17,12 +16,10 @@ import { tagsController } from '../../controllers/tagsController';
 import type {
   CanonicalNamespaceSummary,
   CanonicalTagRecord,
-  CanonicalTagRelation,
 } from '../../shared/types/canonical';
 import { TagChip } from '../../shared/ui/TagChip/TagChip';
 import { GlassInput } from '../../shared/ui/GlassInput/GlassInput';
 import { GlassModal } from '../../shared/ui/GlassModal';
-import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ConfirmModal } from '../modals/ConfirmModal';
 import { EmptyState } from '../subscriptions/components/EmptyState';
 import { ActionButton } from '../subscriptions/components/ActionButton';
@@ -47,20 +44,14 @@ const PAGE_SIZE = 100;
 const PICKER_PAGE_SIZE = 40;
 const tagManagerQueryAtom = atom('');
 
-type RelationMode = 'alias' | 'parent' | 'child';
 type EditorAction =
   | { kind: 'merge' }
-  | { kind: 'relation'; mode: RelationMode }
   | { kind: 'delete' }
   | null;
 type GroupAction = { kind: 'rename' | 'delete'; namespace: string } | null;
 
 function tagKey(tag: Pick<CanonicalTagRecord, 'namespace' | 'subtag'>): string {
   return tagName(tag);
-}
-
-function relationKey(relation: CanonicalTagRelation): string {
-  return tagName(relation);
 }
 
 function errorMessage(reason: unknown): string {
@@ -181,60 +172,20 @@ function RenameTagGroupModal({
   );
 }
 
-function RelationList({
-  relations,
-  emptyLabel,
-  onRemove,
-}: {
-  relations: CanonicalTagRelation[];
-  emptyLabel: string;
-  onRemove: (relation: CanonicalTagRelation) => void;
-}) {
-  if (relations.length === 0) return <div className={styles.relationEmpty}>{emptyLabel}</div>;
-  return (
-    <div className={styles.relationList}>
-      {relations.map((relation) => (
-        <div className={styles.relationRow} key={`${relation.relation}:${relation.tag_id}`}>
-          <TagChip namespace={relation.namespace} subtag={relation.subtag} />
-          <span className={styles.relationKind}>{relation.relation}</span>
-          <KbdTooltip label="Remove relation"><button
-            className={styles.iconButton}
-            aria-label={`Remove ${relationKey(relation)}`}
-            onClick={() => onRemove(relation)}
-            type="button"
-          >
-            <IconX size={14} />
-          </button></KbdTooltip>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function TagEditorModal({
   tag,
-  aliases,
-  implications,
-  detailsLoading,
   busy,
   onClose,
   onRename,
   onAction,
-  onRemoveRelation,
 }: {
   tag: CanonicalTagRecord;
-  aliases: CanonicalTagRelation[];
-  implications: CanonicalTagRelation[];
-  detailsLoading: boolean;
   busy: boolean;
   onClose: () => void;
   onRename: (name: string) => void;
   onAction: (action: Exclude<EditorAction, null>) => void;
-  onRemoveRelation: (relation: CanonicalTagRelation) => void;
 }) {
   const [name, setName] = useState(tagKey(tag));
-  const parents = implications.filter((relation) => relation.relation === 'parent');
-  const children = implications.filter((relation) => relation.relation === 'child');
 
   const submitRename = () => {
     const value = name.trim();
@@ -278,61 +229,8 @@ function TagEditorModal({
           </ActionButton>
         </div>
 
-        {detailsLoading && <div className={styles.muted}>Loading relations...</div>}
-        <RelationEditorSection
-          title="Aliases"
-          addLabel="Add alias"
-          emptyLabel="No aliases"
-          relations={aliases}
-          onAdd={() => onAction({ kind: 'relation', mode: 'alias' })}
-          onRemove={onRemoveRelation}
-        />
-        <RelationEditorSection
-          title="Parents"
-          addLabel="Add parent"
-          emptyLabel="No parent implications"
-          relations={parents}
-          onAdd={() => onAction({ kind: 'relation', mode: 'parent' })}
-          onRemove={onRemoveRelation}
-        />
-        <RelationEditorSection
-          title="Children"
-          addLabel="Add child"
-          emptyLabel="No child implications"
-          relations={children}
-          onAdd={() => onAction({ kind: 'relation', mode: 'child' })}
-          onRemove={onRemoveRelation}
-        />
       </div>
     </GlassModal>
-  );
-}
-
-function RelationEditorSection({
-  title,
-  addLabel,
-  emptyLabel,
-  relations,
-  onAdd,
-  onRemove,
-}: {
-  title: string;
-  addLabel: string;
-  emptyLabel: string;
-  relations: CanonicalTagRelation[];
-  onAdd: () => void;
-  onRemove: (relation: CanonicalTagRelation) => void;
-}) {
-  return (
-    <section className={styles.editorSection} aria-labelledby={`${title.toLowerCase()}-heading`}>
-      <div className={styles.sectionHeader}>
-        <h2 id={`${title.toLowerCase()}-heading`}>{title}</h2>
-        <ActionButton compact onClick={onAdd}>
-          <IconPlus size={14} /> {addLabel}
-        </ActionButton>
-      </div>
-      <RelationList relations={relations} emptyLabel={emptyLabel} onRemove={onRemove} />
-    </section>
   );
 }
 
@@ -344,11 +242,8 @@ export function TagManagerScreen() {
   const query = useAtomValue(tagManagerQueryAtom);
   const [namespace, setNamespace] = useState<string | null>(null);
   const [selected, setSelected] = useState<CanonicalTagRecord | null>(null);
-  const [aliases, setAliases] = useState<CanonicalTagRelation[]>([]);
-  const [implications, setImplications] = useState<CanonicalTagRelation[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [detailsLoading, setDetailsLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editorAction, setEditorAction] = useState<EditorAction>(null);
@@ -358,7 +253,6 @@ export function TagManagerScreen() {
   const [viewEpoch, setViewEpoch] = useState(0);
   const listGeneration = useRef(0);
   const summaryGeneration = useRef(0);
-  const relationGeneration = useRef(0);
   const selectedRef = useRef<CanonicalTagRecord | null>(null);
   const tagCanvasRef = useRef<HTMLDivElement>(null);
   const [columnCount, setColumnCount] = useState(3);
@@ -379,27 +273,6 @@ export function TagManagerScreen() {
       }
     } catch (reason: unknown) {
       if (generation === summaryGeneration.current) setError(errorMessage(reason));
-    }
-  }, []);
-
-  const loadRelations = useCallback(async (tag: CanonicalTagRecord | null) => {
-    const generation = ++relationGeneration.current;
-    if (!tag) {
-      setAliases([]);
-      setImplications([]);
-      setDetailsLoading(false);
-      return;
-    }
-    setDetailsLoading(true);
-    try {
-      const relations = await tagsController.getRelations(tag.tag_id);
-      if (generation !== relationGeneration.current) return;
-      setAliases(relations.aliases);
-      setImplications(relations.implications);
-    } catch (reason: unknown) {
-      if (generation === relationGeneration.current) setError(errorMessage(reason));
-    } finally {
-      if (generation === relationGeneration.current) setDetailsLoading(false);
     }
   }, []);
 
@@ -436,10 +309,6 @@ export function TagManagerScreen() {
     setEditorAction(null);
   }, [query]);
 
-  useEffect(() => {
-    void loadRelations(selected);
-  }, [loadRelations, selected]);
-
   const refreshData = useCallback(async () => {
     setReloadToken((value) => value + 1);
     await reloadNamespaceSummary();
@@ -450,14 +319,13 @@ export function TagManagerScreen() {
     const unregister = libraryInvalidation.register('tags', () => {
       if (cancelled) return;
       void refreshData();
-      if (selectedRef.current) void loadRelations(selectedRef.current);
     });
     libraryInvalidation.start();
     return () => {
       cancelled = true;
       unregister();
     };
-  }, [loadRelations, refreshData]);
+  }, [refreshData]);
 
   const resetBrowse = useCallback(() => {
     listGeneration.current += 1;
@@ -566,7 +434,6 @@ export function TagManagerScreen() {
       if (closeAfterSuccess) {
         closeEditor();
       } else if (currentTag) {
-        await loadRelations(currentTag);
         setEditorAction(null);
       }
       return true;
@@ -576,33 +443,7 @@ export function TagManagerScreen() {
     } finally {
       setBusy(false);
     }
-  }, [closeEditor, loadRelations, refreshData]);
-
-  const handleRelation = useCallback((mode: RelationMode, target: CanonicalTagRecord) => {
-    const currentTag = selectedRef.current;
-    if (!currentTag) return;
-    if (mode === 'alias') {
-      void runMutation(() => tagsController.setAlias(target.tag_id, currentTag.tag_id));
-    } else if (mode === 'parent') {
-      void runMutation(() => tagsController.setImplication(currentTag.tag_id, target.tag_id, true));
-    } else {
-      void runMutation(() => tagsController.setImplication(target.tag_id, currentTag.tag_id, true));
-    }
-  }, [runMutation]);
-
-  const removeRelation = useCallback((relation: CanonicalTagRelation) => {
-    const currentTag = selectedRef.current;
-    if (!currentTag) return;
-    if (relation.relation === 'alias_outgoing') {
-      void runMutation(() => tagsController.setAlias(currentTag.tag_id, null));
-    } else if (relation.relation === 'alias_incoming') {
-      void runMutation(() => tagsController.setAlias(relation.tag_id, null));
-    } else if (relation.relation === 'parent') {
-      void runMutation(() => tagsController.setImplication(currentTag.tag_id, relation.tag_id, false));
-    } else if (relation.relation === 'child') {
-      void runMutation(() => tagsController.setImplication(relation.tag_id, currentTag.tag_id, false));
-    }
-  }, [runMutation]);
+  }, [closeEditor, refreshData]);
 
   const namespaceLabel = (value: string) => value || 'general';
   const sortedNamespaces = useMemo(
@@ -792,14 +633,10 @@ export function TagManagerScreen() {
         <TagEditorModal
           key={selected.tag_id}
           tag={selected}
-          aliases={aliases}
-          implications={implications}
-          detailsLoading={detailsLoading}
           busy={busy}
           onClose={closeEditor}
           onRename={(name) => void runMutation(() => tagsController.rename(selected.tag_id, name), true)}
           onAction={setEditorAction}
-          onRemoveRelation={removeRelation}
         />
       )}
       {selected && editorAction?.kind === 'merge' && (
@@ -810,17 +647,6 @@ export function TagManagerScreen() {
           onChoose={(target) => {
             setEditorAction(null);
             void runMutation(() => tagsController.merge(selected.tag_id, tagKey(target)), true);
-          }}
-        />
-      )}
-      {selected && editorAction?.kind === 'relation' && (
-        <RelationPicker
-          title={editorAction.mode === 'alias' ? 'Add existing alias' : editorAction.mode === 'parent' ? 'Add existing parent' : 'Add existing child'}
-          excludeTagId={selected.tag_id}
-          onClose={() => setEditorAction(null)}
-          onChoose={(target) => {
-            setEditorAction(null);
-            handleRelation(editorAction.mode, target);
           }}
         />
       )}
@@ -879,7 +705,7 @@ export function TagManagerScreen() {
           void runMutation(() => tagsController.deleteUnused());
         }}
         title="Delete unused tags"
-        message={`Delete ${unusedCount.toLocaleString()} ${unusedCount === 1 ? 'tag' : 'tags'} with no media assignments or relationships?`}
+        message={`Delete ${unusedCount.toLocaleString()} ${unusedCount === 1 ? 'tag' : 'tags'} with no media assignments?`}
         confirmLabel="Delete unused tags"
         danger
         loading={busy}

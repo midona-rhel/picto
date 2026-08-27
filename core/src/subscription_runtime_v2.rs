@@ -11,6 +11,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use chrono::{DateTime, Duration, Utc};
 use tokio::sync::mpsc::{self, Sender};
@@ -22,10 +23,11 @@ use crate::ingest_v2::PreparedMediaInput;
 use crate::subscriptions_v2::{self, ClaimedQueryRun, DomainSchedule, NormalizedPost};
 
 const CHANNEL_CAPACITY: usize = 32;
-const STREAM_INGEST_BATCH_SIZE: usize = 8;
+const QUERY_INGEST_BATCH_SIZE: usize = 8;
 const MAX_ATTEMPTS: i64 = 3;
 const RETRY_BASE_SECONDS: i64 = 60;
 const RUN_STATE_POLL: std::time::Duration = std::time::Duration::from_millis(250);
+const PROGRESS_PUBLISH_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 pub type RunnerFuture<'a> =
     Pin<Box<dyn Future<Output = Result<RunnerSuccess, RunnerFailure>> + Send + 'a>>;
@@ -49,6 +51,38 @@ pub struct DownloadedItem {
 pub enum SourceEvent {
     PostTraversed(NormalizedPost),
     MediaDownloaded(DownloadedItem),
+}
+
+struct SourceProgressPublisher {
+    last_publish: Instant,
+    dirty: bool,
+}
+
+impl SourceProgressPublisher {
+    fn new() -> Self {
+        Self {
+            last_publish: Instant::now(),
+            dirty: false,
+        }
+    }
+
+    fn changed(&mut self, application: &Application) -> Result<(), String> {
+        self.dirty = true;
+        if self.last_publish.elapsed() >= PROGRESS_PUBLISH_INTERVAL {
+            self.flush(application)?;
+        }
+        Ok(())
+    }
+
+    fn flush(&mut self, application: &Application) -> Result<(), String> {
+        if !self.dirty {
+            return Ok(());
+        }
+        publish_source_progress(application)?;
+        self.last_publish = Instant::now();
+        self.dirty = false;
+        Ok(())
+    }
 }
 
 /// Failure returned by a source runner.
@@ -311,6 +345,8 @@ async fn run_stream<R: SourceRunner>(
     let atomic_gallery = query.site_id == "ehentai";
     let mut gallery_posts = Vec::new();
     let mut gallery_items = Vec::new();
+    let mut recorded_source_items = BTreeSet::new();
+    let mut progress = SourceProgressPublisher::new();
 
     let runner_result = loop {
         tokio::select! {
@@ -353,6 +389,8 @@ async fn run_stream<R: SourceRunner>(
                     atomic_gallery,
                     &mut gallery_posts,
                     &mut gallery_items,
+                    &mut recorded_source_items,
+                    &mut progress,
                 ).await?,
                 None => {
                     input_open = false;
@@ -370,6 +408,8 @@ async fn run_stream<R: SourceRunner>(
             atomic_gallery,
             &mut gallery_posts,
             &mut gallery_items,
+            &mut recorded_source_items,
+            &mut progress,
         )
         .await?;
     }
@@ -398,8 +438,7 @@ async fn run_stream<R: SourceRunner>(
                     return Err(error);
                 }
             }
-            drain_available_ingest(application)?;
-            publish_source_progress(application)?;
+            progress.changed(application)?;
         } else {
             let post_keys = gallery_items
                 .iter()
@@ -415,12 +454,13 @@ async fn run_stream<R: SourceRunner>(
             }
         }
     }
-
-    // Production maintenance drains this queue concurrently. Drain anything
-    // still immediately available so standalone workers and focused tests
-    // retain the same settled-run contract without blocking every download on
-    // image processing.
-    drain_available_ingest(application)?;
+    let ingest =
+        ingest_queue_v2::drain_query(application, query.run_query_id, QUERY_INGEST_BATCH_SIZE)
+            .map_err(|error| format!("settling subscription ingest failed: {error}"))?;
+    if ingest.claimed != 0 {
+        progress.changed(application)?;
+    }
+    progress.flush(application)?;
     if let Ok(success) = &runner_result {
         for path in &success.cleanup_paths {
             if let Err(error) = std::fs::remove_dir_all(path) {
@@ -441,10 +481,18 @@ async fn handle_source_event(
     atomic_gallery: bool,
     gallery_posts: &mut Vec<NormalizedPost>,
     gallery_items: &mut Vec<DownloadedItem>,
+    recorded_source_items: &mut BTreeSet<(String, String)>,
+    progress: &mut SourceProgressPublisher,
 ) -> Result<(), String> {
-    match event {
-        SourceEvent::PostTraversed(post) if atomic_gallery => gallery_posts.push(post),
-        SourceEvent::MediaDownloaded(item) if atomic_gallery => gallery_items.push(item),
+    let durable_change = match event {
+        SourceEvent::PostTraversed(post) if atomic_gallery => {
+            gallery_posts.push(post);
+            false
+        }
+        SourceEvent::MediaDownloaded(item) if atomic_gallery => {
+            gallery_items.push(item);
+            false
+        }
         SourceEvent::PostTraversed(post) => {
             subscriptions_v2::record_post(
                 application.store(),
@@ -453,23 +501,57 @@ async fn handle_source_event(
                 &Utc::now().to_rfc3339(),
             )
             .map_err(|error| format!("recording traversed source post failed: {error}"))?;
+            recorded_source_items.extend(
+                post.items
+                    .iter()
+                    .map(|item| (post.post_key.clone(), item.item_key.clone())),
+            );
+            true
         }
         SourceEvent::MediaDownloaded(item) => {
-            let post_complete = item
-                .input
-                .source
-                .as_ref()
-                .is_some_and(|source| source.post_complete);
-            if let Err(error) = process_item(application, query, &item, destination) {
+            ensure_source_item_recorded(application, query, &item, recorded_source_items)?;
+            if let Err(error) = process_item_after_post(application, query, &item, destination) {
                 release_post_archive(application, query, &item.post.post_key).await;
                 return Err(error);
             }
-            if post_complete {
-                drain_available_ingest(application)?;
-            }
+            true
         }
+    };
+    if durable_change {
+        progress.changed(application)?;
     }
-    publish_source_progress(application)
+    Ok(())
+}
+
+fn ensure_source_item_recorded(
+    application: &Application,
+    query: &ClaimedQueryRun,
+    item: &DownloadedItem,
+    recorded_source_items: &mut BTreeSet<(String, String)>,
+) -> Result<(), String> {
+    let source = item
+        .input
+        .source
+        .as_ref()
+        .ok_or_else(|| "A subscription item needs source identity".to_string())?;
+    let identity = (source.post_key.clone(), source.item_key.clone());
+    if recorded_source_items.contains(&identity) {
+        return Ok(());
+    }
+    subscriptions_v2::record_post(
+        application.store(),
+        query.run_query_id,
+        &item.post,
+        &Utc::now().to_rfc3339(),
+    )
+    .map_err(|error| format!("recording fallback source post failed: {error}"))?;
+    recorded_source_items.extend(
+        item.post
+            .items
+            .iter()
+            .map(|post_item| (item.post.post_key.clone(), post_item.item_key.clone())),
+    );
+    Ok(())
 }
 
 fn validate_complete_gallery(items: &[DownloadedItem]) -> Result<(), String> {
@@ -528,16 +610,6 @@ fn publish_source_progress(application: &Application) -> Result<(), String> {
     Ok(())
 }
 
-fn drain_available_ingest(application: &Application) -> Result<(), String> {
-    loop {
-        let report = ingest_queue_v2::run_batch(application, STREAM_INGEST_BATCH_SIZE)
-            .map_err(|error| format!("processing subscription ingest failed: {error}"))?;
-        if report.claimed < STREAM_INGEST_BATCH_SIZE {
-            return Ok(());
-        }
-    }
-}
-
 async fn release_post_archive(application: &Application, query: &ClaimedQueryRun, post_key: &str) {
     let prefix = crate::subscriptions::archive::subscription_query_archive_prefix(
         query.subscription_id,
@@ -549,31 +621,6 @@ async fn release_post_archive(application: &Application, query: &ClaimedQueryRun
         &[post_key.to_string()],
     )
     .await;
-}
-
-fn process_item(
-    application: &Application,
-    query: &ClaimedQueryRun,
-    item: &DownloadedItem,
-    destination: &crate::subscription_catalog_v2::SubscriptionDestinationPolicy,
-) -> Result<(), String> {
-    record_downloaded_post(application, query, item)?;
-    process_item_after_post(application, query, item, destination)
-}
-
-fn record_downloaded_post(
-    application: &Application,
-    query: &ClaimedQueryRun,
-    item: &DownloadedItem,
-) -> Result<(), String> {
-    subscriptions_v2::record_post(
-        application.store(),
-        query.run_query_id,
-        &item.post,
-        &Utc::now().to_rfc3339(),
-    )
-    .map(|_| ())
-    .map_err(|error| format!("recording subscription post failed: {error}"))
 }
 
 fn process_item_after_post(
@@ -831,6 +878,16 @@ mod tests {
         (directory, application, subscription)
     }
 
+    fn drain_maintenance_ingest(application: &Application) {
+        for _ in 0..32 {
+            let report = ingest_queue_v2::run_batch(application, 64).unwrap();
+            if report.claimed == 0 {
+                return;
+            }
+        }
+        panic!("maintenance ingest did not drain within the test bound");
+    }
+
     fn item(root: &Path, post_key: &str, item_key: &str) -> DownloadedItem {
         item_at(root, post_key, item_key, 0)
     }
@@ -1007,6 +1064,7 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+        drain_maintenance_ingest(&application);
 
         application
             .store()
@@ -1148,6 +1206,7 @@ mod tests {
             .tick(FIRST_NOW)
             .await
             .unwrap();
+        drain_maintenance_ingest(&application);
 
         let (kind, members): (String, i64) = application
             .store()
@@ -1211,6 +1270,7 @@ mod tests {
             .tick(FIRST_NOW)
             .await
             .unwrap();
+        drain_maintenance_ingest(&application);
 
         application
             .store()
@@ -1221,8 +1281,8 @@ mod tests {
                     |row| row.get(0),
                 )?;
                 let tags: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM media_tag mt
-                     JOIN tag t ON t.tag_id = mt.tag_id
+                    "SELECT COUNT(*) FROM root_tag rt
+                     JOIN tag t ON t.tag_id = rt.tag_id
                      WHERE t.namespace = 'creator' AND t.subtag = 'alice'",
                     [],
                     |row| row.get(0),
@@ -1390,6 +1450,7 @@ mod tests {
         let worker = SubscriptionWorker::new(&application, runner);
 
         worker.tick(FIRST_NOW).await.unwrap().unwrap();
+        drain_maintenance_ingest(&application);
 
         assert!(!deleted_path.exists());
         let state: (String, i64, i64, i64) = application
@@ -1429,6 +1490,7 @@ mod tests {
         };
         let worker = SubscriptionWorker::new(&application, runner);
         worker.tick(FIRST_NOW).await.unwrap().unwrap();
+        drain_maintenance_ingest(&application);
 
         application
             .store()
@@ -1489,6 +1551,7 @@ mod tests {
             .tick(FIRST_NOW)
             .await
             .unwrap();
+        drain_maintenance_ingest(&application);
 
         application
             .store()

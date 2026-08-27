@@ -201,7 +201,7 @@ pub async fn publish(
     let checksum = hex::encode(Sha256::digest(&bytes));
     // Publishing the manifest last makes an incomplete upload unreachable.
     provider.upload(&manifest_path, bytes, &checksum).await?;
-    store.transaction(|transaction| {
+    store.transaction_cloud(|transaction| {
         transaction.execute(
             "INSERT INTO cloud_snapshot (
                  snapshot_id, frontier_json, database_sha256, artifact_sha256,
@@ -332,7 +332,7 @@ pub async fn prune_remote(store: &Store, provider: &dyn CloudProvider) -> Result
                 manifest.snapshot_id
             ))
             .await?;
-        store.transaction(|transaction| {
+        store.transaction_cloud(|transaction| {
             transaction.execute(
                 "DELETE FROM cloud_snapshot WHERE snapshot_id = ?1",
                 [&manifest.snapshot_id],

@@ -240,12 +240,14 @@ pub fn enqueue_thumbnail_regeneration(
     let now = Utc::now().to_rfc3339();
     let ((known, enqueued), revision, _) =
         application.store().transaction_if_changed(|transaction| {
-            let known: usize = transaction.query_row(
+            let known: i64 = transaction.query_row(
                 "SELECT COUNT(*) FROM media_file
                  WHERE file_hash IN (SELECT CAST(value AS TEXT) FROM json_each(?1))",
                 [&encoded],
                 |row| row.get(0),
             )?;
+            let known = usize::try_from(known)
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, known))?;
             if known != unique.len() {
                 return Err(rusqlite::Error::InvalidParameterName(
                     "A thumbnail target is not a physical file".to_string(),
@@ -616,10 +618,14 @@ mod tests {
         let mut hashes = Vec::new();
         store
             .transaction(|transaction| {
-                for (file_id, color, name) in [(1, [255, 0, 0], "same.png"), (2, [0, 0, 255], "same.png")] {
+                for (file_id, color, name) in
+                    [(1, [255, 0, 0], "same.png"), (2, [0, 0, 255], "same.png")]
+                {
                     let image = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(16, 8, Rgb(color)));
                     let mut bytes = Vec::new();
-                    image.write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png).unwrap();
+                    image
+                        .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+                        .unwrap();
                     let hash = hex::encode(Sha256::digest(&bytes));
                     application
                         .blobs()
@@ -632,9 +638,9 @@ mod tests {
                         rusqlite::params![file_id, hash, bytes.len() as i64, NOW],
                     )?;
                     transaction.execute(
-                        "INSERT INTO library_item (item_id, item_key, kind, label, created_at, updated_at)
-                         VALUES (?1, ?2, 'media', ?3, ?4, ?4)",
-                        rusqlite::params![file_id, format!("item-{file_id}"), name, NOW],
+                        "INSERT INTO library_item (item_id, item_key, kind, created_at, updated_at)
+                         VALUES (?1, ?2, 'media', ?3, ?3)",
+                        rusqlite::params![file_id, format!("item-{file_id}"), NOW],
                     )?;
                     transaction.execute(
                         "INSERT INTO media_asset (item_id, file_id, name, imported_at, updated_at)
@@ -645,11 +651,17 @@ mod tests {
                         "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
                         [file_id],
                     )?;
+                    transaction.execute(
+                        "INSERT INTO root_metadata
+                            (root_item_id, name, source_urls_json, updated_at)
+                         VALUES (?1, ?2, '[]', ?3)",
+                        rusqlite::params![file_id, name, NOW],
+                    )?;
                     hashes.push(FileHash(hash));
                 }
                 transaction.execute(
-                    "INSERT INTO library_item (item_id, item_key, kind, label, created_at, updated_at)
-                     VALUES (10, 'collection-10', 'collection', 'ordered', ?1, ?1)",
+                    "INSERT INTO library_item (item_id, item_key, kind, created_at, updated_at)
+                     VALUES (10, 'collection-10', 'collection', ?1, ?1)",
                     [NOW],
                 )?;
                 transaction.execute(
@@ -657,9 +669,12 @@ mod tests {
                     [],
                 )?;
                 transaction.execute(
-                    "DELETE FROM library_root WHERE item_id IN (1, 2)",
-                    [],
+                    "INSERT INTO root_metadata
+                        (root_item_id, name, source_urls_json, updated_at)
+                     VALUES (10, 'ordered', '[]', ?1)",
+                    [NOW],
                 )?;
+                transaction.execute("DELETE FROM library_root WHERE item_id IN (1, 2)", [])?;
                 transaction.execute(
                     "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
                      VALUES (10, 2, 10), (10, 1, 20)",

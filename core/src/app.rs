@@ -11,9 +11,13 @@ use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 
 use crate::blob_store::BlobStore;
-use crate::projection_v2::ProjectionStore;
+use crate::projection_v2::{
+    ItemProjectionChange, MembershipProjectionChange, ProjectionStore, RootProjectionChange,
+    StructureProjectionDelta, TagGraphProjectionDelta, TagIdentityProjectionChange,
+};
 use crate::store::history::{
-    HistoryDescriptor, HistoryDirection, HistoryEntrySummary, HistoryState,
+    HistoryDescriptor, HistoryDirection, HistoryEntrySummary, HistoryProjectionRequest,
+    HistoryState, SemanticHistoryPayload, SemanticHistoryRecord,
 };
 use crate::store::Store;
 
@@ -196,6 +200,11 @@ pub enum ItemTarget {
         #[serde(default)]
         excluded_item_ids: Vec<ItemId>,
     },
+    Range {
+        query: ItemQuery,
+        anchor_item_id: ItemId,
+        focus_item_id: ItemId,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -237,6 +246,7 @@ pub struct Application {
     store: Arc<Store>,
     blobs: Arc<BlobStore>,
     projections: Arc<ProjectionStore>,
+    publication: crate::publication::PublicationCoordinator,
     ai_sessions: crate::ai_tagger::inference::SharedTaggerSessions,
     ai_prediction_cache: crate::ai_tagger::inference::SharedPredictionCache,
     ai_model_downloads: tokio::sync::Mutex<HashMap<String, AiModelDownload>>,
@@ -282,6 +292,7 @@ impl Application {
             store,
             blobs,
             projections,
+            publication: crate::publication::PublicationCoordinator::new(),
             ai_sessions: crate::ai_tagger::inference::new_shared_sessions(),
             ai_prediction_cache: crate::ai_tagger::inference::new_prediction_cache(),
             ai_model_downloads: tokio::sync::Mutex::new(HashMap::new()),
@@ -349,82 +360,117 @@ impl Application {
         }
     }
 
+    #[track_caller]
     pub fn transaction<T, D>(
         &self,
         operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<(T, D)>,
         settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
     ) -> Result<(T, u64), String> {
-        let projections = Arc::clone(&self.projections);
-        self.store
-            .transaction_settled(operation, move |connection, delta| {
-                if settle(&projections, delta).is_err() {
-                    projections.reload(connection)?;
-                }
-                Ok(())
-            })
+        let prepare_projection = Arc::clone(&self.projections);
+        let publish_projection = Arc::clone(&self.projections);
+        self.store.transaction_settled(
+            operation,
+            move |delta| prepare_projection.prepare(|candidate| settle(candidate, delta)),
+            move |prepared| publish_projection.publish_prepared(prepared),
+        )
     }
 
+    #[track_caller]
     pub fn undoable_transaction<T, D>(
         &self,
         descriptor: HistoryDescriptor,
         operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<(T, D)>,
         settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
     ) -> Result<(T, u64, Option<HistoryEntrySummary>), String> {
-        let projections = Arc::clone(&self.projections);
-        self.store
-            .undoable_transaction_settled(descriptor, operation, move |connection, delta| {
-                if settle(&projections, delta).is_err() {
-                    projections.reload(connection)?;
-                }
-                Ok(())
-            })
+        let prepare_projection = Arc::clone(&self.projections);
+        let publish_projection = Arc::clone(&self.projections);
+        self.store.undoable_transaction_settled(
+            descriptor,
+            operation,
+            move |delta| prepare_projection.prepare(|candidate| settle(candidate, delta)),
+            move |prepared| publish_projection.publish_prepared(prepared),
+        )
     }
 
+    #[track_caller]
     pub fn undoable_transaction_if_changed<T, D>(
         &self,
         descriptor: HistoryDescriptor,
         operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
         settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
     ) -> Result<(T, u64, Option<HistoryEntrySummary>, bool), String> {
-        let projections = Arc::clone(&self.projections);
+        let prepare_projection = Arc::clone(&self.projections);
+        let publish_projection = Arc::clone(&self.projections);
         self.store.undoable_transaction_if_changed_settled(
             descriptor,
             operation,
-            move |connection, delta| {
-                if settle(&projections, delta).is_err() {
-                    projections.reload(connection)?;
-                }
-                Ok(())
-            },
+            move |delta| prepare_projection.prepare(|candidate| settle(candidate, delta)),
+            move |prepared| publish_projection.publish_prepared(prepared),
         )
     }
 
-    pub fn undoable_transaction_if_changed_rebuilding<T>(
+    /// Broad operations use compact semantic inverses rather than SQLite
+    /// Session changesets. Their normal forward projection delta is prepared
+    /// by the operation and settled once after commit.
+    #[track_caller]
+    pub fn semantic_undoable_transaction_if_changed<T, D>(
         &self,
         descriptor: HistoryDescriptor,
-        operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<(T, bool)>,
+        operation: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+        ) -> rusqlite::Result<(T, D, Option<SemanticHistoryRecord>, bool)>,
+        settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
     ) -> Result<(T, u64, Option<HistoryEntrySummary>, bool), String> {
-        let projections = Arc::clone(&self.projections);
-        self.store.undoable_transaction_if_changed_settled(
-            descriptor.rebuilding_projections(),
-            |transaction| {
-                let (value, changed) = operation(transaction)?;
-                Ok((value, (), changed))
-            },
-            move |connection, ()| projections.reload(connection),
+        let prepare_projection = Arc::clone(&self.projections);
+        let publish_projection = Arc::clone(&self.projections);
+        self.store.semantic_undoable_transaction_if_changed_settled(
+            descriptor,
+            operation,
+            move |delta| prepare_projection.prepare(|candidate| settle(candidate, delta)),
+            move |prepared| publish_projection.publish_prepared(prepared),
         )
     }
 
-    pub fn undoable_transaction_rebuilding<T>(
+    #[track_caller]
+    pub(crate) fn semantic_undoable_transaction_if_changed_captured<T, D, C>(
         &self,
         descriptor: HistoryDescriptor,
-        operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<T>,
+        capture: impl FnOnce(&ProjectionStore) -> C,
+        operation: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+            C,
+        ) -> rusqlite::Result<(T, D, Option<SemanticHistoryRecord>, bool)>,
+        settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
+    ) -> Result<(T, u64, Option<HistoryEntrySummary>, bool), String> {
+        let capture_projection = Arc::clone(&self.projections);
+        let prepare_projection = Arc::clone(&self.projections);
+        let publish_projection = Arc::clone(&self.projections);
+        self.store
+            .semantic_undoable_transaction_if_changed_settled_captured(
+                descriptor,
+                move || capture(&capture_projection),
+                operation,
+                move |delta| prepare_projection.prepare(|candidate| settle(candidate, delta)),
+                move |prepared| publish_projection.publish_prepared(prepared),
+            )
+    }
+
+    #[track_caller]
+    pub fn semantic_undoable_transaction<T, D>(
+        &self,
+        descriptor: HistoryDescriptor,
+        operation: impl FnOnce(
+            &rusqlite::Transaction<'_>,
+        ) -> rusqlite::Result<(T, D, SemanticHistoryRecord)>,
+        settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
     ) -> Result<(T, u64, Option<HistoryEntrySummary>), String> {
-        let projections = Arc::clone(&self.projections);
-        self.store.undoable_transaction_settled(
-            descriptor.rebuilding_projections(),
-            |transaction| operation(transaction).map(|value| (value, ())),
-            move |connection, ()| projections.reload(connection),
+        let prepare_projection = Arc::clone(&self.projections);
+        let publish_projection = Arc::clone(&self.projections);
+        self.store.semantic_undoable_transaction_settled(
+            descriptor,
+            operation,
+            move |delta| prepare_projection.prepare(|candidate| settle(candidate, delta)),
+            move |prepared| publish_projection.publish_prepared(prepared),
         )
     }
 
@@ -441,16 +487,31 @@ impl Application {
     }
 
     fn apply_history(&self, direction: HistoryDirection) -> Result<HistoryOperationResult, String> {
-        let projections = Arc::clone(&self.projections);
-        let mutation = self
-            .store
-            .apply_history(direction, move |connection, reload| {
-                if reload {
-                    projections.reload(connection)
-                } else {
-                    Ok(())
-                }
-            })?;
+        let history_projection = Arc::clone(&self.projections);
+        let prepare_projection = Arc::clone(&self.projections);
+        let publish_projection = Arc::clone(&self.projections);
+        let mutation = self.store.apply_history_prepared(
+            direction,
+            move |transaction, payload| {
+                let Some((roots, active_after)) = payload.lifecycle_target() else {
+                    return Ok(());
+                };
+                history_projection
+                    .selection_snapshot()
+                    .lifecycle_summary_delta_for_active(&roots, &active_after)?
+                    .stage(transaction)
+                    .map_err(|error| error.to_string())
+            },
+            move |request| {
+                prepare_projection.prepare(|candidate| match request {
+                    HistoryProjectionRequest::Changeset => Ok(()),
+                    HistoryProjectionRequest::Semantic(payload) => {
+                        apply_semantic_projection(candidate, payload)
+                    }
+                })
+            },
+            move |prepared| publish_projection.publish_prepared(prepared),
+        )?;
         Ok(HistoryOperationResult {
             entry: mutation.entry,
             state: mutation.state,
@@ -462,48 +523,148 @@ impl Application {
         })
     }
 
-    pub fn transaction_rebuilding<T>(
-        &self,
-        operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<T>,
-    ) -> Result<(T, u64), String> {
-        let projections = Arc::clone(&self.projections);
-        self.store.transaction_settled(
-            |transaction| operation(transaction).map(|value| (value, ())),
-            move |connection, ()| projections.reload(connection),
-        )
-    }
-
+    #[track_caller]
     pub fn transaction_if_changed<T, D>(
         &self,
         operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
         settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
     ) -> Result<(T, u64, bool), String> {
-        let projections = Arc::clone(&self.projections);
-        self.store
-            .transaction_if_changed_settled(operation, move |connection, delta| {
-                if settle(&projections, delta).is_err() {
-                    projections.reload(connection)?;
-                }
-                Ok(())
-            })
+        let prepare_projection = Arc::clone(&self.projections);
+        let publish_projection = Arc::clone(&self.projections);
+        self.store.transaction_if_changed_settled(
+            operation,
+            move |delta| prepare_projection.prepare(|candidate| settle(candidate, delta)),
+            move |prepared| publish_projection.publish_prepared(prepared),
+        )
     }
 
-    pub fn transaction_if_changed_rebuilding<T>(
+    /// Ingest is user-visible and exact, but direct manipulation must be able
+    /// to overtake a queued ingest publication.
+    #[track_caller]
+    pub(crate) fn transaction_if_changed_maintenance<T, D>(
         &self,
-        operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<(T, bool)>,
+        operation: impl FnOnce(&rusqlite::Transaction<'_>) -> rusqlite::Result<(T, D, bool)>,
+        settle: impl FnOnce(&ProjectionStore, D) -> Result<(), String>,
     ) -> Result<(T, u64, bool), String> {
-        let projections = Arc::clone(&self.projections);
-        self.store.transaction_if_changed_settled(
-            |transaction| {
-                let (value, changed) = operation(transaction)?;
-                Ok((value, (), changed))
-            },
-            move |connection, ()| projections.reload(connection),
+        let prepare_projection = Arc::clone(&self.projections);
+        let publish_projection = Arc::clone(&self.projections);
+        self.store.transaction_if_changed_settled_maintenance(
+            operation,
+            move |delta| prepare_projection.prepare(|candidate| settle(candidate, delta)),
+            move |prepared| publish_projection.publish_prepared(prepared),
         )
     }
 
     pub fn publish(&self, receipt: &MutationReceipt) {
-        crate::events::emit(LIBRARY_CHANGED_EVENT, &LibraryChanged::from(receipt));
+        self.publication.submit(receipt);
+    }
+}
+
+fn apply_semantic_projection(
+    projections: &ProjectionStore,
+    payload: &SemanticHistoryPayload,
+) -> Result<(), String> {
+    match payload {
+        SemanticHistoryPayload::Lifecycle(delta) => {
+            projections.apply_lifecycle_bitmap(&delta.inbox, Lifecycle::Inbox)?;
+            projections.apply_lifecycle_bitmap(&delta.active, Lifecycle::Active)?;
+            projections.apply_lifecycle_bitmap(&delta.trash, Lifecycle::Trash)
+        }
+        SemanticHistoryPayload::Tags(changes) => {
+            for change in changes {
+                projections.apply_root_tag_bitmap(change.relation_id, &change.remove, false)?;
+                projections.apply_root_tag_bitmap(change.relation_id, &change.add, true)?;
+            }
+            Ok(())
+        }
+        SemanticHistoryPayload::Folders(changes) => {
+            for change in changes {
+                projections.apply_folder_bitmap(change.relation_id, &change.remove, false)?;
+                projections.apply_folder_bitmap(change.relation_id, &change.add, true)?;
+            }
+            Ok(())
+        }
+        SemanticHistoryPayload::Ratings(delta) => {
+            projections.apply_rating_bitmap(&delta.unrated, None)?;
+            for (rating, roots) in &delta.rated {
+                let rating = u8::try_from(*rating)
+                    .map_err(|_| format!("rating {rating} is outside the projection range"))?;
+                projections.apply_rating_bitmap(roots, Some(rating))?;
+            }
+            Ok(())
+        }
+        SemanticHistoryPayload::TagGraph(delta) => {
+            projections.apply_tag_graph_delta(TagGraphProjectionDelta {
+                identities: delta
+                    .removed_tag_ids
+                    .iter()
+                    .map(|tag_id| TagIdentityProjectionChange {
+                        source_tag_id: *tag_id,
+                        target_tag_id: None,
+                        remove_tag: true,
+                    })
+                    .collect(),
+            })?;
+            for change in &delta.projection_tags {
+                projections.apply_root_tag_bitmap(change.relation_id, &change.remove, false)?;
+                projections.apply_root_tag_bitmap(change.relation_id, &change.add, true)?;
+            }
+            Ok(())
+        }
+        SemanticHistoryPayload::Group(delta) => {
+            let mut structure = StructureProjectionDelta::default();
+            for item_id in &delta.remove_item_ids {
+                structure.items.push(ItemProjectionChange {
+                    item_id: i64::from(item_id),
+                    kind: ItemKind::Media,
+                    present: false,
+                });
+            }
+            for item_id in &delta.remove_root_ids {
+                structure.roots.push(RootProjectionChange {
+                    item_id: i64::from(item_id),
+                    lifecycle: None,
+                });
+            }
+            for root in &delta.roots {
+                structure.items.push(ItemProjectionChange {
+                    item_id: root.item_id,
+                    kind: root.kind,
+                    present: true,
+                });
+                structure.roots.push(RootProjectionChange {
+                    item_id: root.item_id,
+                    lifecycle: Some(root.lifecycle),
+                });
+            }
+            for member in &delta.members {
+                structure.memberships.push(MembershipProjectionChange {
+                    collection_id: member.collection_id,
+                    media_id: member.media_item_id,
+                    present: member.present,
+                });
+            }
+            projections.apply_structure_delta(structure)?;
+            apply_semantic_projection(
+                projections,
+                &SemanticHistoryPayload::Folders(delta.folder_changes.clone()),
+            )?;
+            apply_semantic_projection(
+                projections,
+                &SemanticHistoryPayload::Tags(delta.tag_changes.clone()),
+            )?;
+            apply_semantic_projection(
+                projections,
+                &SemanticHistoryPayload::Ratings(delta.rating_changes.clone()),
+            )?;
+            Ok(())
+        }
+        SemanticHistoryPayload::Composite(payloads) => {
+            for payload in payloads {
+                apply_semantic_projection(projections, payload)?;
+            }
+            Ok(())
+        }
     }
 }
 
