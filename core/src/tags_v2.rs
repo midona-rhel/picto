@@ -711,24 +711,6 @@ fn normalize_search(value: &str) -> String {
         .replace(' ', "_")
 }
 
-/// Match a visible root against one directly assigned tag.
-pub(crate) fn effective_tag_exists_sql(
-    root_id_expression: &str,
-    namespace_parameter: usize,
-    subtag_parameter: usize,
-) -> String {
-    format!(
-        "EXISTS (
-             SELECT 1
-             FROM root_tag assigned
-             JOIN tag ON tag.tag_id = assigned.tag_id
-             WHERE assigned.root_item_id = {root_id_expression}
-               AND tag.namespace = ?{namespace_parameter}
-               AND tag.subtag = ?{subtag_parameter}
-         )"
-    )
-}
-
 pub(crate) fn effective_query_tag_ids(
     connection: &rusqlite::Connection,
     namespace: &str,

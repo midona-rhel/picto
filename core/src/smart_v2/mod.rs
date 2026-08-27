@@ -52,47 +52,10 @@ pub struct PredicateRule {
     pub values: Option<Vec<String>>,
 }
 
-/// Compile one smart folder to the active root item IDs it currently matches.
-pub fn compile_smart_folder(
-    connection: &Connection,
-    smart_folder_id: i64,
-) -> rusqlite::Result<Vec<i64>> {
-    let (sql, arguments) = compile_smart_folder_sql(connection, smart_folder_id, 0)?;
-    connection
-        .prepare(&sql)?
-        .query_map(rusqlite::params_from_iter(arguments), |row| row.get(0))?
-        .collect()
-}
-
-pub(crate) fn count_smart_folder(
-    connection: &Connection,
-    smart_folder_id: i64,
-) -> rusqlite::Result<i64> {
-    if let Some(count) = connection
-        .query_row(
-            "SELECT member_count
-             FROM smart_folder_generation
-             WHERE smart_folder_id = ?1 AND state = 'active'",
-            [smart_folder_id],
-            |row| row.get(0),
-        )
-        .optional()?
-    {
-        return Ok(count);
-    }
-    let (sql, arguments) = compile_smart_folder_sql(connection, smart_folder_id, 0)?;
-    connection.query_row(
-        &format!("SELECT COUNT(*) FROM ({sql})"),
-        rusqlite::params_from_iter(arguments),
-        |row| row.get(0),
-    )
-}
-
-pub(crate) fn compile_smart_folder_sql(
-    connection: &Connection,
-    smart_folder_id: i64,
-    parameter_offset: usize,
-) -> rusqlite::Result<(String, Vec<Value>)> {
+/// Evaluate one smart folder to the active root item IDs it currently matches.
+/// Materialized folders read their exact active generation; unmaterialized
+/// folders evaluate their effective predicate against canonical bitmap state.
+pub fn evaluate(connection: &Connection, smart_folder_id: i64) -> rusqlite::Result<Vec<i64>> {
     let has_active_generation: bool = connection.query_row(
         "SELECT EXISTS(
              SELECT 1 FROM smart_folder_generation
@@ -102,199 +65,125 @@ pub(crate) fn compile_smart_folder_sql(
         |row| row.get(0),
     )?;
     if has_active_generation {
-        return Ok((
-            format!(
-                "SELECT membership.root_item_id AS root_id
+        return connection
+            .prepare(
+                "SELECT membership.root_item_id
                  FROM smart_folder_generation generation
                  JOIN smart_folder_membership membership
                    ON membership.generation_id = generation.generation_id
-                 WHERE generation.smart_folder_id = ?{}
-                   AND generation.state = 'active'",
-                parameter_offset + 1
-            ),
-            vec![Value::Integer(smart_folder_id)],
-        ));
+                 WHERE generation.smart_folder_id = ?1
+                   AND generation.state = 'active'
+                 ORDER BY membership.root_item_id",
+            )?
+            .query_map([smart_folder_id], |row| row.get(0))?
+            .collect();
     }
-
     let predicate = effective_predicate(connection, smart_folder_id)?;
-    let read_models_available: bool = connection.query_row(
-        "SELECT NOT EXISTS(SELECT 1 FROM library_root)
-             OR EXISTS(SELECT 1 FROM root_summary)",
-        [],
-        |row| row.get(0),
-    )?;
-    predicate_sql(
-        read_models_available.then_some(connection),
-        &predicate,
-        parameter_offset,
-        false,
-    )
+    Ok(evaluate_canonical_predicate(connection, &predicate)?
+        .iter()
+        .map(i64::from)
+        .collect())
 }
 
-/// Evaluate a predicate against the replacement schema and return root IDs.
-pub fn compile_predicate(
+/// Evaluate a predicate against the canonical active set and bitmap state.
+pub(crate) fn evaluate_canonical_predicate(
     connection: &Connection,
     predicate: &SmartFolderPredicate,
-) -> rusqlite::Result<Vec<i64>> {
-    let (sql, arguments) = predicate_sql(None, predicate, 0, false)?;
-    let mut statement = connection.prepare(&sql)?;
-    let roots = statement
-        .query_map(rusqlite::params_from_iter(arguments), |row| row.get(0))?
-        .collect();
-    roots
+) -> rusqlite::Result<RoaringBitmap> {
+    let active = canonical_active_roots(connection)?;
+    evaluate_impacted_with_tag_bitmaps(connection, predicate, &active, |tag_id| {
+        canonical_tag_bitmap(connection, tag_id)
+    })
 }
 
-fn predicate_sql(
-    connection: Option<&Connection>,
-    predicate: &SmartFolderPredicate,
-    parameter_offset: usize,
-    impacted_roots_only: bool,
-) -> rusqlite::Result<(String, Vec<Value>)> {
-    if predicate.groups.is_empty() {
-        return Ok((
-            "SELECT item_id AS root_id FROM library_root WHERE 0".to_string(),
-            Vec::new(),
-        ));
+/// The current active root set. `root_summary` is maintained inside every
+/// write transaction; fall back to `library_root` for databases whose read
+/// models have not been seeded yet.
+fn canonical_active_roots(connection: &Connection) -> rusqlite::Result<RoaringBitmap> {
+    let from_summary = connection
+        .prepare_cached("SELECT root_item_id FROM root_summary WHERE lifecycle = 'active'")?
+        .query_map([], |row| {
+            let root_id: i64 = row.get(0)?;
+            u32::try_from(root_id)
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
+        })?
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
+    if !from_summary.is_empty() {
+        return Ok(from_summary);
     }
+    connection
+        .prepare_cached("SELECT item_id FROM library_root WHERE lifecycle = 'active'")?
+        .query_map([], |row| {
+            let root_id: i64 = row.get(0)?;
+            u32::try_from(root_id)
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
+        })?
+        .collect()
+}
 
-    let needs_root_media = predicate
-        .groups
-        .iter()
-        .flat_map(|group| &group.rules)
-        .any(|rule| !is_root_owned_rule(&rule.field));
-    let mut sql = if connection.is_some() && impacted_roots_only {
-        String::from(
-            "WITH active_roots AS (
-                 SELECT rs.root_item_id AS root_id
-                 FROM picto_smart_impacted_root impacted
-                 JOIN root_summary rs ON rs.root_item_id = impacted.root_item_id
-                 WHERE rs.lifecycle = 'active'
-             )",
-        )
-    } else if connection.is_some() {
-        String::from(
-            "WITH active_roots AS (
-                 SELECT root_item_id AS root_id
-                 FROM root_summary
-                 WHERE lifecycle = 'active'
-             )",
+/// Canonical direct-tag membership as durably persisted in the same database.
+fn canonical_tag_bitmap(connection: &Connection, tag_id: i64) -> RoaringBitmap {
+    crate::canonical_bitmap::load_bitmap(connection, crate::canonical_bitmap::BitmapDomain::Tag, tag_id)
+        .unwrap_or_default()
+}
+
+/// Answer one non-tag rule with SQL over immutable facts, scoped to the
+/// staged active set. Group ownership comes from the canonical group-member
+/// staging table, never from relationship rows.
+fn single_rule_roots(
+    connection: &Connection,
+    rule: &PredicateRule,
+) -> rusqlite::Result<RoaringBitmap> {
+    if rule.field == "tags" {
+        return Err(invalid("tag rules are evaluated from canonical bitmaps"));
+    }
+    let mut arguments = Vec::new();
+    let sql = if is_root_owned_rule(&rule.field) {
+        let condition = root_rule_condition(rule, &mut arguments)?;
+        format!(
+            "WITH active_roots(root_id) AS (
+                 SELECT root_item_id FROM picto_smart_impacted_root
+             )
+             SELECT ar.root_id
+             FROM active_roots ar
+             JOIN library_item li ON li.item_id = ar.root_id
+             LEFT JOIN root_metadata metadata ON metadata.root_item_id = ar.root_id
+             LEFT JOIN media_asset cover_asset
+               ON cover_asset.item_id = COALESCE(
+                    li.cover_media_item_id,
+                    CASE WHEN li.kind = 'media' THEN ar.root_id END
+                  )
+             WHERE {condition}"
         )
     } else {
-        String::from(
-            "WITH active_roots AS (
-                 SELECT item_id AS root_id
-                 FROM library_root
-                 WHERE lifecycle = 'active'
-             )",
+        let condition = rule_condition(rule, &mut arguments)?;
+        format!(
+            "WITH active_roots(root_id) AS (
+                 SELECT root_item_id FROM picto_smart_impacted_root
+             ),
+             root_media(root_id, media_id) AS (
+                 SELECT ar.root_id, ar.root_id
+                 FROM active_roots ar
+                 JOIN library_item li ON li.item_id = ar.root_id AND li.kind = 'media'
+                 JOIN media_asset own ON own.item_id = ar.root_id
+                 UNION ALL
+                 SELECT gm.root_id, gm.media_id FROM picto_smart_group_member gm
+             )
+             SELECT DISTINCT rm.root_id
+             FROM root_media rm
+             JOIN media_asset ma ON ma.item_id = rm.media_id
+             JOIN media_file mf ON mf.file_id = ma.file_id
+             WHERE {condition}"
         )
     };
-    if needs_root_media {
-        sql.push_str(
-            ", root_media AS (
-                 SELECT ar.root_id, ar.root_id AS media_id
-                 FROM active_roots ar
-                 JOIN library_item li ON li.item_id = ar.root_id
-                 JOIN media_asset ma ON ma.item_id = ar.root_id
-                 WHERE li.kind = 'media'
-                   AND NOT EXISTS (
-                       SELECT 1 FROM collection_member cm
-                       WHERE cm.media_item_id = ar.root_id
-                   )
-                 UNION
-                 SELECT ar.root_id, cm.media_item_id AS media_id
-                 FROM active_roots ar
-                 JOIN library_item li ON li.item_id = ar.root_id
-                 JOIN collection_member cm ON cm.collection_id = ar.root_id
-                 WHERE li.kind = 'collection'
-             )",
-        );
-    }
-    let mut arguments = vec![Value::Null; parameter_offset];
-    let mut group_names = Vec::with_capacity(predicate.groups.len());
-    let mut rule_index = 0;
-
-    for (group_index, group) in predicate.groups.iter().enumerate() {
-        let mut rule_names = Vec::with_capacity(group.rules.len());
-        for rule in &group.rules {
-            let name = format!("r{rule_index}");
-            rule_index += 1;
-            if rule.field == "tags" && connection.is_some() {
-                let set_sql = root_tag_set_sql(
-                    connection.expect("tag rule requires a connection"),
-                    rule,
-                    &mut arguments,
-                )?;
-                sql.push_str(&format!(", {name} AS ({set_sql})"));
-            } else if is_root_owned_rule(&rule.field) {
-                let condition = root_rule_condition(rule, &mut arguments)?;
-                sql.push_str(&format!(
-                    ", {name} AS ( SELECT ar.root_id
-                     FROM active_roots ar
-                     JOIN library_item li ON li.item_id = ar.root_id
-                     LEFT JOIN root_metadata metadata ON metadata.root_item_id = ar.root_id
-                     LEFT JOIN media_asset cover_asset
-                       ON cover_asset.item_id = COALESCE(
-                            li.cover_media_item_id,
-                            CASE WHEN li.kind = 'media' THEN ar.root_id END
-                          )
-                     WHERE {condition} )"
-                ));
-            } else {
-                let condition = rule_condition(rule, &mut arguments)?;
-                sql.push_str(&format!(
-                    ", {name} AS ( SELECT DISTINCT rm.root_id
-                     FROM root_media rm
-                     JOIN media_asset ma ON ma.item_id = rm.media_id
-                     JOIN media_file mf ON mf.file_id = ma.file_id
-                     WHERE {condition} )"
-                ));
-            }
-            rule_names.push(name);
-        }
-
-        let raw_name = format!("g{group_index}_raw");
-        let group_name = format!("g{group_index}");
-        if rule_names.is_empty() {
-            sql.push_str(&format!(
-                ", {raw_name} AS (SELECT root_id FROM active_roots)"
-            ));
-        } else {
-            let joiner = match group.match_mode {
-                MatchMode::All => " INTERSECT ",
-                MatchMode::Any => " UNION ",
-            };
-            let set_expression = rule_names
-                .iter()
-                .map(|name| format!("SELECT root_id FROM {name}"))
-                .collect::<Vec<_>>()
-                .join(joiner);
-            sql.push_str(&format!(", {raw_name} AS ({set_expression})"));
-        }
-        if group.negate {
-            sql.push_str(&format!(
-                ", {group_name} AS (
-                    SELECT root_id FROM active_roots
-                    EXCEPT
-                    SELECT root_id FROM {raw_name}
-                )"
-            ));
-        } else {
-            sql.push_str(&format!(
-                ", {group_name} AS (SELECT root_id FROM {raw_name})"
-            ));
-        }
-        group_names.push(group_name);
-    }
-
-    let groups = group_names
-        .iter()
-        .map(|name| format!("SELECT root_id FROM {name}"))
-        .collect::<Vec<_>>()
-        .join(" INTERSECT ");
-    sql.push_str(" SELECT root_id FROM ");
-    sql.push_str(&format!("({groups}) ORDER BY root_id"));
-
-    Ok((sql, arguments.split_off(parameter_offset)))
+    connection
+        .prepare(&sql)?
+        .query_map(rusqlite::params_from_iter(arguments), |row| {
+            let root_id: i64 = row.get(0)?;
+            u32::try_from(root_id)
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
+        })?
+        .collect()
 }
 
 /// Complete pending definition or tag-graph rebuilds inside the canonical
@@ -388,11 +277,6 @@ pub(crate) fn refresh_impacted_roots(
          DELETE FROM picto_smart_changed_tag;",
     )?;
     let encoded_roots = bitmap_json(roots);
-    transaction.execute(
-        "INSERT INTO picto_smart_impacted_root(root_item_id)
-         SELECT CAST(value AS INTEGER) FROM json_each(?1)",
-        [encoded_roots],
-    )?;
     trace_smart_stage("stage_roots", stage_started);
     stage_started = std::time::Instant::now();
 
@@ -479,16 +363,20 @@ pub(crate) fn refresh_impacted_roots(
         )?;
         return Ok(());
     }
-    let has_active_roots: bool = transaction.query_row(
-        "SELECT EXISTS(
-             SELECT 1
-             FROM picto_smart_impacted_root impacted
-             JOIN root_summary summary ON summary.root_item_id = impacted.root_item_id
-             WHERE summary.lifecycle = 'active'
-         )",
-        [],
-        |row| row.get(0),
-    )?;
+    let impacted_active = transaction
+        .prepare(
+            "SELECT summary.root_item_id
+             FROM json_each(?1) impacted
+             JOIN root_summary summary
+               ON summary.root_item_id = CAST(impacted.value AS INTEGER)
+             WHERE summary.lifecycle = 'active'",
+        )?
+        .query_map([&encoded_roots], |row| {
+            let root_id: i64 = row.get(0)?;
+            u32::try_from(root_id)
+                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
+        })?
+        .collect::<rusqlite::Result<RoaringBitmap>>()?;
     let next_revision: i64 = transaction.query_row(
         "SELECT revision + 1 FROM library_meta WHERE singleton = 1",
         [],
@@ -500,20 +388,42 @@ pub(crate) fn refresh_impacted_roots(
          WHERE singleton = 1",
         [],
     )?;
-    for (smart_folder_id, generation_id) in targets {
+    let targets = targets
+        .into_iter()
+        .map(|(smart_folder_id, generation_id)| {
+            effective_predicate(transaction, smart_folder_id)
+                .map(|predicate| (smart_folder_id, generation_id, predicate))
+        })
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !impacted_active.is_empty() {
+        let needs_media = targets
+            .iter()
+            .any(|(_, _, predicate)| predicate_needs_media(predicate));
+        stage_active_context(transaction, &impacted_active, needs_media)?;
+    }
+    for (_smart_folder_id, generation_id, predicate) in targets {
         stage_started = std::time::Instant::now();
         transaction.execute(
             "DELETE FROM smart_folder_membership
              WHERE generation_id = ?1
                AND root_item_id IN (
-                   SELECT root_item_id FROM picto_smart_impacted_root
+                   SELECT CAST(value AS INTEGER) FROM json_each(?2)
                )",
-            [generation_id],
+            rusqlite::params![generation_id, &encoded_roots],
         )?;
         trace_smart_stage("delete_membership", stage_started);
-        if has_active_roots {
+        if !impacted_active.is_empty() {
             stage_started = std::time::Instant::now();
-            insert_generation_matches(transaction, generation_id, smart_folder_id, true)?;
+            let matches = evaluate_staged(transaction, &predicate, &impacted_active, |tag_id| {
+                canonical_tag_bitmap(transaction, tag_id)
+            })?;
+            let mut insert = transaction.prepare_cached(
+                "INSERT INTO smart_folder_membership (generation_id, root_item_id)
+                 VALUES (?1, ?2)",
+            )?;
+            for root_id in matches {
+                insert.execute(rusqlite::params![generation_id, root_id])?;
+            }
             trace_smart_stage("insert_matches", stage_started);
         }
         stage_started = std::time::Instant::now();
@@ -594,7 +504,7 @@ fn refresh_canonical_materialized(transaction: &Transaction<'_>) -> rusqlite::Re
 fn settle_building_generations(
     transaction: &Transaction<'_>,
     targeted: bool,
-    mut bitmap_context: Option<(&RoaringBitmap, &mut dyn FnMut(i64) -> RoaringBitmap)>,
+    bitmap_context: Option<(&RoaringBitmap, &mut dyn FnMut(i64) -> RoaringBitmap)>,
 ) -> rusqlite::Result<()> {
     let target_filter = if targeted {
         "AND smart_folder_id IN (
@@ -630,28 +540,49 @@ fn settle_building_generations(
          WHERE singleton = 1",
         [],
     )?;
-    for (smart_folder_id, generation_id) in builds {
+    let builds = builds
+        .into_iter()
+        .map(|(smart_folder_id, generation_id)| {
+            effective_predicate(transaction, smart_folder_id)
+                .map(|predicate| (smart_folder_id, generation_id, predicate))
+        })
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let (context_active, mut context_tags) = match bitmap_context {
+        Some((active_roots, tag_bitmap)) => (Some(active_roots), Some(tag_bitmap)),
+        None => (None, None),
+    };
+    let canonical_active = match context_active {
+        Some(_) => None,
+        None => Some(canonical_active_roots(transaction)?),
+    };
+    let active_roots = context_active.unwrap_or_else(|| {
+        canonical_active
+            .as_ref()
+            .expect("canonical active set built when no context is supplied")
+    });
+    let needs_media = builds
+        .iter()
+        .any(|(_, _, predicate)| predicate_needs_media(predicate));
+    stage_active_context(transaction, active_roots, needs_media)?;
+    for (smart_folder_id, generation_id, predicate) in builds {
         transaction.execute(
             "DELETE FROM smart_folder_membership WHERE generation_id = ?1",
             [generation_id],
         )?;
-        if let Some((active_roots, tag_bitmap)) = bitmap_context.as_mut() {
-            let predicate = effective_predicate(transaction, smart_folder_id)?;
-            let matches = evaluate_impacted_with_tag_bitmaps(
-                transaction,
-                &predicate,
-                active_roots,
-                |tag_id| (*tag_bitmap)(tag_id),
-            )?;
-            let mut insert = transaction.prepare_cached(
-                "INSERT INTO smart_folder_membership (generation_id, root_item_id)
-                 VALUES (?1, ?2)",
-            )?;
-            for root_id in matches {
-                insert.execute(rusqlite::params![generation_id, root_id])?;
-            }
-        } else {
-            insert_generation_matches(transaction, generation_id, smart_folder_id, false)?;
+        let matches = match context_tags.as_mut() {
+            Some(tag_bitmap) => evaluate_staged(transaction, &predicate, active_roots, |tag_id| {
+                (*tag_bitmap)(tag_id)
+            })?,
+            None => evaluate_staged(transaction, &predicate, active_roots, |tag_id| {
+                canonical_tag_bitmap(transaction, tag_id)
+            })?,
+        };
+        let mut insert = transaction.prepare_cached(
+            "INSERT INTO smart_folder_membership (generation_id, root_item_id)
+             VALUES (?1, ?2)",
+        )?;
+        for root_id in matches {
+            insert.execute(rusqlite::params![generation_id, root_id])?;
         }
         let member_count: i64 = transaction.query_row(
             "SELECT COUNT(*) FROM smart_folder_membership WHERE generation_id = ?1",
@@ -732,46 +663,6 @@ pub(crate) fn tag_affects_any_smart_folder(
     )
 }
 
-fn insert_materialized_matches_into(
-    transaction: &Transaction<'_>,
-    target_table: &str,
-    smart_folder_id: i64,
-    dirty_roots_only: bool,
-) -> rusqlite::Result<()> {
-    let predicate = effective_predicate(transaction, smart_folder_id)?;
-    let (sql, arguments) = predicate_sql(Some(transaction), &predicate, 1, dirty_roots_only)?;
-    let mut parameters = vec![Value::Integer(smart_folder_id)];
-    parameters.extend(arguments);
-    transaction.execute(
-        &format!(
-            "INSERT INTO {target_table} (smart_folder_id, root_item_id)
-             SELECT ?1, root_id FROM ({sql}) GROUP BY root_id"
-        ),
-        rusqlite::params_from_iter(parameters),
-    )?;
-    Ok(())
-}
-
-fn insert_generation_matches(
-    transaction: &Transaction<'_>,
-    generation_id: i64,
-    smart_folder_id: i64,
-    impacted_roots_only: bool,
-) -> rusqlite::Result<()> {
-    let predicate = effective_predicate(transaction, smart_folder_id)?;
-    let (sql, arguments) = predicate_sql(Some(transaction), &predicate, 1, impacted_roots_only)?;
-    let mut parameters = vec![Value::Integer(generation_id)];
-    parameters.extend(arguments);
-    transaction.execute(
-        &format!(
-            "INSERT INTO smart_folder_membership (generation_id, root_item_id)
-             SELECT ?1, root_id FROM ({sql}) GROUP BY root_id"
-        ),
-        rusqlite::params_from_iter(parameters),
-    )?;
-    Ok(())
-}
-
 fn rebuild_dependencies(
     transaction: &Transaction<'_>,
     smart_folder_ids: &[i64],
@@ -825,60 +716,6 @@ fn canonical_dependency_field(field: &str) -> &str {
     }
 }
 
-fn root_tag_set_sql(
-    connection: &Connection,
-    rule: &PredicateRule,
-    arguments: &mut Vec<Value>,
-) -> rusqlite::Result<String> {
-    let values = rule.values.as_deref().unwrap_or_default();
-    if values.is_empty() {
-        return Ok(if rule.op == "do_not_include" || rule.op == "exclude" {
-            "SELECT root_id FROM active_roots".to_string()
-        } else {
-            "SELECT root_id FROM active_roots WHERE 0".to_string()
-        });
-    }
-
-    let mut sets = Vec::with_capacity(values.len());
-    for tag in values {
-        let (namespace, subtag) = split_tag(tag);
-        let tag_ids = crate::tags_v2::effective_query_tag_ids(connection, &namespace, &subtag)?;
-        if tag_ids.is_empty() {
-            sets.push("SELECT root_id FROM active_roots WHERE 0".to_string());
-            continue;
-        }
-        let placeholders = tag_ids
-            .into_iter()
-            .map(|tag_id| {
-                arguments.push(Value::Integer(tag_id));
-                format!("?{}", arguments.len())
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        sets.push(format!(
-            "SELECT relation.root_item_id AS root_id
-             FROM root_tag relation
-             JOIN active_roots ar ON ar.root_id = relation.root_item_id
-             WHERE relation.tag_id IN ({placeholders})"
-        ));
-    }
-
-    match rule.op.as_str() {
-        "include" | "include_all" => Ok(sets.join(" INTERSECT ")),
-        "include_any" => Ok(sets.join(" UNION ")),
-        "do_not_include" | "exclude" => Ok(format!(
-            "SELECT root_id FROM active_roots EXCEPT {}",
-            sets.join(" UNION ")
-        )),
-        op => Err(invalid(format!("Unknown tag operator: {op}"))),
-    }
-}
-
-/// Alias named for callers that treat compilation as evaluation.
-pub fn evaluate(connection: &Connection, smart_folder_id: i64) -> rusqlite::Result<Vec<i64>> {
-    compile_smart_folder(connection, smart_folder_id)
-}
-
 pub(crate) fn effective_predicate(
     connection: &Connection,
     smart_folder_id: i64,
@@ -915,7 +752,77 @@ pub(crate) fn effective_predicate(
 /// indexed SQL predicates; tag ownership is never expanded into persistent
 /// relationship rows.
 pub(crate) fn evaluate_impacted_with_tag_bitmaps(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
+    predicate: &SmartFolderPredicate,
+    active_roots: &RoaringBitmap,
+    tag_bitmap: impl FnMut(i64) -> RoaringBitmap,
+) -> rusqlite::Result<RoaringBitmap> {
+    if predicate.groups.is_empty() || active_roots.is_empty() {
+        return Ok(RoaringBitmap::new());
+    }
+    stage_active_context(connection, active_roots, predicate_needs_media(predicate))?;
+    evaluate_staged(connection, predicate, active_roots, tag_bitmap)
+}
+
+fn predicate_needs_media(predicate: &SmartFolderPredicate) -> bool {
+    predicate
+        .groups
+        .iter()
+        .flat_map(|group| &group.rules)
+        .any(|rule| rule.field != "tags" && !is_root_owned_rule(&rule.field))
+}
+
+/// Stage the active root set — and, when media rules will run, the canonical
+/// group members owned by those roots — into connection-local temp tables.
+fn stage_active_context(
+    connection: &Connection,
+    active_roots: &RoaringBitmap,
+    include_group_members: bool,
+) -> rusqlite::Result<()> {
+    connection.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_smart_impacted_root (
+             root_item_id INTEGER PRIMARY KEY
+         ) WITHOUT ROWID;
+         CREATE TEMP TABLE IF NOT EXISTS picto_smart_group_member (
+             root_id INTEGER NOT NULL,
+             media_id INTEGER NOT NULL,
+             PRIMARY KEY (root_id, media_id)
+         ) WITHOUT ROWID;
+         DELETE FROM picto_smart_impacted_root;
+         DELETE FROM picto_smart_group_member;",
+    )?;
+    {
+        let mut insert = connection
+            .prepare_cached("INSERT INTO picto_smart_impacted_root(root_item_id) VALUES (?1)")?;
+        for root_id in active_roots {
+            insert.execute([root_id])?;
+        }
+    }
+    if include_group_members {
+        let mut insert = connection.prepare_cached(
+            "INSERT INTO picto_smart_group_member(root_id, media_id) VALUES (?1, ?2)",
+        )?;
+        for (group_id, members) in crate::canonical_bitmap::load_domain(
+            connection,
+            crate::canonical_bitmap::BitmapDomain::GroupMember,
+        )? {
+            let Ok(group_root) = u32::try_from(group_id) else {
+                continue;
+            };
+            if !active_roots.contains(group_root) {
+                continue;
+            }
+            for media_id in members.iter().map(i64::from) {
+                insert.execute(rusqlite::params![group_id, media_id])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Evaluate against an already-staged active context.
+fn evaluate_staged(
+    connection: &Connection,
     predicate: &SmartFolderPredicate,
     active_roots: &RoaringBitmap,
     mut tag_bitmap: impl FnMut(i64) -> RoaringBitmap,
@@ -923,20 +830,6 @@ pub(crate) fn evaluate_impacted_with_tag_bitmaps(
     if predicate.groups.is_empty() || active_roots.is_empty() {
         return Ok(RoaringBitmap::new());
     }
-    transaction.execute_batch(
-        "CREATE TEMP TABLE IF NOT EXISTS picto_smart_impacted_root (
-             root_item_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;
-         DELETE FROM picto_smart_impacted_root;",
-    )?;
-    {
-        let mut insert = transaction
-            .prepare_cached("INSERT INTO picto_smart_impacted_root(root_item_id) VALUES (?1)")?;
-        for root_id in active_roots {
-            insert.execute([root_id])?;
-        }
-    }
-
     let mut result = active_roots.clone();
     for group in &predicate.groups {
         let mut group_result = match group.match_mode {
@@ -945,24 +838,9 @@ pub(crate) fn evaluate_impacted_with_tag_bitmaps(
         };
         for rule in &group.rules {
             let matches = if rule.field == "tags" {
-                tag_rule_bitmap(transaction, rule, active_roots, &mut tag_bitmap)?
+                tag_rule_bitmap(connection, rule, active_roots, &mut tag_bitmap)?
             } else {
-                let single = SmartFolderPredicate {
-                    groups: vec![SmartRuleGroup {
-                        match_mode: MatchMode::All,
-                        negate: false,
-                        rules: vec![rule.clone()],
-                    }],
-                };
-                let (sql, arguments) = predicate_sql(Some(transaction), &single, 0, true)?;
-                transaction
-                    .prepare(&sql)?
-                    .query_map(rusqlite::params_from_iter(arguments), |row| {
-                        let root_id = row.get::<_, i64>(0)?;
-                        u32::try_from(root_id)
-                            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
-                    })?
-                    .collect::<rusqlite::Result<RoaringBitmap>>()?
+                single_rule_roots(connection, rule)?
             };
             match group.match_mode {
                 MatchMode::All => group_result &= matches,
@@ -974,12 +852,11 @@ pub(crate) fn evaluate_impacted_with_tag_bitmaps(
         }
         result &= group_result;
     }
-    transaction.execute("DELETE FROM picto_smart_impacted_root", [])?;
     Ok(result)
 }
 
 fn tag_rule_bitmap(
-    transaction: &Transaction<'_>,
+    connection: &Connection,
     rule: &PredicateRule,
     active_roots: &RoaringBitmap,
     tag_bitmap: &mut impl FnMut(i64) -> RoaringBitmap,
@@ -997,7 +874,7 @@ fn tag_rule_bitmap(
     let mut sets = Vec::with_capacity(values.len());
     for value in values {
         let (namespace, subtag) = split_tag(value);
-        let tag_id = transaction
+        let tag_id = connection
             .query_row(
                 "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
                 rusqlite::params![namespace, subtag],
@@ -1063,7 +940,6 @@ fn root_rule_condition(
     arguments: &mut Vec<Value>,
 ) -> rusqlite::Result<String> {
     match rule.field.as_str() {
-        "tags" => tag_condition(rule, arguments),
         "rating" => numeric_condition("metadata.rating", rule, arguments),
         "notes" => text_condition("metadata.notes", rule, arguments),
         "name" => text_condition("COALESCE(metadata.name, cover_asset.name)", rule, arguments),
@@ -1143,36 +1019,6 @@ fn text_condition(
         "is_empty" => Ok(format!("{column} IS NULL OR {column} = ''")),
         "is_not_empty" => Ok(format!("{column} IS NOT NULL AND {column} != ''")),
         op => Err(invalid(format!("Unknown text operator: {op}"))),
-    }
-}
-
-fn tag_condition(rule: &PredicateRule, arguments: &mut Vec<Value>) -> rusqlite::Result<String> {
-    let values = rule.values.as_deref().unwrap_or_default();
-    if values.is_empty() {
-        return Ok(if rule.op == "do_not_include" || rule.op == "exclude" {
-            "1".to_string()
-        } else {
-            "0".to_string()
-        });
-    }
-
-    let exists = values
-        .iter()
-        .map(|tag| {
-            let (namespace, subtag) = split_tag(tag);
-            arguments.push(Value::Text(namespace));
-            let namespace_index = arguments.len();
-            arguments.push(Value::Text(subtag));
-            let subtag_index = arguments.len();
-            crate::tags_v2::effective_tag_exists_sql("ar.root_id", namespace_index, subtag_index)
-        })
-        .collect::<Vec<_>>();
-
-    match rule.op.as_str() {
-        "include" | "include_all" => Ok(exists.join(" AND ")),
-        "include_any" => Ok(format!("({})", exists.join(" OR "))),
-        "do_not_include" | "exclude" => Ok(format!("NOT ({})", exists.join(" OR "))),
-        op => Err(invalid(format!("Unknown tag operator: {op}"))),
     }
 }
 
@@ -1427,6 +1273,17 @@ mod tests {
         }
     }
 
+    fn evaluate_predicate(
+        connection: &Connection,
+        predicate: &SmartFolderPredicate,
+    ) -> Vec<i64> {
+        evaluate_canonical_predicate(connection, predicate)
+            .unwrap()
+            .iter()
+            .map(i64::from)
+            .collect()
+    }
+
     fn tag_rule(op: &str, values: &[&str]) -> PredicateRule {
         PredicateRule {
             field: "tags".to_string(),
@@ -1455,13 +1312,13 @@ mod tests {
             &predicate(vec![rule("name", "is", serde_json::json!("one"))]),
         );
 
-        assert_eq!(compile_smart_folder(&connection, 11).unwrap(), vec![1]);
-        assert_eq!(count_smart_folder(&connection, 11).unwrap(), 1);
+        assert_eq!(evaluate(&connection, 11).unwrap(), vec![1]);
+        assert_eq!(evaluate(&connection, 11).unwrap().len() as i64, 1);
     }
 
     #[test]
     fn collection_members_can_satisfy_distinct_and_rules() {
-        let connection = connection();
+        let mut connection = connection();
         media(&connection, 1, "one", "active", "one", 5, 10);
         media(&connection, 2, "two", "active", "two", 2, 200);
         connection
@@ -1491,13 +1348,18 @@ mod tests {
                 [],
             )
             .unwrap();
-        connection
-            .execute(
-                "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                 VALUES (10, 1, 0), (10, 2, 1)",
-                [],
+        {
+            let transaction = connection.transaction().unwrap();
+            crate::canonical_bitmap::replace_bitmap(
+                &transaction,
+                crate::canonical_bitmap::BitmapDomain::GroupMember,
+                10,
+                1,
+                &RoaringBitmap::from_iter([1_u32, 2]),
             )
             .unwrap();
+            transaction.commit().unwrap();
+        }
 
         let predicate = SmartFolderPredicate {
             groups: vec![SmartRuleGroup {
@@ -1511,7 +1373,7 @@ mod tests {
         };
 
         assert_eq!(
-            compile_predicate(&connection, &predicate).unwrap(),
+            evaluate_predicate(&connection, &predicate),
             vec![10]
         );
     }
@@ -1530,7 +1392,7 @@ mod tests {
             }],
         };
 
-        assert_eq!(compile_predicate(&connection, &predicate).unwrap(), vec![1]);
+        assert_eq!(evaluate_predicate(&connection, &predicate), vec![1]);
     }
 
     #[test]
@@ -1556,7 +1418,64 @@ mod tests {
             }],
         };
 
-        assert_eq!(compile_predicate(&connection, &predicate).unwrap(), vec![1]);
+        assert_eq!(evaluate_predicate(&connection, &predicate), vec![1]);
+    }
+
+    #[test]
+    fn field_refresh_keeps_tag_rules_exact_for_mixed_predicates() {
+        let mut connection = canonical_connection();
+        canonical_media(&connection, 1, "one", 5);
+        canonical_media(&connection, 2, "two", 2);
+        connection
+            .execute(
+                "INSERT INTO tag(tag_id, namespace, subtag) VALUES (10, 'general', 'blue')",
+                [],
+            )
+            .unwrap();
+        {
+            let transaction = connection.transaction().unwrap();
+            crate::canonical_bitmap::replace_bitmap(
+                &transaction,
+                crate::canonical_bitmap::BitmapDomain::Tag,
+                10,
+                1,
+                &RoaringBitmap::from_iter([1_u32, 2]),
+            )
+            .unwrap();
+            transaction.commit().unwrap();
+        }
+        folder(
+            &connection,
+            10,
+            None,
+            &predicate(vec![
+                tag_rule("include", &["blue"]),
+                rule("rating", "gte", serde_json::json!(4)),
+            ]),
+        );
+        {
+            let transaction = connection.transaction().unwrap();
+            refresh_materialized(&transaction).unwrap();
+            transaction.commit().unwrap();
+        }
+        assert_eq!(evaluate(&connection, 10).unwrap(), vec![1]);
+
+        let transaction = connection.transaction().unwrap();
+        transaction
+            .execute(
+                "UPDATE root_metadata SET rating = 5 WHERE root_item_id = 2",
+                [],
+            )
+            .unwrap();
+        refresh_impacted_roots(
+            &transaction,
+            &RoaringBitmap::from_iter([2]),
+            &["rating"],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(evaluate(&transaction, 10).unwrap(), vec![1, 2]);
+        transaction.commit().unwrap();
     }
 
     #[test]
@@ -1630,7 +1549,7 @@ mod tests {
             }],
         };
 
-        assert_eq!(compile_predicate(&connection, &predicate).unwrap(), vec![1]);
+        assert_eq!(evaluate_predicate(&connection, &predicate), vec![1]);
     }
 
     #[test]
@@ -1652,7 +1571,7 @@ mod tests {
             )
             .unwrap();
 
-        assert!(compile_smart_folder(&connection, 10).is_err());
+        assert!(evaluate(&connection, 10).is_err());
     }
 
     #[test]
@@ -1679,8 +1598,8 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(compile_smart_folder(&connection, 10).unwrap(), vec![1]);
-        assert_eq!(count_smart_folder(&connection, 10).unwrap(), 1);
+        assert_eq!(evaluate(&connection, 10).unwrap(), vec![1]);
+        assert_eq!(evaluate(&connection, 10).unwrap().len() as i64, 1);
 
         {
             let transaction = connection.transaction().unwrap();
@@ -1692,7 +1611,7 @@ mod tests {
                 .unwrap();
             let roots = RoaringBitmap::from_iter([2]);
             refresh_impacted_roots(&transaction, &roots, &["rating"], &[]).unwrap();
-            assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 2);
+            assert_eq!(evaluate(&transaction, 10).unwrap().len() as i64, 2);
             assert_eq!(
                 transaction
                     .query_row(
@@ -1707,8 +1626,8 @@ mod tests {
             transaction.commit().unwrap();
         }
 
-        assert_eq!(compile_smart_folder(&connection, 10).unwrap(), vec![1, 2]);
-        assert_eq!(count_smart_folder(&connection, 10).unwrap(), 2);
+        assert_eq!(evaluate(&connection, 10).unwrap(), vec![1, 2]);
+        assert_eq!(evaluate(&connection, 10).unwrap().len() as i64, 2);
         assert_eq!(
             connection
                 .query_row(
@@ -1728,11 +1647,11 @@ mod tests {
                 .unwrap();
             let roots = RoaringBitmap::from_iter([2]);
             refresh_impacted_roots(&transaction, &roots, &["lifecycle"], &[]).unwrap();
-            assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 1);
+            assert_eq!(evaluate(&transaction, 10).unwrap().len() as i64, 1);
             transaction.commit().unwrap();
         }
-        assert_eq!(compile_smart_folder(&connection, 10).unwrap(), vec![1]);
-        assert_eq!(count_smart_folder(&connection, 10).unwrap(), 1);
+        assert_eq!(evaluate(&connection, 10).unwrap(), vec![1]);
+        assert_eq!(evaluate(&connection, 10).unwrap().len() as i64, 1);
     }
 
     #[test]
@@ -1758,8 +1677,8 @@ mod tests {
 
         let transaction = connection.transaction().unwrap();
         refresh_materialized(&transaction).unwrap();
-        assert_eq!(compile_smart_folder(&transaction, 10).unwrap(), vec![1]);
-        assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 1);
+        assert_eq!(evaluate(&transaction, 10).unwrap(), vec![1]);
+        assert_eq!(evaluate(&transaction, 10).unwrap().len() as i64, 1);
         transaction.commit().unwrap();
     }
 
@@ -1797,7 +1716,7 @@ mod tests {
                     [predicate(vec![rule("rating", "gte", serde_json::json!(2))])],
                 )
                 .unwrap();
-            assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 1);
+            assert_eq!(evaluate(&transaction, 10).unwrap().len() as i64, 1);
             assert_eq!(
                 transaction
                     .query_row(
@@ -1810,7 +1729,7 @@ mod tests {
                 1
             );
             refresh_materialized(&transaction).unwrap();
-            assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 2);
+            assert_eq!(evaluate(&transaction, 10).unwrap().len() as i64, 2);
             transaction.commit().unwrap();
         }
 
@@ -1897,9 +1816,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(compile_smart_folder(&transaction, 10).unwrap(), vec![1, 2]);
-        assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 2);
-        assert_eq!(compile_smart_folder(&transaction, 11).unwrap(), vec![2]);
+        assert_eq!(evaluate(&transaction, 10).unwrap(), vec![1, 2]);
+        assert_eq!(evaluate(&transaction, 10).unwrap().len() as i64, 2);
+        assert_eq!(evaluate(&transaction, 11).unwrap(), vec![2]);
         assert_eq!(
             transaction
                 .query_row(
@@ -1997,7 +1916,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 2);
+        assert_eq!(evaluate(&transaction, 10).unwrap().len() as i64, 2);
         assert_eq!(
             transaction
                 .query_row(
@@ -2019,7 +1938,7 @@ mod tests {
                 .unwrap(),
             UNRELATED_FOLDERS
         );
-        assert_eq!(compile_smart_folder(&transaction, 100).unwrap(), vec![2]);
+        assert_eq!(evaluate(&transaction, 100).unwrap(), vec![2]);
         transaction.commit().unwrap();
     }
 }
