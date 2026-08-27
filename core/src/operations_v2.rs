@@ -264,24 +264,24 @@ impl Application {
             |transaction, projection| {
                 let operation_started = Instant::now();
                 let mut stage_started = operation_started;
-                stage_root_selection(transaction, target)?;
+                stage_root_selection_projected(transaction, target, &projection)?;
                 transaction.execute_batch(
                     "CREATE TEMP TABLE IF NOT EXISTS picto_changed_root (
                          item_id INTEGER PRIMARY KEY
                      ) WITHOUT ROWID;
                      DELETE FROM picto_changed_root;",
                 )?;
+                let selected =
+                    selected_id_bitmap(transaction, "SELECT item_id FROM picto_selected_root")?;
+                let changed_ids = &selected - &projection.lifecycle_bitmap(lifecycle);
+                let encoded = serde_json::to_string(&changed_ids.iter().collect::<Vec<_>>())
+                    .map_err(|error| invalid(format!("Could not encode changed roots: {error}")))?;
                 transaction.execute(
                     "INSERT INTO picto_changed_root(item_id)
-                     SELECT selected.item_id
-                     FROM picto_selected_root selected
-                     JOIN library_root root ON root.item_id = selected.item_id
-                     WHERE root.lifecycle <> ?1",
-                    [lifecycle.as_str()],
+                     SELECT CAST(value AS INTEGER) FROM json_each(?1)",
+                    [encoded],
                 )?;
-                let changed_ids =
-                    selected_id_bitmap(transaction, "SELECT item_id FROM picto_changed_root")?;
-                let undo = lifecycle_delta_for_table(transaction, "picto_changed_root", "item_id")?;
+                let undo = lifecycle_delta_for_projection(&projection, &changed_ids);
                 trace_bulk_stage("items.lifecycle", "stage_selection", stage_started);
                 stage_started = Instant::now();
                 if !changed_ids.is_empty() {
@@ -1272,7 +1272,7 @@ impl Application {
             return Err("No valid tags were provided".to_string());
         }
         let item_ids = mutation_item_hints(target);
-        let (_, revision, _, _) = self.semantic_undoable_transaction_if_changed(
+        let (_, revision, _, _) = self.semantic_undoable_transaction_if_changed_captured(
             HistoryDescriptor::new(
                 "items.apply_tags",
                 if add { "Add tags" } else { "Remove tags" },
@@ -1284,8 +1284,9 @@ impl Application {
                 ],
                 vec![],
             ),
-            |transaction| {
-                stage_root_selection(transaction, target)?;
+            |projections| projections.selection_snapshot(),
+            |transaction, projection| {
+                stage_root_selection_projected(transaction, target, &projection)?;
                 let delta = apply_tags_to_selection(transaction, self.projections(), &tags, add)?;
                 let changed = delta.canonical_changed;
                 let undo = semantic_tag_memberships(&delta, !add);
@@ -1580,7 +1581,7 @@ impl Application {
             return Err("Rating must be between 0 and 5".to_string());
         }
         let item_ids = mutation_item_hints(target);
-        let (_, revision, _, _) = self.semantic_undoable_transaction_if_changed(
+        let (_, revision, _, _) = self.semantic_undoable_transaction_if_changed_captured(
             HistoryDescriptor::new(
                 "items.patch_rating",
                 "Change rating",
@@ -1591,25 +1592,27 @@ impl Application {
                 ],
                 vec![],
             ),
-            |transaction| {
+            |projections| projections.selection_snapshot(),
+            |transaction, projection| {
                 let operation_started = Instant::now();
                 let mut stage_started = Instant::now();
-                stage_root_selection(transaction, target)?;
+                stage_root_selection_projected(transaction, target, &projection)?;
                 trace_bulk_stage("items.patch_rating", "stage_selection", stage_started);
                 stage_started = Instant::now();
+                let selected =
+                    selected_id_bitmap(transaction, "SELECT item_id FROM picto_selected_root")?;
+                let changed_roots = &selected - &projection.rating_value_bitmap(rating);
+                transaction.execute("DELETE FROM picto_selected_root", [])?;
+                let encoded = serde_json::to_string(&changed_roots.iter().collect::<Vec<_>>())
+                    .map_err(|error| invalid(format!("Could not encode changed roots: {error}")))?;
                 transaction.execute(
-                    "DELETE FROM picto_selected_root
-                     WHERE item_id IN (
-                         SELECT root_item_id FROM root_metadata
-                         WHERE rating IS ?1
-                     )",
-                    [rating],
+                    "INSERT INTO picto_selected_root(item_id)
+                     SELECT CAST(value AS INTEGER) FROM json_each(?1)",
+                    [encoded],
                 )?;
                 trace_bulk_stage("items.patch_rating", "stage_changes", stage_started);
                 stage_started = Instant::now();
-                let changed_roots =
-                    selected_id_bitmap(transaction, "SELECT item_id FROM picto_selected_root")?;
-                let undo = rating_delta_for_table(transaction, "picto_selected_root", "item_id")?;
+                let undo = rating_delta_for_projection(&projection, &changed_roots);
                 trace_bulk_stage("items.patch_rating", "capture_history", stage_started);
                 if !changed_roots.is_empty() {
                     stage_started = Instant::now();
@@ -2682,61 +2685,30 @@ fn semantic_tag_memberships(
     )
 }
 
-fn lifecycle_delta_for_table(
-    transaction: &Transaction<'_>,
-    table: &str,
-    column: &str,
-) -> rusqlite::Result<SemanticLifecycleDelta> {
-    let sql = format!(
-        "SELECT selected.{column}, root.lifecycle
-         FROM {table} selected
-         JOIN library_root root ON root.item_id = selected.{column}"
-    );
-    let mut delta = SemanticLifecycleDelta::default();
-    let mut statement = transaction.prepare(&sql)?;
-    let mut rows = statement.query([])?;
-    while let Some(row) = rows.next()? {
-        let item_id = u32::try_from(row.get::<_, i64>(0)?)
-            .map_err(|_| invalid("Item ID exceeds projection capacity"))?;
-        match row.get::<_, String>(1)?.as_str() {
-            "inbox" => delta.inbox.insert(item_id),
-            "active" => delta.active.insert(item_id),
-            "trash" => delta.trash.insert(item_id),
-            other => return Err(invalid(format!("Unknown lifecycle '{other}'"))),
-        };
+fn lifecycle_delta_for_projection(
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
+    roots: &RoaringBitmap,
+) -> SemanticLifecycleDelta {
+    SemanticLifecycleDelta {
+        inbox: roots & &projection.lifecycle_bitmap(Lifecycle::Inbox),
+        active: roots & &projection.lifecycle_bitmap(Lifecycle::Active),
+        trash: roots & &projection.lifecycle_bitmap(Lifecycle::Trash),
     }
-    Ok(delta)
 }
 
-fn rating_delta_for_table(
-    transaction: &Transaction<'_>,
-    table: &str,
-    column: &str,
-) -> rusqlite::Result<SemanticRatingDelta> {
-    let sql = format!(
-        "SELECT changed.{column}, metadata.rating
-         FROM {table} changed
-         JOIN root_metadata metadata ON metadata.root_item_id = changed.{column}"
-    );
-    let mut delta = SemanticRatingDelta::default();
-    let mut statement = transaction.prepare(&sql)?;
-    let mut rows = statement.query([])?;
-    let mut rated = std::collections::BTreeMap::<i64, RoaringBitmap>::new();
-    while let Some(row) = rows.next()? {
-        let root_id_value = row.get::<_, i64>(0)?;
-        let root_id = u32::try_from(root_id_value)
-            .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id_value))?;
-        match row.get::<_, Option<i64>>(1)? {
-            Some(rating) => {
-                rated.entry(rating).or_default().insert(root_id);
-            }
-            None => {
-                delta.unrated.insert(root_id);
-            }
-        }
+fn rating_delta_for_projection(
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
+    roots: &RoaringBitmap,
+) -> SemanticRatingDelta {
+    SemanticRatingDelta {
+        unrated: roots & &projection.rating_value_bitmap(None),
+        rated: (0..=5)
+            .filter_map(|rating| {
+                let matching = roots & &projection.rating_value_bitmap(Some(rating));
+                (!matching.is_empty()).then_some((rating, matching))
+            })
+            .collect(),
     }
-    delta.rated = rated.into_iter().collect();
-    Ok(delta)
 }
 
 fn rating_delta_for_target(roots: &RoaringBitmap, rating: Option<i64>) -> SemanticRatingDelta {

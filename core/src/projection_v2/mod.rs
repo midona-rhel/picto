@@ -1312,6 +1312,18 @@ impl ProjectionSelectionSnapshot {
             .unwrap_or_default()
     }
 
+    pub(crate) fn rating_value_bitmap(&self, rating: Option<i64>) -> RoaringBitmap {
+        let roots = all_roots(&self.state);
+        match rating {
+            None => &roots - &self.state.numeric.rating.present_bitmap(),
+            Some(rating) => u8::try_from(rating)
+                .ok()
+                .filter(|rating| *rating <= 5)
+                .map(|rating| self.state.numeric.rating.value_bitmap(rating, &roots))
+                .unwrap_or_default(),
+        }
+    }
+
     pub(crate) fn total_size_range_bitmap(
         &self,
         minimum: Option<u64>,
