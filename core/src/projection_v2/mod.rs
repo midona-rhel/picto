@@ -971,6 +971,12 @@ pub struct GroupOrderProjectionChange {
 }
 
 #[derive(Debug, Clone)]
+pub struct FolderOrderProjectionChange {
+    pub folder_id: i64,
+    pub item_ids: Vec<i64>,
+}
+
+#[derive(Debug, Clone)]
 pub struct MediaClassificationProjectionChange {
     pub media_id: i64,
     pub is_image: bool,
@@ -1023,6 +1029,7 @@ pub struct StructureProjectionDelta {
     pub roots: Vec<RootProjectionChange>,
     pub memberships: Vec<MembershipProjectionChange>,
     pub group_orders: Vec<GroupOrderProjectionChange>,
+    pub folder_orders: Vec<FolderOrderProjectionChange>,
     pub folders: Vec<FolderProjectionChange>,
     pub tags: Vec<TagProjectionChange>,
 }
@@ -2404,6 +2411,12 @@ impl ProjectionStore {
             validate_id(change.folder_id)?;
             validate_id(change.item_id)?;
         }
+        for change in &delta.folder_orders {
+            validate_id(change.folder_id)?;
+            for item_id in &change.item_ids {
+                validate_id(*item_id)?;
+            }
+        }
         for change in &delta.tags {
             validate_id(change.media_id)?;
             validate_id(change.tag_id)?;
@@ -2632,6 +2645,34 @@ impl ProjectionStore {
                     bitmap.remove(change.item_id as u32);
                 }
             }
+        }
+
+        for change in delta.folder_orders {
+            let mut ordered = RoaringBitmap::new();
+            for item_id in &change.item_ids {
+                if !ordered.insert(*item_id as u32) {
+                    state.abort();
+                    return Err(format!(
+                        "folder {} order contains item {} more than once",
+                        change.folder_id, item_id
+                    ));
+                }
+            }
+            let members = state
+                .folder_members
+                .get(&change.folder_id)
+                .map(|members| (**members).clone())
+                .unwrap_or_default();
+            if ordered != members {
+                state.abort();
+                return Err(format!(
+                    "folder {} membership and order differ",
+                    change.folder_id
+                ));
+            }
+            state
+                .folder_orders
+                .insert(change.folder_id, change.item_ids.into());
         }
 
         let mut tag_changes_by_root: HashMap<(i64, bool), RoaringBitmap> = HashMap::new();
@@ -3776,7 +3817,7 @@ mod tests {
     use rusqlite::Connection;
 
     use super::{
-        rebuild_all_derived, set_lifecycle, ItemKind, Lifecycle,
+        rebuild_all_derived, set_lifecycle, FolderOrderProjectionChange, ItemKind, Lifecycle,
         MediaClassificationProjectionChange, MembershipProjectionChange, ProjectionStore,
         RootProjectionChange, RootSummaryProjectionChange, StructureProjectionDelta,
     };
@@ -3912,6 +3953,28 @@ mod tests {
             projection.selection_snapshot().folder_order(7),
             Some(vec![11])
         );
+    }
+
+    #[test]
+    fn exact_folder_order_rejects_duplicates_and_membership_mismatch() {
+        let (_connection, projection) = fixture();
+
+        for item_ids in [vec![20, 20], vec![11]] {
+            let error = projection
+                .apply_structure_delta(StructureProjectionDelta {
+                    folder_orders: vec![FolderOrderProjectionChange {
+                        folder_id: 7,
+                        item_ids,
+                    }],
+                    ..StructureProjectionDelta::default()
+                })
+                .unwrap_err();
+            assert!(error.contains("folder 7"));
+            assert_eq!(
+                projection.selection_snapshot().folder_order(7),
+                Some(vec![20])
+            );
+        }
     }
 
     #[test]

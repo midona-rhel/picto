@@ -96,6 +96,12 @@ pub struct SemanticMembershipDelta {
     pub remove: RoaringBitmap,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticFolderOrder {
+    pub folder_id: i64,
+    pub item_ids: Vec<i64>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SemanticLifecycleDelta {
     pub inbox: RoaringBitmap,
@@ -193,6 +199,7 @@ pub enum SemanticHistoryPayload {
     Lifecycle(SemanticLifecycleDelta),
     Tags(Vec<SemanticMembershipDelta>),
     Folders(Vec<SemanticMembershipDelta>),
+    FolderOrders(Vec<SemanticFolderOrder>),
     Ratings(SemanticRatingDelta),
     TagGraph(SemanticTagGraphDelta),
     Group(SemanticGroupDelta),
@@ -241,6 +248,12 @@ impl SemanticHistoryPayload {
                     std::mem::size_of::<i64>()
                         + bitmap_bytes(&change.add)
                         + bitmap_bytes(&change.remove)
+                })
+                .sum(),
+            Self::FolderOrders(changes) => changes
+                .iter()
+                .map(|change| {
+                    std::mem::size_of::<i64>() + change.item_ids.len() * std::mem::size_of::<i64>()
                 })
                 .sum(),
             Self::Ratings(delta) => {
@@ -970,6 +983,21 @@ fn apply_semantic_payload(
         // payload is applied to the private projection candidate and persisted
         // as one checksummed bitmap during prepared publication.
         SemanticHistoryPayload::Folders(changes) => validate_membership_changes(changes),
+        SemanticHistoryPayload::FolderOrders(changes) => {
+            for change in changes {
+                let mut unique = std::collections::BTreeSet::new();
+                if change.folder_id <= 0
+                    || change.item_ids.iter().any(|item_id| *item_id <= 0)
+                    || !change
+                        .item_ids
+                        .iter()
+                        .all(|item_id| unique.insert(*item_id))
+                {
+                    return Err("Folder order history contains invalid item IDs".to_string());
+                }
+            }
+            Ok(())
+        }
         SemanticHistoryPayload::Ratings(delta) => apply_ratings(transaction, delta),
         SemanticHistoryPayload::TagGraph(delta) => apply_tag_graph(transaction, delta),
         SemanticHistoryPayload::Group(delta) => apply_group(transaction, delta),
@@ -1059,6 +1087,7 @@ fn collect_semantic_smart_impact(
         // folders from the candidate bitmap. SQL read models are not involved.
         SemanticHistoryPayload::Tags(_) => {}
         SemanticHistoryPayload::Folders(_) => {}
+        SemanticHistoryPayload::FolderOrders(_) => {}
         SemanticHistoryPayload::Ratings(delta) => {
             fields.insert("rating");
             *roots |= &delta.unrated;

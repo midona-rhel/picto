@@ -13,7 +13,10 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, ItemId, MutationReceipt};
 use crate::cloud::capture::{record_folder_created, record_folder_delete, record_folder_upsert};
-use crate::store::history::HistoryDescriptor;
+use crate::projection_v2::{FolderOrderProjectionChange, StructureProjectionDelta};
+use crate::store::history::{
+    HistoryDescriptor, SemanticFolderOrder, SemanticHistoryPayload, SemanticHistoryRecord,
+};
 
 const RANK_GAP: i64 = 1024;
 const APPLICATION_SETTINGS_KEY: &str = "application";
@@ -538,61 +541,56 @@ impl Application {
             return Err("Folder item reorder must contain unique item IDs".to_string());
         }
 
-        let ((), revision, _) = self.undoable_transaction(
+        let folder_id = input.folder_id.0;
+        let requested_ids = input.item_ids.iter().map(|item| item.0).collect::<Vec<_>>();
+        let ((), revision, _, _) = self.semantic_undoable_transaction_if_changed_captured(
             folder_history(
                 "folders.reorder_items",
                 "Reorder folder items",
                 &[input.folder_id],
             ),
-            |transaction| {
-                require_folder(transaction, input.folder_id.0)?;
-                let visible = transaction
-                    .prepare(
-                        "SELECT fi.item_id
-                         FROM folder_item fi
-                         JOIN library_root lr ON lr.item_id = fi.item_id
-                         WHERE fi.folder_id = ?1 AND lr.lifecycle = 'active'
-                         ORDER BY fi.position_rank, fi.item_id",
-                    )?
-                    .query_map([input.folder_id.0], |row| row.get::<_, i64>(0))?
-                    .collect::<rusqlite::Result<BTreeSet<_>>>()?;
+            move |projections| {
+                let snapshot = projections.selection_snapshot();
+                let members = snapshot.folder_bitmap(folder_id);
+                let active = &members & &snapshot.lifecycle_bitmap(crate::app::Lifecycle::Active);
+                let order = complete_folder_order(
+                    &members,
+                    snapshot.folder_order(folder_id).unwrap_or_default(),
+                );
+                (members, active, order)
+            },
+            move |transaction, (members, active, previous_order)| {
+                require_folder(transaction, folder_id)?;
+                let visible = active.iter().map(i64::from).collect::<BTreeSet<_>>();
                 if visible != requested {
                     return Err(invalid(
                         "Folder item reorder must contain every active folder item exactly once",
                     ));
                 }
-                let item_ids = input.item_ids.iter().map(|item| item.0).collect::<Vec<_>>();
-                stage_ordered_ids(transaction, "picto_folder_item_order", &item_ids)?;
-                transaction.execute(
-                    "UPDATE folder_item
-                     SET position_rank = (
-                         SELECT staged.ordinal * ?1
-                         FROM picto_folder_item_order staged
-                         WHERE staged.item_id = folder_item.item_id
-                     )
-                     WHERE folder_id = ?2
-                       AND item_id IN (SELECT item_id FROM picto_folder_item_order)",
-                    params![RANK_GAP, input.folder_id.0],
-                )?;
-                transaction.execute(
-                    "WITH hidden AS (
-                         SELECT fi.item_id,
-                                ROW_NUMBER() OVER (ORDER BY fi.position_rank, fi.item_id) AS offset
-                         FROM folder_item fi
-                         JOIN library_root lr ON lr.item_id = fi.item_id
-                         WHERE fi.folder_id = ?1 AND lr.lifecycle != 'active'
-                     )
-                     UPDATE folder_item
-                     SET position_rank = (?2 + (
-                         SELECT offset FROM hidden WHERE hidden.item_id = folder_item.item_id
-                     )) * ?3
-                     WHERE folder_id = ?1
-                       AND item_id IN (SELECT item_id FROM hidden)",
-                    params![input.folder_id.0, input.item_ids.len() as i64, RANK_GAP],
-                )?;
-                Ok(((), ()))
+
+                let mut next_order = requested_ids.clone();
+                next_order.extend(previous_order.iter().copied().filter(|item_id| {
+                    u32::try_from(*item_id).ok().is_some_and(|item_id| {
+                        members.contains(item_id) && !active.contains(item_id)
+                    })
+                }));
+                let changed = next_order != previous_order;
+                let delta = StructureProjectionDelta {
+                    folder_orders: vec![FolderOrderProjectionChange {
+                        folder_id,
+                        item_ids: next_order.clone(),
+                    }],
+                    ..StructureProjectionDelta::default()
+                };
+                let history = changed.then(|| {
+                    SemanticHistoryRecord::new(
+                        folder_order_history_payload(folder_id, previous_order),
+                        folder_order_history_payload(folder_id, next_order),
+                    )
+                });
+                Ok(((), delta, history, changed))
             },
-            |_, ()| Ok(()),
+            |projections, delta| projections.apply_structure_delta(delta),
         )?;
         let mut receipt = folder_receipt(revision, vec![input.folder_id], Vec::new(), None);
         set_receipt_item_ids(&mut receipt.receipt, input.item_ids.clone());
@@ -603,42 +601,57 @@ impl Application {
         &self,
         folder_id: FolderId,
     ) -> Result<FolderMutationReceipt, String> {
-        let (item_ids, revision, _) = self.undoable_transaction(
+        let raw_folder_id = folder_id.0;
+        let (item_ids, revision, _, _) = self.semantic_undoable_transaction_if_changed_captured(
             folder_history("folders.sort_items", "Sort folder items", &[folder_id]),
-            |transaction| {
-                require_folder(transaction, folder_id.0)?;
-                transaction.execute(
-                    "WITH ranked AS (
-                         SELECT fi.item_id,
-                                ROW_NUMBER() OVER (
-                                    ORDER BY lower(COALESCE(summary.sort_name, '')), fi.item_id
-                                ) AS ordinal
-                         FROM folder_item fi
-                         JOIN library_root lr ON lr.item_id = fi.item_id
-                         JOIN root_summary summary ON summary.root_item_id = fi.item_id
-                         WHERE fi.folder_id = ?1 AND lr.lifecycle = 'active'
-                     )
-                     UPDATE folder_item
-                     SET position_rank = (
-                         SELECT ranked.ordinal * ?2 FROM ranked
-                         WHERE ranked.item_id = folder_item.item_id
-                     )
-                     WHERE folder_id = ?1 AND item_id IN (SELECT item_id FROM ranked)",
-                    params![folder_id.0, RANK_GAP],
-                )?;
+            move |projections| {
+                let snapshot = projections.selection_snapshot();
+                let members = snapshot.folder_bitmap(raw_folder_id);
+                let active = &members & &snapshot.lifecycle_bitmap(crate::app::Lifecycle::Active);
+                let order = complete_folder_order(
+                    &members,
+                    snapshot.folder_order(raw_folder_id).unwrap_or_default(),
+                );
+                (members, active, order)
+            },
+            move |transaction, (members, active, previous_order)| {
+                require_folder(transaction, raw_folder_id)?;
+                let active_json = serde_json::to_string(&active.iter().collect::<Vec<_>>())
+                    .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
                 let item_ids = transaction
                     .prepare(
-                        "SELECT fi.item_id
-                         FROM folder_item fi
-                         JOIN library_root lr ON lr.item_id = fi.item_id
-                         WHERE fi.folder_id = ?1 AND lr.lifecycle = 'active'
-                         ORDER BY fi.position_rank, fi.item_id",
+                        "SELECT CAST(selected.value AS INTEGER)
+                         FROM json_each(?1) selected
+                         JOIN root_summary summary
+                           ON summary.root_item_id = CAST(selected.value AS INTEGER)
+                         ORDER BY lower(COALESCE(summary.sort_name, '')),
+                                  CAST(selected.value AS INTEGER)",
                     )?
-                    .query_map([folder_id.0], |row| row.get::<_, i64>(0))?
+                    .query_map([active_json], |row| row.get::<_, i64>(0))?
                     .collect::<rusqlite::Result<Vec<_>>>()?;
-                Ok((item_ids.clone(), item_ids))
+                let mut next_order = item_ids.clone();
+                next_order.extend(previous_order.iter().copied().filter(|item_id| {
+                    u32::try_from(*item_id).ok().is_some_and(|item_id| {
+                        members.contains(item_id) && !active.contains(item_id)
+                    })
+                }));
+                let changed = next_order != previous_order;
+                let delta = StructureProjectionDelta {
+                    folder_orders: vec![FolderOrderProjectionChange {
+                        folder_id: raw_folder_id,
+                        item_ids: next_order.clone(),
+                    }],
+                    ..StructureProjectionDelta::default()
+                };
+                let history = changed.then(|| {
+                    SemanticHistoryRecord::new(
+                        folder_order_history_payload(raw_folder_id, previous_order),
+                        folder_order_history_payload(raw_folder_id, next_order),
+                    )
+                });
+                Ok((item_ids, delta, history, changed))
             },
-            |_, _| Ok(()),
+            |projections, delta| projections.apply_structure_delta(delta),
         )?;
         let mut receipt = folder_receipt(revision, vec![folder_id], Vec::new(), None);
         set_receipt_item_ids(
@@ -886,6 +899,32 @@ fn folder_history(command: &str, label: &str, folder_ids: &[FolderId]) -> Histor
     HistoryDescriptor::new(command, label, resources, Vec::new())
 }
 
+fn complete_folder_order(members: &roaring::RoaringBitmap, existing: Vec<i64>) -> Vec<i64> {
+    let mut seen = roaring::RoaringBitmap::new();
+    let mut order = existing
+        .into_iter()
+        .filter(|item_id| {
+            u32::try_from(*item_id)
+                .ok()
+                .is_some_and(|item_id| members.contains(item_id) && seen.insert(item_id))
+        })
+        .collect::<Vec<_>>();
+    order.extend(
+        members
+            .iter()
+            .filter(|item_id| !seen.contains(*item_id))
+            .map(i64::from),
+    );
+    order
+}
+
+fn folder_order_history_payload(folder_id: i64, item_ids: Vec<i64>) -> SemanticHistoryPayload {
+    SemanticHistoryPayload::FolderOrders(vec![SemanticFolderOrder {
+        folder_id,
+        item_ids,
+    }])
+}
+
 fn folder_receipt(
     revision: u64,
     folder_ids: Vec<FolderId>,
@@ -1031,16 +1070,7 @@ fn resolve_folder_cover(
             "SELECT mf.file_hash, mf.mime_type
              FROM library_root lr
              JOIN library_item li ON li.item_id = lr.item_id
-             JOIN media_asset ma ON ma.item_id = CASE
-                 WHEN li.kind = 'collection' THEN (
-                     SELECT cm.media_item_id
-                     FROM collection_member cm
-                     WHERE cm.collection_id = li.item_id
-                     ORDER BY cm.position_rank ASC, cm.media_item_id ASC
-                     LIMIT 1
-                 )
-                 ELSE li.item_id
-             END
+             JOIN media_asset ma ON ma.item_id = COALESCE(li.cover_media_item_id, li.item_id)
              JOIN media_file mf ON mf.file_id = ma.file_id
              WHERE lr.lifecycle = 'active' AND lr.item_id = ?1",
             [item_id],
@@ -1421,9 +1451,9 @@ mod tests {
         folder_receipt, set_receipt_item_ids, CreateFolderInput, FolderId, FolderMetadataInput,
         FolderWatchInput, ReorderFolderChildrenInput, ReorderFolderItemsInput,
         SetFolderAutoTagsInput, SetFolderCoverInput, SortFolderTreeInput, MAX_RECEIPT_ITEM_IDS,
-        RANK_GAP,
     };
-    use crate::app::{Application, ItemId, ItemTarget};
+    use crate::app::{Application, ItemId, ItemTarget, Lifecycle};
+    use crate::ingest_v2::PreparedMediaInput;
     use crate::store::Store;
 
     #[test]
@@ -1494,6 +1524,32 @@ mod tests {
             folder_key: None,
         })
         .unwrap()
+        .0
+    }
+
+    fn ingest_root(app: &Application, key: &str, name: &str, lifecycle: Lifecycle) -> i64 {
+        app.ingest_prepared(&PreparedMediaInput {
+            file_hash: format!("{key}-hash"),
+            mime_type: "image/png".to_string(),
+            size_bytes: 10,
+            pixel_width: Some(10),
+            pixel_height: Some(10),
+            duration_ms: None,
+            frame_count: Some(1),
+            has_audio: false,
+            name: Some(name.to_string()),
+            notes: None,
+            rating: None,
+            source_urls: Vec::new(),
+            tags: Vec::new(),
+            lifecycle,
+            captured_at: None,
+            source: None,
+            target_folder_id: None,
+            target_folder_ids: Vec::new(),
+        })
+        .unwrap()
+        .root_item_id
         .0
     }
 
@@ -1893,112 +1949,43 @@ mod tests {
 
     #[test]
     fn sorting_folder_items_by_name_writes_canonical_order() {
-        let (_directory, app, zulu_id) = fixture();
+        let (_directory, app, _fixture_id) = fixture();
         let folder = create(&app, "Sorted", None);
-        let ((alpha_id, mike_id), _) = app
-            .store()
-            .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO root_metadata (root_item_id, name, updated_at)
-                     VALUES (?1, 'Zulu', 'now')
-                     ON CONFLICT(root_item_id) DO UPDATE SET name = excluded.name,
-                         updated_at = excluded.updated_at",
-                    [zulu_id],
-                )?;
-                let create_root = |key: &str, label: &str| {
-                    transaction.execute(
-                        "INSERT INTO library_item
-                             (item_key, kind, created_at, updated_at)
-                         VALUES (?1, 'media', 'now', 'now')",
-                        [key],
-                    )?;
-                    let item_id = transaction.last_insert_rowid();
-                    transaction.execute(
-                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
-                        [item_id],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO root_metadata (root_item_id, name, updated_at)
-                         VALUES (?1, ?2, 'now')",
-                        rusqlite::params![item_id, label],
-                    )?;
-                    Ok::<_, rusqlite::Error>(item_id)
-                };
-                let alpha_id = create_root("sort-alpha", "Alpha")?;
-                let mike_id = create_root("sort-mike", "mike")?;
-                for (item_id, rank) in [(zulu_id, 10), (mike_id, 20), (alpha_id, 30)] {
-                    transaction.execute(
-                        "INSERT INTO folder_item (folder_id, item_id, position_rank)
-                         VALUES (?1, ?2, ?3)",
-                        rusqlite::params![folder.0, item_id, rank],
-                    )?;
-                }
-                Ok((alpha_id, mike_id))
-            })
-            .unwrap();
+        let zulu_id = ingest_root(&app, "sort-zulu", "Zulu", Lifecycle::Active);
+        let mike_id = ingest_root(&app, "sort-mike", "mike", Lifecycle::Active);
+        let alpha_id = ingest_root(&app, "sort-alpha", "Alpha", Lifecycle::Active);
+        app.set_folder_membership(
+            &ItemTarget::Explicit {
+                item_ids: vec![ItemId(zulu_id), ItemId(mike_id), ItemId(alpha_id)],
+            },
+            folder.0,
+            true,
+        )
+        .unwrap();
 
         app.sort_folder_items_by_name(folder).unwrap();
-
-        app.store()
-            .read(|connection| {
-                let ids = connection
-                    .prepare(
-                        "SELECT item_id FROM folder_item
-                         WHERE folder_id = ?1 ORDER BY position_rank, item_id",
-                    )?
-                    .query_map([folder.0], |row| row.get::<_, i64>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                assert_eq!(ids, vec![alpha_id, mike_id, zulu_id]);
-                Ok(())
-            })
-            .unwrap();
+        assert_eq!(
+            app.projections()
+                .selection_snapshot()
+                .folder_order(folder.0),
+            Some(vec![alpha_id, mike_id, zulu_id])
+        );
     }
 
     #[test]
     fn reordering_folder_items_covers_active_items_and_leaves_hidden_items_last() {
         let (_directory, app, first_id) = fixture();
         let folder = create(&app, "Ordered", None);
-        let ((second_id, hidden_id), _) = app
-            .store()
-            .transaction(|transaction| {
-                let create_media = |key: &str, lifecycle: &str| {
-                    transaction.execute(
-                        "INSERT INTO media_file
-                             (file_hash, mime_type, size_bytes, created_at)
-                         VALUES (?1, 'image/png', 10, 'now')",
-                        [format!("{key}-hash")],
-                    )?;
-                    let file_id = transaction.last_insert_rowid();
-                    transaction.execute(
-                        "INSERT INTO library_item (item_key, kind, created_at, updated_at)
-                         VALUES (?1, 'media', 'now', 'now')",
-                        [key],
-                    )?;
-                    let item_id = transaction.last_insert_rowid();
-                    transaction.execute(
-                        "INSERT INTO media_asset
-                             (item_id, file_id, imported_at, updated_at)
-                         VALUES (?1, ?2, 'now', 'now')",
-                        rusqlite::params![item_id, file_id],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, ?2)",
-                        rusqlite::params![item_id, lifecycle],
-                    )?;
-                    Ok::<_, rusqlite::Error>(item_id)
-                };
-                let second_id = create_media("folder-second-item", "active")?;
-                let hidden_id = create_media("folder-hidden-item", "trash")?;
-                for (item_id, rank) in [(first_id, 100), (second_id, 200), (hidden_id, 50)] {
-                    transaction.execute(
-                        "INSERT INTO folder_item (folder_id, item_id, position_rank)
-                         VALUES (?1, ?2, ?3)",
-                        rusqlite::params![folder.0, item_id, rank],
-                    )?;
-                }
-                Ok((second_id, hidden_id))
-            })
-            .unwrap();
+        let second_id = ingest_root(&app, "folder-second-item", "Second", Lifecycle::Active);
+        let hidden_id = ingest_root(&app, "folder-hidden-item", "Hidden", Lifecycle::Trash);
+        app.set_folder_membership(
+            &ItemTarget::Explicit {
+                item_ids: vec![ItemId(first_id), ItemId(second_id), ItemId(hidden_id)],
+            },
+            folder.0,
+            true,
+        )
+        .unwrap();
 
         let incomplete = app
             .reorder_folder_items(&ReorderFolderItemsInput {
@@ -2023,28 +2010,26 @@ mod tests {
             .resources
             .contains(&format!("folder:{}", folder.0)));
 
-        app.store()
-            .read(|connection| {
-                let rows = connection
-                    .prepare(
-                        "SELECT item_id, position_rank FROM folder_item
-                         WHERE folder_id = ?1 ORDER BY position_rank, item_id",
-                    )?
-                    .query_map([folder.0], |row| {
-                        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                assert_eq!(
-                    rows,
-                    vec![
-                        (second_id, RANK_GAP),
-                        (first_id, RANK_GAP * 2),
-                        (hidden_id, RANK_GAP * 3),
-                    ]
-                );
-                Ok(())
-            })
-            .unwrap();
+        assert_eq!(
+            app.projections()
+                .selection_snapshot()
+                .folder_order(folder.0),
+            Some(vec![second_id, first_id, hidden_id])
+        );
+        app.undo().unwrap();
+        assert_eq!(
+            app.projections()
+                .selection_snapshot()
+                .folder_order(folder.0),
+            Some(vec![first_id, second_id, hidden_id])
+        );
+        app.redo().unwrap();
+        assert_eq!(
+            app.projections()
+                .selection_snapshot()
+                .folder_order(folder.0),
+            Some(vec![second_id, first_id, hidden_id])
+        );
     }
 
     #[test]

@@ -12,9 +12,9 @@ use ts_rs::TS;
 
 use crate::blob_store::BlobStore;
 use crate::projection_v2::{
-    GroupOrderProjectionChange, ItemProjectionChange, MembershipProjectionChange, ProjectionStore,
-    RootProjectionChange, StructureProjectionDelta, TagGraphProjectionDelta,
-    TagIdentityProjectionChange,
+    FolderOrderProjectionChange, GroupOrderProjectionChange, ItemProjectionChange,
+    MembershipProjectionChange, ProjectionStore, RootProjectionChange, StructureProjectionDelta,
+    TagGraphProjectionDelta, TagIdentityProjectionChange,
 };
 use crate::store::history::{
     HistoryDescriptor, HistoryDirection, HistoryEntrySummary, HistoryProjectionRequest,
@@ -602,6 +602,18 @@ fn apply_semantic_projection(
                 projections.apply_folder_bitmap(change.relation_id, &change.add, true)?;
             }
             Ok(())
+        }
+        SemanticHistoryPayload::FolderOrders(changes) => {
+            projections.apply_structure_delta(StructureProjectionDelta {
+                folder_orders: changes
+                    .iter()
+                    .map(|change| FolderOrderProjectionChange {
+                        folder_id: change.folder_id,
+                        item_ids: change.item_ids.clone(),
+                    })
+                    .collect(),
+                ..StructureProjectionDelta::default()
+            })
         }
         SemanticHistoryPayload::Ratings(delta) => {
             projections.apply_rating_bitmap(&delta.unrated, None)?;
