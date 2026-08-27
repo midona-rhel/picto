@@ -2408,6 +2408,11 @@ impl ProjectionStore {
             validate_id(change.media_id)?;
             validate_id(change.tag_id)?;
         }
+        let explicitly_ordered_groups = delta
+            .group_orders
+            .iter()
+            .map(|change| change.collection_id)
+            .collect::<HashSet<_>>();
         let mut state = self.write_state();
         let mut touched_media = HashSet::new();
         let mut touched_roots = HashSet::new();
@@ -2480,8 +2485,10 @@ impl ProjectionStore {
                         if let Some(members) = state.collection_members.get_mut(&previous_root) {
                             members.remove(change.media_id as u32);
                         }
-                        if let Some(order) = state.collection_orders.get_mut(&previous_root) {
-                            order.retain(|media_id| *media_id != change.media_id);
+                        if !explicitly_ordered_groups.contains(&previous_root) {
+                            if let Some(order) = state.collection_orders.get_mut(&previous_root) {
+                                order.retain(|media_id| *media_id != change.media_id);
+                            }
                         }
                     }
                 }
@@ -2493,12 +2500,14 @@ impl ProjectionStore {
                 state
                     .media_to_root
                     .insert(change.media_id, change.collection_id);
-                let order = state
-                    .collection_orders
-                    .entry(change.collection_id)
-                    .or_default();
-                if !order.contains(&change.media_id) {
-                    order.push(change.media_id);
+                if !explicitly_ordered_groups.contains(&change.collection_id) {
+                    let order = state
+                        .collection_orders
+                        .entry(change.collection_id)
+                        .or_default();
+                    if !order.contains(&change.media_id) {
+                        order.push(change.media_id);
+                    }
                 }
                 touched_roots.insert(change.collection_id);
                 for bitmap in Arc::make_mut(&mut state.lifecycle_bitmaps) {
@@ -2509,8 +2518,10 @@ impl ProjectionStore {
                 if let Some(members) = state.collection_members.get_mut(&change.collection_id) {
                     members.remove(change.media_id as u32);
                 }
-                if let Some(order) = state.collection_orders.get_mut(&change.collection_id) {
-                    order.retain(|media_id| *media_id != change.media_id);
+                if !explicitly_ordered_groups.contains(&change.collection_id) {
+                    if let Some(order) = state.collection_orders.get_mut(&change.collection_id) {
+                        order.retain(|media_id| *media_id != change.media_id);
+                    }
                 }
                 if state.media_to_root.get(&change.media_id) == Some(&change.collection_id) {
                     if has_root(&state, change.media_id)
