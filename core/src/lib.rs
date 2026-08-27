@@ -29,6 +29,7 @@ pub mod navigation_v2;
 pub mod onlyfans_source_v2;
 pub mod operations_v2;
 pub mod poison;
+pub mod predicate_v2;
 pub mod projection_v2;
 pub mod publication;
 pub mod query_v2;

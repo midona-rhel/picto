@@ -11,12 +11,14 @@ use rusqlite::{Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
-use super::{validate_bitmap_ids, NumericIndexes, ShardedMap, Shared, State};
+use super::{
+    rebuild_all_mime_roots, validate_bitmap_ids, NumericIndexes, ShardedMap, Shared, State,
+};
 
 const COMPONENT: &str = "projection-v2-roaring";
 const MAGIC: &[u8; 8] = b"PCTOV2\0\x02";
 const IMPLEMENTATION_MATERIAL: &[u8] =
-    b"projection-v2-checkpoint-v3:image-root-classification:complete-immutable-state:portable-roaring";
+    b"projection-v2-checkpoint-v4:group-aware-mime-classification:complete-immutable-state:portable-roaring";
 const MAX_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ENTRY_COUNT: usize = 100_000_000;
 
@@ -250,6 +252,7 @@ fn encode_state(state: &State) -> Result<Vec<u8>, String> {
     }
     encoder.numeric(state);
     encoder.id_set(&state.media_ids);
+    encoder.string_map(&state.media_mime_types);
     encoder.bitmap(&state.image_media_ids)?;
     encoder.bitmap(&state.all_image_roots)?;
     encoder.id_set(&state.collection_ids);
@@ -269,10 +272,14 @@ fn decode_state(bytes: &[u8]) -> Result<State, String> {
     let mut decoder = Decoder::new(bytes);
     let lifecycle_bitmaps = Arc::new([decoder.bitmap()?, decoder.bitmap()?, decoder.bitmap()?]);
     let numeric = Arc::new(decoder.numeric(&lifecycle_bitmaps)?);
-    let state = State {
+    let mut state = State {
         lifecycle_bitmaps,
         numeric,
         media_ids: decoder.id_set()?.into(),
+        media_mime_types: decoder.string_map()?,
+        root_mime_types: ShardedMap::default(),
+        exact_mime_roots: ShardedMap::default(),
+        mime_family_roots: ShardedMap::default(),
         image_media_ids: decoder.bitmap()?.into(),
         all_image_roots: decoder.bitmap()?.into(),
         collection_ids: decoder.id_set()?.into(),
@@ -287,6 +294,7 @@ fn decode_state(bytes: &[u8]) -> Result<State, String> {
         tagged_roots: decoder.bitmap()?.into(),
     };
     decoder.finish()?;
+    rebuild_all_mime_roots(&mut state);
     Ok(state)
 }
 
@@ -353,6 +361,21 @@ impl Encoder {
         self.len(values.len());
         for value in values {
             self.i64(value);
+        }
+    }
+
+    fn string(&mut self, value: &str) {
+        self.len(value.len());
+        self.bytes.extend_from_slice(value.as_bytes());
+    }
+
+    fn string_map(&mut self, map: &ShardedMap<i64, String>) {
+        let mut entries = map.iter().collect::<Vec<_>>();
+        entries.sort_unstable_by_key(|(key, _)| **key);
+        self.len(entries.len());
+        for (key, value) in entries {
+            self.i64(*key);
+            self.string(value);
         }
     }
 
@@ -558,6 +581,25 @@ impl<'a> Decoder<'a> {
             }
         }
         Ok(set)
+    }
+
+    fn string(&mut self) -> Result<String, String> {
+        let length = self.length()?;
+        let bytes = self.take(length)?;
+        std::str::from_utf8(bytes)
+            .map(str::to_owned)
+            .map_err(|_| "Projection checkpoint string is not UTF-8".to_string())
+    }
+
+    fn string_map(&mut self) -> Result<ShardedMap<i64, String>, String> {
+        let count = self.count(16)?;
+        let mut map = ShardedMap::default();
+        for _ in 0..count {
+            let key = self.i64()?;
+            let value = self.string()?;
+            insert_unique(&mut map, key, value)?;
+        }
+        Ok(map)
     }
 
     fn id_vec_map(&mut self) -> Result<ShardedMap<i64, Shared<Vec<i64>>>, String> {
@@ -798,5 +840,13 @@ mod tests {
         assert!(initialized
             .selection_snapshot()
             .all_media_are_images(&RoaringBitmap::from_iter([1])));
+        assert_eq!(
+            initialized.mime_bitmap("image/png"),
+            RoaringBitmap::from_iter([1])
+        );
+        assert_eq!(
+            initialized.mime_family_bitmap("image"),
+            RoaringBitmap::from_iter([1])
+        );
     }
 }

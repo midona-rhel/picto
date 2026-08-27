@@ -358,6 +358,14 @@ impl ProjectionKey for (i64, i64) {
     }
 }
 
+impl ProjectionKey for String {
+    fn projection_shard(&self) -> usize {
+        self.bytes().fold(0_usize, |hash, byte| {
+            hash.wrapping_mul(31).wrapping_add(usize::from(byte))
+        }) & (PROJECTION_SHARDS - 1)
+    }
+}
+
 /// A map split into independently copy-on-write components. A point mutation
 /// clones at most one shard, not a million-entry global map.
 #[derive(Clone)]
@@ -504,10 +512,11 @@ pub struct MembershipProjectionChange {
     pub present: bool,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct MediaClassificationProjectionChange {
     pub media_id: i64,
     pub is_image: bool,
+    pub mime_type: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -558,6 +567,10 @@ struct State {
     lifecycle_bitmaps: Arc<[RoaringBitmap; 3]>,
     numeric: Arc<NumericIndexes>,
     media_ids: Shared<HashSet<i64>>,
+    media_mime_types: ShardedMap<i64, String>,
+    root_mime_types: ShardedMap<i64, Shared<Vec<String>>>,
+    exact_mime_roots: ShardedMap<String, Shared<RoaringBitmap>>,
+    mime_family_roots: ShardedMap<String, Shared<RoaringBitmap>>,
     image_media_ids: Shared<RoaringBitmap>,
     all_image_roots: Shared<RoaringBitmap>,
     collection_ids: Shared<HashSet<i64>>,
@@ -727,6 +740,95 @@ pub(crate) struct ProjectionSelectionSnapshot {
 }
 
 impl ProjectionSelectionSnapshot {
+    pub(crate) fn lifecycle_bitmap(&self, lifecycle: Lifecycle) -> RoaringBitmap {
+        self.state.lifecycle_bitmaps[lifecycle_index(lifecycle)].clone()
+    }
+
+    pub(crate) fn folder_bitmap(&self, folder_id: i64) -> RoaringBitmap {
+        self.state
+            .folder_bitmaps
+            .get(&folder_id)
+            .map(|bitmap| (**bitmap).clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn tag_bitmap(&self, tag_id: i64) -> RoaringBitmap {
+        self.state
+            .direct_tag_bitmaps
+            .get(&tag_id)
+            .map(|bitmap| (**bitmap).clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn mime_bitmap(&self, mime_type: &str) -> RoaringBitmap {
+        let mime_type = normalize_mime_type(mime_type);
+        self.state
+            .exact_mime_roots
+            .get(&mime_type)
+            .map(|bitmap| (**bitmap).clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn mime_family_bitmap(&self, family: &str) -> RoaringBitmap {
+        let family = normalize_mime_family(family);
+        self.state
+            .mime_family_roots
+            .get(&family)
+            .map(|bitmap| (**bitmap).clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn rating_bitmap(&self, rating: i64) -> RoaringBitmap {
+        if rating == 0 {
+            let roots = all_roots(&self.state);
+            return &roots - &self.state.numeric.rating.present_bitmap();
+        }
+        u8::try_from(rating)
+            .ok()
+            .filter(|rating| *rating <= 5)
+            .map(|rating| {
+                self.state
+                    .numeric
+                    .rating
+                    .value_bitmap(rating, &all_roots(&self.state))
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn untagged_bitmap(&self) -> RoaringBitmap {
+        &self.state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)]
+            - &*self.state.tagged_roots
+    }
+
+    pub(crate) fn uncategorized_bitmap(&self) -> RoaringBitmap {
+        &self.state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)]
+            - &*self.state.categorized_roots
+    }
+
+    pub(crate) fn retain_exact_tags(&self, roots: &mut RoaringBitmap, tag_ids: &[i64]) {
+        *roots = roots
+            .iter()
+            .filter(|root_id| {
+                self.state
+                    .root_owned_tags
+                    .get(&i64::from(*root_id))
+                    .is_some_and(|tags| tags.as_slice() == tag_ids)
+            })
+            .collect();
+    }
+
+    pub(crate) fn retain_exact_folders(&self, roots: &mut RoaringBitmap, folder_count: usize) {
+        *roots = roots
+            .iter()
+            .filter(|root_id| {
+                self.state
+                    .root_folder_counts
+                    .get(&i64::from(*root_id))
+                    .is_some_and(|count| usize::try_from(*count).ok() == Some(folder_count))
+            })
+            .collect();
+    }
+
     pub(crate) fn numeric_aggregates(&self, roots: &RoaringBitmap) -> ProjectionNumericAggregates {
         let rating_range = self.state.numeric.rating.filtered_min_max(roots);
         ProjectionNumericAggregates {
@@ -896,8 +998,7 @@ impl ProjectionStore {
         {
             let mut statement = connection
                 .prepare(
-                    "SELECT item.item_id, item.kind,
-                            COALESCE(file.mime_type LIKE 'image/%', 0)
+                    "SELECT item.item_id, item.kind, file.mime_type
                      FROM library_item item
                      LEFT JOIN media_asset asset ON asset.item_id = item.item_id
                      LEFT JOIN media_file file ON file.file_id = asset.file_id",
@@ -908,18 +1009,24 @@ impl ProjectionStore {
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, bool>(2)?,
+                        row.get::<_, Option<String>>(2)?,
                     ))
                 })
                 .map_err(|error| error.to_string())?;
             for row in rows {
-                let (item_id, kind, is_image) = row.map_err(|error| error.to_string())?;
+                let (item_id, kind, mime_type) = row.map_err(|error| error.to_string())?;
                 match kind.as_str() {
                     "media" => {
                         state.media_ids.insert(item_id);
-                        if is_image {
+                        let mime_type = normalize_mime_type(
+                            mime_type
+                                .as_deref()
+                                .ok_or_else(|| format!("media item {item_id} has no MIME type"))?,
+                        );
+                        if mime_type.starts_with("image/") {
                             state.image_media_ids.insert(bitmap_id(item_id)?);
                         }
+                        state.media_mime_types.insert(item_id, mime_type);
                     }
                     "collection" => {
                         state.collection_ids.insert(item_id);
@@ -1307,6 +1414,30 @@ impl ProjectionStore {
             .unwrap_or_default()
     }
 
+    /// Return active roots containing at least one member with this exact MIME.
+    pub fn mime_bitmap(&self, mime_type: &str) -> RoaringBitmap {
+        let state = self.state.load();
+        let mime_type = normalize_mime_type(mime_type);
+        let roots = state
+            .exact_mime_roots
+            .get(&mime_type)
+            .map(|bitmap| (**bitmap).clone())
+            .unwrap_or_default();
+        roots & &state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)]
+    }
+
+    /// Return active roots containing at least one member in a MIME family.
+    pub fn mime_family_bitmap(&self, family: &str) -> RoaringBitmap {
+        let state = self.state.load();
+        let family = normalize_mime_family(family);
+        let roots = state
+            .mime_family_roots
+            .get(&family)
+            .map(|bitmap| (**bitmap).clone())
+            .unwrap_or_default();
+        roots & &state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)]
+    }
+
     pub fn root_for_media(&self, media_id: i64) -> Option<i64> {
         self.state.load().media_to_root.get(&media_id).copied()
     }
@@ -1349,6 +1480,9 @@ impl ProjectionStore {
             } else {
                 state.image_media_ids.remove(change.media_id as u32);
             }
+            state
+                .media_mime_types
+                .insert(change.media_id, normalize_mime_type(&change.mime_type));
             touched_media.insert(change.media_id);
         }
 
@@ -1369,6 +1503,7 @@ impl ProjectionStore {
                 }
                 clear_root_tag_counts(&mut state, change.item_id);
                 state.media_ids.remove(&change.item_id);
+                state.media_mime_types.remove(&change.item_id);
                 state.image_media_ids.remove(change.item_id as u32);
                 state.collection_ids.remove(&change.item_id);
                 state.media_to_root.remove(&change.item_id);
@@ -1457,6 +1592,7 @@ impl ProjectionStore {
 
         for root_id in touched_roots {
             sync_all_image_root(&mut state, root_id);
+            sync_mime_root(&mut state, root_id);
         }
 
         for change in delta.folders {
@@ -2117,6 +2253,85 @@ fn rebuild_all_derived(state: &mut State) {
     }
     rebuild_all_tags(state);
     rebuild_all_image_roots(state);
+    rebuild_all_mime_roots(state);
+}
+
+fn normalize_mime_type(value: &str) -> String {
+    value.trim().to_ascii_lowercase()
+}
+
+fn normalize_mime_family(value: &str) -> String {
+    normalize_mime_type(value)
+        .trim_end_matches("/*")
+        .trim_end_matches('/')
+        .to_string()
+}
+
+fn mime_family(mime_type: &str) -> &str {
+    mime_type
+        .split_once('/')
+        .map_or(mime_type, |(family, _)| family)
+}
+
+fn rebuild_all_mime_roots(state: &mut State) {
+    state.root_mime_types.clear();
+    state.exact_mime_roots.clear();
+    state.mime_family_roots.clear();
+    let roots = all_roots(state);
+    for root_id in roots.into_iter().map(i64::from) {
+        sync_mime_root(state, root_id);
+    }
+}
+
+fn sync_mime_root(state: &mut State, root_id: i64) {
+    let root_id_u32 = root_id as u32;
+    if let Some(previous) = state.root_mime_types.remove(&root_id) {
+        for mime_type in previous.iter() {
+            if let Some(bitmap) = state.exact_mime_roots.get_mut(mime_type) {
+                bitmap.remove(root_id_u32);
+            }
+            let family = mime_family(mime_type).to_string();
+            if let Some(bitmap) = state.mime_family_roots.get_mut(&family) {
+                bitmap.remove(root_id_u32);
+            }
+        }
+    }
+    if !is_visible_root(state, root_id) {
+        return;
+    }
+
+    let media_ids = if state.media_ids.contains(&root_id) {
+        RoaringBitmap::from_iter([root_id_u32])
+    } else {
+        state
+            .collection_members
+            .get(&root_id)
+            .map(|members| (**members).clone())
+            .unwrap_or_default()
+    };
+    let mut exact = HashSet::new();
+    for media_id in media_ids.into_iter().map(i64::from) {
+        if let Some(mime_type) = state.media_mime_types.get(&media_id) {
+            exact.insert(mime_type.clone());
+        }
+    }
+    let mut exact = exact.into_iter().collect::<Vec<_>>();
+    exact.sort_unstable();
+    for mime_type in &exact {
+        state
+            .mime_family_roots
+            .entry(mime_family(mime_type).to_string())
+            .or_default()
+            .insert(root_id_u32);
+        state
+            .exact_mime_roots
+            .entry(mime_type.clone())
+            .or_default()
+            .insert(root_id_u32);
+    }
+    if !exact.is_empty() {
+        state.root_mime_types.insert(root_id, exact.into());
+    }
 }
 
 fn rebuild_all_image_roots(state: &mut State) {
@@ -2389,12 +2604,21 @@ mod tests {
         assert!(projection
             .selection_snapshot()
             .all_media_are_images(&all_roots));
+        assert_eq!(
+            projection.mime_bitmap("IMAGE/PNG"),
+            RoaringBitmap::from_iter([11, 20])
+        );
+        assert_eq!(
+            projection.mime_family_bitmap("image/*"),
+            RoaringBitmap::from_iter([11, 20])
+        );
 
         projection
             .apply_structure_delta(StructureProjectionDelta {
                 media_classifications: vec![MediaClassificationProjectionChange {
                     media_id: 11,
                     is_image: false,
+                    mime_type: "video/mp4".to_string(),
                 }],
                 roots: vec![RootProjectionChange {
                     item_id: 11,
@@ -2410,6 +2634,18 @@ mod tests {
             .unwrap();
         let snapshot = projection.selection_snapshot();
         assert!(!snapshot.all_media_are_images(&RoaringBitmap::from_iter([20])));
+        assert_eq!(
+            projection.mime_bitmap("video/mp4"),
+            RoaringBitmap::from_iter([20])
+        );
+        assert_eq!(
+            projection.mime_family_bitmap("video"),
+            RoaringBitmap::from_iter([20])
+        );
+        assert_eq!(
+            projection.mime_family_bitmap("image"),
+            RoaringBitmap::from_iter([20])
+        );
 
         projection
             .apply_structure_delta(StructureProjectionDelta {
@@ -2428,6 +2664,12 @@ mod tests {
         let snapshot = projection.selection_snapshot();
         assert!(snapshot.all_media_are_images(&RoaringBitmap::from_iter([20])));
         assert!(!snapshot.all_media_are_images(&RoaringBitmap::from_iter([11])));
+        assert_eq!(
+            projection.mime_bitmap("video/mp4"),
+            RoaringBitmap::from_iter([11])
+        );
+        assert!(projection.mime_family_bitmap("video").contains(11));
+        assert!(!projection.mime_family_bitmap("video").contains(20));
     }
 
     #[test]

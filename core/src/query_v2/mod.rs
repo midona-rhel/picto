@@ -293,7 +293,7 @@ pub fn details(store: &Store, item_id: ItemId) -> Result<ItemDetails, String> {
 }
 
 pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<SelectionSummary, String> {
-    store.read_snapshot(|connection| selection_summary_connection(connection, target, None))
+    store.read_snapshot(|connection| selection_summary_connection(connection, target, None, None))
 }
 
 pub fn selection_summary_for_application(
@@ -303,8 +303,29 @@ pub fn selection_summary_for_application(
     application.store().read_snapshot_captured(
         || application.projections().selection_snapshot(),
         |connection, _revision, projection| {
-            selection_summary_connection(connection, target, Some(&projection))
-                .map_err(|error| error.to_string())
+            let preselected = match target {
+                ItemTarget::Query {
+                    query,
+                    excluded_item_ids,
+                } => crate::predicate_v2::compile_item_query(connection, &projection, query)
+                    .map_err(|error| error.to_string())?
+                    .map(|mut roots| {
+                        for item_id in excluded_item_ids {
+                            if let Ok(item_id) = u32::try_from(item_id.0) {
+                                roots.remove(item_id);
+                            }
+                        }
+                        roots
+                    }),
+                ItemTarget::Explicit { .. } | ItemTarget::Range { .. } => None,
+            };
+            selection_summary_connection(
+                connection,
+                target,
+                Some(&projection),
+                preselected.as_ref(),
+            )
+            .map_err(|error| error.to_string())
         },
     )
 }
@@ -313,10 +334,11 @@ fn selection_summary_connection(
     connection: &Connection,
     target: &ItemTarget,
     projection: Option<&ProjectionSelectionSnapshot>,
+    preselected: Option<&roaring::RoaringBitmap>,
 ) -> rusqlite::Result<SelectionSummary> {
     let operation_started = std::time::Instant::now();
     let mut stage_started = operation_started;
-    let selection = MaterializedSelection::new(connection, target)?;
+    let selection = MaterializedSelection::new(connection, target, preselected)?;
     trace_selection_stage("materialize", stage_started);
     stage_started = std::time::Instant::now();
     let selected_roots = projection.map(|_| selection.bitmap()).transpose()?;
@@ -563,7 +585,11 @@ struct MaterializedSelection<'connection> {
 }
 
 impl<'connection> MaterializedSelection<'connection> {
-    fn new(connection: &'connection Connection, target: &ItemTarget) -> rusqlite::Result<Self> {
+    fn new(
+        connection: &'connection Connection,
+        target: &ItemTarget,
+        preselected: Option<&roaring::RoaringBitmap>,
+    ) -> rusqlite::Result<Self> {
         connection.execute_batch(
             "PRAGMA query_only = OFF;
              CREATE TEMP TABLE IF NOT EXISTS picto_selected_root (
@@ -573,15 +599,24 @@ impl<'connection> MaterializedSelection<'connection> {
         )?;
 
         let materialized = (|| {
-            let selection = target_selection_sql(connection, target)?;
-            let sql = format!(
-                "{}
-                 INSERT INTO picto_selected_root(item_id)
-                 SELECT item_id FROM selected_roots",
-                selection.with_clause
-            );
-            let parameters = selection.parameters();
-            connection.execute(&sql, parameters.as_slice())?;
+            if let Some(preselected) = preselected {
+                let ids = bitmap_json(preselected);
+                connection.execute(
+                    "INSERT INTO picto_selected_root(item_id)
+                     SELECT CAST(value AS INTEGER) FROM json_each(?1)",
+                    [ids],
+                )?;
+            } else {
+                let selection = target_selection_sql(connection, target)?;
+                let sql = format!(
+                    "{}
+                     INSERT INTO picto_selected_root(item_id)
+                     SELECT item_id FROM selected_roots",
+                    selection.with_clause
+                );
+                let parameters = selection.parameters();
+                connection.execute(&sql, parameters.as_slice())?;
+            }
             Ok::<_, rusqlite::Error>(())
         })();
         let restored = connection.execute_batch("PRAGMA query_only = ON;");
@@ -611,6 +646,19 @@ impl<'connection> MaterializedSelection<'connection> {
             .query_map([], |row| row.get::<_, u32>(0))?
             .collect()
     }
+}
+
+fn bitmap_json(bitmap: &roaring::RoaringBitmap) -> String {
+    let mut json = String::with_capacity(bitmap.len() as usize * 8 + 2);
+    json.push('[');
+    for (index, value) in bitmap.iter().enumerate() {
+        if index != 0 {
+            json.push(',');
+        }
+        json.push_str(&value.to_string());
+    }
+    json.push(']');
+    json
 }
 
 impl Drop for MaterializedSelection<'_> {
@@ -2835,12 +2883,16 @@ fn stable_seed(value: &str) -> i64 {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Arc;
+
     use super::{
         details, library_statistics, query, resolve_target_ids, selection_summary,
-        sidebar_counts_for_application, ItemPageRequest, SelectionCollectionCandidate,
+        selection_summary_for_application, sidebar_counts_for_application, ItemPageRequest,
+        SelectionCollectionCandidate,
     };
     use crate::app::{
-        FilterMatchMode, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope, ItemSort, ItemTarget,
+        Application, FilterMatchMode, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope,
+        ItemSort, ItemTarget,
     };
     use crate::store::Store;
 
@@ -4155,6 +4207,39 @@ mod tests {
         assert_eq!(explicit.shared_notes, query.shared_notes);
         assert_eq!(explicit.shared_source_urls, query.shared_source_urls);
         assert_eq!(explicit.stats, query.stats);
+    }
+
+    #[test]
+    fn application_selection_uses_group_aware_bitmap_mime_predicates() {
+        let (_directory, store) = seed_store();
+        let application = Application::new(Arc::new(store));
+
+        let mut images = query_for(ItemScope::All);
+        images.filters.include_mime_types = vec!["image/*".to_string()];
+        let image_summary = selection_summary_for_application(
+            &application,
+            &ItemTarget::Query {
+                query: images,
+                excluded_item_ids: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(image_summary.selected_count, 2);
+
+        let mut without_video = query_for(ItemScope::All);
+        without_video.filters.exclude_mime_types = vec!["video/mp4".to_string()];
+        let non_video_summary = selection_summary_for_application(
+            &application,
+            &ItemTarget::Query {
+                query: without_video,
+                excluded_item_ids: Vec::new(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            non_video_summary.selected_count, 1,
+            "a group is excluded when any member matches the excluded MIME"
+        );
     }
 
     #[test]

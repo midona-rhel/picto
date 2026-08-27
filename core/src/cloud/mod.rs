@@ -1168,6 +1168,7 @@ struct CloudProjectionState {
     memberships: BTreeSet<(i64, i64)>,
     summaries: BTreeMap<i64, RootSummaryProjectionChange>,
     image_media_ids: BTreeSet<i64>,
+    mime_types: BTreeMap<i64, String>,
 }
 
 impl CloudProjectionState {
@@ -1246,17 +1247,22 @@ impl CloudProjectionState {
         }
 
         let mut statement = transaction.prepare(
-            "SELECT asset.item_id
+            "SELECT asset.item_id, file.mime_type
              FROM media_asset asset
              JOIN media_file file ON file.file_id = asset.file_id
-             WHERE asset.item_id IN (SELECT value FROM json_each(?1))
-               AND file.mime_type LIKE 'image/%'",
+             WHERE asset.item_id IN (SELECT value FROM json_each(?1))",
         )?;
-        state.image_media_ids.extend(
-            statement
-                .query_map([ids.clone()], |row| row.get::<_, i64>(0))?
-                .collect::<rusqlite::Result<Vec<_>>>()?,
-        );
+        for (media_id, mime_type) in statement
+            .query_map([ids.clone()], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+        {
+            if mime_type.starts_with("image/") {
+                state.image_media_ids.insert(media_id);
+            }
+            state.mime_types.insert(media_id, mime_type);
+        }
 
         let mut statement = transaction.prepare(
             "SELECT folder_id, item_id FROM folder_item
@@ -1337,6 +1343,11 @@ impl CloudProjectionDelta {
                             .push(MediaClassificationProjectionChange {
                                 media_id: *item_id,
                                 is_image: after.image_media_ids.contains(item_id),
+                                mime_type: after
+                                    .mime_types
+                                    .get(item_id)
+                                    .cloned()
+                                    .unwrap_or_else(|| "application/octet-stream".to_string()),
                             });
                     }
                     structure.roots.push(RootProjectionChange {

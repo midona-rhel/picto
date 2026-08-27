@@ -417,6 +417,7 @@ impl Application {
                         MediaClassificationProjectionChange {
                             media_id: media_item_id,
                             is_image: input.mime_type.starts_with("image/"),
+                            mime_type: input.mime_type.clone(),
                         },
                     );
                     if media_item_id == root_item_id {
