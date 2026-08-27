@@ -18,7 +18,7 @@ use super::{
 const COMPONENT: &str = "projection-v2-roaring";
 const MAGIC: &[u8; 8] = b"PCTOV2\0\x02";
 const IMPLEMENTATION_MATERIAL: &[u8] =
-    b"projection-v2-checkpoint-v7:canonical-group-membership-and-order:complete-immutable-state:portable-roaring";
+    b"projection-v2-checkpoint-v8:canonical-group-and-folder-order:complete-immutable-state:portable-roaring";
 const MAX_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ENTRY_COUNT: usize = 100_000_000;
 
@@ -260,6 +260,7 @@ fn encode_state(state: &State) -> Result<Vec<u8>, String> {
     encoder.id_vec_map(&state.collection_orders);
     encoder.id_map(&state.media_to_root);
     encoder.bitmap_map(&state.folder_members)?;
+    encoder.id_vec_map(&state.folder_orders);
     encoder.bitmap_map(&state.folder_bitmaps)?;
     encoder.id_vec_map(&state.root_owned_folders);
     encoder.u32_map(&state.root_folder_counts);
@@ -290,6 +291,7 @@ fn decode_state(bytes: &[u8]) -> Result<State, String> {
         collection_orders: decoder.id_vec_map()?,
         media_to_root: decoder.id_map()?,
         folder_members: decoder.bitmap_map()?,
+        folder_orders: decoder.id_vec_map()?,
         folder_bitmaps: decoder.bitmap_map()?,
         root_owned_folders: decoder.id_vec_map()?,
         root_folder_counts: decoder.u32_map()?,

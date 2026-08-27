@@ -229,20 +229,26 @@ impl PreparedProjection {
                 ])
                 .map_err(|error| error.to_string())?;
 
-            if let Some(mut order) = canonical_bitmap::load_order(transaction, "folder", *folder_id)
-                .map_err(|error| error.to_string())?
-            {
-                order.retain(|item_id| bitmap.contains(*item_id));
-                let ordered = order.iter().copied().collect::<RoaringBitmap>();
-                order.extend((&bitmap - &ordered).iter());
+            if let Some(order) = self.state.folder_orders.get(folder_id) {
                 canonical_bitmap::replace_order(
                     transaction,
                     "folder",
                     *folder_id,
                     revision,
-                    &order,
+                    &order
+                        .iter()
+                        .map(|item_id| *item_id as u32)
+                        .collect::<Vec<_>>(),
                 )
                 .map_err(|error| error.to_string())?;
+            } else {
+                transaction
+                    .execute(
+                        "DELETE FROM canonical_order
+                         WHERE owner_kind = 'folder' AND owner_id = ?1",
+                        [folder_id],
+                    )
+                    .map_err(|error| error.to_string())?;
             }
         }
 
@@ -1025,6 +1031,7 @@ struct State {
     collection_orders: ShardedMap<i64, Shared<Vec<i64>>>,
     media_to_root: ShardedMap<i64, i64>,
     folder_members: ShardedMap<i64, Shared<RoaringBitmap>>,
+    folder_orders: ShardedMap<i64, Shared<Vec<i64>>>,
     folder_bitmaps: ShardedMap<i64, Shared<RoaringBitmap>>,
     root_owned_folders: ShardedMap<i64, Shared<Vec<i64>>>,
     root_folder_counts: ShardedMap<i64, u32>,
@@ -1106,7 +1113,19 @@ fn canonical_diff(before: &State, after: &State) -> CanonicalDirty {
         rating: rating_changed,
         tags,
         tag_roots,
-        folders: changed_shared_keys(&before.folder_members, &after.folder_members),
+        folders: {
+            let mut folders = changed_shared_keys(&before.folder_members, &after.folder_members)
+                .into_iter()
+                .chain(changed_shared_keys(
+                    &before.folder_orders,
+                    &after.folder_orders,
+                ))
+                .collect::<HashSet<_>>()
+                .into_iter()
+                .collect::<Vec<_>>();
+            folders.sort_unstable();
+            folders
+        },
         groups: {
             let mut groups =
                 changed_shared_keys(&before.collection_members, &after.collection_members)
@@ -1251,6 +1270,13 @@ impl ProjectionSelectionSnapshot {
             .get(&root_id)
             .map(|folders| (**folders).clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn folder_order(&self, folder_id: i64) -> Option<Vec<i64>> {
+        self.state
+            .folder_orders
+            .get(&folder_id)
+            .map(|order| (**order).clone())
     }
 
     pub(crate) fn tag_ids_for_root(&self, root_id: i64) -> Vec<i64> {
@@ -1730,6 +1756,20 @@ impl ProjectionStore {
                 return Err(format!(
                     "canonical folder {folder_id} references unknown root {root_id}"
                 ));
+            }
+            if let Some(order) = canonical_bitmap::load_order(connection, "folder", folder_id)
+                .map_err(|error| error.to_string())?
+            {
+                let ordered_members = order.iter().copied().collect::<RoaringBitmap>();
+                if ordered_members.len() != order.len() as u64 || ordered_members != members {
+                    return Err(format!(
+                        "canonical folder {folder_id} membership and order differ"
+                    ));
+                }
+                state.folder_orders.insert(
+                    folder_id,
+                    order.into_iter().map(i64::from).collect::<Vec<_>>().into(),
+                );
             }
             state.folder_members.insert(folder_id, members.into());
         }
@@ -2293,6 +2333,11 @@ impl ProjectionStore {
                         .insert(change.item_id as u32);
                     insert_root_folder(&mut state, change.item_id, change.folder_id);
                 }
+                if inserted {
+                    if let Some(order) = state.folder_orders.get_mut(&change.folder_id) {
+                        order.push(change.item_id);
+                    }
+                }
             } else {
                 let removed = state
                     .folder_members
@@ -2303,6 +2348,9 @@ impl ProjectionStore {
                         bitmap.remove(change.item_id as u32);
                     }
                     remove_root_folder(&mut state, change.item_id, change.folder_id);
+                    if let Some(order) = state.folder_orders.get_mut(&change.folder_id) {
+                        order.retain(|item_id| *item_id != change.item_id);
+                    }
                 } else if let Some(bitmap) = state.folder_bitmaps.get_mut(&change.folder_id) {
                     bitmap.remove(change.item_id as u32);
                 }
@@ -2534,6 +2582,11 @@ impl ProjectionStore {
                     .insert(item_id as u32);
                 insert_root_folder(&mut state, item_id, folder_id);
             }
+            if inserted {
+                if let Some(order) = state.folder_orders.get_mut(&folder_id) {
+                    order.push(item_id);
+                }
+            }
         } else {
             let removed = state
                 .folder_members
@@ -2544,6 +2597,9 @@ impl ProjectionStore {
                     bitmap.remove(item_id as u32);
                 }
                 remove_root_folder(&mut state, item_id, folder_id);
+                if let Some(order) = state.folder_orders.get_mut(&folder_id) {
+                    order.retain(|ordered_id| *ordered_id != item_id);
+                }
             } else if let Some(bitmap) = state.folder_bitmaps.get_mut(&folder_id) {
                 bitmap.remove(item_id as u32);
             }
@@ -2585,6 +2641,9 @@ impl ProjectionStore {
             for item_id in visible_changed.into_iter().map(i64::from) {
                 insert_root_folder(&mut state, item_id, folder_id);
             }
+            if let Some(order) = state.folder_orders.get_mut(&folder_id) {
+                order.extend(changed.iter().map(i64::from));
+            }
         } else {
             if let Some(members) = state.folder_members.get_mut(&folder_id) {
                 *members -= item_ids;
@@ -2594,6 +2653,13 @@ impl ProjectionStore {
             }
             for item_id in changed.into_iter().map(i64::from) {
                 remove_root_folder(&mut state, item_id, folder_id);
+            }
+            if let Some(order) = state.folder_orders.get_mut(&folder_id) {
+                order.retain(|item_id| {
+                    u32::try_from(*item_id)
+                        .ok()
+                        .is_none_or(|item_id| !item_ids.contains(item_id))
+                });
             }
         }
         Ok(())
@@ -2613,6 +2679,7 @@ impl ProjectionStore {
                 }
             }
             state.folder_bitmaps.remove(folder_id);
+            state.folder_orders.remove(folder_id);
         }
         Ok(())
     }
@@ -3252,8 +3319,8 @@ mod tests {
         RootProjectionChange, RootSummaryProjectionChange, StructureProjectionDelta,
     };
     use crate::canonical_bitmap::{
-        replace_bitmap, replace_ordered_membership, BitmapDomain, LIFECYCLE_ACTIVE_KEY,
-        LIFECYCLE_INBOX_KEY, LIFECYCLE_TRASH_KEY, RATING_UNRATED_KEY,
+        replace_bitmap, replace_order, replace_ordered_membership, BitmapDomain,
+        LIFECYCLE_ACTIVE_KEY, LIFECYCLE_INBOX_KEY, LIFECYCLE_TRASH_KEY, RATING_UNRATED_KEY,
     };
 
     fn fixture() -> (Connection, ProjectionStore) {
@@ -3338,6 +3405,7 @@ mod tests {
             &RoaringBitmap::from_iter([20]),
         )
         .unwrap();
+        replace_order(&transaction, "folder", 7, 1, &[20]).unwrap();
         replace_ordered_membership(&transaction, "group", 20, 1, &[10]).unwrap();
         transaction.commit().unwrap();
         let projection = ProjectionStore::from_connection(&connection).unwrap();
@@ -3357,6 +3425,31 @@ mod tests {
         assert_eq!(projection.inbox_bitmap(), RoaringBitmap::from_iter([12]));
         assert!(projection.trash_bitmap().is_empty());
         assert_eq!(projection.folder_bitmap(7), RoaringBitmap::from_iter([20]));
+        assert_eq!(
+            projection.selection_snapshot().folder_order(7),
+            Some(vec![20])
+        );
+    }
+
+    #[test]
+    fn canonical_folder_order_tracks_membership_changes() {
+        let (_connection, projection) = fixture();
+
+        projection
+            .apply_folder_bitmap(7, &RoaringBitmap::from_iter([11]), true)
+            .unwrap();
+        assert_eq!(
+            projection.selection_snapshot().folder_order(7),
+            Some(vec![20, 11])
+        );
+
+        projection
+            .apply_folder_bitmap(7, &RoaringBitmap::from_iter([20]), false)
+            .unwrap();
+        assert_eq!(
+            projection.selection_snapshot().folder_order(7),
+            Some(vec![11])
+        );
     }
 
     #[test]
@@ -3507,6 +3600,7 @@ mod tests {
             &RoaringBitmap::from_iter([12, 20]),
         )
         .unwrap();
+        replace_order(&transaction, "folder", 7, 2, &[20, 12]).unwrap();
         transaction.commit().unwrap();
         projection.reload(&connection).unwrap();
 
