@@ -3618,10 +3618,7 @@ mod tests {
                 crate::canonical_bitmap::seed_test_state(
                     transaction,
                     &crate::canonical_bitmap::TestMembership {
-                        folders: vec![(
-                            folder_id,
-                            ids.iter().map(|item| item.0 as u32).collect(),
-                        )],
+                        folders: vec![(folder_id, ids.iter().map(|item| item.0 as u32).collect())],
                         ..Default::default()
                     },
                 )?;

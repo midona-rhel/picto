@@ -219,7 +219,7 @@ impl Application {
                     transaction,
                     &[smart_folder_id],
                     &active_roots,
-                    |tag_id| projection.tag_bitmap(tag_id),
+                    |tag_id| Ok(projection.tag_bitmap(tag_id)),
                 )?;
                 record_smart_folder_created(transaction, &[smart_folder_id])?;
                 Ok((smart_folder_id, ()))
@@ -333,7 +333,7 @@ impl Application {
                         transaction,
                         &affected,
                         &active_roots,
-                        |tag_id| projection.tag_bitmap(tag_id),
+                        |tag_id| Ok(projection.tag_bitmap(tag_id)),
                     )?;
                 }
                 record_smart_folder_upsert(transaction, &[smart_folder_id], &changed_fields)?;
@@ -385,7 +385,7 @@ impl Application {
                         transaction,
                         &affected,
                         &active_roots,
-                        |tag_id| projection.tag_bitmap(tag_id),
+                        |tag_id| Ok(projection.tag_bitmap(tag_id)),
                     )?;
                 }
                 let changed_fields = if parent_changed {

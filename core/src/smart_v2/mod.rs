@@ -104,8 +104,7 @@ fn canonical_active_roots(connection: &Connection) -> rusqlite::Result<RoaringBi
         .prepare_cached("SELECT root_item_id FROM root_summary WHERE lifecycle = 'active'")?
         .query_map([], |row| {
             let root_id: i64 = row.get(0)?;
-            u32::try_from(root_id)
-                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
+            u32::try_from(root_id).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
         })?
         .collect::<rusqlite::Result<RoaringBitmap>>()?;
     if !from_summary.is_empty() {
@@ -115,16 +114,20 @@ fn canonical_active_roots(connection: &Connection) -> rusqlite::Result<RoaringBi
         .prepare_cached("SELECT item_id FROM library_root WHERE lifecycle = 'active'")?
         .query_map([], |row| {
             let root_id: i64 = row.get(0)?;
-            u32::try_from(root_id)
-                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
+            u32::try_from(root_id).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
         })?
         .collect()
 }
 
 /// Canonical direct-tag membership as durably persisted in the same database.
-fn canonical_tag_bitmap(connection: &Connection, tag_id: i64) -> RoaringBitmap {
-    crate::canonical_bitmap::load_bitmap(connection, crate::canonical_bitmap::BitmapDomain::Tag, tag_id)
-        .unwrap_or_default()
+/// Checksum or decoding failures propagate: a corrupt component must fail the
+/// evaluation loudly instead of masquerading as an empty tag.
+fn canonical_tag_bitmap(connection: &Connection, tag_id: i64) -> rusqlite::Result<RoaringBitmap> {
+    crate::canonical_bitmap::load_bitmap(
+        connection,
+        crate::canonical_bitmap::BitmapDomain::Tag,
+        tag_id,
+    )
 }
 
 /// Answer one non-tag rule with SQL over immutable facts, scoped to the
@@ -180,8 +183,7 @@ fn single_rule_roots(
         .prepare(&sql)?
         .query_map(rusqlite::params_from_iter(arguments), |row| {
             let root_id: i64 = row.get(0)?;
-            u32::try_from(root_id)
-                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
+            u32::try_from(root_id).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
         })?
         .collect()
 }
@@ -200,7 +202,7 @@ pub(crate) fn rebuild_generations(
     transaction: &Transaction<'_>,
     smart_folder_ids: &[i64],
     active_roots: &RoaringBitmap,
-    mut tag_bitmap: impl FnMut(i64) -> RoaringBitmap,
+    mut tag_bitmap: impl FnMut(i64) -> rusqlite::Result<RoaringBitmap>,
 ) -> rusqlite::Result<()> {
     if smart_folder_ids.is_empty() {
         return Ok(());
@@ -373,8 +375,7 @@ pub(crate) fn refresh_impacted_roots(
         )?
         .query_map([&encoded_roots], |row| {
             let root_id: i64 = row.get(0)?;
-            u32::try_from(root_id)
-                .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
+            u32::try_from(root_id).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(0, root_id))
         })?
         .collect::<rusqlite::Result<RoaringBitmap>>()?;
     let next_revision: i64 = transaction.query_row(
@@ -504,7 +505,10 @@ fn refresh_canonical_materialized(transaction: &Transaction<'_>) -> rusqlite::Re
 fn settle_building_generations(
     transaction: &Transaction<'_>,
     targeted: bool,
-    bitmap_context: Option<(&RoaringBitmap, &mut dyn FnMut(i64) -> RoaringBitmap)>,
+    bitmap_context: Option<(
+        &RoaringBitmap,
+        &mut dyn FnMut(i64) -> rusqlite::Result<RoaringBitmap>,
+    )>,
 ) -> rusqlite::Result<()> {
     let target_filter = if targeted {
         "AND smart_folder_id IN (
@@ -755,7 +759,7 @@ pub(crate) fn evaluate_impacted_with_tag_bitmaps(
     connection: &Connection,
     predicate: &SmartFolderPredicate,
     active_roots: &RoaringBitmap,
-    tag_bitmap: impl FnMut(i64) -> RoaringBitmap,
+    tag_bitmap: impl FnMut(i64) -> rusqlite::Result<RoaringBitmap>,
 ) -> rusqlite::Result<RoaringBitmap> {
     if predicate.groups.is_empty() || active_roots.is_empty() {
         return Ok(RoaringBitmap::new());
@@ -825,7 +829,7 @@ fn evaluate_staged(
     connection: &Connection,
     predicate: &SmartFolderPredicate,
     active_roots: &RoaringBitmap,
-    mut tag_bitmap: impl FnMut(i64) -> RoaringBitmap,
+    mut tag_bitmap: impl FnMut(i64) -> rusqlite::Result<RoaringBitmap>,
 ) -> rusqlite::Result<RoaringBitmap> {
     if predicate.groups.is_empty() || active_roots.is_empty() {
         return Ok(RoaringBitmap::new());
@@ -859,7 +863,7 @@ fn tag_rule_bitmap(
     connection: &Connection,
     rule: &PredicateRule,
     active_roots: &RoaringBitmap,
-    tag_bitmap: &mut impl FnMut(i64) -> RoaringBitmap,
+    tag_bitmap: &mut impl FnMut(i64) -> rusqlite::Result<RoaringBitmap>,
 ) -> rusqlite::Result<RoaringBitmap> {
     let values = rule.values.as_deref().unwrap_or_default();
     if values.is_empty() {
@@ -881,7 +885,11 @@ fn tag_rule_bitmap(
                 |row| row.get::<_, i64>(0),
             )
             .optional()?;
-        sets.push(tag_id.map(&mut *tag_bitmap).unwrap_or_default() & active_roots);
+        let members = match tag_id {
+            Some(tag_id) => tag_bitmap(tag_id)?,
+            None => RoaringBitmap::new(),
+        };
+        sets.push(members & active_roots);
     }
     let combined = match rule.op.as_str() {
         "include" | "include_all" => sets
@@ -1273,10 +1281,7 @@ mod tests {
         }
     }
 
-    fn evaluate_predicate(
-        connection: &Connection,
-        predicate: &SmartFolderPredicate,
-    ) -> Vec<i64> {
+    fn evaluate_predicate(connection: &Connection, predicate: &SmartFolderPredicate) -> Vec<i64> {
         evaluate_canonical_predicate(connection, predicate)
             .unwrap()
             .iter()
@@ -1372,10 +1377,7 @@ mod tests {
             }],
         };
 
-        assert_eq!(
-            evaluate_predicate(&connection, &predicate),
-            vec![10]
-        );
+        assert_eq!(evaluate_predicate(&connection, &predicate), vec![10]);
     }
 
     #[test]
@@ -1506,10 +1508,12 @@ mod tests {
             &transaction,
             &predicate,
             &RoaringBitmap::from_iter([1, 2]),
-            |tag_id| match tag_id {
-                10 => RoaringBitmap::from_iter([1, 2]),
-                11 => RoaringBitmap::from_iter([1]),
-                _ => RoaringBitmap::new(),
+            |tag_id| {
+                Ok(match tag_id {
+                    10 => RoaringBitmap::from_iter([1, 2]),
+                    11 => RoaringBitmap::from_iter([1]),
+                    _ => RoaringBitmap::new(),
+                })
             },
         )
         .unwrap();
@@ -1805,7 +1809,7 @@ mod tests {
             &transaction,
             &[10],
             &RoaringBitmap::from_iter([1, 2]),
-            |_| RoaringBitmap::new(),
+            |_| Ok(RoaringBitmap::new()),
         )
         .unwrap();
 

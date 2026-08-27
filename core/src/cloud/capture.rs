@@ -10,7 +10,8 @@ use serde_json::Value;
 use super::{
     json_sql_error, record_local, source_item_sync_key, source_post_sync_key, CloudFolder,
     CloudOperation, CloudSmartFolder, CloudSourceItem, CloudSourcePost, CloudSubscription,
-    CloudSubscriptionQuery, RestoredItem, RestoredMedia,
+    CloudSubscriptionQuery, JournalFolderDelta, JournalGroupDelta, JournalTagDelta, RestoredItem,
+    RestoredMedia,
 };
 
 const CAPTURED_TABLES: &[&str] = &[
@@ -83,6 +84,7 @@ pub(crate) struct CanonicalFolderChange {
     pub folder_id: i64,
     pub added: Vec<u32>,
     pub removed: Vec<u32>,
+    pub order_changed: bool,
     pub order: Option<Vec<u32>>,
 }
 
@@ -125,22 +127,23 @@ pub(crate) fn canonical_membership_capture_enabled(
     )
 }
 
-fn capture_item_key(
-    transaction: &Transaction<'_>,
-    item_id: i64,
-) -> rusqlite::Result<Option<String>> {
-    transaction
-        .query_row(
-            "SELECT item_key FROM library_item WHERE item_id = ?1",
-            [item_id],
-            |row| row.get(0),
-        )
-        .optional()
+fn hex_roaring(ids: &[u32]) -> String {
+    let bitmap = ids.iter().copied().collect::<roaring::RoaringBitmap>();
+    let mut bytes = Vec::with_capacity(bitmap.serialized_size());
+    bitmap
+        .serialize_into(&mut bytes)
+        .expect("serializing into a Vec cannot fail");
+    hex::encode(bytes)
 }
 
-/// Record one replication batch for canonical tag, folder, and group
-/// membership deltas. Items or tags already deleted in this transaction are
-/// skipped; their own tombstone operations carry the removal.
+fn roaring_from_hex(encoded: &str) -> Result<roaring::RoaringBitmap, String> {
+    let bytes = hex::decode(encoded).map_err(|error| error.to_string())?;
+    roaring::RoaringBitmap::deserialize_from(bytes.as_slice()).map_err(|error| error.to_string())
+}
+
+/// Record one compact journal entry for canonical tag, folder, and group
+/// membership deltas. The foreground transaction stores only bitmaps and
+/// per-container metadata; per-item key expansion happens at flush time.
 pub(crate) fn record_canonical_membership(
     transaction: &Transaction<'_>,
     changes: &CanonicalMembershipChanges,
@@ -148,7 +151,7 @@ pub(crate) fn record_canonical_membership(
     if changes.is_empty() {
         return Ok(0);
     }
-    let mut operations = Vec::new();
+    let mut tags = Vec::new();
     for change in &changes.tags {
         let Some((namespace, subtag)) = transaction
             .query_row(
@@ -160,19 +163,14 @@ pub(crate) fn record_canonical_membership(
         else {
             continue;
         };
-        for (roots, present) in [(&change.added, true), (&change.removed, false)] {
-            for root_id in roots.iter().map(|root| i64::from(*root)) {
-                if let Some(item_key) = capture_item_key(transaction, root_id)? {
-                    operations.push(CloudOperation::TagMembership {
-                        item_key,
-                        namespace: namespace.clone(),
-                        subtag: subtag.clone(),
-                        present,
-                    });
-                }
-            }
-        }
+        tags.push(JournalTagDelta {
+            namespace,
+            subtag,
+            added: hex_roaring(&change.added),
+            removed: hex_roaring(&change.removed),
+        });
     }
+    let mut folders = Vec::new();
     for change in &changes.folders {
         let Some(folder_key) = transaction
             .query_row(
@@ -184,49 +182,247 @@ pub(crate) fn record_canonical_membership(
         else {
             continue;
         };
-        for (roots, present) in [(&change.added, true), (&change.removed, false)] {
-            for root in roots {
-                let root_id = i64::from(*root);
-                if let Some(item_key) = capture_item_key(transaction, root_id)? {
-                    let position_rank = change
+        folders.push(JournalFolderDelta {
+            folder_key,
+            added: hex_roaring(&change.added),
+            removed: hex_roaring(&change.removed),
+            order_changed: change.order_changed,
+            order: change
+                .order
+                .as_ref()
+                .map(|order| order.iter().map(|item| i64::from(*item)).collect()),
+        });
+    }
+    let mut groups = Vec::new();
+    for change in &changes.groups {
+        let collection_item_key = transaction
+            .query_row(
+                "SELECT item_key FROM library_item WHERE item_id = ?1",
+                [change.collection_id],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?;
+        groups.push(JournalGroupDelta {
+            collection_item_key,
+            previous: change.previous.iter().map(|id| i64::from(*id)).collect(),
+            next: change
+                .next
+                .as_ref()
+                .map(|next| next.iter().map(|id| i64::from(*id)).collect()),
+        });
+    }
+    if tags.is_empty() && folders.is_empty() && groups.is_empty() {
+        return Ok(0);
+    }
+    record_local(
+        transaction,
+        CloudOperation::MembershipJournal {
+            tags,
+            folders,
+            groups,
+        },
+    )?;
+    Ok(1)
+}
+
+fn item_keys_for(
+    transaction: &Transaction<'_>,
+    ids: &std::collections::BTreeSet<i64>,
+) -> rusqlite::Result<BTreeMap<i64, String>> {
+    if ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let encoded = serde_json::to_string(&ids.iter().collect::<Vec<_>>()).map_err(json_sql_error)?;
+    transaction
+        .prepare_cached(
+            "SELECT li.item_id, li.item_key
+             FROM json_each(?1) selected
+             JOIN library_item li ON li.item_id = CAST(selected.value AS INTEGER)",
+        )?
+        .query_map([encoded], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect()
+}
+
+/// A journal payload with every hex bitmap decoded up front, so payload
+/// corruption is detected before any expansion work begins.
+struct DecodedJournal {
+    tags: Vec<DecodedTagDelta>,
+    folders: Vec<DecodedFolderDelta>,
+    groups: Vec<JournalGroupDelta>,
+}
+
+struct DecodedTagDelta {
+    namespace: String,
+    subtag: String,
+    added: roaring::RoaringBitmap,
+    removed: roaring::RoaringBitmap,
+}
+
+struct DecodedFolderDelta {
+    folder_key: String,
+    added: roaring::RoaringBitmap,
+    removed: roaring::RoaringBitmap,
+    order_changed: bool,
+    order: Option<Vec<i64>>,
+}
+
+fn decode_journal(payload_json: &str) -> Result<DecodedJournal, String> {
+    let operation: CloudOperation = serde_json::from_str(payload_json)
+        .map_err(|error| format!("undecodable membership journal: {error}"))?;
+    let CloudOperation::MembershipJournal {
+        tags,
+        folders,
+        groups,
+    } = operation
+    else {
+        return Err("outbox row is not a membership journal".to_string());
+    };
+    let tags = tags
+        .into_iter()
+        .map(|delta| {
+            Ok(DecodedTagDelta {
+                added: roaring_from_hex(&delta.added)?,
+                removed: roaring_from_hex(&delta.removed)?,
+                namespace: delta.namespace,
+                subtag: delta.subtag,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|error| format!("corrupt tag bitmap in membership journal: {error}"))?;
+    let folders = folders
+        .into_iter()
+        .map(|delta| {
+            Ok(DecodedFolderDelta {
+                added: roaring_from_hex(&delta.added)?,
+                removed: roaring_from_hex(&delta.removed)?,
+                folder_key: delta.folder_key,
+                order_changed: delta.order_changed,
+                order: delta.order,
+            })
+        })
+        .collect::<Result<Vec<_>, String>>()
+        .map_err(|error| format!("corrupt folder bitmap in membership journal: {error}"))?;
+    Ok(DecodedJournal {
+        tags,
+        folders,
+        groups,
+    })
+}
+
+/// Expand one journal payload into keyed replication operations. Items that
+/// no longer exist are skipped; their tombstones carry the removal.
+fn expand_membership_journal(
+    transaction: &Transaction<'_>,
+    journal: &DecodedJournal,
+) -> rusqlite::Result<Vec<CloudOperation>> {
+    let mut operations = Vec::new();
+    for delta in &journal.tags {
+        let ids = delta
+            .added
+            .iter()
+            .chain(delta.removed.iter())
+            .map(i64::from)
+            .collect::<std::collections::BTreeSet<_>>();
+        let keys = item_keys_for(transaction, &ids)?;
+        for (roots, present) in [(&delta.added, true), (&delta.removed, false)] {
+            for root in roots.iter().map(i64::from) {
+                if let Some(item_key) = keys.get(&root) {
+                    operations.push(CloudOperation::TagMembership {
+                        item_key: item_key.clone(),
+                        namespace: delta.namespace.clone(),
+                        subtag: delta.subtag.clone(),
+                        present,
+                    });
+                }
+            }
+        }
+    }
+    for delta in &journal.folders {
+        let mut ids = delta
+            .added
+            .iter()
+            .chain(delta.removed.iter())
+            .map(i64::from)
+            .collect::<std::collections::BTreeSet<_>>();
+        if let Some(order) = &delta.order {
+            ids.extend(order.iter().copied());
+        }
+        let keys = item_keys_for(transaction, &ids)?;
+        for (roots, present) in [(&delta.added, true), (&delta.removed, false)] {
+            for root in roots.iter().map(i64::from) {
+                if let Some(item_key) = keys.get(&root) {
+                    let position_rank = delta
                         .order
                         .as_ref()
-                        .and_then(|order| order.iter().position(|entry| entry == root))
+                        .and_then(|order| order.iter().position(|entry| *entry == root))
                         .and_then(|index| i64::try_from(index).ok());
                     operations.push(CloudOperation::FolderMembership {
-                        item_key,
-                        folder_key: folder_key.clone(),
+                        item_key: item_key.clone(),
+                        folder_key: delta.folder_key.clone(),
                         present,
                         position_rank,
                     });
                 }
             }
         }
+        if delta.order_changed {
+            match &delta.order {
+                // A recorded order of None is a deliberate clear.
+                None => operations.push(CloudOperation::FolderOrder {
+                    folder_key: delta.folder_key.clone(),
+                    item_keys: Vec::new(),
+                }),
+                Some(order) => {
+                    let item_keys = order
+                        .iter()
+                        .filter_map(|item| keys.get(item).cloned())
+                        .collect::<Vec<_>>();
+                    // When every ordered item vanished before the flush there
+                    // is nothing left to replicate; an empty list would read
+                    // as a clear on the receiver.
+                    if !item_keys.is_empty() {
+                        operations.push(CloudOperation::FolderOrder {
+                            folder_key: delta.folder_key.clone(),
+                            item_keys,
+                        });
+                    }
+                }
+            }
+        }
     }
-    for change in &changes.groups {
-        let collection_key = capture_item_key(transaction, change.collection_id)?;
-        let next = change.next.as_deref().unwrap_or(&[]);
-        let previous_positions = change
+    for delta in &journal.groups {
+        let next = delta.next.as_deref().unwrap_or(&[]);
+        let ids = delta
+            .previous
+            .iter()
+            .chain(next.iter())
+            .copied()
+            .collect::<std::collections::BTreeSet<_>>();
+        let keys = item_keys_for(transaction, &ids)?;
+        let previous_positions = delta
             .previous
             .iter()
             .enumerate()
             .map(|(index, media)| (*media, index))
             .collect::<BTreeMap<_, _>>();
-        if let Some(collection_key) = &collection_key {
+        if let Some(collection_key) = &delta.collection_item_key {
             for (index, media) in next.iter().enumerate() {
-                let Some(media_key) = capture_item_key(transaction, i64::from(*media))? else {
+                let Some(media_key) = keys.get(media) else {
                     continue;
                 };
                 match previous_positions.get(media) {
                     None => operations.push(CloudOperation::GroupAssignment {
-                        media_item_key: media_key,
+                        media_item_key: media_key.clone(),
                         collection_item_key: Some(collection_key.clone()),
                         position_rank: i64::try_from(index).ok(),
+                        lifecycle: None,
                     }),
                     Some(previous_index) if *previous_index != index => {
                         operations.push(CloudOperation::ReorderMember {
                             collection_item_key: collection_key.clone(),
-                            media_item_key: media_key,
+                            media_item_key: media_key.clone(),
                             position_rank: i64::try_from(index).unwrap_or(i64::MAX),
                         })
                     }
@@ -234,26 +430,164 @@ pub(crate) fn record_canonical_membership(
                 }
             }
         }
-        for media in &change.previous {
+        for media in &delta.previous {
             if next.contains(media) {
                 continue;
             }
-            // A removed member that still exists became a standalone root.
-            if let Some(media_key) = capture_item_key(transaction, i64::from(*media))? {
-                operations.push(CloudOperation::GroupAssignment {
-                    media_item_key: media_key,
-                    collection_item_key: None,
-                    position_rank: None,
-                });
-            }
+            let Some(media_key) = keys.get(media) else {
+                continue;
+            };
+            // A removed member that still exists became a standalone root;
+            // its lifecycle rides along so replicas do not guess.
+            let lifecycle = transaction
+                .query_row(
+                    "SELECT lifecycle FROM library_root WHERE item_id = ?1",
+                    [media],
+                    |row| row.get::<_, String>(0),
+                )
+                .optional()?;
+            operations.push(CloudOperation::GroupAssignment {
+                media_item_key: media_key.clone(),
+                collection_item_key: None,
+                position_rank: None,
+                lifecycle,
+            });
         }
     }
-    if operations.is_empty() {
-        return Ok(0);
+    Ok(operations)
+}
+
+/// Expand the earliest pending membership journal into keyed operations, in
+/// place, and stamp the local conflict clocks those operations imply — with
+/// the journal's original timestamp and frontier, exactly as eager per-item
+/// recording would have. Returns false when no journal remains. A journal
+/// whose payload cannot be decoded is quarantined and removed so one corrupt
+/// row cannot wedge replication forever.
+fn expand_next_outbox_journal(transaction: &Transaction<'_>) -> rusqlite::Result<bool> {
+    let row = transaction
+        .prepare(
+            "SELECT mutation_id, library_id, device_id, hlc_physical_ms, hlc_logical,
+                    causal_frontier_json, payload_json, schema_generation
+             FROM cloud_outbox
+             WHERE json_extract(payload_json, '$.kind') = 'membership_journal'
+             ORDER BY hlc_physical_ms, hlc_logical, mutation_id
+             LIMIT 1",
+        )?
+        .query_row([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        })
+        .optional()?;
+    let Some((
+        mutation_id,
+        library_id,
+        device_id,
+        physical_ms,
+        logical,
+        frontier_json,
+        payload_json,
+        schema_generation,
+    )) = row
+    else {
+        return Ok(false);
+    };
+    let journal = match decode_journal(&payload_json) {
+        Ok(journal) => journal,
+        Err(reason) => {
+            quarantine_outbox_row(transaction, &mutation_id, &reason, &payload_json)?;
+            return Ok(true);
+        }
+    };
+    let operations = expand_membership_journal(transaction, &journal)?;
+    let mut mutation = super::CloudMutation {
+        mutation_id: mutation_id.clone(),
+        library_id,
+        device_id,
+        timestamp: super::HybridTimestamp {
+            physical_ms: physical_ms as u64,
+            logical: logical as u32,
+        },
+        causal_frontier: serde_json::from_str(&frontier_json).map_err(json_sql_error)?,
+        operation: CloudOperation::Batch { operations },
+        schema_generation,
+        checksum: String::new(),
+    };
+    mutation.checksum = super::checksum(&mutation).map_err(json_sql_error)?;
+    let expanded_payload = serde_json::to_string(&mutation.operation).map_err(json_sql_error)?;
+    let byte_size = expanded_payload.len() + frontier_json.len();
+    transaction.execute(
+        "UPDATE cloud_outbox
+         SET payload_json = ?2, operation = ?3, checksum = ?4, byte_size = ?5
+         WHERE mutation_id = ?1",
+        params![
+            mutation_id,
+            expanded_payload,
+            mutation.operation.name(),
+            mutation.checksum,
+            byte_size as i64,
+        ],
+    )?;
+    super::stamp_local_operation(transaction, &mutation.operation, &mutation)?;
+    Ok(true)
+}
+
+/// Quarantine an undecodable outbox journal. The payload is carried raw
+/// because a full envelope cannot be reconstructed from a corrupt row.
+fn quarantine_outbox_row(
+    transaction: &Transaction<'_>,
+    mutation_id: &str,
+    reason: &str,
+    payload_json: &str,
+) -> rusqlite::Result<()> {
+    transaction.execute(
+        "INSERT INTO cloud_quarantine (mutation_id, reason, envelope_json, created_at)
+         VALUES (?1, ?2, ?3, ?4) ON CONFLICT(mutation_id) DO NOTHING",
+        params![
+            mutation_id,
+            reason,
+            payload_json,
+            chrono::Utc::now().to_rfc3339(),
+        ],
+    )?;
+    transaction.execute(
+        "DELETE FROM cloud_outbox WHERE mutation_id = ?1",
+        [mutation_id],
+    )?;
+    Ok(())
+}
+
+/// Expand every pending membership journal inside one writer transaction.
+/// Remote reconciliation calls this first, in its own apply transaction, so
+/// every committed local mutation holds its conflict stamps before any remote
+/// operation consults the clocks.
+pub(crate) fn expand_outbox_journals(transaction: &Transaction<'_>) -> rusqlite::Result<usize> {
+    let mut expanded = 0;
+    while expand_next_outbox_journal(transaction)? {
+        expanded += 1;
     }
-    let count = operations.len();
-    record_local(transaction, CloudOperation::Batch { operations })?;
-    Ok(count)
+    Ok(expanded)
+}
+
+/// Expand pending membership journals in bounded writer transactions — one
+/// journal per transaction, at cloud priority — so a broad expansion yields
+/// the writer to foreground mutations between journals.
+pub(crate) fn expand_pending_journals(store: &crate::store::Store) -> Result<usize, String> {
+    let mut expanded = 0;
+    loop {
+        let (more, _) = store.transaction_cloud(expand_next_outbox_journal)?;
+        if !more {
+            return Ok(expanded);
+        }
+        expanded += 1;
+    }
 }
 
 pub(crate) fn begin_explicit_capture(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
@@ -1279,7 +1613,6 @@ fn lifecycle_states(
         })?
         .collect()
 }
-
 
 #[cfg(test)]
 fn restored_item_state(

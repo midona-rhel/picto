@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{params, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -66,6 +66,10 @@ pub async fn flush(
     provider: &dyn CloudProvider,
     force_seal: bool,
 ) -> Result<FlushResult, String> {
+    // Compact membership journals expand into keyed operations here, at
+    // cloud priority and one journal per writer transaction, so neither the
+    // foreground mutation nor a broad expansion stalls interactive work.
+    super::capture::expand_pending_journals(store)?;
     let pack = load_current_and_pending(store)?;
     if pack.mutations.is_empty() {
         return Ok(FlushResult::default());
@@ -152,30 +156,56 @@ fn load_current_and_pending(store: &Store) -> Result<EpochPack, String> {
             [],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        // A journal recorded between expansion and this read must never
+        // upload raw: hold it and every later mutation for the next flush so
+        // the pack stays a contiguous timestamp prefix and the advertised
+        // frontier never passes an unexpanded journal.
+        let boundary: Option<(i64, i64, String)> = connection
+            .query_row(
+                "SELECT hlc_physical_ms, hlc_logical, mutation_id FROM cloud_outbox
+                 WHERE json_extract(payload_json, '$.kind') = 'membership_journal'
+                 ORDER BY hlc_physical_ms, hlc_logical, mutation_id LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let (boundary_physical, boundary_logical, boundary_id) = match &boundary {
+            Some((physical, logical, id)) => (Some(*physical), Some(*logical), Some(id.clone())),
+            None => (None, None, None),
+        };
         let mut statement = connection.prepare(
             "SELECT mutation_id, library_id, device_id, hlc_physical_ms, hlc_logical,
                     causal_frontier_json, payload_json, schema_generation, checksum
-             FROM cloud_outbox WHERE current_epoch = 1 OR published_at IS NULL
+             FROM cloud_outbox WHERE (current_epoch = 1 OR published_at IS NULL)
+               AND (?1 IS NULL
+                    OR hlc_physical_ms < ?1
+                    OR (hlc_physical_ms = ?1
+                        AND (hlc_logical < ?2
+                             OR (hlc_logical = ?2 AND mutation_id < ?3))))
              ORDER BY hlc_physical_ms, hlc_logical, mutation_id",
         )?;
-        let rows = statement.query_map([], |row| {
-            let frontier_json: String = row.get(5)?;
-            let payload_json: String = row.get(6)?;
-            Ok(CloudMutation {
-                mutation_id: row.get(0)?,
-                library_id: row.get(1)?,
-                device_id: row.get(2)?,
-                timestamp: HybridTimestamp {
-                    physical_ms: row.get::<_, i64>(3)? as u64,
-                    logical: row.get::<_, i64>(4)? as u32,
-                },
-                causal_frontier: serde_json::from_str(&frontier_json).map_err(json_sql_error)?,
-                operation: serde_json::from_str::<CloudOperation>(&payload_json)
-                    .map_err(json_sql_error)?,
-                schema_generation: row.get(7)?,
-                checksum: row.get(8)?,
-            })
-        })?;
+        let rows = statement.query_map(
+            params![boundary_physical, boundary_logical, boundary_id],
+            |row| {
+                let frontier_json: String = row.get(5)?;
+                let payload_json: String = row.get(6)?;
+                Ok(CloudMutation {
+                    mutation_id: row.get(0)?,
+                    library_id: row.get(1)?,
+                    device_id: row.get(2)?,
+                    timestamp: HybridTimestamp {
+                        physical_ms: row.get::<_, i64>(3)? as u64,
+                        logical: row.get::<_, i64>(4)? as u32,
+                    },
+                    causal_frontier: serde_json::from_str(&frontier_json)
+                        .map_err(json_sql_error)?,
+                    operation: serde_json::from_str::<CloudOperation>(&payload_json)
+                        .map_err(json_sql_error)?,
+                    schema_generation: row.get(7)?,
+                    checksum: row.get(8)?,
+                })
+            },
+        )?;
         Ok(EpochPack {
             library_id,
             device_id,
@@ -464,6 +494,47 @@ mod tests {
         assert!(!objects
             .iter()
             .any(|object| object.path.ends_with("current.epoch.zst")));
+    }
+
+    #[test]
+    fn pack_holds_back_mutations_at_or_after_an_unexpanded_journal() {
+        let library = tempfile::tempdir().unwrap();
+        let store = Store::open(library.path()).unwrap();
+        store
+            .transaction(|transaction| {
+                record_local(
+                    transaction,
+                    CloudOperation::DeleteItem {
+                        item_key: "first".into(),
+                    },
+                )?;
+                record_local(
+                    transaction,
+                    CloudOperation::MembershipJournal {
+                        tags: Vec::new(),
+                        folders: Vec::new(),
+                        groups: Vec::new(),
+                    },
+                )?;
+                record_local(
+                    transaction,
+                    CloudOperation::DeleteItem {
+                        item_key: "second".into(),
+                    },
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let pack = load_current_and_pending(&store).unwrap();
+        assert_eq!(
+            pack.mutations.len(),
+            1,
+            "an unexpanded journal and everything after it must wait for the next flush"
+        );
+        assert!(matches!(
+            &pack.mutations[0].operation,
+            CloudOperation::DeleteItem { item_key } if item_key == "first"
+        ));
     }
 
     #[test]

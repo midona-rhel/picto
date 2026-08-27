@@ -456,7 +456,6 @@ impl Encoder {
         }
     }
 
-
     fn bitmap_map(&mut self, map: &ShardedMap<i64, Shared<RoaringBitmap>>) -> Result<(), String> {
         let mut entries = map.iter().collect::<Vec<_>>();
         entries.sort_unstable_by_key(|(key, _)| **key);
@@ -710,7 +709,6 @@ impl<'a> Decoder<'a> {
         }
         Ok(map)
     }
-
 
     fn bitmap_map(&mut self) -> Result<ShardedMap<i64, Shared<RoaringBitmap>>, String> {
         let count = self.count(16)?;

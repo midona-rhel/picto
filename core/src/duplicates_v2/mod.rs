@@ -1283,7 +1283,7 @@ pub fn list_candidates(app: &Application, limit: i64) -> Result<Vec<DuplicateCan
     )
 }
 
-pub fn count_candidates(
+pub(crate) fn count_candidates(
     connection: &Connection,
     projection: &ProjectionSelectionSnapshot,
 ) -> rusqlite::Result<i64> {

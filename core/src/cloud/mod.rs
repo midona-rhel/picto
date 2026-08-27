@@ -172,11 +172,30 @@ pub enum CloudOperation {
         media_item_key: String,
         collection_item_key: Option<String>,
         position_rank: Option<i64>,
+        /// Lifecycle of the standalone root a detached member became.
+        /// Absent for attachments and for envelopes from older builds. The
+        /// field must vanish when unset so checksums of envelopes recorded
+        /// before it existed still verify.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        lifecycle: Option<String>,
     },
     ReorderMember {
         collection_item_key: String,
         media_item_key: String,
         position_rank: i64,
+    },
+    /// Compact local membership deltas recorded in the mutation transaction.
+    /// Expanded into keyed operations at flush time; never uploaded as-is.
+    MembershipJournal {
+        tags: Vec<JournalTagDelta>,
+        folders: Vec<JournalFolderDelta>,
+        groups: Vec<JournalGroupDelta>,
+    },
+    /// Complete manual member order for one folder. An empty key list clears
+    /// the manual order.
+    FolderOrder {
+        folder_key: String,
+        item_keys: Vec<String>,
     },
     DeleteItem {
         item_key: String,
@@ -188,7 +207,7 @@ pub enum CloudOperation {
 }
 
 impl CloudOperation {
-    fn name(&self) -> &'static str {
+    pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::Batch { .. } => "batch",
             Self::UpsertItem { .. } => "upsert_item",
@@ -211,6 +230,8 @@ impl CloudOperation {
             Self::SubscriptionSourcePost { .. } => "subscription_source_post",
             Self::GroupAssignment { .. } => "group_assignment",
             Self::ReorderMember { .. } => "reorder_member",
+            Self::MembershipJournal { .. } => "membership_journal",
+            Self::FolderOrder { .. } => "folder_order",
             Self::DeleteItem { .. } => "delete_item",
             Self::RestoreItem { .. } => "restore_item",
         }
@@ -258,9 +279,42 @@ impl CloudOperation {
             }
             Self::GroupAssignment { media_item_key, .. } => Some(("item", media_item_key)),
             Self::ReorderMember { media_item_key, .. } => Some(("item", media_item_key)),
+            Self::MembershipJournal { .. } => None,
+            Self::FolderOrder { folder_key, .. } => Some(("folder", folder_key)),
             Self::RestoreItem { item, .. } => Some(("item", &item.item_key)),
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct JournalTagDelta {
+    pub namespace: String,
+    pub subtag: String,
+    /// Hex-encoded serialized Roaring bitmap of local root IDs.
+    pub added: String,
+    pub removed: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct JournalFolderDelta {
+    pub folder_key: String,
+    pub added: String,
+    pub removed: String,
+    pub order_changed: bool,
+    #[ts(type = "Array<number> | null")]
+    pub order: Option<Vec<i64>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/application/")]
+pub struct JournalGroupDelta {
+    pub collection_item_key: Option<String>,
+    #[ts(type = "Array<number>")]
+    pub previous: Vec<i64>,
+    #[ts(type = "Array<number> | null")]
+    pub next: Option<Vec<i64>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -920,6 +974,15 @@ fn collect_local_stamps(
         CloudOperation::ReorderMember { media_item_key, .. } => {
             plan.field("item", media_item_key, "position_rank");
         }
+        CloudOperation::MembershipJournal { .. } => {
+            // Journals stamp nothing at record time; the expanded batch
+            // stamps with the original timestamp before any remote apply
+            // (capture::expand_outbox_journals runs first in that
+            // transaction), so the clocks never observe the gap.
+        }
+        CloudOperation::FolderOrder { folder_key, .. } => {
+            plan.field("folder", folder_key, "member_order");
+        }
         CloudOperation::DeleteItem { item_key } => {
             plan.tombstone("item", item_key, true);
         }
@@ -1104,6 +1167,10 @@ impl CloudProjectionFootprint {
             | CloudOperation::TagMembership { item_key, .. }
             | CloudOperation::DeleteItem { item_key } => {
                 footprint.item_keys.insert(item_key.clone());
+            }
+            CloudOperation::MembershipJournal { .. } => {}
+            CloudOperation::FolderOrder { folder_key, .. } => {
+                footprint.folder_keys.insert(folder_key.clone());
             }
             CloudOperation::FolderMembership {
                 item_key,
@@ -1497,6 +1564,16 @@ impl CloudProjectionDelta {
                 structure.folder_orders.push(FolderOrderProjectionChange {
                     folder_id: *folder_id,
                     item_ids: order.iter().map(|item| i64::from(*item)).collect(),
+                    cleared: false,
+                });
+            }
+        }
+        for folder_id in before.folder_orders.keys() {
+            if !after.folder_orders.contains_key(folder_id) {
+                structure.folder_orders.push(FolderOrderProjectionChange {
+                    folder_id: *folder_id,
+                    item_ids: Vec::new(),
+                    cleared: true,
                 });
             }
         }
@@ -1552,6 +1629,11 @@ pub fn apply_downloaded(
         .store()
         .transaction_if_changed_settled_without_cloud_maintenance(
             |transaction| {
+                // Every committed local mutation must hold its conflict
+                // stamps before a remote operation consults the clocks.
+                // Expanding in this same writer transaction leaves no window
+                // for an unstamped journal to lose a race.
+                capture::expand_outbox_journals(transaction)?;
                 // Applied remote changes must not be captured again as local
                 // membership operations at projection persistence.
                 transaction.execute(
@@ -2002,11 +2084,13 @@ fn apply_operation(
             media_item_key,
             collection_item_key,
             position_rank,
+            lifecycle,
         } => apply_group_assignment(
             transaction,
             media_item_key,
             collection_item_key.as_deref(),
             *position_rank,
+            lifecycle.as_deref(),
             mutation,
         ),
         CloudOperation::ReorderMember {
@@ -2031,16 +2115,13 @@ fn apply_operation(
             )? {
                 return Ok(ApplyOutcome::Ignored);
             }
-            let in_group = crate::canonical_bitmap::load_order(
-                transaction,
-                "group",
-                collection_id,
-            )?
-            .is_some_and(|order| {
-                u32::try_from(media_id)
-                    .ok()
-                    .is_some_and(|media| order.contains(&media))
-            });
+            let in_group =
+                crate::canonical_bitmap::load_order(transaction, "group", collection_id)?
+                    .is_some_and(|order| {
+                        u32::try_from(media_id)
+                            .ok()
+                            .is_some_and(|media| order.contains(&media))
+                    });
             if !in_group {
                 quarantine(
                     transaction,
@@ -2064,6 +2145,83 @@ fn apply_operation(
                 mutation,
             )?;
             Ok(ApplyOutcome::Applied(Some(collection_id)))
+        }
+        CloudOperation::MembershipJournal { .. } => {
+            quarantine(
+                transaction,
+                mutation,
+                "membership journal was uploaded without expansion",
+            )?;
+            Ok(ApplyOutcome::Quarantined)
+        }
+        CloudOperation::FolderOrder {
+            folder_key,
+            item_keys,
+        } => {
+            let folder_id: Option<i64> = transaction
+                .query_row(
+                    "SELECT folder_id FROM folder WHERE folder_key = ?1",
+                    [folder_key],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(folder_id) = folder_id else {
+                quarantine(transaction, mutation, "ordered folder does not exist")?;
+                return Ok(ApplyOutcome::Quarantined);
+            };
+            if !scalar_wins(transaction, "folder", folder_key, "member_order", mutation)? {
+                return Ok(ApplyOutcome::Ignored);
+            }
+            if item_keys.is_empty() {
+                transaction.execute(
+                    "DELETE FROM canonical_order
+                     WHERE owner_kind = 'folder' AND owner_id = ?1",
+                    [folder_id],
+                )?;
+            } else {
+                let members = crate::canonical_bitmap::load_bitmap(
+                    transaction,
+                    crate::canonical_bitmap::BitmapDomain::Folder,
+                    folder_id,
+                )?;
+                let mut order = Vec::new();
+                let mut placed = RoaringBitmap::new();
+                for item_key in item_keys {
+                    let Some(id) = item_id(transaction, item_key)? else {
+                        continue;
+                    };
+                    let Ok(member) = u32::try_from(id) else {
+                        continue;
+                    };
+                    if members.contains(member) && placed.insert(member) {
+                        order.push(member);
+                    }
+                }
+                // The canonical order vector must cover the full membership;
+                // members this envelope does not mention form a tail that
+                // keeps their existing relative order.
+                for member in crate::canonical_bitmap::load_order(transaction, "folder", folder_id)?
+                    .unwrap_or_default()
+                {
+                    if members.contains(member) && placed.insert(member) {
+                        order.push(member);
+                    }
+                }
+                for member in members.iter() {
+                    if placed.insert(member) {
+                        order.push(member);
+                    }
+                }
+                crate::canonical_bitmap::replace_order(
+                    transaction,
+                    "folder",
+                    folder_id,
+                    next_revision(transaction)?,
+                    &order,
+                )?;
+            }
+            write_field_clock(transaction, "folder", folder_key, "member_order", mutation)?;
+            Ok(ApplyOutcome::Applied(None))
         }
         CloudOperation::DeleteItem { item_key } => {
             if !scalar_wins(transaction, "item", item_key, "tombstone", mutation)? {
@@ -3407,8 +3565,13 @@ fn apply_group_assignment(
     media_item_key: &str,
     collection_item_key: Option<&str>,
     position_rank: Option<i64>,
+    lifecycle: Option<&str>,
     mutation: &CloudMutation,
 ) -> rusqlite::Result<ApplyOutcome> {
+    if lifecycle.is_some_and(|value| !matches!(value, "inbox" | "active" | "trash")) {
+        quarantine(transaction, mutation, "invalid lifecycle")?;
+        return Ok(ApplyOutcome::Quarantined);
+    }
     let Some(media_id) = item_id(transaction, media_item_key)? else {
         quarantine(transaction, mutation, "group member does not exist")?;
         return Ok(ApplyOutcome::Quarantined);
@@ -3425,7 +3588,8 @@ fn apply_group_assignment(
     if !scalar_wins(transaction, "item", media_item_key, "collection", mutation)? {
         return Ok(ApplyOutcome::Ignored);
     }
-    if let Some(previous_group) = owning_group(transaction, media_id)? {
+    let previous_group = owning_group(transaction, media_id)?;
+    if let Some(previous_group) = previous_group {
         splice_group_member(transaction, previous_group, media_id, None, false)?;
     }
     if let Some(collection_key) = collection_item_key {
@@ -3453,10 +3617,26 @@ fn apply_group_assignment(
             true,
         )?;
     } else {
+        // A detached member becomes a root inheriting the sender's recorded
+        // lifecycle; older envelopes fall back to the group it left.
+        let inherited = match lifecycle {
+            Some(lifecycle) => Some(lifecycle.to_string()),
+            None => match previous_group {
+                Some(previous_group) => transaction
+                    .query_row(
+                        "SELECT lifecycle FROM library_root WHERE item_id = ?1",
+                        [previous_group],
+                        |row| row.get::<_, String>(0),
+                    )
+                    .optional()?,
+                None => None,
+            },
+        };
         transaction.execute(
-            "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')
+            "INSERT INTO library_root (item_id, lifecycle)
+             VALUES (?1, COALESCE(?2, 'active'))
              ON CONFLICT(item_id) DO NOTHING",
-            [media_id],
+            params![media_id, inherited],
         )?;
     }
     write_field_clock(transaction, "item", media_item_key, "collection", mutation)?;
@@ -3652,9 +3832,7 @@ fn splice_group_member(
         if let Some(index) = existing {
             order.remove(index);
         }
-        let index = position
-            .unwrap_or(order.len())
-            .min(order.len());
+        let index = position.unwrap_or(order.len()).min(order.len());
         order.insert(index, media);
     }
     crate::canonical_bitmap::replace_ordered_membership(
@@ -4143,6 +4321,16 @@ mod tests {
             .unwrap();
     }
 
+    fn expand_journals(application: &Application) {
+        application
+            .store()
+            .transaction_cloud(|transaction| {
+                capture::expand_outbox_journals(transaction)?;
+                Ok(())
+            })
+            .unwrap();
+    }
+
     fn latest_operation(application: &Application) -> CloudOperation {
         application
             .store()
@@ -4292,6 +4480,8 @@ mod tests {
             media_item_key: format!("member-{index:04}"),
             collection_item_key: Some("group-a".into()),
             position_rank: Some(index * 1024),
+
+            lifecycle: None,
         }));
         operations.extend((0..10_000).map(|index| CloudOperation::DeleteItem {
             item_key: format!("deleted-{index:05}"),
@@ -5029,6 +5219,7 @@ mod tests {
                 true,
             )
             .unwrap();
+        expand_journals(&sender);
         let membership_operation = latest_operation(&sender);
         let CloudOperation::Batch {
             operations: membership_operations,
@@ -5115,7 +5306,13 @@ mod tests {
                     crate::canonical_bitmap::BitmapDomain::Folder,
                     folder_id,
                 )?;
-                Ok((child_name, parent_name, watch_path, smart_count, members.len()))
+                Ok((
+                    child_name,
+                    parent_name,
+                    watch_path,
+                    smart_count,
+                    members.len(),
+                ))
             })
             .unwrap();
         assert_eq!(child_name, "Child");
@@ -5123,6 +5320,56 @@ mod tests {
         assert_eq!(watch_path, None, "watch paths are device-local");
         assert_eq!(smart_count, 1);
         assert_eq!(member_count, 1);
+    }
+
+    #[test]
+    fn folder_reorder_replicates_through_the_journal() {
+        let sender = application();
+        let first = add_media(&sender, "item-a");
+        let second = add_media(&sender, "item-b");
+        for item_id in [first, second] {
+            sender
+                .projections()
+                .apply_root_delta(
+                    item_id,
+                    crate::app::ItemKind::Media,
+                    Some(crate::app::Lifecycle::Active),
+                )
+                .unwrap();
+        }
+        let (folder, _) = sender
+            .create_folder(&crate::folders_v2::CreateFolderInput {
+                name: "Ordered".to_string(),
+                parent_id: None,
+                folder_key: None,
+            })
+            .unwrap();
+        sender
+            .set_folder_membership(
+                &crate::app::ItemTarget::Explicit {
+                    item_ids: vec![crate::app::ItemId(first), crate::app::ItemId(second)],
+                },
+                folder.0,
+                true,
+            )
+            .unwrap();
+        enable_capture(&sender);
+        sender
+            .reorder_folder_items(&crate::folders_v2::ReorderFolderItemsInput {
+                folder_id: folder,
+                item_ids: vec![crate::app::ItemId(second), crate::app::ItemId(first)],
+            })
+            .unwrap();
+        expand_journals(&sender);
+        let operation = latest_operation(&sender);
+        let CloudOperation::Batch { operations } = &operation else {
+            panic!("journal expansion must produce one batch");
+        };
+        assert!(operations.iter().any(|operation| matches!(
+            operation,
+            CloudOperation::FolderOrder { item_keys, .. }
+                if item_keys == &vec!["item-b".to_string(), "item-a".to_string()]
+        )));
     }
 
     #[test]
@@ -5174,9 +5421,7 @@ mod tests {
 
         let order = receiver
             .store()
-            .read(|connection| {
-                crate::canonical_bitmap::load_order(connection, "folder", folder_id)
-            })
+            .read(|connection| crate::canonical_bitmap::load_order(connection, "folder", folder_id))
             .unwrap()
             .expect("manual folder order must survive projection persistence");
         assert_eq!(order, vec![second as u32, first as u32]);
@@ -5186,6 +5431,371 @@ mod tests {
                 .selection_snapshot()
                 .folder_order(folder_id),
             Some(vec![second, first])
+        );
+    }
+
+    #[test]
+    fn unpublished_local_removal_defeats_a_concurrent_remote_add() {
+        let application = application();
+        let item = add_media(&application, "item-a");
+        application
+            .projections()
+            .apply_root_delta(
+                item,
+                crate::app::ItemKind::Media,
+                Some(crate::app::Lifecycle::Active),
+            )
+            .unwrap();
+        let (folder, _) = application
+            .create_folder(&crate::folders_v2::CreateFolderInput {
+                name: "Shared".to_string(),
+                parent_id: None,
+                folder_key: None,
+            })
+            .unwrap();
+        let target = crate::app::ItemTarget::Explicit {
+            item_ids: vec![crate::app::ItemId(item)],
+        };
+        application
+            .set_folder_membership(&target, folder.0, true)
+            .unwrap();
+        enable_capture(&application);
+        application
+            .set_folder_membership(&target, folder.0, false)
+            .unwrap();
+
+        // A concurrent remote add that never observed the local removal must
+        // lose, even though the removal still sits in an unexpanded journal.
+        let folder_key: String = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT folder_key FROM folder WHERE folder_id = ?1",
+                    [folder.0],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        let add = remote_mutation(
+            &application,
+            "sender",
+            HybridTimestamp {
+                physical_ms: 50,
+                logical: 0,
+            },
+            CausalFrontier::new(),
+            CloudOperation::FolderMembership {
+                item_key: "item-a".into(),
+                folder_key,
+                present: true,
+                position_rank: None,
+            },
+        );
+        let (summary, _) = apply_downloaded(&application, &[add]).unwrap();
+        assert_eq!(summary.ignored, 1);
+        assert_eq!(summary.applied, 0);
+        let members = application
+            .store()
+            .read(|connection| {
+                crate::canonical_bitmap::load_bitmap(
+                    connection,
+                    crate::canonical_bitmap::BitmapDomain::Folder,
+                    folder.0,
+                )
+            })
+            .unwrap();
+        assert!(!members.contains(item as u32));
+        let pending_journals: i64 = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT COUNT(*) FROM cloud_outbox
+                     WHERE json_extract(payload_json, '$.kind') = 'membership_journal'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            pending_journals, 0,
+            "remote apply must expand journals first"
+        );
+    }
+
+    #[test]
+    fn invalid_group_assignment_lifecycle_is_quarantined() {
+        let application = application();
+        add_media(&application, "item-a");
+        let detach = remote_mutation(
+            &application,
+            "sender",
+            HybridTimestamp {
+                physical_ms: 50,
+                logical: 0,
+            },
+            CausalFrontier::new(),
+            CloudOperation::GroupAssignment {
+                media_item_key: "item-a".into(),
+                collection_item_key: None,
+                position_rank: None,
+                lifecycle: Some("purgatory".into()),
+            },
+        );
+        let (summary, _) = apply_downloaded(&application, &[detach]).unwrap();
+        assert_eq!(summary.quarantined, 1);
+        let lifecycle: String = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT lifecycle FROM library_root
+                     WHERE item_id = (SELECT item_id FROM library_item WHERE item_key = 'item-a')",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(lifecycle, "active");
+    }
+
+    #[test]
+    fn group_assignment_without_lifecycle_serializes_like_older_builds() {
+        let operation = CloudOperation::GroupAssignment {
+            media_item_key: "m".into(),
+            collection_item_key: None,
+            position_rank: None,
+            lifecycle: None,
+        };
+        let json = serde_json::to_string(&operation).unwrap();
+        assert!(
+            !json.contains("lifecycle"),
+            "an unset lifecycle must vanish so pre-existing envelope checksums verify: {json}"
+        );
+    }
+
+    #[test]
+    fn corrupt_membership_journal_is_quarantined_instead_of_wedging_the_outbox() {
+        let application = application();
+        application
+            .store()
+            .transaction(|transaction| {
+                record_local(
+                    transaction,
+                    CloudOperation::MembershipJournal {
+                        tags: vec![JournalTagDelta {
+                            namespace: "general".into(),
+                            subtag: "broken".into(),
+                            added: "not-hex".into(),
+                            removed: String::new(),
+                        }],
+                        folders: Vec::new(),
+                        groups: Vec::new(),
+                    },
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        expand_journals(&application);
+        let (outbox, quarantined): (i64, i64) = application
+            .store()
+            .read(|connection| {
+                Ok((
+                    connection
+                        .query_row("SELECT COUNT(*) FROM cloud_outbox", [], |row| row.get(0))?,
+                    connection.query_row("SELECT COUNT(*) FROM cloud_quarantine", [], |row| {
+                        row.get(0)
+                    })?,
+                ))
+            })
+            .unwrap();
+        assert_eq!(outbox, 0);
+        assert_eq!(quarantined, 1);
+    }
+
+    #[test]
+    fn folder_order_clear_replicates_and_settles_into_the_projection() {
+        let receiver = application();
+        let first = add_media(&receiver, "item-a");
+        let second = add_media(&receiver, "item-b");
+        let (folder_id, _) = receiver
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO folder (folder_key, name, created_at, updated_at)
+                     VALUES ('folder-a', 'Folder', 'now', 'now')",
+                    [],
+                )?;
+                let folder_id = transaction.last_insert_rowid();
+                crate::canonical_bitmap::seed_test_state(
+                    transaction,
+                    &crate::canonical_bitmap::TestMembership {
+                        folders: vec![(folder_id, vec![first as u32, second as u32])],
+                        ..Default::default()
+                    },
+                )?;
+                Ok(folder_id)
+            })
+            .unwrap();
+        receiver
+            .store()
+            .read_result(|connection| receiver.projections().reload(connection))
+            .unwrap();
+        assert!(receiver
+            .projections()
+            .selection_snapshot()
+            .folder_order(folder_id)
+            .is_some());
+
+        let clear = remote_mutation(
+            &receiver,
+            "sender",
+            HybridTimestamp {
+                physical_ms: 60,
+                logical: 0,
+            },
+            CausalFrontier::new(),
+            CloudOperation::FolderOrder {
+                folder_key: "folder-a".into(),
+                item_keys: Vec::new(),
+            },
+        );
+        let (summary, _) = apply_downloaded(&receiver, &[clear]).unwrap();
+        assert_eq!(summary.applied, 1);
+        let durable = receiver
+            .store()
+            .read(|connection| crate::canonical_bitmap::load_order(connection, "folder", folder_id))
+            .unwrap();
+        assert_eq!(durable, None);
+        assert_eq!(
+            receiver
+                .projections()
+                .selection_snapshot()
+                .folder_order(folder_id),
+            None,
+            "a replicated order clear must settle into the projection"
+        );
+    }
+
+    #[test]
+    fn folder_order_tail_keeps_the_receiver_relative_order() {
+        let receiver = application();
+        let a = add_media(&receiver, "item-a");
+        let b = add_media(&receiver, "item-b");
+        let c = add_media(&receiver, "item-c");
+        let d = add_media(&receiver, "item-d");
+        let (folder_id, _) = receiver
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO folder (folder_key, name, created_at, updated_at)
+                     VALUES ('folder-a', 'Folder', 'now', 'now')",
+                    [],
+                )?;
+                let folder_id = transaction.last_insert_rowid();
+                crate::canonical_bitmap::seed_test_state(
+                    transaction,
+                    &crate::canonical_bitmap::TestMembership {
+                        folders: vec![(folder_id, vec![d as u32, c as u32, b as u32, a as u32])],
+                        ..Default::default()
+                    },
+                )?;
+                Ok(folder_id)
+            })
+            .unwrap();
+        receiver
+            .store()
+            .read_result(|connection| receiver.projections().reload(connection))
+            .unwrap();
+
+        let reorder = remote_mutation(
+            &receiver,
+            "sender",
+            HybridTimestamp {
+                physical_ms: 60,
+                logical: 0,
+            },
+            CausalFrontier::new(),
+            CloudOperation::FolderOrder {
+                folder_key: "folder-a".into(),
+                item_keys: vec!["item-b".into(), "item-d".into()],
+            },
+        );
+        let (summary, _) = apply_downloaded(&receiver, &[reorder]).unwrap();
+        assert_eq!(summary.applied, 1);
+        let order = receiver
+            .store()
+            .read(|connection| crate::canonical_bitmap::load_order(connection, "folder", folder_id))
+            .unwrap()
+            .expect("manual order must survive");
+        assert_eq!(
+            order,
+            vec![b as u32, d as u32, c as u32, a as u32],
+            "unmentioned members must keep their previous relative order"
+        );
+    }
+
+    #[test]
+    fn expansion_omits_the_folder_order_when_every_ordered_item_is_gone() {
+        let sender = application();
+        let first = add_media(&sender, "item-a");
+        let second = add_media(&sender, "item-b");
+        for item_id in [first, second] {
+            sender
+                .projections()
+                .apply_root_delta(
+                    item_id,
+                    crate::app::ItemKind::Media,
+                    Some(crate::app::Lifecycle::Active),
+                )
+                .unwrap();
+        }
+        let (folder, _) = sender
+            .create_folder(&crate::folders_v2::CreateFolderInput {
+                name: "Ordered".to_string(),
+                parent_id: None,
+                folder_key: None,
+            })
+            .unwrap();
+        sender
+            .set_folder_membership(
+                &crate::app::ItemTarget::Explicit {
+                    item_ids: vec![crate::app::ItemId(first), crate::app::ItemId(second)],
+                },
+                folder.0,
+                true,
+            )
+            .unwrap();
+        enable_capture(&sender);
+        sender
+            .reorder_folder_items(&crate::folders_v2::ReorderFolderItemsInput {
+                folder_id: folder,
+                item_ids: vec![crate::app::ItemId(second), crate::app::ItemId(first)],
+            })
+            .unwrap();
+        sender
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "DELETE FROM library_item WHERE item_key IN ('item-a', 'item-b')",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        expand_journals(&sender);
+        let stray_orders: i64 = sender
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT COUNT(*) FROM cloud_outbox
+                     WHERE payload_json LIKE '%folder_order%'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(
+            stray_orders, 0,
+            "an order whose items all vanished must not replicate as a clear"
         );
     }
 

@@ -239,16 +239,24 @@ impl PreparedProjection {
                         .map_err(|error| error.to_string())?;
                 let added = &bitmap - &previous;
                 let removed = &previous - &bitmap;
-                if !added.is_empty() || !removed.is_empty() {
+                let order: Option<Vec<u32>> = self
+                    .state
+                    .folder_orders
+                    .get(folder_id)
+                    .map(|order| order.iter().map(|item_id| *item_id as u32).collect());
+                let previous_order =
+                    canonical_bitmap::load_order(transaction, "folder", *folder_id)
+                        .map_err(|error| error.to_string())?;
+                let order_changed = previous_order != order;
+                if !added.is_empty() || !removed.is_empty() || order_changed {
                     membership_changes
                         .folders
                         .push(crate::cloud::capture::CanonicalFolderChange {
                             folder_id: *folder_id,
                             added: added.iter().collect(),
                             removed: removed.iter().collect(),
-                            order: self.state.folder_orders.get(folder_id).map(|order| {
-                                order.iter().map(|item_id| *item_id as u32).collect()
-                            }),
+                            order_changed,
+                            order,
                         });
                 }
             }
@@ -532,11 +540,11 @@ impl PreparedProjection {
                 &predicate,
                 &impacted_active,
                 |tag_id| {
-                    state
+                    Ok(state
                         .direct_tag_bitmaps
                         .get(&tag_id)
                         .map(|bitmap| (**bitmap).clone())
-                        .unwrap_or_default()
+                        .unwrap_or_default())
                 },
             )
             .map_err(|error| error.to_string())?;
@@ -1053,6 +1061,9 @@ pub struct GroupOrderProjectionChange {
 pub struct FolderOrderProjectionChange {
     pub folder_id: i64,
     pub item_ids: Vec<i64>,
+    /// The folder's manual order was removed rather than replaced;
+    /// `item_ids` is empty and membership validation does not apply.
+    pub cleared: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -2726,6 +2737,10 @@ impl ProjectionStore {
         }
 
         for change in delta.folder_orders {
+            if change.cleared {
+                state.folder_orders.remove(&change.folder_id);
+                continue;
+            }
             let mut ordered = RoaringBitmap::new();
             for item_id in &change.item_ids {
                 if !ordered.insert(*item_id as u32) {
@@ -3416,7 +3431,6 @@ fn apply_root_tag_changes_state(
     Ok(())
 }
 
-
 fn validate_id(id: i64) -> Result<(), String> {
     bitmap_id(id).map(|_| ())
 }
@@ -4031,6 +4045,7 @@ mod tests {
                     folder_orders: vec![FolderOrderProjectionChange {
                         folder_id: 7,
                         item_ids,
+                        cleared: false,
                     }],
                     ..StructureProjectionDelta::default()
                 })
@@ -4637,7 +4652,9 @@ mod tests {
         );
         assert!(projection.direct_tag_bitmap(101).is_empty());
         assert_eq!(
-            projection.selection_snapshot().tag_memberships_for_roots(&roots),
+            projection
+                .selection_snapshot()
+                .tag_memberships_for_roots(&roots),
             vec![(100, roots.clone())]
         );
 
@@ -4646,7 +4663,10 @@ mod tests {
             projection.direct_tag_bitmap(100),
             RoaringBitmap::from_iter([20])
         );
-        assert!(projection.selection_snapshot().tag_memberships_for_roots(&roots).is_empty());
+        assert!(projection
+            .selection_snapshot()
+            .tag_memberships_for_roots(&roots)
+            .is_empty());
     }
 
     #[test]

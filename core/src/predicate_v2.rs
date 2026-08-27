@@ -406,9 +406,7 @@ fn apply_color_filter(
                  WHERE lower(fc.hex) = ?1",
             )?;
             let media_ids = statement
-                .query_map([color_hex.to_ascii_lowercase()], |row| {
-                    row.get::<_, i64>(0)
-                })?
+                .query_map([color_hex.to_ascii_lowercase()], |row| row.get::<_, i64>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             for media_id in media_ids {
                 if let Some(root_id) = projection.root_for_media(media_id) {

@@ -623,6 +623,7 @@ fn apply_semantic_projection(
                     .map(|change| FolderOrderProjectionChange {
                         folder_id: change.folder_id,
                         item_ids: change.item_ids.clone(),
+                        cleared: false,
                     })
                     .collect(),
                 ..StructureProjectionDelta::default()

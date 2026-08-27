@@ -566,7 +566,6 @@ fn timed_bulk_mutations(
 
     for reader_id in 0..FIXED_RATE_READERS {
         let application = Arc::clone(application);
-        let store = Arc::clone(store);
         let start = Arc::clone(&start);
         let done = Arc::clone(&done);
         let latencies = Arc::clone(&latencies);
@@ -925,7 +924,11 @@ fn timed_tag_query(application: &Application, rows: usize, budget: Duration) -> 
     elapsed
 }
 
-fn timed_tag_smart_folder_query(application: &Application, rows: usize, budget: Duration) -> Duration {
+fn timed_tag_smart_folder_query(
+    application: &Application,
+    rows: usize,
+    budget: Duration,
+) -> Duration {
     insert_smart_folder(application.store(), 1, tag_smart_folder_predicate());
     let started = Instant::now();
     let page = query(
@@ -961,13 +964,27 @@ fn tag_smart_folder_predicate() -> serde_json::Value {
     })
 }
 
-fn timed_numeric_smart_folder_query(application: &Application, rows: usize, budget: Duration) -> Duration {
+fn timed_numeric_smart_folder_query(
+    application: &Application,
+    rows: usize,
+    budget: Duration,
+) -> Duration {
     let minimum_size = 501_024_i64;
-    insert_smart_folder(application.store(), 2, numeric_smart_folder_predicate(minimum_size));
+    insert_smart_folder(
+        application.store(),
+        2,
+        numeric_smart_folder_predicate(minimum_size),
+    );
     let expected = (1..=rows as i64)
         .filter(|item_id| 1_024 + item_id >= minimum_size)
         .count() as i64;
-    timed_smart_scope(application, 2, expected, "numeric smart-folder query", budget)
+    timed_smart_scope(
+        application,
+        2,
+        expected,
+        "numeric smart-folder query",
+        budget,
+    )
 }
 
 fn numeric_smart_folder_predicate(minimum_size: i64) -> serde_json::Value {
@@ -984,7 +1001,11 @@ fn numeric_smart_folder_predicate(minimum_size: i64) -> serde_json::Value {
     })
 }
 
-fn timed_text_smart_folder_query(application: &Application, rows: usize, budget: Duration) -> Duration {
+fn timed_text_smart_folder_query(
+    application: &Application,
+    rows: usize,
+    budget: Duration,
+) -> Duration {
     let needle = "9999";
     insert_smart_folder(application.store(), 3, text_smart_folder_predicate(needle));
     let expected = (1..=rows as i64)
@@ -1088,7 +1109,11 @@ fn timed_smart_scope(
     elapsed
 }
 
-fn timed_search_settlement(application: &Application, rows: usize, budget: Duration) -> (Duration, Duration) {
+fn timed_search_settlement(
+    application: &Application,
+    rows: usize,
+    budget: Duration,
+) -> (Duration, Duration) {
     let settle_started = Instant::now();
     application.store().refresh_search_indexes().unwrap();
     let settle_elapsed = settle_started.elapsed();
@@ -1146,7 +1171,12 @@ fn transition_lifecycle(application: &Application, item_id: i64, lifecycle: Life
         .unwrap();
 }
 
-fn timed_scope_query(application: &Application, scope: ItemScope, expected: i64, budget: Duration) -> Duration {
+fn timed_scope_query(
+    application: &Application,
+    scope: ItemScope,
+    expected: i64,
+    budget: Duration,
+) -> Duration {
     let started = Instant::now();
     let page = query(
         application,
@@ -2310,7 +2340,6 @@ fn measure_mutation<T>(
 
     for reader_id in 0..FIXED_RATE_READERS {
         let application = Arc::clone(application);
-        let store = Arc::clone(store);
         let done = Arc::clone(&done);
         let start = Arc::clone(&start);
         let latencies = Arc::clone(&latencies);
@@ -2325,7 +2354,7 @@ fn measure_mutation<T>(
                 }
                 deadline += FIXED_READER_PERIOD;
                 let read_started = Instant::now();
-                let result = fixed_rate_read(reader_id, &application, &store);
+                let result = fixed_rate_read(reader_id, &application);
                 latencies
                     .lock()
                     .unwrap()
@@ -2390,11 +2419,7 @@ fn measure_mutation<T>(
     (value, measurement)
 }
 
-fn fixed_rate_read(
-    reader_id: usize,
-    application: &Application,
-    store: &Store,
-) -> Result<i64, String> {
+fn fixed_rate_read(reader_id: usize, application: &Application) -> Result<i64, String> {
     match reader_id {
         0 => query(
             application,

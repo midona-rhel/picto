@@ -620,17 +620,31 @@ fn validate_canonical_v1(connection: &Connection, counts: &Counts) -> Result<(),
         let active = load_bitmap(connection, BitmapDomain::Lifecycle, LIFECYCLE_ACTIVE_KEY)
             .map_err(|error| format!("cannot decode active lifecycle bitmap: {error}"))?;
         let summaries = connection
-            .prepare("SELECT tag_id, visible_root_count FROM tag_summary ORDER BY tag_id")
+            .prepare(
+                "SELECT tag_id, visible_root_count, assignment_count
+                 FROM tag_summary ORDER BY tag_id",
+            )
             .map_err(|error| format!("cannot read tag summaries: {error}"))?
-            .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
             .map_err(|error| format!("cannot read tag summaries: {error}"))?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|error| format!("cannot read tag summaries: {error}"))?;
-        for (tag_id, visible_root_count) in summaries {
+        for (tag_id, visible_root_count, assignment_count) in summaries {
             let members = load_bitmap(connection, BitmapDomain::Tag, tag_id)
                 .map_err(|error| format!("cannot decode tag {tag_id}: {error}"))?;
             if members.intersection_len(&active) as i64 != visible_root_count {
                 return Err(format!("tag summary {tag_id} is inconsistent"));
+            }
+            if members.len() as i64 != assignment_count {
+                return Err(format!(
+                    "tag summary {tag_id} assignment count is inconsistent"
+                ));
             }
         }
     }
@@ -1949,8 +1963,7 @@ mod tests {
                 "https://example.test/common",
             ]
         );
-        let sample_tag =
-            load_bitmap(&destination_connection, BitmapDomain::Tag, 1).unwrap();
+        let sample_tag = load_bitmap(&destination_connection, BitmapDomain::Tag, 1).unwrap();
         assert!(sample_tag.contains(1));
         assert_eq!(sample_tag.len(), 1);
         assert_eq!(

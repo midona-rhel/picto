@@ -12,8 +12,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::app::{
-    FileHash, FilterMatchMode, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope, ItemTarget,
-    Lifecycle,
+    FileHash, ItemFilters, ItemId, ItemKind, ItemQuery, ItemScope, ItemTarget, Lifecycle,
 };
 use crate::store::Store;
 use crate::{app::Application, projection_v2::ProjectionSelectionSnapshot};
@@ -331,18 +330,33 @@ pub fn query_for_application(
             }
             if matches!(item_query.scope, ItemScope::RecentlyViewed) {
                 return resolve_projected_sorted_page(
-                    connection, item_query, page, revision, &projection, &roots,
+                    connection,
+                    item_query,
+                    page,
+                    revision,
+                    &projection,
+                    &roots,
                 )
                 .map_err(|error| error.to_string());
             }
             if matches!(item_query.sort.field, crate::app::ItemSortField::ImportedAt) {
                 return resolve_projected_imported_page(
-                    connection, item_query, page, revision, &projection, &roots,
+                    connection,
+                    item_query,
+                    page,
+                    revision,
+                    &projection,
+                    &roots,
                 )
                 .map_err(|error| error.to_string());
             }
             resolve_projected_sorted_page(
-                connection, item_query, page, revision, &projection, &roots,
+                connection,
+                item_query,
+                page,
+                revision,
+                &projection,
+                &roots,
             )
             .map_err(|error| error.to_string())
         },
@@ -915,8 +929,12 @@ pub(crate) fn target_selection_sql(
             query,
             excluded_item_ids,
         } => {
-            let roots =
-                target_selection_sql_bitmap_roots(connection, projection, query, excluded_item_ids)?;
+            let roots = target_selection_sql_bitmap_roots(
+                connection,
+                projection,
+                query,
+                excluded_item_ids,
+            )?;
             let encoded = bitmap_json(&roots);
             Ok(TargetSelectionSql {
                 with_clause: "WITH
@@ -931,7 +949,13 @@ pub(crate) fn target_selection_sql(
             query,
             anchor_item_id,
             focus_item_id,
-        } => range_target_selection_sql(connection, projection, query, *anchor_item_id, *focus_item_id),
+        } => range_target_selection_sql(
+            connection,
+            projection,
+            query,
+            *anchor_item_id,
+            *focus_item_id,
+        ),
     }
 }
 
@@ -2955,7 +2979,11 @@ mod tests {
         assert_eq!(
             store
                 .store()
-                .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &target))
+                .read(|connection| resolve_target_ids(
+                    connection,
+                    &store.projections().selection_snapshot(),
+                    &target
+                ))
                 .unwrap(),
             vec![10]
         );
@@ -3505,7 +3533,13 @@ mod tests {
         };
         let ids = store
             .store()
-            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &target))
+            .read(|connection| {
+                resolve_target_ids(
+                    connection,
+                    &store.projections().selection_snapshot(),
+                    &target,
+                )
+            })
             .unwrap();
         assert_eq!(ids, vec![10]);
     }
@@ -3544,7 +3578,13 @@ mod tests {
         };
         let ids = store
             .store()
-            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &target))
+            .read(|connection| {
+                resolve_target_ids(
+                    connection,
+                    &store.projections().selection_snapshot(),
+                    &target,
+                )
+            })
             .unwrap();
         assert_eq!(ids, vec![20, 21, 22]);
         assert_eq!(
@@ -3559,7 +3599,13 @@ mod tests {
         };
         let reversed_ids = store
             .store()
-            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &reversed))
+            .read(|connection| {
+                resolve_target_ids(
+                    connection,
+                    &store.projections().selection_snapshot(),
+                    &reversed,
+                )
+            })
             .unwrap();
         assert_eq!(reversed_ids, ids);
     }
@@ -3595,7 +3641,13 @@ mod tests {
         };
         let ids = store
             .store()
-            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &target))
+            .read(|connection| {
+                resolve_target_ids(
+                    connection,
+                    &store.projections().selection_snapshot(),
+                    &target,
+                )
+            })
             .unwrap();
         assert_eq!(ids, vec![20, 21, 22]);
 
@@ -3607,7 +3659,11 @@ mod tests {
         assert_eq!(
             store
                 .store()
-                .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &one))
+                .read(|connection| resolve_target_ids(
+                    connection,
+                    &store.projections().selection_snapshot(),
+                    &one
+                ))
                 .unwrap(),
             vec![21]
         );
@@ -3620,7 +3676,11 @@ mod tests {
         };
         assert!(store
             .store()
-            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &outside_query))
+            .read(|connection| resolve_target_ids(
+                connection,
+                &store.projections().selection_snapshot(),
+                &outside_query
+            ))
             .unwrap()
             .is_empty());
     }
@@ -3633,7 +3693,13 @@ mod tests {
         };
         let ids = store
             .store()
-            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &target))
+            .read(|connection| {
+                resolve_target_ids(
+                    connection,
+                    &store.projections().selection_snapshot(),
+                    &target,
+                )
+            })
             .unwrap();
         assert_eq!(ids, vec![10, 1, 3, 2]);
 
@@ -3642,7 +3708,11 @@ mod tests {
         };
         assert!(store
             .store()
-            .read(|connection| resolve_target_ids(connection, &store.projections().selection_snapshot(), &duplicate))
+            .read(|connection| resolve_target_ids(
+                connection,
+                &store.projections().selection_snapshot(),
+                &duplicate
+            ))
             .is_err());
     }
 
@@ -3733,10 +3803,12 @@ mod tests {
 
         let mut query = query_for(ItemScope::All);
         query.filters.ratings = vec![1];
-        assert!(query_for_application(&store, &query, ItemPageRequest::default())
-            .unwrap()
-            .items
-            .is_empty());
+        assert!(
+            query_for_application(&store, &query, ItemPageRequest::default())
+                .unwrap()
+                .items
+                .is_empty()
+        );
         query.filters.ratings = vec![5];
         assert_eq!(
             query_for_application(&store, &query, ItemPageRequest::default())

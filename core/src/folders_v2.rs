@@ -579,6 +579,7 @@ impl Application {
                     folder_orders: vec![FolderOrderProjectionChange {
                         folder_id,
                         item_ids: next_order.clone(),
+                        cleared: false,
                     }],
                     ..StructureProjectionDelta::default()
                 };
@@ -640,6 +641,7 @@ impl Application {
                     folder_orders: vec![FolderOrderProjectionChange {
                         folder_id: raw_folder_id,
                         item_ids: next_order.clone(),
+                        cleared: false,
                     }],
                     ..StructureProjectionDelta::default()
                 };

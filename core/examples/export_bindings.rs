@@ -74,9 +74,8 @@ fn main() {
         ScheduleSubscriptionInput, ScopeInput, SiteInput, SmartFolderInput,
         SubscriptionCoverCandidatesInput, SubscriptionCoverInput, SubscriptionDestinationInput,
         SubscriptionInput, SubscriptionPostsPerRunInput, SubscriptionQueryInput,
-        SubscriptionRunActivityInput, SubscriptionRunsInput, TagGroupInput,
-        TagInput, TargetInput, UpdateSmartFolderInput,
-        UpdateSubscriptionQueryInput, ValueInput,
+        SubscriptionRunActivityInput, SubscriptionRunsInput, TagGroupInput, TagInput, TargetInput,
+        UpdateSmartFolderInput, UpdateSubscriptionQueryInput, ValueInput,
     };
     use picto_core::media_io_v2::{
         ExportFormat, ExportRequest, ExportResult, RequestThumbnailResult, ResolvedFilePath,

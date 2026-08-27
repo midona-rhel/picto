@@ -307,16 +307,13 @@ fn read_evidence(store: &Store, subscription_id: i64) -> Result<Evidence, String
                 .map_err(|error| error.to_string())?;
             let root_item_id = root_item_id
                 .ok_or_else(|| format!("source post {source_post_id} has no visible root"))?;
-            let collection_member_order = picto_core::canonical_bitmap::load_order(
-                connection,
-                "group",
-                root_item_id,
-            )
-            .map_err(|error| error.to_string())?
-            .unwrap_or_default()
-            .into_iter()
-            .map(i64::from)
-            .collect::<Vec<i64>>();
+            let collection_member_order =
+                picto_core::canonical_bitmap::load_order(connection, "group", root_item_id)
+                    .map_err(|error| error.to_string())?
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(i64::from)
+                    .collect::<Vec<i64>>();
             let rooted_media_count: i64 = connection
                 .query_row(
                     "SELECT COUNT(*) FROM library_root

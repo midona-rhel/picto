@@ -447,14 +447,6 @@ impl Store {
     }
 
     #[track_caller]
-    pub(crate) fn transaction_background<T>(
-        &self,
-        operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<T>,
-    ) -> Result<(T, u64), String> {
-        self.transaction_with_priority(WritePriority::Background, operation)
-    }
-
-    #[track_caller]
     pub(crate) fn transaction_cloud<T>(
         &self,
         operation: impl FnOnce(&Transaction<'_>) -> rusqlite::Result<T>,
@@ -706,24 +698,6 @@ impl Store {
 
     pub fn revision(&self) -> Result<u64, String> {
         self.read(schema::revision)
-    }
-
-    /// Publish a privately prepared read model only if SQLite is still at the
-    /// revision from which it was built. Preparation happens without the gate;
-    /// this method contains only the revision check and infallible swap.
-    #[track_caller]
-    pub(crate) fn publish_if_current_revision(
-        &self,
-        expected_revision: u64,
-        publish: impl FnOnce(),
-    ) -> Result<bool, String> {
-        let connection = open_connection(&self.path, true)?;
-        let _publication = self.consistency_write(std::panic::Location::caller())?;
-        if schema::revision(&connection).map_err(|error| error.to_string())? != expected_revision {
-            return Ok(false);
-        }
-        publish();
-        Ok(true)
     }
 
     /// Materialize every dirty FTS row. This explicit path is reserved for
@@ -1162,25 +1136,6 @@ mod tests {
         );
         drop(publication);
         read.join().unwrap();
-    }
-
-    #[test]
-    fn shadow_publication_requires_the_revision_it_was_built_from() {
-        let directory = tempfile::tempdir().unwrap();
-        let store = Store::open(directory.path()).unwrap();
-        let published = AtomicBool::new(false);
-
-        assert!(store
-            .publish_if_current_revision(1, || published.store(true, Ordering::Release))
-            .unwrap());
-        assert!(published.load(Ordering::Acquire));
-
-        store.transaction(|_| Ok(())).unwrap();
-        published.store(false, Ordering::Release);
-        assert!(!store
-            .publish_if_current_revision(1, || published.store(true, Ordering::Release))
-            .unwrap());
-        assert!(!published.load(Ordering::Acquire));
     }
 
     #[test]
