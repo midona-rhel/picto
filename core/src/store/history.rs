@@ -24,7 +24,6 @@ const UNDOABLE_TABLES: &[&str] = &[
     "root_metadata",
     "root_tag",
     "media_asset",
-    "collection_member",
     "media_view",
     "tag",
     "folder",
@@ -1498,20 +1497,6 @@ fn apply_group(transaction: &Transaction<'_>, delta: &SemanticGroupDelta) -> Res
         )
         .map_err(|error| error.to_string())?;
     stage_group_payload(transaction, delta)?;
-    let creates_root: bool = transaction
-        .query_row(
-            "SELECT EXISTS(
-                 SELECT 1 FROM picto_history_group_root staged
-                 LEFT JOIN library_root root ON root.item_id = staged.item_id
-                 WHERE root.item_id IS NULL
-             )",
-            [],
-            |row| row.get(0),
-        )
-        .map_err(|error| error.to_string())?;
-    let structural_change =
-        creates_root || !delta.remove_root_ids.is_empty() || !delta.remove_item_ids.is_empty();
-
     transaction
         .execute(
             "DELETE FROM library_root
@@ -1554,24 +1539,37 @@ fn apply_group(transaction: &Transaction<'_>, delta: &SemanticGroupDelta) -> Res
                  updated_at = excluded.updated_at;",
         )
         .map_err(|error| error.to_string())?;
-    if structural_change {
-        transaction
-            .execute_batch(
-                "DELETE FROM collection_member
-                 WHERE EXISTS (
-                     SELECT 1 FROM picto_history_group_member staged
-                     WHERE staged.present = 0
-                       AND staged.collection_id = collection_member.collection_id
-                       AND staged.media_item_id = collection_member.media_item_id
-                 );
-                 INSERT INTO collection_member(collection_id, media_item_id, position_rank)
-                 SELECT collection_id, media_item_id, position_rank
-                 FROM picto_history_group_member WHERE present = 1
-                 ON CONFLICT(collection_id, media_item_id) DO UPDATE SET
-                     position_rank = excluded.position_rank;",
-            )
-            .map_err(|error| error.to_string())?;
-    }
+    transaction
+        .execute_batch(
+            "INSERT INTO root_summary (
+                 root_item_id, lifecycle, kind, cover_media_item_id, media_count,
+                 total_size_bytes, imported_at, captured_at, sort_rating,
+                 sort_name, updated_at
+             )
+             SELECT root.item_id, root.lifecycle, root.kind,
+                    root.cover_media_item_id, COUNT(member.media_item_id),
+                    COALESCE(SUM(file.size_bytes), 0), MAX(asset.imported_at),
+                    MAX(asset.captured_at), root.rating, root.name, root.updated_at
+             FROM picto_history_group_root root
+             JOIN picto_history_group_member member
+               ON member.collection_id = root.item_id AND member.present = 1
+             JOIN media_asset asset ON asset.item_id = member.media_item_id
+             JOIN media_file file ON file.file_id = asset.file_id
+             WHERE root.kind = 'collection'
+             GROUP BY root.item_id
+             ON CONFLICT(root_item_id) DO UPDATE SET
+                 lifecycle = excluded.lifecycle,
+                 kind = excluded.kind,
+                 cover_media_item_id = excluded.cover_media_item_id,
+                 media_count = excluded.media_count,
+                 total_size_bytes = excluded.total_size_bytes,
+                 imported_at = excluded.imported_at,
+                 captured_at = excluded.captured_at,
+                 sort_rating = excluded.sort_rating,
+                 sort_name = excluded.sort_name,
+                 updated_at = excluded.updated_at;",
+        )
+        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
