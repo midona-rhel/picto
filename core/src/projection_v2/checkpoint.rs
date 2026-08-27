@@ -18,7 +18,7 @@ use super::{
 const COMPONENT: &str = "projection-v2-roaring";
 const MAGIC: &[u8; 8] = b"PCTOV2\0\x02";
 const IMPLEMENTATION_MATERIAL: &[u8] =
-    b"projection-v2-checkpoint-v8:canonical-group-and-folder-order:complete-immutable-state:portable-roaring";
+    b"projection-v2-checkpoint-v9:canonical-display-metric-bit-slices:complete-immutable-state:portable-roaring";
 const MAX_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ENTRY_COUNT: usize = 100_000_000;
 
@@ -353,6 +353,9 @@ impl Encoder {
             self.i64(id);
             encode_option_u64(self, state.numeric.total_size_bytes.get(bitmap_id));
             encode_option_u64(self, state.numeric.media_count.get(bitmap_id));
+            encode_option_u64(self, state.numeric.display_duration_ms.get(bitmap_id));
+            encode_option_u64(self, state.numeric.display_width.get(bitmap_id));
+            encode_option_u64(self, state.numeric.display_height.get(bitmap_id));
             match state.numeric.rating.get(bitmap_id) {
                 Some(value) => {
                     self.u8(1);
@@ -541,7 +544,7 @@ impl<'a> Decoder<'a> {
     }
 
     fn numeric(&mut self, roots: &[RoaringBitmap; 3]) -> Result<NumericIndexes, String> {
-        let count = self.count(11)?;
+        let count = self.count(14)?;
         let mut numeric = NumericIndexes::default();
         let mut seen = HashSet::with_capacity(count);
         for _ in 0..count {
@@ -560,6 +563,15 @@ impl<'a> Decoder<'a> {
             }
             if let Some(value) = self.option_u64()? {
                 numeric.media_count.set(bitmap_id, value);
+            }
+            if let Some(value) = self.option_u64()? {
+                numeric.display_duration_ms.set(bitmap_id, value);
+            }
+            if let Some(value) = self.option_u64()? {
+                numeric.display_width.set(bitmap_id, value);
+            }
+            if let Some(value) = self.option_u64()? {
+                numeric.display_height.set(bitmap_id, value);
             }
             match self.u8()? {
                 0 => {}

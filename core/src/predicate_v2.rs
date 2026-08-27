@@ -49,6 +49,7 @@ pub(crate) fn compile_item_query(
     apply_folder_filters(projection, &query.filters, &mut roots);
     apply_rating_filters(projection, &query.filters, &mut roots);
     apply_size_filters(projection, &query.filters, &mut roots);
+    apply_display_metric_filters(projection, &query.filters, &mut roots);
     apply_mime_filters(projection, &query.filters, &mut roots);
     apply_tag_filters(connection, projection, &query.filters, &mut roots)?;
     apply_text_filter(connection, projection, &query.filters, &mut roots)?;
@@ -170,6 +171,57 @@ fn apply_size_filters(
     *roots = projection.total_size_range_bitmap(minimum, maximum, roots);
 }
 
+fn apply_display_metric_filters(
+    projection: &ProjectionSelectionSnapshot,
+    filters: &ItemFilters,
+    roots: &mut RoaringBitmap,
+) {
+    apply_nonnegative_range(
+        filters.min_duration_ms,
+        filters.max_duration_ms,
+        roots,
+        |minimum, maximum, universe| {
+            projection.display_duration_range_bitmap(minimum, maximum, universe)
+        },
+    );
+    apply_nonnegative_range(
+        filters.min_width,
+        filters.max_width,
+        roots,
+        |minimum, maximum, universe| {
+            projection.display_width_range_bitmap(minimum, maximum, universe)
+        },
+    );
+    apply_nonnegative_range(
+        filters.min_height,
+        filters.max_height,
+        roots,
+        |minimum, maximum, universe| {
+            projection.display_height_range_bitmap(minimum, maximum, universe)
+        },
+    );
+}
+
+fn apply_nonnegative_range(
+    minimum: Option<i64>,
+    maximum: Option<i64>,
+    roots: &mut RoaringBitmap,
+    apply: impl FnOnce(Option<u64>, Option<u64>, &RoaringBitmap) -> RoaringBitmap,
+) {
+    if minimum.is_none() && maximum.is_none() {
+        return;
+    }
+    if maximum.is_some_and(|maximum| maximum < 0) {
+        roots.clear();
+        return;
+    }
+    let minimum = minimum
+        .filter(|minimum| *minimum > 0)
+        .map(|minimum| minimum as u64);
+    let maximum = maximum.map(|maximum| maximum as u64);
+    *roots = apply(minimum, maximum, roots);
+}
+
 fn apply_mime_filters(
     projection: &ProjectionSelectionSnapshot,
     filters: &ItemFilters,
@@ -268,12 +320,6 @@ fn has_sql_only_filters(filters: &ItemFilters) -> bool {
         || filters.imported_before.is_some()
         || filters.modified_after.is_some()
         || filters.modified_before.is_some()
-        || filters.min_duration_ms.is_some()
-        || filters.max_duration_ms.is_some()
-        || filters.min_width.is_some()
-        || filters.max_width.is_some()
-        || filters.min_height.is_some()
-        || filters.max_height.is_some()
         || filters.notes_present.is_some()
         || filters.notes_contains.is_some()
         || filters.source_url_present.is_some()

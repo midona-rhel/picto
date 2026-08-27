@@ -949,6 +949,9 @@ pub struct RootSummaryProjectionChange {
     pub total_size_bytes: u64,
     pub media_count: u64,
     pub rating: Option<u8>,
+    pub display_duration_ms: Option<u64>,
+    pub display_width: Option<u64>,
+    pub display_height: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -1013,6 +1016,9 @@ struct NumericIndexes {
     total_size_bytes: BitSlicedU64,
     media_count: BitSlicedU64,
     rating: OptionalU8,
+    display_duration_ms: BitSlicedU64,
+    display_width: BitSlicedU64,
+    display_height: BitSlicedU64,
 }
 
 #[derive(Clone, Default)]
@@ -1373,6 +1379,42 @@ impl ProjectionSelectionSnapshot {
             .range_bitmap(minimum, maximum, universe)
     }
 
+    pub(crate) fn display_duration_range_bitmap(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        universe: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        self.state
+            .numeric
+            .display_duration_ms
+            .range_bitmap(minimum, maximum, universe)
+    }
+
+    pub(crate) fn display_width_range_bitmap(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        universe: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        self.state
+            .numeric
+            .display_width
+            .range_bitmap(minimum, maximum, universe)
+    }
+
+    pub(crate) fn display_height_range_bitmap(
+        &self,
+        minimum: Option<u64>,
+        maximum: Option<u64>,
+        universe: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        self.state
+            .numeric
+            .display_height
+            .range_bitmap(minimum, maximum, universe)
+    }
+
     pub(crate) fn untagged_bitmap(&self) -> RoaringBitmap {
         &self.state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)]
             - &*self.state.tagged_roots
@@ -1515,6 +1557,26 @@ fn signed_u128_delta(after: u128, before: u128, field: &str) -> Result<i64, Stri
     }
 }
 
+fn set_optional_nonnegative(
+    index: &mut BitSlicedU64,
+    item_id: u32,
+    value: Option<i64>,
+    error: &str,
+) -> Result<(), String> {
+    match value {
+        Some(value) => {
+            index.set(
+                item_id,
+                u64::try_from(value).map_err(|_| error.to_string())?,
+            );
+        }
+        None => {
+            index.remove(item_id);
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone)]
 struct NumericProjectionSnapshot {
     lifecycle_bitmaps: Arc<[RoaringBitmap; 3]>,
@@ -1639,9 +1701,13 @@ impl ProjectionStore {
         {
             let mut statement = connection
                 .prepare(
-                    "SELECT root_item_id, total_size_bytes,
-                            media_count
-                     FROM root_summary",
+                    "SELECT summary.root_item_id, summary.total_size_bytes,
+                            summary.media_count, file.duration_ms,
+                            file.pixel_width, file.pixel_height
+                     FROM root_summary summary
+                     LEFT JOIN media_asset cover
+                       ON cover.item_id = summary.cover_media_item_id
+                     LEFT JOIN media_file file ON file.file_id = cover.file_id",
                 )
                 .map_err(|error| error.to_string())?;
             let rows = statement
@@ -1650,13 +1716,22 @@ impl ProjectionStore {
                         row.get::<_, i64>(0)?,
                         row.get::<_, i64>(1)?,
                         row.get::<_, i64>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                        row.get::<_, Option<i64>>(4)?,
+                        row.get::<_, Option<i64>>(5)?,
                     ))
                 })
                 .map_err(|error| error.to_string())?;
             let numeric = Arc::make_mut(&mut state.numeric);
             for row in rows {
-                let (item_id, total_size_bytes, media_count) =
-                    row.map_err(|error| error.to_string())?;
+                let (
+                    item_id,
+                    total_size_bytes,
+                    media_count,
+                    duration_ms,
+                    pixel_width,
+                    pixel_height,
+                ) = row.map_err(|error| error.to_string())?;
                 let item_id = bitmap_id(item_id)?;
                 numeric.total_size_bytes.set(
                     item_id,
@@ -1668,6 +1743,24 @@ impl ProjectionStore {
                     u64::try_from(media_count)
                         .map_err(|_| "root_summary contains a negative media count".to_string())?,
                 );
+                set_optional_nonnegative(
+                    &mut numeric.display_duration_ms,
+                    item_id,
+                    duration_ms,
+                    "media_file contains a negative duration",
+                )?;
+                set_optional_nonnegative(
+                    &mut numeric.display_width,
+                    item_id,
+                    pixel_width,
+                    "media_file contains a negative width",
+                )?;
+                set_optional_nonnegative(
+                    &mut numeric.display_height,
+                    item_id,
+                    pixel_height,
+                    "media_file contains a negative height",
+                )?;
             }
         }
 
@@ -2456,6 +2549,9 @@ impl ProjectionStore {
             numeric.total_size_bytes.remove(item_id);
             numeric.media_count.remove(item_id);
             numeric.rating.remove(item_id);
+            numeric.display_duration_ms.remove(item_id);
+            numeric.display_width.remove(item_id);
+            numeric.display_height.remove(item_id);
         }
         for change in changes {
             let item_id = change.item_id as u32;
@@ -2471,6 +2567,13 @@ impl ProjectionStore {
                     numeric.rating.remove(item_id);
                 }
             }
+            set_optional_u64(
+                &mut numeric.display_duration_ms,
+                item_id,
+                change.display_duration_ms,
+            );
+            set_optional_u64(&mut numeric.display_width, item_id, change.display_width);
+            set_optional_u64(&mut numeric.display_height, item_id, change.display_height);
         }
         Ok(())
     }
@@ -3019,6 +3122,20 @@ fn remove_root_numeric_summary(state: &mut State, item_id: u32) {
     numeric.total_size_bytes.remove(item_id);
     numeric.media_count.remove(item_id);
     numeric.rating.remove(item_id);
+    numeric.display_duration_ms.remove(item_id);
+    numeric.display_width.remove(item_id);
+    numeric.display_height.remove(item_id);
+}
+
+fn set_optional_u64(index: &mut BitSlicedU64, item_id: u32, value: Option<u64>) {
+    match value {
+        Some(value) => {
+            index.set(item_id, value);
+        }
+        None => {
+            index.remove(item_id);
+        }
+    }
 }
 
 fn is_visible_root(state: &State, item_id: i64) -> bool {
@@ -3750,12 +3867,18 @@ mod tests {
                         total_size_bytes: 100,
                         media_count: 1,
                         rating: Some(4),
+                        display_duration_ms: Some(1_000),
+                        display_width: Some(100),
+                        display_height: Some(200),
                     },
                     RootSummaryProjectionChange {
                         item_id: 20,
                         total_size_bytes: 900,
                         media_count: 3,
                         rating: None,
+                        display_duration_ms: None,
+                        display_width: Some(500),
+                        display_height: Some(600),
                     },
                 ],
                 &RoaringBitmap::new(),
@@ -3770,6 +3893,15 @@ mod tests {
         assert_eq!(aggregate.media_count.sum, 4);
         assert_eq!(aggregate.rating.count, 1);
         assert_eq!(aggregate.rating.sum, 4);
+        let snapshot = projection.selection_snapshot();
+        assert_eq!(
+            snapshot.display_duration_range_bitmap(Some(500), Some(1_500), &selected),
+            RoaringBitmap::from_iter([11])
+        );
+        assert_eq!(
+            snapshot.display_width_range_bitmap(Some(200), None, &selected),
+            RoaringBitmap::from_iter([20])
+        );
 
         projection
             .apply_rating_bitmap(&RoaringBitmap::from_iter([11, 20]), Some(2))
@@ -3791,6 +3923,9 @@ mod tests {
                     total_size_bytes: 321,
                     media_count: 7,
                     rating: Some(5),
+                    display_duration_ms: None,
+                    display_width: None,
+                    display_height: None,
                 }],
                 &RoaringBitmap::new(),
             )
@@ -3901,6 +4036,9 @@ mod tests {
                 total_size_bytes: 10,
                 media_count: 1,
                 rating: Some(5),
+                display_duration_ms: None,
+                display_width: None,
+                display_height: None,
             })
             .collect::<Vec<_>>();
         projection

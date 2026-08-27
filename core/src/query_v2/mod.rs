@@ -4023,6 +4023,10 @@ mod tests {
         let mut item_query = query_for(ItemScope::Folder { folder_id: 7 });
         item_query.filters.text = Some("member-b".to_string());
         item_query.filters.include_tags = vec!["general:member-tag".to_string()];
+        item_query.filters.min_width = Some(800);
+        item_query.filters.max_width = Some(800);
+        item_query.filters.min_height = Some(800);
+        item_query.filters.max_height = Some(800);
         item_query.sort.field = crate::app::ItemSortField::Name;
         let page =
             query_for_application(&application, &item_query, ItemPageRequest::default()).unwrap();

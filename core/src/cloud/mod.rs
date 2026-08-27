@@ -1285,9 +1285,14 @@ impl CloudProjectionState {
         );
 
         let mut statement = transaction.prepare(
-            "SELECT root_item_id, total_size_bytes, media_count, sort_rating
-             FROM root_summary
-             WHERE root_item_id IN (SELECT value FROM json_each(?1))",
+            "SELECT summary.root_item_id, summary.total_size_bytes,
+                    summary.media_count, summary.sort_rating,
+                    file.duration_ms, file.pixel_width, file.pixel_height
+             FROM root_summary summary
+             LEFT JOIN media_asset cover
+               ON cover.item_id = summary.cover_media_item_id
+             LEFT JOIN media_file file ON file.file_id = cover.file_id
+             WHERE summary.root_item_id IN (SELECT value FROM json_each(?1))",
         )?;
         let summaries = statement
             .query_map([ids], |row| {
@@ -1302,6 +1307,9 @@ impl CloudProjectionState {
                         .map(u8::try_from)
                         .transpose()
                         .map_err(|_| rusqlite::Error::InvalidQuery)?,
+                    display_duration_ms: cloud_optional_u64(row.get(4)?)?,
+                    display_width: cloud_optional_u64(row.get(5)?)?,
+                    display_height: cloud_optional_u64(row.get(6)?)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -1310,6 +1318,12 @@ impl CloudProjectionState {
         }
         Ok(state)
     }
+}
+
+fn cloud_optional_u64(value: Option<i64>) -> rusqlite::Result<Option<u64>> {
+    value
+        .map(|value| u64::try_from(value).map_err(|_| rusqlite::Error::InvalidQuery))
+        .transpose()
 }
 
 #[derive(Default)]

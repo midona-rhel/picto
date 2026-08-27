@@ -2782,8 +2782,12 @@ fn root_summary_changes_for_roots(
     transaction
         .prepare(
             "SELECT summary.root_item_id, summary.total_size_bytes,
-                    summary.media_count, summary.sort_rating
+                    summary.media_count, summary.sort_rating,
+                    file.duration_ms, file.pixel_width, file.pixel_height
              FROM root_summary summary
+             LEFT JOIN media_asset cover
+               ON cover.item_id = summary.cover_media_item_id
+             LEFT JOIN media_file file ON file.file_id = cover.file_id
              JOIN json_each(?1) selected
                ON CAST(selected.value AS INTEGER) = summary.root_item_id",
         )?
@@ -2802,9 +2806,20 @@ fn root_summary_changes_for_roots(
                 total_size_bytes,
                 media_count,
                 rating,
+                display_duration_ms: optional_u64(row, 4)?,
+                display_width: optional_u64(row, 5)?,
+                display_height: optional_u64(row, 6)?,
             })
         })?
         .collect()
+}
+
+fn optional_u64(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Option<u64>> {
+    row.get::<_, Option<i64>>(index)?
+        .map(|value| {
+            u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
+        })
+        .transpose()
 }
 
 fn limited_staged_hints(

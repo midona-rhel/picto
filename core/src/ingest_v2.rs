@@ -168,19 +168,36 @@ impl IngestProjectionDelta {
         for item_id in &self.summary_root_ids {
             let summary = transaction
                 .query_row(
-                    "SELECT total_size_bytes, media_count, sort_rating
-                     FROM root_summary WHERE root_item_id = ?1",
+                    "SELECT summary.total_size_bytes, summary.media_count,
+                            summary.sort_rating, file.duration_ms,
+                            file.pixel_width, file.pixel_height
+                     FROM root_summary summary
+                     LEFT JOIN media_asset cover
+                       ON cover.item_id = summary.cover_media_item_id
+                     LEFT JOIN media_file file ON file.file_id = cover.file_id
+                     WHERE summary.root_item_id = ?1",
                     [item_id],
                     |row| {
                         Ok((
                             row.get::<_, i64>(0)?,
                             row.get::<_, i64>(1)?,
                             row.get::<_, Option<i64>>(2)?,
+                            row.get::<_, Option<i64>>(3)?,
+                            row.get::<_, Option<i64>>(4)?,
+                            row.get::<_, Option<i64>>(5)?,
                         ))
                     },
                 )
                 .optional()?;
-            let Some((total_size_bytes, media_count, rating)) = summary else {
+            let Some((
+                total_size_bytes,
+                media_count,
+                rating,
+                duration_ms,
+                pixel_width,
+                pixel_height,
+            )) = summary
+            else {
                 continue;
             };
             self.summaries.push(RootSummaryProjectionChange {
@@ -195,10 +212,21 @@ impl IngestProjectionDelta {
                             .map_err(|_| rusqlite::Error::IntegralValueOutOfRange(2, rating))
                     })
                     .transpose()?,
+                display_duration_ms: optional_nonnegative_u64(duration_ms, 3)?,
+                display_width: optional_nonnegative_u64(pixel_width, 4)?,
+                display_height: optional_nonnegative_u64(pixel_height, 5)?,
             });
         }
         Ok(())
     }
+}
+
+fn optional_nonnegative_u64(value: Option<i64>, index: usize) -> rusqlite::Result<Option<u64>> {
+    value
+        .map(|value| {
+            u64::try_from(value).map_err(|_| rusqlite::Error::IntegralValueOutOfRange(index, value))
+        })
+        .transpose()
 }
 
 fn settle_ingest_projection(
