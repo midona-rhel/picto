@@ -11,6 +11,7 @@ use ts_rs::TS;
 
 use crate::app::{resources, Application, MutationReceipt};
 use crate::blob_store::{mime_to_extension, BlobStore};
+use crate::projection_v2::ProjectionSelectionSnapshot;
 use crate::subscriptions::gallery_dl_runner::{build_url, site_by_id};
 use crate::subscriptions::source_adapter::{
     infer_query_kind, normalize_query_text, validate_query_text,
@@ -192,6 +193,7 @@ impl StoredSubscriptionCover {
 
 #[derive(Debug, Clone)]
 struct SubscriptionCoverSource {
+    root_item_id: i64,
     file_hash: String,
     mime_type: String,
 }
@@ -205,10 +207,13 @@ pub struct SubscriptionList {
 }
 
 pub fn list(application: &Application) -> Result<SubscriptionList, String> {
-    application.store().read_snapshot(|connection| {
-        let mut subscriptions = connection
-            .prepare(
-                "WITH active_runs AS (
+    application.store().read_snapshot_captured(
+        || application.projections().selection_snapshot(),
+        |connection, _, projection| {
+            (|| -> rusqlite::Result<SubscriptionList> {
+                let mut subscriptions = connection
+                    .prepare(
+                        "WITH active_runs AS (
                      SELECT *
                      FROM subscription_run
                      WHERE status IN ('pending', 'running')
@@ -292,64 +297,67 @@ pub fn list(application: &Application) -> Result<SubscriptionList, String> {
                  LEFT JOIN traversed_posts ON traversed_posts.run_id = active.run_id
                  LEFT JOIN item_progress ON item_progress.run_id = active.run_id
                  ORDER BY s.name, s.subscription_id",
-            )?
-            .query_map([], |row| {
-                Ok(SubscriptionView {
-                    subscription_id: row.get(0)?,
-                    name: row.get(1)?,
-                    schedule: row.get(2)?,
-                    paused: row.get(3)?,
-                    initial_post_limit: row.get(4)?,
-                    periodic_post_limit: row.get(5)?,
-                    next_run_at: row.get(6)?,
-                    active_run_id: row.get(7)?,
-                    status: row.get(8)?,
-                    media_count: row.get(9)?,
-                    open_issue_count: row.get(10)?,
-                    cover_file_hash: row.get(11)?,
-                    cover_focus_x: 500,
-                    cover_focus_y: 500,
-                    cover_zoom_percent: 100,
-                    progress: SubscriptionProgress {
-                        posts_traversed: row.get(12)?,
-                        posts_added: row.get(13)?,
-                        discovered: row.get(14)?,
-                        downloaded: row.get(15)?,
-                        ingested: row.get(16)?,
-                        failed: row.get(17)?,
-                        deleted: row.get(18)?,
-                    },
-                    destination: SubscriptionDestinationPolicy::default(),
-                    queries: Vec::new(),
-                })
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut queries = query_views_by_subscription(connection)?;
-        let (mut destinations, mut covers) =
-            subscription_settings_by_id(connection, application.blobs())?;
-        for subscription in &mut subscriptions {
-            subscription.queries = queries
-                .remove(&subscription.subscription_id)
-                .unwrap_or_default();
-            subscription.destination = destinations
-                .remove(&subscription.subscription_id)
-                .unwrap_or_default();
-            if let Some(cover) = covers.remove(&subscription.subscription_id) {
-                if let Some((selection, file_hash)) = cover {
-                    subscription.cover_file_hash = Some(file_hash);
-                    subscription.cover_focus_x = selection.focus_x;
-                    subscription.cover_focus_y = selection.focus_y;
-                    subscription.cover_zoom_percent = selection.zoom_percent;
-                } else {
-                    subscription.cover_file_hash = None;
+                    )?
+                    .query_map([], |row| {
+                        Ok(SubscriptionView {
+                            subscription_id: row.get(0)?,
+                            name: row.get(1)?,
+                            schedule: row.get(2)?,
+                            paused: row.get(3)?,
+                            initial_post_limit: row.get(4)?,
+                            periodic_post_limit: row.get(5)?,
+                            next_run_at: row.get(6)?,
+                            active_run_id: row.get(7)?,
+                            status: row.get(8)?,
+                            media_count: row.get(9)?,
+                            open_issue_count: row.get(10)?,
+                            cover_file_hash: row.get(11)?,
+                            cover_focus_x: 500,
+                            cover_focus_y: 500,
+                            cover_zoom_percent: 100,
+                            progress: SubscriptionProgress {
+                                posts_traversed: row.get(12)?,
+                                posts_added: row.get(13)?,
+                                discovered: row.get(14)?,
+                                downloaded: row.get(15)?,
+                                ingested: row.get(16)?,
+                                failed: row.get(17)?,
+                                deleted: row.get(18)?,
+                            },
+                            destination: SubscriptionDestinationPolicy::default(),
+                            queries: Vec::new(),
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                let mut queries = query_views_by_subscription(connection)?;
+                let (mut destinations, mut covers) =
+                    subscription_settings_by_id(connection, application.blobs(), &projection)?;
+                for subscription in &mut subscriptions {
+                    subscription.queries = queries
+                        .remove(&subscription.subscription_id)
+                        .unwrap_or_default();
+                    subscription.destination = destinations
+                        .remove(&subscription.subscription_id)
+                        .unwrap_or_default();
+                    if let Some(cover) = covers.remove(&subscription.subscription_id) {
+                        if let Some((selection, file_hash)) = cover {
+                            subscription.cover_file_hash = Some(file_hash);
+                            subscription.cover_focus_x = selection.focus_x;
+                            subscription.cover_focus_y = selection.focus_y;
+                            subscription.cover_zoom_percent = selection.zoom_percent;
+                        } else {
+                            subscription.cover_file_hash = None;
+                        }
+                    }
                 }
-            }
-        }
-        Ok(SubscriptionList {
-            subscriptions,
-            revision: crate::store::schema::revision(connection)?,
-        })
-    })
+                Ok(SubscriptionList {
+                    subscriptions,
+                    revision: crate::store::schema::revision(connection)?,
+                })
+            })()
+            .map_err(|error| error.to_string())
+        },
+    )
 }
 
 impl Application {
@@ -359,15 +367,20 @@ impl Application {
         selection: &SubscriptionCoverSelection,
     ) -> Result<MutationReceipt, String> {
         validate_cover_selection(selection)?;
-        let source = self.store().read_result(|connection| {
-            require_subscription(connection, subscription_id).map_err(|error| error.to_string())?;
-            require_subscription_cover_candidate(
-                connection,
-                subscription_id,
-                selection.media_item_id,
-            )
-            .map_err(|error| error.to_string())
-        })?;
+        let source = self.store().read_snapshot_captured(
+            || self.projections().selection_snapshot(),
+            |connection, _, projection| {
+                require_subscription(connection, subscription_id)
+                    .map_err(|error| error.to_string())?;
+                require_subscription_cover_candidate(
+                    connection,
+                    &projection,
+                    subscription_id,
+                    selection.media_item_id,
+                )
+                .map_err(|error| error.to_string())
+            },
+        )?;
         let rendered_hash =
             render_subscription_cover(self.blobs(), subscription_id, &source, selection)?;
         let stored = StoredSubscriptionCover {
@@ -384,10 +397,13 @@ impl Application {
                 require_subscription(transaction, subscription_id)?;
                 let current_source = require_subscription_cover_candidate(
                     transaction,
+                    &self.projections().selection_snapshot(),
                     subscription_id,
                     selection.media_item_id,
                 )?;
-                if current_source.file_hash != source.file_hash {
+                if current_source.file_hash != source.file_hash
+                    || current_source.root_item_id != source.root_item_id
+                {
                     return Err(invalid("cover media changed while rendering"));
                 }
                 let previous: Option<String> = transaction
@@ -1039,74 +1055,93 @@ pub fn subscription_cover_candidates(
 ) -> Result<SubscriptionCoverCandidatePage, String> {
     const MAX_LIMIT: i64 = 200;
     let limit = limit.clamp(1, MAX_LIMIT);
-    application.store().read(|connection| {
-        require_subscription(connection, subscription_id)?;
-        let cursor_imported_at = cursor.map(|value| value.imported_at.as_str());
-        let cursor_media_item_id = cursor.map(|value| value.media_item_id);
-        let mut rows = connection
-            .prepare(
-                "WITH candidates AS (
-                     SELECT ma.item_id AS media_item_id, mf.file_hash, ma.name,
-                            mf.pixel_width, mf.pixel_height,
-                            ma.imported_at
-                     FROM subscription_source_post ssp
-                     JOIN source_item si ON si.source_post_id = ssp.source_post_id
-                     JOIN media_asset ma ON ma.item_id = si.media_item_id
-                     JOIN media_file mf ON mf.file_id = ma.file_id
-                     LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
-                     JOIN library_root root
-                       ON root.item_id = COALESCE(cm.collection_id, ma.item_id)
-                     WHERE ssp.subscription_id = ?1
-                       -- Keep the subscription lookup outermost. Unary plus prevents SQLite from
-                       -- scanning the global state index before applying the subscription scope.
-                       AND +si.state = 'ingested'
-                       AND root.lifecycle = 'active'
-                       AND mf.mime_type LIKE 'image/%'
-                     GROUP BY ma.item_id, mf.file_hash, ma.name,
-                              mf.pixel_width, mf.pixel_height, ma.imported_at
-                 )
-                 SELECT media_item_id, file_hash, name, pixel_width, pixel_height, imported_at
-                 FROM candidates
-                 WHERE ?2 IS NULL
-                    OR imported_at < ?2
-                    OR (imported_at = ?2 AND media_item_id < ?3)
-                 ORDER BY imported_at DESC, media_item_id DESC
-                 LIMIT ?4",
-            )?
-            .query_map(
-                params![
-                    subscription_id,
-                    cursor_imported_at,
-                    cursor_media_item_id,
-                    limit + 1,
-                ],
-                |row| {
-                    Ok((
-                        SubscriptionCoverCandidate {
-                            media_item_id: row.get(0)?,
-                            file_hash: row.get(1)?,
-                            name: row.get(2)?,
-                            pixel_width: row.get(3)?,
-                            pixel_height: row.get(4)?,
-                        },
-                        row.get::<_, String>(5)?,
-                    ))
-                },
-            )?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let next_cursor = (rows.len() as i64 > limit).then(|| {
-            let (candidate, imported_at) = &rows[limit as usize - 1];
-            SubscriptionCoverCandidateCursor {
-                imported_at: imported_at.clone(),
-                media_item_id: candidate.media_item_id,
-            }
-        });
-        rows.truncate(limit as usize);
-        Ok(SubscriptionCoverCandidatePage {
-            candidates: rows.into_iter().map(|(candidate, _)| candidate).collect(),
-            next_cursor,
-        })
-    })
+    application.store().read_snapshot_captured(
+        || application.projections().selection_snapshot(),
+        |connection, _, projection| {
+            (|| -> rusqlite::Result<SubscriptionCoverCandidatePage> {
+                require_subscription(connection, subscription_id)?;
+                let active = projection.lifecycle_bitmap(crate::app::Lifecycle::Active);
+                let mut raw_cursor = cursor.cloned();
+                let mut rows = Vec::new();
+                let batch_limit = ((limit + 1) * 4).clamp(64, 800);
+                loop {
+                    let cursor_imported_at =
+                        raw_cursor.as_ref().map(|value| value.imported_at.as_str());
+                    let cursor_media_item_id = raw_cursor.as_ref().map(|value| value.media_item_id);
+                    let batch = connection
+                        .prepare(
+                            "SELECT ma.item_id, mf.file_hash, ma.name,
+                                mf.pixel_width, mf.pixel_height, ma.imported_at
+                         FROM subscription_source_post ssp
+                         JOIN source_item si ON si.source_post_id = ssp.source_post_id
+                         JOIN media_asset ma ON ma.item_id = si.media_item_id
+                         JOIN media_file mf ON mf.file_id = ma.file_id
+                         WHERE ssp.subscription_id = ?1
+                           AND +si.state = 'ingested'
+                           AND mf.mime_type LIKE 'image/%'
+                           AND (?2 IS NULL
+                                OR ma.imported_at < ?2
+                                OR (ma.imported_at = ?2 AND ma.item_id < ?3))
+                         GROUP BY ma.item_id, mf.file_hash, ma.name,
+                                  mf.pixel_width, mf.pixel_height, ma.imported_at
+                         ORDER BY ma.imported_at DESC, ma.item_id DESC
+                         LIMIT ?4",
+                        )?
+                        .query_map(
+                            params![
+                                subscription_id,
+                                cursor_imported_at,
+                                cursor_media_item_id,
+                                batch_limit,
+                            ],
+                            |row| {
+                                Ok((
+                                    SubscriptionCoverCandidate {
+                                        media_item_id: row.get(0)?,
+                                        file_hash: row.get(1)?,
+                                        name: row.get(2)?,
+                                        pixel_width: row.get(3)?,
+                                        pixel_height: row.get(4)?,
+                                    },
+                                    row.get::<_, String>(5)?,
+                                ))
+                            },
+                        )?
+                        .collect::<rusqlite::Result<Vec<_>>>()?;
+                    let raw_count = batch.len() as i64;
+                    let last = batch.last().map(|(candidate, imported_at)| {
+                        SubscriptionCoverCandidateCursor {
+                            imported_at: imported_at.clone(),
+                            media_item_id: candidate.media_item_id,
+                        }
+                    });
+                    rows.extend(batch.into_iter().filter(|(candidate, _)| {
+                        projection
+                            .root_for_media(candidate.media_item_id)
+                            .and_then(|root_id| u32::try_from(root_id).ok())
+                            .is_some_and(|root_id| active.contains(root_id))
+                    }));
+                    if rows.len() as i64 > limit || raw_count < batch_limit || last.is_none() {
+                        break;
+                    }
+                    raw_cursor = last;
+                }
+                let next_cursor = (rows.len() as i64 > limit).then(|| {
+                    let (candidate, imported_at) = &rows[limit as usize - 1];
+                    SubscriptionCoverCandidateCursor {
+                        imported_at: imported_at.clone(),
+                        media_item_id: candidate.media_item_id,
+                    }
+                });
+                rows.truncate(limit as usize);
+                Ok(SubscriptionCoverCandidatePage {
+                    candidates: rows.into_iter().map(|(candidate, _)| candidate).collect(),
+                    next_cursor,
+                })
+            })()
+            .map_err(|error| error.to_string())
+        },
+    )
 }
 
 fn validate_cover_selection(selection: &SubscriptionCoverSelection) -> Result<(), String> {
@@ -1121,18 +1156,32 @@ fn validate_cover_selection(selection: &SubscriptionCoverSelection) -> Result<()
 
 fn require_subscription_cover_candidate(
     connection: &rusqlite::Connection,
+    projection: &ProjectionSelectionSnapshot,
     subscription_id: i64,
     media_item_id: i64,
 ) -> rusqlite::Result<SubscriptionCoverSource> {
-    find_subscription_cover_candidate(connection, subscription_id, media_item_id)?
+    find_subscription_cover_candidate(connection, projection, subscription_id, media_item_id)?
         .ok_or_else(|| invalid("cover media is not active in this subscription"))
 }
 
 fn find_subscription_cover_candidate(
     connection: &rusqlite::Connection,
+    projection: &ProjectionSelectionSnapshot,
     subscription_id: i64,
     media_item_id: i64,
 ) -> rusqlite::Result<Option<SubscriptionCoverSource>> {
+    let Some(root_item_id) = projection.root_for_media(media_item_id) else {
+        return Ok(None);
+    };
+    let Some(root_id) = u32::try_from(root_item_id).ok() else {
+        return Ok(None);
+    };
+    if !projection
+        .lifecycle_bitmap(crate::app::Lifecycle::Active)
+        .contains(root_id)
+    {
+        return Ok(None);
+    }
     connection
         .query_row(
             "SELECT mf.file_hash, mf.mime_type
@@ -1140,17 +1189,14 @@ fn find_subscription_cover_candidate(
              JOIN source_item si ON si.source_post_id = ssp.source_post_id
              JOIN media_asset ma ON ma.item_id = si.media_item_id
              JOIN media_file mf ON mf.file_id = ma.file_id
-             LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
-             JOIN library_root root
-               ON root.item_id = COALESCE(cm.collection_id, ma.item_id)
              WHERE ssp.subscription_id = ?1
                AND ma.item_id = ?2
                AND si.state = 'ingested'
-               AND root.lifecycle = 'active'
              LIMIT 1",
             params![subscription_id, media_item_id],
             |row| {
                 Ok(SubscriptionCoverSource {
+                    root_item_id,
                     file_hash: row.get(0)?,
                     mime_type: row.get(1)?,
                 })
@@ -1292,28 +1338,28 @@ type SubscriptionCoverOverride = Option<(SubscriptionCoverSelection, String)>;
 fn subscription_settings_by_id(
     connection: &rusqlite::Connection,
     blobs: &BlobStore,
+    projection: &ProjectionSelectionSnapshot,
 ) -> rusqlite::Result<(
     HashMap<i64, SubscriptionDestinationPolicy>,
     HashMap<i64, SubscriptionCoverOverride>,
 )> {
     let mut statement = connection.prepare(
         "SELECT s.subscription_id, destination.value_json, cover.value_json,
+                CASE WHEN json_valid(cover.value_json)
+                     THEN CAST(json_extract(cover.value_json, '$.media_item_id') AS INTEGER)
+                END,
                 (
                     SELECT mf.file_hash
                     FROM subscription_source_post ssp
                     JOIN source_item si ON si.source_post_id = ssp.source_post_id
                     JOIN media_asset ma ON ma.item_id = si.media_item_id
                     JOIN media_file mf ON mf.file_id = ma.file_id
-                    LEFT JOIN collection_member cm ON cm.media_item_id = ma.item_id
-                    JOIN library_root root
-                      ON root.item_id = COALESCE(cm.collection_id, ma.item_id)
                     WHERE ssp.subscription_id = s.subscription_id
                       AND si.media_item_id = CASE
                           WHEN json_valid(cover.value_json)
                           THEN CAST(json_extract(cover.value_json, '$.media_item_id') AS INTEGER)
                       END
                       AND si.state = 'ingested'
-                      AND root.lifecycle = 'active'
                     LIMIT 1
                 )
          FROM subscription s
@@ -1328,13 +1374,15 @@ fn subscription_settings_by_id(
             row.get::<_, i64>(0)?,
             row.get::<_, Option<String>>(1)?,
             row.get::<_, Option<String>>(2)?,
-            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<i64>>(3)?,
+            row.get::<_, Option<String>>(4)?,
         ))
     })?;
     let mut destinations = HashMap::new();
     let mut covers = HashMap::new();
     for row in rows {
-        let (subscription_id, destination_json, cover_json, source_file_hash) = row?;
+        let (subscription_id, destination_json, cover_json, media_item_id, mut source_file_hash) =
+            row?;
         let destination = destination_json
             .map(|json| {
                 let policy = serde_json::from_str(&json).map_err(|error| {
@@ -1346,6 +1394,17 @@ fn subscription_settings_by_id(
             .unwrap_or_default();
         destinations.insert(subscription_id, destination);
         if let Some(json) = cover_json {
+            let is_active = media_item_id
+                .and_then(|media_item_id| projection.root_for_media(media_item_id))
+                .and_then(|root_id| u32::try_from(root_id).ok())
+                .is_some_and(|root_id| {
+                    projection
+                        .lifecycle_bitmap(crate::app::Lifecycle::Active)
+                        .contains(root_id)
+                });
+            if !is_active {
+                source_file_hash = None;
+            }
             let stored: StoredSubscriptionCover = serde_json::from_str(&json)
                 .map_err(|error| invalid(format!("invalid subscription cover: {error}")))?;
             covers.insert(
@@ -1610,6 +1669,8 @@ mod tests {
     use std::sync::Arc;
 
     use super::*;
+    use crate::app::{ItemTarget, Lifecycle};
+    use crate::ingest_v2::{PreparedMediaInput, SourcePostInput};
     use crate::store::Store;
 
     fn fixture() -> (tempfile::TempDir, Application) {
@@ -1632,6 +1693,75 @@ mod tests {
                 group_posts: true,
             }],
         }
+    }
+
+    fn ingest_subscription_media(
+        application: &Application,
+        subscription_id: i64,
+        query_id: i64,
+        file_hash: &str,
+        mime_type: &str,
+        name: &str,
+        post_key: &str,
+        imported_at: &str,
+    ) -> i64 {
+        let result = application
+            .ingest_prepared(&PreparedMediaInput {
+                file_hash: file_hash.to_string(),
+                mime_type: mime_type.to_string(),
+                size_bytes: 10,
+                pixel_width: Some(800),
+                pixel_height: Some(600),
+                duration_ms: None,
+                frame_count: Some(1),
+                has_audio: false,
+                name: Some(name.to_string()),
+                notes: None,
+                rating: None,
+                source_urls: Vec::new(),
+                tags: Vec::new(),
+                lifecycle: Lifecycle::Active,
+                captured_at: None,
+                source: Some(SourcePostInput {
+                    site_id: "pixiv".to_string(),
+                    post_key: post_key.to_string(),
+                    item_key: format!("media:{post_key}"),
+                    position: 0,
+                    post_complete: true,
+                    force_collection: false,
+                    group_post: false,
+                    canonical_post_url: None,
+                    canonical_media_url: None,
+                    creator_name: None,
+                    title: None,
+                    description: None,
+                    captured_at: None,
+                    metadata_json: None,
+                }),
+                target_folder_id: None,
+                target_folder_ids: Vec::new(),
+            })
+            .unwrap();
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE media_asset SET imported_at = ?2 WHERE item_id = ?1",
+                    params![result.media_item_id.0, imported_at],
+                )?;
+                transaction.execute(
+                    "INSERT INTO subscription_source_post (
+                         subscription_id, query_id, source_post_id
+                     )
+                     SELECT ?1, ?2, source_post_id
+                     FROM source_post
+                     WHERE site_id = 'pixiv' AND post_key = ?3",
+                    params![subscription_id, query_id, post_key],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        result.media_item_id.0
     }
 
     #[test]
@@ -1750,54 +1880,16 @@ mod tests {
             .blobs()
             .write_original(&source_hash, source_bytes.get_ref(), Some("png"))
             .unwrap();
-        application
-            .store()
-            .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO media_file (
-                         file_id, file_hash, mime_type, size_bytes,
-                         pixel_width, pixel_height, created_at
-                     ) VALUES (1, ?1, 'image/png', ?2, 800, 600, 'now')",
-                    params![source_hash, source_bytes.get_ref().len() as i64],
-                )?;
-                transaction.execute(
-                    "INSERT INTO library_item (
-                         item_id, item_key, kind, created_at, updated_at
-                     ) VALUES (1, 'media:1', 'media', 'now', 'now')",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO media_asset (
-                         item_id, file_id, name, imported_at, updated_at
-                     ) VALUES (1, 1, 'Cover', 'now', 'now')",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO library_root (item_id, lifecycle) VALUES (1, 'active')",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO source_post (
-                         source_post_id, site_id, post_key, root_item_id, created_at, updated_at
-                     ) VALUES (1, 'pixiv', 'post', 1, 'now', 'now')",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO subscription_source_post (
-                         subscription_id, query_id, source_post_id
-                     ) VALUES (?1, ?2, 1)",
-                    params![subscription_id, query_id],
-                )?;
-                transaction.execute(
-                    "INSERT INTO source_item (
-                         source_post_id, item_key, position, media_item_id,
-                         state, created_at, updated_at
-                     ) VALUES (1, 'image', 0, 1, 'ingested', 'now', 'now')",
-                    [],
-                )?;
-                Ok(())
-            })
-            .unwrap();
+        let media_item_id = ingest_subscription_media(
+            &application,
+            subscription_id,
+            query_id,
+            &source_hash,
+            "image/png",
+            "Cover",
+            "post",
+            "2026-01-01T00:00:00Z",
+        );
 
         let page = subscription_cover_candidates(&application, subscription_id, None, 200).unwrap();
         assert_eq!(page.candidates.len(), 1);
@@ -1808,7 +1900,7 @@ mod tests {
             .set_subscription_cover(
                 subscription_id,
                 &SubscriptionCoverSelection {
-                    media_item_id: 1,
+                    media_item_id,
                     focus_x: 250,
                     focus_y: 750,
                     zoom_percent: 160,
@@ -1834,14 +1926,12 @@ mod tests {
         assert_eq!(subscription.cover_zoom_percent, 100);
 
         application
-            .store()
-            .transaction(|transaction| {
-                transaction.execute(
-                    "UPDATE library_root SET lifecycle = 'inbox' WHERE item_id = 1",
-                    [],
-                )?;
-                Ok(())
-            })
+            .set_lifecycle(
+                &ItemTarget::Explicit {
+                    item_ids: vec![crate::app::ItemId(media_item_id)],
+                },
+                Lifecycle::Inbox,
+            )
             .unwrap();
         assert!(
             subscription_cover_candidates(&application, subscription_id, None, 200)
@@ -1861,62 +1951,34 @@ mod tests {
             .create_subscription_definition(&input(), "2026-01-01T00:00:00Z")
             .unwrap();
         let query_id = list(&application).unwrap().subscriptions[0].queries[0].query_id;
+        let mut media_ids = Vec::new();
+        for (position, imported_at, mime_type) in [
+            (1_i64, "2026-01-01T00:00:01Z", "image/jpeg"),
+            (2_i64, "2026-01-01T00:00:03Z", "image/jpeg"),
+            (3_i64, "2026-01-01T00:00:03Z", "image/jpeg"),
+            (4_i64, "2026-01-01T00:00:04Z", "video/mp4"),
+        ] {
+            media_ids.push(ingest_subscription_media(
+                &application,
+                subscription_id,
+                query_id,
+                &format!("hash-{position}"),
+                mime_type,
+                &format!("Cover {position}"),
+                &format!("post-{position}"),
+                imported_at,
+            ));
+        }
+        // Retraversal and state bookkeeping must not make an old image the cover.
         application
             .store()
             .transaction(|transaction| {
-                for (item_id, imported_at, mime_type) in [
-                    (1_i64, "2026-01-01T00:00:01Z", "image/jpeg"),
-                    (2_i64, "2026-01-01T00:00:03Z", "image/jpeg"),
-                    (3_i64, "2026-01-01T00:00:03Z", "image/jpeg"),
-                    (4_i64, "2026-01-01T00:00:04Z", "video/mp4"),
-                ] {
-                    transaction.execute(
-                        "INSERT INTO media_file (
-                             file_id, file_hash, mime_type, size_bytes, created_at
-                         ) VALUES (?1, ?2, ?3, 10, ?4)",
-                        params![item_id, format!("hash-{item_id}"), mime_type, imported_at],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO library_item (
-                             item_id, item_key, kind, created_at, updated_at
-                         ) VALUES (?1, ?2, 'media', ?3, ?3)",
-                        params![item_id, format!("media:{item_id}"), imported_at],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO media_asset (
-                             item_id, file_id, name, imported_at, updated_at
-                         ) VALUES (?1, ?1, ?2, ?3, ?3)",
-                        params![item_id, format!("Cover {item_id}"), imported_at],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
-                        [item_id],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO source_post (
-                             source_post_id, site_id, post_key, root_item_id,
-                             created_at, updated_at
-                         ) VALUES (?1, 'pixiv', ?2, ?1, ?3, ?3)",
-                        params![item_id, format!("post-{item_id}"), imported_at],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO subscription_source_post (
-                             subscription_id, query_id, source_post_id
-                         ) VALUES (?1, ?2, ?3)",
-                        params![subscription_id, query_id, item_id],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO source_item (
-                             source_post_id, item_key, position, media_item_id,
-                             state, created_at, updated_at
-                         ) VALUES (?1, 'image', 0, ?1, 'ingested', ?2, ?2)",
-                        params![item_id, imported_at],
-                    )?;
-                }
-                // Retraversal and state bookkeeping must not make an old image the cover.
                 transaction.execute(
                     "UPDATE source_item SET updated_at = '2099-01-01T00:00:00Z'
-                     WHERE source_post_id = 1",
+                     WHERE source_post_id = (
+                         SELECT source_post_id FROM source_post
+                         WHERE site_id = 'pixiv' AND post_key = 'post-1'
+                     )",
                     [],
                 )?;
                 Ok(())
@@ -1933,11 +1995,11 @@ mod tests {
                 .iter()
                 .map(|candidate| candidate.media_item_id)
                 .collect::<Vec<_>>(),
-            vec![3, 2]
+            vec![media_ids[2], media_ids[1]]
         );
         let cursor = first.next_cursor.expect("first page cursor");
         assert_eq!(cursor.imported_at, "2026-01-01T00:00:03Z");
-        assert_eq!(cursor.media_item_id, 2);
+        assert_eq!(cursor.media_item_id, media_ids[1]);
 
         let second =
             subscription_cover_candidates(&application, subscription_id, Some(&cursor), 2).unwrap();
@@ -1947,7 +2009,7 @@ mod tests {
                 .iter()
                 .map(|candidate| candidate.media_item_id)
                 .collect::<Vec<_>>(),
-            vec![1]
+            vec![media_ids[0]]
         );
         assert!(second.next_cursor.is_none());
     }
