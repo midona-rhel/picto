@@ -80,13 +80,14 @@ pub fn resolve_file_paths(
 /// Collections expand in their stored member order.
 pub fn resolve_target_file_paths(
     store: &Store,
+    projections: &crate::projection_v2::ProjectionStore,
     blobs: &BlobStore,
     target: &ItemTarget,
 ) -> Result<Vec<ResolvedFilePath>, String> {
     let item_ids = store.read_result(|connection| {
         crate::query_v2::resolve_target_ids(connection, target).map_err(|error| error.to_string())
     })?;
-    let hashes = ordered_media(store, &item_ids)?
+    let hashes = ordered_media(store, projections, &item_ids)?
         .into_iter()
         .map(|media| media.file_hash)
         .collect::<Vec<_>>();
@@ -329,6 +330,7 @@ pub struct ExportResult {
 /// library. Conversion is limited to image formats supported by `image`.
 pub fn export(
     store: &Store,
+    projections: &crate::projection_v2::ProjectionStore,
     blobs: &BlobStore,
     library_root: &Path,
     request: &ExportRequest,
@@ -341,7 +343,7 @@ pub fn export(
         crate::query_v2::resolve_target_ids(connection, &request.target)
             .map_err(|error| error.to_string())
     })?;
-    let media = ordered_media(store, &item_ids)?;
+    let media = ordered_media(store, projections, &item_ids)?;
     let mut result = ExportResult {
         selected_item_count: item_ids.len(),
         selected_media_count: media.len(),
@@ -370,27 +372,31 @@ struct ExportMedia {
     position: i64,
 }
 
-fn ordered_media(store: &Store, item_ids: &[i64]) -> Result<Vec<ExportMedia>, String> {
-    let encoded = serde_json::to_string(item_ids)
+fn ordered_media(
+    store: &Store,
+    projections: &crate::projection_v2::ProjectionStore,
+    item_ids: &[i64],
+) -> Result<Vec<ExportMedia>, String> {
+    let media_ids = item_ids
+        .iter()
+        .flat_map(|root_id| {
+            projections
+                .group_order(*root_id)
+                .unwrap_or_else(|| vec![*root_id])
+        })
+        .collect::<Vec<_>>();
+    let encoded = serde_json::to_string(&media_ids)
         .map_err(|error| format!("Could not encode export targets: {error}"))?;
     store.read(|connection| {
         let mut statement = connection.prepare(
-            "WITH roots(root_item_id, root_order) AS (
+            "WITH ordered_media(media_item_id, position) AS (
                  SELECT CAST(value AS INTEGER), CAST(key AS INTEGER) FROM json_each(?1)
-             ), ordered_media(root_order, media_item_id, position) AS (
-                 SELECT roots.root_order, ma.item_id, 0
-                 FROM roots JOIN media_asset ma ON ma.item_id = roots.root_item_id
-                 UNION ALL
-                 SELECT roots.root_order, cm.media_item_id, cm.position_rank
-                 FROM roots
-                 JOIN collection_member cm ON cm.collection_id = roots.root_item_id
              )
              SELECT mf.file_hash, mf.mime_type, ma.name, ordered_media.position
              FROM ordered_media
              JOIN media_asset ma ON ma.item_id = ordered_media.media_item_id
              JOIN media_file mf ON mf.file_id = ma.file_id
-             ORDER BY ordered_media.root_order, ordered_media.position,
-                      ordered_media.media_item_id",
+             ORDER BY ordered_media.position",
         )?;
         let media = statement
             .query_map([encoded], |row| {
@@ -598,6 +604,7 @@ mod tests {
 
     use super::*;
     use crate::app::ItemId;
+    use crate::operations_v2::OrganizeIntoCollectionInput;
     use image::{DynamicImage, ImageBuffer, ImageFormat, Rgb};
     use sha2::{Digest, Sha256};
     use std::io::Cursor;
@@ -609,6 +616,7 @@ mod tests {
         directory: TempDir,
         application: Application,
         hashes: Vec<FileHash>,
+        group_id: ItemId,
     }
 
     fn fixture() -> Fixture {
@@ -616,81 +624,65 @@ mod tests {
         let store = Arc::new(Store::open(directory.path()).unwrap());
         let application = Application::new(Arc::clone(&store));
         let mut hashes = Vec::new();
-        store
+        let mut item_ids = Vec::new();
+        for color in [[255, 0, 0], [0, 0, 255]] {
+            let image = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(16, 8, Rgb(color)));
+            let mut bytes = Vec::new();
+            image
+                .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
+                .unwrap();
+            let hash = hex::encode(Sha256::digest(&bytes));
+            application
+                .blobs()
+                .write_original(&hash, &bytes, Some("png"))
+                .unwrap();
+            let item = application
+                .ingest_prepared(&crate::ingest_v2::PreparedMediaInput {
+                    file_hash: hash.clone(),
+                    mime_type: "image/png".to_string(),
+                    size_bytes: bytes.len() as i64,
+                    pixel_width: Some(16),
+                    pixel_height: Some(8),
+                    duration_ms: None,
+                    frame_count: Some(1),
+                    has_audio: false,
+                    name: Some("same.png".to_string()),
+                    notes: None,
+                    rating: None,
+                    source_urls: Vec::new(),
+                    tags: Vec::new(),
+                    lifecycle: crate::app::Lifecycle::Active,
+                    captured_at: None,
+                    source: None,
+                    target_folder_id: None,
+                    target_folder_ids: Vec::new(),
+                })
+                .unwrap();
+            hashes.push(FileHash(hash));
+            item_ids.push(item.root_item_id);
+        }
+        application
+            .store()
             .transaction(|transaction| {
-                for (file_id, color, name) in
-                    [(1, [255, 0, 0], "same.png"), (2, [0, 0, 255], "same.png")]
-                {
-                    let image = DynamicImage::ImageRgb8(ImageBuffer::from_pixel(16, 8, Rgb(color)));
-                    let mut bytes = Vec::new();
-                    image
-                        .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Png)
-                        .unwrap();
-                    let hash = hex::encode(Sha256::digest(&bytes));
-                    application
-                        .blobs()
-                        .write_original(&hash, &bytes, Some("png"))
-                        .unwrap();
-                    transaction.execute(
-                        "INSERT INTO media_file (file_id, file_hash, mime_type, size_bytes,
-                             pixel_width, pixel_height, created_at)
-                         VALUES (?1, ?2, 'image/png', ?3, 16, 8, ?4)",
-                        rusqlite::params![file_id, hash, bytes.len() as i64, NOW],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO library_item (item_id, item_key, kind, created_at, updated_at)
-                         VALUES (?1, ?2, 'media', ?3, ?3)",
-                        rusqlite::params![file_id, format!("item-{file_id}"), NOW],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO media_asset (item_id, file_id, name, imported_at, updated_at)
-                         VALUES (?1, ?1, ?2, ?3, ?3)",
-                        rusqlite::params![file_id, name, NOW],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO library_root (item_id, lifecycle) VALUES (?1, 'active')",
-                        [file_id],
-                    )?;
-                    transaction.execute(
-                        "INSERT INTO root_metadata
-                            (root_item_id, name, source_urls_json, updated_at)
-                         VALUES (?1, ?2, '[]', ?3)",
-                        rusqlite::params![file_id, name, NOW],
-                    )?;
-                    hashes.push(FileHash(hash));
-                }
-                transaction.execute(
-                    "INSERT INTO library_item (item_id, item_key, kind, created_at, updated_at)
-                     VALUES (10, 'collection-10', 'collection', ?1, ?1)",
-                    [NOW],
-                )?;
-                transaction.execute(
-                    "INSERT INTO library_root (item_id, lifecycle) VALUES (10, 'active')",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO root_metadata
-                        (root_item_id, name, source_urls_json, updated_at)
-                     VALUES (10, 'ordered', '[]', ?1)",
-                    [NOW],
-                )?;
-                transaction.execute("DELETE FROM library_root WHERE item_id IN (1, 2)", [])?;
-                transaction.execute(
-                    "INSERT INTO collection_member (collection_id, media_item_id, position_rank)
-                     VALUES (10, 2, 10), (10, 1, 20)",
-                    [],
-                )?;
-                transaction.execute(
-                    "UPDATE library_item SET cover_media_item_id = 2 WHERE item_id = 10",
-                    [],
-                )?;
+                transaction.execute("DELETE FROM work_item", [])?;
                 Ok(())
             })
             .unwrap();
+        let group_id = application
+            .organize_into_collection(OrganizeIntoCollectionInput {
+                target: ItemTarget::Explicit {
+                    item_ids: vec![item_ids[1], item_ids[0]],
+                },
+                label: Some("ordered".to_string()),
+                winning_collection_id: None,
+            })
+            .unwrap()
+            .collection_id;
         Fixture {
             directory,
             application,
             hashes,
+            group_id,
         }
     }
 
@@ -730,9 +722,10 @@ mod tests {
         let fixture = fixture();
         let resolved = resolve_target_file_paths(
             fixture.application.store(),
+            fixture.application.projections(),
             fixture.application.blobs(),
             &ItemTarget::Explicit {
-                item_ids: vec![ItemId(10)],
+                item_ids: vec![fixture.group_id],
             },
         )
         .unwrap();
@@ -846,7 +839,7 @@ mod tests {
         let output = tempfile::tempdir().unwrap();
         let request = ExportRequest {
             target: ItemTarget::Explicit {
-                item_ids: vec![ItemId(10)],
+                item_ids: vec![fixture.group_id],
             },
             output_dir: output.path().to_path_buf(),
             format: ExportFormat::Original,
@@ -857,6 +850,7 @@ mod tests {
         };
         let result = export(
             fixture.application.store(),
+            fixture.application.projections(),
             fixture.application.blobs(),
             fixture.directory.path(),
             &request,
@@ -893,6 +887,7 @@ mod tests {
         };
         let error = export(
             fixture.application.store(),
+            fixture.application.projections(),
             fixture.application.blobs(),
             fixture.directory.path(),
             &request,

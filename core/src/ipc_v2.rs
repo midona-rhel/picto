@@ -171,6 +171,7 @@ pub fn dispatch(
             let input: TargetInput = parse(args_json)?;
             read(crate::media_io_v2::resolve_target_file_paths(
                 application.store(),
+                application.projections(),
                 application.blobs(),
                 &input.target,
             )?)
@@ -187,6 +188,7 @@ pub fn dispatch(
             let input: crate::media_io_v2::ExportRequest = parse(args_json)?;
             read(crate::media_io_v2::export(
                 application.store(),
+                application.projections(),
                 application.blobs(),
                 application.store().library_root(),
                 &input,
