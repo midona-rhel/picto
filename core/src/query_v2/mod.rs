@@ -1556,7 +1556,63 @@ pub fn sidebar_counts(store: &Store) -> Result<SidebarCounts, String> {
 pub fn sidebar_counts_for_application(
     application: &crate::app::Application,
 ) -> Result<SidebarCounts, String> {
-    sidebar_counts(application.store())
+    application.store().read_snapshot_captured(
+        || application.projections().sidebar_snapshot_all(),
+        |connection, revision, snapshot| {
+            (|| -> rusqlite::Result<SidebarCounts> {
+                let mut result = SidebarCounts {
+                    all: snapshot.all,
+                    inbox: snapshot.inbox,
+                    trash: snapshot.trash,
+                    untagged: snapshot.untagged,
+                    uncategorized: snapshot.uncategorized,
+                    revision,
+                    ..SidebarCounts::default()
+                };
+                result.recently_viewed = connection.query_row(
+                    "SELECT COUNT(*) FROM media_view mv
+                     WHERE EXISTS (
+                         SELECT 1 FROM library_root root
+                         WHERE root.item_id = mv.item_id AND root.lifecycle = 'active'
+                     )",
+                    [],
+                    |row| row.get(0),
+                )?;
+                result.duplicates = crate::duplicates_v2::count_candidates(connection)?;
+
+                let folder_counts = snapshot.folders.into_iter().collect::<HashMap<_, _>>();
+                result.folders = connection
+                    .prepare("SELECT folder_id FROM folder ORDER BY folder_id")?
+                    .query_map([], |row| {
+                        let folder_id = row.get::<_, i64>(0)?;
+                        Ok(ScopeCount {
+                            id: folder_id,
+                            count: folder_counts.get(&folder_id).copied().unwrap_or_default(),
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                result.smart_folders = connection
+                    .prepare(
+                        "SELECT smart_folder.smart_folder_id,
+                                COALESCE(generation.member_count, 0)
+                         FROM smart_folder
+                         LEFT JOIN smart_folder_generation generation
+                           ON generation.smart_folder_id = smart_folder.smart_folder_id
+                          AND generation.state = 'active'
+                         ORDER BY smart_folder.smart_folder_id",
+                    )?
+                    .query_map([], |row| {
+                        Ok(ScopeCount {
+                            id: row.get(0)?,
+                            count: row.get(1)?,
+                        })
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(result)
+            })()
+            .map_err(|error| error.to_string())
+        },
+    )
 }
 
 pub fn library_statistics(store: &Store) -> Result<LibraryStatistics, String> {
