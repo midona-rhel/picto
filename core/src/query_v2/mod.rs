@@ -21,7 +21,6 @@ use crate::{app::Application, projection_v2::ProjectionSelectionSnapshot};
 const DEFAULT_PAGE_LIMIT: i64 = 100;
 const MAX_PAGE_LIMIT: i64 = 500;
 const MAX_CURSOR_LENGTH: usize = 2_048;
-const COLOR_FILTER_DELTA_E: f64 = 30.0;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/application/")]
@@ -3100,8 +3099,10 @@ fn apply_filters(
             let l_index = push_argument(arguments, l);
             let a_index = push_argument(arguments, a);
             let b_index = push_argument(arguments, b);
-            let threshold_index =
-                push_argument(arguments, COLOR_FILTER_DELTA_E * COLOR_FILTER_DELTA_E);
+            let threshold_index = push_argument(
+                arguments,
+                crate::media_processing::colors::FILTER_DELTA_E.powi(2),
+            );
             predicates.push(format!(
                 "EXISTS (
                      SELECT 1 FROM root_media rm
@@ -4478,9 +4479,11 @@ mod tests {
     #[test]
     fn color_filter_matches_any_persisted_palette_color() {
         let (_directory, store) = seed_store();
+        let application = Application::new(Arc::new(store));
         let mut item_query = query_for(ItemScope::All);
         item_query.filters.color_hex = Some("#ABCDEF".to_string());
-        let page = query(&store, &item_query, ItemPageRequest::default()).unwrap();
+        let page =
+            query_for_application(&application, &item_query, ItemPageRequest::default()).unwrap();
 
         assert_eq!(
             page.items
@@ -4506,10 +4509,12 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        let application = Application::new(Arc::new(store));
         let mut item_query = query_for(ItemScope::All);
         item_query.filters.color_hex = Some("#2f9f4b".to_string());
 
-        let page = query(&store, &item_query, ItemPageRequest::default()).unwrap();
+        let page =
+            query_for_application(&application, &item_query, ItemPageRequest::default()).unwrap();
 
         assert_eq!(
             page.items

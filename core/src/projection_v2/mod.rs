@@ -977,6 +977,19 @@ pub struct MediaClassificationProjectionChange {
     pub mime_type: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LabColorProjectionValue {
+    pub l: f64,
+    pub a: f64,
+    pub b: f64,
+}
+
+#[derive(Debug, Clone)]
+pub struct MediaColorProjectionChange {
+    pub media_id: i64,
+    pub colors: Vec<LabColorProjectionValue>,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct FolderProjectionChange {
     pub folder_id: i64,
@@ -1032,6 +1045,9 @@ struct State {
     numeric: Arc<NumericIndexes>,
     media_ids: Shared<HashSet<i64>>,
     media_mime_types: ShardedMap<i64, String>,
+    media_lab_colors: ShardedMap<i64, Shared<Vec<LabColorProjectionValue>>>,
+    root_lab_colors: ShardedMap<i64, Shared<Vec<LabColorProjectionValue>>>,
+    color_lab_cell_roots: ShardedMap<i64, Shared<RoaringBitmap>>,
     root_mime_types: ShardedMap<i64, Shared<Vec<String>>>,
     exact_mime_roots: ShardedMap<String, Shared<RoaringBitmap>>,
     mime_family_roots: ShardedMap<String, Shared<RoaringBitmap>>,
@@ -1341,6 +1357,40 @@ impl ProjectionSelectionSnapshot {
             .get(&family)
             .map(|bitmap| (**bitmap).clone())
             .unwrap_or_default()
+    }
+
+    pub(crate) fn color_match_bitmap(
+        &self,
+        l: f64,
+        a: f64,
+        b: f64,
+        threshold: f64,
+        universe: &RoaringBitmap,
+    ) -> RoaringBitmap {
+        if !l.is_finite() || !a.is_finite() || !b.is_finite() || !threshold.is_finite() {
+            return RoaringBitmap::new();
+        }
+        let threshold_squared = threshold.max(0.0).powi(2);
+        let mut candidates = RoaringBitmap::new();
+        for (cell, roots) in self.state.color_lab_cell_roots.iter() {
+            if lab_cell_distance_squared(*cell, l, a, b) <= threshold_squared {
+                candidates |= &**roots;
+            }
+        }
+        candidates &= universe;
+        candidates
+            .iter()
+            .filter(|root_id| {
+                self.state
+                    .root_lab_colors
+                    .get(&i64::from(*root_id))
+                    .is_some_and(|colors| {
+                        colors
+                            .iter()
+                            .any(|color| lab_distance_squared(*color, l, a, b) <= threshold_squared)
+                    })
+            })
+            .collect()
     }
 
     pub(crate) fn rating_bitmap(&self, rating: i64) -> RoaringBitmap {
@@ -1727,6 +1777,42 @@ impl ProjectionStore {
                         state.collection_ids.insert(item_id);
                     }
                     other => return Err(format!("invalid library item kind: {other}")),
+                }
+            }
+        }
+
+        {
+            let mut statement = connection
+                .prepare(
+                    "SELECT asset.item_id, color.l, color.a, color.b
+                     FROM media_asset asset
+                     JOIN file_color color ON color.file_id = asset.file_id
+                     ORDER BY asset.item_id, color.color_id",
+                )
+                .map_err(|error| error.to_string())?;
+            let rows = statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        LabColorProjectionValue {
+                            l: row.get(1)?,
+                            a: row.get(2)?,
+                            b: row.get(3)?,
+                        },
+                    ))
+                })
+                .map_err(|error| error.to_string())?;
+            for row in rows {
+                let (media_id, color) = row.map_err(|error| error.to_string())?;
+                if !state.media_ids.contains(&media_id) {
+                    return Err(format!("file color references unknown media {media_id}"));
+                }
+                if color_is_finite(color) {
+                    state
+                        .media_lab_colors
+                        .entry(media_id)
+                        .or_default()
+                        .push(color);
                 }
             }
         }
@@ -2347,6 +2433,7 @@ impl ProjectionStore {
                 clear_root_tag_counts(&mut state, change.item_id);
                 state.media_ids.remove(&change.item_id);
                 state.media_mime_types.remove(&change.item_id);
+                state.media_lab_colors.remove(&change.item_id);
                 state.image_media_ids.remove(change.item_id as u32);
                 state.collection_ids.remove(&change.item_id);
                 state.media_to_root.remove(&change.item_id);
@@ -2481,6 +2568,7 @@ impl ProjectionStore {
         for root_id in touched_roots {
             sync_all_image_root(&mut state, root_id);
             sync_mime_root(&mut state, root_id);
+            sync_color_root(&mut state, root_id);
         }
 
         for change in delta.folders {
@@ -2542,6 +2630,39 @@ impl ProjectionStore {
         }
         for ((tag_id, present), roots) in tag_changes_by_root {
             apply_root_tag_changes_state(&mut state, tag_id, &roots, present)?;
+        }
+        Ok(())
+    }
+
+    pub fn apply_media_color_changes(
+        &self,
+        changes: Vec<MediaColorProjectionChange>,
+    ) -> Result<(), String> {
+        for change in &changes {
+            validate_id(change.media_id)?;
+            if change.colors.iter().any(|color| !color_is_finite(*color)) {
+                return Err(format!(
+                    "media {} contains a non-finite Lab color",
+                    change.media_id
+                ));
+            }
+        }
+        let mut state = self.write_state();
+        let mut touched_roots = HashSet::new();
+        for change in changes {
+            if change.colors.is_empty() {
+                state.media_lab_colors.remove(&change.media_id);
+            } else {
+                state
+                    .media_lab_colors
+                    .insert(change.media_id, change.colors.into());
+            }
+            if let Some(root_id) = state.media_to_root.get(&change.media_id).copied() {
+                touched_roots.insert(root_id);
+            }
+        }
+        for root_id in touched_roots {
+            sync_color_root(&mut state, root_id);
         }
         Ok(())
     }
@@ -3267,6 +3388,7 @@ fn rebuild_all_derived(state: &mut State) {
     rebuild_all_tags(state);
     rebuild_all_image_roots(state);
     rebuild_all_mime_roots(state);
+    rebuild_all_color_roots(state);
 }
 
 fn normalize_mime_type(value: &str) -> String {
@@ -3345,6 +3467,119 @@ fn sync_mime_root(state: &mut State, root_id: i64) {
     if !exact.is_empty() {
         state.root_mime_types.insert(root_id, exact.into());
     }
+}
+
+const LAB_CELL_SIZE: f64 = 8.0;
+
+fn color_is_finite(color: LabColorProjectionValue) -> bool {
+    color.l.is_finite() && color.a.is_finite() && color.b.is_finite()
+}
+
+fn lab_distance_squared(color: LabColorProjectionValue, l: f64, a: f64, b: f64) -> f64 {
+    (color.l - l).powi(2) + (color.a - a).powi(2) + (color.b - b).powi(2)
+}
+
+fn lab_cell_component(value: f64) -> i16 {
+    (value / LAB_CELL_SIZE)
+        .floor()
+        .clamp(f64::from(i16::MIN), f64::from(i16::MAX)) as i16
+}
+
+fn lab_cell_key(color: LabColorProjectionValue) -> i64 {
+    let l = u16::from_ne_bytes(lab_cell_component(color.l).to_ne_bytes());
+    let a = u16::from_ne_bytes(lab_cell_component(color.a).to_ne_bytes());
+    let b = u16::from_ne_bytes(lab_cell_component(color.b).to_ne_bytes());
+    (i64::from(l) << 32) | (i64::from(a) << 16) | i64::from(b)
+}
+
+fn lab_cell_components(key: i64) -> (i16, i16, i16) {
+    (
+        i16::from_ne_bytes(((key >> 32) as u16).to_ne_bytes()),
+        i16::from_ne_bytes(((key >> 16) as u16).to_ne_bytes()),
+        i16::from_ne_bytes((key as u16).to_ne_bytes()),
+    )
+}
+
+fn lab_axis_cell_distance(value: f64, cell: i16) -> f64 {
+    let minimum = f64::from(cell) * LAB_CELL_SIZE;
+    let maximum = minimum + LAB_CELL_SIZE;
+    if value < minimum {
+        minimum - value
+    } else if value > maximum {
+        value - maximum
+    } else {
+        0.0
+    }
+}
+
+fn lab_cell_distance_squared(key: i64, l: f64, a: f64, b: f64) -> f64 {
+    let (l_cell, a_cell, b_cell) = lab_cell_components(key);
+    lab_axis_cell_distance(l, l_cell).powi(2)
+        + lab_axis_cell_distance(a, a_cell).powi(2)
+        + lab_axis_cell_distance(b, b_cell).powi(2)
+}
+
+fn rebuild_all_color_roots(state: &mut State) {
+    state.root_lab_colors.clear();
+    state.color_lab_cell_roots.clear();
+    let roots = all_roots(state);
+    for root_id in roots.into_iter().map(i64::from) {
+        sync_color_root(state, root_id);
+    }
+}
+
+fn sync_color_root(state: &mut State, root_id: i64) {
+    let root_id_u32 = root_id as u32;
+    if let Some(previous) = state.root_lab_colors.remove(&root_id) {
+        let previous_cells = previous
+            .iter()
+            .copied()
+            .map(lab_cell_key)
+            .collect::<HashSet<_>>();
+        for cell in previous_cells {
+            if let Some(roots) = state.color_lab_cell_roots.get_mut(&cell) {
+                roots.remove(root_id_u32);
+            }
+        }
+        state
+            .color_lab_cell_roots
+            .retain(|_, roots| !roots.is_empty());
+    }
+    if !is_visible_root(state, root_id) {
+        return;
+    }
+
+    let media_ids = if state.media_ids.contains(&root_id) {
+        RoaringBitmap::from_iter([root_id_u32])
+    } else {
+        state
+            .collection_members
+            .get(&root_id)
+            .map(|members| (**members).clone())
+            .unwrap_or_default()
+    };
+    let mut colors = Vec::new();
+    for media_id in media_ids.into_iter().map(i64::from) {
+        if let Some(media_colors) = state.media_lab_colors.get(&media_id) {
+            colors.extend(media_colors.iter().copied());
+        }
+    }
+    if colors.is_empty() {
+        return;
+    }
+    let cells = colors
+        .iter()
+        .copied()
+        .map(lab_cell_key)
+        .collect::<HashSet<_>>();
+    for cell in cells {
+        state
+            .color_lab_cell_roots
+            .entry(cell)
+            .or_default()
+            .insert(root_id_u32);
+    }
+    state.root_lab_colors.insert(root_id, colors.into());
 }
 
 fn rebuild_all_image_roots(state: &mut State) {

@@ -8,6 +8,8 @@ use image::DynamicImage;
 use kmeans_colors::{get_kmeans_hamerly, Sort};
 use palette::{cast::from_component_slice, IntoColor, Lab, Srgb};
 
+pub const FILTER_DELTA_E: f64 = 30.0;
+
 /// Convert a UI hex color into the same Lab space persisted in `file_color`.
 /// Keeping this conversion beside extraction prevents query-time color search
 /// from drifting from the stored palette representation.

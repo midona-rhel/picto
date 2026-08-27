@@ -51,6 +51,7 @@ pub(crate) fn compile_item_query(
     apply_size_filters(projection, &query.filters, &mut roots);
     apply_display_metric_filters(projection, &query.filters, &mut roots);
     apply_timestamp_filters(projection, &query.filters, &mut roots);
+    apply_color_filter(projection, &query.filters, &mut roots);
     apply_mime_filters(projection, &query.filters, &mut roots);
     apply_tag_filters(connection, projection, &query.filters, &mut roots)?;
     apply_text_filter(connection, projection, &query.filters, &mut roots)?;
@@ -296,6 +297,30 @@ fn parse_optional_timestamp(value: Option<&str>) -> Option<Option<i64>> {
     timestamp_ms(value).map(Some)
 }
 
+fn apply_color_filter(
+    projection: &ProjectionSelectionSnapshot,
+    filters: &ItemFilters,
+    roots: &mut RoaringBitmap,
+) {
+    let Some(Some((l, a, b))) = parsed_color(filters.color_hex.as_deref()) else {
+        return;
+    };
+    *roots = projection.color_match_bitmap(
+        l,
+        a,
+        b,
+        crate::media_processing::colors::FILTER_DELTA_E,
+        roots,
+    );
+}
+
+fn parsed_color(value: Option<&str>) -> Option<Option<(f64, f64, f64)>> {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Some(None);
+    };
+    crate::media_processing::colors::lab_components_from_hex(value).map(Some)
+}
+
 fn apply_mime_filters(
     projection: &ProjectionSelectionSnapshot,
     filters: &ItemFilters,
@@ -389,7 +414,7 @@ fn combine(bitmaps: impl IntoIterator<Item = RoaringBitmap>, union: bool) -> Roa
 }
 
 fn has_sql_only_filters(filters: &ItemFilters) -> bool {
-    filters.color_hex.is_some()
+    parsed_color(filters.color_hex.as_deref()).is_none()
         || parsed_timestamp_range(
             filters.imported_after.as_deref(),
             filters.imported_before.as_deref(),

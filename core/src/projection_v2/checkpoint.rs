@@ -12,13 +12,14 @@ use sha2::{Digest, Sha256};
 use tempfile::NamedTempFile;
 
 use super::{
-    rebuild_all_mime_roots, validate_bitmap_ids, NumericIndexes, ShardedMap, Shared, State,
+    color_is_finite, rebuild_all_color_roots, rebuild_all_mime_roots, validate_bitmap_ids,
+    LabColorProjectionValue, NumericIndexes, ShardedMap, Shared, State,
 };
 
 const COMPONENT: &str = "projection-v2-roaring";
 const MAGIC: &[u8; 8] = b"PCTOV2\0\x02";
 const IMPLEMENTATION_MATERIAL: &[u8] =
-    b"projection-v2-checkpoint-v10:canonical-time-bit-slices:complete-immutable-state:portable-roaring";
+    b"projection-v2-checkpoint-v11:lab-color-candidates:complete-immutable-state:portable-roaring";
 const MAX_CHECKPOINT_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_ENTRY_COUNT: usize = 100_000_000;
 
@@ -253,6 +254,7 @@ fn encode_state(state: &State) -> Result<Vec<u8>, String> {
     encoder.numeric(state);
     encoder.id_set(&state.media_ids);
     encoder.string_map(&state.media_mime_types);
+    encoder.lab_color_map(&state.media_lab_colors);
     encoder.bitmap(&state.image_media_ids)?;
     encoder.bitmap(&state.all_image_roots)?;
     encoder.id_set(&state.collection_ids);
@@ -281,6 +283,9 @@ fn decode_state(bytes: &[u8]) -> Result<State, String> {
         numeric,
         media_ids: decoder.id_set()?.into(),
         media_mime_types: decoder.string_map()?,
+        media_lab_colors: decoder.lab_color_map()?,
+        root_lab_colors: ShardedMap::default(),
+        color_lab_cell_roots: ShardedMap::default(),
         root_mime_types: ShardedMap::default(),
         exact_mime_roots: ShardedMap::default(),
         mime_family_roots: ShardedMap::default(),
@@ -303,6 +308,7 @@ fn decode_state(bytes: &[u8]) -> Result<State, String> {
     };
     decoder.finish()?;
     rebuild_all_mime_roots(&mut state);
+    rebuild_all_color_roots(&mut state);
     Ok(state)
 }
 
@@ -326,6 +332,10 @@ impl Encoder {
 
     fn i64(&mut self, value: i64) {
         self.bytes.extend_from_slice(&value.to_le_bytes());
+    }
+
+    fn f64(&mut self, value: f64) {
+        self.u64(value.to_bits());
     }
 
     fn len(&mut self, value: usize) {
@@ -389,6 +399,21 @@ impl Encoder {
         for (key, value) in entries {
             self.i64(*key);
             self.string(value);
+        }
+    }
+
+    fn lab_color_map(&mut self, map: &ShardedMap<i64, Shared<Vec<LabColorProjectionValue>>>) {
+        let mut entries = map.iter().collect::<Vec<_>>();
+        entries.sort_unstable_by_key(|(key, _)| **key);
+        self.len(entries.len());
+        for (key, colors) in entries {
+            self.i64(*key);
+            self.len(colors.len());
+            for color in colors.iter() {
+                self.f64(color.l);
+                self.f64(color.a);
+                self.f64(color.b);
+            }
         }
     }
 
@@ -504,6 +529,10 @@ impl<'a> Decoder<'a> {
 
     fn i64(&mut self) -> Result<i64, String> {
         Ok(i64::from_le_bytes(self.take(8)?.try_into().unwrap()))
+    }
+
+    fn f64(&mut self) -> Result<f64, String> {
+        Ok(f64::from_bits(self.u64()?))
     }
 
     fn length(&mut self) -> Result<usize, String> {
@@ -626,6 +655,31 @@ impl<'a> Decoder<'a> {
             let key = self.i64()?;
             let value = self.string()?;
             insert_unique(&mut map, key, value)?;
+        }
+        Ok(map)
+    }
+
+    fn lab_color_map(
+        &mut self,
+    ) -> Result<ShardedMap<i64, Shared<Vec<LabColorProjectionValue>>>, String> {
+        let count = self.count(16)?;
+        let mut map = ShardedMap::default();
+        for _ in 0..count {
+            let key = self.i64()?;
+            let color_count = self.count(24)?;
+            let mut colors = Vec::with_capacity(color_count);
+            for _ in 0..color_count {
+                let color = LabColorProjectionValue {
+                    l: self.f64()?,
+                    a: self.f64()?,
+                    b: self.f64()?,
+                };
+                if !color_is_finite(color) {
+                    return Err("Projection checkpoint Lab color is invalid".to_string());
+                }
+                colors.push(color);
+            }
+            insert_unique(&mut map, key, colors.into())?;
         }
         Ok(map)
     }

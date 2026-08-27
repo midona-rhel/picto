@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crate::app::{resources, Application, ItemId, MutationReceipt};
 use crate::media_processing_v2::{self, BlobSource, DerivativeOutcome};
+use crate::projection_v2::{LabColorProjectionValue, MediaColorProjectionChange};
 use crate::store::Store;
 use crate::workers_v2::{self, WorkItem, WorkKind, DEFAULT_BATCH_SIZE};
 
@@ -52,6 +53,7 @@ async fn drain_claimed_batch<B: BlobSource>(
     let mut thumbnail_file_hashes = BTreeSet::new();
     let mut dominant_color_changes = BTreeMap::new();
     let mut duplicate_analysis_touched = false;
+    let mut color_file_ids = BTreeSet::new();
     let mut completed_work_ids = Vec::new();
 
     let mut groups: Vec<Vec<WorkItem>> = Vec::new();
@@ -143,6 +145,9 @@ async fn drain_claimed_batch<B: BlobSource>(
                                     thumbnail_file_hashes.insert(file_hash);
                                 }
                                 WorkKind::DominantColors => {
+                                    if let Some(file_id) = item.file_id {
+                                        color_file_ids.insert(file_id);
+                                    }
                                     let dominant_color_hex =
                                         dominant_color_for_file(store, item.file_id)?;
                                     dominant_color_changes.insert(
@@ -179,6 +184,12 @@ async fn drain_claimed_batch<B: BlobSource>(
                 }
             }
         }
+    }
+
+    if !color_file_ids.is_empty() {
+        application
+            .projections()
+            .apply_media_color_changes(color_projection_changes(store, &color_file_ids)?)?;
     }
 
     if !completed_work_ids.is_empty() {
@@ -220,6 +231,42 @@ async fn drain_claimed_batch<B: BlobSource>(
     result.thumbnail_file_hashes = thumbnail_file_hashes.into_iter().collect();
     result.dominant_color_changes = dominant_color_changes.into_values().collect();
     Ok(result)
+}
+
+fn color_projection_changes(
+    store: &Store,
+    file_ids: &BTreeSet<i64>,
+) -> Result<Vec<MediaColorProjectionChange>, String> {
+    let encoded = serde_json::to_string(&file_ids.iter().copied().collect::<Vec<_>>())
+        .map_err(|error| format!("Could not encode color projection files: {error}"))?;
+    store.read(|connection| {
+        let mut colors = BTreeMap::<i64, Vec<LabColorProjectionValue>>::new();
+        let mut statement = connection.prepare(
+            "SELECT asset.item_id, color.l, color.a, color.b
+             FROM media_asset asset
+             LEFT JOIN file_color color ON color.file_id = asset.file_id
+             WHERE asset.file_id IN (SELECT value FROM json_each(?1))
+             ORDER BY asset.item_id, color.color_id",
+        )?;
+        for row in statement.query_map([encoded], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<f64>>(1)?,
+                row.get::<_, Option<f64>>(2)?,
+                row.get::<_, Option<f64>>(3)?,
+            ))
+        })? {
+            let (media_id, l, a, b) = row?;
+            let media_colors = colors.entry(media_id).or_default();
+            if let (Some(l), Some(a), Some(b)) = (l, a, b) {
+                media_colors.push(LabColorProjectionValue { l, a, b });
+            }
+        }
+        Ok(colors
+            .into_iter()
+            .map(|(media_id, colors)| MediaColorProjectionChange { media_id, colors })
+            .collect())
+    })
 }
 
 fn is_derivative(kind: WorkKind) -> bool {
@@ -562,6 +609,26 @@ mod tests {
         assert!(result.dominant_color_changes[0]
             .dominant_color_hex
             .is_some());
+        let (l, a, b) = crate::media_processing::colors::lab_components_from_hex(
+            result.dominant_color_changes[0]
+                .dominant_color_hex
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            application
+                .projections()
+                .selection_snapshot()
+                .color_match_bitmap(
+                    l,
+                    a,
+                    b,
+                    crate::media_processing::colors::FILTER_DELTA_E,
+                    &RoaringBitmap::from_iter([9, 10]),
+                ),
+            RoaringBitmap::from_iter([9, 10])
+        );
         let receipt = result.receipt.as_ref().unwrap();
         assert_eq!(
             receipt.resources,
