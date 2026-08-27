@@ -126,29 +126,16 @@ pub struct SemanticTagIdentityState {
     pub present: bool,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub struct SemanticTagRootSet {
-    pub tag_id: i64,
-    pub roots: RoaringBitmap,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct SemanticRootTagState {
-    pub tag_id: i64,
-    pub roots: RoaringBitmap,
-}
-
 /// Exact directional inverse for tag identity, graph, and root ownership.
 /// Dense root sets are grouped by their row values and Roaring-compressed.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct SemanticTagGraphDelta {
     pub identities: Vec<SemanticTagIdentityState>,
-    pub clear_root_tags: Vec<SemanticTagRootSet>,
-    pub root_tags: Vec<SemanticRootTagState>,
     pub projection_tags: Vec<SemanticMembershipDelta>,
     pub removed_tag_ids: Vec<i64>,
     pub affected_roots: RoaringBitmap,
     pub affected_tag_ids: Vec<i64>,
+    pub dependency_keys: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -276,16 +263,6 @@ impl SemanticHistoryPayload {
                     })
                     .sum::<usize>()
                     + delta
-                        .clear_root_tags
-                        .iter()
-                        .map(|state| std::mem::size_of::<i64>() + bitmap_bytes(&state.roots))
-                        .sum::<usize>()
-                    + delta
-                        .root_tags
-                        .iter()
-                        .map(|state| std::mem::size_of::<i64>() + bitmap_bytes(&state.roots))
-                        .sum::<usize>()
-                    + delta
                         .projection_tags
                         .iter()
                         .map(membership_bytes)
@@ -293,6 +270,7 @@ impl SemanticHistoryPayload {
                     + delta.removed_tag_ids.len() * std::mem::size_of::<i64>()
                     + bitmap_bytes(&delta.affected_roots)
                     + delta.affected_tag_ids.len() * std::mem::size_of::<i64>()
+                    + delta.dependency_keys.iter().map(String::len).sum::<usize>()
             }
             Self::Group(delta) => {
                 bitmap_bytes(&delta.remove_root_ids)
@@ -989,9 +967,7 @@ fn apply_semantic_payload(
         // payload is applied to the private projection candidate and persisted
         // as one checksummed bitmap during prepared publication.
         SemanticHistoryPayload::Tags(_) => Ok(()),
-        SemanticHistoryPayload::Folders(changes) => {
-            apply_memberships(transaction, "folder_item", "item_id", "folder_id", changes)
-        }
+        SemanticHistoryPayload::Folders(changes) => apply_folder_memberships(transaction, changes),
         SemanticHistoryPayload::Ratings(delta) => apply_ratings(transaction, delta),
         SemanticHistoryPayload::TagGraph(delta) => apply_tag_graph(transaction, delta),
         SemanticHistoryPayload::Group(delta) => apply_group(transaction, delta),
@@ -1132,102 +1108,32 @@ fn apply_tag_graph(
             .map_err(|error| error.to_string())?;
     }
 
-    transaction
-        .execute_batch(
-            "CREATE TEMP TABLE IF NOT EXISTS picto_history_root_tag_key (
-                 root_item_id INTEGER NOT NULL,
-                 tag_id INTEGER NOT NULL,
-                 PRIMARY KEY (root_item_id, tag_id)
-             ) WITHOUT ROWID;
-             DELETE FROM picto_history_root_tag_key;",
-        )
-        .map_err(|error| error.to_string())?;
-    for cleared in &delta.clear_root_tags {
-        insert_bitmap_rows(
-            transaction,
-            "INSERT INTO picto_history_root_tag_key(root_item_id, tag_id)
-             SELECT CAST(value AS INTEGER), ?1 FROM json_each(?2)
-             WHERE TRUE
-             ON CONFLICT DO NOTHING",
-            &[rusqlite::types::Value::Integer(cleared.tag_id)],
-            &cleared.roots,
-        )?;
-    }
-    transaction
-        .execute(
-            "DELETE FROM root_tag
-             WHERE (root_item_id, tag_id) IN (
-                 SELECT root_item_id, tag_id FROM picto_history_root_tag_key
-             )",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
-    for state in &delta.root_tags {
-        insert_bitmap_rows(
-            transaction,
-            "INSERT INTO root_tag(root_item_id, tag_id)
-             SELECT CAST(value AS INTEGER), ?1 FROM json_each(?2)",
-            &[rusqlite::types::Value::Integer(state.tag_id)],
-            &state.roots,
-        )?;
-    }
-
     for identity in delta.identities.iter().filter(|identity| !identity.present) {
         transaction
             .execute("DELETE FROM tag WHERE tag_id = ?1", [identity.tag_id])
             .map_err(|error| error.to_string())?;
     }
-    refresh_tag_summaries_for_history(transaction, &delta.affected_tag_ids)
-}
-
-fn refresh_tag_summaries_for_history(
-    transaction: &Transaction<'_>,
-    tag_ids: &[i64],
-) -> Result<(), String> {
     transaction
         .execute_batch(
-            "CREATE TEMP TABLE IF NOT EXISTS picto_history_tag_summary (
-                 tag_id INTEGER PRIMARY KEY
+            "CREATE TEMP TABLE IF NOT EXISTS picto_changed_tag_dependency_key (
+                 dependency_key TEXT PRIMARY KEY
              ) WITHOUT ROWID;
-             DELETE FROM picto_history_tag_summary;",
+             DELETE FROM picto_changed_tag_dependency_key;",
         )
         .map_err(|error| error.to_string())?;
-    if !tag_ids.is_empty() {
-        let json = i64_json(tag_ids.iter().copied());
+    if !delta.dependency_keys.is_empty() {
+        let json =
+            serde_json::to_string(&delta.dependency_keys).map_err(|error| error.to_string())?;
         transaction
             .execute(
-                "INSERT INTO picto_history_tag_summary(tag_id)
-                 SELECT CAST(value AS INTEGER) FROM json_each(?1)
+                "INSERT INTO picto_changed_tag_dependency_key(dependency_key)
+                 SELECT CAST(value AS TEXT) FROM json_each(?1)
                  WHERE TRUE
                  ON CONFLICT DO NOTHING",
                 [json],
             )
             .map_err(|error| error.to_string())?;
     }
-    transaction
-        .execute(
-            "DELETE FROM tag_summary
-             WHERE tag_id IN (SELECT tag_id FROM picto_history_tag_summary)",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "INSERT INTO tag_summary(
-                 tag_id, visible_root_count, assignment_count
-             )
-             SELECT tag.tag_id,
-                    COUNT(DISTINCT CASE WHEN root.lifecycle = 'active'
-                                        THEN relation.root_item_id END),
-                    COUNT(relation.root_item_id)
-             FROM picto_history_tag_summary dirty
-             JOIN tag ON tag.tag_id = dirty.tag_id
-             LEFT JOIN root_tag relation ON relation.tag_id = tag.tag_id
-             LEFT JOIN library_root root ON root.item_id = relation.root_item_id
-             GROUP BY tag.tag_id",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -1442,11 +1348,8 @@ fn apply_lifecycle(
     Ok(())
 }
 
-fn apply_memberships(
+fn apply_folder_memberships(
     transaction: &Transaction<'_>,
-    table: &str,
-    _root_column: &str,
-    _relation_column: &str,
     changes: &[SemanticMembershipDelta],
 ) -> Result<(), String> {
     transaction
@@ -1483,74 +1386,43 @@ fn apply_memberships(
         )?;
     }
 
-    let control_column = if table == "root_tag" {
-        "suppress_tag_summary"
-    } else {
-        "suppress_folder_summary"
-    };
     transaction
         .execute(
-            &format!(
-                "UPDATE projection_write_control SET {control_column} = 1 WHERE singleton = 1"
-            ),
+            "UPDATE projection_write_control
+             SET suppress_folder_summary = 1 WHERE singleton = 1",
             [],
         )
         .map_err(|error| error.to_string())?;
     // Drive removal from the staged primary keys. A correlated EXISTS makes
     // SQLite scan the complete relationship table for broad undo operations.
-    let delete_sql = if table == "root_tag" {
-        "DELETE FROM root_tag
-         WHERE (root_item_id, tag_id) IN (
-             SELECT root_item_id, relation_id
-             FROM picto_history_membership
-             WHERE present = 0
-         )"
-        .to_string()
-    } else {
-        "DELETE FROM folder_item
+    transaction
+        .execute(
+            "DELETE FROM folder_item
          WHERE (folder_id, item_id) IN (
              SELECT relation_id, root_item_id
              FROM picto_history_membership
              WHERE present = 0
-         )"
-        .to_string()
-    };
-    transaction
-        .execute(&delete_sql, [])
+         )",
+            [],
+        )
         .map_err(|error| error.to_string())?;
-    let insert_sql = if table == "root_tag" {
-        "INSERT INTO root_tag(root_item_id, tag_id)
-         SELECT root_item_id, relation_id
-         FROM picto_history_membership WHERE present = 1
-         ON CONFLICT(root_item_id, tag_id) DO NOTHING"
-            .to_string()
-    } else {
-        "INSERT INTO folder_item(folder_id, item_id)
-         SELECT relation_id, root_item_id
-         FROM picto_history_membership WHERE present = 1
-         ON CONFLICT(folder_id, item_id) DO NOTHING"
-            .to_string()
-    };
-    transaction
-        .execute(&insert_sql, [])
-        .map_err(|error| error.to_string())?;
-    if table == "root_tag" {
-        let tag_ids = changes
-            .iter()
-            .map(|change| change.relation_id)
-            .collect::<Vec<_>>();
-        refresh_tag_summaries_for_history(transaction, &tag_ids)?;
-    } else {
-        refresh_folder_summaries_for_history(
-            transaction,
-            "SELECT DISTINCT relation_id FROM picto_history_membership",
-        )?;
-    }
     transaction
         .execute(
-            &format!(
-                "UPDATE projection_write_control SET {control_column} = 0 WHERE singleton = 1"
-            ),
+            "INSERT INTO folder_item(folder_id, item_id)
+         SELECT relation_id, root_item_id
+         FROM picto_history_membership WHERE present = 1
+         ON CONFLICT(folder_id, item_id) DO NOTHING",
+            [],
+        )
+        .map_err(|error| error.to_string())?;
+    refresh_folder_summaries_for_history(
+        transaction,
+        "SELECT DISTINCT relation_id FROM picto_history_membership",
+    )?;
+    transaction
+        .execute(
+            "UPDATE projection_write_control
+             SET suppress_folder_summary = 0 WHERE singleton = 1",
             [],
         )
         .map_err(|error| error.to_string())?;
@@ -1938,8 +1810,8 @@ mod tests {
 
     use super::{
         HistoryDescriptor, HistoryDirection, SemanticHistoryPayload, SemanticHistoryRecord,
-        SemanticLifecycleDelta, SemanticMembershipDelta, SemanticRatingDelta, SemanticRootTagState,
-        SemanticTagGraphDelta, SemanticTagRootSet,
+        SemanticLifecycleDelta, SemanticMembershipDelta, SemanticRatingDelta,
+        SemanticTagGraphDelta,
     };
     use crate::store::Store;
 
@@ -2233,13 +2105,10 @@ mod tests {
                     ..SemanticRatingDelta::default()
                 }),
                 SemanticHistoryPayload::TagGraph(SemanticTagGraphDelta {
-                    clear_root_tags: vec![SemanticTagRootSet {
-                        tag_id: 7,
-                        roots: roots.clone(),
-                    }],
-                    root_tags: vec![SemanticRootTagState {
-                        tag_id: 7,
-                        roots: roots.clone(),
+                    projection_tags: vec![SemanticMembershipDelta {
+                        relation_id: 7,
+                        add: roots.clone(),
+                        remove: RoaringBitmap::new(),
                     }],
                     affected_roots: roots.clone(),
                     affected_tag_ids: vec![7],

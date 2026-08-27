@@ -2477,7 +2477,7 @@ fn fixed_rate_read(
                 ItemPageRequest::new(None, 1),
             )?;
             match page.items.first() {
-                Some(item) => match details(store, item.item_id) {
+                Some(item) => match details(application, item.item_id) {
                     Ok(details) => Ok(details.media.len() as i64),
                     Err(error) if error.contains("is not a library root") => Ok(0),
                     Err(error) => Err(error),

@@ -4293,7 +4293,7 @@ mod tests {
         })
         .unwrap();
 
-        let details = crate::query_v2::details(app.store(), grouped.collection_id).unwrap();
+        let details = crate::query_v2::details(&app, grouped.collection_id).unwrap();
         assert_eq!(
             details
                 .media

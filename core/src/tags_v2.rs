@@ -11,7 +11,7 @@ use crate::app::{resources, Application, ItemId, MutationReceipt};
 use crate::projection_v2::{ProjectionStore, TagGraphProjectionDelta, TagIdentityProjectionChange};
 use crate::store::history::{
     HistoryDescriptor, SemanticHistoryPayload, SemanticHistoryRecord, SemanticMembershipDelta,
-    SemanticRootTagState, SemanticTagGraphDelta, SemanticTagIdentityState, SemanticTagRootSet,
+    SemanticTagGraphDelta, SemanticTagIdentityState,
 };
 
 const MAX_LIMIT: i64 = 500;
@@ -133,9 +133,10 @@ impl Application {
         new_name: &str,
     ) -> Result<MutationReceipt, String> {
         let (namespace, subtag) = parse_tag(new_name)?;
-        let (item_ids, revision, _, _) = self.semantic_undoable_transaction_if_changed(
+        let (item_ids, revision, _, _) = self.semantic_undoable_transaction_if_changed_captured(
             tag_history("tags.rename_or_merge", "Rename tag"),
-            |transaction| {
+            ProjectionStore::selection_snapshot,
+            |transaction, projection| {
                 require_tag(transaction, tag_id)?;
                 let target = transaction
                     .query_row(
@@ -148,30 +149,29 @@ impl Application {
                     .into_iter()
                     .flatten()
                     .collect::<BTreeSet<_>>();
-                let before = semantic_tag_snapshot(transaction, scope.iter().copied())?;
+                let before =
+                    semantic_tag_snapshot(transaction, &projection, scope.iter().copied())?;
                 match target {
                     Some(target_id) if target_id != tag_id => {
-                        let smart_roots = graph_affected_roots(transaction, [tag_id, target_id])?;
-                        move_tag_assignments(transaction, tag_id, target_id)?;
                         transaction.execute("DELETE FROM tag WHERE tag_id = ?1", [tag_id])?;
-                        let projection = TagGraphProjectionDelta {
-                            identities: vec![TagIdentityProjectionChange {
-                                source_tag_id: tag_id,
-                                target_tag_id: Some(target_id),
-                                remove_tag: true,
-                            }],
-                        };
-                        refresh_tag_summaries(
+                        let identity_changes = vec![TagIdentityProjectionChange {
+                            source_tag_id: tag_id,
+                            target_tag_id: Some(target_id),
+                            remove_tag: true,
+                        }];
+                        let after = transformed_tag_snapshot(
                             transaction,
-                            affected_tag_ids(&projection).into_iter(),
+                            &projection,
+                            &scope,
+                            &identity_changes,
                         )?;
-                        let after = semantic_tag_snapshot(transaction, scope.iter().copied())?;
-                        let record = semantic_tag_record(&before, &after, &smart_roots)?;
+                        let record = semantic_tag_record(&before, &after)?;
                         let SemanticHistoryPayload::TagGraph(redo) = &record.redo else {
                             unreachable!()
                         };
+                        stage_tag_dependency_keys(transaction, &redo.dependency_keys)?;
                         Ok((
-                            smart_roots.into_iter().collect::<Vec<_>>(),
+                            redo.affected_roots.iter().map(i64::from).collect(),
                             redo.clone(),
                             Some(record),
                             true,
@@ -179,33 +179,28 @@ impl Application {
                     }
                     Some(_) => Ok((Vec::new(), SemanticTagGraphDelta::default(), None, false)),
                     None => {
-                        let smart_roots = graph_affected_roots(transaction, [tag_id])?;
-                        let (old_namespace, old_subtag) = before
-                            .identities
-                            .get(&tag_id)
-                            .expect("required tag identity is present before rename");
-                        let old_name = canonical_tag_name(old_namespace, old_subtag);
-                        let new_name = canonical_tag_name(&namespace, &subtag);
-                        stage_tag_rename_smart_targets(transaction, &old_name, &new_name)?;
                         transaction.execute(
                             "UPDATE tag SET namespace = ?1, subtag = ?2 WHERE tag_id = ?3",
                             params![namespace, subtag, tag_id],
                         )?;
-                        settle_tag_rename_smart_targets(
+                        let identity_changes = vec![TagIdentityProjectionChange {
+                            source_tag_id: tag_id,
+                            target_tag_id: Some(tag_id),
+                            remove_tag: false,
+                        }];
+                        let after = transformed_tag_snapshot(
                             transaction,
-                            &smart_roots,
-                            tag_id,
-                            &old_name,
-                            &new_name,
+                            &projection,
+                            &scope,
+                            &identity_changes,
                         )?;
-                        refresh_tag_summaries(transaction, [tag_id])?;
-                        let after = semantic_tag_snapshot(transaction, scope.iter().copied())?;
-                        let record = semantic_tag_record(&before, &after, &smart_roots)?;
+                        let record = semantic_tag_record(&before, &after)?;
                         let SemanticHistoryPayload::TagGraph(redo) = &record.redo else {
                             unreachable!()
                         };
+                        stage_tag_dependency_keys(transaction, &redo.dependency_keys)?;
                         Ok((
-                            smart_roots.into_iter().collect(),
+                            redo.affected_roots.iter().map(i64::from).collect(),
                             redo.clone(),
                             Some(record),
                             true,
@@ -231,9 +226,10 @@ impl Application {
         if namespace == new_namespace {
             return Ok(tag_receipt(self.store().revision()?));
         }
-        let (item_ids, revision, _, _) = self.semantic_undoable_transaction_if_changed(
+        let (item_ids, revision, _, _) = self.semantic_undoable_transaction_if_changed_captured(
             tag_history("tags.group.rename", "Rename tag group"),
-            |transaction| {
+            ProjectionStore::selection_snapshot,
+            |transaction, projection| {
                 let exists: bool = transaction.query_row(
                     "SELECT EXISTS(SELECT 1 FROM tag WHERE namespace = ?1)",
                     [&namespace],
@@ -243,22 +239,21 @@ impl Application {
                     return Err(invalid(format!("Tag group {namespace} does not exist")));
                 }
                 let scope = namespace_move_scope(transaction, &namespace, &new_namespace)?;
-                let before = semantic_tag_snapshot(transaction, scope.iter().copied())?;
-                let mut smart_roots = graph_affected_roots_for_namespace(transaction, &namespace)?;
-                let (roots, projection) = move_namespace(transaction, &namespace, &new_namespace)?;
-                smart_roots.extend(roots);
-                smart_roots.extend(graph_affected_roots(
-                    transaction,
-                    affected_tag_ids(&projection),
-                )?);
-                refresh_tag_summaries(transaction, affected_tag_ids(&projection).into_iter())?;
-                let after = semantic_tag_snapshot(transaction, scope.iter().copied())?;
-                let record = semantic_tag_record(&before, &after, &smart_roots)?;
+                let before =
+                    semantic_tag_snapshot(transaction, &projection, scope.iter().copied())?;
+                let identity_changes = move_namespace(transaction, &namespace, &new_namespace)?;
+                let after =
+                    transformed_tag_snapshot(transaction, &projection, &scope, &identity_changes)?;
+                let record = semantic_tag_record(&before, &after)?;
                 let SemanticHistoryPayload::TagGraph(redo) = &record.redo else {
                     unreachable!()
                 };
+                stage_tag_dependency_keys(transaction, &redo.dependency_keys)?;
                 Ok((
-                    smart_roots.into_iter().collect::<Vec<_>>(),
+                    redo.affected_roots
+                        .iter()
+                        .map(i64::from)
+                        .collect::<Vec<_>>(),
                     redo.clone(),
                     Some(record),
                     true,
@@ -274,9 +269,10 @@ impl Application {
         if namespace == "general" {
             return Err("The General group cannot be deleted".to_string());
         }
-        let (item_ids, revision, _, _) = self.semantic_undoable_transaction_if_changed(
+        let (item_ids, revision, _, _) = self.semantic_undoable_transaction_if_changed_captured(
             tag_history("tags.group.delete", "Delete tag group"),
-            |transaction| {
+            ProjectionStore::selection_snapshot,
+            |transaction, projection| {
                 let exists: bool = transaction.query_row(
                     "SELECT EXISTS(SELECT 1 FROM tag WHERE namespace = ?1)",
                     [&namespace],
@@ -286,22 +282,21 @@ impl Application {
                     return Err(invalid(format!("Tag group {namespace} does not exist")));
                 }
                 let scope = namespace_move_scope(transaction, &namespace, "general")?;
-                let before = semantic_tag_snapshot(transaction, scope.iter().copied())?;
-                let mut smart_roots = graph_affected_roots_for_namespace(transaction, &namespace)?;
-                let (roots, projection) = move_namespace(transaction, &namespace, "general")?;
-                smart_roots.extend(roots);
-                smart_roots.extend(graph_affected_roots(
-                    transaction,
-                    affected_tag_ids(&projection),
-                )?);
-                refresh_tag_summaries(transaction, affected_tag_ids(&projection).into_iter())?;
-                let after = semantic_tag_snapshot(transaction, scope.iter().copied())?;
-                let record = semantic_tag_record(&before, &after, &smart_roots)?;
+                let before =
+                    semantic_tag_snapshot(transaction, &projection, scope.iter().copied())?;
+                let identity_changes = move_namespace(transaction, &namespace, "general")?;
+                let after =
+                    transformed_tag_snapshot(transaction, &projection, &scope, &identity_changes)?;
+                let record = semantic_tag_record(&before, &after)?;
                 let SemanticHistoryPayload::TagGraph(redo) = &record.redo else {
                     unreachable!()
                 };
+                stage_tag_dependency_keys(transaction, &redo.dependency_keys)?;
                 Ok((
-                    smart_roots.into_iter().collect::<Vec<_>>(),
+                    redo.affected_roots
+                        .iter()
+                        .map(i64::from)
+                        .collect::<Vec<_>>(),
                     redo.clone(),
                     Some(record),
                     true,
@@ -313,31 +308,34 @@ impl Application {
     }
 
     pub fn delete_tag(&self, tag_id: i64) -> Result<MutationReceipt, String> {
-        let (item_ids, revision, _) = self.semantic_undoable_transaction(
+        let (item_ids, revision, _, _) = self.semantic_undoable_transaction_if_changed_captured(
             tag_history("tags.delete", "Delete tag"),
-            |transaction| {
+            ProjectionStore::selection_snapshot,
+            |transaction, projection| {
                 require_tag(transaction, tag_id)?;
                 let scope = BTreeSet::from([tag_id]);
-                let before = semantic_tag_snapshot(transaction, scope.iter().copied())?;
-                let smart_roots = graph_affected_roots(transaction, [tag_id])?;
+                let before = semantic_tag_snapshot(transaction, &projection, [tag_id])?;
                 transaction.execute("DELETE FROM tag WHERE tag_id = ?1", [tag_id])?;
-                let projection = TagGraphProjectionDelta {
-                    identities: vec![TagIdentityProjectionChange {
-                        source_tag_id: tag_id,
-                        target_tag_id: None,
-                        remove_tag: true,
-                    }],
-                };
-                refresh_tag_summaries(transaction, affected_tag_ids(&projection).into_iter())?;
-                let after = semantic_tag_snapshot(transaction, scope.iter().copied())?;
-                let record = semantic_tag_record(&before, &after, &smart_roots)?;
+                let identity_changes = vec![TagIdentityProjectionChange {
+                    source_tag_id: tag_id,
+                    target_tag_id: None,
+                    remove_tag: true,
+                }];
+                let after =
+                    transformed_tag_snapshot(transaction, &projection, &scope, &identity_changes)?;
+                let record = semantic_tag_record(&before, &after)?;
                 let SemanticHistoryPayload::TagGraph(redo) = &record.redo else {
                     unreachable!()
                 };
+                stage_tag_dependency_keys(transaction, &redo.dependency_keys)?;
                 Ok((
-                    smart_roots.into_iter().collect::<Vec<_>>(),
+                    redo.affected_roots
+                        .iter()
+                        .map(i64::from)
+                        .collect::<Vec<_>>(),
                     redo.clone(),
-                    record,
+                    Some(record),
+                    true,
                 ))
             },
             apply_semantic_tag_projection,
@@ -381,61 +379,6 @@ fn tag_history(command: &str, label: &str) -> HistoryDescriptor {
     )
 }
 
-/// Return roots directly assigned any seed tag.
-fn graph_affected_roots(
-    connection: &rusqlite::Connection,
-    tag_ids: impl IntoIterator<Item = i64>,
-) -> rusqlite::Result<BTreeSet<i64>> {
-    connection.execute_batch(
-        "CREATE TEMP TABLE IF NOT EXISTS picto_tag_graph_seed (
-             tag_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;
-         DELETE FROM picto_tag_graph_seed;",
-    )?;
-    {
-        let mut insert = connection.prepare_cached(
-            "INSERT INTO picto_tag_graph_seed(tag_id) VALUES (?1)
-             ON CONFLICT DO NOTHING",
-        )?;
-        for tag_id in tag_ids {
-            insert.execute([tag_id])?;
-        }
-    }
-    query_graph_affected_roots(connection)
-}
-
-fn graph_affected_roots_for_namespace(
-    connection: &rusqlite::Connection,
-    namespace: &str,
-) -> rusqlite::Result<BTreeSet<i64>> {
-    connection.execute_batch(
-        "CREATE TEMP TABLE IF NOT EXISTS picto_tag_graph_seed (
-             tag_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;
-         DELETE FROM picto_tag_graph_seed;",
-    )?;
-    connection.execute(
-        "INSERT INTO picto_tag_graph_seed(tag_id)
-         SELECT tag_id FROM tag WHERE namespace = ?1",
-        [namespace],
-    )?;
-    query_graph_affected_roots(connection)
-}
-
-fn query_graph_affected_roots(
-    connection: &rusqlite::Connection,
-) -> rusqlite::Result<BTreeSet<i64>> {
-    connection
-        .prepare(
-            "SELECT DISTINCT relation.root_item_id
-             FROM picto_tag_graph_seed affected
-             JOIN root_tag relation ON relation.tag_id = affected.tag_id
-             ORDER BY relation.root_item_id",
-        )?
-        .query_map([], |row| row.get(0))?
-        .collect()
-}
-
 fn canonical_tag_name(namespace: &str, subtag: &str) -> String {
     if namespace == "general" {
         subtag.to_string()
@@ -444,136 +387,18 @@ fn canonical_tag_name(namespace: &str, subtag: &str) -> String {
     }
 }
 
-/// Snapshot only the smart folders reached by either rename identity. The
-/// schema trigger may create replacement generations for these folders; the
-/// snapshot lets incremental settlement remove only builds caused here.
-fn stage_tag_rename_smart_targets(
-    transaction: &rusqlite::Transaction<'_>,
-    old_name: &str,
-    new_name: &str,
-) -> rusqlite::Result<()> {
-    transaction.execute_batch(
-        "CREATE TEMP TABLE IF NOT EXISTS picto_tag_rename_smart_target (
-             smart_folder_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;
-         CREATE TEMP TABLE IF NOT EXISTS picto_tag_rename_existing_build (
-             generation_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;
-         CREATE TEMP TABLE IF NOT EXISTS picto_tag_rename_dependency_remap (
-             smart_folder_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;
-         DELETE FROM picto_tag_rename_smart_target;
-         DELETE FROM picto_tag_rename_existing_build;
-         DELETE FROM picto_tag_rename_dependency_remap;",
-    )?;
-    transaction.execute(
-        "INSERT INTO picto_tag_rename_smart_target(smart_folder_id)
-         SELECT DISTINCT smart_folder_id
-         FROM smart_folder_dependency
-         WHERE dependency_kind = 'tag'
-           AND dependency_key IN (?1, ?2)",
-        params![old_name, new_name],
-    )?;
-    transaction.execute(
-        "INSERT INTO picto_tag_rename_existing_build(generation_id)
-         SELECT generation.generation_id
-         FROM smart_folder_generation generation
-         JOIN picto_tag_rename_smart_target target
-           ON target.smart_folder_id = generation.smart_folder_id
-         WHERE generation.state = 'building'",
-        [],
-    )?;
-    Ok(())
-}
-
-/// Incrementally re-evaluate affected roots for both identities. Temporarily
-/// mapping old-only dependencies to the new identity lets the canonical smart
-/// refresh select the exact old and new folders while evaluating their
-/// unchanged predicates against the post-rename tag graph.
-fn settle_tag_rename_smart_targets(
-    transaction: &rusqlite::Transaction<'_>,
-    affected_roots: &BTreeSet<i64>,
-    tag_id: i64,
-    old_name: &str,
-    new_name: &str,
-) -> rusqlite::Result<()> {
-    transaction.execute(
-        "INSERT INTO picto_tag_rename_dependency_remap(smart_folder_id)
-         SELECT target.smart_folder_id
-         FROM picto_tag_rename_smart_target target
-         WHERE EXISTS (
-                   SELECT 1 FROM smart_folder_dependency dependency
-                   WHERE dependency.smart_folder_id = target.smart_folder_id
-                     AND dependency.dependency_kind = 'tag'
-                     AND dependency.dependency_key = ?1
-               )
-           AND NOT EXISTS (
-                   SELECT 1 FROM smart_folder_dependency dependency
-                   WHERE dependency.smart_folder_id = target.smart_folder_id
-                     AND dependency.dependency_kind = 'tag'
-                     AND dependency.dependency_key = ?2
-               )",
-        params![old_name, new_name],
-    )?;
-    transaction.execute(
-        "UPDATE smart_folder_dependency
-         SET dependency_key = ?2
-         WHERE dependency_kind = 'tag'
-           AND dependency_key = ?1
-           AND smart_folder_id IN (
-               SELECT smart_folder_id FROM picto_tag_rename_dependency_remap
-           )",
-        params![old_name, new_name],
-    )?;
-
-    let roots = affected_roots
-        .iter()
-        .map(|root_id| {
-            u32::try_from(*root_id)
-                .map_err(|_| invalid(format!("Root item {root_id} exceeds projection capacity")))
-        })
-        .collect::<rusqlite::Result<RoaringBitmap>>()?;
-    crate::smart_v2::refresh_impacted_roots(transaction, &roots, &["tags"], &[tag_id])?;
-
-    transaction.execute(
-        "UPDATE smart_folder_dependency
-         SET dependency_key = ?1
-         WHERE dependency_kind = 'tag'
-           AND dependency_key = ?2
-           AND smart_folder_id IN (
-               SELECT smart_folder_id FROM picto_tag_rename_dependency_remap
-           )",
-        params![old_name, new_name],
-    )?;
-    transaction.execute(
-        "DELETE FROM smart_folder_generation
-         WHERE state = 'building'
-           AND smart_folder_id IN (
-               SELECT smart_folder_id FROM picto_tag_rename_smart_target
-           )
-           AND generation_id NOT IN (
-               SELECT generation_id FROM picto_tag_rename_existing_build
-           )",
-        [],
-    )?;
-    transaction.execute_batch(
-        "DELETE FROM picto_tag_rename_smart_target;
-         DELETE FROM picto_tag_rename_existing_build;
-         DELETE FROM picto_tag_rename_dependency_remap;",
-    )?;
-    Ok(())
-}
-
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct SemanticTagSnapshot {
     identities: BTreeMap<i64, (String, String)>,
-    root_tags: BTreeSet<(i64, i64)>,
+    root_tags: BTreeMap<i64, RoaringBitmap>,
 }
 
 fn semantic_tag_snapshot(
     transaction: &rusqlite::Transaction<'_>,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
     tag_ids: impl IntoIterator<Item = i64>,
 ) -> rusqlite::Result<SemanticTagSnapshot> {
+    let tag_ids = tag_ids.into_iter().collect::<BTreeSet<_>>();
     transaction.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS picto_tag_history_scope (
              tag_id INTEGER PRIMARY KEY
@@ -585,7 +410,7 @@ fn semantic_tag_snapshot(
             "INSERT INTO picto_tag_history_scope(tag_id) VALUES (?1)
              ON CONFLICT DO NOTHING",
         )?;
-        for tag_id in tag_ids {
+        for tag_id in &tag_ids {
             insert.execute([tag_id])?;
         }
     }
@@ -601,35 +426,51 @@ fn semantic_tag_snapshot(
             ))
         })?
         .collect::<rusqlite::Result<BTreeMap<_, _>>>()?;
-    let root_tags = transaction
-        .prepare(
-            "SELECT relation.root_item_id, relation.tag_id
-             FROM root_tag relation
-             JOIN picto_tag_history_scope scope ON scope.tag_id = relation.tag_id",
-        )?
-        .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
-        .collect::<rusqlite::Result<BTreeSet<_>>>()?;
+    let root_tags = tag_ids
+        .into_iter()
+        .map(|tag_id| (tag_id, projection.tag_bitmap(tag_id)))
+        .collect();
     Ok(SemanticTagSnapshot {
         identities,
         root_tags,
     })
 }
 
+fn transformed_tag_snapshot(
+    transaction: &rusqlite::Transaction<'_>,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
+    scope: &BTreeSet<i64>,
+    identities: &[TagIdentityProjectionChange],
+) -> rusqlite::Result<SemanticTagSnapshot> {
+    let mut snapshot = semantic_tag_snapshot(transaction, projection, scope.iter().copied())?;
+    for identity in identities {
+        if identity.target_tag_id == Some(identity.source_tag_id) {
+            continue;
+        }
+        let source = snapshot
+            .root_tags
+            .remove(&identity.source_tag_id)
+            .unwrap_or_default();
+        if let Some(target_tag_id) = identity.target_tag_id {
+            *snapshot.root_tags.entry(target_tag_id).or_default() |= source;
+        }
+    }
+    Ok(snapshot)
+}
+
 fn semantic_tag_record(
     before: &SemanticTagSnapshot,
     after: &SemanticTagSnapshot,
-    affected_roots: &BTreeSet<i64>,
 ) -> rusqlite::Result<SemanticHistoryRecord> {
     Ok(SemanticHistoryRecord::new(
-        SemanticHistoryPayload::TagGraph(semantic_tag_direction(after, before, affected_roots)?),
-        SemanticHistoryPayload::TagGraph(semantic_tag_direction(before, after, affected_roots)?),
+        SemanticHistoryPayload::TagGraph(semantic_tag_direction(after, before)?),
+        SemanticHistoryPayload::TagGraph(semantic_tag_direction(before, after)?),
     ))
 }
 
 fn semantic_tag_direction(
     current: &SemanticTagSnapshot,
     desired: &SemanticTagSnapshot,
-    affected_roots: &BTreeSet<i64>,
 ) -> rusqlite::Result<SemanticTagGraphDelta> {
     let identity_ids = current
         .identities
@@ -653,75 +494,53 @@ fn semantic_tag_direction(
         })
         .collect::<Vec<_>>();
 
-    let root_keys = current
+    let membership_ids = current
         .root_tags
-        .iter()
-        .chain(desired.root_tags.iter())
+        .keys()
+        .chain(desired.root_tags.keys())
         .copied()
-        .filter(|key| current.root_tags.contains(key) != desired.root_tags.contains(key))
         .collect::<BTreeSet<_>>();
-    let mut clear_by_tag = BTreeMap::<i64, RoaringBitmap>::new();
-    let mut desired_groups = BTreeMap::<i64, RoaringBitmap>::new();
-    let mut projection_by_tag = BTreeMap::<i64, (RoaringBitmap, RoaringBitmap)>::new();
-    for (root_id, tag_id) in root_keys {
-        let root_id_u32 = u32::try_from(root_id)
-            .map_err(|_| invalid(format!("Root item {root_id} exceeds projection capacity")))?;
-        clear_by_tag.entry(tag_id).or_default().insert(root_id_u32);
-        match (
-            current.root_tags.contains(&(root_id, tag_id)),
-            desired.root_tags.contains(&(root_id, tag_id)),
-        ) {
-            (false, true) => {
-                projection_by_tag
-                    .entry(tag_id)
-                    .or_default()
-                    .0
-                    .insert(root_id_u32);
-            }
-            (true, false) => {
-                projection_by_tag
-                    .entry(tag_id)
-                    .or_default()
-                    .1
-                    .insert(root_id_u32);
-            }
-            _ => {}
+    let mut projection_tags = Vec::new();
+    let mut affected_roots = RoaringBitmap::new();
+    for tag_id in &membership_ids {
+        let current_roots = current.root_tags.get(tag_id).cloned().unwrap_or_default();
+        let desired_roots = desired.root_tags.get(tag_id).cloned().unwrap_or_default();
+        let identity_changed = current.identities.get(tag_id) != desired.identities.get(tag_id);
+        let mut add = &desired_roots - &current_roots;
+        let mut remove = &current_roots - &desired_roots;
+        if identity_changed && add.is_empty() && remove.is_empty() && !current_roots.is_empty() {
+            add = current_roots.clone();
+            remove = current_roots.clone();
         }
-        if desired.root_tags.contains(&(root_id, tag_id)) {
-            desired_groups
-                .entry(tag_id)
-                .or_default()
-                .insert(root_id_u32);
-        }
-    }
-
-    let mut affected_tag_ids = identity_ids;
-    affected_tag_ids.extend(clear_by_tag.keys().copied());
-    let affected_roots = affected_roots
-        .iter()
-        .map(|root_id| {
-            u32::try_from(*root_id)
-                .map_err(|_| invalid(format!("Root item {root_id} exceeds projection capacity")))
-        })
-        .collect::<rusqlite::Result<RoaringBitmap>>()?;
-    Ok(SemanticTagGraphDelta {
-        identities,
-        clear_root_tags: clear_by_tag
-            .into_iter()
-            .map(|(tag_id, roots)| SemanticTagRootSet { tag_id, roots })
-            .collect(),
-        root_tags: desired_groups
-            .into_iter()
-            .map(|(tag_id, roots)| SemanticRootTagState { tag_id, roots })
-            .collect(),
-        projection_tags: projection_by_tag
-            .into_iter()
-            .map(|(relation_id, (add, remove))| SemanticMembershipDelta {
-                relation_id,
+        if !add.is_empty() || !remove.is_empty() {
+            affected_roots |= &current_roots;
+            affected_roots |= &desired_roots;
+            projection_tags.push(SemanticMembershipDelta {
+                relation_id: *tag_id,
                 add,
                 remove,
-            })
-            .collect(),
+            });
+        }
+    }
+    let dependency_keys = identity_ids
+        .iter()
+        .flat_map(|tag_id| {
+            [
+                current.identities.get(tag_id),
+                desired.identities.get(tag_id),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|(namespace, subtag)| canonical_tag_name(namespace, subtag))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut affected_tag_ids = identity_ids;
+    affected_tag_ids.extend(membership_ids);
+    Ok(SemanticTagGraphDelta {
+        identities,
+        projection_tags,
         removed_tag_ids: current
             .identities
             .keys()
@@ -730,7 +549,33 @@ fn semantic_tag_direction(
             .collect(),
         affected_roots,
         affected_tag_ids: affected_tag_ids.into_iter().collect(),
+        dependency_keys,
     })
+}
+
+fn stage_tag_dependency_keys(
+    transaction: &rusqlite::Transaction<'_>,
+    dependency_keys: &[String],
+) -> rusqlite::Result<()> {
+    transaction.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS picto_changed_tag_dependency_key (
+             dependency_key TEXT PRIMARY KEY
+         ) WITHOUT ROWID;
+         DELETE FROM picto_changed_tag_dependency_key;",
+    )?;
+    if dependency_keys.is_empty() {
+        return Ok(());
+    }
+    let encoded = serde_json::to_string(dependency_keys)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    transaction.execute(
+        "INSERT INTO picto_changed_tag_dependency_key(dependency_key)
+         SELECT CAST(value AS TEXT) FROM json_each(?1)
+         WHERE TRUE
+         ON CONFLICT DO NOTHING",
+        [encoded],
+    )?;
+    Ok(())
 }
 
 fn apply_semantic_tag_projection(
@@ -759,7 +604,7 @@ fn move_namespace(
     transaction: &rusqlite::Transaction<'_>,
     source_namespace: &str,
     target_namespace: &str,
-) -> rusqlite::Result<(Vec<i64>, TagGraphProjectionDelta)> {
+) -> rusqlite::Result<Vec<TagIdentityProjectionChange>> {
     transaction.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS picto_tag_merge (
              source_tag_id INTEGER PRIMARY KEY,
@@ -777,16 +622,6 @@ fn move_namespace(
          WHERE source.namespace = ?2",
         params![target_namespace, source_namespace],
     )?;
-    let roots = transaction
-        .prepare(
-            "SELECT DISTINCT relation.root_item_id
-             FROM root_tag relation
-             JOIN picto_tag_merge mapping
-               ON mapping.source_tag_id = relation.tag_id
-             ORDER BY relation.root_item_id",
-        )?
-        .query_map([], |row| row.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
     let identities = transaction
         .prepare(
             "SELECT source_tag_id, target_tag_id
@@ -813,25 +648,11 @@ fn move_namespace(
         params![target_namespace, source_namespace],
     )?;
     transaction.execute(
-        "INSERT INTO root_tag(root_item_id, tag_id)
-         SELECT relation.root_item_id, mapping.target_tag_id
-         FROM root_tag relation
-         JOIN picto_tag_merge mapping ON mapping.source_tag_id = relation.tag_id
-         WHERE TRUE
-         ON CONFLICT(root_item_id, tag_id) DO NOTHING",
-        [],
-    )?;
-    transaction.execute(
-        "DELETE FROM root_tag
-         WHERE tag_id IN (SELECT source_tag_id FROM picto_tag_merge)",
-        [],
-    )?;
-    transaction.execute(
         "DELETE FROM tag
          WHERE tag_id IN (SELECT source_tag_id FROM picto_tag_merge)",
         [],
     )?;
-    Ok((roots, TagGraphProjectionDelta { identities }))
+    Ok(identities)
 }
 
 fn namespace_move_scope(
@@ -856,83 +677,6 @@ fn namespace_move_scope(
             row.get::<_, i64>(0)
         })?
         .collect()
-}
-
-fn move_tag_assignments(
-    transaction: &rusqlite::Transaction<'_>,
-    source_id: i64,
-    target_id: i64,
-) -> rusqlite::Result<()> {
-    transaction.execute(
-        "INSERT INTO root_tag(root_item_id, tag_id)
-         SELECT root_item_id, ?1
-         FROM root_tag WHERE tag_id = ?2
-         ON CONFLICT(root_item_id, tag_id) DO NOTHING",
-        params![target_id, source_id],
-    )?;
-    transaction.execute("DELETE FROM root_tag WHERE tag_id = ?1", [source_id])?;
-    Ok(())
-}
-
-fn affected_tag_ids(delta: &TagGraphProjectionDelta) -> BTreeSet<i64> {
-    let mut tag_ids = BTreeSet::new();
-    for identity in &delta.identities {
-        tag_ids.insert(identity.source_tag_id);
-        tag_ids.extend(identity.target_tag_id);
-    }
-    tag_ids
-}
-
-/// Refresh only tag-manager rows whose assignments changed.
-fn refresh_tag_summaries(
-    transaction: &rusqlite::Transaction<'_>,
-    tag_ids: impl IntoIterator<Item = i64>,
-) -> rusqlite::Result<()> {
-    transaction.execute_batch(
-        "CREATE TEMP TABLE IF NOT EXISTS picto_dirty_tag_summary (
-             tag_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;
-         DELETE FROM picto_dirty_tag_summary;",
-    )?;
-    {
-        let mut insert = transaction.prepare_cached(
-            "INSERT INTO picto_dirty_tag_summary (tag_id) VALUES (?1)
-             ON CONFLICT DO NOTHING",
-        )?;
-        for tag_id in tag_ids {
-            insert.execute([tag_id])?;
-        }
-    }
-    transaction.execute(
-        "DELETE FROM tag_summary
-         WHERE tag_id IN (SELECT tag_id FROM picto_dirty_tag_summary)",
-        [],
-    )?;
-    transaction.execute(
-        "INSERT INTO tag_summary (
-             tag_id, visible_root_count, assignment_count
-         )
-         SELECT tag.tag_id,
-                COUNT(DISTINCT CASE WHEN root.lifecycle = 'active'
-                                    THEN relation.root_item_id END),
-                COUNT(relation.root_item_id)
-         FROM picto_dirty_tag_summary dirty
-         JOIN tag ON tag.tag_id = dirty.tag_id
-         LEFT JOIN root_tag relation ON relation.tag_id = tag.tag_id
-         LEFT JOIN library_root root ON root.item_id = relation.root_item_id
-         GROUP BY tag.tag_id",
-        [],
-    )?;
-    Ok(())
-}
-
-#[cfg(test)]
-fn rebuild_tag_summaries(transaction: &rusqlite::Transaction<'_>) -> rusqlite::Result<()> {
-    let tag_ids = transaction
-        .prepare("SELECT tag_id FROM tag")?
-        .query_map([], |row| row.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
-    refresh_tag_summaries(transaction, tag_ids)
 }
 
 fn require_tag(connection: &rusqlite::Connection, tag_id: i64) -> rusqlite::Result<()> {
@@ -1070,14 +814,10 @@ mod tests {
             })
             .unwrap()
             .root_item_id;
-        application
-            .store()
-            .transaction(|transaction| rebuild_tag_summaries(transaction))
-            .unwrap();
         (directory, application, media)
     }
 
-    fn assert_tag_projection_matches_sql(application: &Application, extra_tag_ids: &[i64]) {
+    fn assert_tag_projection_matches_canonical(application: &Application, extra_tag_ids: &[i64]) {
         let mut tag_ids = application
             .store()
             .read(|connection| {
@@ -1091,22 +831,20 @@ mod tests {
         tag_ids.sort_unstable();
         tag_ids.dedup();
         for tag_id in tag_ids {
-            let direct = application
+            let canonical = application
                 .store()
                 .read(|connection| {
-                    connection
-                        .prepare(
-                            "SELECT root_item_id FROM root_tag
-                             WHERE tag_id = ?1 ORDER BY root_item_id",
-                        )?
-                        .query_map([tag_id], |row| row.get::<_, u32>(0))?
-                        .collect::<rusqlite::Result<RoaringBitmap>>()
+                    crate::canonical_bitmap::load_bitmap(
+                        connection,
+                        crate::canonical_bitmap::BitmapDomain::Tag,
+                        tag_id,
+                    )
                 })
                 .unwrap();
             assert_eq!(
                 application.projections().direct_tag_bitmap(tag_id),
-                direct,
-                "direct projection differs for tag {tag_id}"
+                canonical,
+                "published projection differs from canonical tag bitmap {tag_id}"
             );
         }
     }
@@ -1137,10 +875,6 @@ mod tests {
             })
             .unwrap()
             .0;
-        application
-            .store()
-            .transaction(crate::smart_v2::refresh_materialized)
-            .unwrap();
         smart_folder_id
     }
 
@@ -1178,11 +912,8 @@ mod tests {
     fn list_does_not_count_tags_from_media_without_a_visible_root() {
         let (_directory, application, media) = fixture();
         application
-            .store()
-            .transaction(|transaction| {
-                transaction.execute("DELETE FROM library_root WHERE item_id = ?1", [media.0])?;
-                rebuild_tag_summaries(transaction)?;
-                Ok(())
+            .delete_items(&crate::app::ItemTarget::Explicit {
+                item_ids: vec![media],
             })
             .unwrap();
 
@@ -1195,30 +926,36 @@ mod tests {
     #[test]
     fn list_counts_only_active_roots_but_retains_inbox_assignments() {
         let (_directory, application, _) = fixture();
-        let (tag_id, _) = application
+        let tag_id = application
             .store()
-            .transaction(|transaction| {
-                let tag_id = transaction.query_row(
+            .read(|connection| {
+                connection.query_row(
                     "SELECT tag_id FROM tag WHERE subtag = 'one_girl'",
                     [],
                     |row| row.get::<_, i64>(0),
-                )?;
-                transaction.execute(
-                    "INSERT INTO library_item (
-                         item_id, item_key, kind, created_at, updated_at
-                     ) VALUES (99, 'inbox-root', 'media', '2026-01-01', '2026-01-01')",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO library_root (item_id, lifecycle) VALUES (99, 'inbox')",
-                    [],
-                )?;
-                transaction.execute(
-                    "INSERT INTO root_tag(root_item_id, tag_id) VALUES (99, ?1)",
-                    [tag_id],
-                )?;
-                rebuild_tag_summaries(transaction)?;
-                Ok(tag_id)
+                )
+            })
+            .unwrap();
+        application
+            .ingest_prepared(&PreparedMediaInput {
+                file_hash: "hash-inbox".into(),
+                mime_type: "image/png".into(),
+                size_bytes: 10,
+                pixel_width: Some(1),
+                pixel_height: Some(1),
+                duration_ms: None,
+                frame_count: Some(1),
+                has_audio: false,
+                name: Some("Inbox media".into()),
+                notes: None,
+                rating: None,
+                source_urls: Vec::new(),
+                tags: vec!["general:one_girl".into()],
+                lifecycle: Lifecycle::Inbox,
+                captured_at: None,
+                source: None,
+                target_folder_id: None,
+                target_folder_ids: Vec::new(),
             })
             .unwrap();
 
@@ -1313,7 +1050,7 @@ mod tests {
             .projections()
             .direct_tag_bitmap(tag_id)
             .contains(media.0 as u32));
-        assert_tag_projection_matches_sql(&application, &[]);
+        assert_tag_projection_matches_canonical(&application, &[]);
     }
 
     #[test]
@@ -1336,19 +1073,10 @@ mod tests {
 
         application.rename_or_merge_tag(from, "one_girl").unwrap();
 
-        application
-            .store()
-            .read(|connection| {
-                let merged = connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag
-                     WHERE root_item_id = ?1 AND tag_id = ?2",
-                    params![media.0, to],
-                    |row| row.get::<_, i64>(0),
-                )?;
-                assert_eq!(merged, 1);
-                Ok(())
-            })
-            .unwrap();
+        assert!(application
+            .projections()
+            .direct_tag_bitmap(to)
+            .contains(media.0 as u32));
     }
 
     #[test]
@@ -1427,13 +1155,7 @@ mod tests {
                     [],
                     |row| row.get(0),
                 )?;
-                let assignment_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag WHERE root_item_id = ?1 AND tag_id = ?2",
-                    params![media.0, target_id],
-                    |row| row.get(0),
-                )?;
                 assert_eq!(old_count, 0);
-                assert_eq!(assignment_count, 1);
                 assert!(!application
                     .projections()
                     .direct_tag_bitmap(source_id)
@@ -1445,7 +1167,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        assert_tag_projection_matches_sql(&application, &[source_id]);
+        assert_tag_projection_matches_canonical(&application, &[source_id]);
 
         application.undo().unwrap();
         let restored = application
@@ -1455,17 +1177,18 @@ mod tests {
                     "SELECT EXISTS(
                          SELECT 1 FROM tag
                          WHERE tag_id = ?1 AND namespace = 'character'
-                     ) AND EXISTS(
-                         SELECT 1 FROM root_tag
-                         WHERE root_item_id = ?2 AND tag_id = ?1
                      )",
-                    params![source_id, media.0],
+                    [source_id],
                     |row| row.get::<_, bool>(0),
                 )
             })
             .unwrap();
         assert!(restored);
-        assert_tag_projection_matches_sql(&application, &[]);
+        assert!(application
+            .projections()
+            .direct_tag_bitmap(source_id)
+            .contains(media.0 as u32));
+        assert_tag_projection_matches_canonical(&application, &[]);
     }
 
     #[test]
@@ -1507,13 +1230,7 @@ mod tests {
                     [],
                     |row| row.get(0),
                 )?;
-                let assignment_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag WHERE root_item_id = ?1 AND tag_id = ?2",
-                    params![media.0, target_id],
-                    |row| row.get(0),
-                )?;
                 assert_eq!(old_count, 0);
-                assert_eq!(assignment_count, 1);
                 assert!(!application
                     .projections()
                     .direct_tag_bitmap(source_id)
@@ -1525,7 +1242,7 @@ mod tests {
                 Ok(())
             })
             .unwrap();
-        assert_tag_projection_matches_sql(&application, &[source_id]);
+        assert_tag_projection_matches_canonical(&application, &[source_id]);
 
         application.undo().unwrap();
         let restored = application
@@ -1535,16 +1252,17 @@ mod tests {
                     "SELECT EXISTS(
                          SELECT 1 FROM tag
                          WHERE tag_id = ?1 AND namespace = 'character'
-                     ) AND EXISTS(
-                         SELECT 1 FROM root_tag
-                         WHERE root_item_id = ?2 AND tag_id = ?1
                      )",
-                    params![source_id, media.0],
+                    [source_id],
                     |row| row.get::<_, bool>(0),
                 )
             })
             .unwrap();
         assert!(restored);
-        assert_tag_projection_matches_sql(&application, &[]);
+        assert!(application
+            .projections()
+            .direct_tag_bitmap(source_id)
+            .contains(media.0 as u32));
+        assert_tag_projection_matches_canonical(&application, &[]);
     }
 }

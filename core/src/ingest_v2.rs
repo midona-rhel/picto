@@ -265,6 +265,7 @@ impl Application {
                                             root_kind(transaction, root_item_id)? == "collection";
                                         let changes = merge_root_organization(
                                             transaction,
+                                            self.projections(),
                                             root_item_id,
                                             &organization,
                                             preserve_cover,
@@ -306,6 +307,7 @@ impl Application {
                         let preserve_cover = root_kind(transaction, root_item_id)? == "collection";
                         let changes = merge_root_organization(
                             transaction,
+                            self.projections(),
                             root_item_id,
                             &organization,
                             preserve_cover,
@@ -334,6 +336,7 @@ impl Application {
                         }
                         let settled = settle_source_post_root(
                             transaction,
+                            self.projections(),
                             source,
                             media_item_id,
                             input.lifecycle,
@@ -504,6 +507,7 @@ impl Application {
                         let preserve_cover = root_kind(transaction, root_item_id)? == "collection";
                         let changes = merge_root_organization(
                             transaction,
+                            self.projections(),
                             root_item_id,
                             &organization,
                             preserve_cover,
@@ -512,8 +516,10 @@ impl Application {
                         delta.add_organization(root_item_id, changes);
                         if promoted {
                             delta.root_tags_added.extend(
-                                root_tag_ids(transaction, root_item_id)?
-                                    .into_iter()
+                                settlement
+                                    .removed_root_tag_ids
+                                    .iter()
+                                    .copied()
                                     .map(|tag_id| (root_item_id, tag_id)),
                             );
                         }
@@ -603,6 +609,7 @@ impl Application {
                 };
                 let changes = merge_root_organization(
                     transaction,
+                    self.projections(),
                     collection_id,
                     &organization,
                     false,
@@ -642,11 +649,6 @@ impl Application {
                         });
                 }
                 delta.add_organization(collection_id, changes);
-                delta.root_tags_added.extend(
-                    root_tag_ids(transaction, collection_id)?
-                        .into_iter()
-                        .map(|tag_id| (collection_id, tag_id)),
-                );
                 delta.prepare_summaries(transaction)?;
                 Ok(((), delta, true))
             },
@@ -807,11 +809,17 @@ fn parsed_root_tags(input: &PreparedMediaInput, external: bool) -> Vec<StagedRoo
 
 fn merge_root_organization(
     transaction: &Transaction<'_>,
+    projections: &crate::projection_v2::ProjectionStore,
     root_item_id: i64,
     organization: &StagedRootOrganization,
     preserve_cover_fields: bool,
     now: &str,
 ) -> rusqlite::Result<RootOrganizationChanges> {
+    let root_bitmap_id = u32::try_from(root_item_id).map_err(|_| {
+        rusqlite::Error::InvalidParameterName(format!(
+            "root item {root_item_id} is outside the bitmap ID domain"
+        ))
+    })?;
     let existing = transaction
         .query_row(
             "SELECT name, rating, notes, source_urls_json
@@ -881,27 +889,30 @@ fn merge_root_organization(
          ON CONFLICT(namespace, subtag) DO NOTHING",
         [&encoded_tags],
     )?;
-    let tag_ids = {
-        let mut statement = transaction.prepare(
+    let tag_ids = transaction
+        .prepare(
             "WITH input(namespace, subtag) AS (
                  SELECT json_extract(value, '$.namespace'),
                         json_extract(value, '$.subtag')
                  FROM json_each(?1)
              )
-             INSERT INTO root_tag (root_item_id, tag_id)
-             SELECT ?2, tag.tag_id
+             SELECT tag.tag_id
              FROM input JOIN tag USING (namespace, subtag)
-             WHERE 1
-             ON CONFLICT(root_item_id, tag_id) DO NOTHING
-             RETURNING tag_id",
-        )?;
-        let rows = statement
-            .query_map(params![encoded_tags, root_item_id], |row| {
-                row.get::<_, i64>(0)
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        rows
-    };
+             ORDER BY tag.tag_id",
+        )?
+        .query_map([encoded_tags], |row| row.get::<_, i64>(0))?
+        .filter_map(|tag_id| match tag_id {
+            Ok(tag_id)
+                if !projections
+                    .direct_tag_bitmap(tag_id)
+                    .contains(root_bitmap_id) =>
+            {
+                Some(Ok(tag_id))
+            }
+            Ok(_) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
     let encoded_folders = serde_json::to_string(&organization.folder_ids)
         .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
@@ -1289,6 +1300,7 @@ fn take_staged_root_organization_by_id(
 
 fn settle_source_post_root(
     transaction: &Transaction<'_>,
+    projections: &crate::projection_v2::ProjectionStore,
     source: &SourcePostInput,
     new_media_item_id: i64,
     lifecycle: Lifecycle,
@@ -1395,7 +1407,7 @@ fn settle_source_post_root(
             )?;
             let collection_id = transaction.last_insert_rowid();
             insert_root(transaction, collection_id, lifecycle)?;
-            let removed_root_tag_ids = root_tag_ids(transaction, root_id)?;
+            let removed_root_tag_ids = projections.tag_ids_for_root(root_id);
             transaction.execute(
                 "INSERT INTO root_metadata (
                      root_item_id, name, rating, notes, source_urls_json, updated_at
@@ -1404,12 +1416,6 @@ fn settle_source_post_root(
                  FROM root_metadata WHERE root_item_id = ?3
                  ON CONFLICT(root_item_id) DO NOTHING",
                 params![collection_id, now, root_id],
-            )?;
-            transaction.execute(
-                "INSERT INTO root_tag (root_item_id, tag_id)
-                 SELECT ?1, tag_id FROM root_tag WHERE root_item_id = ?2
-                 ON CONFLICT(root_item_id, tag_id) DO NOTHING",
-                params![collection_id, root_id],
             )?;
             transaction.execute(
                 "INSERT INTO folder_item (folder_id, item_id, position_rank)
@@ -1548,15 +1554,6 @@ fn root_kind(transaction: &Transaction<'_>, root_id: i64) -> rusqlite::Result<St
         [root_id],
         |row| row.get(0),
     )
-}
-
-fn root_tag_ids(transaction: &Transaction<'_>, root_item_id: i64) -> rusqlite::Result<Vec<i64>> {
-    let mut statement = transaction
-        .prepare("SELECT tag_id FROM root_tag WHERE root_item_id = ?1 ORDER BY tag_id")?;
-    let rows = statement
-        .query_map([root_item_id], |row| row.get::<_, i64>(0))?
-        .collect();
-    rows
 }
 
 fn enqueue_derivatives(
@@ -1899,12 +1896,6 @@ mod tests {
                     })?,
                     0
                 );
-                assert_eq!(
-                    connection.query_row("SELECT COUNT(*) FROM root_tag", [], |row| {
-                        row.get::<_, i64>(0)
-                    })?,
-                    0
-                );
                 Ok(())
             })
             .unwrap();
@@ -1944,12 +1935,6 @@ mod tests {
                         "https://example.test/second".to_string(),
                     ])
                 );
-                let tags: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag WHERE root_item_id = ?1",
-                    [second.root_item_id.0],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(tags, 2);
                 let metadata: String = connection.query_row(
                     "SELECT metadata_json FROM source_post
                      WHERE site_id = 'example' AND post_key = 'post'",
@@ -1960,6 +1945,12 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+        assert_eq!(
+            app.projections()
+                .tag_ids_for_root(second.root_item_id.0)
+                .len(),
+            2
+        );
     }
 
     #[test]
@@ -1989,7 +1980,8 @@ mod tests {
 
         let repeated_again = app.ingest_prepared(&update).unwrap();
         assert!(repeated_again.receipt.is_none());
-        app.store()
+        let creator_tag_id = app
+            .store()
             .read(|connection| {
                 let (name, notes, rating, sources): (String, String, i64, String) = connection
                     .query_row(
@@ -2008,18 +2000,18 @@ mod tests {
                         "https://example.test/second".to_string()
                     ]
                 );
-                let creator_tags: i64 = connection.query_row(
-                    "SELECT COUNT(*)
-                     FROM root_tag rt JOIN tag t ON t.tag_id = rt.tag_id
-                     WHERE rt.root_item_id = ?1
-                       AND t.namespace = 'creator' AND t.subtag = 'leonardo'",
-                    [first.root_item_id.0],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(creator_tags, 1);
-                Ok(())
+                connection.query_row(
+                    "SELECT tag_id FROM tag
+                     WHERE namespace = 'creator' AND subtag = 'leonardo'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
             })
             .unwrap();
+        assert!(app
+            .projections()
+            .direct_tag_bitmap(creator_tag_id)
+            .contains(first.root_item_id.0 as u32));
 
         app.delete_items(&ItemTarget::Explicit {
             item_ids: vec![first.root_item_id],
@@ -2041,22 +2033,32 @@ mod tests {
         ];
         let result = app.ingest_prepared(&media).unwrap();
 
-        app.store()
+        let tag_ids: Vec<i64> = app
+            .store()
             .read(|connection| {
-                let assignments: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag WHERE root_item_id = ?1",
-                    [result.root_item_id.0],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(assignments, 2);
-                Ok(())
+                connection
+                    .prepare(
+                        "SELECT tag_id FROM tag
+                         WHERE namespace = 'general' AND subtag IN ('first', 'second')
+                         ORDER BY subtag",
+                    )?
+                    .query_map([], |row| row.get::<_, i64>(0))?
+                    .collect()
             })
             .unwrap();
+        assert_eq!(tag_ids.len(), 2);
+        for tag_id in &tag_ids {
+            assert!(app
+                .projections()
+                .direct_tag_bitmap(*tag_id)
+                .contains(result.root_item_id.0 as u32));
+        }
 
         app.store()
             .transaction(|transaction| {
                 let unchanged = merge_root_organization(
                     transaction,
+                    app.projections(),
                     result.root_item_id.0,
                     &StagedRootOrganization::from_input(&media, true),
                     false,
@@ -2066,6 +2068,7 @@ mod tests {
 
                 let changed = merge_root_organization(
                     transaction,
+                    app.projections(),
                     result.root_item_id.0,
                     &StagedRootOrganization::from_input(&media, true),
                     false,
@@ -2076,21 +2079,10 @@ mod tests {
             })
             .unwrap();
 
-        app.store()
-            .read(|connection| {
-                let assignments: i64 = connection.query_row(
-                    "SELECT COUNT(*)
-                     FROM root_tag rt JOIN tag t ON t.tag_id = rt.tag_id
-                     WHERE rt.root_item_id = ?1
-                       AND t.namespace = 'general' AND t.subtag = 'first'
-                    ",
-                    [result.root_item_id.0],
-                    |row| row.get(0),
-                )?;
-                assert_eq!(assignments, 1);
-                Ok(())
-            })
-            .unwrap();
+        assert!(app
+            .projections()
+            .direct_tag_bitmap(tag_ids[0])
+            .contains(result.root_item_id.0 as u32));
     }
 
     #[test]

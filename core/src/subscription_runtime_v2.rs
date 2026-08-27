@@ -1271,7 +1271,7 @@ mod tests {
             .unwrap();
         drain_maintenance_ingest(&application);
 
-        application
+        let creator_tag_id = application
             .store()
             .read(|connection| {
                 let folder_members: i64 = connection.query_row(
@@ -1279,17 +1279,23 @@ mod tests {
                     [folder_id, second_folder_id],
                     |row| row.get(0),
                 )?;
-                let tags: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM root_tag rt
-                     JOIN tag t ON t.tag_id = rt.tag_id
-                     WHERE t.namespace = 'creator' AND t.subtag = 'alice'",
+                let tag_id: i64 = connection.query_row(
+                    "SELECT tag_id FROM tag
+                     WHERE namespace = 'creator' AND subtag = 'alice'",
                     [],
                     |row| row.get(0),
                 )?;
-                assert_eq!((folder_members, tags), (2, 1));
-                Ok(())
+                assert_eq!(folder_members, 2);
+                Ok(tag_id)
             })
             .unwrap();
+        assert_eq!(
+            application
+                .projections()
+                .direct_tag_bitmap(creator_tag_id)
+                .len(),
+            1
+        );
     }
 
     #[tokio::test]

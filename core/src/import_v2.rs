@@ -734,8 +734,6 @@ mod tests {
                     [],
                     |row| row.get(0),
                 )?;
-                let root_tags: i64 =
-                    connection.query_row("SELECT COUNT(*) FROM root_tag", [], |row| row.get(0))?;
                 let inbox_summaries: i64 = connection.query_row(
                     "SELECT COUNT(*) FROM root_summary WHERE lifecycle = 'inbox'",
                     [],
@@ -754,13 +752,24 @@ mod tests {
                 assert_eq!(folders.len(), 2, "folders: {folders:?}");
                 assert_eq!(memberships, 2);
                 assert_eq!(root_metadata, 2);
-                assert_eq!(root_tags, 2);
                 assert_eq!(inbox_summaries, 2);
                 assert_eq!(visible_tags, 0);
                 assert_eq!(visible_folders, 0);
                 Ok(())
             })
             .unwrap();
+        let tag_id = application
+            .store()
+            .read(|connection| {
+                connection.query_row(
+                    "SELECT tag_id FROM tag
+                     WHERE namespace = 'general' AND subtag = 'test'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(application.projections().direct_tag_bitmap(tag_id).len(), 2);
     }
 
     #[tokio::test]

@@ -183,6 +183,8 @@ impl Application {
         input: &CreateSmartFolderInput,
     ) -> Result<(i64, SmartFolderMutationReceipt), String> {
         let input = PreparedSmartFolder::from_input(input)?;
+        let projection = self.projections().selection_snapshot();
+        let active_roots = projection.lifecycle_bitmap(crate::app::Lifecycle::Active);
         let now = Utc::now().to_rfc3339();
         let key = new_key();
         let (smart_folder_id, revision, _) = self.undoable_transaction(
@@ -213,7 +215,12 @@ impl Application {
                     ],
                 )?;
                 let smart_folder_id = transaction.last_insert_rowid();
-                crate::smart_v2::rebuild_generations(transaction, &[smart_folder_id])?;
+                crate::smart_v2::rebuild_generations(
+                    transaction,
+                    &[smart_folder_id],
+                    &active_roots,
+                    |tag_id| projection.tag_bitmap(tag_id),
+                )?;
                 record_smart_folder_created(transaction, &[smart_folder_id])?;
                 Ok((smart_folder_id, ()))
             },
@@ -231,6 +238,8 @@ impl Application {
         input: &CreateSmartFolderInput,
     ) -> Result<SmartFolderMutationReceipt, String> {
         let input = PreparedSmartFolder::from_input(input)?;
+        let projection = self.projections().selection_snapshot();
+        let active_roots = projection.lifecycle_bitmap(crate::app::Lifecycle::Active);
         let now = Utc::now().to_rfc3339();
         let (affected, revision, _) = self.undoable_transaction(
             smart_folder_history("smart_folders.update", "Edit smart folder"),
@@ -320,7 +329,12 @@ impl Application {
                 }
                 let affected = descendant_ids(transaction, smart_folder_id)?;
                 if definition_changed {
-                    crate::smart_v2::rebuild_generations(transaction, &affected)?;
+                    crate::smart_v2::rebuild_generations(
+                        transaction,
+                        &affected,
+                        &active_roots,
+                        |tag_id| projection.tag_bitmap(tag_id),
+                    )?;
                 }
                 record_smart_folder_upsert(transaction, &[smart_folder_id], &changed_fields)?;
                 Ok((affected, ()))
@@ -335,6 +349,8 @@ impl Application {
         smart_folder_id: i64,
         parent_id: Option<i64>,
     ) -> Result<SmartFolderMutationReceipt, String> {
+        let projection = self.projections().selection_snapshot();
+        let active_roots = projection.lifecycle_bitmap(crate::app::Lifecycle::Active);
         let now = Utc::now().to_rfc3339();
         let (affected, revision, _) = self.undoable_transaction(
             smart_folder_history("smart_folders.move", "Move smart folder"),
@@ -365,7 +381,12 @@ impl Application {
                 }
                 let affected = descendant_ids(transaction, smart_folder_id)?;
                 if parent_changed {
-                    crate::smart_v2::rebuild_generations(transaction, &affected)?;
+                    crate::smart_v2::rebuild_generations(
+                        transaction,
+                        &affected,
+                        &active_roots,
+                        |tag_id| projection.tag_bitmap(tag_id),
+                    )?;
                 }
                 let changed_fields = if parent_changed {
                     &["parent", "display_order"][..]

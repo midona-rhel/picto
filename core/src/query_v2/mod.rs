@@ -328,8 +328,14 @@ pub fn query_for_application(
     )
 }
 
-pub fn details(store: &Store, item_id: ItemId) -> Result<ItemDetails, String> {
-    store.read_snapshot(|connection| details_connection(connection, item_id.0))
+pub fn details(application: &Application, item_id: ItemId) -> Result<ItemDetails, String> {
+    application.store().read_snapshot_captured(
+        || application.projections().selection_snapshot(),
+        |connection, revision, projection| {
+            details_connection(connection, item_id.0, &projection, revision)
+                .map_err(|error| error.to_string())
+        },
+    )
 }
 
 pub fn selection_summary(store: &Store, target: &ItemTarget) -> Result<SelectionSummary, String> {
@@ -1671,7 +1677,12 @@ pub fn library_statistics(store: &Store) -> Result<LibraryStatistics, String> {
     })
 }
 
-fn details_connection(connection: &Connection, item_id: i64) -> rusqlite::Result<ItemDetails> {
+fn details_connection(
+    connection: &Connection,
+    item_id: i64,
+    projection: &ProjectionSelectionSnapshot,
+    revision: u64,
+) -> rusqlite::Result<ItemDetails> {
     let (kind, lifecycle, label, cover_media_item_id, notes, rating, source_urls_json): (
         String,
         String,
@@ -1716,10 +1727,7 @@ fn details_connection(connection: &Connection, item_id: i64) -> rusqlite::Result
     let source_urls = serde_json::from_str::<Vec<String>>(&source_urls_json).map_err(|error| {
         rusqlite::Error::FromSqlConversionFailure(6, rusqlite::types::Type::Text, Box::new(error))
     })?;
-    let folder_ids = connection
-        .prepare("SELECT folder_id FROM folder_item WHERE item_id = ?1 ORDER BY folder_id")?
-        .query_map([item_id], |row| row.get::<_, i64>(0))?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let folder_ids = projection.folder_ids_for_root(item_id);
     let mut media = connection
         .prepare(
             "WITH root_media(media_item_id, position) AS (
@@ -1780,16 +1788,19 @@ fn details_connection(connection: &Connection, item_id: i64) -> rusqlite::Result
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let tag_ids = projection.tag_ids_for_root(item_id);
+    let tag_ids_json = serde_json::to_string(&tag_ids)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
     let aggregate_tags = connection
         .prepare(
             "SELECT CASE WHEN tag.namespace IN ('', 'general') THEN tag.subtag
                          ELSE tag.namespace || ':' || tag.subtag END
-             FROM root_tag
-             JOIN tag ON tag.tag_id = root_tag.tag_id
-             WHERE root_tag.root_item_id = ?1
+             FROM tag
+             JOIN json_each(?1) selected
+               ON tag.tag_id = CAST(selected.value AS INTEGER)
              ORDER BY tag.namespace, tag.subtag",
         )?
-        .query_map([item_id], |row| row.get::<_, String>(0))?
+        .query_map([tag_ids_json], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for media_item in &mut media {
         media_item.tags.clone_from(&aggregate_tags);
@@ -1803,7 +1814,7 @@ fn details_connection(connection: &Connection, item_id: i64) -> rusqlite::Result
         folder_ids,
         media,
         aggregate_tags,
-        revision: crate::store::schema::revision(connection)?,
+        revision,
     })
 }
 
@@ -3229,7 +3240,7 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        details, library_statistics, query, query_for_application, resolve_target_ids,
+        details_connection, library_statistics, query, query_for_application, resolve_target_ids,
         selection_summary, selection_summary_for_application, sidebar_counts_for_application,
         ItemPageRequest, SelectionCollectionCandidate,
     };
@@ -4433,7 +4444,18 @@ mod tests {
     #[test]
     fn collection_details_are_ordered_and_aggregate_member_tags() {
         let (_directory, store) = seed_store();
-        let details = details(&store, ItemId(10)).unwrap();
+        let projection = store
+            .read(|connection| {
+                crate::projection_v2::ProjectionStore::from_connection(connection)
+                    .map_err(rusqlite::Error::InvalidParameterName)
+            })
+            .unwrap();
+        let revision = store.revision().unwrap();
+        let details = store
+            .read(|connection| {
+                details_connection(connection, 10, &projection.selection_snapshot(), revision)
+            })
+            .unwrap();
 
         assert_eq!(details.kind, ItemKind::Collection);
         assert_eq!(details.folder_ids, vec![7]);
@@ -4478,7 +4500,18 @@ mod tests {
             })
             .unwrap();
 
-        let details = details(&store, ItemId(10)).unwrap();
+        let projection = store
+            .read(|connection| {
+                crate::projection_v2::ProjectionStore::from_connection(connection)
+                    .map_err(rusqlite::Error::InvalidParameterName)
+            })
+            .unwrap();
+        let revision = store.revision().unwrap();
+        let details = store
+            .read(|connection| {
+                details_connection(connection, 10, &projection.selection_snapshot(), revision)
+            })
+            .unwrap();
         assert!(details
             .media
             .iter()

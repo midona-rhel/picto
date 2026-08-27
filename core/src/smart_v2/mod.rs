@@ -310,6 +310,8 @@ pub(crate) fn refresh_materialized(transaction: &Transaction<'_>) -> rusqlite::R
 pub(crate) fn rebuild_generations(
     transaction: &Transaction<'_>,
     smart_folder_ids: &[i64],
+    active_roots: &RoaringBitmap,
+    mut tag_bitmap: impl FnMut(i64) -> RoaringBitmap,
 ) -> rusqlite::Result<()> {
     if smart_folder_ids.is_empty() {
         return Ok(());
@@ -349,7 +351,7 @@ pub(crate) fn rebuild_generations(
            ON target.smart_folder_id = folder.smart_folder_id",
         [],
     )?;
-    settle_building_generations(transaction, true)?;
+    settle_building_generations(transaction, true, Some((active_roots, &mut tag_bitmap)))?;
     transaction.execute("DELETE FROM picto_smart_rebuild_target", [])?;
     Ok(())
 }
@@ -586,12 +588,13 @@ fn refresh_canonical_materialized(transaction: &Transaction<'_>) -> rusqlite::Re
                )",
         [],
     )?;
-    settle_building_generations(transaction, false)
+    settle_building_generations(transaction, false, None)
 }
 
 fn settle_building_generations(
     transaction: &Transaction<'_>,
     targeted: bool,
+    mut bitmap_context: Option<(&RoaringBitmap, &mut dyn FnMut(i64) -> RoaringBitmap)>,
 ) -> rusqlite::Result<()> {
     let target_filter = if targeted {
         "AND smart_folder_id IN (
@@ -632,7 +635,24 @@ fn settle_building_generations(
             "DELETE FROM smart_folder_membership WHERE generation_id = ?1",
             [generation_id],
         )?;
-        insert_generation_matches(transaction, generation_id, smart_folder_id, false)?;
+        if let Some((active_roots, tag_bitmap)) = bitmap_context.as_mut() {
+            let predicate = effective_predicate(transaction, smart_folder_id)?;
+            let matches = evaluate_impacted_with_tag_bitmaps(
+                transaction,
+                &predicate,
+                active_roots,
+                |tag_id| (*tag_bitmap)(tag_id),
+            )?;
+            let mut insert = transaction.prepare_cached(
+                "INSERT INTO smart_folder_membership (generation_id, root_item_id)
+                 VALUES (?1, ?2)",
+            )?;
+            for root_id in matches {
+                insert.execute(rusqlite::params![generation_id, root_id])?;
+            }
+        } else {
+            insert_generation_matches(transaction, generation_id, smart_folder_id, false)?;
+        }
         let member_count: i64 = transaction.query_row(
             "SELECT COUNT(*) FROM smart_folder_membership WHERE generation_id = ?1",
             [generation_id],
@@ -1869,7 +1889,13 @@ mod tests {
             )
             .unwrap();
 
-        rebuild_generations(&transaction, &[10]).unwrap();
+        rebuild_generations(
+            &transaction,
+            &[10],
+            &RoaringBitmap::from_iter([1, 2]),
+            |_| RoaringBitmap::new(),
+        )
+        .unwrap();
 
         assert_eq!(compile_smart_folder(&transaction, 10).unwrap(), vec![1, 2]);
         assert_eq!(count_smart_folder(&transaction, 10).unwrap(), 2);

@@ -42,10 +42,7 @@ pub fn dispatch(
         }
         "items.details" => {
             let input: ItemInput = parse(args_json)?;
-            read(crate::query_v2::details(
-                application.store(),
-                input.item_id,
-            )?)
+            read(crate::query_v2::details(application, input.item_id)?)
         }
         "items.selection_summary" => {
             let input: TargetInput = parse(args_json)?;

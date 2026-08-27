@@ -270,6 +270,9 @@ impl PreparedProjection {
                  CREATE TEMP TABLE IF NOT EXISTS picto_smart_tag_match_root (
                      root_item_id INTEGER PRIMARY KEY
                  ) WITHOUT ROWID;
+                 CREATE TEMP TABLE IF NOT EXISTS picto_changed_tag_dependency_key (
+                     dependency_key TEXT PRIMARY KEY
+                 ) WITHOUT ROWID;
                  DELETE FROM picto_changed_tag_id;
                  DELETE FROM picto_changed_tag_root;
                  DELETE FROM picto_smart_tag_match_root;",
@@ -287,15 +290,24 @@ impl PreparedProjection {
         }
         let smart_folder_ids = transaction
             .prepare(
-                "SELECT DISTINCT dependency.smart_folder_id
-                 FROM picto_changed_tag_id changed
-                 JOIN tag ON tag.tag_id = changed.tag_id
-                 JOIN smart_folder_dependency dependency
-                   ON dependency.dependency_kind = 'tag'
-                  AND dependency.dependency_key = CASE
-                        WHEN tag.namespace = 'general' THEN tag.subtag
-                        ELSE tag.namespace || ':' || tag.subtag
-                      END
+                "SELECT dependency.smart_folder_id
+                 FROM smart_folder_dependency dependency
+                 WHERE dependency.dependency_kind = 'tag'
+                   AND (
+                       dependency.dependency_key IN (
+                           SELECT CASE
+                                    WHEN tag.namespace = 'general' THEN tag.subtag
+                                    ELSE tag.namespace || ':' || tag.subtag
+                                  END
+                           FROM picto_changed_tag_id changed
+                           JOIN tag ON tag.tag_id = changed.tag_id
+                       )
+                       OR dependency.dependency_key IN (
+                           SELECT dependency_key
+                           FROM picto_changed_tag_dependency_key
+                       )
+                   )
+                 GROUP BY dependency.smart_folder_id
                  ORDER BY dependency.smart_folder_id",
             )
             .and_then(|mut statement| {
@@ -305,7 +317,10 @@ impl PreparedProjection {
             })
             .map_err(|error| error.to_string())?;
         transaction
-            .execute("DELETE FROM picto_changed_tag_id", [])
+            .execute_batch(
+                "DELETE FROM picto_changed_tag_id;
+                 DELETE FROM picto_changed_tag_dependency_key;",
+            )
             .map_err(|error| error.to_string())?;
         if smart_folder_ids.is_empty() {
             return Ok(());
@@ -912,6 +927,7 @@ struct State {
     media_to_root: ShardedMap<i64, i64>,
     folder_members: ShardedMap<i64, Shared<RoaringBitmap>>,
     folder_bitmaps: ShardedMap<i64, Shared<RoaringBitmap>>,
+    root_owned_folders: ShardedMap<i64, Shared<Vec<i64>>>,
     root_folder_counts: ShardedMap<i64, u32>,
     categorized_roots: Shared<RoaringBitmap>,
     root_owned_tags: ShardedMap<i64, Shared<Vec<i64>>>,
@@ -976,7 +992,15 @@ fn canonical_diff(before: &State, after: &State) -> CanonicalDirty {
             .map(|bitmap| &**bitmap)
             .cloned()
             .unwrap_or_default();
-        tag_roots |= before ^ after;
+        let changed = &before ^ &after;
+        if changed.is_empty() {
+            // A tag rename deliberately removes and restores the same root
+            // set. The changed immutable component is an identity touch, so
+            // those roots still need exact old/new smart-folder settlement.
+            tag_roots |= before | after;
+        } else {
+            tag_roots |= changed;
+        }
     }
     CanonicalDirty {
         lifecycle: !Arc::ptr_eq(&before.lifecycle_bitmaps, &after.lifecycle_bitmaps),
@@ -1106,6 +1130,22 @@ impl ProjectionSelectionSnapshot {
             .folder_bitmaps
             .get(&folder_id)
             .map(|bitmap| (**bitmap).clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn folder_ids_for_root(&self, root_id: i64) -> Vec<i64> {
+        self.state
+            .root_owned_folders
+            .get(&root_id)
+            .map(|folders| (**folders).clone())
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn tag_ids_for_root(&self, root_id: i64) -> Vec<i64> {
+        self.state
+            .root_owned_tags
+            .get(&root_id)
+            .map(|tags| (**tags).clone())
             .unwrap_or_default()
     }
 
@@ -1773,6 +1813,33 @@ impl ProjectionStore {
         folder & &state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)]
     }
 
+    pub fn direct_folder_bitmap(&self, folder_id: i64) -> RoaringBitmap {
+        self.state
+            .load()
+            .folder_members
+            .get(&folder_id)
+            .map(|bitmap| (**bitmap).clone())
+            .unwrap_or_default()
+    }
+
+    pub fn folder_ids_for_root(&self, root_id: i64) -> Vec<i64> {
+        self.state
+            .load()
+            .root_owned_folders
+            .get(&root_id)
+            .map(|folders| (**folders).clone())
+            .unwrap_or_default()
+    }
+
+    pub fn tag_ids_for_root(&self, root_id: i64) -> Vec<i64> {
+        self.state
+            .load()
+            .root_owned_tags
+            .get(&root_id)
+            .map(|tags| (**tags).clone())
+            .unwrap_or_default()
+    }
+
     pub fn sidebar_snapshot(&self, folder_ids: &[i64]) -> ProjectionSidebarSnapshot {
         let state = self.state.load();
         let active = &state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)];
@@ -2052,7 +2119,7 @@ impl ProjectionStore {
                         .entry(change.folder_id)
                         .or_default()
                         .insert(change.item_id as u32);
-                    increment_root_folder_count(&mut state, change.item_id);
+                    insert_root_folder(&mut state, change.item_id, change.folder_id);
                 }
             } else {
                 let removed = state
@@ -2063,7 +2130,7 @@ impl ProjectionStore {
                     if let Some(bitmap) = state.folder_bitmaps.get_mut(&change.folder_id) {
                         bitmap.remove(change.item_id as u32);
                     }
-                    decrement_root_folder_count(&mut state, change.item_id);
+                    remove_root_folder(&mut state, change.item_id, change.folder_id);
                 } else if let Some(bitmap) = state.folder_bitmaps.get_mut(&change.folder_id) {
                     bitmap.remove(change.item_id as u32);
                 }
@@ -2293,7 +2360,7 @@ impl ProjectionStore {
                     .entry(folder_id)
                     .or_default()
                     .insert(item_id as u32);
-                increment_root_folder_count(&mut state, item_id);
+                insert_root_folder(&mut state, item_id, folder_id);
             }
         } else {
             let removed = state
@@ -2304,7 +2371,7 @@ impl ProjectionStore {
                 if let Some(bitmap) = state.folder_bitmaps.get_mut(&folder_id) {
                     bitmap.remove(item_id as u32);
                 }
-                decrement_root_folder_count(&mut state, item_id);
+                remove_root_folder(&mut state, item_id, folder_id);
             } else if let Some(bitmap) = state.folder_bitmaps.get_mut(&folder_id) {
                 bitmap.remove(item_id as u32);
             }
@@ -2344,7 +2411,7 @@ impl ProjectionStore {
             *state.folder_members.entry(folder_id).or_default() |= item_ids;
             *state.folder_bitmaps.entry(folder_id).or_default() |= &visible_changed;
             for item_id in visible_changed.into_iter().map(i64::from) {
-                increment_root_folder_count(&mut state, item_id);
+                insert_root_folder(&mut state, item_id, folder_id);
             }
         } else {
             if let Some(members) = state.folder_members.get_mut(&folder_id) {
@@ -2354,7 +2421,7 @@ impl ProjectionStore {
                 *bitmap -= &visible_changed;
             }
             for item_id in visible_changed.into_iter().map(i64::from) {
-                decrement_root_folder_count(&mut state, item_id);
+                remove_root_folder(&mut state, item_id, folder_id);
             }
         }
         Ok(())
@@ -2369,7 +2436,7 @@ impl ProjectionStore {
             if let Some(members) = state.folder_members.remove(folder_id) {
                 for item_id in members.into_iter().map(i64::from) {
                     if has_root(&state, item_id) {
-                        decrement_root_folder_count(&mut state, item_id);
+                        remove_root_folder(&mut state, item_id, *folder_id);
                     }
                 }
             }
@@ -2748,6 +2815,7 @@ fn replace_root_owned_tag(state: &mut State, source_tag_id: i64, target_tag_id: 
 
 fn rebuild_all_derived(state: &mut State) {
     state.folder_bitmaps.clear();
+    state.root_owned_folders.clear();
     state.root_folder_counts.clear();
     state.categorized_roots.clear();
     for folder_id in state.folder_members.keys().copied().collect::<Vec<_>>() {
@@ -2882,13 +2950,19 @@ fn rebuild_folder_bitmap(state: &mut State, folder_id: i64) {
     for item_id in members.into_iter().map(i64::from) {
         if is_visible_root(state, item_id) {
             bitmap.insert(item_id as u32);
-            increment_root_folder_count(state, item_id);
+            insert_root_folder(state, item_id, folder_id);
         }
     }
     state.folder_bitmaps.insert(folder_id, bitmap.into());
 }
 
-fn increment_root_folder_count(state: &mut State, root_id: i64) {
+fn insert_root_folder(state: &mut State, root_id: i64, folder_id: i64) {
+    if !insert_sorted_tag(
+        state.root_owned_folders.entry(root_id).or_default(),
+        folder_id,
+    ) {
+        return;
+    }
     let count = state.root_folder_counts.entry(root_id).or_default();
     if *count == 0 {
         state.categorized_roots.insert(root_id as u32);
@@ -2896,7 +2970,21 @@ fn increment_root_folder_count(state: &mut State, root_id: i64) {
     *count = count.saturating_add(1);
 }
 
-fn decrement_root_folder_count(state: &mut State, root_id: i64) {
+fn remove_root_folder(state: &mut State, root_id: i64, folder_id: i64) {
+    let removed = state
+        .root_owned_folders
+        .get_mut(&root_id)
+        .is_some_and(|folders| remove_sorted_tag(folders, folder_id));
+    if !removed {
+        return;
+    }
+    if state
+        .root_owned_folders
+        .get(&root_id)
+        .is_some_and(|folders| folders.is_empty())
+    {
+        state.root_owned_folders.remove(&root_id);
+    }
     let remove_root = if let Some(count) = state.root_folder_counts.get_mut(&root_id) {
         *count = count.saturating_sub(1);
         *count == 0
