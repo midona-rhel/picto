@@ -1,8 +1,9 @@
 //! Shared bitmap predicate compiler for grids and smart folders.
 //!
 //! This module only accepts predicates that can be answered exactly by the
-//! immutable projection snapshot. Callers keep the existing indexed SQL path
-//! for text and derivative predicates until their bitmap components exist.
+//! immutable projection snapshot. FTS is resolved to a root bitmap before it
+//! composes with structured predicates; derivative predicates retain the
+//! existing indexed SQL path until their bitmap components exist.
 
 use roaring::RoaringBitmap;
 use rusqlite::Connection;
@@ -50,7 +51,62 @@ pub(crate) fn compile_item_query(
     apply_size_filters(projection, &query.filters, &mut roots);
     apply_mime_filters(projection, &query.filters, &mut roots);
     apply_tag_filters(connection, projection, &query.filters, &mut roots)?;
+    apply_text_filter(connection, projection, &query.filters, &mut roots)?;
     Ok(Some(roots))
+}
+
+fn apply_text_filter(
+    connection: &Connection,
+    projection: &ProjectionSelectionSnapshot,
+    filters: &ItemFilters,
+    roots: &mut RoaringBitmap,
+) -> rusqlite::Result<()> {
+    let Some(text) = filters.text.as_deref().filter(|text| !text.is_empty()) else {
+        return Ok(());
+    };
+    let Some(query) = fts_match_query(text) else {
+        roots.clear();
+        return Ok(());
+    };
+
+    let mut matches = RoaringBitmap::new();
+    let mut root_statement = connection.prepare_cached(
+        "SELECT CAST(root_name_fts.root_item_id AS INTEGER)
+         FROM root_name_fts WHERE root_name_fts MATCH ?1
+         UNION
+         SELECT CAST(root_notes_fts.root_item_id AS INTEGER)
+         FROM root_notes_fts WHERE root_notes_fts MATCH ?1",
+    )?;
+    let root_ids = root_statement.query_map([&query], |row| row.get::<_, i64>(0))?;
+    for root_id in root_ids {
+        if let Ok(root_id) = u32::try_from(root_id?) {
+            matches.insert(root_id);
+        }
+    }
+
+    let mut source_statement = connection.prepare_cached(
+        "SELECT post.root_item_id, item.media_item_id
+         FROM source_text_fts
+         JOIN source_post post
+           ON post.source_post_id = source_text_fts.source_post_id
+         LEFT JOIN source_item item
+           ON item.source_post_id = post.source_post_id
+         WHERE source_text_fts MATCH ?1",
+    )?;
+    let source_roots = source_statement.query_map([&query], |row| {
+        Ok((row.get::<_, Option<i64>>(0)?, row.get::<_, Option<i64>>(1)?))
+    })?;
+    for source_root in source_roots {
+        let (root_id, media_id) = source_root?;
+        let root_id = root_id.or_else(|| media_id.and_then(|id| projection.root_for_media(id)));
+        if let Some(root_id) = root_id.and_then(|id| u32::try_from(id).ok()) {
+            matches.insert(root_id);
+        }
+    }
+
+    matches &= projection.lifecycle_bitmap(Lifecycle::Active);
+    *roots &= matches;
+    Ok(())
 }
 
 fn apply_folder_filters(
@@ -207,8 +263,7 @@ fn combine(bitmaps: impl IntoIterator<Item = RoaringBitmap>, union: bool) -> Roa
 }
 
 fn has_sql_only_filters(filters: &ItemFilters) -> bool {
-    filters.text.is_some()
-        || filters.color_hex.is_some()
+    filters.color_hex.is_some()
         || filters.imported_after.is_some()
         || filters.imported_before.is_some()
         || filters.modified_after.is_some()
@@ -223,6 +278,15 @@ fn has_sql_only_filters(filters: &ItemFilters) -> bool {
         || filters.notes_contains.is_some()
         || filters.source_url_present.is_some()
         || filters.source_url_contains.is_some()
+}
+
+pub(crate) fn fts_match_query(text: &str) -> Option<String> {
+    let terms = text
+        .split(|character: char| !character.is_alphanumeric() && character != '_')
+        .filter(|term| !term.is_empty())
+        .map(|term| format!("\"{term}\"*"))
+        .collect::<Vec<_>>();
+    (!terms.is_empty()).then(|| terms.join(" AND "))
 }
 
 fn split_tag(value: &str) -> (String, String) {

@@ -3053,7 +3053,7 @@ fn apply_filters(
     arguments: &mut Vec<Box<dyn ToSql>>,
 ) -> rusqlite::Result<()> {
     if let Some(text) = filters.text.as_deref().filter(|text| !text.is_empty()) {
-        if let Some(query) = fts_match_query(text) {
+        if let Some(query) = crate::predicate_v2::fts_match_query(text) {
             let index = push_argument(arguments, query);
             predicates.push(format!(
                 "ri.lifecycle = 'active' AND ri.item_id IN (
@@ -3349,15 +3349,6 @@ fn effective_root_tag_predicate(
              WHERE root_tag.tag_id IN ({placeholders})
          )"
     ))
-}
-
-fn fts_match_query(text: &str) -> Option<String> {
-    let terms = text
-        .split(|character: char| !character.is_alphanumeric() && character != '_')
-        .filter(|term| !term.is_empty())
-        .map(|term| format!("\"{term}\"*"))
-        .collect::<Vec<_>>();
-    (!terms.is_empty()).then(|| terms.join(" AND "))
 }
 
 fn display_file_metric(column: &str) -> String {
@@ -4042,6 +4033,43 @@ mod tests {
                 Ok(())
             })
             .unwrap();
+    }
+
+    #[test]
+    fn application_text_search_composes_with_canonical_organization() {
+        let (_directory, store) = seed_store();
+        refresh_canonical_search_indexes(&store);
+        let application = Application::new(Arc::new(store));
+        application
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "UPDATE source_post SET root_item_id = NULL WHERE source_post_id = 1",
+                    [],
+                )?;
+                transaction.execute("DELETE FROM root_tag", [])?;
+                transaction.execute("DELETE FROM folder_item", [])?;
+                transaction.execute("DELETE FROM collection_member", [])?;
+                Ok(())
+            })
+            .unwrap();
+
+        let mut item_query = query_for(ItemScope::Folder { folder_id: 7 });
+        item_query.filters.text = Some("Source Creator".to_string());
+        item_query.filters.include_tags = vec!["general:member-tag".to_string()];
+        item_query.sort.field = crate::app::ItemSortField::Name;
+        let page =
+            query_for_application(&application, &item_query, ItemPageRequest::default()).unwrap();
+
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|item| item.item_id)
+                .collect::<Vec<_>>(),
+            vec![ItemId(10)]
+        );
+        assert_eq!(page.visible_item_count, Some(1));
+        assert_eq!(page.visible_media_count, Some(2));
     }
 
     #[test]

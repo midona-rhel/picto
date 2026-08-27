@@ -1286,6 +1286,10 @@ impl ProjectionSelectionSnapshot {
             .map(|order| (**order).clone())
     }
 
+    pub(crate) fn root_for_media(&self, media_id: i64) -> Option<i64> {
+        self.state.media_to_root.get(&media_id).copied()
+    }
+
     pub(crate) fn tag_ids_for_root(&self, root_id: i64) -> Vec<i64> {
         self.state
             .root_owned_tags
