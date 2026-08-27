@@ -355,6 +355,7 @@ impl Application {
 
                 crate::operations_v2::stage_folder_subtree_selection(
                     transaction,
+                    &self.projections().selection_snapshot(),
                     input.folder_id.0,
                 )?;
                 let root_ids = crate::operations_v2::staged_root_hints(transaction)?;
@@ -801,13 +802,23 @@ impl Application {
     }
 
     pub fn folder_cover(&self, folder_id: FolderId) -> Result<Option<FolderCover>, String> {
+        let folder_members = self
+            .projections()
+            .selection_snapshot()
+            .folder_bitmap(folder_id.0);
         self.store().read(|connection| {
             require_folder(connection, folder_id.0)?;
             let settings = read_application_settings(connection)?;
             let Some(item_id) = exact_folder_cover_item_id(&settings, folder_id.0) else {
                 return Ok(None);
             };
-            resolve_folder_cover(connection, folder_id.0, item_id).map_err(Into::into)
+            if u32::try_from(item_id)
+                .ok()
+                .is_none_or(|item_id| !folder_members.contains(item_id))
+            {
+                return Ok(None);
+            }
+            resolve_folder_cover(connection, item_id).map_err(Into::into)
         })
     }
 
@@ -815,12 +826,21 @@ impl Application {
         &self,
         input: &SetFolderCoverInput,
     ) -> Result<FolderMutationReceipt, String> {
+        let belongs_to_folder = u32::try_from(input.item_id.0).ok().is_some_and(|item_id| {
+            self.projections()
+                .selection_snapshot()
+                .folder_bitmap(input.folder_id.0)
+                .contains(item_id)
+        });
+        if !belongs_to_folder {
+            return Err("Folder cover item must belong to the folder".to_string());
+        }
         let (_, revision, _, _) = self.undoable_transaction_if_changed(
             folder_history("folders.set_cover", "Set folder cover", &[input.folder_id]),
             |transaction| {
                 require_folder(transaction, input.folder_id.0)?;
-                resolve_folder_cover(transaction, input.folder_id.0, input.item_id.0)?
-                    .ok_or_else(|| invalid("Folder cover item must belong to the folder"))?;
+                resolve_folder_cover(transaction, input.item_id.0)?
+                    .ok_or_else(|| invalid("Folder cover item is unavailable"))?;
                 let mut settings = read_application_settings(transaction)?;
                 let previous = exact_folder_cover_item_id(&settings, input.folder_id.0);
                 if previous == Some(input.item_id.0) {
@@ -1004,15 +1024,13 @@ fn write_exact_folder_cover_item_id(
 
 fn resolve_folder_cover(
     connection: &rusqlite::Connection,
-    folder_id: i64,
     item_id: i64,
 ) -> rusqlite::Result<Option<FolderCover>> {
     connection
         .query_row(
             "SELECT mf.file_hash, mf.mime_type
-             FROM folder_item fi
-             JOIN library_root lr ON lr.item_id = fi.item_id AND lr.lifecycle = 'active'
-             JOIN library_item li ON li.item_id = fi.item_id
+             FROM library_root lr
+             JOIN library_item li ON li.item_id = lr.item_id
              JOIN media_asset ma ON ma.item_id = CASE
                  WHEN li.kind = 'collection' THEN (
                      SELECT cm.media_item_id
@@ -1024,8 +1042,8 @@ fn resolve_folder_cover(
                  ELSE li.item_id
              END
              JOIN media_file mf ON mf.file_id = ma.file_id
-             WHERE fi.folder_id = ?1 AND fi.item_id = ?2",
-            params![folder_id, item_id],
+             WHERE lr.lifecycle = 'active' AND lr.item_id = ?1",
+            [item_id],
             |row| {
                 Ok(FolderCover {
                     entity_hash: row.get(0)?,
@@ -1792,15 +1810,14 @@ mod tests {
         let (_directory, app, media_id) = fixture();
         let parent = create(&app, "Parent", None);
         let child = create(&app, "Child", Some(parent));
-        app.store()
-            .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO folder_item (folder_id, item_id) VALUES (?1, ?2)",
-                    rusqlite::params![child.0, media_id],
-                )?;
-                Ok(())
-            })
-            .unwrap();
+        app.set_folder_membership(
+            &ItemTarget::Explicit {
+                item_ids: vec![ItemId(media_id)],
+            },
+            child.0,
+            true,
+        )
+        .unwrap();
 
         app.set_folder_auto_tags(&SetFolderAutoTagsInput {
             folder_id: parent,

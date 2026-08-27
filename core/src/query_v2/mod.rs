@@ -476,7 +476,12 @@ fn selection_summary_connection(
         };
     trace_selection_stage("tag_counts", stage_started);
     stage_started = std::time::Instant::now();
-    let shared_folders = selection_shared_folders(connection, selected_count)?;
+    let shared_folders =
+        if let (Some(projection), Some(roots)) = (projection, selected_roots.as_ref()) {
+            selection_shared_folders_projected(connection, projection, roots)?
+        } else {
+            selection_shared_folders(connection, selected_count)?
+        };
     trace_selection_stage("shared_folders", stage_started);
     stage_started = std::time::Instant::now();
     let selected_collection_candidates = selection_collection_candidates(connection)?;
@@ -891,6 +896,41 @@ fn selection_shared_folders(
         })?
         .collect();
     folders
+}
+
+fn selection_shared_folders_projected(
+    connection: &Connection,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
+    selected: &roaring::RoaringBitmap,
+) -> rusqlite::Result<Vec<SelectionFolderInfo>> {
+    let Some(first_root) = selected.iter().next() else {
+        return Ok(Vec::new());
+    };
+    let folder_ids = projection
+        .folder_ids_for_root(i64::from(first_root))
+        .into_iter()
+        .filter(|folder_id| (selected - &projection.folder_bitmap(*folder_id)).is_empty())
+        .collect::<Vec<_>>();
+    if folder_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let encoded = serde_json::to_string(&folder_ids)
+        .map_err(|error| rusqlite::Error::ToSqlConversionFailure(Box::new(error)))?;
+    connection
+        .prepare_cached(
+            "SELECT folder.folder_id, folder.name
+             FROM folder
+             JOIN json_each(?1) selected
+               ON folder.folder_id = CAST(selected.value AS INTEGER)
+             ORDER BY folder.folder_id",
+        )?
+        .query_map([encoded], |row| {
+            Ok(SelectionFolderInfo {
+                folder_id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })?
+        .collect()
 }
 
 fn selection_collection_candidates(

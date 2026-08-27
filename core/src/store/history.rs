@@ -967,7 +967,10 @@ fn apply_semantic_payload(
         // payload is applied to the private projection candidate and persisted
         // as one checksummed bitmap during prepared publication.
         SemanticHistoryPayload::Tags(_) => Ok(()),
-        SemanticHistoryPayload::Folders(changes) => apply_folder_memberships(transaction, changes),
+        // Folder ownership is canonical bitmap state. The in-memory semantic
+        // payload is applied to the private projection candidate and persisted
+        // as one checksummed bitmap during prepared publication.
+        SemanticHistoryPayload::Folders(changes) => validate_membership_changes(changes),
         SemanticHistoryPayload::Ratings(delta) => apply_ratings(transaction, delta),
         SemanticHistoryPayload::TagGraph(delta) => apply_tag_graph(transaction, delta),
         SemanticHistoryPayload::Group(delta) => apply_group(transaction, delta),
@@ -1348,21 +1351,7 @@ fn apply_lifecycle(
     Ok(())
 }
 
-fn apply_folder_memberships(
-    transaction: &Transaction<'_>,
-    changes: &[SemanticMembershipDelta],
-) -> Result<(), String> {
-    transaction
-        .execute_batch(
-            "CREATE TEMP TABLE IF NOT EXISTS picto_history_membership (
-                 relation_id INTEGER NOT NULL,
-                 root_item_id INTEGER NOT NULL,
-                 present INTEGER NOT NULL,
-                 PRIMARY KEY (relation_id, root_item_id)
-             ) WITHOUT ROWID;
-             DELETE FROM picto_history_membership;",
-        )
-        .map_err(|error| error.to_string())?;
+fn validate_membership_changes(changes: &[SemanticMembershipDelta]) -> Result<(), String> {
     for change in changes {
         if !(&change.add & &change.remove).is_empty() {
             return Err(format!(
@@ -1370,62 +1359,7 @@ fn apply_folder_memberships(
                 change.relation_id
             ));
         }
-        insert_bitmap_rows(
-            transaction,
-            "INSERT INTO picto_history_membership(relation_id, root_item_id, present)
-             SELECT ?1, CAST(value AS INTEGER), 1 FROM json_each(?2)",
-            &[rusqlite::types::Value::Integer(change.relation_id)],
-            &change.add,
-        )?;
-        insert_bitmap_rows(
-            transaction,
-            "INSERT INTO picto_history_membership(relation_id, root_item_id, present)
-             SELECT ?1, CAST(value AS INTEGER), 0 FROM json_each(?2)",
-            &[rusqlite::types::Value::Integer(change.relation_id)],
-            &change.remove,
-        )?;
     }
-
-    transaction
-        .execute(
-            "UPDATE projection_write_control
-             SET suppress_folder_summary = 1 WHERE singleton = 1",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
-    // Drive removal from the staged primary keys. A correlated EXISTS makes
-    // SQLite scan the complete relationship table for broad undo operations.
-    transaction
-        .execute(
-            "DELETE FROM folder_item
-         WHERE (folder_id, item_id) IN (
-             SELECT relation_id, root_item_id
-             FROM picto_history_membership
-             WHERE present = 0
-         )",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
-    transaction
-        .execute(
-            "INSERT INTO folder_item(folder_id, item_id)
-         SELECT relation_id, root_item_id
-         FROM picto_history_membership WHERE present = 1
-         ON CONFLICT(folder_id, item_id) DO NOTHING",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
-    refresh_folder_summaries_for_history(
-        transaction,
-        "SELECT DISTINCT relation_id FROM picto_history_membership",
-    )?;
-    transaction
-        .execute(
-            "UPDATE projection_write_control
-             SET suppress_folder_summary = 0 WHERE singleton = 1",
-            [],
-        )
-        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -1525,40 +1459,6 @@ fn i64_json(values: impl IntoIterator<Item = i64>) -> String {
     }
     json.push(']');
     json
-}
-
-fn refresh_folder_summaries_for_history(
-    transaction: &Transaction<'_>,
-    affected_folder_sql: &str,
-) -> Result<(), String> {
-    transaction
-        .execute(
-            &format!(
-                "UPDATE folder_summary
-                 SET visible_root_count = COALESCE((
-                         SELECT COUNT(*) FROM folder_item membership
-                         JOIN root_summary summary ON summary.root_item_id = membership.item_id
-                         WHERE membership.folder_id = folder_summary.folder_id
-                           AND summary.lifecycle = 'active'
-                     ), 0),
-                     media_count = COALESCE((
-                         SELECT SUM(summary.media_count) FROM folder_item membership
-                         JOIN root_summary summary ON summary.root_item_id = membership.item_id
-                         WHERE membership.folder_id = folder_summary.folder_id
-                           AND summary.lifecycle = 'active'
-                     ), 0),
-                     total_size_bytes = COALESCE((
-                         SELECT SUM(summary.total_size_bytes) FROM folder_item membership
-                         JOIN root_summary summary ON summary.root_item_id = membership.item_id
-                         WHERE membership.folder_id = folder_summary.folder_id
-                           AND summary.lifecycle = 'active'
-                     ), 0)
-                 WHERE folder_id IN ({affected_folder_sql})"
-            ),
-            [],
-        )
-        .map_err(|error| error.to_string())?;
-    Ok(())
 }
 
 fn apply_group(transaction: &Transaction<'_>, delta: &SemanticGroupDelta) -> Result<(), String> {
@@ -2129,19 +2029,12 @@ mod tests {
     }
 
     #[test]
-    fn semantic_broad_state_undo_and_redo_are_exact() {
+    fn semantic_lifecycle_and_rating_undo_and_redo_are_exact() {
         const ROOT_COUNT: u32 = 1_000;
         let directory = tempfile::tempdir().unwrap();
         let store = Store::open(directory.path()).unwrap();
-        let folder_id = store
+        store
             .transaction(|transaction| {
-                transaction.execute(
-                    "INSERT INTO folder
-                         (folder_key, name, created_at, updated_at)
-                     VALUES ('semantic-folder', 'Semantic', 'now', 'now')",
-                    [],
-                )?;
-                let folder_id = transaction.last_insert_rowid();
                 let mut insert_file = transaction.prepare_cached(
                     "INSERT INTO media_file
                          (file_hash, mime_type, size_bytes, created_at)
@@ -2180,21 +2073,15 @@ mod tests {
                     insert_root.execute([i64::from(root_id)])?;
                     insert_metadata.execute([i64::from(root_id)])?;
                 }
-                Ok(folder_id)
+                Ok(())
             })
-            .unwrap()
-            .0;
+            .unwrap();
         let roots = RoaringBitmap::from_iter(1..=ROOT_COUNT);
         let undo = SemanticHistoryPayload::Composite(vec![
             SemanticHistoryPayload::Lifecycle(SemanticLifecycleDelta {
                 active: roots.clone(),
                 ..SemanticLifecycleDelta::default()
             }),
-            SemanticHistoryPayload::Folders(vec![SemanticMembershipDelta {
-                relation_id: folder_id,
-                remove: roots.clone(),
-                ..SemanticMembershipDelta::default()
-            }]),
             SemanticHistoryPayload::Ratings(SemanticRatingDelta {
                 unrated: roots.clone(),
                 ..SemanticRatingDelta::default()
@@ -2205,11 +2092,6 @@ mod tests {
                 trash: roots.clone(),
                 ..SemanticLifecycleDelta::default()
             }),
-            SemanticHistoryPayload::Folders(vec![SemanticMembershipDelta {
-                relation_id: folder_id,
-                add: roots.clone(),
-                ..SemanticMembershipDelta::default()
-            }]),
             SemanticHistoryPayload::Ratings(SemanticRatingDelta {
                 rated: vec![(5, roots.clone())],
                 ..SemanticRatingDelta::default()
@@ -2226,11 +2108,6 @@ mod tests {
                 ),
                 |transaction| {
                     transaction.execute("UPDATE library_root SET lifecycle = 'trash'", [])?;
-                    transaction.execute(
-                        "INSERT INTO folder_item(folder_id, item_id)
-                         SELECT ?1, item_id FROM library_root",
-                        [folder_id],
-                    )?;
                     transaction.execute("UPDATE root_metadata SET rating = 5", [])?;
                     Ok(((), (), SemanticHistoryRecord::new(undo, redo)))
                 },
@@ -2239,25 +2116,18 @@ mod tests {
             )
             .unwrap();
 
-        assert_semantic_state(&store, ROOT_COUNT, folder_id, "trash", 5, true);
+        assert_semantic_state(&store, ROOT_COUNT, "trash", 5);
         store
             .apply_history(HistoryDirection::Undo, |_| Ok(()), |()| {})
             .unwrap();
-        assert_semantic_state(&store, ROOT_COUNT, folder_id, "active", 0, false);
+        assert_semantic_state(&store, ROOT_COUNT, "active", 0);
         store
             .apply_history(HistoryDirection::Redo, |_| Ok(()), |()| {})
             .unwrap();
-        assert_semantic_state(&store, ROOT_COUNT, folder_id, "trash", 5, true);
+        assert_semantic_state(&store, ROOT_COUNT, "trash", 5);
     }
 
-    fn assert_semantic_state(
-        store: &Store,
-        root_count: u32,
-        folder_id: i64,
-        lifecycle: &str,
-        rating: i64,
-        memberships_present: bool,
-    ) {
+    fn assert_semantic_state(store: &Store, root_count: u32, lifecycle: &str, rating: i64) {
         store
             .read(|connection| {
                 let lifecycle_count: i64 = connection.query_row(
@@ -2278,15 +2148,9 @@ mod tests {
                         |row| row.get(0),
                     )?
                 };
-                let folder_count: i64 = connection.query_row(
-                    "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1",
-                    [folder_id],
-                    |row| row.get(0),
-                )?;
                 let expected = i64::from(root_count);
                 assert_eq!(lifecycle_count, expected);
                 assert_eq!(rating_count, expected);
-                assert_eq!(folder_count, if memberships_present { expected } else { 0 });
                 Ok(())
             })
             .unwrap();

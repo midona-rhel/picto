@@ -151,7 +151,51 @@ impl PreparedProjection {
                 .map_err(|error| error.to_string())?;
         }
 
+        let mut folder_summary_statement = (!self.dirty.folders.is_empty())
+            .then(|| {
+                transaction.prepare_cached(
+                    "INSERT INTO folder_summary(
+                         folder_id, visible_root_count, media_count, total_size_bytes
+                     ) VALUES (?1, ?2, ?3, ?4)
+                     ON CONFLICT(folder_id) DO UPDATE SET
+                         visible_root_count = excluded.visible_root_count,
+                         media_count = excluded.media_count,
+                         total_size_bytes = excluded.total_size_bytes",
+                )
+            })
+            .transpose()
+            .map_err(|error| error.to_string())?;
         for folder_id in &self.dirty.folders {
+            let exists = transaction
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM folder WHERE folder_id = ?1)",
+                    [folder_id],
+                    |row| row.get::<_, bool>(0),
+                )
+                .map_err(|error| error.to_string())?;
+            if !exists {
+                transaction
+                    .execute(
+                        "DELETE FROM canonical_bitmap
+                         WHERE domain = ?1 AND key_id = ?2",
+                        rusqlite::params![BitmapDomain::Folder.as_i64(), folder_id],
+                    )
+                    .map_err(|error| error.to_string())?;
+                transaction
+                    .execute(
+                        "DELETE FROM canonical_order
+                         WHERE owner_kind = 'folder' AND owner_id = ?1",
+                        [folder_id],
+                    )
+                    .map_err(|error| error.to_string())?;
+                transaction
+                    .execute(
+                        "DELETE FROM folder_summary WHERE folder_id = ?1",
+                        [folder_id],
+                    )
+                    .map_err(|error| error.to_string())?;
+                continue;
+            }
             let bitmap = self
                 .state
                 .folder_members
@@ -166,6 +210,40 @@ impl PreparedProjection {
                 &bitmap,
             )
             .map_err(|error| error.to_string())?;
+
+            let active =
+                &bitmap & &self.state.lifecycle_bitmaps[lifecycle_index(Lifecycle::Active)];
+            let media_count = self.state.numeric.media_count.filtered_sum(&active);
+            let total_size_bytes = self.state.numeric.total_size_bytes.filtered_sum(&active);
+            folder_summary_statement
+                .as_mut()
+                .expect("dirty folders require a summary statement")
+                .execute(rusqlite::params![
+                    folder_id,
+                    i64::try_from(active.len())
+                        .map_err(|_| "Folder root count exceeds SQLite range")?,
+                    i64::try_from(media_count)
+                        .map_err(|_| "Folder media count exceeds SQLite range")?,
+                    i64::try_from(total_size_bytes)
+                        .map_err(|_| "Folder byte count exceeds SQLite range")?,
+                ])
+                .map_err(|error| error.to_string())?;
+
+            if let Some(mut order) = canonical_bitmap::load_order(transaction, "folder", *folder_id)
+                .map_err(|error| error.to_string())?
+            {
+                order.retain(|item_id| bitmap.contains(*item_id));
+                let ordered = order.iter().copied().collect::<RoaringBitmap>();
+                order.extend((&bitmap - &ordered).iter());
+                canonical_bitmap::replace_order(
+                    transaction,
+                    "folder",
+                    *folder_id,
+                    revision,
+                    &order,
+                )
+                .map_err(|error| error.to_string())?;
+            }
         }
 
         for group_id in &self.dirty.groups {

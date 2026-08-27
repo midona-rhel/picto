@@ -335,7 +335,7 @@ impl Application {
         present: bool,
     ) -> Result<MutationReceipt, String> {
         let item_ids = mutation_item_hints(target);
-        let (_, revision, _, _) = self.semantic_undoable_transaction_if_changed(
+        let (_, revision, _, _) = self.semantic_undoable_transaction_if_changed_captured(
             HistoryDescriptor::new(
                 "items.set_folder",
                 if present {
@@ -350,10 +350,12 @@ impl Application {
                 ],
                 vec![],
             ),
-            |transaction| {
+            |projections| projections.selection_snapshot(),
+            |transaction, projection| {
                 require_folder(transaction, folder_id)?;
-                stage_root_selection(transaction, target)?;
-                let changed_roots = apply_folder_to_selection(transaction, folder_id, present)?;
+                stage_root_selection_projected(transaction, target, &projection)?;
+                let changed_roots =
+                    apply_folder_to_selection(transaction, &projection, folder_id, present)?;
                 let changed_tags = if present && !changed_roots.is_empty() {
                     let tags =
                         crate::folders_v2::inherited_folder_auto_tags(transaction, folder_id)?;
@@ -2834,6 +2836,42 @@ fn stage_root_selection(
     Ok(())
 }
 
+fn stage_root_selection_projected(
+    transaction: &Transaction<'_>,
+    target: &ItemTarget,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
+) -> rusqlite::Result<()> {
+    if let ItemTarget::Query {
+        query,
+        excluded_item_ids,
+    } = target
+    {
+        if let Some(mut roots) =
+            crate::predicate_v2::compile_item_query(transaction, projection, query)?
+        {
+            for item_id in excluded_item_ids {
+                if let Ok(item_id) = u32::try_from(item_id.0) {
+                    roots.remove(item_id);
+                }
+            }
+            return stage_root_bitmap(transaction, &roots);
+        }
+    }
+    stage_root_selection(transaction, target)
+}
+
+fn stage_root_bitmap(transaction: &Transaction<'_>, roots: &RoaringBitmap) -> rusqlite::Result<()> {
+    prepare_mutation_selection_tables(transaction)?;
+    let encoded = serde_json::to_string(&roots.iter().collect::<Vec<_>>())
+        .map_err(|error| invalid(format!("Could not encode root selection: {error}")))?;
+    transaction.execute(
+        "INSERT INTO picto_selected_root(item_id)
+         SELECT CAST(value AS INTEGER) FROM json_each(?1)",
+        [encoded],
+    )?;
+    Ok(())
+}
+
 fn stage_root_ids(transaction: &Transaction<'_>, item_ids: &[i64]) -> rusqlite::Result<()> {
     prepare_mutation_selection_tables(transaction)?;
     let encoded = serde_json::to_string(item_ids)
@@ -3651,23 +3689,29 @@ fn trace_bulk_stage(operation: &str, stage: &str, started: Instant) {
 
 pub(crate) fn stage_folder_subtree_selection(
     transaction: &Transaction<'_>,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
     folder_id: i64,
 ) -> rusqlite::Result<()> {
-    prepare_mutation_selection_tables(transaction)?;
-    transaction.execute(
-        "WITH RECURSIVE descendants(folder_id) AS (
+    let folder_ids = transaction
+        .prepare(
+            "WITH RECURSIVE descendants(folder_id) AS (
              SELECT ?1
              UNION ALL
              SELECT folder.folder_id
              FROM folder
              JOIN descendants parent ON folder.parent_id = parent.folder_id
          )
-         INSERT INTO picto_selected_root(item_id)
-         SELECT DISTINCT membership.item_id
-         FROM folder_item membership
-         JOIN descendants ON descendants.folder_id = membership.folder_id",
-        [folder_id],
-    )?;
+         SELECT folder_id FROM descendants ORDER BY folder_id",
+        )?
+        .query_map([folder_id], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let roots = folder_ids
+        .into_iter()
+        .fold(RoaringBitmap::new(), |mut roots, folder_id| {
+            roots |= projection.folder_bitmap(folder_id);
+            roots
+        });
+    stage_root_bitmap(transaction, &roots)?;
     populate_staged_media(transaction)
 }
 
@@ -3677,105 +3721,17 @@ pub(crate) fn staged_root_hints(transaction: &Transaction<'_>) -> rusqlite::Resu
 
 fn apply_folder_to_selection(
     transaction: &Transaction<'_>,
+    projection: &crate::projection_v2::ProjectionSelectionSnapshot,
     folder_id: i64,
     present: bool,
 ) -> rusqlite::Result<RoaringBitmap> {
-    transaction.execute_batch(
-        "CREATE TEMP TABLE IF NOT EXISTS picto_changed_root (
-             item_id INTEGER PRIMARY KEY
-         ) WITHOUT ROWID;
-         DELETE FROM picto_changed_root;",
-    )?;
-    if present {
-        let folder_is_empty = !transaction.query_row(
-            "SELECT EXISTS(SELECT 1 FROM folder_item WHERE folder_id = ?1)",
-            [folder_id],
-            |row| row.get::<_, bool>(0),
-        )?;
-        if folder_is_empty {
-            transaction.execute(
-                "INSERT INTO picto_changed_root(item_id)
-                 SELECT item_id FROM picto_selected_root",
-                [],
-            )?;
-        } else {
-            transaction.execute(
-                "INSERT INTO picto_changed_root(item_id)
-                 SELECT selected.item_id
-                 FROM picto_selected_root selected
-                 LEFT JOIN folder_item existing
-                   ON existing.folder_id = ?1
-                  AND existing.item_id = selected.item_id
-                 WHERE existing.item_id IS NULL",
-                [folder_id],
-            )?;
-        }
+    let selected = selected_id_bitmap(transaction, "SELECT item_id FROM picto_selected_root")?;
+    let existing = projection.folder_bitmap(folder_id);
+    Ok(if present {
+        &selected - &existing
     } else {
-        transaction.execute(
-            "INSERT INTO picto_changed_root(item_id)
-             SELECT existing.item_id
-             FROM folder_item existing
-             JOIN picto_selected_root selected ON selected.item_id = existing.item_id
-             WHERE existing.folder_id = ?1",
-            [folder_id],
-        )?;
-    }
-    let changed = selected_id_bitmap(transaction, "SELECT item_id FROM picto_changed_root")?;
-    if changed.is_empty() {
-        return Ok(changed);
-    }
-    let (root_count, media_count, total_size_bytes): (i64, i64, i64) = transaction.query_row(
-        "SELECT COUNT(*),
-                COALESCE(SUM(summary.media_count), 0),
-                COALESCE(SUM(summary.total_size_bytes), 0)
-         FROM picto_changed_root changed
-         JOIN root_summary summary ON summary.root_item_id = changed.item_id
-         WHERE summary.lifecycle = 'active'
-           AND NOT EXISTS (
-               SELECT 1 FROM collection_member member
-               WHERE member.media_item_id = changed.item_id
-           )",
-        [],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-    )?;
-
-    transaction.execute(
-        "UPDATE projection_write_control
-         SET suppress_folder_summary = 1
-         WHERE singleton = 1",
-        [],
-    )?;
-    let sql = if present {
-        "INSERT INTO folder_item (folder_id, item_id)
-             SELECT ?1, item_id FROM picto_changed_root"
-    } else {
-        "DELETE FROM folder_item
-             WHERE folder_id = ?1
-               AND item_id IN (SELECT item_id FROM picto_changed_root)"
-    };
-    transaction.execute(sql, [folder_id])?;
-    let direction = if present { 1 } else { -1 };
-    transaction.execute(
-        "UPDATE folder_summary
-         SET visible_root_count = visible_root_count + ?2 * ?3,
-             media_count = media_count + ?2 * ?4,
-             total_size_bytes = total_size_bytes + ?2 * ?5
-         WHERE folder_id = ?1",
-        params![
-            folder_id,
-            direction,
-            root_count,
-            media_count,
-            total_size_bytes
-        ],
-    )?;
-    transaction.execute(
-        "UPDATE projection_write_control
-         SET suppress_folder_summary = 0
-         WHERE singleton = 1",
-        [],
-    )?;
-    Ok(changed)
+        &selected & &existing
+    })
 }
 
 pub(crate) fn apply_tags_to_selection(
@@ -4980,6 +4936,69 @@ mod tests {
                 assert_eq!(
                     load_order(connection, "group", grouped.collection_id.0)?.unwrap(),
                     vec![ids[0].0 as u32, ids[1].0 as u32]
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn folder_membership_and_history_are_canonical_bitmaps_only() {
+        let (_directory, app, ids) = fixture();
+        let folder_id = app
+            .store()
+            .transaction(|transaction| {
+                transaction.execute(
+                    "INSERT INTO folder(folder_key, name, created_at, updated_at)
+                     VALUES ('bitmap-folder', 'Bitmap folder', 'now', 'now')",
+                    [],
+                )?;
+                Ok(transaction.last_insert_rowid())
+            })
+            .unwrap()
+            .0;
+        let selected = RoaringBitmap::from_iter(ids[..2].iter().map(|item| item.0 as u32));
+        let target = ItemTarget::Explicit {
+            item_ids: ids[..2].to_vec(),
+        };
+
+        app.set_folder_membership(&target, folder_id, true).unwrap();
+        app.store()
+            .read(|connection| {
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Folder, folder_id)?,
+                    selected
+                );
+                let legacy_rows: i64 = connection.query_row(
+                    "SELECT COUNT(*) FROM folder_item WHERE folder_id = ?1",
+                    [folder_id],
+                    |row| row.get(0),
+                )?;
+                assert_eq!(legacy_rows, 0);
+                let summary: (i64, i64, i64) = connection.query_row(
+                    "SELECT visible_root_count, media_count, total_size_bytes
+                     FROM folder_summary WHERE folder_id = ?1",
+                    [folder_id],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                assert_eq!(summary, (2, 2, 3));
+                Ok(())
+            })
+            .unwrap();
+
+        app.undo().unwrap();
+        app.store()
+            .read(|connection| {
+                assert!(load_bitmap(connection, BitmapDomain::Folder, folder_id)?.is_empty());
+                Ok(())
+            })
+            .unwrap();
+        app.redo().unwrap();
+        app.store()
+            .read(|connection| {
+                assert_eq!(
+                    load_bitmap(connection, BitmapDomain::Folder, folder_id)?,
+                    selected
                 );
                 Ok(())
             })
