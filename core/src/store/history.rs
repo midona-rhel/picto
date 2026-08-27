@@ -1270,8 +1270,6 @@ fn apply_lifecycle(
              WHERE singleton = 1;",
         )
         .map_err(|error| error.to_string())?;
-    crate::store::schema::suspend_bulk_lifecycle_triggers(transaction)
-        .map_err(|error| error.to_string())?;
     let changed = transaction
         .execute(
             "UPDATE library_root
@@ -1445,8 +1443,6 @@ fn apply_lifecycle(
             [],
         )
         .map_err(|error| error.to_string())?;
-    crate::store::schema::restore_bulk_lifecycle_triggers(transaction)
-        .map_err(|error| error.to_string())?;
     Ok(())
 }
 
@@ -1504,13 +1500,6 @@ fn apply_memberships(
             [],
         )
         .map_err(|error| error.to_string())?;
-    if table == "root_tag" {
-        crate::store::schema::suspend_bulk_tag_membership_triggers(transaction)
-    } else {
-        crate::store::schema::suspend_bulk_folder_membership_triggers(transaction)
-    }
-    .map_err(|error| error.to_string())?;
-
     // Drive removal from the staged primary keys. A correlated EXISTS makes
     // SQLite scan the complete relationship table for broad undo operations.
     let delete_sql = if table == "root_tag" {
@@ -1569,12 +1558,6 @@ fn apply_memberships(
             [],
         )
         .map_err(|error| error.to_string())?;
-    if table == "root_tag" {
-        crate::store::schema::restore_bulk_tag_membership_triggers(transaction)
-    } else {
-        crate::store::schema::restore_bulk_folder_membership_triggers(transaction)
-    }
-    .map_err(|error| error.to_string())?;
     Ok(())
 }
 

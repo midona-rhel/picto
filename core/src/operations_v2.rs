@@ -3333,7 +3333,6 @@ fn begin_bulk_lifecycle_settlement(
     transaction: &Transaction<'_>,
     summary_delta: &LifecycleSummaryDelta,
 ) -> rusqlite::Result<()> {
-    crate::store::schema::suspend_bulk_lifecycle_triggers(transaction)?;
     transaction.execute_batch(
         "CREATE TEMP TABLE IF NOT EXISTS picto_lifecycle_old_root (
              root_item_id INTEGER PRIMARY KEY,
@@ -3434,7 +3433,7 @@ fn finish_bulk_lifecycle_settlement(
              suppress_tag_summary = 0
          WHERE singleton = 1;",
     )?;
-    crate::store::schema::restore_bulk_lifecycle_triggers(transaction)
+    Ok(())
 }
 
 fn capture_structural_summary_baseline(transaction: &Transaction<'_>) -> rusqlite::Result<()> {
@@ -3863,7 +3862,6 @@ fn apply_folder_to_selection(
          WHERE singleton = 1",
         [],
     )?;
-    crate::store::schema::suspend_bulk_folder_membership_triggers(transaction)?;
     let sql = if present {
         "INSERT INTO folder_item (folder_id, item_id)
              SELECT ?1, item_id FROM picto_changed_root"
@@ -3894,7 +3892,6 @@ fn apply_folder_to_selection(
          WHERE singleton = 1",
         [],
     )?;
-    crate::store::schema::restore_bulk_folder_membership_triggers(transaction)?;
     Ok(changed)
 }
 
@@ -3909,7 +3906,6 @@ pub(crate) fn apply_tags_to_selection(
              root_item_id INTEGER PRIMARY KEY
          ) WITHOUT ROWID;",
     )?;
-    crate::store::schema::suspend_bulk_tag_membership_triggers(transaction)?;
     for (namespace, subtag) in tags {
         let tag_started = Instant::now();
         let tag_was_created = transaction.execute(
@@ -4038,7 +4034,6 @@ pub(crate) fn apply_tags_to_selection(
             );
         }
     }
-    crate::store::schema::restore_bulk_tag_membership_triggers(transaction)?;
     Ok(delta)
 }
 
