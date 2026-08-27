@@ -3631,6 +3631,47 @@ mod tests {
         (directory, Application::new(store), ids)
     }
 
+    #[test]
+    fn group_history_replay_restores_numeric_projection_entries() {
+        let (_directory, app, ids) = fixture();
+        let grouped = organize(&app, &ids, Some("Replay"), None);
+        app.detach_items(DetachItemsInput {
+            collection_id: grouped.collection_id,
+            media_item_ids: vec![ids[0]],
+            target_lifecycle: None,
+        })
+        .unwrap();
+        app.undo().unwrap();
+        app.redo().unwrap();
+
+        let active = app.projections().active_bitmap();
+        assert!(active.contains(ids[0].0 as u32));
+        // The replay purged the detached root's numeric entries on undo; redo
+        // must restore them or size-filtered targets silently skip the root.
+        let sized = app
+            .projections()
+            .selection_snapshot()
+            .total_size_range_bitmap(Some(1), None, &active);
+        assert!(
+            sized.contains(ids[0].0 as u32),
+            "re-created root must be present in the numeric size slice"
+        );
+        let counted = crate::query_v2::query_for_application(
+            &app,
+            &crate::app::ItemQuery {
+                scope: crate::app::ItemScope::All,
+                filters: crate::app::ItemFilters {
+                    min_size_bytes: Some(1),
+                    ..crate::app::ItemFilters::default()
+                },
+                sort: crate::app::ItemSort::default(),
+            },
+            crate::query_v2::ItemPageRequest::new(None, 1),
+        )
+        .unwrap();
+        assert_eq!(counted.visible_item_count, Some(2));
+    }
+
     fn organize(
         app: &Application,
         item_ids: &[ItemId],

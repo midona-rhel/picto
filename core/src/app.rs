@@ -524,8 +524,21 @@ impl Application {
             move |request| {
                 prepare_projection.prepare(|candidate| match request {
                     HistoryProjectionRequest::Changeset => Ok(()),
-                    HistoryProjectionRequest::Semantic(payload) => {
-                        apply_semantic_projection(candidate, payload)
+                    HistoryProjectionRequest::Semantic {
+                        payload,
+                        group_summaries,
+                    } => {
+                        apply_semantic_projection(candidate, payload)?;
+                        if group_summaries.is_empty() {
+                            Ok(())
+                        } else {
+                            // Re-created roots regain their numeric summary
+                            // entries; the replay purged them on the way out.
+                            candidate.apply_root_summary_changes(
+                                &group_summaries,
+                                &roaring::RoaringBitmap::new(),
+                            )
+                        }
                     }
                 })
             },

@@ -333,9 +333,29 @@ impl SemanticHistoryRecord {
     }
 }
 
+fn collect_group_replay_roots(payload: &SemanticHistoryPayload, roots: &mut Vec<i64>) {
+    match payload {
+        SemanticHistoryPayload::Group(delta) => {
+            roots.extend(delta.roots.iter().map(|root| root.item_id));
+        }
+        SemanticHistoryPayload::Composite(payloads) => {
+            for payload in payloads {
+                collect_group_replay_roots(payload, roots);
+            }
+        }
+        _ => {}
+    }
+}
+
 pub enum HistoryProjectionRequest<'a> {
     Changeset,
-    Semantic(&'a SemanticHistoryPayload),
+    Semantic {
+        payload: &'a SemanticHistoryPayload,
+        /// Numeric root-summary projection changes for every root a Group
+        /// replay re-created, read back from the canonical transaction so
+        /// the in-memory numeric slices are restored exactly.
+        group_summaries: Vec<crate::projection_v2::RootSummaryProjectionChange>,
+    },
 }
 
 #[derive(Clone)]
@@ -860,7 +880,17 @@ impl Store {
                     apply_semantic_payload(&transaction, payload)?;
                     refresh_smart_for_semantic_payload(&transaction, payload)?;
                     schema::refresh_read_models(&transaction).map_err(|error| error.to_string())?;
-                    HistoryProjectionRequest::Semantic(payload)
+                    let mut replayed_roots = Vec::new();
+                    collect_group_replay_roots(payload, &mut replayed_roots);
+                    let group_summaries = crate::operations_v2::root_summary_changes_for_roots(
+                        &transaction,
+                        &replayed_roots,
+                    )
+                    .map_err(|error| error.to_string())?;
+                    HistoryProjectionRequest::Semantic {
+                        payload,
+                        group_summaries,
+                    }
                 }
             };
             let payload_elapsed = payload_started.elapsed();
@@ -1526,6 +1556,33 @@ fn apply_group(transaction: &Transaction<'_>, delta: &SemanticGroupDelta) -> Res
              JOIN media_file file ON file.file_id = asset.file_id
              WHERE root.kind = 'collection'
              GROUP BY root.item_id
+             ON CONFLICT(root_item_id) DO UPDATE SET
+                 lifecycle = excluded.lifecycle,
+                 kind = excluded.kind,
+                 cover_media_item_id = excluded.cover_media_item_id,
+                 media_count = excluded.media_count,
+                 total_size_bytes = excluded.total_size_bytes,
+                 imported_at = excluded.imported_at,
+                 captured_at = excluded.captured_at,
+                 sort_rating = excluded.sort_rating,
+                 sort_name = excluded.sort_name,
+                 updated_at = excluded.updated_at;
+             INSERT INTO root_summary (
+                 root_item_id, lifecycle, kind, cover_media_item_id, media_count,
+                 total_size_bytes, imported_at, captured_at, sort_rating,
+                 sort_name, updated_at
+             )
+             SELECT root.item_id, root.lifecycle, root.kind,
+                    COALESCE(root.cover_media_item_id, root.item_id), 1,
+                    COALESCE(file.size_bytes, 0), asset.imported_at,
+                    asset.captured_at, root.rating,
+                    COALESCE(root.name, asset.name), root.updated_at
+             FROM picto_history_group_root root
+             LEFT JOIN media_asset asset ON asset.item_id = COALESCE(
+                 root.cover_media_item_id, root.item_id
+             )
+             LEFT JOIN media_file file ON file.file_id = asset.file_id
+             WHERE root.kind = 'media'
              ON CONFLICT(root_item_id) DO UPDATE SET
                  lifecycle = excluded.lifecycle,
                  kind = excluded.kind,
