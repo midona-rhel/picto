@@ -265,13 +265,7 @@ pub fn claim_at(store: &Store, limit: usize, now: &str) -> Result<Vec<WorkItem>,
                        JOIN library_item collection
                          ON collection.item_id = collection_root.item_id
                        WHERE collection.kind = 'collection'
-                         AND work_item.media_item_id = (
-                             SELECT member.media_item_id
-                             FROM collection_member member
-                             WHERE member.collection_id = collection.item_id
-                             ORDER BY member.position_rank, member.media_item_id
-                             LIMIT 1
-                         )
+                         AND collection.cover_media_item_id = work_item.media_item_id
                    )
                )
              ORDER BY priority DESC, available_at,
