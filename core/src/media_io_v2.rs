@@ -262,8 +262,8 @@ pub fn enqueue_thumbnail_regeneration(
                      available_at, created_at, updated_at
                  )
                  SELECT mf.file_id, 'thumbnail', 'pending', 0, ?2, ?2, ?2
-                 FROM media_file mf
-                 JOIN json_each(?1) target
+                 FROM json_each(?1) target
+                 CROSS JOIN media_file mf
                    ON mf.file_hash = CAST(target.value AS TEXT)
                  WHERE 1
                  ON CONFLICT(file_id, work_type)
@@ -397,7 +397,7 @@ fn ordered_media(
              )
              SELECT mf.file_hash, mf.mime_type, ma.name, ordered_media.position
              FROM ordered_media
-             JOIN media_asset ma ON ma.item_id = ordered_media.media_item_id
+             CROSS JOIN media_asset ma ON ma.item_id = ordered_media.media_item_id
              JOIN media_file mf ON mf.file_id = ma.file_id
              ORDER BY ordered_media.position",
         )?;

@@ -623,7 +623,7 @@ impl Application {
                     .prepare(
                         "SELECT CAST(selected.value AS INTEGER)
                          FROM json_each(?1) selected
-                         JOIN root_summary summary
+                         CROSS JOIN root_summary summary
                            ON summary.root_item_id = CAST(selected.value AS INTEGER)
                          ORDER BY lower(COALESCE(summary.sort_name, '')),
                                   CAST(selected.value AS INTEGER)",

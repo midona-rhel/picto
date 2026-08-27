@@ -1687,7 +1687,7 @@ fn refresh_name_search_batch(transaction: &Transaction<'_>, limit: i64) -> rusql
              FROM (
                  SELECT mapped.root_item_id, media.name
                  FROM mapped
-                 JOIN media_asset media ON media.item_id = mapped.media_item_id
+                 CROSS JOIN media_asset media ON media.item_id = mapped.media_item_id
                  ORDER BY mapped.root_item_id, mapped.position
              )
              GROUP BY root_item_id

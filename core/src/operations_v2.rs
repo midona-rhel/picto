@@ -582,10 +582,10 @@ impl Application {
                            SELECT json_group_array(url)
                            FROM (
                                SELECT DISTINCT CAST(url.value AS TEXT) AS url
-                               FROM root_metadata source
-                               JOIN json_each(?1) selected
+                               FROM json_each(?1) selected
+                               CROSS JOIN root_metadata source
                                  ON source.root_item_id = CAST(selected.value AS INTEGER)
-                               JOIN json_each(source.source_urls_json) url
+                               CROSS JOIN json_each(source.source_urls_json) url
                                WHERE CAST(url.value AS TEXT) <> ''
                                ORDER BY url
                            )
@@ -2433,7 +2433,7 @@ fn require_same_root_lifecycle(
     let (count, minimum, maximum): (i64, Option<String>, Option<String>) = transaction.query_row(
         "SELECT COUNT(*), MIN(root.lifecycle), MAX(root.lifecycle)
          FROM json_each(?1) selected
-         JOIN library_root root
+         CROSS JOIN library_root root
            ON root.item_id = CAST(selected.value AS INTEGER)",
         [encoded],
         |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -2512,7 +2512,7 @@ fn require_no_selected_file_overlap(
              )
              SELECT asset.file_id
              FROM candidate
-             JOIN media_asset asset ON asset.item_id = candidate.media_item_id
+             CROSS JOIN media_asset asset ON asset.item_id = candidate.media_item_id
              GROUP BY asset.file_id
              HAVING COUNT(DISTINCT candidate.origin_id) > 1
              LIMIT 1",
@@ -2729,12 +2729,12 @@ pub(crate) fn root_summary_changes_for_roots(
                     summary.media_count, summary.sort_rating,
                     file.duration_ms, file.pixel_width, file.pixel_height,
                     summary.imported_at, summary.updated_at
-             FROM root_summary summary
+             FROM json_each(?1) selected
+             CROSS JOIN root_summary summary
+               ON summary.root_item_id = CAST(selected.value AS INTEGER)
              LEFT JOIN media_asset cover
                ON cover.item_id = summary.cover_media_item_id
-             LEFT JOIN media_file file ON file.file_id = cover.file_id
-             JOIN json_each(?1) selected
-               ON CAST(selected.value AS INTEGER) = summary.root_item_id",
+             LEFT JOIN media_file file ON file.file_id = cover.file_id",
         )?
         .query_map([encoded], |row| {
             let total_size_bytes = u64::try_from(row.get::<_, i64>(1)?)
@@ -3127,8 +3127,8 @@ pub(crate) fn upsert_group_root_summary(
                 metadata.name, COALESCE(metadata.updated_at, item.updated_at)
          FROM library_item item
          JOIN library_root root ON root.item_id = item.item_id
-         JOIN json_each(?2) member
-         JOIN media_asset asset ON asset.item_id = CAST(member.value AS INTEGER)
+         CROSS JOIN json_each(?2) member
+         CROSS JOIN media_asset asset ON asset.item_id = CAST(member.value AS INTEGER)
          JOIN media_file file ON file.file_id = asset.file_id
          LEFT JOIN root_metadata metadata ON metadata.root_item_id = item.item_id
          WHERE item.item_id = ?1

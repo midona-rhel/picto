@@ -950,7 +950,7 @@ fn merge_root_organization(
                  FROM json_each(?1)
              )
              SELECT tag.tag_id
-             FROM input JOIN tag USING (namespace, subtag)
+             FROM input CROSS JOIN tag USING (namespace, subtag)
              ORDER BY tag.tag_id",
         )?
         .query_map([encoded_tags], |row| row.get::<_, i64>(0))?
@@ -974,7 +974,7 @@ fn merge_root_organization(
         let mut statement = transaction.prepare(
             "SELECT folder.folder_id
              FROM json_each(?1) input
-             JOIN folder ON folder.folder_id = CAST(input.value AS INTEGER)
+             CROSS JOIN folder ON folder.folder_id = CAST(input.value AS INTEGER)
              ORDER BY folder.folder_id",
         )?;
         let missing = statement

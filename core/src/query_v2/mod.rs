@@ -766,8 +766,8 @@ fn selection_tag_counts_projected(
             "SELECT tag.tag_id,
                     CASE WHEN tag.namespace IN ('', 'general') THEN tag.subtag
                          ELSE tag.namespace || ':' || tag.subtag END
-             FROM tag
-             JOIN json_each(?1) selected
+             FROM json_each(?1) selected
+             CROSS JOIN tag
                ON tag.tag_id = CAST(selected.value AS INTEGER)",
         )?
         .query_map([encoded_ids], |row| {
@@ -821,8 +821,8 @@ fn selection_shared_folders_projected(
     connection
         .prepare_cached(
             "SELECT folder.folder_id, folder.name
-             FROM folder
-             JOIN json_each(?1) selected
+             FROM json_each(?1) selected
+             CROSS JOIN folder
                ON folder.folder_id = CAST(selected.value AS INTEGER)
              ORDER BY folder.folder_id",
         )?
@@ -907,7 +907,7 @@ pub(crate) fn target_selection_sql(
             let valid_count: i64 = connection.query_row(
                 "SELECT COUNT(*)
                  FROM json_each(?1) target
-                 JOIN library_root lr ON lr.item_id = CAST(target.value AS INTEGER)",
+                 CROSS JOIN library_root lr ON lr.item_id = CAST(target.value AS INTEGER)",
                 [&encoded],
                 |row| row.get(0),
             )?;
@@ -919,7 +919,7 @@ pub(crate) fn target_selection_sql(
                     selected_roots(item_id) AS MATERIALIZED (
                         SELECT lr.item_id
                         FROM json_each(?1) target
-                        JOIN library_root lr ON lr.item_id = CAST(target.value AS INTEGER)
+                        CROSS JOIN library_root lr ON lr.item_id = CAST(target.value AS INTEGER)
                     )"
                 .to_string(),
                 arguments: vec![Box::new(encoded)],
@@ -1375,7 +1375,7 @@ fn details_connection(
                     mf.duration_ms, mf.frame_count, mf.has_audio, ma.name,
                     ma.captured_at, ma.imported_at, rm.position
              FROM root_media rm
-             JOIN media_asset ma ON ma.item_id = rm.media_item_id
+             CROSS JOIN media_asset ma ON ma.item_id = rm.media_item_id
              JOIN media_file mf ON mf.file_id = ma.file_id
              ORDER BY rm.position, ma.item_id",
         )?
@@ -1429,8 +1429,8 @@ fn details_connection(
         .prepare(
             "SELECT CASE WHEN tag.namespace IN ('', 'general') THEN tag.subtag
                          ELSE tag.namespace || ':' || tag.subtag END
-             FROM tag
-             JOIN json_each(?1) selected
+             FROM json_each(?1) selected
+             CROSS JOIN tag
                ON tag.tag_id = CAST(selected.value AS INTEGER)
              ORDER BY tag.namespace, tag.subtag",
         )?
@@ -1494,7 +1494,7 @@ pub(crate) fn resolve_target_ids(
             let mut statement = connection.prepare(
                 "SELECT lr.item_id
                  FROM json_each(?1) target
-                 JOIN library_root lr ON lr.item_id = CAST(target.value AS INTEGER)
+                 CROSS JOIN library_root lr ON lr.item_id = CAST(target.value AS INTEGER)
                  ORDER BY CAST(target.key AS INTEGER)",
             )?;
             let resolved = statement
@@ -1613,7 +1613,7 @@ fn ordered_sparse_projected_roots_by_sort(
          )
          SELECT summary.root_item_id, {expression}
          FROM selected
-         JOIN root_summary summary USING (root_item_id)
+         CROSS JOIN root_summary summary ON summary.root_item_id = selected.root_item_id
          LEFT JOIN media_view mv ON mv.item_id = summary.root_item_id
          WHERE TRUE {cursor_clause}
          ORDER BY {expression} {direction}, summary.root_item_id ASC
@@ -1922,7 +1922,7 @@ fn ordered_sparse_projected_roots(
          )
          SELECT summary.root_item_id, summary.imported_at
          FROM selected
-         JOIN root_summary summary USING (root_item_id)
+         CROSS JOIN root_summary summary ON summary.root_item_id = selected.root_item_id
          WHERE summary.imported_at IS NOT NULL
            {cursor_clause}
          ORDER BY summary.imported_at {direction},
@@ -2058,7 +2058,7 @@ fn hydrate_projected_roots(
                 display_file.dominant_color_hex, metadata.rating,
                 summary.media_count, selected.position
          FROM selected
-         JOIN root_summary summary ON summary.root_item_id = selected.item_id
+         CROSS JOIN root_summary summary ON summary.root_item_id = selected.item_id
          LEFT JOIN root_metadata metadata
            ON metadata.root_item_id = summary.root_item_id
          JOIN media_asset display_asset

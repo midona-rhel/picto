@@ -1875,10 +1875,10 @@ fn reassert_surviving_roots(
     let roots = transaction
         .prepare(
             "SELECT item.item_id, item.kind, root.lifecycle
-             FROM library_item item
-             JOIN library_root root ON root.item_id = item.item_id
-             JOIN json_each(?1) selected
-               ON CAST(selected.value AS INTEGER) = item.item_id",
+             FROM json_each(?1) selected
+             CROSS JOIN library_item item
+               ON item.item_id = CAST(selected.value AS INTEGER)
+             JOIN library_root root ON root.item_id = item.item_id",
         )?
         .query_map([encoded], |row| {
             let item_id = row.get::<_, i64>(0)?;

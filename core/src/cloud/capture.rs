@@ -237,7 +237,7 @@ fn item_keys_for(
         .prepare_cached(
             "SELECT li.item_id, li.item_key
              FROM json_each(?1) selected
-             JOIN library_item li ON li.item_id = CAST(selected.value AS INTEGER)",
+             CROSS JOIN library_item li ON li.item_id = CAST(selected.value AS INTEGER)",
         )?
         .query_map([encoded], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
